@@ -1,0 +1,12 @@
+[package]
+name = "liteventd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+ulid = { version = "1.2", features = ["serde"] }
+tokio = { version = "1.45", features = ["full"] }
+timada-macros = { path = "../macros" }
+
+[dev-dependencies]

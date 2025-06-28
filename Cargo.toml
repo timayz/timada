@@ -1,11 +1,16 @@
+[package]
+name = "timada"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0"
+
+[dependencies]
+tokio = { version = "1.45", features = ["full"] }
+
 [workspace]
-
-resolver = "2"
-
 members = [
-  "./timada",
-  "./admin",
-  "./www"
+  "liteventd",
+  "macros"
 ]
 
 [profile.release]
