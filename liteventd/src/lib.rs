@@ -1,6 +1,17 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::mpsc::Receiver,
+};
+
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use ulid::Ulid;
+
+pub struct EventDetail<D, M> {
+    pub detail: Event,
+    pub data: D,
+    pub metadata: M,
+}
 
 pub struct Event {
     pub id: Ulid,
@@ -13,20 +24,17 @@ pub struct Event {
 }
 
 impl Event {
-    pub fn to_data<D: AggregatorEvent>(&self) -> anyhow::Result<Option<D>> {
+    pub fn to_detail<D: AggregatorEvent, M>(&self) -> anyhow::Result<Option<EventDetail<D, M>>> {
         if D::name() != self.name {
             return Ok(None);
         }
         todo!();
     }
-
-    pub fn to_metadata<M>(&self) -> anyhow::Result<M> {
-        todo!();
-    }
 }
 
+#[async_trait::async_trait]
 pub trait Aggregator: Default + Serialize + DeserializeOwned {
-    fn aggregate(&mut self, event: &'_ Event) -> anyhow::Result<()>;
+    async fn aggregate(&mut self, event: Event) -> anyhow::Result<()>;
     fn revision() -> &'static str;
     fn name() -> &'static str;
 }
@@ -35,11 +43,18 @@ pub trait AggregatorEvent {
     fn name() -> &'static str;
 }
 
-pub trait Executor {}
+pub trait Executor: Clone + Send + Sync {
+    fn test(&self) {}
+}
 
+#[derive(Clone)]
 pub struct SqlExecutor();
 
-impl Executor for SqlExecutor {}
+impl Executor for SqlExecutor {
+    fn test(&self) {
+        todo!()
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum LoadError {}
@@ -49,7 +64,7 @@ pub struct LoadResult<A: Aggregator> {
     pub version: u16,
 }
 
-pub fn load<E: Executor, A: Aggregator>(
+pub async fn load<A: Aggregator, E: Executor>(
     _executor: &E,
     id: Ulid,
 ) -> Result<LoadResult<A>, LoadError> {
@@ -97,12 +112,12 @@ impl<A: Aggregator> SaveBuilder<A> {
         Ok(self)
     }
 
-    pub fn commit<E: Executor>(&self, _executor: &E) -> Result<(), SaveError> {
+    pub async fn commit<E: Executor>(&self, _executor: &E) -> Result<(), SaveError> {
         todo!()
     }
 }
 
-pub fn save<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
+pub fn save_aggregator<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
     SaveBuilder {
         aggregate_id,
         aggregator,
@@ -113,4 +128,57 @@ pub fn save<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> 
     }
 }
 
-pub fn subscribe() {}
+pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregate_id: Ulid) -> SaveBuilder<A> {
+    save_aggregator(aggregator.item, aggregate_id).original_version(aggregator.version)
+}
+
+#[derive(Debug, Error)]
+pub enum SubscribeError {}
+
+#[async_trait::async_trait]
+pub trait SubscribeHandler {
+    async fn handle<E: Executor>(&self, executor: &E, event: Event) -> anyhow::Result<()>;
+}
+
+pub enum SubscribeMode {
+    Persistent,
+    Stream,
+    StreamOff,
+}
+
+pub struct SubscribeBuilder {
+    id: Ulid,
+    key: String,
+    mode: SubscribeMode,
+    aggregators: HashSet<String>,
+}
+
+impl SubscribeBuilder {
+    pub fn mode(mut self, v: SubscribeMode) -> Self {
+        self.mode = v;
+
+        self
+    }
+
+    pub fn aggregator<A: Aggregator>(mut self) -> Self {
+        self.aggregators.insert(A::name().to_owned());
+
+        self
+    }
+
+    pub async fn start<E: Executor>(
+        &mut self,
+        _executor: &E,
+    ) -> Result<Receiver<Event>, SubscribeError> {
+        todo!()
+    }
+}
+
+pub fn subscribe(key: impl Into<String>) -> SubscribeBuilder {
+    SubscribeBuilder {
+        id: Ulid::new(),
+        key: key.into(),
+        mode: SubscribeMode::Persistent,
+        aggregators: HashSet::default(),
+    }
+}

@@ -1,6 +1,6 @@
 use liteventd::AggregatorEvent;
+use liteventd_macros::AggregatorEvent;
 use serde::{Deserialize, Serialize};
-use timada_macros::AggregatorEvent;
 use ulid::Ulid;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]

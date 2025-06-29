@@ -1,9 +1,15 @@
-use anyhow::Result;
-use liteventd::Executor;
+use liteventd::{Aggregator, Event, EventDetail, Executor, SubscribeHandler};
+use liteventd_macros::handle;
+use std::collections::HashMap;
 use ulid::Ulid;
 use validator::Validate;
 
-use crate::account::{Account, AccountCreated, FullNameChanged, MoneyTransferred};
+use crate::account::{
+    Account, AccountCreated, AccountCredited, AccountDebited, FullNameChanged,
+    MoneyTransferCancelled, MoneyTransferSucceeded, MoneyTransferred, Reason,
+};
+
+type AccountEventDetail<D> = EventDetail<D, HashMap<String, String>>;
 
 #[derive(Debug, Validate)]
 pub struct CreateAccountInput {
@@ -11,16 +17,20 @@ pub struct CreateAccountInput {
     pub fullname: String,
 }
 
-pub fn create_account<E: Executor>(executor: &E, input: CreateAccountInput) -> Result<Ulid> {
+pub async fn create_account<E: Executor>(
+    executor: &E,
+    input: CreateAccountInput,
+) -> anyhow::Result<Ulid> {
     input.validate()?;
 
     let id = Ulid::new();
 
-    liteventd::save(Account::default(), id)
+    liteventd::save_aggregator(Account::default(), id)
         .data(&AccountCreated {
             fullname: input.fullname,
         })?
-        .commit(executor)?;
+        .commit(executor)
+        .await?;
 
     Ok(id)
 }
@@ -33,17 +43,20 @@ pub struct ChangeFullNameInput {
     pub fullname: String,
 }
 
-pub fn change_fullname<E: Executor>(executor: &E, input: ChangeFullNameInput) -> Result<()> {
+pub async fn change_fullname<E: Executor>(
+    executor: &E,
+    input: ChangeFullNameInput,
+) -> anyhow::Result<()> {
     input.validate()?;
 
-    let account = liteventd::load(executor, input.id)?;
+    let account = liteventd::load::<Account, _>(executor, input.id).await?;
 
-    liteventd::save::<Account>(account.item, input.id)
-        .original_version(account.version)
+    liteventd::save(account, input.id)
         .data(&FullNameChanged {
             fullname: input.fullname,
         })?
-        .commit(executor)?;
+        .commit(executor)
+        .await?;
 
     Ok(())
 }
@@ -56,7 +69,10 @@ pub struct TransferMoneyInput {
     pub value: f32,
 }
 
-pub fn transfer_money<E: Executor>(executor: &E, input: TransferMoneyInput) -> Result<()> {
+pub async fn transfer_money<E: Executor>(
+    executor: &E,
+    input: TransferMoneyInput,
+) -> anyhow::Result<()> {
     input.validate()?;
 
     if input.from == input.to {
@@ -65,23 +81,123 @@ pub fn transfer_money<E: Executor>(executor: &E, input: TransferMoneyInput) -> R
         ));
     }
 
-    let from_account = liteventd::load::<_, Account>(executor, input.from)?;
+    let from_account = liteventd::load::<Account, _>(executor, input.from).await?;
+    let to_account = liteventd::load::<Account, _>(executor, input.to).await?;
 
-    if from_account.item.balance - input.value < 0.0 {
-        return Err(anyhow::anyhow!("balance too low"));
-    }
-
-    let to_account = liteventd::load::<_, Account>(executor, input.to)?;
-
-    liteventd::save(from_account.item, input.from)
-        .original_version(from_account.version)
+    liteventd::save(from_account, input.from)
         .data(&MoneyTransferred {
             from_id: input.from,
             to_id: to_account.item.id,
             transaction_id: Ulid::new(),
             value: input.value,
         })?
-        .commit(executor)?;
+        .commit(executor)
+        .await?;
 
     Ok(())
+}
+
+#[handle(money_transferred, account_debited, account_credited)]
+struct Command;
+
+impl Command {
+    async fn money_transferred<E: Executor>(
+        &self,
+        executor: &E,
+        event: AccountEventDetail<MoneyTransferred>,
+    ) -> anyhow::Result<()> {
+        let account = liteventd::load::<Account, _>(executor, event.detail.aggregate_id).await?;
+        liteventd::save(account, event.detail.aggregate_id)
+            .data(&AccountDebited {
+                from_id: event.data.from_id,
+                to_id: event.data.to_id,
+                transaction_id: event.data.transaction_id,
+                value: event.data.value,
+            })?
+            .commit(executor)
+            .await?;
+        Ok(())
+    }
+
+    async fn account_debited<E: Executor>(
+        &self,
+        executor: &E,
+        event: AccountEventDetail<AccountDebited>,
+    ) -> anyhow::Result<()> {
+        let from = liteventd::load::<Account, _>(executor, event.data.from_id).await?;
+        if from.item.balance - event.data.value < 0.0 {
+            liteventd::save(from, event.data.from_id)
+                .data(&MoneyTransferCancelled {
+                    from_id: event.data.from_id,
+                    transaction_id: event.data.transaction_id,
+                    to_id: event.data.to_id,
+                    value: event.data.value,
+                    reason: Reason::BalanceTooLow,
+                })?
+                .commit(executor)
+                .await?;
+            return Ok(());
+        }
+
+        let to = liteventd::load::<Account, _>(executor, event.data.to_id).await?;
+
+        liteventd::save(to, event.data.to_id)
+            .data(&AccountCredited {
+                from_id: event.data.from_id,
+                transaction_id: event.data.transaction_id,
+                to_id: event.data.to_id,
+                value: event.data.value,
+            })?
+            .commit(executor)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn account_credited<E: Executor>(
+        &self,
+        executor: &E,
+        event: AccountEventDetail<AccountCredited>,
+    ) -> anyhow::Result<()> {
+        let from = liteventd::load::<Account, _>(executor, event.data.from_id).await?;
+
+        liteventd::save(from, event.data.from_id)
+            .data(&MoneyTransferSucceeded {
+                from_id: event.data.from_id,
+                transaction_id: event.data.transaction_id,
+                to_id: event.data.to_id,
+                value: event.data.value,
+            })?
+            .commit(executor)
+            .await?;
+
+        let to = liteventd::load::<Account, _>(executor, event.data.to_id).await?;
+
+        liteventd::save(to, event.data.to_id)
+            .data(&MoneyTransferSucceeded {
+                from_id: event.data.from_id,
+                transaction_id: event.data.transaction_id,
+                to_id: event.data.to_id,
+                value: event.data.value,
+            })?
+            .commit(executor)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn subscribe<E: Executor>(executor: &E) -> anyhow::Result<()> {
+        let recv = liteventd::subscribe("account-command")
+            .aggregator::<Account>()
+            .start(executor)
+            .await?;
+
+        while let Ok(event) = recv.recv() {
+            if event.aggregate_type == Account::name() {
+                Command.handle(executor, event).await?;
+            }
+        }
+
+        Ok(())
+    }
 }
