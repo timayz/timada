@@ -1,297 +1,116 @@
 use serde::{Serialize, de::DeserializeOwned};
+use thiserror::Error;
 use ulid::Ulid;
 
 pub struct Event {
+    pub id: Ulid,
     pub aggregate_id: Ulid,
+    pub aggregate_type: String,
     pub name: String,
+    pub data: Vec<u8>,
+    pub metadata: Vec<u8>,
     pub timestamp: u32,
 }
 
 impl Event {
-    fn to_data<D: AggregatorEvent>(&self) -> Option<D> {
+    pub fn to_data<D: AggregatorEvent>(&self) -> anyhow::Result<Option<D>> {
         if D::name() != self.name {
-            return None;
+            return Ok(None);
         }
         todo!();
     }
 
-    fn to_metadata<M>(&self) -> Option<M> {
+    pub fn to_metadata<M>(&self) -> anyhow::Result<M> {
         todo!();
     }
 }
 
 pub trait Aggregator: Default + Serialize + DeserializeOwned {
-    fn aggregate(&mut self, event: &'_ Event);
+    fn aggregate(&mut self, event: &'_ Event) -> anyhow::Result<()>;
     fn revision() -> &'static str;
+    fn name() -> &'static str;
 }
 
 pub trait AggregatorEvent {
     fn name() -> &'static str;
 }
 
-#[cfg(test)]
-mod tests {
-    use serde::{Deserialize, Serialize};
-    use std::collections::HashMap;
-    use ulid::Ulid;
+pub trait Executor {}
 
-    use super::*;
-    use timada_macros::{AggregatorEvent, aggregate};
+pub struct SqlExecutor();
 
-    #[derive(Serialize, Deserialize, Debug, PartialEq)]
-    enum Reason {
-        BalanceTooLow,
-        InternalServerError,
-    }
+impl Executor for SqlExecutor {}
 
-    #[derive(Serialize, Deserialize, Debug, PartialEq, AggregatorEvent)]
-    struct AccountCreated {
-        pub fullname: String,
-    }
+#[derive(Debug, Error)]
+pub enum LoadError {}
 
-    #[derive(Serialize, Deserialize, Debug, PartialEq, AggregatorEvent)]
-    struct AccountCredited {
-        pub transaction_id: Ulid,
-        pub from_id: Ulid,
-        pub to_id: Ulid,
-        pub value: f32,
-    }
-
-    #[derive(Serialize, Deserialize, Debug, PartialEq, AggregatorEvent)]
-    struct AccountDebited {
-        pub transaction_id: Ulid,
-        pub from_id: Ulid,
-        pub to_id: Ulid,
-        pub value: f32,
-    }
-
-    #[derive(Serialize, Deserialize, Debug, PartialEq, AggregatorEvent)]
-    struct FullNameChanged {
-        pub fullname: String,
-    }
-
-    #[derive(Serialize, Deserialize, Debug, PartialEq, AggregatorEvent)]
-    struct MoneyTransferCancelled {
-        pub transaction_id: Ulid,
-        pub from_id: Ulid,
-        pub to_id: Ulid,
-        pub value: f32,
-        pub reason: Reason,
-    }
-
-    #[derive(Serialize, Deserialize, Debug, PartialEq, AggregatorEvent)]
-    struct MoneyTransferSucceeded {
-        pub transaction_id: Ulid,
-        pub from_id: Ulid,
-        pub to_id: Ulid,
-        pub value: f32,
-    }
-
-    #[derive(Serialize, Deserialize, Debug, PartialEq, AggregatorEvent)]
-    struct MoneyTransferred {
-        pub transaction_id: Ulid,
-        pub from_id: Ulid,
-        pub to_id: Ulid,
-        pub value: f32,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    enum MoneyTransactionState {
-        New,
-        Pending,
-        Succeeded,
-        Cancelled,
-    }
-
-    impl Default for MoneyTransactionState {
-        fn default() -> Self {
-            Self::New
-        }
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    enum MoneyTransactionType {
-        Incoming,
-        Outgoing,
-    }
-
-    impl Default for MoneyTransactionType {
-        fn default() -> Self {
-            Self::Incoming
-        }
-    }
-
-    #[derive(Debug, Default, Serialize, Deserialize)]
-    struct MoneyTransaction {
-        pub transaction_id: Ulid,
-        pub from_id: Ulid,
-        pub to_id: Ulid,
-        pub value: f32,
-        pub state: MoneyTransactionState,
-        pub transaction_type: MoneyTransactionType,
-        pub created_at: u32,
-        pub updated_at: Option<u32>,
-    }
-
-    #[derive(Debug, Default, Serialize, Deserialize)]
-    #[aggregate(
-        aggregate_account_created,
-        aggregate_account_credited,
-        aggregate_account_debited,
-        aggregate_full_name_changed,
-        aggregate_money_transferred,
-        aggregate_money_transfer_cancelled,
-        aggregate_money_transfer_succeeded
-    )]
-    struct Account {
-        pub id: Ulid,
-        pub fullname: String,
-        pub balance: f32,
-        pub transaction_to_reserved_balance: HashMap<Ulid, f32>,
-        pub transactions: HashMap<Ulid, MoneyTransaction>,
-        pub created_at: u32,
-        pub updated_at: Option<u32>,
-    }
-
-    impl Account {
-        fn aggregate_account_created(
-            &mut self,
-            event: &'_ Event,
-            data: AccountCreated,
-            _metadata: HashMap<String, String>,
-        ) {
-            self.id = event.aggregate_id;
-            self.fullname = data.fullname;
-            self.created_at = event.timestamp;
-        }
-
-        fn aggregate_account_credited(
-            &mut self,
-            event: &'_ Event,
-            data: AccountCredited,
-            _metadata: HashMap<String, String>,
-        ) {
-            self.updated_at = Some(event.timestamp);
-            self.transaction_to_reserved_balance
-                .insert(data.transaction_id, data.value);
-
-            if let Some(transaction) = self.transactions.get_mut(&data.transaction_id) {
-                transaction.state = MoneyTransactionState::Pending;
-                transaction.updated_at = Some(event.timestamp);
-            }
-        }
-
-        fn aggregate_account_debited(
-            &mut self,
-            event: &'_ Event,
-            data: AccountDebited,
-            _metadata: HashMap<String, String>,
-        ) {
-            self.updated_at = Some(event.timestamp);
-            self.balance -= data.value;
-            self.transaction_to_reserved_balance
-                .insert(data.transaction_id, data.value * -1.0);
-
-            if let Some(transaction) = self.transactions.get_mut(&data.transaction_id) {
-                transaction.state = MoneyTransactionState::Pending;
-                transaction.updated_at = Some(event.timestamp);
-            }
-        }
-
-        fn aggregate_full_name_changed(
-            &mut self,
-            event: &'_ Event,
-            data: FullNameChanged,
-            _metadata: HashMap<String, String>,
-        ) {
-            self.fullname = data.fullname;
-            self.updated_at = Some(event.timestamp);
-        }
-
-        fn aggregate_money_transferred(
-            &mut self,
-            event: &'_ Event,
-            data: MoneyTransferred,
-            _metadata: HashMap<String, String>,
-        ) {
-            self.updated_at = Some(event.timestamp);
-
-            let transaction_type = if self.id == data.from_id {
-                MoneyTransactionType::Outgoing
-            } else {
-                MoneyTransactionType::Incoming
-            };
-
-            let value = if self.id == data.from_id {
-                data.value * -1.0
-            } else {
-                data.value
-            };
-
-            self.transactions.insert(
-                data.transaction_id,
-                MoneyTransaction {
-                    transaction_id: data.transaction_id,
-                    from_id: data.from_id,
-                    to_id: data.to_id,
-                    value,
-                    state: MoneyTransactionState::New,
-                    transaction_type,
-                    created_at: event.timestamp,
-                    updated_at: None,
-                },
-            );
-        }
-
-        fn aggregate_money_transfer_cancelled(
-            &mut self,
-            event: &'_ Event,
-            data: MoneyTransferCancelled,
-            _metadata: HashMap<String, String>,
-        ) {
-            self.updated_at = Some(event.timestamp);
-
-            if data.to_id == self.id {
-                self.transaction_to_reserved_balance
-                    .remove(&data.transaction_id);
-            } else if let Some(reserved_balance) = self
-                .transaction_to_reserved_balance
-                .get(&data.transaction_id)
-            {
-                self.balance += reserved_balance * -1.0;
-                self.transaction_to_reserved_balance
-                    .remove(&data.transaction_id);
-            }
-
-            if let Some(transaction) = self.transactions.get_mut(&data.transaction_id) {
-                transaction.state = MoneyTransactionState::Cancelled;
-                transaction.updated_at = Some(event.timestamp);
-            }
-        }
-
-        fn aggregate_money_transfer_succeeded(
-            &mut self,
-            event: &'_ Event,
-            data: MoneyTransferSucceeded,
-            _metadata: HashMap<String, String>,
-        ) {
-            self.updated_at = Some(event.timestamp);
-
-            if let Some(transaction) = self.transactions.get_mut(&data.transaction_id) {
-                transaction.state = MoneyTransactionState::Succeeded;
-                transaction.updated_at = Some(event.timestamp);
-            }
-
-            if let (Some(reserved_balance), true) = (
-                self.transaction_to_reserved_balance
-                    .remove(&data.transaction_id),
-                data.to_id == self.id,
-            ) {
-                self.balance += reserved_balance;
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn my_test() {}
+pub struct LoadResult<A: Aggregator> {
+    pub item: A,
+    pub version: u16,
 }
+
+pub fn load<E: Executor, A: Aggregator>(
+    _executor: &E,
+    id: Ulid,
+) -> Result<LoadResult<A>, LoadError> {
+    todo!()
+}
+
+#[derive(Debug, Error)]
+pub enum SaveError {}
+
+pub struct SaveBuilder<A: Aggregator> {
+    aggregate_id: Ulid,
+    aggregate_type: String,
+    aggregator: A,
+    original_version: u16,
+    data: Vec<(&'static str, Vec<u8>)>,
+    metadata: Vec<u8>,
+}
+
+impl<A: Aggregator> SaveBuilder<A> {
+    pub fn original_version(mut self, v: u16) -> Self {
+        self.original_version = v;
+
+        self
+    }
+
+    pub fn metadata<M: Serialize>(
+        mut self,
+        v: &M,
+    ) -> Result<Self, ciborium::ser::Error<std::io::Error>> {
+        let mut metadata = Vec::new();
+        ciborium::into_writer(v, &mut metadata)?;
+        self.metadata = metadata;
+
+        Ok(self)
+    }
+
+    pub fn data<D: Serialize + AggregatorEvent>(
+        mut self,
+        v: &D,
+    ) -> Result<Self, ciborium::ser::Error<std::io::Error>> {
+        let mut data = Vec::new();
+        ciborium::into_writer(v, &mut data)?;
+        self.data.push((D::name(), data));
+
+        Ok(self)
+    }
+
+    pub fn commit<E: Executor>(&self, _executor: &E) -> Result<(), SaveError> {
+        todo!()
+    }
+}
+
+pub fn save<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
+    SaveBuilder {
+        aggregate_id,
+        aggregator,
+        aggregate_type: A::name().to_owned(),
+        original_version: 0,
+        data: Vec::default(),
+        metadata: Vec::default(),
+    }
+}
+
+pub fn subscribe() {}
