@@ -1,0 +1,21 @@
+[package]
+name = "timada"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0"
+
+[dependencies]
+tokio = { version = "1.45", features = ["full"] }
+
+[workspace]
+members = [
+  "liteventd",
+  "macros"
+]
+
+[profile.release]
+codegen-units = 1
+panic = "abort"
+lto = true
+strip = true
+
