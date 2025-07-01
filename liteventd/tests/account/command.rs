@@ -1,5 +1,4 @@
 use liteventd::{Context, Executor, SubscribeHandler};
-use liteventd_macros::handle;
 use std::collections::HashMap;
 use ulid::Ulid;
 use validator::Validate;

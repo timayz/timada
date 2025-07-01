@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use sha3::{Digest, Sha3_256};
 use std::ops::Deref;
 use syn::{ItemImpl, ItemStruct, parse_macro_input};
