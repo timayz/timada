@@ -1,11 +1,17 @@
-use std::{collections::HashSet, sync::mpsc::Receiver, time::Duration};
+pub mod context;
 
+use dyn_clone::DynClone;
 use serde::{Serialize, de::DeserializeOwned};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::mpsc::Receiver,
+    time::Duration,
+};
 use thiserror::Error;
 use ulid::Ulid;
 
-pub struct EventDetail<D, M> {
-    pub detail: Event,
+pub struct EventData<D, M> {
+    pub details: Event,
     pub data: D,
     pub metadata: M,
 }
@@ -22,7 +28,7 @@ pub struct Event {
 }
 
 impl Event {
-    pub fn to_detail<D: AggregatorEvent, M>(&self) -> anyhow::Result<Option<EventDetail<D, M>>> {
+    pub fn to_data<D: AggregatorEvent, M>(&self) -> anyhow::Result<Option<EventData<D, M>>> {
         if D::name() != self.name {
             return Ok(None);
         }
@@ -41,15 +47,19 @@ pub trait AggregatorEvent {
     fn name() -> &'static str;
 }
 
-pub trait Executor: Clone + Send + Sync {
-    fn test(&self) {}
+#[async_trait::async_trait]
+pub trait Executor: DynClone + Send + Sync {
+    async fn test(&self) {}
 }
+
+dyn_clone::clone_trait_object!(Executor);
 
 #[derive(Clone)]
 pub struct SqlExecutor();
 
+#[async_trait::async_trait()]
 impl Executor for SqlExecutor {
-    fn test(&self) {
+    async fn test(&self) {
         todo!()
     }
 }
@@ -144,9 +154,38 @@ pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregate_id: Ulid) -> Sav
 #[derive(Debug, Error)]
 pub enum SubscribeError {}
 
+#[derive(Clone)]
+pub struct ContextBase<'a, E: Executor> {
+    key: String,
+    event: &'a Event,
+    executor: &'a E,
+}
+
+impl<'a, E: Executor> ContextBase<'a, E> {
+    pub fn to_context<D: AggregatorEvent, M>(
+        &self,
+    ) -> anyhow::Result<Option<Context<'a, E, D, M>>> {
+        todo!()
+    }
+}
+
+pub struct Context<'a, E, D, M> {
+    key: String,
+    pub executor: &'a E,
+    pub event: &'a Event,
+    pub data: D,
+    pub metadata: M,
+}
+
+impl<'a, E: Executor, D, M> Context<'a, E, D, M> {
+    pub fn acknowledge(&self) {
+        todo!()
+    }
+}
+
 #[async_trait::async_trait]
-pub trait SubscribeHandler {
-    async fn handle<E: Executor>(&self, executor: &E, event: &Event) -> anyhow::Result<()>;
+pub trait SubscribeHandler<E: Executor> {
+    async fn handle(&self, context: &ContextBase<'_, E>) -> anyhow::Result<()>;
 }
 
 pub enum SubscribeMode {
@@ -155,27 +194,27 @@ pub enum SubscribeMode {
     Live,
 }
 
-pub struct SubscribeBuilder {
+pub struct SubscribeBuilder<E: Executor> {
     id: Ulid,
     key: String,
     routing_key: Option<String>,
     mode: SubscribeMode,
-    aggregators: HashSet<String>,
+    handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
     delay: Option<Duration>,
 }
 
-pub fn subscribe(key: impl Into<String>) -> SubscribeBuilder {
+pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
     SubscribeBuilder {
         id: Ulid::new(),
         key: key.into(),
         mode: SubscribeMode::Persistent,
-        aggregators: HashSet::default(),
+        handlers: HashMap::default(),
         delay: None,
         routing_key: None,
     }
 }
 
-impl SubscribeBuilder {
+impl<E: Executor> SubscribeBuilder<E> {
     pub fn mode(mut self, v: SubscribeMode) -> Self {
         self.mode = v;
 
@@ -188,16 +227,13 @@ impl SubscribeBuilder {
         self
     }
 
-    pub fn aggregator<A: Aggregator>(mut self) -> Self {
-        self.aggregators.insert(A::name().to_owned());
+    pub fn handler<A: Aggregator, H: SubscribeHandler<E> + 'static>(mut self, v: H) -> Self {
+        self.handlers.insert(A::name().to_owned(), Box::new(v));
 
         self
     }
 
-    pub async fn start<E: Executor>(
-        &mut self,
-        _executor: &E,
-    ) -> Result<Receiver<Event>, SubscribeError> {
+    pub async fn start(&mut self, _executor: &E) -> Result<Receiver<Event>, SubscribeError> {
         todo!()
     }
 }

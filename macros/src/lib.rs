@@ -17,8 +17,8 @@ pub fn handle(attr: TokenStream, item: TokenStream) -> TokenStream {
             let name = format_ident!("{}", h);
 
             quote! {
-              if let Ok(Some(detail)) = event.to_detail() {
-                  self.#name(executor, detail).await?;
+              if let Ok(Some(context)) = context.to_context() {
+                  self.#name(context).await?;
                   return Ok(());
               }
             }
@@ -31,8 +31,8 @@ pub fn handle(attr: TokenStream, item: TokenStream) -> TokenStream {
         #item
 
         #[async_trait::async_trait]
-        impl SubscribeHandler for #ident {
-            async fn handle<E: Executor>(&self, executor: &E, event: &Event) -> anyhow::Result<()> {
+        impl<E: liteventd::Executor> SubscribeHandler<E> for #ident {
+            async fn handle(&self, context: &liteventd::ContextBase<'_, E>) -> anyhow::Result<()> {
                 #event_handlers
 
                 Ok(())
@@ -56,8 +56,8 @@ pub fn aggregate(attr: TokenStream, item: TokenStream) -> TokenStream {
             let name = format_ident!("{}", h);
 
             quote! {
-              if let Ok(Some(detail)) = event.to_detail() {
-                  self.#name(detail).await?;
+              if let Ok(Some(data)) = event.to_data() {
+                  self.#name(data).await?;
                   return Ok(());
               }
             }

@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use ulid::Ulid;
 
-use liteventd::{Aggregator, Event, EventDetail};
+use liteventd::{Aggregator, Event, EventData};
 use liteventd_macros::aggregate;
 
-type AccountEventDetail<D> = EventDetail<D, HashMap<String, String>>;
+type AccountEventData<D> = EventData<D, HashMap<String, String>>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MoneyTransactionState {
@@ -75,60 +75,60 @@ pub struct Account {
 impl Account {
     async fn aggregate_account_created(
         &mut self,
-        event: AccountEventDetail<AccountCreated>,
+        event: AccountEventData<AccountCreated>,
     ) -> anyhow::Result<()> {
-        self.id = event.detail.aggregate_id;
+        self.id = event.details.aggregate_id;
         self.fullname = event.data.fullname;
-        self.created_at = event.detail.timestamp;
+        self.created_at = event.details.timestamp;
 
         Ok(())
     }
 
     async fn aggregate_account_credited(
         &mut self,
-        event: AccountEventDetail<AccountCredited>,
+        event: AccountEventData<AccountCredited>,
     ) -> anyhow::Result<()> {
-        self.updated_at = Some(event.detail.timestamp);
+        self.updated_at = Some(event.details.timestamp);
         self.transaction_to_reserved_balance
             .insert(event.data.transaction_id, event.data.value);
 
         if let Some(transaction) = self.transactions.get_mut(&event.data.transaction_id) {
             transaction.state = MoneyTransactionState::Pending;
-            transaction.updated_at = Some(event.detail.timestamp);
+            transaction.updated_at = Some(event.details.timestamp);
         }
         Ok(())
     }
 
     async fn aggregate_account_debited(
         &mut self,
-        event: AccountEventDetail<AccountDebited>,
+        event: AccountEventData<AccountDebited>,
     ) -> anyhow::Result<()> {
-        self.updated_at = Some(event.detail.timestamp);
+        self.updated_at = Some(event.details.timestamp);
         self.balance -= event.data.value;
         self.transaction_to_reserved_balance
             .insert(event.data.transaction_id, event.data.value * -1.0);
 
         if let Some(transaction) = self.transactions.get_mut(&event.data.transaction_id) {
             transaction.state = MoneyTransactionState::Pending;
-            transaction.updated_at = Some(event.detail.timestamp);
+            transaction.updated_at = Some(event.details.timestamp);
         }
         Ok(())
     }
 
     async fn aggregate_full_name_changed(
         &mut self,
-        event: AccountEventDetail<FullNameChanged>,
+        event: AccountEventData<FullNameChanged>,
     ) -> anyhow::Result<()> {
         self.fullname = event.data.fullname;
-        self.updated_at = Some(event.detail.timestamp);
+        self.updated_at = Some(event.details.timestamp);
         Ok(())
     }
 
     async fn aggregate_money_transferred(
         &mut self,
-        event: AccountEventDetail<MoneyTransferred>,
+        event: AccountEventData<MoneyTransferred>,
     ) -> anyhow::Result<()> {
-        self.updated_at = Some(event.detail.timestamp);
+        self.updated_at = Some(event.details.timestamp);
 
         let transaction_type = if self.id == event.data.from_id {
             MoneyTransactionType::Outgoing
@@ -151,7 +151,7 @@ impl Account {
                 value,
                 state: MoneyTransactionState::New,
                 transaction_type,
-                created_at: event.detail.timestamp,
+                created_at: event.details.timestamp,
                 updated_at: None,
             },
         );
@@ -160,9 +160,9 @@ impl Account {
 
     async fn aggregate_money_transfer_cancelled(
         &mut self,
-        event: AccountEventDetail<MoneyTransferCancelled>,
+        event: AccountEventData<MoneyTransferCancelled>,
     ) -> anyhow::Result<()> {
-        self.updated_at = Some(event.detail.timestamp);
+        self.updated_at = Some(event.details.timestamp);
 
         if event.data.to_id == self.id {
             self.transaction_to_reserved_balance
@@ -178,20 +178,20 @@ impl Account {
 
         if let Some(transaction) = self.transactions.get_mut(&event.data.transaction_id) {
             transaction.state = MoneyTransactionState::Cancelled;
-            transaction.updated_at = Some(event.detail.timestamp);
+            transaction.updated_at = Some(event.details.timestamp);
         }
         Ok(())
     }
 
     async fn aggregate_money_transfer_succeeded(
         &mut self,
-        event: AccountEventDetail<MoneyTransferSucceeded>,
+        event: AccountEventData<MoneyTransferSucceeded>,
     ) -> anyhow::Result<()> {
-        self.updated_at = Some(event.detail.timestamp);
+        self.updated_at = Some(event.details.timestamp);
 
         if let Some(transaction) = self.transactions.get_mut(&event.data.transaction_id) {
             transaction.state = MoneyTransactionState::Succeeded;
-            transaction.updated_at = Some(event.detail.timestamp);
+            transaction.updated_at = Some(event.details.timestamp);
         }
 
         if let (Some(reserved_balance), true) = (
