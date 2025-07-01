@@ -1,6 +1,6 @@
-use liteventd::{Aggregator, Event, EventDetail, Executor, SqlExecutor, SubscribeHandler};
+use liteventd::{Aggregator, Event, EventDetail, Executor, SubscribeHandler};
 use liteventd_macros::handle;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 use ulid::Ulid;
 use validator::Validate;
 
