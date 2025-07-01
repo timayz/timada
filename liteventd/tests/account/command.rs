@@ -1,6 +1,6 @@
-use liteventd::{Aggregator, Context, Event, Executor, SubscribeHandler};
+use liteventd::{Context, Executor, SubscribeHandler};
 use liteventd_macros::handle;
-use std::{collections::HashMap, marker::PhantomData};
+use std::collections::HashMap;
 use ulid::Ulid;
 use validator::Validate;
 
@@ -97,9 +97,10 @@ pub async fn transfer_money<E: Executor>(
     Ok(())
 }
 
-#[handle(money_transferred, account_debited, account_credited)]
+// #[handle(money_transferred, account_debited, account_credited)]
 struct Command;
 
+#[liteventd_macros::handle]
 impl Command {
     async fn money_transferred<E: Executor>(
         &self,
