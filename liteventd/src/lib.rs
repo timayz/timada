@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+use tokio::sync::RwLock;
 use ulid::Ulid;
 
 pub struct EventData<D, M> {
@@ -201,6 +202,7 @@ pub struct SubscribeBuilder<E: Executor> {
     mode: SubscribeMode,
     handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
     delay: Option<Duration>,
+    started: RwLock<bool>,
 }
 
 pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
@@ -211,6 +213,7 @@ pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
         handlers: HashMap::default(),
         delay: None,
         routing_key: None,
+        started: RwLock::new(false),
     }
 }
 
@@ -233,7 +236,7 @@ impl<E: Executor> SubscribeBuilder<E> {
         self
     }
 
-    pub async fn start(&mut self, _executor: &E) -> Result<Receiver<Event>, SubscribeError> {
+    pub async fn start(&mut self, _executor: &E) -> Result<&mut Self, SubscribeError> {
         todo!()
     }
 }

@@ -187,28 +187,10 @@ impl Command {
 
 pub async fn subscribe<E: Executor + 'static>(executor: E) -> anyhow::Result<()> {
     let key = "account-command";
-    let recv = liteventd::subscribe::<E>(key)
+    let _ = liteventd::subscribe::<E>(key)
         .handler::<Account, _>(Command)
         .start(&executor)
         .await?;
-
-    // tokio::spawn(async move {
-    //     while let Ok(event) = recv.recv() {
-    //         let res = if event.aggregate_type == Account::name() {
-    //             Command.handle(&executor, &event).await
-    //         } else {
-    //             Ok(())
-    //         };
-    //
-    //         if let Err(err) = res {
-    //             panic!("subscribe # account-command > Command.handle => '{err}'");
-    //         }
-    //
-    //         if let Err(err) = liteventd::acknowledge(&executor, key, &event).await {
-    //             panic!("subscribe # account-command > acknowledge => '{err}'");
-    //         }
-    //     }
-    // });
 
     Ok(())
 }
