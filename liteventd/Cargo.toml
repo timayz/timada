@@ -1,0 +1,18 @@
+[package]
+name = "liteventd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+ulid = { version = "1.2", features = ["serde"] }
+tokio = { version = "1.45", features = ["full"] }
+liteventd-macros = { path = "../macros" }
+anyhow = "1.0"
+ciborium = "0.2.2"
+sqlx = { version = "0.8", features = [ "runtime-tokio" ] }
+thiserror = "2.0"
+async-trait = "0.1"
+
+[dev-dependencies]
+validator = { version = "0.20.0", features = ["derive"] }
