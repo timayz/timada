@@ -1,31 +1,43 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use sha3::{Digest, Sha3_256};
-use syn::{ItemStruct, parse_macro_input};
+use std::ops::Deref;
+use syn::{ItemImpl, ItemStruct, parse_macro_input};
 
 #[proc_macro_attribute]
-pub fn handle(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item: ItemStruct = parse_macro_input!(item);
-    let attr = attr.to_string().replace("\n", " ");
-    let mut hasher = Sha3_256::new();
+pub fn handle(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item: ItemImpl = parse_macro_input!(item);
 
-    let event_handlers = attr
-        .split(", ")
-        .map(|h| {
-            let h = h.trim();
-            hasher.update(h);
-            let name = format_ident!("{}", h);
+    let syn::Type::Path(item_path) = item.self_ty.deref() else {
+        return syn::Error::new_spanned(item, "Unable to find name of impl struct")
+            .into_compile_error()
+            .into();
+    };
 
-            quote! {
-              if let Ok(Some(context)) = context.to_context() {
-                  self.#name(context).await?;
-                  return Ok(());
-              }
-            }
+    let Some(ident) = item_path.path.get_ident() else {
+        return syn::Error::new_spanned(item, "Unable to get ident of impl struct")
+            .into_compile_error()
+            .into();
+    };
+
+    let handler_fns = item
+        .items
+        .iter()
+        .filter_map(|item| {
+            let syn::ImplItem::Fn(iten_fn) = item else {
+                return None;
+            };
+
+            let ident = iten_fn.sig.ident.clone();
+
+            Some(quote! {
+                if let Ok(Some(context)) = context.to_context(){
+                    self.#ident(context).await?;
+                    return Ok(());
+                }
+            })
         })
         .collect::<proc_macro2::TokenStream>();
-
-    let ident = item.ident.clone();
 
     quote! {
         #item
@@ -33,7 +45,7 @@ pub fn handle(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[async_trait::async_trait]
         impl<E: liteventd::Executor> SubscribeHandler<E> for #ident {
             async fn handle(&self, context: &liteventd::ContextBase<'_, E>) -> anyhow::Result<()> {
-                #event_handlers
+                #handler_fns
 
                 Ok(())
             }
@@ -43,30 +55,44 @@ pub fn handle(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn aggregate(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item: ItemStruct = parse_macro_input!(item);
-    let attr = attr.to_string().replace("\n", " ");
+pub fn aggregate(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item: ItemImpl = parse_macro_input!(item);
     let mut hasher = Sha3_256::new();
 
-    let event_handlers = attr
-        .split(", ")
-        .map(|h| {
-            let h = h.trim();
-            hasher.update(h);
-            let name = format_ident!("{}", h);
+    let syn::Type::Path(item_path) = item.self_ty.deref() else {
+        return syn::Error::new_spanned(item, "Unable to find name of impl struct")
+            .into_compile_error()
+            .into();
+    };
 
-            quote! {
-              if let Ok(Some(data)) = event.to_data() {
-                  self.#name(data).await?;
-                  return Ok(());
-              }
-            }
+    let Some(ident) = item_path.path.get_ident() else {
+        return syn::Error::new_spanned(item, "Unable to get ident of impl struct")
+            .into_compile_error()
+            .into();
+    };
+
+    let handler_fns = item
+        .items
+        .iter()
+        .filter_map(|item| {
+            let syn::ImplItem::Fn(iten_fn) = item else {
+                return None;
+            };
+
+            hasher.update(iten_fn.sig.ident.to_string());
+            let ident = iten_fn.sig.ident.clone();
+
+            Some(quote! {
+                if let Ok(Some(data)) = event.to_data(){
+                    self.#ident(data).await?;
+                    return Ok(());
+                }
+            })
         })
         .collect::<proc_macro2::TokenStream>();
 
-    let ident = item.ident.clone();
     let revision = format!("{:x}", hasher.finalize());
-    let name = item.ident.to_string();
+    let name = ident.to_string();
 
     quote! {
         #item
@@ -74,7 +100,7 @@ pub fn aggregate(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[async_trait::async_trait]
         impl Aggregator for #ident {
             async fn aggregate(&mut self, event: Event) -> anyhow::Result<()> {
-                #event_handlers
+                #handler_fns
 
                 Ok(())
             }
