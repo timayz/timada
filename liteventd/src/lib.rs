@@ -3,8 +3,7 @@ pub mod context;
 use dyn_clone::DynClone;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
-    collections::{HashMap, HashSet},
-    sync::mpsc::Receiver,
+    collections::HashMap,
     time::Duration,
 };
 use thiserror::Error;

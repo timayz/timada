@@ -2,7 +2,6 @@ mod command;
 mod event;
 mod query;
 
-pub use command::*;
 pub use event::*;
 
 use serde::{Deserialize, Serialize};
@@ -53,15 +52,6 @@ pub struct MoneyTransaction {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-#[aggregate(
-    aggregate_account_created,
-    aggregate_account_credited,
-    aggregate_account_debited,
-    aggregate_full_name_changed,
-    aggregate_money_transferred,
-    aggregate_money_transfer_cancelled,
-    aggregate_money_transfer_succeeded
-)]
 pub struct Account {
     pub id: Ulid,
     pub fullname: String,
@@ -72,8 +62,9 @@ pub struct Account {
     pub updated_at: Option<u32>,
 }
 
+#[aggregate]
 impl Account {
-    async fn aggregate_account_created(
+    async fn account_created(
         &mut self,
         event: AccountEventData<AccountCreated>,
     ) -> anyhow::Result<()> {
@@ -84,7 +75,7 @@ impl Account {
         Ok(())
     }
 
-    async fn aggregate_account_credited(
+    async fn account_credited(
         &mut self,
         event: AccountEventData<AccountCredited>,
     ) -> anyhow::Result<()> {
@@ -99,7 +90,7 @@ impl Account {
         Ok(())
     }
 
-    async fn aggregate_account_debited(
+    async fn account_debited(
         &mut self,
         event: AccountEventData<AccountDebited>,
     ) -> anyhow::Result<()> {
@@ -115,7 +106,7 @@ impl Account {
         Ok(())
     }
 
-    async fn aggregate_full_name_changed(
+    async fn full_name_changed(
         &mut self,
         event: AccountEventData<FullNameChanged>,
     ) -> anyhow::Result<()> {
@@ -124,7 +115,7 @@ impl Account {
         Ok(())
     }
 
-    async fn aggregate_money_transferred(
+    async fn money_transferred(
         &mut self,
         event: AccountEventData<MoneyTransferred>,
     ) -> anyhow::Result<()> {
@@ -158,7 +149,7 @@ impl Account {
         Ok(())
     }
 
-    async fn aggregate_money_transfer_cancelled(
+    async fn money_transfer_cancelled(
         &mut self,
         event: AccountEventData<MoneyTransferCancelled>,
     ) -> anyhow::Result<()> {
@@ -183,7 +174,7 @@ impl Account {
         Ok(())
     }
 
-    async fn aggregate_money_transfer_succeeded(
+    async fn money_transfer_succeeded(
         &mut self,
         event: AccountEventData<MoneyTransferSucceeded>,
     ) -> anyhow::Result<()> {
