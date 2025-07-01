@@ -1,6 +1,6 @@
-use liteventd::{Aggregator, Event, EventDetail, Executor, SubscribeHandler};
+use liteventd::{Aggregator, Event, EventDetail, Executor, SqlExecutor, SubscribeHandler};
 use liteventd_macros::handle;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use ulid::Ulid;
 use validator::Validate;
 
@@ -185,19 +185,32 @@ impl Command {
 
         Ok(())
     }
+}
 
-    pub async fn subscribe<E: Executor>(executor: &E) -> anyhow::Result<()> {
-        let recv = liteventd::subscribe("account-command")
-            .aggregator::<Account>()
-            .start(executor)
-            .await?;
+pub async fn subscribe<E: Executor + 'static>(executor: E) -> anyhow::Result<()> {
+    let key = "account-command";
+    let recv = liteventd::subscribe(key)
+        .aggregator::<Account>()
+        .start(&executor)
+        .await?;
 
+    tokio::spawn(async move {
         while let Ok(event) = recv.recv() {
-            if event.aggregate_type == Account::name() {
-                Command.handle(executor, event).await?;
+            let res = if event.aggregate_type == Account::name() {
+                Command.handle(&executor, &event).await
+            } else {
+                Ok(())
+            };
+
+            if let Err(err) = res {
+                panic!("subscribe # account-command > Command.handle => '{err}'");
+            }
+
+            if let Err(err) = liteventd::acknowledge(&executor, key, &event).await {
+                panic!("subscribe # account-command > acknowledge => '{err}'");
             }
         }
+    });
 
-        Ok(())
-    }
+    Ok(())
 }

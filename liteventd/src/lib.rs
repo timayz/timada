@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::mpsc::Receiver,
+    time::Duration,
 };
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -71,8 +72,11 @@ pub async fn load<A: Aggregator, E: Executor>(
     todo!()
 }
 
-#[derive(Debug, Error)]
-pub enum SaveError {}
+#[derive(Debug, Error, PartialEq)]
+pub enum SaveError {
+    #[error("invalid original version")]
+    InvalidOriginalVersion,
+}
 
 pub struct SaveBuilder<A: Aggregator> {
     aggregate_id: Ulid,
@@ -137,13 +141,13 @@ pub enum SubscribeError {}
 
 #[async_trait::async_trait]
 pub trait SubscribeHandler {
-    async fn handle<E: Executor>(&self, executor: &E, event: Event) -> anyhow::Result<()>;
+    async fn handle<E: Executor>(&self, executor: &E, event: &Event) -> anyhow::Result<()>;
 }
 
 pub enum SubscribeMode {
     Persistent,
-    Stream,
-    StreamOff,
+    Normal,
+    Live,
 }
 
 pub struct SubscribeBuilder {
@@ -151,11 +155,18 @@ pub struct SubscribeBuilder {
     key: String,
     mode: SubscribeMode,
     aggregators: HashSet<String>,
+    delay: Option<Duration>,
 }
 
 impl SubscribeBuilder {
     pub fn mode(mut self, v: SubscribeMode) -> Self {
         self.mode = v;
+
+        self
+    }
+
+    pub fn delay(mut self, v: Duration) -> Self {
+        self.delay = Some(v);
 
         self
     }
@@ -180,5 +191,17 @@ pub fn subscribe(key: impl Into<String>) -> SubscribeBuilder {
         key: key.into(),
         mode: SubscribeMode::Persistent,
         aggregators: HashSet::default(),
+        delay: None,
     }
+}
+
+#[derive(Debug, Error)]
+pub enum AcknowledgeError {}
+
+pub async fn acknowledge<E: Executor>(
+    executor: &E,
+    key: impl Into<String>,
+    event: &Event,
+) -> Result<(), AcknowledgeError> {
+    todo!()
 }

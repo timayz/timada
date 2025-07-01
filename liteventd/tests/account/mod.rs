@@ -1,6 +1,6 @@
 mod command;
 mod event;
-mod view;
+mod query;
 
 pub use command::*;
 pub use event::*;
@@ -15,7 +15,7 @@ use liteventd_macros::aggregate;
 type AccountEventDetail<D> = EventDetail<D, HashMap<String, String>>;
 
 #[derive(Debug, Serialize, Deserialize)]
-enum MoneyTransactionState {
+pub enum MoneyTransactionState {
     New,
     Pending,
     Succeeded,
@@ -29,7 +29,7 @@ impl Default for MoneyTransactionState {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-enum MoneyTransactionType {
+pub enum MoneyTransactionType {
     Incoming,
     Outgoing,
 }
@@ -41,7 +41,7 @@ impl Default for MoneyTransactionType {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct MoneyTransaction {
+pub struct MoneyTransaction {
     pub transaction_id: Ulid,
     pub from_id: Ulid,
     pub to_id: Ulid,
@@ -62,7 +62,7 @@ struct MoneyTransaction {
     aggregate_money_transfer_cancelled,
     aggregate_money_transfer_succeeded
 )]
-struct Account {
+pub struct Account {
     pub id: Ulid,
     pub fullname: String,
     pub balance: f32,
