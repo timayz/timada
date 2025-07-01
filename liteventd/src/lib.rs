@@ -1,8 +1,4 @@
-use std::{
-    collections::HashSet,
-    sync::mpsc::Receiver,
-    time::Duration,
-};
+use std::{collections::HashSet, sync::mpsc::Receiver, time::Duration};
 
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -19,6 +15,7 @@ pub struct Event {
     pub aggregate_id: Ulid,
     pub aggregate_type: String,
     pub name: String,
+    pub routing_key: Option<String>,
     pub data: Vec<u8>,
     pub metadata: Vec<u8>,
     pub timestamp: u32,
@@ -82,6 +79,7 @@ pub struct SaveBuilder<A: Aggregator> {
     aggregate_id: Ulid,
     aggregate_type: String,
     aggregator: A,
+    routing_key: Option<String>,
     original_version: u16,
     data: Vec<(&'static str, Vec<u8>)>,
     metadata: Vec<u8>,
@@ -90,6 +88,12 @@ pub struct SaveBuilder<A: Aggregator> {
 impl<A: Aggregator> SaveBuilder<A> {
     pub fn original_version(mut self, v: u16) -> Self {
         self.original_version = v;
+
+        self
+    }
+
+    pub fn routing_key(mut self, v: String) -> Self {
+        self.routing_key = Some(v);
 
         self
     }
@@ -126,6 +130,7 @@ pub fn save_aggregator<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> Save
         aggregate_id,
         aggregator,
         aggregate_type: A::name().to_owned(),
+        routing_key: None,
         original_version: 0,
         data: Vec::default(),
         metadata: Vec::default(),
@@ -153,9 +158,21 @@ pub enum SubscribeMode {
 pub struct SubscribeBuilder {
     id: Ulid,
     key: String,
+    routing_key: Option<String>,
     mode: SubscribeMode,
     aggregators: HashSet<String>,
     delay: Option<Duration>,
+}
+
+pub fn subscribe(key: impl Into<String>) -> SubscribeBuilder {
+    SubscribeBuilder {
+        id: Ulid::new(),
+        key: key.into(),
+        mode: SubscribeMode::Persistent,
+        aggregators: HashSet::default(),
+        delay: None,
+        routing_key: None,
+    }
 }
 
 impl SubscribeBuilder {
@@ -182,16 +199,6 @@ impl SubscribeBuilder {
         _executor: &E,
     ) -> Result<Receiver<Event>, SubscribeError> {
         todo!()
-    }
-}
-
-pub fn subscribe(key: impl Into<String>) -> SubscribeBuilder {
-    SubscribeBuilder {
-        id: Ulid::new(),
-        key: key.into(),
-        mode: SubscribeMode::Persistent,
-        aggregators: HashSet::default(),
-        delay: None,
     }
 }
 
