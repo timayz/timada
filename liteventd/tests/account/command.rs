@@ -1,6 +1,6 @@
-use liteventd::{Aggregator, Context, Event, Executor, SubscribeHandler};
+use liteventd::{Context, Executor, SubscribeHandler};
 use liteventd_macros::handle;
-use std::{collections::HashMap, marker::PhantomData};
+use std::collections::HashMap;
 use ulid::Ulid;
 use validator::Validate;
 

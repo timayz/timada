@@ -2,7 +2,6 @@ mod command;
 mod event;
 mod query;
 
-pub use command::*;
 pub use event::*;
 
 use serde::{Deserialize, Serialize};
