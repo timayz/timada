@@ -99,7 +99,7 @@ pub async fn transfer_money<E: Executor>(
 // #[handle(money_transferred, account_debited, account_credited)]
 struct Command;
 
-#[liteventd_macros::handle]
+#[liteventd_macros::handler]
 impl Command {
     async fn money_transferred<E: Executor>(
         &self,

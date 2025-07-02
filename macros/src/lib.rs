@@ -5,7 +5,7 @@ use std::ops::Deref;
 use syn::{ItemImpl, ItemStruct, parse_macro_input};
 
 #[proc_macro_attribute]
-pub fn handle(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let item: ItemImpl = parse_macro_input!(item);
 
     let syn::Type::Path(item_path) = item.self_ty.deref() else {
@@ -55,7 +55,7 @@ pub fn handle(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn aggregate(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn aggregator(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let item: ItemImpl = parse_macro_input!(item);
     let mut hasher = Sha3_256::new();
 

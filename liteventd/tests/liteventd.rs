@@ -1,6 +1,6 @@
 mod account;
 
-#[tokio::main]
+#[tokio::test]
 async fn save() -> anyhow::Result<()> {
     Ok(())
 }

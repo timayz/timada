@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use ulid::Ulid;
 
 use liteventd::{Aggregator, Event, EventData};
-use liteventd_macros::aggregate;
 
 type AccountEventData<D> = EventData<D, HashMap<String, String>>;
 
@@ -62,7 +61,7 @@ pub struct Account {
     pub updated_at: Option<u32>,
 }
 
-#[aggregate]
+#[liteventd_macros::aggregator]
 impl Account {
     async fn account_created(
         &mut self,
