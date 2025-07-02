@@ -2,10 +2,7 @@ pub mod context;
 
 use dyn_clone::DynClone;
 use serde::{Serialize, de::DeserializeOwned};
-use std::{
-    collections::HashMap,
-    time::Duration,
-};
+use std::{collections::HashMap, time::Duration};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use ulid::Ulid;
@@ -236,6 +233,10 @@ impl<E: Executor> SubscribeBuilder<E> {
     }
 
     pub async fn start(&mut self, _executor: &E) -> Result<&mut Self, SubscribeError> {
+        todo!()
+    }
+
+    pub async fn wait_finish(&mut self, _executor: &E) -> Result<(), SubscribeError> {
         todo!()
     }
 }

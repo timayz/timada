@@ -11,15 +11,17 @@ use crate::account::{
 type AccountContext<'a, E, D> = Context<'a, E, D, HashMap<String, String>>;
 
 #[derive(Debug, Validate)]
-pub struct CreateAccountInput {
+struct CreateAccountInput {
     #[validate(length(min = 3, max = 20))]
     pub fullname: String,
 }
 
 pub async fn create_account<E: Executor>(
     executor: &E,
-    input: CreateAccountInput,
+    fullname: impl Into<String>,
 ) -> anyhow::Result<Ulid> {
+    let fullname = fullname.into();
+    let input = CreateAccountInput { fullname };
     input.validate()?;
 
     let id = Ulid::new();
@@ -35,7 +37,7 @@ pub async fn create_account<E: Executor>(
 }
 
 #[derive(Debug, Validate)]
-pub struct ChangeFullNameInput {
+struct ChangeFullNameInput {
     pub id: Ulid,
 
     #[validate(length(min = 3, max = 20))]
@@ -44,8 +46,12 @@ pub struct ChangeFullNameInput {
 
 pub async fn change_fullname<E: Executor>(
     executor: &E,
-    input: ChangeFullNameInput,
+    id: Ulid,
+    fullname: impl Into<String>,
 ) -> anyhow::Result<()> {
+    let fullname = fullname.into();
+    let input = ChangeFullNameInput { id, fullname };
+
     input.validate()?;
 
     let account = liteventd::load::<Account, _>(executor, input.id).await?;
@@ -61,32 +67,39 @@ pub async fn change_fullname<E: Executor>(
 }
 
 #[derive(Debug, Validate)]
-pub struct TransferMoneyInput {
-    pub from: Ulid,
-    pub to: Ulid,
+struct TransferMoneyInput {
+    pub from_id: Ulid,
+    pub to_id: Ulid,
     #[validate(range(exclusive_min = 0.0))]
     pub value: f32,
 }
 
 pub async fn transfer_money<E: Executor>(
     executor: &E,
-    input: TransferMoneyInput,
+    from_id: Ulid,
+    to_id: Ulid,
+    value: f32,
 ) -> anyhow::Result<()> {
+    let input = TransferMoneyInput {
+        from_id,
+        to_id,
+        value,
+    };
     input.validate()?;
 
-    if input.from == input.to {
+    if input.from_id == input.to_id {
         return Err(anyhow::anyhow!(
             "not possible to transfer money to the same account"
         ));
     }
 
-    let from_account = liteventd::load::<Account, _>(executor, input.from).await?;
-    let to_account = liteventd::load::<Account, _>(executor, input.to).await?;
+    let account_from = liteventd::load::<Account, _>(executor, input.from_id).await?;
+    let account_to = liteventd::load::<Account, _>(executor, input.to_id).await?;
 
-    liteventd::save(from_account, input.from)
+    liteventd::save(account_from, input.from_id)
         .data(&MoneyTransferred {
-            from_id: input.from,
-            to_id: to_account.item.id,
+            from_id: input.from_id,
+            to_id: account_to.item.id,
             transaction_id: Ulid::new(),
             value: input.value,
         })?

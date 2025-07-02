@@ -2,6 +2,7 @@ mod command;
 mod event;
 mod query;
 
+pub use command::*;
 pub use event::*;
 
 use serde::{Deserialize, Serialize};
@@ -69,6 +70,7 @@ impl Account {
     ) -> anyhow::Result<()> {
         self.id = event.details.aggregate_id;
         self.fullname = event.data.fullname;
+        self.balance = 100.00;
         self.created_at = event.details.timestamp;
 
         Ok(())
