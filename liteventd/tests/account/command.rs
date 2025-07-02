@@ -26,7 +26,7 @@ pub async fn create_account<E: Executor>(
 
     let id = Ulid::new();
 
-    liteventd::save_aggregator(Account::default(), id)
+    liteventd::create(Account::default(), id)
         .data(&AccountCreated {
             fullname: input.fullname,
         })?

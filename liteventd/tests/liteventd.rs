@@ -21,7 +21,7 @@ async fn save<E: Executor>(executor: &E) -> anyhow::Result<()> {
 
 async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Result<()> {
     let user1 = account::create_account(executor, "user1").await?;
-    let res = liteventd::save_aggregator(account::Account::default(), user1)
+    let res = liteventd::create(account::Account::default(), user1)
         .data(&account::AccountCreated {
             fullname: "john".to_owned(),
         })?

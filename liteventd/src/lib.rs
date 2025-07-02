@@ -132,7 +132,7 @@ impl<A: Aggregator> SaveBuilder<A> {
     }
 }
 
-pub fn save_aggregator<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
+pub fn new_save_builder<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
     SaveBuilder {
         aggregate_id,
         aggregator,
@@ -144,8 +144,12 @@ pub fn save_aggregator<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> Save
     }
 }
 
+pub fn create<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
+    new_save_builder(aggregator, aggregate_id)
+}
+
 pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregate_id: Ulid) -> SaveBuilder<A> {
-    save_aggregator(aggregator.item, aggregate_id).original_version(aggregator.version)
+    new_save_builder(aggregator.item, aggregate_id).original_version(aggregator.version)
 }
 
 #[derive(Debug, Error)]
