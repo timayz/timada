@@ -17,6 +17,7 @@ pub struct Event {
     pub id: Ulid,
     pub aggregate_id: Ulid,
     pub aggregate_type: String,
+    pub version: u16,
     pub name: String,
     pub routing_key: Option<String>,
     pub data: Vec<u8>,
@@ -93,6 +94,18 @@ pub struct SaveBuilder<A: Aggregator> {
 }
 
 impl<A: Aggregator> SaveBuilder<A> {
+    pub fn new(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
+        SaveBuilder {
+            aggregate_id,
+            aggregator,
+            aggregate_type: A::name().to_owned(),
+            routing_key: None,
+            original_version: 0,
+            data: Vec::default(),
+            metadata: Vec::default(),
+        }
+    }
+
     pub fn original_version(mut self, v: u16) -> Self {
         self.original_version = v;
 
@@ -132,24 +145,12 @@ impl<A: Aggregator> SaveBuilder<A> {
     }
 }
 
-pub fn new_save_builder<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
-    SaveBuilder {
-        aggregate_id,
-        aggregator,
-        aggregate_type: A::name().to_owned(),
-        routing_key: None,
-        original_version: 0,
-        data: Vec::default(),
-        metadata: Vec::default(),
-    }
-}
-
 pub fn create<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
-    new_save_builder(aggregator, aggregate_id)
+    SaveBuilder::new(aggregator, aggregate_id)
 }
 
 pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregate_id: Ulid) -> SaveBuilder<A> {
-    new_save_builder(aggregator.item, aggregate_id).original_version(aggregator.version)
+    SaveBuilder::new(aggregator.item, aggregate_id).original_version(aggregator.version)
 }
 
 #[derive(Debug, Error)]
@@ -176,12 +177,6 @@ pub struct Context<'a, E, D, M> {
     pub event: &'a Event,
     pub data: D,
     pub metadata: M,
-}
-
-impl<'a, E: Executor, D, M> Context<'a, E, D, M> {
-    pub fn acknowledge(&self) {
-        todo!()
-    }
 }
 
 #[async_trait::async_trait]
