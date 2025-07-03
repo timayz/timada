@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
 use sha3::{Digest, Sha3_256};
 use std::ops::Deref;
 use syn::{ItemImpl, ItemStruct, parse_macro_input};
@@ -75,12 +75,12 @@ pub fn aggregator(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .items
         .iter()
         .filter_map(|item| {
-            let syn::ImplItem::Fn(iten_fn) = item else {
+            let syn::ImplItem::Fn(item_fn) = item else {
                 return None;
             };
 
-            hasher.update(iten_fn.sig.ident.to_string());
-            let ident = iten_fn.sig.ident.clone();
+            hasher.update(item_fn.to_token_stream().to_string());
+            let ident = item_fn.sig.ident.clone();
 
             Some(quote! {
                 if let Ok(Some(data)) = event.to_data(){
