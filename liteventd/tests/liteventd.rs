@@ -1,4 +1,5 @@
-use liteventd::{Executor, SqlExecutor};
+use liteventd::{Executor, sql::SqlExecutor};
+use sqlx::{Database, IntoArguments, Pool, Sqlite, SqlitePool};
 
 mod account;
 
@@ -34,15 +35,34 @@ async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn sql_save() -> anyhow::Result<()> {
-    let executor = SqlExecutor();
+async fn sqlite_save() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor().await?;
 
     save(&executor).await
 }
 
 #[tokio::test]
-async fn sql_invalid_original_version() -> anyhow::Result<()> {
-    let executor = SqlExecutor();
+async fn sqlite_invalid_original_version() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor().await?;
 
     invalid_original_version(&executor).await
+}
+
+async fn create_sqlite_executor() -> anyhow::Result<SqlExecutor<Sqlite>> {
+    let pool = SqlitePool::connect("sqlite::memory:").await?;
+
+    create_sql_executor(pool).await
+}
+
+async fn create_sql_executor<'a, D>(pool: Pool<D>) -> anyhow::Result<SqlExecutor<D>>
+where
+    D: Database,
+    D::Arguments<'a>: IntoArguments<'a, D>,
+    for<'c> &'c mut D::Connection: sqlx::Executor<'c, Database = D>,
+{
+    sqlx::query(SqlExecutor::<D>::get_database_schema())
+        .execute(&pool)
+        .await?;
+
+    Ok(SqlExecutor(pool))
 }

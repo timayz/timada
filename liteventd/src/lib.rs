@@ -1,4 +1,5 @@
 pub mod context;
+pub mod sql;
 
 use dyn_clone::DynClone;
 use serde::{Serialize, de::DeserializeOwned};
@@ -52,16 +53,6 @@ pub trait Executor: DynClone + Send + Sync {
 
 dyn_clone::clone_trait_object!(Executor);
 
-#[derive(Clone)]
-pub struct SqlExecutor();
-
-#[async_trait::async_trait()]
-impl Executor for SqlExecutor {
-    async fn test(&self) {
-        todo!()
-    }
-}
-
 #[derive(Debug, Error)]
 pub enum LoadError {}
 
@@ -87,7 +78,7 @@ pub struct SaveBuilder<A: Aggregator> {
     aggregate_id: Ulid,
     aggregate_type: String,
     aggregator: A,
-    routing_key: Option<String>,
+    routing_key: String,
     original_version: u16,
     data: Vec<(&'static str, Vec<u8>)>,
     metadata: Vec<u8>,
@@ -99,7 +90,7 @@ impl<A: Aggregator> SaveBuilder<A> {
             aggregate_id,
             aggregator,
             aggregate_type: A::name().to_owned(),
-            routing_key: None,
+            routing_key: "default".into(),
             original_version: 0,
             data: Vec::default(),
             metadata: Vec::default(),
@@ -113,7 +104,7 @@ impl<A: Aggregator> SaveBuilder<A> {
     }
 
     pub fn routing_key(mut self, v: String) -> Self {
-        self.routing_key = Some(v);
+        self.routing_key = v;
 
         self
     }
