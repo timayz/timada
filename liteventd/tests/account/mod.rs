@@ -13,33 +13,23 @@ use liteventd::{Aggregator, Event, EventData};
 
 type AccountEventData<D> = EventData<D, HashMap<String, String>>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub enum MoneyTransactionState {
+    #[default]
     New,
     Pending,
     Succeeded,
     Cancelled,
 }
 
-impl Default for MoneyTransactionState {
-    fn default() -> Self {
-        Self::New
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub enum MoneyTransactionType {
+    #[default]
     Incoming,
     Outgoing,
 }
 
-impl Default for MoneyTransactionType {
-    fn default() -> Self {
-        Self::Incoming
-    }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct MoneyTransaction {
     pub transaction_id: Ulid,
     pub from_id: Ulid,
@@ -51,7 +41,7 @@ pub struct MoneyTransaction {
     pub updated_at: Option<u32>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Account {
     pub id: Ulid,
     pub fullname: String,

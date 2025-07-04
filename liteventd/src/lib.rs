@@ -2,7 +2,7 @@ pub mod context;
 pub mod sql;
 
 use dyn_clone::DynClone;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{collections::HashMap, time::Duration};
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -14,13 +14,23 @@ pub struct EventData<D, M> {
     pub metadata: M,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub aggregate_id: Ulid,
+    pub aggregate_type: String,
+    pub version: u16,
+    pub data: Vec<u8>,
+    pub created_at: u32,
+    pub updated_at: Option<u32>,
+}
+
 pub struct Event {
     pub id: Ulid,
     pub aggregate_id: Ulid,
     pub aggregate_type: String,
     pub version: u16,
     pub name: String,
-    pub routing_key: Option<String>,
+    pub routing_key: String,
     pub data: Vec<u8>,
     pub metadata: Vec<u8>,
     pub timestamp: u32,
@@ -36,8 +46,8 @@ impl Event {
 }
 
 #[async_trait::async_trait]
-pub trait Aggregator: Default + Serialize + DeserializeOwned {
-    async fn aggregate(&mut self, event: Event) -> anyhow::Result<()>;
+pub trait Aggregator: Default + Serialize + DeserializeOwned + Clone {
+    async fn aggregate(&mut self, event: &Event) -> anyhow::Result<()>;
     fn revision() -> &'static str;
     fn name() -> &'static str;
 }
@@ -48,7 +58,13 @@ pub trait AggregatorEvent {
 
 #[async_trait::async_trait]
 pub trait Executor: DynClone + Send + Sync {
-    async fn test(&self) {}
+    async fn get_event_routing_key(
+        &self,
+        aggregate_type: String,
+        aggregate_id: Ulid,
+    ) -> Result<Option<String>, SaveError>;
+    async fn bulk_insert(&self, events: Vec<Event>) -> Result<(), SaveError>;
+    async fn save_snapshot(&self, snapshot: Snapshot) -> Result<(), SaveError>;
 }
 
 dyn_clone::clone_trait_object!(Executor);
@@ -68,10 +84,16 @@ pub async fn load<A: Aggregator, E: Executor>(
     todo!()
 }
 
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, Error)]
 pub enum SaveError {
     #[error("invalid original version")]
     InvalidOriginalVersion,
+
+    #[error("{0}")]
+    ServerError(#[from] anyhow::Error),
+
+    #[error("{0}")]
+    CiboriumSer(#[from] ciborium::ser::Error<std::io::Error>),
 }
 
 pub struct SaveBuilder<A: Aggregator> {
@@ -131,8 +153,52 @@ impl<A: Aggregator> SaveBuilder<A> {
         Ok(self)
     }
 
-    pub async fn commit<E: Executor>(&self, _executor: &E) -> Result<(), SaveError> {
-        todo!()
+    pub async fn commit<E: Executor>(&self, executor: &E) -> Result<(), SaveError> {
+        let routing_key = executor
+            .get_event_routing_key(self.aggregate_type.to_owned(), self.aggregate_id)
+            .await?
+            .unwrap_or(self.routing_key.to_owned());
+
+        let mut aggregator = self.aggregator.clone();
+        let mut version = self.original_version;
+
+        let mut events = vec![];
+
+        for (name, data) in &self.data {
+            version += 1;
+
+            let event = Event {
+                id: Ulid::new(),
+                name: name.to_string(),
+                data: data.to_vec(),
+                metadata: self.metadata.to_vec(),
+                timestamp: 0,
+                aggregate_id: self.aggregate_id,
+                aggregate_type: self.aggregate_type.to_owned(),
+                version,
+                routing_key: routing_key.to_owned(),
+            };
+
+            aggregator.aggregate(&event).await?;
+            events.push(event);
+        }
+
+        executor.bulk_insert(events).await?;
+
+        let mut data = vec![];
+        ciborium::into_writer(&aggregator, &mut data)?;
+        executor
+            .save_snapshot(Snapshot {
+                aggregate_id: self.aggregate_id,
+                aggregate_type: self.aggregate_type.to_owned(),
+                version,
+                data,
+                created_at: 0,
+                updated_at: None,
+            })
+            .await?;
+
+        Ok(())
     }
 }
 

@@ -99,7 +99,7 @@ pub fn aggregator(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         #[async_trait::async_trait]
         impl Aggregator for #ident {
-            async fn aggregate(&mut self, event: Event) -> anyhow::Result<()> {
+            async fn aggregate(&mut self, event: &Event) -> anyhow::Result<()> {
                 #handler_fns
 
                 Ok(())
