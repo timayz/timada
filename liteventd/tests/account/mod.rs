@@ -2,6 +2,7 @@ mod command;
 mod event;
 mod query;
 
+pub use command::*;
 pub use event::*;
 
 use serde::{Deserialize, Serialize};
@@ -9,37 +10,26 @@ use std::collections::HashMap;
 use ulid::Ulid;
 
 use liteventd::{Aggregator, Event, EventData};
-use liteventd_macros::aggregate;
 
 type AccountEventData<D> = EventData<D, HashMap<String, String>>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub enum MoneyTransactionState {
+    #[default]
     New,
     Pending,
     Succeeded,
     Cancelled,
 }
 
-impl Default for MoneyTransactionState {
-    fn default() -> Self {
-        Self::New
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub enum MoneyTransactionType {
+    #[default]
     Incoming,
     Outgoing,
 }
 
-impl Default for MoneyTransactionType {
-    fn default() -> Self {
-        Self::Incoming
-    }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct MoneyTransaction {
     pub transaction_id: Ulid,
     pub from_id: Ulid,
@@ -51,7 +41,7 @@ pub struct MoneyTransaction {
     pub updated_at: Option<u32>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Account {
     pub id: Ulid,
     pub fullname: String,
@@ -62,7 +52,7 @@ pub struct Account {
     pub updated_at: Option<u32>,
 }
 
-#[aggregate]
+#[liteventd_macros::aggregator]
 impl Account {
     async fn account_created(
         &mut self,
@@ -70,6 +60,7 @@ impl Account {
     ) -> anyhow::Result<()> {
         self.id = event.details.aggregate_id;
         self.fullname = event.data.fullname;
+        self.balance = 100.00;
         self.created_at = event.details.timestamp;
 
         Ok(())
