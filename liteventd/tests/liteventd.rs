@@ -1,3 +1,5 @@
+use std::{env::temp_dir, path::Path};
+
 use liteventd::{Executor, sql::LibSqlExecutor};
 
 mod account;
@@ -38,20 +40,22 @@ async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Result<(
 
 #[tokio::test]
 async fn libsql_save() -> anyhow::Result<()> {
-    let executor = create_libsql_executor().await?;
+    let executor = create_libsql_executor("libsql_save.db").await?;
 
     save(&executor).await
 }
 
 #[tokio::test]
 async fn libsql_invalid_original_version() -> anyhow::Result<()> {
-    let executor = create_libsql_executor().await?;
+    let executor = create_libsql_executor("libsql_invalid_original_version.db").await?;
 
     invalid_original_version(&executor).await
 }
 
-async fn create_libsql_executor() -> anyhow::Result<LibSqlExecutor> {
-    let executor = LibSqlExecutor::new(":memory:").await?;
+async fn create_libsql_executor(path: impl AsRef<Path>) -> anyhow::Result<LibSqlExecutor> {
+    let path = temp_dir().join(path);
+    let _ = std::fs::remove_file(&path);
+    let executor = LibSqlExecutor::new(path).await?;
     executor.migrate().await?;
 
     Ok(executor)

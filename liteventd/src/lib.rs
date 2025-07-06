@@ -20,10 +20,9 @@ pub struct Snapshot {
     pub aggregate_type: String,
     pub version: u16,
     pub data: Vec<u8>,
-    pub created_at: u32,
-    pub updated_at: Option<u32>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Event {
     pub id: Ulid,
     pub aggregate_id: Ulid,
@@ -37,11 +36,36 @@ pub struct Event {
 }
 
 impl Event {
-    pub fn to_data<D: AggregatorEvent, M>(&self) -> anyhow::Result<Option<EventData<D, M>>> {
+    pub fn to_data<D: AggregatorEvent + DeserializeOwned, M: DeserializeOwned>(
+        &self,
+    ) -> Result<Option<EventData<D, M>>, ciborium::de::Error<std::io::Error>> {
         if D::name() != self.name {
             return Ok(None);
         }
-        todo!();
+
+        let data = ciborium::from_reader(&self.data[..])?;
+        let metadata = ciborium::from_reader(&self.metadata[..])?;
+
+        Ok(Some(EventData {
+            data,
+            metadata,
+            details: self.clone(),
+        }))
+    }
+
+    pub fn to_snapshot<A: Aggregator>(
+        &self,
+        aggregator: &A,
+    ) -> Result<Snapshot, ciborium::ser::Error<std::io::Error>> {
+        let mut data = vec![];
+        ciborium::into_writer(aggregator, &mut data)?;
+
+        Ok(Snapshot {
+            aggregate_type: self.aggregate_type.to_owned(),
+            aggregate_id: self.aggregate_id.to_owned(),
+            version: self.version,
+            data,
+        })
     }
 }
 
@@ -88,6 +112,9 @@ pub async fn load<A: Aggregator, E: Executor>(
 pub enum SaveError {
     #[error("invalid original version")]
     InvalidOriginalVersion,
+
+    #[error("not data")]
+    NoData,
 
     #[error("{0}")]
     ServerError(#[from] anyhow::Error),
@@ -183,20 +210,13 @@ impl<A: Aggregator> SaveBuilder<A> {
             events.push(event);
         }
 
-        executor.bulk_insert(events).await?;
+        let Some(last_event) = events.last() else {
+            return Err(SaveError::NoData);
+        };
 
-        let mut data = vec![];
-        ciborium::into_writer(&aggregator, &mut data)?;
-        executor
-            .save_snapshot(Snapshot {
-                aggregate_id: self.aggregate_id,
-                aggregate_type: self.aggregate_type.to_owned(),
-                version,
-                data,
-                created_at: 0,
-                updated_at: None,
-            })
-            .await?;
+        let snapshot = last_event.to_snapshot(&aggregator)?;
+        executor.bulk_insert(events).await?;
+        executor.save_snapshot(snapshot).await?;
 
         Ok(())
     }

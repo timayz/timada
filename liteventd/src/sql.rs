@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use crate::{Aggregator, Event, Executor, SaveError, Snapshot};
-use libsql::Builder;
+use libsql::{Builder, params};
 use libsql_migration::content::migrate;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
@@ -12,8 +12,8 @@ pub struct LibSqlExecutor {
 }
 
 impl LibSqlExecutor {
-    pub async fn new(path: impl Into<String>) -> Result<Self, libsql::Error> {
-        let db = Builder::new_local(path.into()).build().await?;
+    pub async fn new(path: impl AsRef<Path>) -> Result<Self, libsql::Error> {
+        let db = Builder::new_local(path).build().await?;
         Ok(Self { db: Arc::new(db) })
     }
 
@@ -67,6 +67,47 @@ CREATE TABLE snapshot (
 
         Ok(())
     }
+
+    async fn get_event_routing_key_base(
+        &self,
+        aggregate_type: String,
+        aggregate_id: Ulid,
+    ) -> Result<Option<String>, libsql::Error> {
+        let conn = self.db.connect()?;
+        let mut stmt = conn.prepare("SELECT routing_key FROM event WHERE aggregate_type = ?1 AND aggregate_id = ?2 LIMIT 1").await?;
+
+        let mut rows = stmt
+            .query([aggregate_type.to_string(), aggregate_id.to_string()])
+            .await?;
+
+        let Some(row) = rows.next().await? else {
+            return Ok(None);
+        };
+
+        Ok(row.get_str(0).map(|v| v.to_string()).ok())
+    }
+
+    async fn bulk_insert_base(&self, events: Vec<Event>) -> Result<(), libsql::Error> {
+        let conn = self.db.connect()?;
+        let mut rows = conn.query("select * from event", ()).await.unwrap();
+        println!("{:?}", rows.next().await);
+        let tx = conn.transaction().await?;
+
+        for event in events {
+            tx.execute("INSERT INTO event (id, name, aggregate_type, aggregate_id, version, routing_key, data, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![
+                event.id.to_string(),
+                event.name.as_str(),
+                event.aggregate_type.as_str(),
+                event.aggregate_id.to_string(),
+                event.version,
+                event.routing_key.as_str(),
+                event.data.to_vec(),
+                event.metadata.to_vec()
+            ]).await?;
+        }
+
+        tx.commit().await
+    }
 }
 
 #[async_trait::async_trait]
@@ -76,30 +117,25 @@ impl Executor for LibSqlExecutor {
         aggregate_type: String,
         aggregate_id: Ulid,
     ) -> Result<Option<String>, SaveError> {
-        // let mut qb = QueryBuilder::new("SELECT routing_key FROM event WHERE aggregate_type = ");
-        // qb.push_bind(aggregate_type.to_string());
-        // qb.push(" AND aggregate_id = ");
-        // qb.push_bind(aggregate_id.to_string());
-        // qb.push(" LIMIT 1");
-        //
-        // let query = qb.build();
-        // println!("{}", query.sql());
-        // query.execute(&self.0).await;
-
-        // Ok(qb
-        //     .build_query_as()
-        //     .fetch_optional(&self.0)
-        //     .await
-        //     .map_err(|e| SaveError::ServerError(e.into()))?
-        //     .map(|v: (String,)| v.0))
-        todo!()
+        self.get_event_routing_key_base(aggregate_type, aggregate_id)
+            .await
+            .map_err(|e| SaveError::ServerError(e.into()))
     }
 
     async fn bulk_insert(&self, events: Vec<Event>) -> Result<(), SaveError> {
-        todo!()
+        let Err(e) = self.bulk_insert_base(events).await else {
+            return Ok(());
+        };
+
+        if e.to_string().contains("(code: 2067)") {
+            Err(SaveError::InvalidOriginalVersion)
+        } else {
+            Err(SaveError::ServerError(e.into()))
+        }
     }
 
     async fn save_snapshot(&self, snapshot: Snapshot) -> Result<(), SaveError> {
-        todo!()
+        let conn = self.db.connect().unwrap();
+        Ok(())
     }
 }
