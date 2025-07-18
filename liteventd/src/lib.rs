@@ -1,8 +1,7 @@
 pub mod context;
 pub mod sql;
 
-use dyn_clone::DynClone;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use std::{collections::HashMap, time::Duration};
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -12,14 +11,6 @@ pub struct EventData<D, M> {
     pub details: Event,
     pub data: D,
     pub metadata: M,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Snapshot {
-    pub aggregate_id: Ulid,
-    pub aggregate_type: String,
-    pub version: u16,
-    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,25 +43,10 @@ impl Event {
             details: self.clone(),
         }))
     }
-
-    pub fn to_snapshot<A: Aggregator>(
-        &self,
-        aggregator: &A,
-    ) -> Result<Snapshot, ciborium::ser::Error<std::io::Error>> {
-        let mut data = vec![];
-        ciborium::into_writer(aggregator, &mut data)?;
-
-        Ok(Snapshot {
-            aggregate_type: self.aggregate_type.to_owned(),
-            aggregate_id: self.aggregate_id.to_owned(),
-            version: self.version,
-            data,
-        })
-    }
 }
 
 #[async_trait::async_trait]
-pub trait Aggregator: Default + Serialize + DeserializeOwned + Clone {
+pub trait Aggregator: Default + Send + Sync + Serialize + DeserializeOwned + Clone {
     async fn aggregate(&mut self, event: &Event) -> anyhow::Result<()>;
     fn revision() -> &'static str;
     fn name() -> &'static str;
@@ -81,35 +57,32 @@ pub trait AggregatorEvent {
 }
 
 #[async_trait::async_trait]
-pub trait Executor: DynClone + Send + Sync {
-    async fn get_event_routing_key(
+pub trait Executor: Send + Sync {
+    async fn write<A: Aggregator>(
         &self,
-        aggregate_type: String,
-        aggregate_id: Ulid,
-    ) -> Result<Option<String>, SaveError>;
-    async fn bulk_insert(&self, events: Vec<Event>) -> Result<(), SaveError>;
-    async fn save_snapshot(&self, snapshot: Snapshot) -> Result<(), SaveError>;
+        aggregator: &A,
+        events: Vec<Event>,
+    ) -> Result<(), WriteError>;
 }
 
-dyn_clone::clone_trait_object!(Executor);
-
 #[derive(Debug, Error)]
-pub enum LoadError {}
+pub enum ReadError {}
 
 pub struct LoadResult<A: Aggregator> {
     pub item: A,
     pub version: u16,
+    pub routing_key: String,
 }
 
 pub async fn load<A: Aggregator, E: Executor>(
     _executor: &E,
     id: Ulid,
-) -> Result<LoadResult<A>, LoadError> {
+) -> Result<LoadResult<A>, ReadError> {
     todo!()
 }
 
 #[derive(Debug, Error)]
-pub enum SaveError {
+pub enum WriteError {
     #[error("invalid original version")]
     InvalidOriginalVersion,
 
@@ -119,8 +92,11 @@ pub enum SaveError {
     #[error("{0}")]
     ServerError(#[from] anyhow::Error),
 
-    #[error("{0}")]
+    #[error("ciborium >> {0}")]
     CiboriumSer(#[from] ciborium::ser::Error<std::io::Error>),
+
+    #[error("sqlx >> {0}")]
+    Sqlx(#[from] sqlx::Error),
 }
 
 pub struct SaveBuilder<A: Aggregator> {
@@ -180,12 +156,12 @@ impl<A: Aggregator> SaveBuilder<A> {
         Ok(self)
     }
 
-    pub async fn commit<E: Executor>(&self, executor: &E) -> Result<(), SaveError> {
-        let routing_key = executor
-            .get_event_routing_key(self.aggregate_type.to_owned(), self.aggregate_id)
-            .await?
-            .unwrap_or(self.routing_key.to_owned());
+    pub async fn commit<E: Executor>(&self, executor: &E) -> Result<(), WriteError> {
+        if self.data.is_empty() {
+            return Err(WriteError::NoData);
+        }
 
+        let routing_key = self.routing_key.to_owned();
         let mut aggregator = self.aggregator.clone();
         let mut version = self.original_version;
 
@@ -210,13 +186,7 @@ impl<A: Aggregator> SaveBuilder<A> {
             events.push(event);
         }
 
-        let Some(last_event) = events.last() else {
-            return Err(SaveError::NoData);
-        };
-
-        let snapshot = last_event.to_snapshot(&aggregator)?;
-        executor.bulk_insert(events).await?;
-        executor.save_snapshot(snapshot).await?;
+        executor.write(&aggregator, events).await?;
 
         Ok(())
     }
@@ -227,7 +197,9 @@ pub fn create<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A
 }
 
 pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregate_id: Ulid) -> SaveBuilder<A> {
-    SaveBuilder::new(aggregator.item, aggregate_id).original_version(aggregator.version)
+    SaveBuilder::new(aggregator.item, aggregate_id)
+        .original_version(aggregator.version)
+        .routing_key(aggregator.routing_key)
 }
 
 #[derive(Debug, Error)]

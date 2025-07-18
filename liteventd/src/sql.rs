@@ -1,40 +1,45 @@
-use std::{path::Path, sync::Arc};
-
-use crate::{Aggregator, Event, Executor, SaveError, Snapshot};
-use libsql::{Builder, params};
-use libsql_migration::content::migrate;
+use crate::{Aggregator, Event, Executor, WriteError};
 use serde::{Deserialize, Serialize};
+use sqlx::{Database, Pool};
 use ulid::Ulid;
 
-#[derive(Clone)]
-pub struct LibSqlExecutor {
-    db: Arc<libsql::Database>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub aggregate_id: Ulid,
+    pub aggregate_type: String,
+    pub version: u16,
+    pub data: Vec<u8>,
 }
 
-impl LibSqlExecutor {
-    pub async fn new(path: impl AsRef<Path>) -> Result<Self, libsql::Error> {
-        let db = Builder::new_local(path).build().await?;
-        Ok(Self { db: Arc::new(db) })
+pub struct SqlExecutor<D: Database>(pub Pool<D>);
+
+impl<D> SqlExecutor<D>
+where
+    D: Database,
+    for<'a> D::Arguments<'a>: sqlx::IntoArguments<'a, D>,
+    for<'c> &'c mut D::Connection: sqlx::Executor<'c, Database = D>,
+{
+    fn get_bind_key() -> &'static str {
+        match D::NAME {
+            "SQLite" => "?",
+            name => panic!("get_database_schema not supported for '{name}'"),
+        }
     }
 
-    pub async fn new_remote(
-        url: impl Into<String>,
-        token: impl Into<String>,
-    ) -> Result<Self, libsql::Error> {
-        let db = Builder::new_remote(url.into(), token.into())
-            .build()
-            .await?;
-        Ok(Self { db: Arc::new(db) })
+    pub async fn create_database_schema(&self) -> sqlx::Result<()> {
+        let schema = match D::NAME {
+            "SQLite" => Self::get_sqlite_schema(),
+            name => panic!("get_database_schema not supported for '{name}'"),
+        };
+
+        sqlx::query(schema).execute(&self.0).await?;
+
+        Ok(())
     }
 
-    pub async fn migrate(
-        &self,
-    ) -> Result<(), libsql_migration::errors::LibsqlContentMigratorError> {
-        let conn = self.db.connect()?;
-
-        let migration_id = "20250704_init".to_string();
-        let migration_script = r#"
-CREATE TABLE event (
+    fn get_sqlite_schema() -> &'static str {
+        r#"
+CREATE TABLE IF NOT EXISTS event (
     id  TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     aggregate_type TEXT NOT NULL,
@@ -46,12 +51,12 @@ CREATE TABLE event (
     timestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
 );
 
-CREATE INDEX idx_event_5sQ1BZoDjCO ON event(aggregate_type, aggregate_id);
-CREATE INDEX idx_event_CISJrZpQwSz ON event(aggregate_type);
-CREATE INDEX idx_event_sX8G8WjC8WQ ON event(routing_key, aggregate_type);
-CREATE UNIQUE INDEX idx_event_BVjOvQoJPQj ON event(aggregate_type,aggregate_id,version);
+CREATE INDEX IF NOT EXISTS idx_event_5sQ1BZoDjCO ON event(aggregate_type, aggregate_id);
+CREATE INDEX IF NOT EXISTS idx_event_CISJrZpQwSz ON event(aggregate_type);
+CREATE INDEX IF NOT EXISTS idx_event_sX8G8WjC8WQ ON event(routing_key, aggregate_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_event_BVjOvQoJPQj ON event(aggregate_type,aggregate_id,version);
 
-CREATE TABLE snapshot (
+CREATE TABLE IF NOT EXISTS snapshot (
     aggregate_type TEXT NOT NULL,
     aggregate_id TEXT NOT NULL,
     version INTEGER NOT NULL,
@@ -61,81 +66,94 @@ CREATE TABLE snapshot (
     PRIMARY KEY (aggregate_type,aggregate_id)
 );
         "#
-        .to_string();
-
-        migrate(&conn, migration_id, migration_script).await?;
-
-        Ok(())
     }
+}
 
-    async fn get_event_routing_key_base(
-        &self,
-        aggregate_type: String,
-        aggregate_id: Ulid,
-    ) -> Result<Option<String>, libsql::Error> {
-        let conn = self.db.connect()?;
-        let mut stmt = conn.prepare("SELECT routing_key FROM event WHERE aggregate_type = ?1 AND aggregate_id = ?2 LIMIT 1").await?;
-
-        let mut rows = stmt
-            .query([aggregate_type.to_string(), aggregate_id.to_string()])
-            .await?;
-
-        let Some(row) = rows.next().await? else {
-            return Ok(None);
-        };
-
-        Ok(row.get_str(0).map(|v| v.to_string()).ok())
+impl<D: Database> Clone for SqlExecutor<D> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
+}
 
-    async fn bulk_insert_base(&self, events: Vec<Event>) -> Result<(), libsql::Error> {
-        let conn = self.db.connect()?;
-        let mut rows = conn.query("select * from event", ()).await.unwrap();
-        println!("{:?}", rows.next().await);
-        let tx = conn.transaction().await?;
-
-        for event in events {
-            tx.execute("INSERT INTO event (id, name, aggregate_type, aggregate_id, version, routing_key, data, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", params![
-                event.id.to_string(),
-                event.name.as_str(),
-                event.aggregate_type.as_str(),
-                event.aggregate_id.to_string(),
-                event.version,
-                event.routing_key.as_str(),
-                event.data.to_vec(),
-                event.metadata.to_vec()
-            ]).await?;
-        }
-
-        tx.commit().await
+impl<D: Database> From<Pool<D>> for SqlExecutor<D> {
+    fn from(value: Pool<D>) -> Self {
+        Self(value)
     }
 }
 
 #[async_trait::async_trait]
-impl Executor for LibSqlExecutor {
-    async fn get_event_routing_key(
+impl<D> Executor for SqlExecutor<D>
+where
+    D: Database,
+    for<'a> D::Arguments<'a>: sqlx::IntoArguments<'a, D>,
+    for<'c> &'c mut D::Connection: sqlx::Executor<'c, Database = D>,
+    for<'t> String: sqlx::Encode<'t, D> + sqlx::Decode<'t, D> + sqlx::Type<D>,
+    for<'t> u16: sqlx::Encode<'t, D> + sqlx::Decode<'t, D> + sqlx::Type<D>,
+    for<'t> Vec<u8>: sqlx::Encode<'t, D> + sqlx::Decode<'t, D> + sqlx::Type<D>,
+{
+    async fn write<A: Aggregator>(
         &self,
-        aggregate_type: String,
-        aggregate_id: Ulid,
-    ) -> Result<Option<String>, SaveError> {
-        self.get_event_routing_key_base(aggregate_type, aggregate_id)
-            .await
-            .map_err(|e| SaveError::ServerError(e.into()))
-    }
-
-    async fn bulk_insert(&self, events: Vec<Event>) -> Result<(), SaveError> {
-        let Err(e) = self.bulk_insert_base(events).await else {
-            return Ok(());
+        aggregator: &A,
+        events: Vec<Event>,
+    ) -> Result<(), WriteError> {
+        let Some(info) = events.first() else {
+            return Err(WriteError::NoData);
         };
 
-        if e.to_string().contains("(code: 2067)") {
-            Err(SaveError::InvalidOriginalVersion)
-        } else {
-            Err(SaveError::ServerError(e.into()))
-        }
-    }
+        let values = events
+            .iter()
+            .map(|_| format!("({0},{0},{0},{0},{0},{0},{0},{0})", Self::get_bind_key()))
+            .collect::<Vec<_>>()
+            .join(",");
 
-    async fn save_snapshot(&self, snapshot: Snapshot) -> Result<(), SaveError> {
-        let conn = self.db.connect().unwrap();
+        let sql = format!(
+            "INSERT INTO event (id,name,data,metadata,aggregate_type,aggregate_id,version,routing_key) VALUES {}",
+            values
+        );
+
+        let mut query = sqlx::query(&sql);
+
+        for event in events.iter() {
+            query = query
+                .bind(event.id.to_string())
+                .bind(&event.name)
+                .bind(&event.data)
+                .bind(&event.metadata)
+                .bind(&event.aggregate_type)
+                .bind(event.aggregate_id.to_string())
+                .bind(event.version)
+                .bind(&event.routing_key);
+        }
+
+        query.execute(&self.0).await.map_err(|err| {
+            if err.to_string().contains("(code: 2067)") {
+                WriteError::InvalidOriginalVersion
+            } else {
+                err.into()
+            }
+        })?;
+
+        let mut data = vec![];
+        ciborium::into_writer(aggregator, &mut data)?;
+
+        sqlx::query(&format!(
+            r#"
+        INSERT INTO snapshot (aggregate_type,aggregate_id,version,data)
+        VALUES ({0},{0},{0},{0})
+            ON CONFLICT(aggregate_type,aggregate_id) DO UPDATE SET 
+                data=excluded.data,
+                version=excluded.version,
+                updated_at=(strftime('%s', 'now'))
+        "#,
+            Self::get_bind_key()
+        ))
+        .bind(&info.aggregate_type)
+        .bind(info.aggregate_id.to_string())
+        .bind(info.version)
+        .bind(&data)
+        .execute(&self.0)
+        .await?;
+
         Ok(())
     }
 }
