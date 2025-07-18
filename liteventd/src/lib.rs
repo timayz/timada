@@ -1,11 +1,15 @@
 pub mod context;
+pub mod cursor;
 pub mod sql;
 
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sqlx::prelude::FromRow;
 use std::{collections::HashMap, time::Duration};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use ulid::Ulid;
+
+use crate::cursor::{Args, Cursor, ReadResult, ToCursor};
 
 pub struct EventData<D, M> {
     pub details: Event,
@@ -13,10 +17,17 @@ pub struct EventData<D, M> {
     pub metadata: M,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EventCursor {
+    pub i: String,
+    pub v: u16,
+    pub t: u32,
+}
+
+#[derive(Debug, Clone, FromRow)]
 pub struct Event {
-    pub id: Ulid,
-    pub aggregate_id: Ulid,
+    pub id: String,
+    pub aggregate_id: String,
     pub aggregate_type: String,
     pub version: u16,
     pub name: String,
@@ -45,6 +56,18 @@ impl Event {
     }
 }
 
+impl ToCursor for Event {
+    type Cursor = EventCursor;
+
+    fn serialize_cursor(&self) -> EventCursor {
+        EventCursor {
+            i: self.id.to_string(),
+            v: self.version,
+            t: self.timestamp,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait Aggregator: Default + Send + Sync + Serialize + DeserializeOwned + Clone {
     async fn aggregate(&mut self, event: &Event) -> anyhow::Result<()>;
@@ -63,22 +86,89 @@ pub trait Executor: Send + Sync {
         aggregator: &A,
         events: Vec<Event>,
     ) -> Result<(), WriteError>;
+
+    async fn get_event<A: Aggregator>(&self, cursor: Cursor) -> Result<Event, ReadError>;
+
+    async fn read<A: Aggregator>(
+        &self,
+        id: Ulid,
+        args: Args,
+    ) -> Result<ReadResult<Event>, ReadError>;
+
+    async fn get_default_aggregator<A: Aggregator>(
+        &self,
+        id: Ulid,
+    ) -> Result<(A, Option<Cursor>), ReadError>;
 }
 
 #[derive(Debug, Error)]
-pub enum ReadError {}
+pub enum ReadError {
+    #[error("not found")]
+    NotFound,
+
+    #[error("too many events to aggregate")]
+    TooManyEventsToAggregate,
+
+    #[error("{0}")]
+    ServerError(#[from] anyhow::Error),
+
+    #[error("ciborium.ser >> {0}")]
+    CiboriumSer(#[from] ciborium::ser::Error<std::io::Error>),
+
+    #[error("ciborium.de >> {0}")]
+    CiboriumDe(#[from] ciborium::de::Error<std::io::Error>),
+
+    #[error("sqlx >> {0}")]
+    Sqlx(#[from] sqlx::Error),
+
+    #[error("base64 decode: {0}")]
+    Base64Decode(#[from] base64::DecodeError),
+}
 
 pub struct LoadResult<A: Aggregator> {
     pub item: A,
-    pub version: u16,
-    pub routing_key: String,
+    pub event: Event,
 }
 
 pub async fn load<A: Aggregator, E: Executor>(
-    _executor: &E,
+    executor: &E,
     id: Ulid,
 ) -> Result<LoadResult<A>, ReadError> {
-    todo!()
+    let (mut aggregator, mut cursor) = executor.get_default_aggregator::<A>(id).await?;
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    let mut loop_count = 0;
+
+    loop {
+        let events = executor
+            .read::<A>(id, Args::forward(1000, cursor.clone()))
+            .await?;
+
+        for event in events.edges.iter() {
+            aggregator.aggregate(&event.node).await?;
+        }
+
+        if !events.page_info.has_next_page {
+            let event = match (cursor, events.edges.last()) {
+                (_, Some(event)) => event.node.clone(),
+                (Some(cursor), None) => executor.get_event::<A>(cursor).await?,
+                _ => return Err(ReadError::NotFound),
+            };
+
+            return Ok(LoadResult {
+                item: aggregator,
+                event,
+            });
+        }
+
+        cursor = events.page_info.end_cursor;
+
+        interval.tick().await;
+
+        loop_count += 1;
+        if loop_count > 10 {
+            return Err(ReadError::TooManyEventsToAggregate);
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -92,7 +182,7 @@ pub enum WriteError {
     #[error("{0}")]
     ServerError(#[from] anyhow::Error),
 
-    #[error("ciborium >> {0}")]
+    #[error("ciborium.ser >> {0}")]
     CiboriumSer(#[from] ciborium::ser::Error<std::io::Error>),
 
     #[error("sqlx >> {0}")]
@@ -171,12 +261,12 @@ impl<A: Aggregator> SaveBuilder<A> {
             version += 1;
 
             let event = Event {
-                id: Ulid::new(),
+                id: Ulid::new().to_string(),
                 name: name.to_string(),
                 data: data.to_vec(),
                 metadata: self.metadata.to_vec(),
                 timestamp: 0,
-                aggregate_id: self.aggregate_id,
+                aggregate_id: self.aggregate_id.to_string(),
                 aggregate_type: self.aggregate_type.to_owned(),
                 version,
                 routing_key: routing_key.to_owned(),
@@ -198,8 +288,8 @@ pub fn create<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A
 
 pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregate_id: Ulid) -> SaveBuilder<A> {
     SaveBuilder::new(aggregator.item, aggregate_id)
-        .original_version(aggregator.version)
-        .routing_key(aggregator.routing_key)
+        .original_version(aggregator.event.version)
+        .routing_key(aggregator.event.routing_key)
 }
 
 #[derive(Debug, Error)]
