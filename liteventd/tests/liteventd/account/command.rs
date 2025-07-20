@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ulid::Ulid;
 use validator::Validate;
 
-use crate::account::{
+use crate::liteventd_test::account::{
     Account, AccountCreated, AccountCredited, AccountDebited, FullNameChanged,
     MoneyTransferCancelled, MoneyTransferSucceeded, MoneyTransferred, Reason,
 };
@@ -24,7 +24,7 @@ pub async fn create_account<E: Executor>(
     let input = CreateAccountInput { fullname };
     input.validate()?;
 
-    let id = Ulid::new();
+    let id = Ulid::default();
 
     liteventd::create(Account::default(), id)
         .data(&AccountCreated {
@@ -100,7 +100,7 @@ pub async fn transfer_money<E: Executor>(
         .data(&MoneyTransferred {
             from_id: input.from_id,
             to_id: account_to.item.id,
-            transaction_id: Ulid::new(),
+            transaction_id: Ulid::default(),
             value: input.value,
         })?
         .commit(executor)

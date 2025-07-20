@@ -1,15 +1,14 @@
 pub mod context;
 pub mod cursor;
-pub mod sql;
+pub mod rocksdb;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sqlx::prelude::FromRow;
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, ops::Deref, time::Duration};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use ulid::Ulid;
 
-use crate::cursor::{Args, Cursor, ReadResult, ToCursor};
+use crate::cursor::{Args, Cursor, ReadResult, Value};
 
 pub struct EventData<D, M> {
     pub details: Event,
@@ -19,15 +18,15 @@ pub struct EventData<D, M> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EventCursor {
-    pub i: String,
+    pub i: Ulid,
     pub v: u16,
     pub t: u32,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone)]
 pub struct Event {
-    pub id: String,
-    pub aggregate_id: String,
+    pub id: Ulid,
+    pub aggregate_id: Ulid,
     pub aggregate_type: String,
     pub version: u16,
     pub name: String,
@@ -56,12 +55,12 @@ impl Event {
     }
 }
 
-impl ToCursor for Event {
+impl Cursor for Event {
     type Cursor = EventCursor;
 
-    fn serialize_cursor(&self) -> EventCursor {
+    fn serialize(&self) -> EventCursor {
         EventCursor {
-            i: self.id.to_string(),
+            i: self.id,
             v: self.version,
             t: self.timestamp,
         }
@@ -87,18 +86,18 @@ pub trait Executor: Send + Sync {
         events: Vec<Event>,
     ) -> Result<(), WriteError>;
 
-    async fn get_event<A: Aggregator>(&self, cursor: Cursor) -> Result<Event, ReadError>;
+    async fn get_event<A: Aggregator>(&self, cursor: Value) -> Result<Event, ReadError>;
 
     async fn read<A: Aggregator>(
         &self,
-        id: Ulid,
+        id: String,
         args: Args,
     ) -> Result<ReadResult<Event>, ReadError>;
 
     async fn get_default_aggregator<A: Aggregator>(
         &self,
-        id: Ulid,
-    ) -> Result<(A, Option<Cursor>), ReadError>;
+        id: String,
+    ) -> Result<(A, Option<Value>), ReadError>;
 }
 
 #[derive(Debug, Error)]
@@ -107,19 +106,16 @@ pub enum ReadError {
     NotFound,
 
     #[error("too many events to aggregate")]
-    TooManyEventsToAggregate,
+    TooManyEvents,
 
     #[error("{0}")]
-    ServerError(#[from] anyhow::Error),
+    Unknown(#[from] anyhow::Error),
 
     #[error("ciborium.ser >> {0}")]
     CiboriumSer(#[from] ciborium::ser::Error<std::io::Error>),
 
     #[error("ciborium.de >> {0}")]
     CiboriumDe(#[from] ciborium::de::Error<std::io::Error>),
-
-    #[error("sqlx >> {0}")]
-    Sqlx(#[from] sqlx::Error),
 
     #[error("base64 decode: {0}")]
     Base64Decode(#[from] base64::DecodeError),
@@ -132,15 +128,16 @@ pub struct LoadResult<A: Aggregator> {
 
 pub async fn load<A: Aggregator, E: Executor>(
     executor: &E,
-    id: Ulid,
+    id: impl Into<String>,
 ) -> Result<LoadResult<A>, ReadError> {
-    let (mut aggregator, mut cursor) = executor.get_default_aggregator::<A>(id).await?;
+    let id = id.into();
+    let (mut aggregator, mut cursor) = executor.get_default_aggregator::<A>(id.to_owned()).await?;
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     let mut loop_count = 0;
 
     loop {
         let events = executor
-            .read::<A>(id, Args::forward(1000, cursor.clone()))
+            .read::<A>(id.to_owned(), Args::forward(1000, cursor.clone()))
             .await?;
 
         for event in events.edges.iter() {
@@ -166,7 +163,7 @@ pub async fn load<A: Aggregator, E: Executor>(
 
         loop_count += 1;
         if loop_count > 10 {
-            return Err(ReadError::TooManyEventsToAggregate);
+            return Err(ReadError::TooManyEvents);
         }
     }
 }
@@ -180,13 +177,10 @@ pub enum WriteError {
     NoData,
 
     #[error("{0}")]
-    ServerError(#[from] anyhow::Error),
+    Unknown(#[from] anyhow::Error),
 
     #[error("ciborium.ser >> {0}")]
     CiboriumSer(#[from] ciborium::ser::Error<std::io::Error>),
-
-    #[error("sqlx >> {0}")]
-    Sqlx(#[from] sqlx::Error),
 }
 
 pub struct SaveBuilder<A: Aggregator> {
@@ -202,7 +196,7 @@ pub struct SaveBuilder<A: Aggregator> {
 impl<A: Aggregator> SaveBuilder<A> {
     pub fn new(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
         SaveBuilder {
-            aggregate_id,
+            aggregate_id: aggregate_id.into(),
             aggregator,
             aggregate_type: A::name().to_owned(),
             routing_key: "default".into(),
@@ -261,12 +255,12 @@ impl<A: Aggregator> SaveBuilder<A> {
             version += 1;
 
             let event = Event {
-                id: Ulid::new().to_string(),
+                id: Ulid::new(),
                 name: name.to_string(),
                 data: data.to_vec(),
                 metadata: self.metadata.to_vec(),
                 timestamp: 0,
-                aggregate_id: self.aggregate_id.to_string(),
+                aggregate_id: self.aggregate_id,
                 aggregate_type: self.aggregate_type.to_owned(),
                 version,
                 routing_key: routing_key.to_owned(),
@@ -341,7 +335,7 @@ pub struct SubscribeBuilder<E: Executor> {
 
 pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
     SubscribeBuilder {
-        id: Ulid::new(),
+        id: Ulid::default(),
         key: key.into(),
         mode: SubscribeMode::Persistent,
         handlers: HashMap::default(),

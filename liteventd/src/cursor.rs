@@ -2,7 +2,8 @@ use base64::{
     Engine, alphabet,
     engine::{GeneralPurpose, general_purpose},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::ops::Deref;
 
 #[derive(Debug, Clone)]
 pub enum Order {
@@ -12,7 +13,7 @@ pub enum Order {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 pub struct Edge<N> {
-    pub cursor: Cursor,
+    pub cursor: Value,
     pub node: N,
 }
 
@@ -20,8 +21,8 @@ pub struct Edge<N> {
 pub struct PageInfo {
     pub has_previous_page: bool,
     pub has_next_page: bool,
-    pub start_cursor: Option<Cursor>,
-    pub end_cursor: Option<Cursor>,
+    pub start_cursor: Option<Value>,
+    pub end_cursor: Option<Value>,
 }
 
 #[derive(Default, Debug, PartialEq, Serialize, Deserialize)]
@@ -30,47 +31,67 @@ pub struct ReadResult<N> {
     pub page_info: PageInfo,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
-pub struct Cursor(String);
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+pub struct Value(String);
 
-impl From<String> for Cursor {
-    fn from(val: String) -> Self {
-        Self(val)
+impl Deref for Value {
+    type Target = String;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl AsRef<[u8]> for Cursor {
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl AsRef<[u8]> for Value {
     fn as_ref(&self) -> &[u8] {
         self.0.as_bytes()
     }
 }
 
-pub trait ToCursor {
-    type Cursor: Serialize;
+pub trait Cursor {
+    type Cursor: Serialize + DeserializeOwned;
 
-    fn serialize_cursor(&self) -> Self::Cursor;
-    fn to_cursor(&self) -> Result<Cursor, ciborium::ser::Error<std::io::Error>> {
-        let cursor = self.serialize_cursor();
+    fn serialize(&self) -> Self::Cursor;
+
+    fn serialize_cursor(&self) -> Result<Value, ciborium::ser::Error<std::io::Error>> {
+        let cursor = self.serialize();
 
         let mut cbor_encoded = vec![];
         ciborium::into_writer(&cursor, &mut cbor_encoded)?;
 
         let engine = GeneralPurpose::new(&alphabet::URL_SAFE, general_purpose::PAD);
 
-        Ok(Cursor(engine.encode(cbor_encoded)))
+        Ok(Value(engine.encode(cbor_encoded)))
+    }
+
+    fn deserialize_cursor(
+        &self,
+        value: Value,
+    ) -> Result<Self::Cursor, ciborium::de::Error<std::io::Error>> {
+        let engine = GeneralPurpose::new(&alphabet::URL_SAFE, general_purpose::PAD);
+        let decoded = engine
+            .decode(value)
+            .map_err(|e| ciborium::de::Error::Semantic(None, e.to_string()))?;
+
+        ciborium::from_reader(&decoded[..])
     }
 }
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct Args {
     pub first: Option<u16>,
-    pub after: Option<Cursor>,
+    pub after: Option<Value>,
     pub last: Option<u16>,
-    pub before: Option<Cursor>,
+    pub before: Option<Value>,
 }
 
 impl Args {
-    pub fn forward(first: u16, after: Option<Cursor>) -> Self {
+    pub fn forward(first: u16, after: Option<Value>) -> Self {
         Self {
             first: Some(first),
             after,
@@ -79,7 +100,7 @@ impl Args {
         }
     }
 
-    pub fn backward(last: u16, before: Option<Cursor>) -> Self {
+    pub fn backward(last: u16, before: Option<Value>) -> Self {
         Self {
             first: None,
             after: None,

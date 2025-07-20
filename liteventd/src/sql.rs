@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::{
     Aggregator, Event, EventCursor, Executor, ReadError, WriteError,
-    cursor::{Args, Cursor, Edge, Order, PageInfo, ReadResult, ToCursor},
+    cursor::{Args, Cursor, Edge, Order, PageInfo, ReadResult, Value},
 };
 use base64::{
     Engine, alphabet,
@@ -10,9 +10,9 @@ use base64::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sqlx::{
-    Arguments, Database, Execute, FromRow, IntoArguments, Pool, QueryBuilder, query::QueryAs,
+    Arguments, Database, Encode, Execute, FromRow, IntoArguments, Pool, QueryBuilder, Row, Type,
+    query::QueryAs,
 };
-use ulid::Ulid;
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Snapshot {
@@ -104,13 +104,13 @@ where
     for<'t> &'t [u8]: sqlx::Encode<'t, D> + sqlx::Decode<'t, D> + sqlx::Type<D>,
     for<'t> &'t str: sqlx::ColumnIndex<D::Row>,
 {
-    async fn get_event<A: Aggregator>(&self, cursor: Cursor) -> Result<Event, ReadError> {
+    async fn get_event<A: Aggregator>(&self, cursor: Value) -> Result<Event, ReadError> {
         todo!()
     }
 
     async fn read<A: Aggregator>(
         &self,
-        id: Ulid,
+        id: String,
         args: Args,
     ) -> Result<ReadResult<Event>, ReadError> {
         // let q = Query::<_, Event>::new("").args(args).query(&self.0).await;
@@ -120,17 +120,17 @@ where
 
     async fn get_default_aggregator<A: Aggregator>(
         &self,
-        id: Ulid,
-    ) -> Result<(A, Option<Cursor>), ReadError> {
+        id: String,
+    ) -> Result<(A, Option<Value>), ReadError> {
         let Some(snapshot) = sqlx::query_as::<_, Snapshot>(&format!(
             "SELECT cursor, data FROM liteventd_snapshot WHERE id = {0} AND type = {0} AND revision = {0}",
             get_database_bind_key::<D>()
         ))
-        .bind(id.to_string())
+        .bind(id)
         .bind(A::name().to_owned())
         .bind(A::revision().to_owned())
         .fetch_optional(&self.0)
-        .await?
+        .await.map_err(|err| ReadError::Unknown(err.into()))?
         else {
             return Ok((A::default(), None));
         };
@@ -141,7 +141,7 @@ where
             aggregator,
             Some(
                 String::from_utf8(snapshot.cursor)
-                    .map_err(|e| ReadError::ServerError(e.into()))?
+                    .map_err(|e| ReadError::Unknown(e.into()))?
                     .into(),
             ),
         ))
@@ -190,13 +190,13 @@ where
             if err.to_string().contains("(code: 2067)") {
                 WriteError::InvalidOriginalVersion
             } else {
-                err.into()
+                WriteError::Unknown(err.into())
             }
         })?;
 
         let mut data = vec![];
         ciborium::into_writer(aggregator, &mut data)?;
-        let cursor = info.to_cursor()?;
+        let cursor = info.serialize_cursor()?;
 
         sqlx::query(&format!(
             r#"
@@ -216,7 +216,8 @@ where
         .bind(A::revision().to_owned())
         .bind(&data)
         .execute(&self.0)
-        .await?;
+        .await
+        .map_err(|err| WriteError::Unknown(err.into()))?;
 
         Ok(())
     }
@@ -233,7 +234,7 @@ pub trait BindCursor<'q, DB: Database> {
     ) -> QueryAs<'q, DB, O, DB::Arguments<'q>>;
 
     fn bind_cursor<O>(
-        value: &Cursor,
+        value: &Value,
         query: QueryAs<'q, DB, O, DB::Arguments<'q>>,
     ) -> Result<QueryAs<'q, DB, O, DB::Arguments<'q>>, ReadError> {
         let engine = GeneralPurpose::new(&alphabet::URL_SAFE, general_purpose::PAD);
@@ -244,48 +245,13 @@ pub trait BindCursor<'q, DB: Database> {
     }
 }
 
-impl<'q, DB: Database> BindCursor<'q, DB> for Event
-where
-    u16: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    u32: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-{
-    type Cursor = EventCursor;
-
-    fn bing_keys() -> Vec<&'static str> {
-        vec!["timestamp", "version", "id"]
-    }
-
-    fn bind_query<O>(
-        cursor: Self::Cursor,
-        query: QueryAs<'q, DB, O, <DB as Database>::Arguments<'q>>,
-    ) -> QueryAs<'q, DB, O, <DB as Database>::Arguments<'q>> {
-        query.bind(cursor.t).bind(cursor.v).bind(cursor.i)
-    }
-}
-
-pub struct Query<'args, DB, O>
-where
-    DB: Database,
-    DB::Arguments<'args>: IntoArguments<'args, DB> + Clone,
-    O: for<'r> FromRow<'r, DB::Row>,
-    O: 'args + Send + Unpin,
-    O: 'args + BindCursor<'args, DB> + ToCursor,
-{
-    qb: QueryBuilder<'args, DB>,
-    qb_args: DB::Arguments<'args>,
-    phantom_o: PhantomData<O>,
-    order: Order,
-    args: Args,
-}
-
 impl<'args, DB, O> Query<'args, DB, O>
 where
     DB: Database,
     DB::Arguments<'args>: IntoArguments<'args, DB> + Clone,
     O: for<'r> FromRow<'r, DB::Row>,
     O: 'args + Send + Unpin,
-    O: 'args + BindCursor<'args, DB> + ToCursor,
+    O: 'args + BindCursor<'args, DB> + Cursor,
 {
     pub fn new(sql: impl Into<String>) -> Self {
         Self {
@@ -321,7 +287,7 @@ where
         self.order(Order::Desc)
     }
 
-    pub fn backward(self, last: u16, before: Option<Cursor>) -> Self {
+    pub fn backward(self, last: u16, before: Option<Value>) -> Self {
         self.args(Args {
             last: Some(last),
             before,
@@ -329,7 +295,7 @@ where
         })
     }
 
-    pub fn forward(self, first: u16, after: Option<Cursor>) -> Self {
+    pub fn forward(self, first: u16, after: Option<Value>) -> Self {
         self.args(Args {
             first: Some(first),
             after,
@@ -347,7 +313,10 @@ where
         if let Some(cursor) = cursor {
             query = O::bind_cursor(&cursor, query)?;
         }
-        let mut rows = query.fetch_all(executor).await?;
+        let mut rows = query
+            .fetch_all(executor)
+            .await
+            .map_err(|err| ReadError::Unknown(err.into()))?;
         let has_more = rows.len() > limit as usize;
 
         if has_more {
@@ -357,7 +326,7 @@ where
         let mut edges = vec![];
         for node in rows.into_iter() {
             edges.push(Edge {
-                cursor: node.to_cursor()?,
+                cursor: node.serialize_cursor()?,
                 node,
             });
         }
@@ -388,7 +357,7 @@ where
         Ok(ReadResult { edges, page_info })
     }
 
-    fn build(&mut self) -> (u16, Option<Cursor>) {
+    fn build(&mut self) -> (u16, Option<Value>) {
         let (limit, cursor) = if self.is_backward() {
             (self.args.last.unwrap_or(40), self.args.before.clone())
         } else {
@@ -450,5 +419,63 @@ where
         (self.args.last.is_some() || self.args.before.is_some())
             && self.args.first.is_none()
             && self.args.after.is_none()
+    }
+}
+
+pub struct Query<'args, DB, O>
+where
+    DB: Database,
+    DB::Arguments<'args>: IntoArguments<'args, DB> + Clone,
+    O: for<'r> FromRow<'r, DB::Row>,
+    O: 'args + Send + Unpin,
+    O: 'args + BindCursor<'args, DB> + Cursor,
+{
+    qb: QueryBuilder<'args, DB>,
+    qb_args: DB::Arguments<'args>,
+    phantom_o: PhantomData<O>,
+    order: Order,
+    args: Args,
+}
+
+impl<'q, DB: Database> BindCursor<'q, DB> for Event
+where
+    u16: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    u32: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+{
+    type Cursor = EventCursor;
+
+    fn bing_keys() -> Vec<&'static str> {
+        vec!["timestamp", "version", "id"]
+    }
+
+    fn bind_query<O>(
+        cursor: Self::Cursor,
+        query: QueryAs<'q, DB, O, <DB as Database>::Arguments<'q>>,
+    ) -> QueryAs<'q, DB, O, <DB as Database>::Arguments<'q>> {
+        query.bind(cursor.t).bind(cursor.v).bind(cursor.i)
+    }
+}
+
+impl<R: sqlx::Row> FromRow<'_, R> for Event
+where
+    for<'r> u32: sqlx::Type<R::Database> + sqlx::Decode<'r, R::Database>,
+    for<'r> u16: sqlx::Type<R::Database> + sqlx::Decode<'r, R::Database>,
+    for<'r> Vec<u8>: sqlx::Type<R::Database> + sqlx::Decode<'r, R::Database>,
+    for<'r> String: sqlx::Type<R::Database> + sqlx::Decode<'r, R::Database>,
+    for<'r> &'r str: sqlx::ColumnIndex<R>,
+{
+    fn from_row(row: &R) -> Result<Self, sqlx::Error> {
+        Ok(Event {
+            id: row.try_get("id")?,
+            aggregate_id: row.try_get("aggregate_id")?,
+            aggregate_type: row.try_get("aggregate_type")?,
+            version: row.try_get("version")?,
+            name: row.try_get("name")?,
+            routing_key: row.try_get("routing_key")?,
+            data: row.try_get("data")?,
+            metadata: row.try_get("metadata")?,
+            timestamp: row.try_get("timestamp")?,
+        })
     }
 }

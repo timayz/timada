@@ -1,12 +1,9 @@
-use std::{env::temp_dir, path::Path};
-
-use liteventd::{Executor, sql::SqlExecutor};
-use sqlx::{Any, Sqlite, SqlitePool, any::install_default_drivers, migrate::MigrateDatabase};
-use ulid::Ulid;
-
 mod account;
 
-async fn save<E: Executor>(executor: &E) -> anyhow::Result<()> {
+use liteventd::Executor;
+use ulid::Ulid;
+
+pub async fn save<E: Executor>(executor: &E) -> anyhow::Result<()> {
     let user1 = account::create_account(executor, "user1").await?;
     let user2 = Ulid::new();
     liteventd::create(account::Account::default(), user2)
@@ -32,7 +29,7 @@ async fn save<E: Executor>(executor: &E) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Result<()> {
+pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Result<()> {
     let user1 = account::create_account(executor, "user1").await?;
     let res = liteventd::create(account::Account::default(), user1)
         .data(&account::AccountCreated {
@@ -47,31 +44,4 @@ async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Result<(
     );
 
     Ok(())
-}
-
-#[tokio::test]
-async fn sqlite_save() -> anyhow::Result<()> {
-    let executor = create_sqlite_executor("save").await?;
-
-    save(&executor).await
-}
-
-#[tokio::test]
-async fn sqlite_invalid_original_version() -> anyhow::Result<()> {
-    let executor = create_sqlite_executor("invalid_original_version").await?;
-
-    invalid_original_version(&executor).await
-}
-
-async fn create_sqlite_executor(key: impl Into<String>) -> anyhow::Result<SqlExecutor<Sqlite>> {
-    let key = key.into();
-    let dsn = format!("sqlite:../target/liteventd_{key}.db");
-
-    install_default_drivers();
-    let _ = Any::drop_database(&dsn).await;
-    Any::create_database(&dsn).await?;
-    let executor: SqlExecutor<Sqlite> = SqlitePool::connect(":memory:").await?.into();
-    executor.create_database_schema().await?;
-
-    Ok(executor)
 }

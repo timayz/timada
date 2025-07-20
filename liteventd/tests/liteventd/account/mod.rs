@@ -5,11 +5,10 @@ mod query;
 pub use command::*;
 pub use event::*;
 
+use liteventd::{Aggregator, Event, EventData};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use ulid::Ulid;
-
-use liteventd::{Aggregator, Event, EventData};
 
 type AccountEventData<D> = EventData<D, HashMap<String, String>>;
 
