@@ -24,9 +24,9 @@ pub async fn create_account<E: Executor>(
     let input = CreateAccountInput { fullname };
     input.validate()?;
 
-    let id = Ulid::default();
+    let id = Ulid::new();
 
-    liteventd::create(Account::default(), id)
+    liteventd::create_with_id(Account::default(), id)
         .data(&AccountCreated {
             fullname: input.fullname,
         })?

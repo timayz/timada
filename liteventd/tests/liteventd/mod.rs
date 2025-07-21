@@ -6,7 +6,7 @@ use ulid::Ulid;
 pub async fn save<E: Executor>(executor: &E) -> anyhow::Result<()> {
     let user1 = account::create_account(executor, "user1").await?;
     let user2 = Ulid::new();
-    liteventd::create(account::Account::default(), user2)
+    liteventd::create_with_id(account::Account::default(), user2)
         .data(&account::AccountCreated {
             fullname: "user2".to_owned(),
         })?
@@ -31,7 +31,7 @@ pub async fn save<E: Executor>(executor: &E) -> anyhow::Result<()> {
 
 pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Result<()> {
     let user1 = account::create_account(executor, "user1").await?;
-    let res = liteventd::create(account::Account::default(), user1)
+    let res = liteventd::create_with_id(account::Account::default(), user1)
         .data(&account::AccountCreated {
             fullname: "john".to_owned(),
         })?

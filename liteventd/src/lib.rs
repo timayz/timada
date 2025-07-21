@@ -1,7 +1,9 @@
 pub mod context;
 pub mod cursor;
 pub mod rocksdb;
+pub mod sql;
 
+use sea_query::enum_def;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{collections::HashMap, ops::Deref, time::Duration};
 use thiserror::Error;
@@ -24,6 +26,7 @@ pub struct EventCursor {
 }
 
 #[derive(Debug, Clone)]
+#[enum_def]
 pub struct Event {
     pub id: Ulid,
     pub aggregate_id: Ulid,
@@ -80,11 +83,7 @@ pub trait AggregatorEvent {
 
 #[async_trait::async_trait]
 pub trait Executor: Send + Sync {
-    async fn write<A: Aggregator>(
-        &self,
-        aggregator: &A,
-        events: Vec<Event>,
-    ) -> Result<(), WriteError>;
+    async fn write(&self, events: Vec<Event>) -> Result<(), WriteError>;
 
     async fn get_event<A: Aggregator>(&self, cursor: Value) -> Result<Event, ReadError>;
 
@@ -94,10 +93,17 @@ pub trait Executor: Send + Sync {
         args: Args,
     ) -> Result<ReadResult<Event>, ReadError>;
 
-    async fn get_default_aggregator<A: Aggregator>(
+    async fn get_snapshot<A: Aggregator>(
         &self,
         id: String,
-    ) -> Result<(A, Option<Value>), ReadError>;
+    ) -> Result<Option<(Vec<u8>, Value)>, ReadError>;
+
+    async fn save_snapshot<A: Aggregator>(
+        &self,
+        event: Event,
+        data: Vec<u8>,
+        cursor: cursor::Value,
+    ) -> Result<(), WriteError>;
 }
 
 #[derive(Debug, Error)]
@@ -131,7 +137,13 @@ pub async fn load<A: Aggregator, E: Executor>(
     id: impl Into<String>,
 ) -> Result<LoadResult<A>, ReadError> {
     let id = id.into();
-    let (mut aggregator, mut cursor) = executor.get_default_aggregator::<A>(id.to_owned()).await?;
+    let (mut aggregator, mut cursor) = match executor.get_snapshot::<A>(id.to_owned()).await? {
+        Some((data, cursor)) => {
+            let aggregator: A = ciborium::from_reader(&data[..])?;
+            (aggregator, Some(cursor))
+        }
+        _ => (A::default(), None),
+    };
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     let mut loop_count = 0;
 
@@ -241,10 +253,6 @@ impl<A: Aggregator> SaveBuilder<A> {
     }
 
     pub async fn commit<E: Executor>(&self, executor: &E) -> Result<(), WriteError> {
-        if self.data.is_empty() {
-            return Err(WriteError::NoData);
-        }
-
         let routing_key = self.routing_key.to_owned();
         let mut aggregator = self.aggregator.clone();
         let mut version = self.original_version;
@@ -270,13 +278,29 @@ impl<A: Aggregator> SaveBuilder<A> {
             events.push(event);
         }
 
-        executor.write(&aggregator, events).await?;
+        let Some(last_event) = events.last().cloned() else {
+            return Err(WriteError::NoData);
+        };
+
+        executor.write(events).await?;
+
+        let mut data = vec![];
+        ciborium::into_writer(&aggregator, &mut data)?;
+        let cursor = last_event.serialize_cursor()?;
+
+        executor
+            .save_snapshot::<A>(last_event, data, cursor)
+            .await?;
 
         Ok(())
     }
 }
 
-pub fn create<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
+pub fn create<A: Aggregator>(aggregator: A) -> SaveBuilder<A> {
+    SaveBuilder::new(aggregator, Ulid::new())
+}
+
+pub fn create_with_id<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
     SaveBuilder::new(aggregator, aggregate_id)
 }
 
