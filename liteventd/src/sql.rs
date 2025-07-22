@@ -444,7 +444,15 @@ impl Reader {
     }
 
     fn build_reader(&mut self) -> (u16, Option<Value>) {
-        todo!()
+        let (limit, cursor) = if self.is_backward() {
+            (self.args.last.unwrap_or(40), self.args.before.clone())
+        } else {
+            (self.args.first.unwrap_or(40), self.args.after.clone())
+        };
+
+        // @TODO: continue copy from sql poc
+
+        (limit, cursor)
     }
 
     fn is_backward(&self) -> bool {
