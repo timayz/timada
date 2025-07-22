@@ -27,8 +27,8 @@ async fn create_sqlite_executor(key: impl Into<String>) -> anyhow::Result<Sql<sq
 
 async fn create_executor<DB: Database>(url: impl Into<String>) -> anyhow::Result<Sql<DB>>
 where
-    for<'args> DB::Arguments<'args>: sqlx::IntoArguments<'args, DB>,
-    for<'args> &'args mut DB::Connection: sqlx::Executor<'args, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
 {
     install_default_drivers();
 
