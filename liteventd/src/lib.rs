@@ -3,9 +3,8 @@ pub mod cursor;
 pub mod rocksdb;
 pub mod sql;
 
-use sea_query::enum_def;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::{collections::HashMap, ops::Deref, time::Duration};
+use std::{collections::HashMap, time::Duration};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use ulid::Ulid;
@@ -26,7 +25,6 @@ pub struct EventCursor {
 }
 
 #[derive(Debug, Clone)]
-#[enum_def]
 pub struct Event {
     pub id: Ulid,
     pub aggregate_id: Ulid,

@@ -9,9 +9,23 @@ use sqlx::{Database, Pool};
 use ulid::Ulid;
 
 use crate::{
-    Aggregator, Event, EventIden, Executor, ReadError, WriteError,
+    Aggregator, Event, Executor, ReadError, WriteError,
     cursor::{self, Args, Cursor, Edge, PageInfo, ReadResult, Value},
 };
+
+#[derive(Iden)]
+enum EventIden {
+    Table,
+    Id,
+    Name,
+    AggregateType,
+    AggregateId,
+    Version,
+    Data,
+    Metadata,
+    RoutingKey,
+    Timestamp,
+}
 
 #[derive(Iden)]
 enum Snapshot {
