@@ -182,8 +182,11 @@ pub enum WriteError {
     #[error("invalid original version")]
     InvalidOriginalVersion,
 
-    #[error("not data")]
-    NoData,
+    #[error("missing data")]
+    MissingData,
+
+    #[error("missing metadata")]
+    MissingMetadata,
 
     #[error("{0}")]
     Unknown(#[from] anyhow::Error),
@@ -199,7 +202,7 @@ pub struct SaveBuilder<A: Aggregator> {
     routing_key: String,
     original_version: u16,
     data: Vec<(&'static str, Vec<u8>)>,
-    metadata: Vec<u8>,
+    metadata: Option<Vec<u8>>,
 }
 
 impl<A: Aggregator> SaveBuilder<A> {
@@ -211,7 +214,7 @@ impl<A: Aggregator> SaveBuilder<A> {
             routing_key: "default".into(),
             original_version: 0,
             data: Vec::default(),
-            metadata: Vec::default(),
+            metadata: None,
         }
     }
 
@@ -233,7 +236,7 @@ impl<A: Aggregator> SaveBuilder<A> {
     ) -> Result<Self, ciborium::ser::Error<std::io::Error>> {
         let mut metadata = Vec::new();
         ciborium::into_writer(v, &mut metadata)?;
-        self.metadata = metadata;
+        self.metadata = Some(metadata);
 
         Ok(self)
     }
@@ -254,6 +257,10 @@ impl<A: Aggregator> SaveBuilder<A> {
         let mut aggregator = self.aggregator.clone();
         let mut version = self.original_version;
 
+        let Some(metadata) = &self.metadata else {
+            return Err(WriteError::MissingMetadata);
+        };
+
         let mut events = vec![];
 
         for (name, data) in &self.data {
@@ -263,7 +270,7 @@ impl<A: Aggregator> SaveBuilder<A> {
                 id: Ulid::new(),
                 name: name.to_string(),
                 data: data.to_vec(),
-                metadata: self.metadata.to_vec(),
+                metadata: metadata.to_vec(),
                 timestamp: 0,
                 aggregate_id: self.aggregate_id,
                 aggregate_type: self.aggregate_type.to_owned(),
@@ -276,7 +283,7 @@ impl<A: Aggregator> SaveBuilder<A> {
         }
 
         let Some(last_event) = events.last().cloned() else {
-            return Err(WriteError::NoData);
+            return Err(WriteError::MissingData);
         };
 
         executor.write(events).await?;

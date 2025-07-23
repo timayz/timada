@@ -4,7 +4,7 @@ use ulid::Ulid;
 use validator::Validate;
 
 use crate::liteventd_test::account::{
-    Account, AccountCreated, AccountCredited, AccountDebited, FullNameChanged,
+    Account, AccountCreated, AccountCredited, AccountDebited, FullNameChanged, Metadata,
     MoneyTransferCancelled, MoneyTransferSucceeded, MoneyTransferred, Reason,
 };
 
@@ -27,6 +27,7 @@ pub async fn create_account<E: Executor>(
     let id = Ulid::new();
 
     liteventd::create_with_id(Account::default(), id)
+        .metadata(&Metadata { request_id: 1 })?
         .data(&AccountCreated {
             fullname: input.fullname,
         })?
@@ -57,6 +58,7 @@ pub async fn change_fullname<E: Executor>(
     let account = liteventd::load::<Account, _>(executor, input.id).await?;
 
     liteventd::save(account, input.id)
+        .metadata(&Metadata { request_id: 1 })?
         .data(&FullNameChanged {
             fullname: input.fullname,
         })?
@@ -97,6 +99,7 @@ pub async fn transfer_money<E: Executor>(
     let account_to = liteventd::load::<Account, _>(executor, input.to_id).await?;
 
     liteventd::save(account_from, input.from_id)
+        .metadata(&Metadata { request_id: 1 })?
         .data(&MoneyTransferred {
             from_id: input.from_id,
             to_id: account_to.item.id,
@@ -120,6 +123,7 @@ impl Command {
         let account =
             liteventd::load::<Account, _>(context.executor, context.event.aggregate_id).await?;
         liteventd::save(account, context.event.aggregate_id)
+            .metadata(&Metadata { request_id: 1 })?
             .data(&AccountDebited {
                 from_id: context.data.from_id,
                 to_id: context.data.to_id,
@@ -138,6 +142,7 @@ impl Command {
         let from = liteventd::load::<Account, _>(context.executor, context.data.from_id).await?;
         if from.item.balance - context.data.value < 0.0 {
             liteventd::save(from, context.data.from_id)
+                .metadata(&Metadata { request_id: 1 })?
                 .data(&MoneyTransferCancelled {
                     from_id: context.data.from_id,
                     transaction_id: context.data.transaction_id,
@@ -153,6 +158,7 @@ impl Command {
         let to = liteventd::load::<Account, _>(context.executor, context.data.to_id).await?;
 
         liteventd::save(to, context.data.to_id)
+            .metadata(&Metadata { request_id: 1 })?
             .data(&AccountCredited {
                 from_id: context.data.from_id,
                 transaction_id: context.data.transaction_id,
@@ -172,6 +178,7 @@ impl Command {
         let from = liteventd::load::<Account, _>(context.executor, context.data.from_id).await?;
 
         liteventd::save(from, context.data.from_id)
+            .metadata(&Metadata { request_id: 1 })?
             .data(&MoneyTransferSucceeded {
                 from_id: context.data.from_id,
                 transaction_id: context.data.transaction_id,
@@ -184,6 +191,7 @@ impl Command {
         let to = liteventd::load::<Account, _>(context.executor, context.data.to_id).await?;
 
         liteventd::save(to, context.data.to_id)
+            .metadata(&Metadata { request_id: 1 })?
             .data(&MoneyTransferSucceeded {
                 from_id: context.data.from_id,
                 transaction_id: context.data.transaction_id,

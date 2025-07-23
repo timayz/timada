@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct Metadata {
+    pub request_id: u16,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum Reason {
     BalanceTooLow,
     InternalServerError,

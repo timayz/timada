@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use ulid::Ulid;
 
-type AccountEventData<D> = EventData<D, HashMap<String, String>>;
+type AccountEventData<D> = EventData<D, Metadata>;
 
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
 pub enum MoneyTransactionState {
