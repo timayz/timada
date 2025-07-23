@@ -83,7 +83,7 @@ pub fn aggregator(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let ident = item_fn.sig.ident.clone();
 
             Some(quote! {
-                if let Ok(Some(data)) = event.to_data(){
+                if let Some(data) = event.to_data()? {
                     self.#ident(data).await?;
                     return Ok(());
                 }

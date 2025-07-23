@@ -205,7 +205,7 @@ pub struct SaveBuilder<A: Aggregator> {
 impl<A: Aggregator> SaveBuilder<A> {
     pub fn new(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
         SaveBuilder {
-            aggregate_id: aggregate_id.into(),
+            aggregate_id,
             aggregator,
             aggregate_type: A::name().to_owned(),
             routing_key: "default".into(),
