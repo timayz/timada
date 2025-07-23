@@ -1,6 +1,5 @@
 pub mod context;
 pub mod cursor;
-pub mod rocksdb;
 pub mod sql;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -57,9 +56,9 @@ impl Event {
 }
 
 impl Cursor for Event {
-    type Cursor = EventCursor;
+    type T = EventCursor;
 
-    fn serialize(&self) -> EventCursor {
+    fn serialize(&self) -> Self::T {
         EventCursor {
             i: self.id,
             v: self.version,

@@ -1,7 +1,7 @@
-use std::ops::{Deref, DerefMut, Shl};
+use std::ops::{Deref, DerefMut};
 
 use sea_query::{
-    ColumnDef, Expr, ExprTrait, Iden, Index, OnConflict, Query, SelectStatement,
+    ColumnDef, Expr, ExprTrait, Iden, Index, IntoColumnRef, OnConflict, Query, SelectStatement,
     SqliteQueryBuilder, Table,
 };
 use sea_query_binder::SqlxBinder;
@@ -9,12 +9,12 @@ use sqlx::{Database, Pool};
 use ulid::Ulid;
 
 use crate::{
-    Aggregator, Event, Executor, ReadError, WriteError,
+    Aggregator, Executor, ReadError, WriteError,
     cursor::{self, Args, Cursor, Edge, PageInfo, ReadResult, Value},
 };
 
-#[derive(Iden)]
-enum EventIden {
+#[derive(Iden, Clone)]
+pub enum Event {
     Table,
     Id,
     Name,
@@ -44,44 +44,44 @@ pub struct Sql<DB: Database>(Pool<DB>);
 impl<DB: Database> Sql<DB> {
     pub fn get_schema() -> String {
         let event_table = Table::create()
-            .table(EventIden::Table)
+            .table(Event::Table)
             .if_not_exists()
             .col(
-                ColumnDef::new(EventIden::Id)
+                ColumnDef::new(Event::Id)
                     .string()
                     .not_null()
                     .string_len(26)
                     .primary_key(),
             )
             .col(
-                ColumnDef::new(EventIden::Name)
+                ColumnDef::new(Event::Name)
                     .string()
                     .string_len(20)
                     .not_null(),
             )
             .col(
-                ColumnDef::new(EventIden::AggregateType)
+                ColumnDef::new(Event::AggregateType)
                     .string()
                     .string_len(50)
                     .not_null(),
             )
             .col(
-                ColumnDef::new(EventIden::AggregateId)
+                ColumnDef::new(Event::AggregateId)
                     .string()
                     .string_len(26)
                     .not_null(),
             )
-            .col(ColumnDef::new(EventIden::Version).integer().not_null())
-            .col(ColumnDef::new(EventIden::Data).blob().not_null())
-            .col(ColumnDef::new(EventIden::Metadata).blob().not_null())
+            .col(ColumnDef::new(Event::Version).integer().not_null())
+            .col(ColumnDef::new(Event::Data).blob().not_null())
+            .col(ColumnDef::new(Event::Metadata).blob().not_null())
             .col(
-                ColumnDef::new(EventIden::RoutingKey)
+                ColumnDef::new(Event::RoutingKey)
                     .string()
                     .string_len(50)
                     .not_null(),
             )
             .col(
-                ColumnDef::new(EventIden::Timestamp)
+                ColumnDef::new(Event::Timestamp)
                     .integer()
                     .not_null()
                     .default(Expr::custom_keyword("(strftime('%s', 'now'))")),
@@ -91,34 +91,34 @@ impl<DB: Database> Sql<DB> {
         let idx_event_type = Index::create()
             .if_not_exists()
             .name("idx_event_type")
-            .table(EventIden::Table)
-            .col(EventIden::AggregateType)
+            .table(Event::Table)
+            .col(Event::AggregateType)
             .to_owned();
 
         let idx_event_type_id = Index::create()
             .if_not_exists()
             .name("idx_event_type_id")
-            .table(EventIden::Table)
-            .col(EventIden::AggregateType)
-            .col(EventIden::AggregateId)
+            .table(Event::Table)
+            .col(Event::AggregateType)
+            .col(Event::AggregateId)
             .to_owned();
 
         let idx_event_routing_key_type = Index::create()
             .if_not_exists()
             .name("idx_event_routing_key_type")
-            .table(EventIden::Table)
-            .col(EventIden::RoutingKey)
-            .col(EventIden::AggregateType)
+            .table(Event::Table)
+            .col(Event::RoutingKey)
+            .col(Event::AggregateType)
             .to_owned();
 
         let idx_event_type_id_version = Index::create()
             .if_not_exists()
             .name("idx_event_type_id_version")
-            .table(EventIden::Table)
+            .table(Event::Table)
             .unique()
-            .col(EventIden::AggregateType)
-            .col(EventIden::AggregateId)
-            .col(EventIden::Version)
+            .col(Event::AggregateType)
+            .col(Event::AggregateId)
+            .col(Event::Version)
             .to_owned();
 
         let snapshot_table = Table::create()
@@ -173,10 +173,9 @@ where
     String: for<'r> sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     Vec<u8>: for<'r> sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
-    Event: for<'r> sqlx::FromRow<'r, DB::Row>,
+    crate::Event: for<'r> sqlx::FromRow<'r, DB::Row>,
 {
-    async fn get_event<A: Aggregator>(&self, cursor: Value) -> Result<Event, ReadError> {
-        println!("sdfasdfasdfasdfasdfasd");
+    async fn get_event<A: Aggregator>(&self, cursor: Value) -> Result<crate::Event, ReadError> {
         todo!()
     }
 
@@ -184,27 +183,27 @@ where
         &self,
         id: String,
         args: Args,
-    ) -> Result<ReadResult<Event>, ReadError> {
+    ) -> Result<ReadResult<crate::Event>, ReadError> {
         let statement = Query::select()
             .columns([
-                EventIden::Id,
-                EventIden::Name,
-                EventIden::AggregateType,
-                EventIden::AggregateId,
-                EventIden::Version,
-                EventIden::Data,
-                EventIden::Metadata,
-                EventIden::RoutingKey,
-                EventIden::Timestamp,
+                Event::Id,
+                Event::Name,
+                Event::AggregateType,
+                Event::AggregateId,
+                Event::Version,
+                Event::Data,
+                Event::Metadata,
+                Event::RoutingKey,
+                Event::Timestamp,
             ])
-            .from(EventIden::Table)
-            .and_where(Expr::col(EventIden::AggregateType).eq(Expr::value(A::name())))
-            .and_where(Expr::col(EventIden::AggregateId).eq(Expr::value(id)))
+            .from(Event::Table)
+            .and_where(Expr::col(Event::AggregateType).eq(Expr::value(A::name())))
+            .and_where(Expr::col(Event::AggregateId).eq(Expr::value(id)))
             .to_owned();
 
         Reader::new(statement)
             .args(args)
-            .execute::<_, Event, _>(&self.0)
+            .execute::<_, crate::Event, _>(&self.0)
             .await
     }
 
@@ -233,18 +232,18 @@ where
             .map_err(|err| ReadError::Unknown(err.into()))
     }
 
-    async fn write(&self, events: Vec<Event>) -> Result<(), WriteError> {
+    async fn write(&self, events: Vec<crate::Event>) -> Result<(), WriteError> {
         let mut query = Query::insert()
-            .into_table(EventIden::Table)
+            .into_table(Event::Table)
             .columns([
-                EventIden::Id,
-                EventIden::Name,
-                EventIden::Data,
-                EventIden::Metadata,
-                EventIden::AggregateType,
-                EventIden::AggregateId,
-                EventIden::Version,
-                EventIden::RoutingKey,
+                Event::Id,
+                Event::Name,
+                Event::Data,
+                Event::Metadata,
+                Event::AggregateType,
+                Event::AggregateId,
+                Event::Version,
+                Event::RoutingKey,
             ])
             .to_owned();
 
@@ -282,7 +281,7 @@ where
 
     async fn save_snapshot<A: Aggregator>(
         &self,
-        event: Event,
+        event: crate::Event,
         data: Vec<u8>,
         cursor: Value,
     ) -> Result<(), WriteError> {
@@ -390,9 +389,12 @@ impl Reader {
         O: for<'r> sqlx::FromRow<'r, DB::Row>,
         O: Cursor,
         O: Send + Unpin,
+        O: Bind<Cursor = O>,
+        <<O as Bind>::I as IntoIterator>::IntoIter: DoubleEndedIterator,
+        <<O as Bind>::V as IntoIterator>::IntoIter: DoubleEndedIterator,
         sea_query_binder::SqlxValues: for<'q> sqlx::IntoArguments<'q, DB>,
     {
-        let (limit, cursor) = self.build_reader();
+        let limit = self.build_reader::<O, O>()?;
 
         let (sql, values) = match DB::NAME {
             "SQLite" => self.build_sqlx(SqliteQueryBuilder),
@@ -443,22 +445,86 @@ impl Reader {
         Ok(ReadResult { edges, page_info })
     }
 
-    fn build_reader(&mut self) -> (u16, Option<Value>) {
+    fn build_reader<O: Cursor, B: Bind<Cursor = O>>(&mut self) -> Result<u16, ReadError>
+    where
+        B::T: Clone,
+        <<B as Bind>::I as IntoIterator>::IntoIter: DoubleEndedIterator,
+        <<B as Bind>::V as IntoIterator>::IntoIter: DoubleEndedIterator,
+    {
         let (limit, cursor) = if self.is_backward() {
             (self.args.last.unwrap_or(40), self.args.before.clone())
         } else {
             (self.args.first.unwrap_or(40), self.args.after.clone())
         };
 
-        // @TODO: continue copy from sql poc
+        if let Some(cursor) = cursor.as_ref() {
+            self.build_reader_where::<O, B>(cursor)?;
+        }
 
-        (limit, cursor)
+        self.build_reader_order::<B>();
+        self.limit((limit + 1).into());
+
+        Ok(limit)
+    }
+
+    fn build_reader_where<O, B>(&mut self, cursor: &Value) -> Result<(), ReadError>
+    where
+        O: Cursor,
+        B: Bind<Cursor = O>,
+        B::T: Clone,
+        <<B as Bind>::I as IntoIterator>::IntoIter: DoubleEndedIterator,
+        <<B as Bind>::V as IntoIterator>::IntoIter: DoubleEndedIterator,
+    {
+        let is_order_desc = self.is_order_desc();
+        let cursor = O::deserialize_cursor(cursor)?;
+        let colums = B::columns().into_iter().rev();
+        let values = B::values(cursor).into_iter().rev();
+
+        let mut expr = None::<Expr>;
+        for (col, value) in colums.zip(values) {
+            let current_expr = if is_order_desc {
+                Expr::col(col.clone()).lt(value.clone())
+            } else {
+                Expr::col(col.clone()).gt(value.clone())
+            };
+
+            let Some(ref prev_expr) = expr else {
+                expr = Some(current_expr.clone());
+                continue;
+            };
+
+            expr = Some(current_expr.or(Expr::col(col).eq(value).and(prev_expr.clone())));
+        }
+
+        self.and_where(expr.unwrap());
+
+        Ok(())
+    }
+
+    fn build_reader_order<O: Bind>(&mut self) {
+        let order = if self.is_order_desc() {
+            sea_query::Order::Desc
+        } else {
+            sea_query::Order::Asc
+        };
+
+        let colums = O::columns();
+        for col in colums {
+            self.order_by(col, order.clone());
+        }
     }
 
     fn is_backward(&self) -> bool {
         (self.args.last.is_some() || self.args.before.is_some())
             && self.args.first.is_none()
             && self.args.after.is_none()
+    }
+
+    fn is_order_desc(&self) -> bool {
+        matches!(
+            (&self.order, self.is_backward()),
+            (cursor::Order::Asc, true) | (cursor::Order::Desc, false)
+        )
     }
 }
 
@@ -476,7 +542,36 @@ impl DerefMut for Reader {
     }
 }
 
-impl<R: sqlx::Row> sqlx::FromRow<'_, R> for Event
+pub trait Bind {
+    type T: IntoColumnRef + Clone;
+    type I: IntoIterator<Item = Self::T>;
+    type V: IntoIterator<Item = Expr>;
+    type Cursor: Cursor;
+
+    fn columns() -> Self::I;
+    fn values(cursor: <<Self as Bind>::Cursor as Cursor>::T) -> Self::V;
+}
+
+impl Bind for crate::Event {
+    type T = Event;
+    type I = [Self::T; 3];
+    type V = [Expr; 3];
+    type Cursor = Self;
+
+    fn columns() -> Self::I {
+        [Event::Timestamp, Event::Version, Event::Id]
+    }
+
+    fn values(cursor: <<Self as Bind>::Cursor as Cursor>::T) -> Self::V {
+        [
+            cursor.t.into(),
+            cursor.v.into(),
+            cursor.i.to_string().into(),
+        ]
+    }
+}
+
+impl<R: sqlx::Row> sqlx::FromRow<'_, R> for crate::Event
 where
     u32: sqlx::Type<R::Database> + for<'r> sqlx::Decode<'r, R::Database>,
     u16: sqlx::Type<R::Database> + for<'r> sqlx::Decode<'r, R::Database>,
@@ -486,7 +581,7 @@ where
     for<'r> &'r str: sqlx::ColumnIndex<R>,
 {
     fn from_row(row: &R) -> Result<Self, sqlx::Error> {
-        Ok(Event {
+        Ok(crate::Event {
             id: Ulid::from_string(row.try_get("id")?)
                 .map_err(|err| sqlx::Error::InvalidArgument(err.to_string()))?,
             aggregate_id: Ulid::from_string(row.try_get("aggregate_id")?)

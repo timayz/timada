@@ -54,9 +54,9 @@ impl AsRef<[u8]> for Value {
 }
 
 pub trait Cursor {
-    type Cursor: Serialize + DeserializeOwned;
+    type T: Serialize + DeserializeOwned;
 
-    fn serialize(&self) -> Self::Cursor;
+    fn serialize(&self) -> Self::T;
 
     fn serialize_cursor(&self) -> Result<Value, ciborium::ser::Error<std::io::Error>> {
         let cursor = self.serialize();
@@ -69,10 +69,7 @@ pub trait Cursor {
         Ok(Value(engine.encode(cbor_encoded)))
     }
 
-    fn deserialize_cursor(
-        &self,
-        value: Value,
-    ) -> Result<Self::Cursor, ciborium::de::Error<std::io::Error>> {
+    fn deserialize_cursor(value: &Value) -> Result<Self::T, ciborium::de::Error<std::io::Error>> {
         let engine = GeneralPurpose::new(&alphabet::URL_SAFE, general_purpose::PAD);
         let decoded = engine
             .decode(value)
