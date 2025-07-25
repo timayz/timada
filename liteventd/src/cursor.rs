@@ -79,7 +79,7 @@ pub trait Cursor {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, Clone)]
 pub struct Args {
     pub first: Option<u16>,
     pub after: Option<Value>,
@@ -103,6 +103,20 @@ impl Args {
             after: None,
             last: Some(last),
             before,
+        }
+    }
+
+    pub fn is_backward(&self) -> bool {
+        (self.last.is_some() || self.before.is_some())
+            && self.first.is_none()
+            && self.after.is_none()
+    }
+
+    pub fn get_info(&self) -> (u16, Option<Value>) {
+        if self.is_backward() {
+            (self.last.unwrap_or(40), self.before.clone())
+        } else {
+            (self.first.unwrap_or(40), self.after.clone())
         }
     }
 }

@@ -339,7 +339,7 @@ pub struct Reader {
 }
 
 impl Reader {
-    fn new(statement: SelectStatement) -> Self {
+    pub fn new(statement: SelectStatement) -> Self {
         Self {
             statement,
             args: Args::default(),
@@ -419,11 +419,11 @@ impl Reader {
             });
         }
 
-        if self.is_backward() {
+        if self.args.is_backward() {
             edges = edges.into_iter().rev().collect();
         }
 
-        let page_info = if self.is_backward() {
+        let page_info = if self.args.is_backward() {
             let start_cursor = edges.first().map(|e| e.cursor.clone());
 
             PageInfo {
@@ -451,11 +451,7 @@ impl Reader {
         <<B as Bind>::I as IntoIterator>::IntoIter: DoubleEndedIterator,
         <<B as Bind>::V as IntoIterator>::IntoIter: DoubleEndedIterator,
     {
-        let (limit, cursor) = if self.is_backward() {
-            (self.args.last.unwrap_or(40), self.args.before.clone())
-        } else {
-            (self.args.first.unwrap_or(40), self.args.after.clone())
-        };
+        let (limit, cursor) = self.args.get_info();
 
         if let Some(cursor) = cursor.as_ref() {
             self.build_reader_where::<O, B>(cursor)?;
@@ -514,15 +510,9 @@ impl Reader {
         }
     }
 
-    fn is_backward(&self) -> bool {
-        (self.args.last.is_some() || self.args.before.is_some())
-            && self.args.first.is_none()
-            && self.args.after.is_none()
-    }
-
     fn is_order_desc(&self) -> bool {
         matches!(
-            (&self.order, self.is_backward()),
+            (&self.order, self.args.is_backward()),
             (cursor::Order::Asc, true) | (cursor::Order::Desc, false)
         )
     }

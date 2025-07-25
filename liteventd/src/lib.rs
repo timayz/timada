@@ -23,7 +23,7 @@ pub struct EventCursor {
     pub t: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub id: Ulid,
     pub aggregate_id: Ulid,
