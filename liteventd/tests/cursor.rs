@@ -1,30 +1,48 @@
 use liteventd::{
     Event,
-    cursor::{Args, Cursor, Edge, PageInfo, ReadResult},
+    cursor::{Args, Cursor, Edge, Order, PageInfo, ReadResult},
 };
 use rand::{Rng, seq::IndexedRandom};
 use std::collections::HashMap;
 use ulid::Ulid;
 
+// @TODO: Create Vec reader logic in cursor.rs and add static data tests than use it here by reading
+// data vec and replace with vec reader result
 pub fn assert_read_result(
     args: Args,
+    order: Order,
     mut data: Vec<Event>,
     result: ReadResult<Event>,
 ) -> anyhow::Result<()> {
-    data.sort_by(|a, b| {
-        if a.timestamp != b.timestamp {
-            return b.timestamp.cmp(&a.timestamp);
-        }
+    let is_order_desc = matches!(
+        (&order, args.is_backward()),
+        (Order::Asc, true) | (Order::Desc, false)
+    );
 
-        if a.version != b.version {
-            return b.version.cmp(&a.version);
-        }
+    if !is_order_desc {
+        data.sort_by(|a, b| {
+            if a.timestamp != b.timestamp {
+                return a.timestamp.cmp(&b.timestamp);
+            }
 
-        b.id.cmp(&a.id)
-    });
+            if a.version != b.version {
+                return a.version.cmp(&b.version);
+            }
 
-    if args.is_backward() {
-        data = data.into_iter().rev().collect();
+            a.id.cmp(&b.id)
+        });
+    } else {
+        data.sort_by(|a, b| {
+            if a.timestamp != b.timestamp {
+                return b.timestamp.cmp(&a.timestamp);
+            }
+
+            if a.version != b.version {
+                return b.version.cmp(&a.version);
+            }
+
+            b.id.cmp(&a.id)
+        });
     }
 
     let (limit, cursor) = args.get_info();
@@ -32,7 +50,7 @@ pub fn assert_read_result(
     if let Some(cursor) = cursor.as_ref() {
         let cursor = Event::deserialize_cursor(cursor)?;
         data.retain(|event| {
-            if args.is_backward() {
+            if is_order_desc {
                 event.timestamp < cursor.t
                     || (event.timestamp == cursor.t
                         && (event.version < cursor.v
@@ -54,7 +72,7 @@ pub fn assert_read_result(
         data.pop();
     }
 
-    let edges = data
+    let mut edges = data
         .into_iter()
         .map(|node| Edge {
             cursor: node
@@ -64,9 +82,11 @@ pub fn assert_read_result(
         })
         .collect::<Vec<_>>();
 
-    let page_info = if args.is_backward() {
-        let edges = edges.iter().rev().collect::<Vec<_>>();
+    if args.is_backward() {
+        edges = edges.into_iter().rev().collect();
+    }
 
+    let page_info = if args.is_backward() {
         PageInfo {
             has_previous_page: has_more,
             start_cursor: edges.first().map(|e| e.cursor.to_owned()),
@@ -99,7 +119,7 @@ pub fn get_data() -> Vec<Event> {
     let mut versions: HashMap<Ulid, u16> = HashMap::new();
     let mut data = vec![];
 
-    for _ in 0..100 {
+    for _ in 0..10 {
         let mut rng = rand::rng();
         let aggregate_id = aggregate_ids
             .choose(&mut rng)

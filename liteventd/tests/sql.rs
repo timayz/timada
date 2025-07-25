@@ -6,7 +6,7 @@ mod cursor_test;
 
 use liteventd::{
     Event, Executor,
-    cursor::{Args, ReadResult},
+    cursor::{Args, Order, ReadResult},
     sql::{Reader, Sql},
 };
 use sea_query::{Query, SqliteQueryBuilder};
@@ -36,16 +36,103 @@ use crate::cursor_test::assert_read_result;
 async fn forward_asc() -> anyhow::Result<()> {
     let pool = create_sqlite_pool("forward_asc").await?;
     let data = get_data(&pool).await?;
-    let args = Args::forward(10, None);
+    let order = Order::Asc;
 
-    let result = read(&pool, args.clone()).await?;
+    let args = Args::forward((data.len() + 1) as u16, None);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
 
-    assert_read_result(args, data, result)?;
+    assert_read_result(args, order.to_owned(), data.clone(), result)?;
+
+    let args = Args::forward(4, None);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+    let end_cursor = result.page_info.end_cursor.clone();
+
+    assert_read_result(args, order.to_owned(), data.clone(), result)?;
+
+    let args = Args::forward(4, end_cursor);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+
+    assert_read_result(args, order, data, result)?;
 
     Ok(())
 }
 
-async fn read<DB>(pool: &Pool<DB>, args: Args) -> anyhow::Result<ReadResult<Event>>
+#[tokio::test]
+async fn forward_desc() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("forward_desc").await?;
+    let data = get_data(&pool).await?;
+    let order = Order::Desc;
+
+    let args = Args::forward((data.len() + 1) as u16, None);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+
+    assert_read_result(args, order.to_owned(), data.clone(), result)?;
+
+    let args = Args::forward(4, None);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+    let end_cursor = result.page_info.end_cursor.clone();
+
+    assert_read_result(args, order.to_owned(), data.clone(), result)?;
+
+    let args = Args::forward(4, end_cursor);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+
+    assert_read_result(args, order, data, result)?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn backward_asc() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("backward_asc").await?;
+    let data = get_data(&pool).await?;
+    let order = Order::Asc;
+
+    let args = Args::backward((data.len() + 1) as u16, None);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+
+    assert_read_result(args, order.to_owned(), data.clone(), result)?;
+
+    let args = Args::backward(4, None);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+    let start_cursor = result.page_info.start_cursor.clone();
+
+    assert_read_result(args, order.to_owned(), data.clone(), result)?;
+
+    let args = Args::backward(4, start_cursor);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+
+    assert_read_result(args, order, data, result)?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn backward_desc() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("backward_desc").await?;
+    let data = get_data(&pool).await?;
+    let order = Order::Desc;
+
+    let args = Args::backward((data.len() + 1) as u16, None);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+
+    assert_read_result(args, order.to_owned(), data.clone(), result)?;
+
+    let args = Args::backward(4, None);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+    let start_cursor = result.page_info.start_cursor.clone();
+
+    assert_read_result(args, order.to_owned(), data.clone(), result)?;
+
+    let args = Args::backward(4, start_cursor);
+    let result = read(&pool, args.clone(), order.to_owned()).await?;
+
+    assert_read_result(args, order, data, result)?;
+
+    Ok(())
+}
+
+async fn read<DB>(pool: &Pool<DB>, args: Args, order: Order) -> anyhow::Result<ReadResult<Event>>
 where
     DB: Database,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
@@ -70,6 +157,7 @@ where
 
     Ok(Reader::new(statement)
         .args(args)
+        .order(order)
         .execute::<_, crate::Event, _>(pool)
         .await?)
 }

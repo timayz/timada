@@ -5,7 +5,7 @@ use base64::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::ops::Deref;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Order {
     Asc,
     Desc,
