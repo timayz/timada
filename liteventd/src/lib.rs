@@ -162,6 +162,15 @@ pub async fn load<A: Aggregator, E: Executor>(
             aggregator.aggregate(&event.node).await?;
         }
 
+        if let (Some(event), Some(cursor)) = (events.edges.last().cloned(), cursor.clone()) {
+            let mut data = vec![];
+            ciborium::into_writer(&aggregator, &mut data)?;
+
+            executor
+                .save_snapshot::<A>(event.node.aggregate_id, data, cursor)
+                .await?;
+        }
+
         if !events.page_info.has_next_page {
             let event = match (cursor, events.edges.last()) {
                 (_, Some(event)) => event.node.clone(),
@@ -176,15 +185,6 @@ pub async fn load<A: Aggregator, E: Executor>(
         }
 
         cursor = events.page_info.end_cursor;
-
-        if let (Some(event), Some(cursor)) = (events.edges.last().cloned(), cursor.clone()) {
-            let mut data = vec![];
-            ciborium::into_writer(&aggregator, &mut data)?;
-
-            executor
-                .save_snapshot::<A>(event.node.aggregate_id, data, cursor)
-                .await?;
-        }
 
         interval.tick().await;
 
