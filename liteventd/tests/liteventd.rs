@@ -1,4 +1,6 @@
-use liteventd::Executor;
+use liteventd::{Aggregator, AggregatorEvent, Event, EventData, Executor};
+use liteventd_macros::AggregatorEvent;
+use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 pub async fn save<E: Executor>(executor: &E) -> anyhow::Result<()> {
@@ -41,4 +43,56 @@ pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Resu
     // );
 
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
+struct Added {
+    pub value: u16,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
+struct Subtracted {
+    pub value: u16,
+}
+#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
+struct Multiplied {
+    pub value: u16,
+}
+#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
+struct Divided {
+    pub value: u16,
+}
+
+type CalculEvent<D> = EventData<D, bool>;
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+struct Calcul {
+    pub value: u64,
+}
+
+#[liteventd_macros::aggregator]
+impl Calcul {
+    async fn added(&mut self, event: CalculEvent<Added>) -> anyhow::Result<()> {
+        self.value += event.data.value as u64;
+
+        Ok(())
+    }
+
+    async fn subtracted(&mut self, event: CalculEvent<Subtracted>) -> anyhow::Result<()> {
+        self.value -= event.data.value as u64;
+
+        Ok(())
+    }
+
+    async fn multiplied(&mut self, event: CalculEvent<Multiplied>) -> anyhow::Result<()> {
+        self.value *= event.data.value as u64;
+
+        Ok(())
+    }
+
+    async fn divided(&mut self, event: CalculEvent<Divided>) -> anyhow::Result<()> {
+        self.value /= event.data.value as u64;
+
+        Ok(())
+    }
 }
