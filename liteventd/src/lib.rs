@@ -101,7 +101,7 @@ pub trait Executor: Send + Sync {
 
     async fn save_snapshot<A: Aggregator>(
         &self,
-        event: Event,
+        id: Ulid,
         data: Vec<u8>,
         cursor: cursor::Value,
     ) -> Result<(), WriteError>;
@@ -126,6 +126,9 @@ pub enum ReadError {
 
     #[error("base64 decode: {0}")]
     Base64Decode(#[from] base64::DecodeError),
+
+    #[error("write: {0}")]
+    Write(#[from] WriteError),
 }
 
 #[derive(Debug, Clone)]
@@ -134,7 +137,7 @@ pub struct LoadResult<A: Aggregator> {
     pub event: Event,
 }
 
-pub async fn load<A: Aggregator + Debug, E: Executor>(
+pub async fn load<A: Aggregator, E: Executor>(
     executor: &E,
     id: impl Into<String>,
 ) -> Result<LoadResult<A>, ReadError> {
@@ -146,6 +149,7 @@ pub async fn load<A: Aggregator + Debug, E: Executor>(
         }
         _ => (A::default(), None),
     };
+
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     let mut loop_count = 0;
 
@@ -173,7 +177,14 @@ pub async fn load<A: Aggregator + Debug, E: Executor>(
 
         cursor = events.page_info.end_cursor;
 
-        // @TODO: save_snapshot
+        if let (Some(event), Some(cursor)) = (events.edges.last().cloned(), cursor.clone()) {
+            let mut data = vec![];
+            ciborium::into_writer(&aggregator, &mut data)?;
+
+            executor
+                .save_snapshot::<A>(event.node.aggregate_id, data, cursor)
+                .await?;
+        }
 
         interval.tick().await;
 
@@ -306,7 +317,7 @@ impl<A: Aggregator> SaveBuilder<A> {
         let cursor = last_event.serialize_cursor()?;
 
         executor
-            .save_snapshot::<A>(last_event, data, cursor)
+            .save_snapshot::<A>(last_event.aggregate_id, data, cursor)
             .await?;
 
         Ok(self.aggregate_id)
@@ -414,9 +425,9 @@ impl<E: Executor> SubscribeBuilder<E> {
 pub enum AcknowledgeError {}
 
 pub async fn acknowledge<E: Executor>(
-    executor: &E,
-    key: impl Into<String>,
-    event: &Event,
+    _executor: &E,
+    _key: impl Into<String>,
+    _event: &Event,
 ) -> Result<(), AcknowledgeError> {
     todo!()
 }

@@ -1,7 +1,6 @@
 use liteventd::{Aggregator, AggregatorEvent, Event, EventData, Executor, WriteError};
 use liteventd_macros::AggregatorEvent;
 use serde::{Deserialize, Serialize};
-use ulid::Ulid;
 
 pub async fn load<E: Executor>(executor: &E) -> anyhow::Result<()> {
     let id = liteventd::create::<Calcul>()

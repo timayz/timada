@@ -1,7 +1,4 @@
-use std::{
-    f32::consts::E,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 use sea_query::{
     ColumnDef, Expr, ExprTrait, Iden, Index, IntoColumnRef, OnConflict, Query, SelectStatement,
@@ -307,7 +304,7 @@ where
 
     async fn save_snapshot<A: Aggregator>(
         &self,
-        event: crate::Event,
+        id: Ulid,
         data: Vec<u8>,
         cursor: Value,
     ) -> Result<(), WriteError> {
@@ -321,8 +318,8 @@ where
                 Snapshot::Data,
             ])
             .values_panic([
-                event.aggregate_type.into(),
-                event.aggregate_id.to_string().into(),
+                A::name().into(),
+                id.to_string().into(),
                 cursor.to_string().into(),
                 A::revision().into(),
                 data.into(),
