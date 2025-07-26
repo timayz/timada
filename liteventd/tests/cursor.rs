@@ -132,7 +132,7 @@ pub fn get_data() -> Vec<Event> {
         } else {
             None
         }
-        .unwrap_or_else(|| rng.random());
+        .unwrap_or_else(|| rng.random()) as u64;
 
         let event = Event {
             id: Ulid::new(),

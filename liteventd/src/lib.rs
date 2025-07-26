@@ -3,7 +3,11 @@ pub mod cursor;
 pub mod sql;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use ulid::Ulid;
@@ -20,7 +24,7 @@ pub struct EventData<D, M> {
 pub struct EventCursor {
     pub i: Ulid,
     pub v: u16,
-    pub t: u32,
+    pub t: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,7 +37,7 @@ pub struct Event {
     pub routing_key: String,
     pub data: Vec<u8>,
     pub metadata: Vec<u8>,
-    pub timestamp: u32,
+    pub timestamp: u64,
 }
 
 impl Event {
@@ -124,12 +128,13 @@ pub enum ReadError {
     Base64Decode(#[from] base64::DecodeError),
 }
 
+#[derive(Debug, Clone)]
 pub struct LoadResult<A: Aggregator> {
     pub item: A,
     pub event: Event,
 }
 
-pub async fn load<A: Aggregator, E: Executor>(
+pub async fn load<A: Aggregator + Debug, E: Executor>(
     executor: &E,
     id: impl Into<String>,
 ) -> Result<LoadResult<A>, ReadError> {
@@ -168,6 +173,8 @@ pub async fn load<A: Aggregator, E: Executor>(
 
         cursor = events.page_info.end_cursor;
 
+        // @TODO: save_snapshot
+
         interval.tick().await;
 
         loop_count += 1;
@@ -193,13 +200,16 @@ pub enum WriteError {
 
     #[error("ciborium.ser >> {0}")]
     CiboriumSer(#[from] ciborium::ser::Error<std::io::Error>),
+
+    #[error("systemtime >> {0}")]
+    SystemTime(#[from] std::time::SystemTimeError),
 }
 
 pub struct SaveBuilder<A: Aggregator> {
     aggregate_id: Ulid,
     aggregate_type: String,
     aggregator: A,
-    routing_key: String,
+    routing_key: Option<String>,
     original_version: u16,
     data: Vec<(&'static str, Vec<u8>)>,
     metadata: Option<Vec<u8>>,
@@ -211,7 +221,7 @@ impl<A: Aggregator> SaveBuilder<A> {
             aggregate_id,
             aggregator,
             aggregate_type: A::name().to_owned(),
-            routing_key: "default".into(),
+            routing_key: None,
             original_version: 0,
             data: Vec::default(),
             metadata: None,
@@ -224,8 +234,10 @@ impl<A: Aggregator> SaveBuilder<A> {
         self
     }
 
-    pub fn routing_key(mut self, v: String) -> Self {
-        self.routing_key = v;
+    pub fn routing_key(mut self, v: impl Into<String>) -> Self {
+        if self.routing_key.is_none() {
+            self.routing_key = Some(v.into());
+        }
 
         self
     }
@@ -252,8 +264,8 @@ impl<A: Aggregator> SaveBuilder<A> {
         Ok(self)
     }
 
-    pub async fn commit<E: Executor>(&self, executor: &E) -> Result<(), WriteError> {
-        let routing_key = self.routing_key.to_owned();
+    pub async fn commit<E: Executor>(&self, executor: &E) -> Result<Ulid, WriteError> {
+        let routing_key = self.routing_key.to_owned().unwrap_or("default".to_owned());
         let mut aggregator = self.aggregator.clone();
         let mut version = self.original_version;
 
@@ -262,6 +274,7 @@ impl<A: Aggregator> SaveBuilder<A> {
         };
 
         let mut events = vec![];
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
         for (name, data) in &self.data {
             version += 1;
@@ -271,7 +284,7 @@ impl<A: Aggregator> SaveBuilder<A> {
                 name: name.to_string(),
                 data: data.to_vec(),
                 metadata: metadata.to_vec(),
-                timestamp: 0,
+                timestamp,
                 aggregate_id: self.aggregate_id,
                 aggregate_type: self.aggregate_type.to_owned(),
                 version,
@@ -296,16 +309,12 @@ impl<A: Aggregator> SaveBuilder<A> {
             .save_snapshot::<A>(last_event, data, cursor)
             .await?;
 
-        Ok(())
+        Ok(self.aggregate_id)
     }
 }
 
-pub fn create<A: Aggregator>(aggregator: A) -> SaveBuilder<A> {
-    SaveBuilder::new(aggregator, Ulid::new())
-}
-
-pub fn create_with_id<A: Aggregator>(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
-    SaveBuilder::new(aggregator, aggregate_id)
+pub fn create<A: Aggregator>() -> SaveBuilder<A> {
+    SaveBuilder::new(A::default(), Ulid::new())
 }
 
 pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregate_id: Ulid) -> SaveBuilder<A> {

@@ -5,7 +5,7 @@ mod liteventd_test;
 mod cursor_test;
 
 use liteventd::{
-    Event, Executor,
+    Event,
     cursor::{Args, Order, ReadResult},
     sql::{Reader, Sql},
 };
@@ -17,21 +17,34 @@ use sqlx::{
 
 use crate::cursor_test::assert_read_result;
 
-// #[tokio::test]
-// async fn sqlite_save() -> anyhow::Result<()> {
-//     let executor = create_sqlite_executor("save").await?;
-//
-//     liteventd_test::save(&executor).await
-// }
-//
-// #[tokio::test]
-// async fn sqlite_invalid_original_version() -> anyhow::Result<()> {
-//     let executor = create_sqlite_executor("invalid_original_version").await?;
-//
-//     liteventd_test::invalid_original_version(&executor).await
-// }
-//
-//
+#[tokio::test]
+async fn sqlite_version() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor("version").await?;
+
+    liteventd_test::version(&executor).await
+}
+
+#[tokio::test]
+async fn sqlite_routing_key() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor("routing_key").await?;
+
+    liteventd_test::routing_key(&executor).await
+}
+
+#[tokio::test]
+async fn sqlite_load() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor("load").await?;
+
+    liteventd_test::load(&executor).await
+}
+
+#[tokio::test]
+async fn sqlite_invalid_original_version() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor("invalid_original_version").await?;
+
+    liteventd_test::invalid_original_version(&executor).await
+}
+
 #[tokio::test]
 async fn forward_asc() -> anyhow::Result<()> {
     let pool = create_sqlite_pool("forward_asc").await?;

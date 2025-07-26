@@ -1,4 +1,7 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    f32::consts::E,
+    ops::{Deref, DerefMut},
+};
 
 use sea_query::{
     ColumnDef, Expr, ExprTrait, Iden, Index, IntoColumnRef, OnConflict, Query, SelectStatement,
@@ -80,12 +83,7 @@ impl<DB: Database> Sql<DB> {
                     .string_len(50)
                     .not_null(),
             )
-            .col(
-                ColumnDef::new(Event::Timestamp)
-                    .integer()
-                    .not_null()
-                    .default(Expr::custom_keyword("(strftime('%s', 'now'))")),
-            )
+            .col(ColumnDef::new(Event::Timestamp).integer().not_null())
             .to_owned();
 
         let idx_event_type = Index::create()
@@ -176,7 +174,33 @@ where
     crate::Event: for<'r> sqlx::FromRow<'r, DB::Row>,
 {
     async fn get_event<A: Aggregator>(&self, cursor: Value) -> Result<crate::Event, ReadError> {
-        todo!()
+        let cursor = crate::Event::deserialize_cursor(&cursor)?;
+        let query = Query::select()
+            .columns([
+                Event::Id,
+                Event::Name,
+                Event::AggregateType,
+                Event::AggregateId,
+                Event::Version,
+                Event::Data,
+                Event::Metadata,
+                Event::RoutingKey,
+                Event::Timestamp,
+            ])
+            .from(Event::Table)
+            .and_where(Expr::col(Event::Id).eq(Expr::value(cursor.i.to_string())))
+            .limit(1)
+            .to_owned();
+
+        let (sql, values) = match DB::NAME {
+            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
+            name => panic!("'{name}' not supported, consider using SQLite"),
+        };
+
+        sqlx::query_as_with::<DB, crate::Event, _>(&sql, values)
+            .fetch_one(&self.0)
+            .await
+            .map_err(|err| ReadError::Unknown(err.into()))
     }
 
     async fn read<A: Aggregator>(
@@ -244,6 +268,7 @@ where
                 Event::AggregateId,
                 Event::Version,
                 Event::RoutingKey,
+                Event::Timestamp,
             ])
             .to_owned();
 
@@ -257,6 +282,7 @@ where
                 event.aggregate_id.to_string().into(),
                 event.version.into(),
                 event.routing_key.into(),
+                event.timestamp.into(),
             ]);
         }
 
@@ -563,7 +589,7 @@ impl Bind for crate::Event {
 
 impl<R: sqlx::Row> sqlx::FromRow<'_, R> for crate::Event
 where
-    u32: sqlx::Type<R::Database> + for<'r> sqlx::Decode<'r, R::Database>,
+    u64: sqlx::Type<R::Database> + for<'r> sqlx::Decode<'r, R::Database>,
     u16: sqlx::Type<R::Database> + for<'r> sqlx::Decode<'r, R::Database>,
     Vec<u8>: sqlx::Type<R::Database> + for<'r> sqlx::Decode<'r, R::Database>,
     String: sqlx::Type<R::Database> + for<'r> sqlx::Decode<'r, R::Database>,
