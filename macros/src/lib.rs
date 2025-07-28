@@ -1,11 +1,11 @@
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use quote::{ToTokens, quote};
 use sha3::{Digest, Sha3_256};
 use std::ops::Deref;
 use syn::{ItemImpl, ItemStruct, parse_macro_input};
 
 #[proc_macro_attribute]
-pub fn handle(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let item: ItemImpl = parse_macro_input!(item);
 
     let syn::Type::Path(item_path) = item.self_ty.deref() else {
@@ -55,7 +55,7 @@ pub fn handle(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn aggregate(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn aggregator(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let item: ItemImpl = parse_macro_input!(item);
     let mut hasher = Sha3_256::new();
 
@@ -75,15 +75,15 @@ pub fn aggregate(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .items
         .iter()
         .filter_map(|item| {
-            let syn::ImplItem::Fn(iten_fn) = item else {
+            let syn::ImplItem::Fn(item_fn) = item else {
                 return None;
             };
 
-            hasher.update(iten_fn.sig.ident.to_string());
-            let ident = iten_fn.sig.ident.clone();
+            hasher.update(item_fn.to_token_stream().to_string());
+            let ident = item_fn.sig.ident.clone();
 
             Some(quote! {
-                if let Ok(Some(data)) = event.to_data(){
+                if let Some(data) = event.to_data()? {
                     self.#ident(data).await?;
                     return Ok(());
                 }
@@ -99,7 +99,7 @@ pub fn aggregate(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
         #[async_trait::async_trait]
         impl Aggregator for #ident {
-            async fn aggregate(&mut self, event: Event) -> anyhow::Result<()> {
+            async fn aggregate(&mut self, event: &Event) -> anyhow::Result<()> {
                 #handler_fns
 
                 Ok(())
