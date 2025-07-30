@@ -2,6 +2,7 @@ pub mod context;
 pub mod cursor;
 pub mod sql;
 
+use futures::{Stream, stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::HashMap,
@@ -9,7 +10,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
-use tokio::sync::RwLock;
 use ulid::Ulid;
 
 use crate::cursor::{Args, Cursor, ReadResult, Value};
@@ -371,29 +371,25 @@ pub enum SubscribeMode {
     Live,
 }
 
-pub struct SubscribeBuilder<E: Executor> {
+pub struct SubscribeBuilder {
     id: Ulid,
     key: String,
     routing_key: Option<String>,
     mode: SubscribeMode,
-    handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
     delay: Option<Duration>,
-    started: RwLock<bool>,
 }
 
-pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
+pub fn subscribe(key: impl Into<String>) -> SubscribeBuilder {
     SubscribeBuilder {
         id: Ulid::default(),
         key: key.into(),
         mode: SubscribeMode::Persistent,
-        handlers: HashMap::default(),
         delay: None,
         routing_key: None,
-        started: RwLock::new(false),
     }
 }
 
-impl<E: Executor> SubscribeBuilder<E> {
+impl SubscribeBuilder {
     pub fn mode(mut self, v: SubscribeMode) -> Self {
         self.mode = v;
 
@@ -406,18 +402,11 @@ impl<E: Executor> SubscribeBuilder<E> {
         self
     }
 
-    pub fn handler<A: Aggregator, H: SubscribeHandler<E> + 'static>(mut self, v: H) -> Self {
-        self.handlers.insert(A::name().to_owned(), Box::new(v));
-
-        self
-    }
-
-    pub async fn start(&mut self, _executor: &E) -> Result<&mut Self, SubscribeError> {
-        todo!()
-    }
-
-    pub async fn wait_finish(&mut self, _executor: &E) -> Result<(), SubscribeError> {
-        todo!()
+    pub async fn stream<'a, A: Aggregator, E: Executor>(
+        &self,
+        _executor: &'a E,
+    ) -> Result<impl Stream<Item = ContextBase<'a, E>>, SubscribeError> {
+        Ok(stream::empty())
     }
 }
 
