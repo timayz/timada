@@ -145,6 +145,22 @@ pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Resu
     Ok(())
 }
 
+pub async fn subscribe<E: Executor>(executor: &E) -> anyhow::Result<()> {
+    todo!()
+}
+
+pub async fn subscribe_routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
+    todo!()
+}
+
+pub async fn subscribe_persistent<E: Executor>(executor: &E) -> anyhow::Result<()> {
+    todo!()
+}
+
+pub async fn subscribe_persistent_routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
+    todo!()
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
 struct Added {
     pub value: i16,

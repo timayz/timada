@@ -365,33 +365,29 @@ pub trait SubscribeHandler<E: Executor> {
     async fn handle(&self, context: &ContextBase<'_, E>) -> anyhow::Result<()>;
 }
 
-pub enum SubscribeMode {
-    Persistent,
-    Normal,
-    Live,
-}
-
 pub struct SubscribeBuilder {
     id: Ulid,
     key: String,
+    aggregate_type: String,
     routing_key: Option<String>,
-    mode: SubscribeMode,
+    persistent: bool,
     delay: Option<Duration>,
 }
 
-pub fn subscribe(key: impl Into<String>) -> SubscribeBuilder {
+pub fn subscribe<A: Aggregator>(key: impl Into<String>) -> SubscribeBuilder {
     SubscribeBuilder {
         id: Ulid::default(),
         key: key.into(),
-        mode: SubscribeMode::Persistent,
+        aggregate_type: A::name().to_owned(),
         delay: None,
         routing_key: None,
+        persistent: true,
     }
 }
 
 impl SubscribeBuilder {
-    pub fn mode(mut self, v: SubscribeMode) -> Self {
-        self.mode = v;
+    pub fn persistent(mut self, v: bool) -> Self {
+        self.persistent = v;
 
         self
     }
@@ -402,7 +398,14 @@ impl SubscribeBuilder {
         self
     }
 
-    pub async fn stream<'a, A: Aggregator, E: Executor>(
+    pub async fn read<'a, E: Executor>(
+        &self,
+        _executor: &'a E,
+    ) -> Result<impl Stream<Item = ContextBase<'a, E>>, SubscribeError> {
+        Ok(stream::empty())
+    }
+
+    pub async fn stream<'a, E: Executor>(
         &self,
         _executor: &'a E,
     ) -> Result<impl Stream<Item = ContextBase<'a, E>>, SubscribeError> {

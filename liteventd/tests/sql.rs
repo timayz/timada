@@ -46,6 +46,34 @@ async fn sqlite_invalid_original_version() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn sqlite_subscribe() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor("subscribe").await?;
+
+    liteventd_test::subscribe(&executor).await
+}
+
+#[tokio::test]
+async fn sqlite_subscribe_routing_key() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor("subscribe_routing_key").await?;
+
+    liteventd_test::subscribe_routing_key(&executor).await
+}
+
+#[tokio::test]
+async fn sqlite_subscribe_persistent() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor("subscribe_persistent").await?;
+
+    liteventd_test::subscribe_persistent(&executor).await
+}
+
+#[tokio::test]
+async fn sqlite_subscribe_persistent_routing_key() -> anyhow::Result<()> {
+    let executor = create_sqlite_executor("subscribe_persistent_routing_key").await?;
+
+    liteventd_test::subscribe_persistent_routing_key(&executor).await
+}
+
+#[tokio::test]
 async fn forward_asc() -> anyhow::Result<()> {
     let pool = create_sqlite_pool("forward_asc").await?;
     let data = get_data(&pool).await?;
