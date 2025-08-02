@@ -1,3 +1,4 @@
+use futures::StreamExt;
 use liteventd::{Aggregator, AggregatorEvent, Event, EventData, Executor, WriteError};
 use liteventd_macros::AggregatorEvent;
 use serde::{Deserialize, Serialize};
@@ -76,7 +77,7 @@ pub async fn routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
         .await?;
 
     let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
-    assert_eq!(calcul.event.routing_key, "default");
+    assert_eq!(calcul.event.routing_key, None);
 
     liteventd::save(calcul.clone(), id)
         .routing_key("routing1")
@@ -86,7 +87,7 @@ pub async fn routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
         .await?;
 
     let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
-    assert_eq!(calcul.event.routing_key, "default");
+    assert_eq!(calcul.event.routing_key, None);
 
     let id = liteventd::create::<Calcul>()
         .routing_key("routing1")
@@ -96,7 +97,7 @@ pub async fn routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
         .await?;
 
     let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
-    assert_eq!(calcul.event.routing_key, "routing1");
+    assert_eq!(calcul.event.routing_key, Some("routing1".to_owned()));
 
     liteventd::save(calcul.clone(), id)
         .metadata(&true)?
@@ -105,7 +106,7 @@ pub async fn routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
         .await?;
 
     let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
-    assert_eq!(calcul.event.routing_key, "routing1");
+    assert_eq!(calcul.event.routing_key, Some("routing1".to_owned()));
 
     Ok(())
 }
@@ -145,19 +146,61 @@ pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Resu
     Ok(())
 }
 
-pub async fn subscribe<E: Executor>(executor: &E) -> anyhow::Result<()> {
+pub async fn subscribe<E: Executor>(executor: &E, events: Vec<Event>) -> anyhow::Result<()> {
+    let sub1 = liteventd::subscribe("sub1").aggregator::<Calcul>();
+    let sub2 = liteventd::subscribe("sub2").aggregator::<Calcul>();
+
+    let mut sub1_stream = sub1.read(executor).await?;
+    for event in events.iter() {
+        let context = sub1_stream.next().await.unwrap();
+        assert_eq!(context.event, event);
+    }
+    let mut sub1_stream = sub1.read(executor).await?;
+    assert!(sub1_stream.next().await.is_none());
+
+    let mut sub2_stream = sub2.read(executor).await?;
+    for event in events.iter() {
+        let context = sub2_stream.next().await.unwrap();
+        assert_eq!(context.event, event);
+    }
+    let mut sub2_stream = sub2.read(executor).await?;
+    assert!(sub2_stream.next().await.is_none());
+
+    Ok(())
+}
+
+pub async fn subscribe_routing_key<E: Executor>(
+    executor: &E,
+    events: Vec<Event>,
+) -> anyhow::Result<()> {
     todo!()
 }
 
-pub async fn subscribe_routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
+pub async fn subscribe_default<E: Executor>(
+    executor: &E,
+    events: Vec<Event>,
+) -> anyhow::Result<()> {
     todo!()
 }
 
-pub async fn subscribe_persistent<E: Executor>(executor: &E) -> anyhow::Result<()> {
+pub async fn subscribe_multiple_aggregator<E: Executor>(
+    executor: &E,
+    events: Vec<Event>,
+) -> anyhow::Result<()> {
     todo!()
 }
 
-pub async fn subscribe_persistent_routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
+pub async fn subscribe_routing_key_multiple_aggregator<E: Executor>(
+    executor: &E,
+    events: Vec<Event>,
+) -> anyhow::Result<()> {
+    todo!()
+}
+
+pub async fn subscribe_default_multiple_aggregator<E: Executor>(
+    executor: &E,
+    events: Vec<Event>,
+) -> anyhow::Result<()> {
     todo!()
 }
 
@@ -170,10 +213,12 @@ struct Added {
 struct Subtracted {
     pub value: i16,
 }
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
 struct Multiplied {
     pub value: i16,
 }
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
 struct Divided {
     pub value: i16,

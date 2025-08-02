@@ -5,7 +5,7 @@ pub mod sql;
 use futures::{Stream, stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Debug,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -30,11 +30,11 @@ pub struct EventCursor {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub id: Ulid,
-    pub aggregate_id: Ulid,
-    pub aggregate_type: String,
+    pub aggregator_id: Ulid,
+    pub aggregator_type: String,
     pub version: u16,
     pub name: String,
-    pub routing_key: String,
+    pub routing_key: Option<String>,
     pub data: Vec<u8>,
     pub metadata: Vec<u8>,
     pub timestamp: u64,
@@ -167,7 +167,7 @@ pub async fn load<A: Aggregator, E: Executor>(
             ciborium::into_writer(&aggregator, &mut data)?;
 
             executor
-                .save_snapshot::<A>(event.node.aggregate_id, data, cursor)
+                .save_snapshot::<A>(event.node.aggregator_id, data, cursor)
                 .await?;
         }
 
@@ -217,22 +217,24 @@ pub enum WriteError {
 }
 
 pub struct SaveBuilder<A: Aggregator> {
-    aggregate_id: Ulid,
-    aggregate_type: String,
+    aggregator_id: Ulid,
+    aggregator_type: String,
     aggregator: A,
     routing_key: Option<String>,
+    routing_key_locked: bool,
     original_version: u16,
     data: Vec<(&'static str, Vec<u8>)>,
     metadata: Option<Vec<u8>>,
 }
 
 impl<A: Aggregator> SaveBuilder<A> {
-    pub fn new(aggregator: A, aggregate_id: Ulid) -> SaveBuilder<A> {
+    pub fn new(aggregator: A, aggregator_id: Ulid) -> SaveBuilder<A> {
         SaveBuilder {
-            aggregate_id,
+            aggregator_id,
             aggregator,
-            aggregate_type: A::name().to_owned(),
+            aggregator_type: A::name().to_owned(),
             routing_key: None,
+            routing_key_locked: false,
             original_version: 0,
             data: Vec::default(),
             metadata: None,
@@ -245,9 +247,14 @@ impl<A: Aggregator> SaveBuilder<A> {
         self
     }
 
-    pub fn routing_key(mut self, v: impl Into<String>) -> Self {
-        if self.routing_key.is_none() {
-            self.routing_key = Some(v.into());
+    pub fn routing_key(self, v: impl Into<String>) -> Self {
+        self.routing_key_opt(Some(v.into()))
+    }
+
+    pub fn routing_key_opt(mut self, v: Option<String>) -> Self {
+        if !self.routing_key_locked {
+            self.routing_key = v;
+            self.routing_key_locked = true;
         }
 
         self
@@ -276,7 +283,6 @@ impl<A: Aggregator> SaveBuilder<A> {
     }
 
     pub async fn commit<E: Executor>(&self, executor: &E) -> Result<Ulid, WriteError> {
-        let routing_key = self.routing_key.to_owned().unwrap_or("default".to_owned());
         let mut aggregator = self.aggregator.clone();
         let mut version = self.original_version;
 
@@ -296,10 +302,10 @@ impl<A: Aggregator> SaveBuilder<A> {
                 data: data.to_vec(),
                 metadata: metadata.to_vec(),
                 timestamp,
-                aggregate_id: self.aggregate_id,
-                aggregate_type: self.aggregate_type.to_owned(),
+                aggregator_id: self.aggregator_id,
+                aggregator_type: self.aggregator_type.to_owned(),
                 version,
-                routing_key: routing_key.to_owned(),
+                routing_key: self.routing_key.to_owned(),
             };
 
             aggregator.aggregate(&event).await?;
@@ -317,10 +323,10 @@ impl<A: Aggregator> SaveBuilder<A> {
         let cursor = last_event.serialize_cursor()?;
 
         executor
-            .save_snapshot::<A>(last_event.aggregate_id, data, cursor)
+            .save_snapshot::<A>(last_event.aggregator_id, data, cursor)
             .await?;
 
-        Ok(self.aggregate_id)
+        Ok(self.aggregator_id)
     }
 }
 
@@ -328,68 +334,58 @@ pub fn create<A: Aggregator>() -> SaveBuilder<A> {
     SaveBuilder::new(A::default(), Ulid::new())
 }
 
-pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregate_id: Ulid) -> SaveBuilder<A> {
-    SaveBuilder::new(aggregator.item, aggregate_id)
+pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregator_id: Ulid) -> SaveBuilder<A> {
+    SaveBuilder::new(aggregator.item, aggregator_id)
         .original_version(aggregator.event.version)
-        .routing_key(aggregator.event.routing_key)
+        .routing_key_opt(aggregator.event.routing_key)
 }
 
 #[derive(Debug, Error)]
 pub enum SubscribeError {}
 
 #[derive(Clone)]
-pub struct ContextBase<'a, E: Executor> {
+pub struct Context<'a, E: Executor> {
     key: String,
-    event: &'a Event,
-    executor: &'a E,
-}
-
-impl<'a, E: Executor> ContextBase<'a, E> {
-    pub fn to_context<D: AggregatorEvent, M>(
-        &self,
-    ) -> anyhow::Result<Option<Context<'a, E, D, M>>> {
-        todo!()
-    }
-}
-
-pub struct Context<'a, E, D, M> {
-    key: String,
-    pub executor: &'a E,
     pub event: &'a Event,
-    pub data: D,
-    pub metadata: M,
+    pub executor: &'a E,
 }
 
 #[async_trait::async_trait]
 pub trait SubscribeHandler<E: Executor> {
-    async fn handle(&self, context: &ContextBase<'_, E>) -> anyhow::Result<()>;
+    async fn handle(&self, context: &Context<'_, E>) -> anyhow::Result<()>;
+    fn aggregator_type(&self) -> &'static str;
+    fn event_name(&self) -> &'static str;
 }
 
-pub struct SubscribeBuilder {
+pub enum SubscribeCursor {
+    Beginning,
+    After(Duration),
+    Cursor(cursor::Value),
+}
+
+pub struct SubscribeBuilder<E: Executor> {
     id: Ulid,
     key: String,
-    aggregate_type: String,
     routing_key: Option<String>,
-    persistent: bool,
     delay: Option<Duration>,
+    handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
+    aggregator_types: HashSet<String>,
 }
 
-pub fn subscribe<A: Aggregator>(key: impl Into<String>) -> SubscribeBuilder {
+pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
     SubscribeBuilder {
-        id: Ulid::default(),
+        id: Ulid::new(),
         key: key.into(),
-        aggregate_type: A::name().to_owned(),
         delay: None,
         routing_key: None,
-        persistent: true,
+        handlers: HashMap::new(),
+        aggregator_types: HashSet::new(),
     }
 }
 
-impl SubscribeBuilder {
-    pub fn persistent(mut self, v: bool) -> Self {
-        self.persistent = v;
-
-        self
+impl<E: Executor> SubscribeBuilder<E> {
+    pub fn set_cursor(&self, _cursor: SubscribeCursor) -> Result<Self, SubscribeError> {
+        todo!()
     }
 
     pub fn delay(mut self, v: Duration) -> Self {
@@ -398,17 +394,30 @@ impl SubscribeBuilder {
         self
     }
 
-    pub async fn read<'a, E: Executor>(
-        &self,
-        _executor: &'a E,
-    ) -> Result<impl Stream<Item = ContextBase<'a, E>>, SubscribeError> {
-        Ok(stream::empty())
+    pub fn aggregator<A: Aggregator>(mut self) -> Self {
+        self.aggregator_types.insert(A::name().to_owned());
+
+        self
     }
 
-    pub async fn stream<'a, E: Executor>(
+    pub fn handler<H: SubscribeHandler<E> + 'static>(mut self, handler: H) -> Self {
+        self.aggregator_types
+            .insert(handler.aggregator_type().to_owned());
+
+        let key = format!("{}-{}", handler.aggregator_type(), handler.event_name());
+        self.handlers.insert(key, Box::new(handler));
+
+        self
+    }
+
+    pub async fn start<'a>(&self, _executor: &'a E) -> Result<(), SubscribeError> {
+        todo!()
+    }
+
+    pub async fn read<'a>(
         &self,
         _executor: &'a E,
-    ) -> Result<impl Stream<Item = ContextBase<'a, E>>, SubscribeError> {
+    ) -> Result<impl Stream<Item = Context<'a, E>>, SubscribeError> {
         Ok(stream::empty())
     }
 }

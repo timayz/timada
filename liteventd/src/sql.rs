@@ -18,8 +18,8 @@ pub enum Event {
     Table,
     Id,
     Name,
-    AggregateType,
-    AggregateId,
+    AggregatorType,
+    AggregatorId,
     Version,
     Data,
     Metadata,
@@ -60,13 +60,13 @@ impl<DB: Database> Sql<DB> {
                     .not_null(),
             )
             .col(
-                ColumnDef::new(Event::AggregateType)
+                ColumnDef::new(Event::AggregatorType)
                     .string()
                     .string_len(50)
                     .not_null(),
             )
             .col(
-                ColumnDef::new(Event::AggregateId)
+                ColumnDef::new(Event::AggregatorId)
                     .string()
                     .string_len(26)
                     .not_null(),
@@ -74,12 +74,7 @@ impl<DB: Database> Sql<DB> {
             .col(ColumnDef::new(Event::Version).integer().not_null())
             .col(ColumnDef::new(Event::Data).blob().not_null())
             .col(ColumnDef::new(Event::Metadata).blob().not_null())
-            .col(
-                ColumnDef::new(Event::RoutingKey)
-                    .string()
-                    .string_len(50)
-                    .not_null(),
-            )
+            .col(ColumnDef::new(Event::RoutingKey).string().string_len(50))
             .col(ColumnDef::new(Event::Timestamp).integer().not_null())
             .to_owned();
 
@@ -87,15 +82,15 @@ impl<DB: Database> Sql<DB> {
             .if_not_exists()
             .name("idx_event_type")
             .table(Event::Table)
-            .col(Event::AggregateType)
+            .col(Event::AggregatorType)
             .to_owned();
 
         let idx_event_type_id = Index::create()
             .if_not_exists()
             .name("idx_event_type_id")
             .table(Event::Table)
-            .col(Event::AggregateType)
-            .col(Event::AggregateId)
+            .col(Event::AggregatorType)
+            .col(Event::AggregatorId)
             .to_owned();
 
         let idx_event_routing_key_type = Index::create()
@@ -103,7 +98,7 @@ impl<DB: Database> Sql<DB> {
             .name("idx_event_routing_key_type")
             .table(Event::Table)
             .col(Event::RoutingKey)
-            .col(Event::AggregateType)
+            .col(Event::AggregatorType)
             .to_owned();
 
         let idx_event_type_id_version = Index::create()
@@ -111,8 +106,8 @@ impl<DB: Database> Sql<DB> {
             .name("idx_event_type_id_version")
             .table(Event::Table)
             .unique()
-            .col(Event::AggregateType)
-            .col(Event::AggregateId)
+            .col(Event::AggregatorType)
+            .col(Event::AggregatorId)
             .col(Event::Version)
             .to_owned();
 
@@ -176,8 +171,8 @@ where
             .columns([
                 Event::Id,
                 Event::Name,
-                Event::AggregateType,
-                Event::AggregateId,
+                Event::AggregatorType,
+                Event::AggregatorId,
                 Event::Version,
                 Event::Data,
                 Event::Metadata,
@@ -209,8 +204,8 @@ where
             .columns([
                 Event::Id,
                 Event::Name,
-                Event::AggregateType,
-                Event::AggregateId,
+                Event::AggregatorType,
+                Event::AggregatorId,
                 Event::Version,
                 Event::Data,
                 Event::Metadata,
@@ -218,8 +213,8 @@ where
                 Event::Timestamp,
             ])
             .from(Event::Table)
-            .and_where(Expr::col(Event::AggregateType).eq(Expr::value(A::name())))
-            .and_where(Expr::col(Event::AggregateId).eq(Expr::value(id)))
+            .and_where(Expr::col(Event::AggregatorType).eq(Expr::value(A::name())))
+            .and_where(Expr::col(Event::AggregatorId).eq(Expr::value(id)))
             .to_owned();
 
         Reader::new(statement)
@@ -261,8 +256,8 @@ where
                 Event::Name,
                 Event::Data,
                 Event::Metadata,
-                Event::AggregateType,
-                Event::AggregateId,
+                Event::AggregatorType,
+                Event::AggregatorId,
                 Event::Version,
                 Event::RoutingKey,
                 Event::Timestamp,
@@ -275,8 +270,8 @@ where
                 event.name.into(),
                 event.data.into(),
                 event.metadata.into(),
-                event.aggregate_type.into(),
-                event.aggregate_id.to_string().into(),
+                event.aggregator_type.into(),
+                event.aggregator_id.to_string().into(),
                 event.version.into(),
                 event.routing_key.into(),
                 event.timestamp.into(),
@@ -597,9 +592,9 @@ where
         Ok(crate::Event {
             id: Ulid::from_string(row.try_get("id")?)
                 .map_err(|err| sqlx::Error::InvalidArgument(err.to_string()))?,
-            aggregate_id: Ulid::from_string(row.try_get("aggregate_id")?)
+            aggregator_id: Ulid::from_string(row.try_get("aggregator_id")?)
                 .map_err(|err| sqlx::Error::InvalidArgument(err.to_string()))?,
-            aggregate_type: row.try_get("aggregate_type")?,
+            aggregator_type: row.try_get("aggregator_type")?,
             version: row.try_get("version")?,
             name: row.try_get("name")?,
             routing_key: row.try_get("routing_key")?,
