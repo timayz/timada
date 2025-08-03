@@ -107,10 +107,12 @@ pub trait Executor: Send + Sync {
         args: Args,
     ) -> Result<ReadResult<Event>, ReadError>;
 
-    async fn get_subscribe_cursor(
+    async fn get_subscriber_cursor(
         &self,
         key: String,
-    ) -> Result<Option<(Value, Ulid)>, SubscribeError>;
+    ) -> Result<Option<(Option<Value>, Ulid)>, SubscribeError>;
+
+    async fn upsert_subscriber(&self, key: String, worker_id: Ulid) -> Result<(), SubscribeError>;
 
     async fn get_snapshot<A: Aggregator>(
         &self,
@@ -123,6 +125,13 @@ pub trait Executor: Send + Sync {
         data: Vec<u8>,
         cursor: cursor::Value,
     ) -> Result<(), WriteError>;
+
+    async fn acknowledge(
+        &self,
+        key: String,
+        cursor: Value,
+        lag: u64,
+    ) -> Result<(), AcknowledgeError>;
 }
 
 #[derive(Debug, Error)]
@@ -373,12 +382,27 @@ pub enum SubscribeError {
     UlidDecode(#[from] ulid::DecodeError),
 }
 
+#[derive(Debug, Error)]
+pub enum AcknowledgeError {
+    #[error("{0}")]
+    Unknown(#[from] anyhow::Error),
+}
+
 #[derive(Clone)]
 pub struct Context<'a, E: Executor> {
     key: String,
     cursor: Value,
+    lag: u64,
     pub event: Event,
     pub executor: &'a E,
+}
+
+impl<'a, E: Executor> Context<'a, E> {
+    pub async fn acknowledge(&self) -> Result<(), AcknowledgeError> {
+        self.executor
+            .acknowledge(self.key.to_owned(), self.cursor.to_owned(), self.lag)
+            .await
+    }
 }
 
 #[async_trait::async_trait]
@@ -395,6 +419,7 @@ pub struct SubscribeBuilder<E: Executor> {
     delay: Option<Duration>,
     handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
     aggregator_types: HashSet<String>,
+    chunk_size: u16,
 }
 
 pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
@@ -405,10 +430,17 @@ pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
         routing_key: RoutingKey::Value(None),
         handlers: HashMap::new(),
         aggregator_types: HashSet::new(),
+        chunk_size: 1000,
     }
 }
 
 impl<E: Executor> SubscribeBuilder<E> {
+    pub fn chunk_size(mut self, v: u16) -> Self {
+        self.chunk_size = v;
+
+        self
+    }
+
     pub fn delay(mut self, v: Duration) -> Self {
         self.delay = Some(v);
 
@@ -443,27 +475,43 @@ impl<E: Executor> SubscribeBuilder<E> {
         self
     }
 
-    pub async fn start<'a>(&self, _executor: &'a E) -> Result<(), SubscribeError> {
-        todo!()
+    pub async fn init(self, executor: &E) -> Result<Self, SubscribeError> {
+        executor
+            .upsert_subscriber(self.key.to_owned(), self.id)
+            .await?;
+
+        Ok(self)
     }
 
     pub async fn read<'a>(&self, executor: &'a E) -> Result<Vec<Context<'a, E>>, SubscribeError> {
-        let cursor = match executor.get_subscribe_cursor(self.key.to_owned()).await? {
+        let cursor = match executor.get_subscriber_cursor(self.key.to_owned()).await? {
             Some((cursor, id)) => {
                 if self.id != id {
                     return Err(SubscribeError::WorkerNotMatched);
                 }
 
-                Ok::<_, SubscribeError>(Some(cursor))
+                Ok::<_, SubscribeError>(cursor)
             }
             _ => Ok(None),
         }?;
+
+        let timestamp = executor
+            .read(
+                self.aggregator_types.to_owned(),
+                self.routing_key.clone(),
+                Args::backward(1, None),
+            )
+            .await?
+            .edges
+            .last()
+            .map(|e| e.node.timestamp)
+            .unwrap_or_default();
 
         let res = executor
             .read(
                 self.aggregator_types.to_owned(),
                 self.routing_key.clone(),
-                Args::forward(1000, cursor),
+                Args::forward(self.chunk_size, cursor),
             )
             .await?;
 
@@ -473,6 +521,7 @@ impl<E: Executor> SubscribeBuilder<E> {
             .map(|edge| Context {
                 key: self.key.to_owned(),
                 executor,
+                lag: timestamp - edge.node.timestamp,
                 cursor: edge.cursor.to_owned(),
                 event: edge.node.clone(),
             })
@@ -485,15 +534,4 @@ impl<E: Executor> SubscribeBuilder<E> {
     ) -> Result<impl Stream<Item = Context<'a, E>>, SubscribeError> {
         Ok(stream::empty())
     }
-}
-
-#[derive(Debug, Error)]
-pub enum AcknowledgeError {}
-
-pub async fn acknowledge<E: Executor>(
-    _executor: &E,
-    _key: impl Into<String>,
-    _event: &Event,
-) -> Result<(), AcknowledgeError> {
-    todo!()
 }

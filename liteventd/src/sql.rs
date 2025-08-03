@@ -12,7 +12,7 @@ use sqlx::{Database, Pool};
 use ulid::Ulid;
 
 use crate::{
-    Aggregator, Executor, ReadError, SubscribeError, WriteError,
+    AcknowledgeError, Aggregator, Executor, ReadError, SubscribeError, WriteError,
     cursor::{self, Args, Cursor, Edge, PageInfo, ReadResult, Value},
 };
 
@@ -169,7 +169,7 @@ impl<DB: Database> Sql<DB> {
                     .not_null()
                     .string_len(26),
             )
-            .col(ColumnDef::new(Subsriber::Cursor).string().not_null())
+            .col(ColumnDef::new(Subsriber::Cursor).string())
             .col(ColumnDef::new(Subsriber::Lag).integer().not_null())
             .col(
                 ColumnDef::new(Subsriber::CreatedAt)
@@ -302,10 +302,10 @@ where
             .await
     }
 
-    async fn get_subscribe_cursor(
+    async fn get_subscriber_cursor(
         &self,
         key: String,
-    ) -> Result<Option<(Value, Ulid)>, SubscribeError> {
+    ) -> Result<Option<(Option<Value>, Ulid)>, SubscribeError> {
         let query = Query::select()
             .columns([Subsriber::Cursor, Subsriber::WorkerId])
             .from(Subsriber::Table)
@@ -319,7 +319,7 @@ where
         };
 
         let Some((cursor, worker_id)) =
-            sqlx::query_as_with::<DB, (String, String), _>(&sql, values)
+            sqlx::query_as_with::<DB, (Option<String>, String), _>(&sql, values)
                 .fetch_optional(&self.0)
                 .await
                 .map_err(|err| SubscribeError::Unknown(err.into()))?
@@ -327,7 +327,39 @@ where
             return Ok(None);
         };
 
-        Ok(Some((cursor.into(), Ulid::from_string(&worker_id)?)))
+        Ok(Some((
+            cursor.map(|c| c.into()),
+            Ulid::from_string(&worker_id)?,
+        )))
+    }
+
+    async fn upsert_subscriber(&self, key: String, worker_id: Ulid) -> Result<(), SubscribeError> {
+        let query = Query::insert()
+            .into_table(Subsriber::Table)
+            .columns([Subsriber::Key, Subsriber::WorkerId, Subsriber::Lag])
+            .values_panic([key.into(), worker_id.to_string().into(), 0.into()])
+            .on_conflict(
+                OnConflict::column(Subsriber::Key)
+                    .update_columns([Subsriber::WorkerId])
+                    .value(
+                        Subsriber::UpdatedAt,
+                        Expr::custom_keyword("(strftime('%s', 'now'))"),
+                    )
+                    .to_owned(),
+            )
+            .to_owned();
+
+        let (sql, values) = match DB::NAME {
+            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
+            name => panic!("'{name}' not supported, consider using SQLite"),
+        };
+
+        sqlx::query_with::<DB, _>(&sql, values)
+            .execute(&self.0)
+            .await
+            .map_err(|err| SubscribeError::Unknown(err.into()))?;
+
+        Ok(())
     }
 
     async fn get_snapshot<A: Aggregator>(
@@ -446,6 +478,38 @@ where
             .execute(&self.0)
             .await
             .map_err(|err| WriteError::Unknown(err.into()))?;
+
+        Ok(())
+    }
+
+    async fn acknowledge(
+        &self,
+        key: String,
+        cursor: Value,
+        lag: u64,
+    ) -> Result<(), AcknowledgeError> {
+        let query = Query::update()
+            .table(Subsriber::Table)
+            .values([
+                (Subsriber::Cursor, cursor.to_string().into()),
+                (Subsriber::Lag, lag.into()),
+                (
+                    Subsriber::UpdatedAt,
+                    Expr::custom_keyword("(strftime('%s', 'now'))"),
+                ),
+            ])
+            .and_where(Expr::col(Subsriber::Key).eq(key))
+            .to_owned();
+
+        let (sql, values) = match DB::NAME {
+            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
+            name => panic!("'{name}' not supported, consider using SQLite"),
+        };
+
+        sqlx::query_with::<DB, _>(&sql, values)
+            .execute(&self.0)
+            .await
+            .map_err(|err| AcknowledgeError::Unknown(err.into()))?;
 
         Ok(())
     }
