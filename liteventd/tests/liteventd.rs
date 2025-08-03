@@ -146,6 +146,10 @@ pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Resu
 }
 
 pub async fn subscribe<E: Executor>(executor: &E, events: Vec<Event>) -> anyhow::Result<()> {
+    let events = events
+        .into_iter()
+        .filter(|e| e.aggregator_type == Calcul::name())
+        .collect::<Vec<_>>();
     let events = liteventd::cursor::Reader::new(events)
         .forward(1000, None)
         .execute()?;
@@ -192,38 +196,186 @@ pub async fn subscribe<E: Executor>(executor: &E, events: Vec<Event>) -> anyhow:
 }
 
 pub async fn subscribe_routing_key<E: Executor>(
-    _executor: &E,
-    _events: Vec<Event>,
+    executor: &E,
+    events: Vec<Event>,
 ) -> anyhow::Result<()> {
-    todo!()
+    let events = events
+        .into_iter()
+        .filter(|e| {
+            e.aggregator_type == Calcul::name() && e.routing_key == Some("eu-west-3".to_owned())
+        })
+        .collect::<Vec<_>>();
+
+    let events = liteventd::cursor::Reader::new(events)
+        .forward(1000, None)
+        .execute()?;
+
+    let sub1 = liteventd::subscribe("sub1")
+        .all()
+        .routing_key("eu-west-3")
+        .aggregator::<Calcul>()
+        .init(executor)
+        .await?;
+
+    let sub1_events = sub1.read(executor).await?;
+    for (index, edge) in events.edges.iter().enumerate() {
+        let sub1_event = sub1_events.get(index).map(|c| &c.event);
+        assert_eq!(sub1_event, Some(&edge.node));
+        sub1_events.get(index).unwrap().acknowledge().await?;
+    }
+
+    let sub1_events = sub1.read(executor).await?;
+    assert!(sub1_events.is_empty());
+
+    Ok(())
 }
 
 pub async fn subscribe_default<E: Executor>(
-    _executor: &E,
-    _events: Vec<Event>,
+    executor: &E,
+    events: Vec<Event>,
 ) -> anyhow::Result<()> {
-    todo!()
+    let events = events
+        .into_iter()
+        .filter(|e| e.aggregator_type == Calcul::name() && e.routing_key.is_none())
+        .collect::<Vec<_>>();
+
+    let events = liteventd::cursor::Reader::new(events)
+        .forward(1000, None)
+        .execute()?;
+
+    let sub1 = liteventd::subscribe("sub1")
+        .aggregator::<Calcul>()
+        .init(executor)
+        .await?;
+
+    let sub1_events = sub1.read(executor).await?;
+    for (index, edge) in events.edges.iter().enumerate() {
+        let sub1_event = sub1_events.get(index).map(|c| &c.event);
+        assert_eq!(sub1_event, Some(&edge.node));
+        sub1_events.get(index).unwrap().acknowledge().await?;
+    }
+
+    let sub1_events = sub1.read(executor).await?;
+    assert!(sub1_events.is_empty());
+
+    Ok(())
 }
 
 pub async fn subscribe_multiple_aggregator<E: Executor>(
-    _executor: &E,
-    _events: Vec<Event>,
+    executor: &E,
+    events: Vec<Event>,
 ) -> anyhow::Result<()> {
-    todo!()
+    let events = liteventd::cursor::Reader::new(events)
+        .forward(1000, None)
+        .execute()?;
+    let sub1 = liteventd::subscribe("sub1")
+        .all()
+        .aggregator::<Calcul>()
+        .aggregator::<MyCalcul>()
+        .init(executor)
+        .await?;
+    let sub2 = liteventd::subscribe("sub2")
+        .chunk_size(5)
+        .all()
+        .aggregator::<Calcul>()
+        .aggregator::<MyCalcul>()
+        .init(executor)
+        .await?;
+
+    let sub1_events = sub1.read(executor).await?;
+    for (index, edge) in events.edges.iter().enumerate() {
+        let sub1_event = sub1_events.get(index).map(|c| &c.event);
+        assert_eq!(sub1_event, Some(&edge.node));
+        sub1_events.get(index).unwrap().acknowledge().await?;
+    }
+
+    let sub1_events = sub1.read(executor).await?;
+    assert!(sub1_events.is_empty());
+
+    let sub2_events = sub2.read(executor).await?;
+    for (index, edge) in events.edges.iter().take(5).enumerate() {
+        let sub2_event = sub2_events.get(index).map(|c| &c.event);
+        assert_eq!(sub2_event, Some(&edge.node));
+        sub2_events.get(index).unwrap().acknowledge().await?;
+    }
+
+    let sub2_events = sub2.read(executor).await?;
+    for (index, edge) in events.edges.iter().skip(5).enumerate() {
+        let sub2_event = sub2_events.get(index).map(|c| &c.event);
+        assert_eq!(sub2_event, Some(&edge.node));
+        sub2_events.get(index).unwrap().acknowledge().await?;
+    }
+
+    let sub2_events = sub2.read(executor).await?;
+    assert!(sub2_events.is_empty());
+
+    Ok(())
 }
 
 pub async fn subscribe_routing_key_multiple_aggregator<E: Executor>(
-    _executor: &E,
-    _events: Vec<Event>,
+    executor: &E,
+    events: Vec<Event>,
 ) -> anyhow::Result<()> {
-    todo!()
+    let events = events
+        .into_iter()
+        .filter(|e| e.routing_key == Some("eu-west-3".to_owned()))
+        .collect::<Vec<_>>();
+
+    let events = liteventd::cursor::Reader::new(events)
+        .forward(1000, None)
+        .execute()?;
+
+    let sub1 = liteventd::subscribe("sub1")
+        .all()
+        .routing_key("eu-west-3")
+        .aggregator::<Calcul>()
+        .aggregator::<MyCalcul>()
+        .init(executor)
+        .await?;
+
+    let sub1_events = sub1.read(executor).await?;
+    for (index, edge) in events.edges.iter().enumerate() {
+        let sub1_event = sub1_events.get(index).map(|c| &c.event);
+        assert_eq!(sub1_event, Some(&edge.node));
+        sub1_events.get(index).unwrap().acknowledge().await?;
+    }
+
+    let sub1_events = sub1.read(executor).await?;
+    assert!(sub1_events.is_empty());
+
+    Ok(())
 }
 
 pub async fn subscribe_default_multiple_aggregator<E: Executor>(
-    _executor: &E,
-    _events: Vec<Event>,
+    executor: &E,
+    events: Vec<Event>,
 ) -> anyhow::Result<()> {
-    todo!()
+    let events = events
+        .into_iter()
+        .filter(|e| e.routing_key.is_none())
+        .collect::<Vec<_>>();
+
+    let events = liteventd::cursor::Reader::new(events)
+        .forward(1000, None)
+        .execute()?;
+
+    let sub1 = liteventd::subscribe("sub1")
+        .aggregator::<Calcul>()
+        .aggregator::<MyCalcul>()
+        .init(executor)
+        .await?;
+
+    let sub1_events = sub1.read(executor).await?;
+    for (index, edge) in events.edges.iter().enumerate() {
+        let sub1_event = sub1_events.get(index).map(|c| &c.event);
+        assert_eq!(sub1_event, Some(&edge.node));
+        sub1_events.get(index).unwrap().acknowledge().await?;
+    }
+
+    let sub1_events = sub1.read(executor).await?;
+    assert!(sub1_events.is_empty());
+
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
@@ -255,6 +407,38 @@ struct Calcul {
 
 #[liteventd_macros::aggregator]
 impl Calcul {
+    async fn added(&mut self, event: CalculEvent<Added>) -> anyhow::Result<()> {
+        self.value += event.data.value as i64;
+
+        Ok(())
+    }
+
+    async fn subtracted(&mut self, event: CalculEvent<Subtracted>) -> anyhow::Result<()> {
+        self.value -= event.data.value as i64;
+
+        Ok(())
+    }
+
+    async fn multiplied(&mut self, event: CalculEvent<Multiplied>) -> anyhow::Result<()> {
+        self.value *= event.data.value as i64;
+
+        Ok(())
+    }
+
+    async fn divided(&mut self, event: CalculEvent<Divided>) -> anyhow::Result<()> {
+        self.value /= event.data.value as i64;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+struct MyCalcul {
+    pub value: i64,
+}
+
+#[liteventd_macros::aggregator]
+impl MyCalcul {
     async fn added(&mut self, event: CalculEvent<Added>) -> anyhow::Result<()> {
         self.value += event.data.value as i64;
 

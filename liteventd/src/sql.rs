@@ -292,8 +292,12 @@ where
             .conditions(
                 matches!(routing_key, crate::RoutingKey::Value(_)),
                 |q| {
-                    if let crate::RoutingKey::Value(routing_key) = routing_key {
+                    if let crate::RoutingKey::Value(Some(ref routing_key)) = routing_key {
                         q.and_where(Expr::col(Event::RoutingKey).eq(routing_key));
+                    }
+
+                    if let crate::RoutingKey::Value(None) = routing_key {
+                        q.and_where(Expr::col(Event::RoutingKey).is_null());
                     }
                 },
                 |_q| {},

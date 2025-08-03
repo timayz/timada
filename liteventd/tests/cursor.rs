@@ -537,11 +537,14 @@ pub fn get_data() -> Vec<Event> {
         Ulid::new(),
     ];
 
+    let aggregator_types = ["Calcul", "MyCalcul"];
+
     let routing_keys = [
         Some("us-east-1".to_owned()),
         Some("eu-west-3".to_owned()),
         None,
     ];
+
     let timestamps: Vec<u32> = vec![rand::random(), rand::random(), rand::random()];
     let mut versions: HashMap<Ulid, u16> = HashMap::new();
     let mut data = vec![];
@@ -554,6 +557,10 @@ pub fn get_data() -> Vec<Event> {
             .unwrap_or_else(Ulid::new);
 
         let routing_key = routing_keys.choose(&mut rng).cloned().unwrap_or(None);
+        let aggregator_type = aggregator_types
+            .choose(&mut rng)
+            .cloned()
+            .unwrap_or("Calcul");
         let version = versions.entry(aggregator_id).or_default();
         let timestamp = if rng.random_range(0..100) < 20 {
             timestamps.choose(&mut rng).cloned()
@@ -566,7 +573,7 @@ pub fn get_data() -> Vec<Event> {
             id: Ulid::new(),
             name: "MessageSent".to_owned(),
             aggregator_id,
-            aggregator_type: "Calcul".to_owned(),
+            aggregator_type: aggregator_type.to_owned(),
             version: version.to_owned(),
             routing_key,
             timestamp,
