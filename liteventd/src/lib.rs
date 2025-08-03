@@ -2,7 +2,8 @@ pub mod context;
 pub mod cursor;
 pub mod sql;
 
-use futures::{Stream, stream};
+use backon::{ExponentialBuilder, Retryable};
+use futures::{Stream, StreamExt, stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{HashMap, HashSet},
@@ -10,9 +11,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
+use tokio::time::{Instant, interval, interval_at};
 use ulid::Ulid;
 
-use crate::cursor::{Args, Cursor, ReadResult, Value};
+use crate::cursor::{Args, Cursor, Edge, ReadResult, Value};
 
 pub struct EventData<D, M> {
     pub details: Event,
@@ -406,7 +408,7 @@ impl<'a, E: Executor> Context<'a, E> {
 }
 
 #[async_trait::async_trait]
-pub trait SubscribeHandler<E: Executor> {
+pub trait SubscribeHandler<E: Executor>: Send + Sync {
     async fn handle(&self, context: &Context<'_, E>) -> anyhow::Result<()>;
     fn aggregator_type(&self) -> &'static str;
     fn event_name(&self) -> &'static str;
@@ -475,12 +477,12 @@ impl<E: Executor> SubscribeBuilder<E> {
         self
     }
 
-    pub async fn init(self, executor: &E) -> Result<Self, SubscribeError> {
+    pub async fn init(&self, executor: &E) -> Result<(), SubscribeError> {
         executor
             .upsert_subscriber(self.key.to_owned(), self.id)
             .await?;
 
-        Ok(self)
+        Ok(())
     }
 
     pub async fn read<'a>(&self, executor: &'a E) -> Result<Vec<Context<'a, E>>, SubscribeError> {
@@ -528,10 +530,72 @@ impl<E: Executor> SubscribeBuilder<E> {
             .collect())
     }
 
+    pub async fn run(self, executor: &'static E) -> Result<(), SubscribeError> {
+        self.init(executor).await?;
+
+        tokio::spawn(async move {
+            let mut interval = interval_at(Instant::now(), Duration::from_millis(150));
+            loop {
+                interval.tick().await;
+
+                let data = match self.read(executor).await {
+                    Ok(res) => res,
+                    Err(SubscribeError::WorkerNotMatched) => break,
+                    _ => continue,
+                };
+
+                for item in data {
+                    let key = format!("{}-{}", item.event.aggregator_type, item.event.name);
+                    let Some(handler) = self.handlers.get(&key) else {
+                        continue;
+                    };
+                    let Ok(_) = (|| async { handler.handle(&item).await })
+                        .retry(ExponentialBuilder::default())
+                        .sleep(tokio::time::sleep)
+                        // @TODO: log me
+                        // .notify(notify)
+                        .await
+                    else {
+                        break;
+                    };
+
+                    if item.acknowledge().await.is_err() {
+                        // @TODO: log me
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
     pub async fn stream<'a>(
         &self,
-        _executor: &'a E,
+        executor: &'a E,
     ) -> Result<impl Stream<Item = Context<'a, E>>, SubscribeError> {
-        Ok(stream::empty())
+        self.init(executor).await?;
+        Ok(stream::unfold(
+            (self, executor, Vec::<Context<'a, E>>::new()),
+            |(sub, executor, mut data)| async move {
+                let mut interval = interval_at(Instant::now(), Duration::from_millis(150));
+
+                loop {
+                    interval.tick().await;
+
+                    if data.is_empty() {
+                        data = match sub.read(executor).await {
+                            Ok(res) => res,
+                            Err(SubscribeError::WorkerNotMatched) => return None,
+                            _ => continue,
+                        };
+                    }
+
+                    if let Some(item) = data.pop() {
+                        return Some((item, (sub, executor, data)));
+                    }
+                }
+            },
+        ))
     }
 }

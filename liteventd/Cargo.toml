@@ -18,6 +18,7 @@ base64 = "0.22"
 sea-query = "1.0.0-rc.1"
 sea-query-binder = { version = "0.8.0-rc.1", features = ["sqlx-sqlite", "runtime-tokio"] }
 futures = "0.3"
+backon = "1.5"
 
 [dev-dependencies]
 validator = { version = "0.20", features = ["derive"] }

@@ -150,20 +150,21 @@ pub async fn subscribe<E: Executor>(executor: &E, events: Vec<Event>) -> anyhow:
         .into_iter()
         .filter(|e| e.aggregator_type == Calcul::name())
         .collect::<Vec<_>>();
+
     let events = liteventd::cursor::Reader::new(events)
         .forward(1000, None)
         .execute()?;
-    let sub1 = liteventd::subscribe("sub1")
-        .all()
-        .aggregator::<Calcul>()
-        .init(executor)
-        .await?;
+
+    let sub1 = liteventd::subscribe("sub1").all().aggregator::<Calcul>();
+
+    sub1.init(executor).await?;
+
     let sub2 = liteventd::subscribe("sub2")
         .chunk_size(5)
         .all()
-        .aggregator::<Calcul>()
-        .init(executor)
-        .await?;
+        .aggregator::<Calcul>();
+
+    sub2.init(executor).await?;
 
     let sub1_events = sub1.read(executor).await?;
     for (index, edge) in events.edges.iter().enumerate() {
@@ -213,9 +214,9 @@ pub async fn subscribe_routing_key<E: Executor>(
     let sub1 = liteventd::subscribe("sub1")
         .all()
         .routing_key("eu-west-3")
-        .aggregator::<Calcul>()
-        .init(executor)
-        .await?;
+        .aggregator::<Calcul>();
+
+    sub1.init(executor).await?;
 
     let sub1_events = sub1.read(executor).await?;
     for (index, edge) in events.edges.iter().enumerate() {
@@ -243,10 +244,9 @@ pub async fn subscribe_default<E: Executor>(
         .forward(1000, None)
         .execute()?;
 
-    let sub1 = liteventd::subscribe("sub1")
-        .aggregator::<Calcul>()
-        .init(executor)
-        .await?;
+    let sub1 = liteventd::subscribe("sub1").aggregator::<Calcul>();
+
+    sub1.init(executor).await?;
 
     let sub1_events = sub1.read(executor).await?;
     for (index, edge) in events.edges.iter().enumerate() {
@@ -268,19 +268,21 @@ pub async fn subscribe_multiple_aggregator<E: Executor>(
     let events = liteventd::cursor::Reader::new(events)
         .forward(1000, None)
         .execute()?;
+
     let sub1 = liteventd::subscribe("sub1")
         .all()
         .aggregator::<Calcul>()
-        .aggregator::<MyCalcul>()
-        .init(executor)
-        .await?;
+        .aggregator::<MyCalcul>();
+
+    sub1.init(executor).await?;
+
     let sub2 = liteventd::subscribe("sub2")
         .chunk_size(5)
         .all()
         .aggregator::<Calcul>()
-        .aggregator::<MyCalcul>()
-        .init(executor)
-        .await?;
+        .aggregator::<MyCalcul>();
+
+    sub2.init(executor).await?;
 
     let sub1_events = sub1.read(executor).await?;
     for (index, edge) in events.edges.iter().enumerate() {
@@ -329,9 +331,9 @@ pub async fn subscribe_routing_key_multiple_aggregator<E: Executor>(
         .all()
         .routing_key("eu-west-3")
         .aggregator::<Calcul>()
-        .aggregator::<MyCalcul>()
-        .init(executor)
-        .await?;
+        .aggregator::<MyCalcul>();
+
+    sub1.init(executor).await?;
 
     let sub1_events = sub1.read(executor).await?;
     for (index, edge) in events.edges.iter().enumerate() {
@@ -361,9 +363,9 @@ pub async fn subscribe_default_multiple_aggregator<E: Executor>(
 
     let sub1 = liteventd::subscribe("sub1")
         .aggregator::<Calcul>()
-        .aggregator::<MyCalcul>()
-        .init(executor)
-        .await?;
+        .aggregator::<MyCalcul>();
+
+    sub1.init(executor).await?;
 
     let sub1_events = sub1.read(executor).await?;
     for (index, edge) in events.edges.iter().enumerate() {
