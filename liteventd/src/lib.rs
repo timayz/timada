@@ -2,6 +2,8 @@ pub mod context;
 pub mod cursor;
 pub mod sql;
 
+pub use liteventd_macros::*;
+
 use backon::{ExponentialBuilder, Retryable};
 use futures::{Stream, stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -43,7 +45,7 @@ pub struct Event {
 }
 
 impl Event {
-    pub fn to_data<D: AggregatorEvent + DeserializeOwned, M: DeserializeOwned>(
+    pub fn to_data<D: AggregatorName + DeserializeOwned, M: DeserializeOwned>(
         &self,
     ) -> Result<Option<EventData<D, M>>, ciborium::de::Error<std::io::Error>> {
         if D::name() != self.name {
@@ -73,14 +75,21 @@ impl Cursor for Event {
     }
 }
 
-#[async_trait::async_trait]
-pub trait Aggregator: Default + Send + Sync + Serialize + DeserializeOwned + Clone {
-    async fn aggregate(&mut self, event: &Event) -> anyhow::Result<()>;
+pub trait Aggregator:
+    Default + Send + Sync + Serialize + DeserializeOwned + Clone + AggregatorName
+{
+    fn aggregate<'async_trait>(
+        &'async_trait mut self,
+        event: &'async_trait Event,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'async_trait>,
+    >
+    where
+        Self: Sync + 'async_trait;
     fn revision() -> &'static str;
-    fn name() -> &'static str;
 }
 
-pub trait AggregatorEvent {
+pub trait AggregatorName {
     fn name() -> &'static str;
 }
 
@@ -300,7 +309,7 @@ impl<A: Aggregator> SaveBuilder<A> {
         Ok(self)
     }
 
-    pub fn data<D: Serialize + AggregatorEvent>(
+    pub fn data<D: Serialize + AggregatorName>(
         mut self,
         v: &D,
     ) -> Result<Self, ciborium::ser::Error<std::io::Error>> {
@@ -407,9 +416,15 @@ impl<'a, E: Executor> Context<'a, E> {
     }
 }
 
-#[async_trait::async_trait]
 pub trait SubscribeHandler<E: Executor>: Send + Sync {
-    async fn handle(&self, context: &Context<'_, E>) -> anyhow::Result<()>;
+    fn handle<'async_trait>(
+        &'async_trait self,
+        context: &'async_trait Context<'_, E>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'async_trait>,
+    >
+    where
+        Self: Sync + 'async_trait;
     fn aggregator_type(&self) -> &'static str;
     fn event_name(&self) -> &'static str;
 }

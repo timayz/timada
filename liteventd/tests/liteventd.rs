@@ -1,5 +1,4 @@
-use liteventd::{Aggregator, AggregatorEvent, Event, EventData, Executor, WriteError};
-use liteventd_macros::AggregatorEvent;
+use liteventd::{AggregatorName, Event, EventData, Executor, WriteError};
 use serde::{Deserialize, Serialize};
 
 pub async fn load<E: Executor>(executor: &E) -> anyhow::Result<()> {
@@ -380,22 +379,22 @@ pub async fn subscribe_default_multiple_aggregator<E: Executor>(
     Ok(())
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorName)]
 struct Added {
     pub value: i16,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorName)]
 struct Subtracted {
     pub value: i16,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorName)]
 struct Multiplied {
     pub value: i16,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorEvent)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorName)]
 struct Divided {
     pub value: i16,
 }
@@ -439,7 +438,7 @@ struct MyCalcul {
     pub value: i64,
 }
 
-#[liteventd_macros::aggregator]
+#[liteventd::aggregator]
 impl MyCalcul {
     async fn added(&mut self, event: CalculEvent<Added>) -> anyhow::Result<()> {
         self.value += event.data.value as i64;
