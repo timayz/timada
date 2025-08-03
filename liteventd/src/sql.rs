@@ -292,7 +292,7 @@ where
                         q.and_where(Expr::col(Event::RoutingKey).eq(routing_key));
                     }
                 },
-                |q| {},
+                |_q| {},
             )
             .to_owned();
 

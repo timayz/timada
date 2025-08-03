@@ -1,4 +1,3 @@
-use futures::StreamExt;
 use liteventd::{Aggregator, AggregatorEvent, Event, EventData, Executor, WriteError};
 use liteventd_macros::AggregatorEvent;
 use serde::{Deserialize, Serialize};
@@ -193,36 +192,36 @@ pub async fn subscribe<E: Executor>(executor: &E, events: Vec<Event>) -> anyhow:
 }
 
 pub async fn subscribe_routing_key<E: Executor>(
-    executor: &E,
-    events: Vec<Event>,
+    _executor: &E,
+    _events: Vec<Event>,
 ) -> anyhow::Result<()> {
     todo!()
 }
 
 pub async fn subscribe_default<E: Executor>(
-    executor: &E,
-    events: Vec<Event>,
+    _executor: &E,
+    _events: Vec<Event>,
 ) -> anyhow::Result<()> {
     todo!()
 }
 
 pub async fn subscribe_multiple_aggregator<E: Executor>(
-    executor: &E,
-    events: Vec<Event>,
+    _executor: &E,
+    _events: Vec<Event>,
 ) -> anyhow::Result<()> {
     todo!()
 }
 
 pub async fn subscribe_routing_key_multiple_aggregator<E: Executor>(
-    executor: &E,
-    events: Vec<Event>,
+    _executor: &E,
+    _events: Vec<Event>,
 ) -> anyhow::Result<()> {
     todo!()
 }
 
 pub async fn subscribe_default_multiple_aggregator<E: Executor>(
-    executor: &E,
-    events: Vec<Event>,
+    _executor: &E,
+    _events: Vec<Event>,
 ) -> anyhow::Result<()> {
     todo!()
 }
