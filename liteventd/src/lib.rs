@@ -3,7 +3,7 @@ pub mod cursor;
 pub mod sql;
 
 use backon::{ExponentialBuilder, Retryable};
-use futures::{Stream, StreamExt, stream};
+use futures::{Stream, stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{HashMap, HashSet},
@@ -11,10 +11,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
-use tokio::time::{Instant, interval, interval_at};
+use tokio::time::{Instant, interval_at};
 use ulid::Ulid;
 
-use crate::cursor::{Args, Cursor, Edge, ReadResult, Value};
+use crate::cursor::{Args, Cursor, ReadResult, Value};
 
 pub struct EventData<D, M> {
     pub details: Event,
