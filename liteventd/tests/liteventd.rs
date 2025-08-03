@@ -147,24 +147,29 @@ pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Resu
 }
 
 pub async fn subscribe<E: Executor>(executor: &E, events: Vec<Event>) -> anyhow::Result<()> {
-    let sub1 = liteventd::subscribe("sub1").aggregator::<Calcul>();
-    let sub2 = liteventd::subscribe("sub2").aggregator::<Calcul>();
+    let events = liteventd::cursor::Reader::new(events)
+        .forward(1000, None)
+        .execute()?;
+    let sub1 = liteventd::subscribe("sub1").all().aggregator::<Calcul>();
+    let sub2 = liteventd::subscribe("sub2").all().aggregator::<Calcul>();
 
-    let mut sub1_stream = sub1.read(executor).await?;
-    for event in events.iter() {
-        let context = sub1_stream.next().await.unwrap();
-        assert_eq!(context.event, event);
+    let sub1_events = sub1.read(executor).await?;
+    for (index, edge) in events.edges.iter().enumerate() {
+        let sub1_event = sub1_events.get(index).map(|c| &c.event);
+        assert_eq!(sub1_event, Some(&edge.node));
     }
-    let mut sub1_stream = sub1.read(executor).await?;
-    assert!(sub1_stream.next().await.is_none());
 
-    let mut sub2_stream = sub2.read(executor).await?;
-    for event in events.iter() {
-        let context = sub2_stream.next().await.unwrap();
-        assert_eq!(context.event, event);
+    let sub1_events = sub1.read(executor).await?;
+    assert!(sub1_events.is_empty());
+
+    let sub2_events = sub2.read(executor).await?;
+    for (index, edge) in events.edges.iter().enumerate() {
+        let sub2_event = sub2_events.get(index).map(|c| &c.event);
+        assert_eq!(sub2_event, Some(&edge.node));
     }
-    let mut sub2_stream = sub2.read(executor).await?;
-    assert!(sub2_stream.next().await.is_none());
+
+    let sub2_events = sub2.read(executor).await?;
+    assert!(sub2_events.is_empty());
 
     Ok(())
 }

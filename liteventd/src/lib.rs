@@ -82,17 +82,35 @@ pub trait AggregatorEvent {
     fn name() -> &'static str;
 }
 
+#[derive(Clone)]
+pub enum RoutingKey {
+    All,
+    Value(Option<String>),
+}
+
 #[async_trait::async_trait]
 pub trait Executor: Send + Sync {
     async fn write(&self, events: Vec<Event>) -> Result<(), WriteError>;
 
     async fn get_event<A: Aggregator>(&self, cursor: Value) -> Result<Event, ReadError>;
 
-    async fn read<A: Aggregator>(
+    async fn read_by_aggregator<A: Aggregator>(
         &self,
         id: String,
         args: Args,
     ) -> Result<ReadResult<Event>, ReadError>;
+
+    async fn read(
+        &self,
+        aggregator_types: HashSet<String>,
+        routing_key: RoutingKey,
+        args: Args,
+    ) -> Result<ReadResult<Event>, ReadError>;
+
+    async fn get_subscribe_cursor(
+        &self,
+        key: String,
+    ) -> Result<Option<(Value, Ulid)>, SubscribeError>;
 
     async fn get_snapshot<A: Aggregator>(
         &self,
@@ -155,7 +173,7 @@ pub async fn load<A: Aggregator, E: Executor>(
 
     loop {
         let events = executor
-            .read::<A>(id.to_owned(), Args::forward(1000, cursor.clone()))
+            .read_by_aggregator::<A>(id.to_owned(), Args::forward(1000, cursor.clone()))
             .await?;
 
         for event in events.edges.iter() {
@@ -341,12 +359,25 @@ pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregator_id: Ulid) -> Sa
 }
 
 #[derive(Debug, Error)]
-pub enum SubscribeError {}
+pub enum SubscribeError {
+    #[error("worker not match")]
+    WorkerNotMatched,
+
+    #[error("read >> {0}")]
+    ReadError(#[from] ReadError),
+
+    #[error("{0}")]
+    Unknown(#[from] anyhow::Error),
+
+    #[error("ulid.decode >> {0}")]
+    UlidDecode(#[from] ulid::DecodeError),
+}
 
 #[derive(Clone)]
 pub struct Context<'a, E: Executor> {
     key: String,
-    pub event: &'a Event,
+    cursor: Value,
+    pub event: Event,
     pub executor: &'a E,
 }
 
@@ -357,16 +388,10 @@ pub trait SubscribeHandler<E: Executor> {
     fn event_name(&self) -> &'static str;
 }
 
-pub enum SubscribeCursor {
-    Beginning,
-    After(Duration),
-    Cursor(cursor::Value),
-}
-
 pub struct SubscribeBuilder<E: Executor> {
     id: Ulid,
     key: String,
-    routing_key: Option<String>,
+    routing_key: RoutingKey,
     delay: Option<Duration>,
     handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
     aggregator_types: HashSet<String>,
@@ -377,19 +402,27 @@ pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
         id: Ulid::new(),
         key: key.into(),
         delay: None,
-        routing_key: None,
+        routing_key: RoutingKey::Value(None),
         handlers: HashMap::new(),
         aggregator_types: HashSet::new(),
     }
 }
 
 impl<E: Executor> SubscribeBuilder<E> {
-    pub fn set_cursor(&self, _cursor: SubscribeCursor) -> Result<Self, SubscribeError> {
-        todo!()
-    }
-
     pub fn delay(mut self, v: Duration) -> Self {
         self.delay = Some(v);
+
+        self
+    }
+
+    pub fn routing_key(mut self, v: impl Into<String>) -> Self {
+        self.routing_key = RoutingKey::Value(Some(v.into()));
+
+        self
+    }
+
+    pub fn all(mut self) -> Self {
+        self.routing_key = RoutingKey::All;
 
         self
     }
@@ -414,7 +447,39 @@ impl<E: Executor> SubscribeBuilder<E> {
         todo!()
     }
 
-    pub async fn read<'a>(
+    pub async fn read<'a>(&self, executor: &'a E) -> Result<Vec<Context<'a, E>>, SubscribeError> {
+        let cursor = match executor.get_subscribe_cursor(self.key.to_owned()).await? {
+            Some((cursor, id)) => {
+                if self.id != id {
+                    return Err(SubscribeError::WorkerNotMatched);
+                }
+
+                Ok::<_, SubscribeError>(Some(cursor))
+            }
+            _ => Ok(None),
+        }?;
+
+        let res = executor
+            .read(
+                self.aggregator_types.to_owned(),
+                self.routing_key.clone(),
+                Args::forward(1000, cursor),
+            )
+            .await?;
+
+        Ok(res
+            .edges
+            .iter()
+            .map(|edge| Context {
+                key: self.key.to_owned(),
+                executor,
+                cursor: edge.cursor.to_owned(),
+                event: edge.node.clone(),
+            })
+            .collect())
+    }
+
+    pub async fn stream<'a>(
         &self,
         _executor: &'a E,
     ) -> Result<impl Stream<Item = Context<'a, E>>, SubscribeError> {

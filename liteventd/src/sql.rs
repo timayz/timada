@@ -1,4 +1,7 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    collections::HashSet,
+    ops::{Deref, DerefMut},
+};
 
 use sea_query::{
     ColumnDef, Expr, ExprTrait, Iden, Index, IntoColumnRef, OnConflict, Query, SelectStatement,
@@ -9,7 +12,7 @@ use sqlx::{Database, Pool};
 use ulid::Ulid;
 
 use crate::{
-    Aggregator, Executor, ReadError, WriteError,
+    Aggregator, Executor, ReadError, SubscribeError, WriteError,
     cursor::{self, Args, Cursor, Edge, PageInfo, ReadResult, Value},
 };
 
@@ -35,6 +38,17 @@ enum Snapshot {
     Cursor,
     Revision,
     Data,
+    CreatedAt,
+    UpdatedAt,
+}
+
+#[derive(Iden)]
+enum Subsriber {
+    Table,
+    Key,
+    WorkerId,
+    Cursor,
+    Lag,
     CreatedAt,
     UpdatedAt,
 }
@@ -139,6 +153,33 @@ impl<DB: Database> Sql<DB> {
             .primary_key(Index::create().col(Snapshot::Type).col(Snapshot::Id))
             .to_owned();
 
+        let subsriber_table = Table::create()
+            .table(Subsriber::Table)
+            .if_not_exists()
+            .col(
+                ColumnDef::new(Subsriber::Key)
+                    .string()
+                    .string_len(50)
+                    .not_null()
+                    .primary_key(),
+            )
+            .col(
+                ColumnDef::new(Subsriber::WorkerId)
+                    .string()
+                    .not_null()
+                    .string_len(26),
+            )
+            .col(ColumnDef::new(Subsriber::Cursor).string().not_null())
+            .col(ColumnDef::new(Subsriber::Lag).integer().not_null())
+            .col(
+                ColumnDef::new(Subsriber::CreatedAt)
+                    .integer()
+                    .not_null()
+                    .default(Expr::custom_keyword("(strftime('%s', 'now'))")),
+            )
+            .col(ColumnDef::new(Subsriber::UpdatedAt).integer().null())
+            .to_owned();
+
         match DB::NAME {
             "SQLite" => [
                 event_table.to_string(SqliteQueryBuilder),
@@ -147,6 +188,7 @@ impl<DB: Database> Sql<DB> {
                 idx_event_routing_key_type.to_string(SqliteQueryBuilder),
                 idx_event_type_id_version.to_string(SqliteQueryBuilder),
                 snapshot_table.to_string(SqliteQueryBuilder),
+                subsriber_table.to_string(SqliteQueryBuilder),
             ]
             .join(";\n"),
             name => panic!("'{name}' not supported, consider using SQLite"),
@@ -195,7 +237,7 @@ where
             .map_err(|err| ReadError::Unknown(err.into()))
     }
 
-    async fn read<A: Aggregator>(
+    async fn read_by_aggregator<A: Aggregator>(
         &self,
         id: String,
         args: Args,
@@ -221,6 +263,71 @@ where
             .args(args)
             .execute::<_, crate::Event, _>(&self.0)
             .await
+    }
+
+    async fn read(
+        &self,
+        aggregator_types: HashSet<String>,
+        routing_key: crate::RoutingKey,
+        args: Args,
+    ) -> Result<ReadResult<crate::Event>, ReadError> {
+        let statement = Query::select()
+            .columns([
+                Event::Id,
+                Event::Name,
+                Event::AggregatorType,
+                Event::AggregatorId,
+                Event::Version,
+                Event::Data,
+                Event::Metadata,
+                Event::RoutingKey,
+                Event::Timestamp,
+            ])
+            .from(Event::Table)
+            .and_where(Expr::col(Event::AggregatorType).in_tuples(aggregator_types))
+            .conditions(
+                matches!(routing_key, crate::RoutingKey::Value(_)),
+                |q| {
+                    if let crate::RoutingKey::Value(routing_key) = routing_key {
+                        q.and_where(Expr::col(Event::RoutingKey).eq(routing_key));
+                    }
+                },
+                |q| {},
+            )
+            .to_owned();
+
+        Reader::new(statement)
+            .args(args)
+            .execute::<_, crate::Event, _>(&self.0)
+            .await
+    }
+
+    async fn get_subscribe_cursor(
+        &self,
+        key: String,
+    ) -> Result<Option<(Value, Ulid)>, SubscribeError> {
+        let query = Query::select()
+            .columns([Subsriber::Cursor, Subsriber::WorkerId])
+            .from(Subsriber::Table)
+            .and_where(Expr::col(Subsriber::Key).eq(Expr::value(key)))
+            .limit(1)
+            .to_owned();
+
+        let (sql, values) = match DB::NAME {
+            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
+            name => panic!("'{name}' not supported, consider using SQLite"),
+        };
+
+        let Some((cursor, worker_id)) =
+            sqlx::query_as_with::<DB, (String, String), _>(&sql, values)
+                .fetch_optional(&self.0)
+                .await
+                .map_err(|err| SubscribeError::Unknown(err.into()))?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some((cursor.into(), Ulid::from_string(&worker_id)?)))
     }
 
     async fn get_snapshot<A: Aggregator>(

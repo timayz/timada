@@ -566,7 +566,7 @@ pub fn get_data() -> Vec<Event> {
             id: Ulid::new(),
             name: "MessageSent".to_owned(),
             aggregator_id,
-            aggregator_type: "Message".to_owned(),
+            aggregator_type: "Calcul".to_owned(),
             version: version.to_owned(),
             routing_key,
             timestamp,
