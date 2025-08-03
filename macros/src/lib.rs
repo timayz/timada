@@ -1,21 +1,20 @@
 use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
-use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use sha3::{Digest, Sha3_256};
 use std::ops::Deref;
-use syn::{Ident, ItemFn, ItemImpl, ItemStruct, parse_macro_input};
+use syn::{Ident, ItemFn, ItemImpl, ItemStruct, parse_macro_input, spanned::Spanned};
 
 #[proc_macro_attribute]
 pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item: ItemFn = parse_macro_input!(item);
     let fn_ident = item.sig.ident.to_owned();
     let struct_ident = item.sig.ident.to_string().to_case(Case::UpperCamel);
-    let struct_ident = Ident::new(&struct_ident, Span::call_site());
+    let struct_ident = Ident::new(&struct_ident, item.span());
     let attr = attr
         .to_string()
         .split(", ")
-        .map(|str| Ident::new(str, Span::call_site()))
+        .map(|str| Ident::new(str, item.span()))
         .collect::<Vec<_>>();
 
     let Some(aggregator_ident) = attr.first() else {
@@ -36,7 +35,7 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
         fn #fn_ident() -> #struct_ident { #struct_ident }
 
         impl<E: liteventd::Executor> liteventd::SubscribeHandler<E> for #struct_ident {
-            fn handle<'async_trait>(&'async_trait self, context: &'async_trait liteventd::Context<'_, E>) -> std::pin::Pin<Box<dyn std::future::Future<Output=anyhow::Result<()>> + Send + 'async_trait>> 
+            fn handle<'async_trait>(&'async_trait self, context: &'async_trait liteventd::Context<'_, E>) -> std::pin::Pin<Box<dyn std::future::Future<Output=anyhow::Result<()>> + Send + 'async_trait>>
             where
                 Self: Sync + 'async_trait
             {
@@ -56,8 +55,7 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
         impl #struct_ident {
             #item
         }
-    }
-    .into()
+    }.into()
 }
 
 #[proc_macro_attribute]
