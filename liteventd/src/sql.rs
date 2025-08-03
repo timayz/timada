@@ -194,6 +194,13 @@ impl<DB: Database> Sql<DB> {
             name => panic!("'{name}' not supported, consider using SQLite"),
         }
     }
+
+    fn build_sqlx<S: SqlxBinder>(statement: S) -> (String, sea_query_binder::SqlxValues) {
+        match DB::NAME {
+            "SQLite" => statement.build_sqlx(SqliteQueryBuilder),
+            name => panic!("'{name}' not supported, consider using SQLite"),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -209,7 +216,7 @@ where
 {
     async fn get_event<A: Aggregator>(&self, cursor: Value) -> Result<crate::Event, ReadError> {
         let cursor = crate::Event::deserialize_cursor(&cursor)?;
-        let query = Query::select()
+        let statement = Query::select()
             .columns([
                 Event::Id,
                 Event::Name,
@@ -226,10 +233,7 @@ where
             .limit(1)
             .to_owned();
 
-        let (sql, values) = match DB::NAME {
-            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
-            name => panic!("'{name}' not supported, consider using SQLite"),
-        };
+        let (sql, values) = Self::build_sqlx(statement);
 
         sqlx::query_as_with::<DB, crate::Event, _>(&sql, values)
             .fetch_one(&self.0)
@@ -306,17 +310,14 @@ where
         &self,
         key: String,
     ) -> Result<Option<(Option<Value>, Ulid)>, SubscribeError> {
-        let query = Query::select()
+        let statement = Query::select()
             .columns([Subsriber::Cursor, Subsriber::WorkerId])
             .from(Subsriber::Table)
             .and_where(Expr::col(Subsriber::Key).eq(Expr::value(key)))
             .limit(1)
             .to_owned();
 
-        let (sql, values) = match DB::NAME {
-            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
-            name => panic!("'{name}' not supported, consider using SQLite"),
-        };
+        let (sql, values) = Self::build_sqlx(statement);
 
         let Some((cursor, worker_id)) =
             sqlx::query_as_with::<DB, (Option<String>, String), _>(&sql, values)
@@ -334,7 +335,7 @@ where
     }
 
     async fn upsert_subscriber(&self, key: String, worker_id: Ulid) -> Result<(), SubscribeError> {
-        let query = Query::insert()
+        let statement = Query::insert()
             .into_table(Subsriber::Table)
             .columns([Subsriber::Key, Subsriber::WorkerId, Subsriber::Lag])
             .values_panic([key.into(), worker_id.to_string().into(), 0.into()])
@@ -349,10 +350,7 @@ where
             )
             .to_owned();
 
-        let (sql, values) = match DB::NAME {
-            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
-            name => panic!("'{name}' not supported, consider using SQLite"),
-        };
+        let (sql, values) = Self::build_sqlx(statement);
 
         sqlx::query_with::<DB, _>(&sql, values)
             .execute(&self.0)
@@ -366,7 +364,7 @@ where
         &self,
         id: String,
     ) -> Result<Option<(Vec<u8>, Value)>, ReadError> {
-        let query = Query::select()
+        let statement = Query::select()
             .columns([Snapshot::Data, Snapshot::Cursor])
             .from(Snapshot::Table)
             .and_where(Expr::col(Snapshot::Type).eq(Expr::value(A::name())))
@@ -375,10 +373,7 @@ where
             .limit(1)
             .to_owned();
 
-        let (sql, values) = match DB::NAME {
-            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
-            name => panic!("'{name}' not supported, consider using SQLite"),
-        };
+        let (sql, values) = Self::build_sqlx(statement);
 
         sqlx::query_as_with::<DB, (Vec<u8>, String), _>(&sql, values)
             .fetch_optional(&self.0)
@@ -388,7 +383,7 @@ where
     }
 
     async fn write(&self, events: Vec<crate::Event>) -> Result<(), WriteError> {
-        let mut query = Query::insert()
+        let mut statement = Query::insert()
             .into_table(Event::Table)
             .columns([
                 Event::Id,
@@ -404,7 +399,7 @@ where
             .to_owned();
 
         for event in events {
-            query.values_panic([
+            statement.values_panic([
                 event.id.to_string().into(),
                 event.name.into(),
                 event.data.into(),
@@ -417,10 +412,7 @@ where
             ]);
         }
 
-        let (sql, values) = match DB::NAME {
-            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
-            name => panic!("'{name}' not supported, consider using SQLite"),
-        };
+        let (sql, values) = Self::build_sqlx(statement);
 
         sqlx::query_with::<DB, _>(&sql, values)
             .execute(&self.0)
@@ -442,7 +434,7 @@ where
         data: Vec<u8>,
         cursor: Value,
     ) -> Result<(), WriteError> {
-        let query = Query::insert()
+        let statement = Query::insert()
             .into_table(Snapshot::Table)
             .columns([
                 Snapshot::Type,
@@ -469,10 +461,7 @@ where
             )
             .to_owned();
 
-        let (sql, values) = match DB::NAME {
-            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
-            name => panic!("'{name}' not supported, consider using SQLite"),
-        };
+        let (sql, values) = Self::build_sqlx(statement);
 
         sqlx::query_with::<DB, _>(&sql, values)
             .execute(&self.0)
@@ -488,7 +477,7 @@ where
         cursor: Value,
         lag: u64,
     ) -> Result<(), AcknowledgeError> {
-        let query = Query::update()
+        let statement = Query::update()
             .table(Subsriber::Table)
             .values([
                 (Subsriber::Cursor, cursor.to_string().into()),
@@ -501,10 +490,7 @@ where
             .and_where(Expr::col(Subsriber::Key).eq(key))
             .to_owned();
 
-        let (sql, values) = match DB::NAME {
-            "SQLite" => query.build_sqlx(SqliteQueryBuilder),
-            name => panic!("'{name}' not supported, consider using SQLite"),
-        };
+        let (sql, values) = Self::build_sqlx(statement);
 
         sqlx::query_with::<DB, _>(&sql, values)
             .execute(&self.0)
@@ -586,7 +572,7 @@ impl Reader {
         let limit = self.build_reader::<O, O>()?;
 
         let (sql, values) = match DB::NAME {
-            "SQLite" => self.build_sqlx(SqliteQueryBuilder),
+            "SQLite" => self.statement.build_sqlx(SqliteQueryBuilder),
             name => panic!("'{name}' not supported, consider using SQLite"),
         };
 
