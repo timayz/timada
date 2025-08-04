@@ -100,7 +100,7 @@ pub enum RoutingKey {
 }
 
 #[async_trait::async_trait]
-pub trait Executor: Send + Sync {
+pub trait Executor: Send + Sync + 'static {
     async fn write(&self, events: Vec<Event>) -> Result<(), WriteError>;
 
     async fn get_event<A: Aggregator>(&self, cursor: Value) -> Result<Event, ReadError>;
@@ -545,15 +545,15 @@ impl<E: Executor> SubscribeBuilder<E> {
             .collect())
     }
 
-    pub async fn run(self, executor: &'static E) -> Result<(), SubscribeError> {
-        self.init(executor).await?;
+    pub async fn run(self, executor: E) -> Result<(), SubscribeError> {
+        self.init(&executor).await?;
 
         tokio::spawn(async move {
             let mut interval = interval_at(Instant::now(), Duration::from_millis(150));
             loop {
                 interval.tick().await;
 
-                let data = match self.read(executor).await {
+                let data = match self.read(&executor).await {
                     Ok(res) => res,
                     Err(SubscribeError::WorkerNotMatched) => break,
                     _ => continue,

@@ -505,6 +505,12 @@ where
     }
 }
 
+impl<D: Database> Clone for Sql<D> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
 impl<D: Database> From<Pool<D>> for Sql<D> {
     fn from(value: Pool<D>) -> Self {
         Self(value)

@@ -11,23 +11,35 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_ident = item.sig.ident.to_owned();
     let struct_ident = item.sig.ident.to_string().to_case(Case::UpperCamel);
     let struct_ident = Ident::new(&struct_ident, item.span());
-    let attr = attr
-        .to_string()
-        .split(", ")
-        .map(|str| Ident::new(str, item.span()))
-        .collect::<Vec<_>>();
-
-    let Some(aggregator_ident) = attr.first() else {
-        return syn::Error::new_spanned(item, "Unable to find name of aggregator")
+    let aggregator_ident = Ident::new(&attr.to_string(), item.span());
+    // item.sig.inputs.iter().find_map(|input| {
+    //     let syn::FnArg::Typed(arg) = input else {
+    //         return None::<Ident>;
+    //     };
+    //
+    //     eprintln!("{arg:#?}");
+    //
+    //     None
+    // });
+    let Some(syn::FnArg::Typed(event_arg)) = item.sig.inputs.get(1) else {
+        return syn::Error::new_spanned(item, "Unable to find event input")
             .into_compile_error()
             .into();
     };
 
-    let Some(event_ident) = attr.last() else {
-        return syn::Error::new_spanned(item, "Unable to find name of event")
+    let syn::Type::Path(event_arg_path) = *event_arg.ty.clone() else {
+        return syn::Error::new_spanned(item, "Unable to find event input type")
             .into_compile_error()
             .into();
     };
+
+    let Some(event_arg_segment) = event_arg_path.path.segments.first() else {
+        return syn::Error::new_spanned(item, "Unable to find event input type iden")
+            .into_compile_error()
+            .into();
+    };
+
+    let event_ident = event_arg_segment.ident.to_owned();
 
     quote! {
         struct #struct_ident;
@@ -41,7 +53,7 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
             {
                 Box::pin(async move {
                     if let Some(data) = context.event.to_data()? {
-                        return Self::#fn_ident(context, data).await;
+                        return Self::#fn_ident(context, data.data, data.metadata).await;
                     }
 
                     Ok(())

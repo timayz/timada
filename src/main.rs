@@ -64,12 +64,35 @@ impl CalculTwo {
     }
 }
 
-#[liteventd::handler(CalculOne, Added)]
+#[liteventd::handler(CalculOne)]
 async fn handler_calcul_one_added<E: Executor>(
     _context: &Context<'_, E>,
-    event: CalculEvent<Added>,
+    data: Added,
+    _metadata: bool,
 ) -> anyhow::Result<()> {
-    println!("{}", event.data.value);
+    println!("add >> {}", data.value);
+
+    Ok(())
+}
+
+#[liteventd::handler(CalculOne)]
+async fn handler_calcul_one_subtracted<E: Executor>(
+    _context: &Context<'_, E>,
+    data: Subtracted,
+    _metadata: bool,
+) -> anyhow::Result<()> {
+    println!("sub >> {}", data.value);
+
+    Ok(())
+}
+
+#[liteventd::handler(CalculTwo)]
+async fn handler_calcul_two_multiplied<E: Executor>(
+    _context: &Context<'_, E>,
+    data: Multiplied,
+    _metadata: bool,
+) -> anyhow::Result<()> {
+    println!("multi >> {}", data.value);
 
     Ok(())
 }
@@ -87,11 +110,36 @@ async fn main() -> anyhow::Result<()> {
 
     sqlx::query(&schema).execute(&pool).await?;
 
-    let _executor: Sql<Sqlite> = pool.into();
+    let executor: Sql<Sqlite> = pool.into();
 
     liteventd::subscribe::<Sql<Sqlite>>("eu-west-3")
         .aggregator::<CalculOne>()
-        .handler(handler_calcul_one_added());
+        .aggregator::<CalculTwo>()
+        .handler(handler_calcul_one_added())
+        .handler(handler_calcul_one_subtracted())
+        .handler(handler_calcul_two_multiplied())
+        .run(executor.clone())
+        .await?;
+
+    liteventd::create::<CalculOne>()
+        .data(&Added { value: 0 })?
+        .metadata(&true)?
+        .commit(&executor)
+        .await?;
+
+    liteventd::create::<CalculOne>()
+        .data(&Subtracted { value: 10 })?
+        .metadata(&true)?
+        .commit(&executor)
+        .await?;
+
+    liteventd::create::<CalculTwo>()
+        .data(&Multiplied { value: 3 })?
+        .metadata(&true)?
+        .commit(&executor)
+        .await?;
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
     Ok(())
 }
