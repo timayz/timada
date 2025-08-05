@@ -12,15 +12,6 @@ pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
     let struct_ident = item.sig.ident.to_string().to_case(Case::UpperCamel);
     let struct_ident = Ident::new(&struct_ident, item.span());
     let aggregator_ident = Ident::new(&attr.to_string(), item.span());
-    // item.sig.inputs.iter().find_map(|input| {
-    //     let syn::FnArg::Typed(arg) = input else {
-    //         return None::<Ident>;
-    //     };
-    //
-    //     eprintln!("{arg:#?}");
-    //
-    //     None
-    // });
     let Some(syn::FnArg::Typed(event_arg)) = item.sig.inputs.get(1) else {
         return syn::Error::new_spanned(item, "Unable to find event input")
             .into_compile_error()
