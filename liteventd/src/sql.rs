@@ -3,9 +3,11 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+#[cfg(feature = "sqlite")]
+use sea_query::SqliteQueryBuilder;
 use sea_query::{
     ColumnDef, Expr, ExprTrait, Iden, Index, IntoColumnRef, OnConflict, Query, SelectStatement,
-    SqliteQueryBuilder, Table,
+    Table,
 };
 use sea_query_binder::SqlxBinder;
 use sqlx::{Database, Pool};
@@ -147,7 +149,7 @@ impl<DB: Database> Sql<DB> {
                 ColumnDef::new(Snapshot::CreatedAt)
                     .integer()
                     .not_null()
-                    .default(Expr::custom_keyword("(strftime('%s', 'now'))")),
+                    .default(Expr::current_timestamp()),
             )
             .col(ColumnDef::new(Snapshot::UpdatedAt).integer().null())
             .primary_key(Index::create().col(Snapshot::Type).col(Snapshot::Id))
@@ -175,12 +177,13 @@ impl<DB: Database> Sql<DB> {
                 ColumnDef::new(Subsriber::CreatedAt)
                     .integer()
                     .not_null()
-                    .default(Expr::custom_keyword("(strftime('%s', 'now'))")),
+                    .default(Expr::current_timestamp()),
             )
             .col(ColumnDef::new(Subsriber::UpdatedAt).integer().null())
             .to_owned();
 
         match DB::NAME {
+            #[cfg(feature = "sqlite")]
             "SQLite" => [
                 event_table.to_string(SqliteQueryBuilder),
                 idx_event_type.to_string(SqliteQueryBuilder),
@@ -197,6 +200,7 @@ impl<DB: Database> Sql<DB> {
 
     fn build_sqlx<S: SqlxBinder>(statement: S) -> (String, sea_query_binder::SqlxValues) {
         match DB::NAME {
+            #[cfg(feature = "sqlite")]
             "SQLite" => statement.build_sqlx(SqliteQueryBuilder),
             name => panic!("'{name}' not supported, consider using SQLite"),
         }
@@ -346,10 +350,7 @@ where
             .on_conflict(
                 OnConflict::column(Subsriber::Key)
                     .update_columns([Subsriber::WorkerId])
-                    .value(
-                        Subsriber::UpdatedAt,
-                        Expr::custom_keyword("(strftime('%s', 'now'))"),
-                    )
+                    .value(Subsriber::UpdatedAt, Expr::current_timestamp())
                     .to_owned(),
             )
             .to_owned();
@@ -457,10 +458,7 @@ where
             .on_conflict(
                 OnConflict::columns([Snapshot::Type, Snapshot::Id])
                     .update_columns([Snapshot::Data, Snapshot::Cursor, Snapshot::Revision])
-                    .value(
-                        Snapshot::UpdatedAt,
-                        Expr::custom_keyword("(strftime('%s', 'now'))"),
-                    )
+                    .value(Snapshot::UpdatedAt, Expr::current_timestamp())
                     .to_owned(),
             )
             .to_owned();
@@ -486,10 +484,7 @@ where
             .values([
                 (Subsriber::Cursor, cursor.to_string().into()),
                 (Subsriber::Lag, lag.into()),
-                (
-                    Subsriber::UpdatedAt,
-                    Expr::custom_keyword("(strftime('%s', 'now'))"),
-                ),
+                (Subsriber::UpdatedAt, Expr::current_timestamp()),
             ])
             .and_where(Expr::col(Subsriber::Key).eq(key))
             .to_owned();
@@ -582,6 +577,7 @@ impl Reader {
         let limit = self.build_reader::<O, O>()?;
 
         let (sql, values) = match DB::NAME {
+            #[cfg(feature = "sqlite")]
             "SQLite" => self.statement.build_sqlx(SqliteQueryBuilder),
             name => panic!("'{name}' not supported, consider using SQLite"),
         };

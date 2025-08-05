@@ -1,10 +1,14 @@
 pub mod context;
 pub mod cursor;
+#[cfg(feature = "sqlite")]
 pub mod sql;
 
-pub use liteventd_macros::*;
+#[cfg(feature = "derive")]
+pub use liteventd_derive::*;
 
+#[cfg(feature = "handler")]
 use backon::{ExponentialBuilder, Retryable};
+#[cfg(feature = "stream")]
 use futures::{Stream, stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
@@ -14,6 +18,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
+#[cfg(any(feature = "stream", feature = "handler"))]
 use tokio::time::{Instant, interval_at};
 use ulid::Ulid;
 
@@ -441,6 +446,7 @@ pub struct SubscribeBuilder<E: Executor> {
     key: String,
     routing_key: RoutingKey,
     delay: Option<Duration>,
+    #[allow(dead_code)]
     handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
     aggregator_types: HashSet<String>,
     chunk_size: u16,
@@ -503,6 +509,7 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
         self
     }
 
+    #[cfg(feature = "handler")]
     pub fn handler<H: SubscribeHandler<E> + 'static>(mut self, handler: H) -> Self {
         self.aggregator_types
             .insert(handler.aggregator_type().to_owned());
@@ -567,6 +574,7 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
             .collect())
     }
 
+    #[cfg(feature = "handler")]
     pub async fn run(self, executor: &E) -> Result<(), SubscribeError> {
         self.init(executor).await?;
 
@@ -619,6 +627,7 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
         Ok(())
     }
 
+    #[cfg(feature = "stream")]
     pub async fn stream<'a>(
         &self,
         executor: &'a E,
