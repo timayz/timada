@@ -529,12 +529,20 @@ pub fn assert_read_result(
 }
 
 pub fn get_data() -> Vec<Event> {
-    let aggregate_ids = [
+    let aggregator_ids = [
         Ulid::new(),
         Ulid::new(),
         Ulid::new(),
         Ulid::new(),
         Ulid::new(),
+    ];
+
+    let aggregator_types = ["Calcul", "MyCalcul"];
+
+    let routing_keys = [
+        Some("us-east-1".to_owned()),
+        Some("eu-west-3".to_owned()),
+        None,
     ];
 
     let timestamps: Vec<u32> = vec![rand::random(), rand::random(), rand::random()];
@@ -543,12 +551,17 @@ pub fn get_data() -> Vec<Event> {
 
     for _ in 0..10 {
         let mut rng = rand::rng();
-        let aggregate_id = aggregate_ids
+        let aggregator_id = aggregator_ids
             .choose(&mut rng)
             .cloned()
             .unwrap_or_else(Ulid::new);
 
-        let version = versions.entry(aggregate_id).or_default();
+        let routing_key = routing_keys.choose(&mut rng).cloned().unwrap_or(None);
+        let aggregator_type = aggregator_types
+            .choose(&mut rng)
+            .cloned()
+            .unwrap_or("Calcul");
+        let version = versions.entry(aggregator_id).or_default();
         let timestamp = if rng.random_range(0..100) < 20 {
             timestamps.choose(&mut rng).cloned()
         } else {
@@ -559,10 +572,10 @@ pub fn get_data() -> Vec<Event> {
         let event = Event {
             id: Ulid::new(),
             name: "MessageSent".to_owned(),
-            aggregate_id,
-            aggregate_type: "Message".to_owned(),
+            aggregator_id,
+            aggregator_type: aggregator_type.to_owned(),
             version: version.to_owned(),
-            routing_key: "".to_owned(),
+            routing_key,
             timestamp,
             data: Default::default(),
             metadata: Default::default(),
@@ -595,10 +608,10 @@ fn create_event(id: &str, version: u16, timestamp: u64) -> Event {
     Event {
         id: Ulid::from_string(id).unwrap(),
         name: "MessageSent".to_owned(),
-        aggregate_id: Ulid::new(),
-        aggregate_type: "Message".to_owned(),
+        aggregator_id: Ulid::new(),
+        aggregator_type: "Message".to_owned(),
         version,
-        routing_key: "".to_owned(),
+        routing_key: None,
         timestamp,
         data: Default::default(),
         metadata: Default::default(),

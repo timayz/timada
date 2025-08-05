@@ -1,57 +1,64 @@
+use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
 use sha3::{Digest, Sha3_256};
 use std::ops::Deref;
-use syn::{ItemImpl, ItemStruct, parse_macro_input};
+use syn::{Ident, ItemFn, ItemImpl, ItemStruct, parse_macro_input, spanned::Spanned};
 
 #[proc_macro_attribute]
-pub fn handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item: ItemImpl = parse_macro_input!(item);
-
-    let syn::Type::Path(item_path) = item.self_ty.deref() else {
-        return syn::Error::new_spanned(item, "Unable to find name of impl struct")
+pub fn handler(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item: ItemFn = parse_macro_input!(item);
+    let fn_ident = item.sig.ident.to_owned();
+    let struct_ident = item.sig.ident.to_string().to_case(Case::UpperCamel);
+    let struct_ident = Ident::new(&struct_ident, item.span());
+    let aggregator_ident = Ident::new(&attr.to_string(), item.span());
+    let Some(syn::FnArg::Typed(event_arg)) = item.sig.inputs.get(1) else {
+        return syn::Error::new_spanned(item, "Unable to find event input")
             .into_compile_error()
             .into();
     };
 
-    let Some(ident) = item_path.path.get_ident() else {
-        return syn::Error::new_spanned(item, "Unable to get ident of impl struct")
+    let syn::Type::Path(event_arg_path) = *event_arg.ty.clone() else {
+        return syn::Error::new_spanned(item, "Unable to find event input type")
             .into_compile_error()
             .into();
     };
 
-    let handler_fns = item
-        .items
-        .iter()
-        .filter_map(|item| {
-            let syn::ImplItem::Fn(iten_fn) = item else {
-                return None;
-            };
+    let Some(event_arg_segment) = event_arg_path.path.segments.first() else {
+        return syn::Error::new_spanned(item, "Unable to find event input type iden")
+            .into_compile_error()
+            .into();
+    };
 
-            let ident = iten_fn.sig.ident.clone();
-
-            Some(quote! {
-                if let Ok(Some(context)) = context.to_context(){
-                    self.#ident(context).await?;
-                    return Ok(());
-                }
-            })
-        })
-        .collect::<proc_macro2::TokenStream>();
+    let event_ident = event_arg_segment.ident.to_owned();
 
     quote! {
-        #item
+        struct #struct_ident;
 
-        #[async_trait::async_trait]
-        impl<E: liteventd::Executor> SubscribeHandler<E> for #ident {
-            async fn handle(&self, context: &liteventd::ContextBase<'_, E>) -> anyhow::Result<()> {
-                #handler_fns
+        fn #fn_ident() -> #struct_ident { #struct_ident }
 
-                Ok(())
+        impl<E: liteventd::Executor> liteventd::SubscribeHandler<E> for #struct_ident {
+            fn handle<'async_trait>(&'async_trait self, context: &'async_trait liteventd::Context<'_, E>) -> std::pin::Pin<Box<dyn std::future::Future<Output=anyhow::Result<()>> + Send + 'async_trait>>
+            where
+                Self: Sync + 'async_trait
+            {
+                Box::pin(async move {
+                    if let Some(data) = context.event.to_data()? {
+                        return Self::#fn_ident(context, data.data, data.metadata).await;
+                    }
+
+                    Ok(())
+                })
             }
+
+            fn aggregator_type(&self) -> &'static str{ #aggregator_ident::name() }
+            fn event_name(&self) -> &'static str { #event_ident::name() }
         }
-    }
-    .into()
+
+        impl #struct_ident {
+            #item
+        }
+    }.into()
 }
 
 #[proc_macro_attribute]
@@ -97,18 +104,24 @@ pub fn aggregator(_attr: TokenStream, item: TokenStream) -> TokenStream {
     quote! {
         #item
 
-        #[async_trait::async_trait]
-        impl Aggregator for #ident {
-            async fn aggregate(&mut self, event: &Event) -> anyhow::Result<()> {
-                #handler_fns
+        impl liteventd::Aggregator for #ident {
+            fn aggregate<'async_trait>(&'async_trait mut self, event: &'async_trait liteventd::Event) -> std::pin::Pin<Box<dyn std::future::Future<Output=anyhow::Result<()>> + Send + 'async_trait>>
+            where
+                Self: Sync + 'async_trait
+            {
+                Box::pin(async move {
+                    #handler_fns
 
-                Ok(())
+                    Ok(())
+                })
             }
 
             fn revision() -> &'static str {
                 #revision
             }
+        }
 
+        impl liteventd::AggregatorName for #ident {
             fn name() -> &'static str {
                 #name
             }
@@ -117,13 +130,13 @@ pub fn aggregator(_attr: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-#[proc_macro_derive(AggregatorEvent)]
-pub fn derive_aggregator_event(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(AggregatorName)]
+pub fn derive_aggregator_name(input: TokenStream) -> TokenStream {
     let ItemStruct { ident, .. } = parse_macro_input!(input);
     let name = ident.to_string();
 
     quote! {
-        impl AggregatorEvent for #ident {
+        impl liteventd::AggregatorName for #ident {
             fn name() -> &'static str {
                 #name
             }
