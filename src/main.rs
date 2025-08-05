@@ -77,22 +77,24 @@ async fn handler_calcul_one_added<E: Executor>(
 
 #[liteventd::handler(CalculOne)]
 async fn handler_calcul_one_subtracted<E: Executor>(
-    _context: &Context<'_, E>,
+    context: &Context<'_, E>,
     data: Subtracted,
     _metadata: bool,
 ) -> anyhow::Result<()> {
-    println!("sub >> {}", data.value);
+    let v: bool = context.extract();
+    println!("sub >> {} {}", data.value, v);
 
     Ok(())
 }
 
 #[liteventd::handler(CalculTwo)]
 async fn handler_calcul_two_multiplied<E: Executor>(
-    _context: &Context<'_, E>,
+    context: &Context<'_, E>,
     data: Multiplied,
     _metadata: bool,
 ) -> anyhow::Result<()> {
-    println!("multi >> {}", data.value);
+    let v: bool = context.extract();
+    println!("multi >> {} {}", data.value, v);
 
     Ok(())
 }
@@ -113,12 +115,13 @@ async fn main() -> anyhow::Result<()> {
     let executor: Sql<Sqlite> = pool.into();
 
     liteventd::subscribe::<Sql<Sqlite>>("eu-west-3")
+        .data(true)
         .aggregator::<CalculOne>()
         .aggregator::<CalculTwo>()
         .handler(handler_calcul_one_added())
         .handler(handler_calcul_one_subtracted())
         .handler(handler_calcul_two_multiplied())
-        .run(executor.clone())
+        .run(&executor)
         .await?;
 
     liteventd::create::<CalculOne>()

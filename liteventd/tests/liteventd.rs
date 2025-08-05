@@ -144,7 +144,10 @@ pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Resu
     Ok(())
 }
 
-pub async fn subscribe<E: Executor>(executor: &E, events: Vec<Event>) -> anyhow::Result<()> {
+pub async fn subscribe<E: Executor + Clone>(
+    executor: &E,
+    events: Vec<Event>,
+) -> anyhow::Result<()> {
     let events = events
         .into_iter()
         .filter(|e| e.aggregator_type == Calcul::name())
@@ -195,7 +198,7 @@ pub async fn subscribe<E: Executor>(executor: &E, events: Vec<Event>) -> anyhow:
     Ok(())
 }
 
-pub async fn subscribe_routing_key<E: Executor>(
+pub async fn subscribe_routing_key<E: Executor + Clone>(
     executor: &E,
     events: Vec<Event>,
 ) -> anyhow::Result<()> {
@@ -230,7 +233,7 @@ pub async fn subscribe_routing_key<E: Executor>(
     Ok(())
 }
 
-pub async fn subscribe_default<E: Executor>(
+pub async fn subscribe_default<E: Executor + Clone>(
     executor: &E,
     events: Vec<Event>,
 ) -> anyhow::Result<()> {
@@ -260,7 +263,7 @@ pub async fn subscribe_default<E: Executor>(
     Ok(())
 }
 
-pub async fn subscribe_multiple_aggregator<E: Executor>(
+pub async fn subscribe_multiple_aggregator<E: Executor + Clone>(
     executor: &E,
     events: Vec<Event>,
 ) -> anyhow::Result<()> {
@@ -313,7 +316,7 @@ pub async fn subscribe_multiple_aggregator<E: Executor>(
     Ok(())
 }
 
-pub async fn subscribe_routing_key_multiple_aggregator<E: Executor>(
+pub async fn subscribe_routing_key_multiple_aggregator<E: Executor + Clone>(
     executor: &E,
     events: Vec<Event>,
 ) -> anyhow::Result<()> {
@@ -347,7 +350,7 @@ pub async fn subscribe_routing_key_multiple_aggregator<E: Executor>(
     Ok(())
 }
 
-pub async fn subscribe_default_multiple_aggregator<E: Executor>(
+pub async fn subscribe_default_multiple_aggregator<E: Executor + Clone>(
     executor: &E,
     events: Vec<Event>,
 ) -> anyhow::Result<()> {

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -401,6 +402,7 @@ pub enum AcknowledgeError {
 
 #[derive(Clone)]
 pub struct Context<'a, E: Executor> {
+    inner: Arc<Mutex<context::Context>>,
     key: String,
     cursor: Value,
     lag: u64,
@@ -409,6 +411,11 @@ pub struct Context<'a, E: Executor> {
 }
 
 impl<'a, E: Executor> Context<'a, E> {
+    pub fn extract<T: Clone + 'static>(&self) -> T {
+        let context = self.inner.lock().expect("Unable to lock Context.inner");
+        context.extract::<T>().clone()
+    }
+
     pub async fn acknowledge(&self) -> Result<(), AcknowledgeError> {
         self.executor
             .acknowledge(self.key.to_owned(), self.cursor.to_owned(), self.lag)
@@ -437,6 +444,7 @@ pub struct SubscribeBuilder<E: Executor> {
     handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
     aggregator_types: HashSet<String>,
     chunk_size: u16,
+    context: Arc<Mutex<context::Context>>,
 }
 
 pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
@@ -448,12 +456,25 @@ pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
         handlers: HashMap::new(),
         aggregator_types: HashSet::new(),
         chunk_size: 1000,
+        context: Arc::default(),
     }
 }
 
-impl<E: Executor> SubscribeBuilder<E> {
+impl<E: Executor + Clone> SubscribeBuilder<E> {
     pub fn chunk_size(mut self, v: u16) -> Self {
         self.chunk_size = v;
+
+        self
+    }
+
+    pub fn data<D: Send + Sync + 'static>(self, v: D) -> Self {
+        let mut context = self
+            .context
+            .lock()
+            .expect("Unable to lock SubscribeBuilder.context");
+
+        context.insert(v);
+        drop(context);
 
         self
     }
@@ -536,6 +557,7 @@ impl<E: Executor> SubscribeBuilder<E> {
             .edges
             .iter()
             .map(|edge| Context {
+                inner: self.context.clone(),
                 key: self.key.to_owned(),
                 executor,
                 lag: timestamp - edge.node.timestamp,
@@ -545,8 +567,10 @@ impl<E: Executor> SubscribeBuilder<E> {
             .collect())
     }
 
-    pub async fn run(self, executor: E) -> Result<(), SubscribeError> {
-        self.init(&executor).await?;
+    pub async fn run(self, executor: &E) -> Result<(), SubscribeError> {
+        self.init(executor).await?;
+
+        let executor = executor.clone();
 
         tokio::spawn(async move {
             let mut interval = interval_at(Instant::now(), Duration::from_millis(150));
@@ -564,18 +588,28 @@ impl<E: Executor> SubscribeBuilder<E> {
                     let Some(handler) = self.handlers.get(&key) else {
                         continue;
                     };
+
                     let Ok(_) = (|| async { handler.handle(&item).await })
                         .retry(ExponentialBuilder::default())
                         .sleep(tokio::time::sleep)
-                        // @TODO: log me
-                        // .notify(notify)
+                        .notify(|err, dur| {
+                            tracing::error!(
+                                "subscriber='{}' id='{}' type='{}' event_name='{}' error='{}' sleeping='{:?}'",
+                                item.key,
+                                item.event.id,
+                                item.event.aggregator_type,
+                                item.event.name,
+                                err,
+                                dur
+                            );
+                        })
                         .await
                     else {
                         break;
                     };
 
-                    if item.acknowledge().await.is_err() {
-                        // @TODO: log me
+                    if let Err(err) = item.acknowledge().await {
+                        tracing::error!("acknowledge '{err}'");
                         break;
                     }
                 }
