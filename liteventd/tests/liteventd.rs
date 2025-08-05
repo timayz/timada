@@ -409,7 +409,7 @@ struct Calcul {
     pub value: i64,
 }
 
-#[liteventd_macros::aggregator]
+#[liteventd::aggregator]
 impl Calcul {
     async fn added(&mut self, event: CalculEvent<Added>) -> anyhow::Result<()> {
         self.value += event.data.value as i64;
