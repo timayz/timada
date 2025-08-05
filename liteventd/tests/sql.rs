@@ -46,6 +46,59 @@ async fn sqlite_invalid_original_version() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn sqlite_subscribe() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("subscribe").await?;
+    let data = get_data(&pool).await?;
+
+    liteventd_test::subscribe::<Sql<sqlx::Sqlite>>(&pool.into(), data).await
+}
+
+#[tokio::test]
+async fn sqlite_subscribe_routing_key() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("subscribe_routing_key").await?;
+    let data = get_data(&pool).await?;
+
+    liteventd_test::subscribe_routing_key::<Sql<sqlx::Sqlite>>(&pool.into(), data).await
+}
+
+#[tokio::test]
+async fn sqlite_subscribe_default() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("subscribe_default").await?;
+    let data = get_data(&pool).await?;
+
+    liteventd_test::subscribe_default::<Sql<sqlx::Sqlite>>(&pool.into(), data).await
+}
+
+#[tokio::test]
+async fn sqlite_subscribe_multiple_aggregator() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("subscribe_multiple_aggregator").await?;
+    let data = get_data(&pool).await?;
+
+    liteventd_test::subscribe_multiple_aggregator::<Sql<sqlx::Sqlite>>(&pool.into(), data).await
+}
+
+#[tokio::test]
+async fn sqlite_subscribe_routing_key_multiple_aggregator() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("subscribe_routing_key_multiple_aggregator").await?;
+    let data = get_data(&pool).await?;
+
+    liteventd_test::subscribe_routing_key_multiple_aggregator::<Sql<sqlx::Sqlite>>(
+        &pool.into(),
+        data,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn sqlite_subscribe_default_multiple_aggregator() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("subscribe_default_multiple_aggregator").await?;
+    let data = get_data(&pool).await?;
+
+    liteventd_test::subscribe_default_multiple_aggregator::<Sql<sqlx::Sqlite>>(&pool.into(), data)
+        .await
+}
+
+#[tokio::test]
 async fn forward_asc() -> anyhow::Result<()> {
     let pool = create_sqlite_pool("forward_asc").await?;
     let data = get_data(&pool).await?;
@@ -157,8 +210,8 @@ where
         .columns([
             liteventd::sql::Event::Id,
             liteventd::sql::Event::Name,
-            liteventd::sql::Event::AggregateType,
-            liteventd::sql::Event::AggregateId,
+            liteventd::sql::Event::AggregatorType,
+            liteventd::sql::Event::AggregatorId,
             liteventd::sql::Event::Version,
             liteventd::sql::Event::Data,
             liteventd::sql::Event::Metadata,
@@ -189,8 +242,8 @@ where
             liteventd::sql::Event::Name,
             liteventd::sql::Event::Data,
             liteventd::sql::Event::Metadata,
-            liteventd::sql::Event::AggregateType,
-            liteventd::sql::Event::AggregateId,
+            liteventd::sql::Event::AggregatorType,
+            liteventd::sql::Event::AggregatorId,
             liteventd::sql::Event::Version,
             liteventd::sql::Event::RoutingKey,
             liteventd::sql::Event::Timestamp,
@@ -203,8 +256,8 @@ where
             event.name.into(),
             event.data.into(),
             event.metadata.into(),
-            event.aggregate_type.into(),
-            event.aggregate_id.to_string().into(),
+            event.aggregator_type.into(),
+            event.aggregator_id.to_string().into(),
             event.version.into(),
             event.routing_key.into(),
             event.timestamp.into(),
