@@ -1,6 +1,10 @@
 use liteventd::{sql::Sql, AggregatorName, Context, EventData, Executor};
 use serde::{Deserialize, Serialize};
 use sqlx::{any::install_default_drivers, migrate::MigrateDatabase, Any, Sqlite, SqlitePool};
+use std::{str::FromStr, time::Duration};
+use tracing_subscriber::{
+    prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt, EnvFilter,
+};
 
 type CalculEvent<D> = EventData<D, bool>;
 
@@ -101,6 +105,12 @@ async fn handler_calcul_two_multiplied<E: Executor>(
 
 #[tokio::main()]
 async fn main() -> anyhow::Result<()> {
+    let env_filter = EnvFilter::from_str("error,liteventd=debug")?;
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(env_filter)
+        .init();
+
     install_default_drivers();
 
     let url = "sqlite:./target/tmp/timada.db";
@@ -115,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
     let executor: Sql<Sqlite> = pool.into();
 
     liteventd::subscribe::<Sql<Sqlite>>("eu-west-3")
+        .delay(Duration::from_secs(5))
         .data(true)
         .aggregator::<CalculOne>()
         .aggregator::<CalculTwo>()
@@ -142,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
         .commit(&executor)
         .await?;
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(8)).await;
 
     Ok(())
 }

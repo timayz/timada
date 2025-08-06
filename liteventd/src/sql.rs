@@ -51,6 +51,7 @@ enum Subsriber {
     WorkerId,
     Cursor,
     Lag,
+    Enabled,
     CreatedAt,
     UpdatedAt,
 }
@@ -174,6 +175,12 @@ impl<DB: Database> Sql<DB> {
             .col(ColumnDef::new(Subsriber::Cursor).string())
             .col(ColumnDef::new(Subsriber::Lag).integer().not_null())
             .col(
+                ColumnDef::new(Subsriber::Enabled)
+                    .boolean()
+                    .not_null()
+                    .default(true),
+            )
+            .col(
                 ColumnDef::new(Subsriber::CreatedAt)
                     .integer()
                     .not_null()
@@ -214,6 +221,7 @@ where
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     sea_query_binder::SqlxValues: for<'q> sqlx::IntoArguments<'q, DB>,
     String: for<'r> sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    bool: for<'r> sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     Vec<u8>: for<'r> sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
     crate::Event: for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -314,12 +322,9 @@ where
             .await
     }
 
-    async fn get_subscriber_cursor(
-        &self,
-        key: String,
-    ) -> Result<Option<(Option<Value>, Ulid)>, SubscribeError> {
+    async fn get_subscriber_cursor(&self, key: String) -> Result<Option<Value>, SubscribeError> {
         let statement = Query::select()
-            .columns([Subsriber::Cursor, Subsriber::WorkerId])
+            .columns([Subsriber::Cursor])
             .from(Subsriber::Table)
             .and_where(Expr::col(Subsriber::Key).eq(Expr::value(key)))
             .limit(1)
@@ -327,19 +332,37 @@ where
 
         let (sql, values) = Self::build_sqlx(statement);
 
-        let Some((cursor, worker_id)) =
-            sqlx::query_as_with::<DB, (Option<String>, String), _>(&sql, values)
-                .fetch_optional(&self.0)
-                .await
-                .map_err(|err| SubscribeError::Unknown(err.into()))?
+        let Some((cursor,)) = sqlx::query_as_with::<DB, (Option<String>,), _>(&sql, values)
+            .fetch_optional(&self.0)
+            .await
+            .map_err(|err| SubscribeError::Unknown(err.into()))?
         else {
             return Ok(None);
         };
 
-        Ok(Some((
-            cursor.map(|c| c.into()),
-            Ulid::from_string(&worker_id)?,
-        )))
+        Ok(cursor.map(|c| c.into()))
+    }
+
+    async fn is_subscriber_running(
+        &self,
+        key: String,
+        worker_id: Ulid,
+    ) -> Result<bool, SubscribeError> {
+        let statement = Query::select()
+            .columns([Subsriber::WorkerId, Subsriber::Enabled])
+            .from(Subsriber::Table)
+            .and_where(Expr::col(Subsriber::Key).eq(Expr::value(key)))
+            .limit(1)
+            .to_owned();
+
+        let (sql, values) = Self::build_sqlx(statement);
+
+        let (id, enabled) = sqlx::query_as_with::<DB, (String, bool), _>(&sql, values)
+            .fetch_one(&self.0)
+            .await
+            .map_err(|err| SubscribeError::Unknown(err.into()))?;
+
+        Ok(worker_id.to_string() == id && enabled)
     }
 
     async fn upsert_subscriber(&self, key: String, worker_id: Ulid) -> Result<(), SubscribeError> {
@@ -410,7 +433,7 @@ where
                 event.data.into(),
                 event.metadata.into(),
                 event.aggregator_type.into(),
-                event.aggregator_id.to_string().into(),
+                event.aggregator_id.into(),
                 event.version.into(),
                 event.routing_key.into(),
                 event.timestamp.into(),
@@ -435,7 +458,7 @@ where
 
     async fn save_snapshot<A: Aggregator>(
         &self,
-        id: Ulid,
+        id: String,
         data: Vec<u8>,
         cursor: Value,
     ) -> Result<(), WriteError> {
@@ -755,8 +778,7 @@ where
         Ok(crate::Event {
             id: Ulid::from_string(row.try_get("id")?)
                 .map_err(|err| sqlx::Error::InvalidArgument(err.to_string()))?,
-            aggregator_id: Ulid::from_string(row.try_get("aggregator_id")?)
-                .map_err(|err| sqlx::Error::InvalidArgument(err.to_string()))?,
+            aggregator_id: row.try_get("aggregator_id")?,
             aggregator_type: row.try_get("aggregator_type")?,
             version: row.try_get("version")?,
             name: row.try_get("name")?,
