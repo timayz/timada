@@ -13,9 +13,14 @@ liteventd = { path = "./liteventd", features = ["handler", "sqlite", "stream"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [workspace]
-members = [
+members = [ 
+  "customer",
   "liteventd",
-  "liteventd-macro"
+  "liteventd-macro",
+  "payment",
+  "product",
+  "provider",
+  "shop"
 ]
 
 [profile.release]
