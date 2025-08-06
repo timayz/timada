@@ -3,8 +3,8 @@ pub mod cursor;
 #[cfg(feature = "sqlite")]
 pub mod sql;
 
-#[cfg(feature = "derive")]
-pub use liteventd_derive::*;
+#[cfg(feature = "macro")]
+pub use liteventd_macro::*;
 
 #[cfg(feature = "handler")]
 use backon::{ExponentialBuilder, Retryable};

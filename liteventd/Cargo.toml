@@ -8,7 +8,7 @@ serde = { version = "1.0", features = ["derive"] }
 ulid = { version = "1.2", features = ["serde"] }
 tokio = { version = "1.45", features = ["full"] }
 tokio-stream = { version = "0.1", optional = true }
-liteventd-derive = { path = "../derive", optional = true }
+liteventd-macro = { path = "../liteventd-macro", optional = true }
 anyhow = "1.0"
 ciborium = "0.2"
 sqlx = { version = "0.8", optional = true }
@@ -27,8 +27,8 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "any"] }
 rand = "0.9.2"
 
 [features]
-default = ["derive"]
-derive = ["liteventd-derive"]
+default = ["macro"]
+macro = ["liteventd-macro"]
 stream = ["futures-util", "tokio-stream"]
 handler = ["backon"]
 sqlite = ["sea-query", "sea-query-binder/sqlx-sqlite", "sqlx"]
