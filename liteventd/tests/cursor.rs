@@ -530,11 +530,11 @@ pub fn assert_read_result(
 
 pub fn get_data() -> Vec<Event> {
     let aggregator_ids = [
-        Ulid::new(),
-        Ulid::new(),
-        Ulid::new(),
-        Ulid::new(),
-        Ulid::new(),
+        Ulid::new().to_string(),
+        Ulid::new().to_string(),
+        Ulid::new().to_string(),
+        Ulid::new().to_string(),
+        Ulid::new().to_string(),
     ];
 
     let aggregator_types = ["Calcul", "MyCalcul"];
@@ -546,7 +546,7 @@ pub fn get_data() -> Vec<Event> {
     ];
 
     let timestamps: Vec<u32> = vec![rand::random(), rand::random(), rand::random()];
-    let mut versions: HashMap<Ulid, u16> = HashMap::new();
+    let mut versions: HashMap<String, u16> = HashMap::new();
     let mut data = vec![];
 
     for _ in 0..10 {
@@ -554,14 +554,14 @@ pub fn get_data() -> Vec<Event> {
         let aggregator_id = aggregator_ids
             .choose(&mut rng)
             .cloned()
-            .unwrap_or_else(Ulid::new);
+            .unwrap_or_else(|| Ulid::new().to_string());
 
         let routing_key = routing_keys.choose(&mut rng).cloned().unwrap_or(None);
         let aggregator_type = aggregator_types
             .choose(&mut rng)
             .cloned()
             .unwrap_or("Calcul");
-        let version = versions.entry(aggregator_id).or_default();
+        let version = versions.entry(aggregator_id.to_owned()).or_default();
         let timestamp = if rng.random_range(0..100) < 20 {
             timestamps.choose(&mut rng).cloned()
         } else {
@@ -608,7 +608,7 @@ fn create_event(id: &str, version: u16, timestamp: u64) -> Event {
     Event {
         id: Ulid::from_string(id).unwrap(),
         name: "MessageSent".to_owned(),
-        aggregator_id: Ulid::new(),
+        aggregator_id: Ulid::new().to_string(),
         aggregator_type: "Message".to_owned(),
         version,
         routing_key: None,

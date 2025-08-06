@@ -11,16 +11,16 @@ pub async fn load<E: Executor>(executor: &E) -> anyhow::Result<()> {
         .commit(executor)
         .await?;
 
-    let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
+    let calcul = liteventd::load::<Calcul, _>(executor, id.to_owned()).await?;
     assert_eq!(calcul.item.value, 3);
 
-    liteventd::save(calcul, id)
+    liteventd::save(calcul)
         .metadata(&true)?
         .data(&Added { value: 9 })?
         .commit(executor)
         .await?;
 
-    let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
+    let calcul = liteventd::load::<Calcul, _>(executor, id.to_owned()).await?;
     assert_eq!(calcul.item.value, 12);
     Ok(())
 }
@@ -32,10 +32,10 @@ pub async fn version<E: Executor>(executor: &E) -> anyhow::Result<()> {
         .commit(executor)
         .await?;
 
-    let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
+    let calcul = liteventd::load::<Calcul, _>(executor, id.to_owned()).await?;
     assert_eq!(calcul.event.version, 1);
 
-    liteventd::save(calcul.clone(), id)
+    liteventd::save(calcul.clone())
         .metadata(&true)?
         .data(&Added { value: 9 })?
         .data(&Added { value: 3 })?
@@ -52,10 +52,10 @@ pub async fn version<E: Executor>(executor: &E) -> anyhow::Result<()> {
         .commit(executor)
         .await?;
 
-    let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
+    let calcul = liteventd::load::<Calcul, _>(executor, id.to_owned()).await?;
     assert_eq!(calcul.event.version, 2);
 
-    liteventd::save(calcul.clone(), id)
+    liteventd::save(calcul.clone())
         .metadata(&true)?
         .data(&Added { value: 9 })?
         .commit(executor)
@@ -74,10 +74,10 @@ pub async fn routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
         .commit(executor)
         .await?;
 
-    let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
+    let calcul = liteventd::load::<Calcul, _>(executor, id.to_owned()).await?;
     assert_eq!(calcul.event.routing_key, None);
 
-    liteventd::save(calcul.clone(), id)
+    liteventd::save(calcul.clone())
         .routing_key("routing1")
         .metadata(&true)?
         .data(&Added { value: 9 })?
@@ -94,10 +94,10 @@ pub async fn routing_key<E: Executor>(executor: &E) -> anyhow::Result<()> {
         .commit(executor)
         .await?;
 
-    let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
+    let calcul = liteventd::load::<Calcul, _>(executor, id.to_owned()).await?;
     assert_eq!(calcul.event.routing_key, Some("routing1".to_owned()));
 
-    liteventd::save(calcul.clone(), id)
+    liteventd::save(calcul.clone())
         .metadata(&true)?
         .data(&Added { value: 9 })?
         .commit(executor)
@@ -116,14 +116,14 @@ pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Resu
         .commit(executor)
         .await?;
 
-    let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
-    liteventd::save(calcul.clone(), id)
+    let calcul = liteventd::load::<Calcul, _>(executor, id.to_owned()).await?;
+    liteventd::save(calcul.clone())
         .metadata(&true)?
         .data(&Added { value: 9 })?
         .commit(executor)
         .await?;
 
-    let res = liteventd::save(calcul, id)
+    let res = liteventd::save(calcul)
         .metadata(&true)?
         .data(&Multiplied { value: 3 })?
         .commit(executor)
@@ -135,11 +135,25 @@ pub async fn invalid_original_version<E: Executor>(executor: &E) -> anyhow::Resu
     );
 
     let calcul = liteventd::load::<Calcul, _>(executor, id).await?;
-    liteventd::save(calcul, id)
+    liteventd::save(calcul)
         .metadata(&true)?
         .data(&Subtracted { value: 39 })?
         .commit(executor)
         .await?;
+
+    Ok(())
+}
+
+pub async fn subscriber_running<E: Executor + Clone>(executor: &E) -> anyhow::Result<()> {
+    let sub1 = liteventd::subscribe("sub").all().aggregator::<Calcul>();
+
+    sub1.init(executor).await?;
+    let sub2 = liteventd::subscribe("sub").all().aggregator::<Calcul>();
+
+    sub2.init(executor).await?;
+
+    assert!(!sub1.is_subscriber_running(executor).await?);
+    assert!(sub2.is_subscriber_running(executor).await?);
 
     Ok(())
 }

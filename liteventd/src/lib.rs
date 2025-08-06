@@ -9,7 +9,7 @@ pub use liteventd_derive::*;
 #[cfg(feature = "handler")]
 use backon::{ExponentialBuilder, Retryable};
 #[cfg(feature = "stream")]
-use futures::{Stream, stream};
+use futures_util::stream::{self, Stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{HashMap, HashSet},
@@ -23,6 +23,11 @@ use tokio::time::{Instant, interval_at};
 use ulid::Ulid;
 
 use crate::cursor::{Args, Cursor, ReadResult, Value};
+
+pub mod prelude {
+    #[cfg(feature = "stream")]
+    pub use tokio_stream::StreamExt;
+}
 
 pub struct EventData<D, M> {
     pub details: Event,
@@ -40,7 +45,7 @@ pub struct EventCursor {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub id: Ulid,
-    pub aggregator_id: Ulid,
+    pub aggregator_id: String,
     pub aggregator_type: String,
     pub version: u16,
     pub name: String,
@@ -124,10 +129,13 @@ pub trait Executor: Send + Sync + 'static {
         args: Args,
     ) -> Result<ReadResult<Event>, ReadError>;
 
-    async fn get_subscriber_cursor(
+    async fn get_subscriber_cursor(&self, key: String) -> Result<Option<Value>, SubscribeError>;
+
+    async fn is_subscriber_running(
         &self,
         key: String,
-    ) -> Result<Option<(Option<Value>, Ulid)>, SubscribeError>;
+        worker_id: Ulid,
+    ) -> Result<bool, SubscribeError>;
 
     async fn upsert_subscriber(&self, key: String, worker_id: Ulid) -> Result<(), SubscribeError>;
 
@@ -138,7 +146,7 @@ pub trait Executor: Send + Sync + 'static {
 
     async fn save_snapshot<A: Aggregator>(
         &self,
-        id: Ulid,
+        id: String,
         data: Vec<u8>,
         cursor: cursor::Value,
     ) -> Result<(), WriteError>;
@@ -261,7 +269,7 @@ pub enum WriteError {
 }
 
 pub struct SaveBuilder<A: Aggregator> {
-    aggregator_id: Ulid,
+    aggregator_id: String,
     aggregator_type: String,
     aggregator: A,
     routing_key: Option<String>,
@@ -272,9 +280,9 @@ pub struct SaveBuilder<A: Aggregator> {
 }
 
 impl<A: Aggregator> SaveBuilder<A> {
-    pub fn new(aggregator: A, aggregator_id: Ulid) -> SaveBuilder<A> {
+    pub fn new(aggregator: A, aggregator_id: impl Into<String>) -> SaveBuilder<A> {
         SaveBuilder {
-            aggregator_id,
+            aggregator_id: aggregator_id.into(),
             aggregator,
             aggregator_type: A::name().to_owned(),
             routing_key: None,
@@ -326,7 +334,7 @@ impl<A: Aggregator> SaveBuilder<A> {
         Ok(self)
     }
 
-    pub async fn commit<E: Executor>(&self, executor: &E) -> Result<Ulid, WriteError> {
+    pub async fn commit<E: Executor>(&self, executor: &E) -> Result<String, WriteError> {
         let mut aggregator = self.aggregator.clone();
         let mut version = self.original_version;
 
@@ -346,7 +354,7 @@ impl<A: Aggregator> SaveBuilder<A> {
                 data: data.to_vec(),
                 metadata: metadata.to_vec(),
                 timestamp,
-                aggregator_id: self.aggregator_id,
+                aggregator_id: self.aggregator_id.to_owned(),
                 aggregator_type: self.aggregator_type.to_owned(),
                 version,
                 routing_key: self.routing_key.to_owned(),
@@ -370,7 +378,7 @@ impl<A: Aggregator> SaveBuilder<A> {
             .save_snapshot::<A>(last_event.aggregator_id, data, cursor)
             .await?;
 
-        Ok(self.aggregator_id)
+        Ok(self.aggregator_id.to_owned())
     }
 }
 
@@ -378,17 +386,14 @@ pub fn create<A: Aggregator>() -> SaveBuilder<A> {
     SaveBuilder::new(A::default(), Ulid::new())
 }
 
-pub fn save<A: Aggregator>(aggregator: LoadResult<A>, aggregator_id: Ulid) -> SaveBuilder<A> {
-    SaveBuilder::new(aggregator.item, aggregator_id)
+pub fn save<A: Aggregator>(aggregator: LoadResult<A>) -> SaveBuilder<A> {
+    SaveBuilder::new(aggregator.item, aggregator.event.aggregator_id)
         .original_version(aggregator.event.version)
         .routing_key_opt(aggregator.event.routing_key)
 }
 
 #[derive(Debug, Error)]
 pub enum SubscribeError {
-    #[error("worker not match")]
-    WorkerNotMatched,
-
     #[error("read >> {0}")]
     ReadError(#[from] ReadError),
 
@@ -445,6 +450,7 @@ pub struct SubscribeBuilder<E: Executor> {
     id: Ulid,
     key: String,
     routing_key: RoutingKey,
+    #[allow(dead_code)]
     delay: Option<Duration>,
     #[allow(dead_code)]
     handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
@@ -461,7 +467,7 @@ pub fn subscribe<E: Executor>(key: impl Into<String>) -> SubscribeBuilder<E> {
         routing_key: RoutingKey::Value(None),
         handlers: HashMap::new(),
         aggregator_types: HashSet::new(),
-        chunk_size: 1000,
+        chunk_size: 300,
         context: Arc::default(),
     }
 }
@@ -485,6 +491,7 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
         self
     }
 
+    #[cfg(feature = "handler")]
     pub fn delay(mut self, v: Duration) -> Self {
         self.delay = Some(v);
 
@@ -528,17 +535,14 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
         Ok(())
     }
 
-    pub async fn read<'a>(&self, executor: &'a E) -> Result<Vec<Context<'a, E>>, SubscribeError> {
-        let cursor = match executor.get_subscriber_cursor(self.key.to_owned()).await? {
-            Some((cursor, id)) => {
-                if self.id != id {
-                    return Err(SubscribeError::WorkerNotMatched);
-                }
+    pub async fn is_subscriber_running(&self, executor: &E) -> Result<bool, SubscribeError> {
+        executor
+            .is_subscriber_running(self.key.to_owned(), self.id)
+            .await
+    }
 
-                Ok::<_, SubscribeError>(cursor)
-            }
-            _ => Ok(None),
-        }?;
+    pub async fn read<'a>(&self, executor: &'a E) -> Result<Vec<Context<'a, E>>, SubscribeError> {
+        let cursor = executor.get_subscriber_cursor(self.key.to_owned()).await?;
 
         let timestamp = executor
             .read(
@@ -579,16 +583,27 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
         self.init(executor).await?;
 
         let executor = executor.clone();
+        let start = self
+            .delay
+            .map(|d| Instant::now() + d)
+            .unwrap_or_else(Instant::now);
 
         tokio::spawn(async move {
-            let mut interval = interval_at(Instant::now(), Duration::from_millis(150));
+            let mut interval = interval_at(start, Duration::from_millis(300));
             loop {
                 interval.tick().await;
 
-                let data = match self.read(&executor).await {
-                    Ok(res) => res,
-                    Err(SubscribeError::WorkerNotMatched) => break,
-                    _ => continue,
+                let Ok(data) = (|| async { self.read(&executor).await })
+                    .retry(ExponentialBuilder::default())
+                    .sleep(tokio::time::sleep)
+                    .notify(|err, dur| {
+                        tracing::error!(
+                            "SubscribeBuilder.run().self.read() '{err}' sleeping='{dur:?}'"
+                        );
+                    })
+                    .await
+                else {
+                    continue;
                 };
 
                 for item in data {
@@ -597,18 +612,32 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
                         continue;
                     };
 
+                    let Ok(running) = (|| async {self.is_subscriber_running(&executor).await})
+                        .retry(ExponentialBuilder::default())
+                        .sleep(tokio::time::sleep)
+                        .notify(|err, dur| {
+                            tracing::error!(
+                                "SubscribeBuilder.run().self.is_subscriber_running '{err}' sleeping='{dur:?}'"
+                            );
+                        }).await
+                    else {
+                        break;
+                    };
+
+                    if !running {
+                        break;
+                    }
+
                     let Ok(_) = (|| async { handler.handle(&item).await })
                         .retry(ExponentialBuilder::default())
                         .sleep(tokio::time::sleep)
                         .notify(|err, dur| {
                             tracing::error!(
-                                "subscriber='{}' id='{}' type='{}' event_name='{}' error='{}' sleeping='{:?}'",
+                                "subscriber='{}' id='{}' type='{}' event_name='{}' error='{err}' sleeping='{dur:?}'",
                                 item.key,
                                 item.event.id,
                                 item.event.aggregator_type,
                                 item.event.name,
-                                err,
-                                dur
                             );
                         })
                         .await
@@ -634,24 +663,36 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
     ) -> Result<impl Stream<Item = Context<'a, E>>, SubscribeError> {
         self.init(executor).await?;
         Ok(stream::unfold(
-            (self, executor, Vec::<Context<'a, E>>::new()),
-            |(sub, executor, mut data)| async move {
-                let mut interval = interval_at(Instant::now(), Duration::from_millis(150));
+            (self, executor, Vec::<Context<'a, E>>::new().into_iter()),
+            move |(sub, executor, mut data)| async move {
+                let start = sub
+                    .delay
+                    .map(|d| Instant::now() + d)
+                    .unwrap_or_else(Instant::now);
+
+                let mut interval = interval_at(start, Duration::from_millis(300));
 
                 loop {
-                    interval.tick().await;
-
-                    if data.is_empty() {
-                        data = match sub.read(executor).await {
-                            Ok(res) => res,
-                            Err(SubscribeError::WorkerNotMatched) => return None,
-                            _ => continue,
-                        };
-                    }
-
-                    if let Some(item) = data.pop() {
+                    if let Some(item) = data.next() {
                         return Some((item, (sub, executor, data)));
                     }
+
+                    interval.tick().await;
+
+                    let Ok(r_data) = (|| async { self.read(executor).await })
+                        .retry(ExponentialBuilder::default())
+                        .sleep(tokio::time::sleep)
+                        .notify(|err, dur| {
+                            tracing::error!(
+                                "SubscribeBuilder.stream().self.read() '{err}' sleeping='{dur:?}'"
+                            );
+                        })
+                        .await
+                    else {
+                        return None;
+                    };
+
+                    data = r_data.into_iter();
                 }
             },
         ))
