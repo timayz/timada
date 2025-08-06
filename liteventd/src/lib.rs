@@ -9,7 +9,7 @@ pub use liteventd_derive::*;
 #[cfg(feature = "handler")]
 use backon::{ExponentialBuilder, Retryable};
 #[cfg(feature = "stream")]
-use futures::{Stream, stream};
+use futures_util::stream::{self, Stream};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{HashMap, HashSet},
@@ -23,6 +23,11 @@ use tokio::time::{Instant, interval_at};
 use ulid::Ulid;
 
 use crate::cursor::{Args, Cursor, ReadResult, Value};
+
+pub mod prelude {
+    #[cfg(feature = "stream")]
+    pub use tokio_stream::StreamExt;
+}
 
 pub struct EventData<D, M> {
     pub details: Event,
@@ -445,6 +450,7 @@ pub struct SubscribeBuilder<E: Executor> {
     id: Ulid,
     key: String,
     routing_key: RoutingKey,
+    #[allow(dead_code)]
     delay: Option<Duration>,
     #[allow(dead_code)]
     handlers: HashMap<String, Box<dyn SubscribeHandler<E>>>,
@@ -485,6 +491,7 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
         self
     }
 
+    #[cfg(feature = "handler")]
     pub fn delay(mut self, v: Duration) -> Self {
         self.delay = Some(v);
 
@@ -656,7 +663,7 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
     ) -> Result<impl Stream<Item = Context<'a, E>>, SubscribeError> {
         self.init(executor).await?;
         Ok(stream::unfold(
-            (self, executor, Vec::<Context<'a, E>>::new()),
+            (self, executor, Vec::<Context<'a, E>>::new().into_iter()),
             move |(sub, executor, mut data)| async move {
                 let start = sub
                     .delay
@@ -666,28 +673,26 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
                 let mut interval = interval_at(start, Duration::from_millis(300));
 
                 loop {
-                    interval.tick().await;
-
-                    if data.is_empty() {
-                        let Ok(read_data) = (|| async { self.read(&executor).await })
-                            .retry(ExponentialBuilder::default())
-                            .sleep(tokio::time::sleep)
-                            .notify(|err, dur| {
-                                tracing::error!(
-                                    "SubscribeBuilder.stream().self.read() '{err}' sleeping='{dur:?}'"
-                                );
-                            })
-                            .await
-                        else {
-                            return None;
-                        };
-
-                        data = read_data;
-                    }
-
-                    if let Some(item) = data.pop() {
+                    if let Some(item) = data.next() {
                         return Some((item, (sub, executor, data)));
                     }
+
+                    interval.tick().await;
+
+                    let Ok(r_data) = (|| async { self.read(executor).await })
+                        .retry(ExponentialBuilder::default())
+                        .sleep(tokio::time::sleep)
+                        .notify(|err, dur| {
+                            tracing::error!(
+                                "SubscribeBuilder.stream().self.read() '{err}' sleeping='{dur:?}'"
+                            );
+                        })
+                        .await
+                    else {
+                        return None;
+                    };
+
+                    data = r_data.into_iter();
                 }
             },
         ))

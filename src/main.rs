@@ -1,4 +1,4 @@
-use liteventd::{sql::Sql, AggregatorName, Context, EventData, Executor};
+use liteventd::{prelude::StreamExt, sql::Sql, AggregatorName, Context, EventData, Executor};
 use serde::{Deserialize, Serialize};
 use sqlx::{any::install_default_drivers, migrate::MigrateDatabase, Any, Sqlite, SqlitePool};
 use std::{str::FromStr, time::Duration};
@@ -125,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
     let executor: Sql<Sqlite> = pool.into();
 
     liteventd::subscribe::<Sql<Sqlite>>("eu-west-3")
-        .delay(Duration::from_secs(5))
+        .delay(Duration::from_secs(2))
         .data(true)
         .aggregator::<CalculOne>()
         .aggregator::<CalculTwo>()
@@ -153,7 +153,17 @@ async fn main() -> anyhow::Result<()> {
         .commit(&executor)
         .await?;
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(8)).await;
+    let sub = liteventd::subscribe("us-east-1").aggregator::<CalculOne>();
+    let stream = sub.stream(&executor).await?;
+    tokio::pin!(stream);
+
+    while let Some(context) = stream.next().await {
+        println!(
+            "stream id={} version={} name={}",
+            context.event.id, context.event.version, context.event.name
+        );
+        context.acknowledge().await?;
+    }
 
     Ok(())
 }
