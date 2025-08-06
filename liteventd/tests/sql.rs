@@ -46,6 +46,13 @@ async fn sqlite_invalid_original_version() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn sqlite_subscriber_running() -> anyhow::Result<()> {
+    let pool = create_sqlite_pool("subscriber_running").await?;
+
+    liteventd_test::subscriber_running::<Sql<sqlx::Sqlite>>(&pool.into()).await
+}
+
+#[tokio::test]
 async fn sqlite_subscribe() -> anyhow::Result<()> {
     let pool = create_sqlite_pool("subscribe").await?;
     let data = get_data(&pool).await?;
