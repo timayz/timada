@@ -39,5 +39,5 @@ pub async fn static_handler(uri: Uri) -> impl IntoResponse {
 }
 
 #[derive(Template)]
-#[template(path = "not_found.html")]
+#[template(path = "404.html")]
 struct NotFoundTemplate;

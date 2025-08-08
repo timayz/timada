@@ -23,7 +23,7 @@ pub fn create_router() -> Router {
 }
 
 #[derive(Template)]
-#[template(path = "not_found.html")]
+#[template(path = "404.html")]
 struct NotFoundTemplate;
 
 async fn not_found() -> impl IntoResponse {
