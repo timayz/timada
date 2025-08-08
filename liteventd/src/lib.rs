@@ -649,6 +649,14 @@ impl<E: Executor + Clone> SubscribeBuilder<E> {
                         tracing::error!("acknowledge '{err}'");
                         break;
                     }
+
+                    tracing::debug!(
+                        "subscriber='{}' id='{}' type='{}' event_name='{}'",
+                        item.key,
+                        item.event.id,
+                        item.event.aggregator_type,
+                        item.event.name,
+                    );
                 }
             }
         });

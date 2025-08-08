@@ -7,20 +7,21 @@ license = "AGPL-3.0"
 [dependencies]
 tokio = { version = "1.45", features = ["full"] }
 anyhow = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "any"] }
-liteventd = { path = "./liteventd", features = ["handler", "sqlite", "stream"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+axum = "0.8"
+askama = "0.14"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rust-embed = "8.7"
+mime_guess = "2.0"
+liteventd = { path = "./liteventd", features = ["handler", "sqlite"] }
+product = { path = "./product" }
 
 [workspace]
 members = [ 
-  "customer",
   "liteventd",
   "liteventd-macro",
-  "payment",
-  "product",
-  "provider",
-  "shop"
+  "product"
 ]
 
 [profile.release]

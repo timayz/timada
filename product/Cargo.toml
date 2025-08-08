@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+liteventd = { path = "../liteventd", features = ["handler", "sqlite"] }
+axum = "0.8"
+askama = "0.14"
+tracing = "0.1"
