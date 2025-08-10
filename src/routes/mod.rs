@@ -1,15 +1,14 @@
 use askama::Template;
 use axum::{response::IntoResponse, routing::get, Router};
 
-use crate::{assets, html_template::HtmlTemplate};
+use crate::{assets, filters};
 
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate;
 
-async fn index() -> impl IntoResponse {
-    let template = IndexTemplate;
-    HtmlTemplate(template)
+async fn index(template: shared::Template<IndexTemplate>) -> impl IntoResponse {
+    template.template(IndexTemplate)
 }
 
 pub fn create_router() -> Router {
@@ -26,7 +25,6 @@ pub fn create_router() -> Router {
 #[template(path = "404.html")]
 struct NotFoundTemplate;
 
-async fn not_found() -> impl IntoResponse {
-    let template = NotFoundTemplate;
-    HtmlTemplate(template)
+async fn not_found(template: shared::Template<NotFoundTemplate>) -> impl IntoResponse {
+    template.template(NotFoundTemplate)
 }

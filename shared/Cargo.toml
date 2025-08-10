@@ -1,0 +1,11 @@
+[package]
+name = "shared"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8"
+tracing = "0.1"
+askama = "0.14"
+async-trait = "0.1"
+rust-i18n = "3.1"

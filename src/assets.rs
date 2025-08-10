@@ -5,22 +5,24 @@ use axum::{
 };
 use rust_embed::RustEmbed;
 
-use crate::html_template::HtmlTemplate;
+use crate::filters;
 
 #[derive(RustEmbed)]
 #[folder = "public/"]
 #[prefix = "/static/"]
 struct Assets;
 
-pub async fn static_handler(uri: Uri) -> impl IntoResponse {
+pub async fn static_handler(
+    uri: Uri,
+    html: shared::Template<NotFoundTemplate>,
+) -> impl IntoResponse {
     let mut path = uri.to_string();
 
     if !path.starts_with("/static/") {
-        let template = NotFoundTemplate;
         return (
             StatusCode::NOT_FOUND,
             [(header::CONTENT_TYPE, "text/html")],
-            HtmlTemplate(template),
+            html.template(NotFoundTemplate),
         )
             .into_response();
     }
@@ -40,4 +42,4 @@ pub async fn static_handler(uri: Uri) -> impl IntoResponse {
 
 #[derive(Template)]
 #[template(path = "404.html")]
-struct NotFoundTemplate;
+pub struct NotFoundTemplate;

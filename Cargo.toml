@@ -14,14 +14,17 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rust-embed = "8.7"
 mime_guess = "2.0"
+rust-i18n = "3.1"
 liteventd = { path = "./liteventd", features = ["handler", "sqlite"] }
+shared = { path = "./shared" }
 product = { path = "./product" }
 
 [workspace]
 members = [ 
   "liteventd",
   "liteventd-macro",
-  "product"
+  "product",
+  "shared"
 ]
 
 [profile.release]
