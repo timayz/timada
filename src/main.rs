@@ -26,11 +26,16 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let app = routes::create_router().layer(Extension(
+    let mut app = routes::create_router().layer(Extension(
         shared::UserLanguage::config()
-            .add_source(shared::QuerySource::new("lang"))
+            .add_source(shared::QuerySource::new("lng"))
             .add_source(shared::AcceptLanguageSource),
     ));
+
+    #[cfg(debug_assertions)]
+    {
+        app = app.layer(tower_livereload::LiveReloadLayer::new());
+    }
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
     tracing::info!("listening on {}", listener.local_addr()?);

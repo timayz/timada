@@ -15,6 +15,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rust-embed = "8.7"
 mime_guess = "2.0"
 rust-i18n = "3.1"
+tower-livereload = "0.9"
 liteventd = { path = "./liteventd", features = ["handler", "sqlite"] }
 shared = { path = "./shared" }
 product = { path = "./product" }

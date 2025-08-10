@@ -22,6 +22,7 @@
             glib
             openssl
             pkg-config
+            cargo-watch
             (rust-bin.stable.latest.default.override {
               extensions = [ "rust-src" "rust-analyzer" ];
             })

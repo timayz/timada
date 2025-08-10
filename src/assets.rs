@@ -8,7 +8,7 @@ use rust_embed::RustEmbed;
 use crate::filters;
 
 #[derive(RustEmbed)]
-#[folder = "public/"]
+#[folder = "assets/"]
 #[prefix = "/static/"]
 struct Assets;
 
