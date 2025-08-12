@@ -23,6 +23,7 @@
             openssl
             pkg-config
             cargo-watch
+            tailwindcss
             (rust-bin.stable.latest.default.override {
               extensions = [ "rust-src" "rust-analyzer" ];
             })
