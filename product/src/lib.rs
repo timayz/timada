@@ -13,3 +13,8 @@ pub(crate) mod filters {
         Ok(rust_i18n::t!(value, locale = preferred_language).to_string())
     }
 }
+
+#[derive(Clone)]
+pub struct State {
+    pub executor: liteventd::sql::Sql<sqlx::Sqlite>,
+}

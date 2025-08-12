@@ -5,6 +5,7 @@ use axum::Extension;
 use clap::{arg, command, Command};
 use config::Config;
 use serde::Deserialize;
+use sqlx::{any::install_default_drivers, migrate::MigrateDatabase};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 rust_i18n::i18n!("locales");
@@ -28,6 +29,11 @@ async fn main() -> anyhow::Result<()> {
         .subcommand(
             Command::new("serve")
                 .about("Serve timada admin web server")
+                .arg(arg!(-c --config <FILE> "path to configuration file").required(true)),
+        )
+        .subcommand(
+            Command::new("migrate")
+                .about("Create timada database")
                 .arg(arg!(-c --config <FILE> "path to configuration file").required(true)),
         )
         .get_matches();
@@ -56,6 +62,14 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
+        Some(("migrate", sub_matches)) => {
+            let config_path = sub_matches.get_one::<String>("config").expect("required");
+            if let Err(err) = migrate(config_path).await {
+                tracing::error!("{err}");
+
+                std::process::exit(1);
+            }
+        }
         _ => unreachable!("Exhausted list of subcommands and subcommand_required prevents `None`"),
     };
 
@@ -63,8 +77,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 #[derive(Deserialize)]
+struct Product {
+    pub dsn: String,
+}
+
+#[derive(Deserialize)]
 struct Serve {
     pub addr: String,
+    pub product: Product,
 }
 
 pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
@@ -75,11 +95,18 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
         .build()?
         .try_deserialize()?;
 
-    let mut app = routes::create_router().layer(Extension(
-        shared::UserLanguage::config()
-            .add_source(shared::QuerySource::new("lng"))
-            .add_source(shared::AcceptLanguageSource),
-    ));
+    let product_executor: liteventd::sql::Sql<sqlx::Sqlite> =
+        sqlx::SqlitePool::connect(&config.product.dsn).await?.into();
+
+    let mut app = routes::create_router()
+        .layer(Extension(
+            shared::UserLanguage::config()
+                .add_source(shared::QuerySource::new("lng"))
+                .add_source(shared::AcceptLanguageSource),
+        ))
+        .layer(Extension(product::State {
+            executor: product_executor.clone(),
+        }));
 
     #[cfg(debug_assertions)]
     {
@@ -89,6 +116,44 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&config.addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
     axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct Migrate {
+    pub product: Product,
+}
+
+pub async fn migrate(config_path: impl Into<String>) -> anyhow::Result<()> {
+    let config_path = config_path.into();
+    let config: Migrate = Config::builder()
+        .add_source(config::File::with_name(&config_path).required(true))
+        .add_source(config::Environment::with_prefix(env!("CARGO_PKG_NAME")))
+        .build()?
+        .try_deserialize()?;
+
+    install_default_drivers();
+
+    sqlx::Any::create_database(&config.product.dsn).await?;
+
+    let (pool, schema) = match config
+        .product
+        .dsn
+        .split_once(":")
+        .expect("Invalid product dsn")
+        .0
+    {
+        "sqlite" => {
+            let pool = sqlx::Pool::<sqlx::Sqlite>::connect(&config.product.dsn).await?;
+            let schema = liteventd::sql::Sql::<sqlx::Sqlite>::get_schema();
+
+            (pool, schema)
+        }
+        name => panic!("'{name}' not supported, consider using SQLite"),
+    };
+
+    sqlx::query(&schema).execute(&pool).await?;
 
     Ok(())
 }
