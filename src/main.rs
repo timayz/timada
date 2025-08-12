@@ -1,10 +1,10 @@
 mod assets;
 mod routes;
 
-use axum::Extension;
 use clap::{arg, command, Command};
 use config::Config;
 use serde::Deserialize;
+use shared::TemplateConfig;
 use sqlx::{any::install_default_drivers, migrate::MigrateDatabase};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -16,6 +16,13 @@ pub(crate) mod filters {
             .expect("Unable to get preferred_language from askama::get_value");
 
         Ok(rust_i18n::t!(value, locale = preferred_language).to_string())
+    }
+
+    pub fn assets(value: &str, values: &dyn askama::Values) -> askama::Result<String> {
+        let config = askama::get_value::<shared::TemplateConfig>(values, "config")
+            .expect("Unable to get config from askama::get_value");
+
+        Ok(format!("{}/{value}", config.assets_base_url))
     }
 }
 
@@ -84,6 +91,7 @@ struct Product {
 #[derive(Deserialize)]
 struct Serve {
     pub addr: String,
+    pub assets_base_url: String,
     pub product: Product,
 }
 
@@ -99,14 +107,10 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
         sqlx::SqlitePool::connect(&config.product.dsn).await?.into();
 
     let mut app = routes::create_router()
-        .layer(Extension(
-            shared::UserLanguage::config()
-                .add_source(shared::QuerySource::new("lng"))
-                .add_source(shared::AcceptLanguageSource),
-        ))
-        .layer(Extension(product::State {
+        .layer(TemplateConfig::new(&config.assets_base_url))
+        .layer(product::State {
             executor: product_executor.clone(),
-        }));
+        });
 
     #[cfg(debug_assertions)]
     {

@@ -9,5 +9,6 @@ axum = "0.8"
 askama = "0.14"
 tracing = "0.1"
 rust-i18n = "3.1"
+tower-layer = "0.3"
 shared = { path = "../shared" }
 liteventd = { path = "../liteventd", features = ["handler", "sqlite"] }

@@ -15,16 +15,5 @@ pub fn create_router() -> Router {
     Router::new()
         .fallback(get(assets::static_handler))
         .route("/", get(index))
-        .nest(
-            "/product",
-            product::create_router().fallback(get(not_found)),
-        )
-}
-
-#[derive(Template)]
-#[template(path = "404.html")]
-struct NotFoundTemplate;
-
-async fn not_found(template: shared::Template<NotFoundTemplate>) -> impl IntoResponse {
-    template.template(NotFoundTemplate)
+        .merge(product::create_router())
 }

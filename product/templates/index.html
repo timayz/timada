@@ -1,26 +1,16 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "_base.html" %}
 
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Timada - Product</title>
-  <script src="/static/twinspark.min.js"></script>
-</head>
-
-<body>
-  <form method="post" action="/product/create" ts-req="" ts-req-selector=".log" ts-target="sibling .log">
+{% block body %}
+<form method="post" action="{{ crate::routes::S_CREATE }}" ts-req="" ts-req-selector=".log" ts-target="sibling .log">
     <input type="text" name="name" value="">
   </form>
 
   {% if let Some(log) = log %}
-  <p class="log" ts-trigger="load delay 3s" ts-req="/product/create/status" ts-req-selector=".log">
+  <p class="log" ts-trigger="load delay 3s" ts-req="{{ crate::routes::s_create_status(Some("dfsdf".to_owned())) }}" ts-req-selector=".log">
     {{ log }}
   </p>
   {% else %}
   <p class="log"></p>
   {% endif %}
 
-</body>
-
-</html>
+{% endblock %}

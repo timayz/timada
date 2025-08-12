@@ -1,4 +1,5 @@
 addr = "127.0.0.1:3000"
+assets_base_url = "/assets"
 
 [product]
 dsn = "sqlite:./target/tmp/product.db"

@@ -9,7 +9,7 @@ use crate::filters;
 
 #[derive(RustEmbed)]
 #[folder = "assets/"]
-#[prefix = "/static/"]
+#[prefix = "/assets/"]
 struct Assets;
 
 pub async fn static_handler(
@@ -18,7 +18,7 @@ pub async fn static_handler(
 ) -> impl IntoResponse {
     let mut path = uri.to_string();
 
-    if !path.starts_with("/static/") {
+    if !path.starts_with("/assets/") {
         return (
             StatusCode::NOT_FOUND,
             [(header::CONTENT_TYPE, "text/html")],

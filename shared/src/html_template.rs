@@ -1,16 +1,40 @@
 use axum::{
-    RequestPartsExt,
+    Extension, RequestPartsExt,
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
+    middleware::AddExtension,
     response::{Html, IntoResponse, Response},
 };
-use std::convert::Infallible;
+use std::{collections::HashMap, convert::Infallible};
 
 use crate::UserLanguage;
+
+#[derive(Clone)]
+pub struct TemplateConfig {
+    pub assets_base_url: String,
+}
+
+impl TemplateConfig {
+    pub fn new(assets_base_url: impl Into<String>) -> Self {
+        Self {
+            assets_base_url: assets_base_url.into(),
+        }
+    }
+}
+
+impl<S> tower_layer::Layer<S> for TemplateConfig {
+    type Service = AddExtension<S, Self>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Extension(self.clone()).layer(inner)
+    }
+}
 
 pub struct Template<T> {
     template: Option<T>,
     preferred_language: String,
+    preferred_language_iso: String,
+    config: TemplateConfig,
 }
 
 impl<T> Template<T> {
@@ -39,9 +63,23 @@ where
             .cloned()
             .unwrap_or_else(|| "en".to_owned());
 
+        let preferred_language_iso = preferred_language
+            .split_once("-")
+            .unwrap_or((preferred_language.as_str(), ""))
+            .0
+            .to_owned();
+
+        let config = parts
+            .extensions
+            .get::<TemplateConfig>()
+            .expect("TemplateConfig not configured")
+            .to_owned();
+
         Ok(Template {
             template: None,
             preferred_language,
+            preferred_language_iso,
+            config,
         })
     }
 }
@@ -51,7 +89,13 @@ where
     T: askama::Template,
 {
     fn into_response(self) -> Response {
-        let values: (&str, &dyn std::any::Any) = ("preferred_language", &self.preferred_language);
+        let mut values: HashMap<&str, Box<dyn std::any::Any>> = HashMap::new();
+        values.insert("preferred_language", Box::new(self.preferred_language));
+        values.insert(
+            "preferred_language_iso",
+            Box::new(self.preferred_language_iso),
+        );
+        values.insert("config", Box::new(self.config));
 
         match self
             .template

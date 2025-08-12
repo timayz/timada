@@ -1715,6 +1715,7 @@ dependencies = [
  "rust-i18n",
  "shared",
  "sqlx",
+ "tower-layer",
  "tracing",
 ]
 
@@ -2182,6 +2183,7 @@ dependencies = [
  "async-trait",
  "axum",
  "rust-i18n",
+ "tower-layer",
  "tracing",
 ]
 
