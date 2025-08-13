@@ -1323,7 +1323,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "ulid",
- "validator",
 ]
 
 [[package]]
@@ -1709,14 +1708,17 @@ dependencies = [
 name = "product"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "askama",
  "axum",
  "liteventd",
  "rust-i18n",
+ "serde",
  "shared",
  "sqlx",
  "tower-layer",
  "tracing",
+ "validator",
 ]
 
 [[package]]
@@ -2183,8 +2185,10 @@ dependencies = [
  "async-trait",
  "axum",
  "rust-i18n",
+ "serde",
  "tower-layer",
  "tracing",
+ "ulid",
 ]
 
 [[package]]

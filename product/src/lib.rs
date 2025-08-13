@@ -1,6 +1,15 @@
+mod error;
+pub mod product;
 mod routes;
 
-use axum::{Extension, middleware::AddExtension};
+use std::ops::Deref;
+
+use axum::{
+    Extension,
+    extract::{FromRequestParts, rejection::ExtensionRejection},
+    http::request::Parts,
+    middleware::AddExtension,
+};
 pub use routes::create_router;
 
 rust_i18n::i18n!("locales");
@@ -26,6 +35,7 @@ pub(crate) mod filters {
 #[derive(Clone)]
 pub struct State {
     pub executor: liteventd::sql::Sql<sqlx::Sqlite>,
+    pub region: String,
 }
 
 impl<S> tower_layer::Layer<S> for State {
@@ -33,5 +43,18 @@ impl<S> tower_layer::Layer<S> for State {
 
     fn layer(&self, inner: S) -> Self::Service {
         Extension(self.clone()).layer(inner)
+    }
+}
+
+impl<S> FromRequestParts<S> for State
+where
+    S: Send + Sync,
+{
+    type Rejection = ExtensionRejection;
+
+    async fn from_request_parts(req: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let state = Extension::<State>::from_request_parts(req, state).await?;
+
+        Ok(state.deref().clone())
     }
 }

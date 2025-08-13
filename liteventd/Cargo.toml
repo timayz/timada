@@ -22,7 +22,6 @@ futures-util = { version = "0.3", optional = true }
 backon = { version =  "1.5", optional = true }
 
 [dev-dependencies]
-validator = { version = "0.20", features = ["derive"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "any"] }
 rand = "0.9.2"
 

@@ -5,10 +5,16 @@
   <input type="text" name="name" value="">
 </form>
 
-{% if let Some(log) = log %}
-<p role="alert" class="log p-4 mb-4 text-sm text-blue-800 rounded-lg bg-blue-50 dark:bg-gray-800 dark:text-blue-400" ts-trigger="load delay 3s" ts-req="{{ crate::routes::s_create_status(Some("dfsdf".to_owned())) }}" ts-req-selector=".log">
-    {{ log }}
+{% if let Some((id, ProductState::Checking)) = log %}
+<p role="alert"
+  class="log p-4 mb-4 text-sm text-blue-800 rounded-lg bg-blue-50 dark:bg-gray-800 dark:text-blue-400"
+  ts-trigger="load delay 1s"
+  ts-req="{{ crate::routes::s_create_status(Some(id.to_owned())) }}"
+  ts-req-selector=".log">
+    {{ "creating..."|t }}
 </p>
+{% else if let Some((_, ProductState::Failed(_,reason))) = log %}
+<p class="log">{{ reason|t }}</p>
 {% else %}
 <p class="log"></p>
 {% endif %}

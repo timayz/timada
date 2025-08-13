@@ -10,3 +10,5 @@ askama = "0.14"
 async-trait = "0.1"
 rust-i18n = "3.1"
 tower-layer = "0.3"
+ulid = { version = "1.2", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }

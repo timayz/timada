@@ -91,6 +91,7 @@ struct Product {
 #[derive(Deserialize)]
 struct Serve {
     pub addr: String,
+    pub region: String,
     pub assets_base_url: String,
     pub product: Product,
 }
@@ -106,10 +107,19 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
     let product_executor: liteventd::sql::Sql<sqlx::Sqlite> =
         sqlx::SqlitePool::connect(&config.product.dsn).await?.into();
 
+    product::product::subscribe_command(&config.region)
+        .run(&product_executor)
+        .await?;
+
+    product::product::subscribe_query_products(&config.region)
+        .run(&product_executor)
+        .await?;
+
     let mut app = routes::create_router()
         .layer(TemplateConfig::new(&config.assets_base_url))
         .layer(product::State {
             executor: product_executor.clone(),
+            region: config.region.to_owned(),
         });
 
     #[cfg(debug_assertions)]
