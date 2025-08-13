@@ -13,6 +13,7 @@ validator = { version = "0.20", features = ["derive"] }
 tracing = "0.1"
 rust-i18n = "3.1"
 tower-layer = "0.3"
+heed = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 shared = { path = "../shared" }
 liteventd = { path = "../liteventd", features = ["handler", "sqlite"] }

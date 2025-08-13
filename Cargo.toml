@@ -13,6 +13,7 @@ axum = "0.8"
 askama = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+heed = "0.22"
 rust-embed = "8.7"
 mime_guess = "2.0"
 rust-i18n = "3.1"
