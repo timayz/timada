@@ -4,17 +4,25 @@ use axum::{
     response::IntoResponse,
     Form,
 };
-use market::product::{CreateInput, Product, ProductState};
+use market::product::{CreateInput, Product, ProductState, QueryProduct};
 use shared::Metadata;
 
 #[derive(askama::Template)]
 #[template(path = "market/index.html")]
 pub struct IndexTemplate {
     pub log: Option<(String, ProductState)>,
+    pub products: evento::cursor::ReadResult<QueryProduct>,
 }
 
-pub async fn index(html: Template<IndexTemplate>) -> impl IntoResponse {
-    html.template(IndexTemplate { log: None })
+pub async fn index(
+    html: Template<IndexTemplate>,
+    State(state): State<crate::State>,
+) -> Result<impl IntoResponse, crate::error::AppError> {
+    let products = market::product::query_products(&state.lmdb)?;
+    Ok(html.template(IndexTemplate {
+        log: None,
+        products,
+    }))
 }
 
 #[axum::debug_handler]
@@ -32,6 +40,7 @@ pub async fn create(
 
     Ok(html.template(IndexTemplate {
         log: Some((id, ProductState::Checking)),
+        products: Default::default(),
     }))
 }
 
@@ -44,5 +53,6 @@ pub async fn status(
 
     Ok(html.template(IndexTemplate {
         log: Some((id, product.item.state)),
+        products: Default::default(),
     }))
 }

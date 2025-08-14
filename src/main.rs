@@ -6,6 +6,7 @@ mod router;
 use axum_extra::TemplateConfig;
 use clap::{arg, command, Command};
 use config::Config;
+use heed::EnvOpenOptions;
 use serde::Deserialize;
 use sqlx::{any::install_default_drivers, migrate::MigrateDatabase};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -100,6 +101,7 @@ pub struct Serve {
 pub struct State {
     pub market_executor: evento::sql::Sql<sqlx::Sqlite>,
     pub config: Serve,
+    pub lmdb: heed::Env,
 }
 
 pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
@@ -110,6 +112,13 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
         .build()?
         .try_deserialize()?;
 
+    let lmdb = unsafe {
+        EnvOpenOptions::new()
+            .map_size(10 * 1024 * 1024)
+            .max_dbs(3)
+            .open("target/tmp")?
+    };
+
     let market_executor: evento::sql::Sql<sqlx::Sqlite> =
         sqlx::SqlitePool::connect(&config.market.dsn).await?.into();
 
@@ -117,7 +126,7 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
         .run(&market_executor)
         .await?;
 
-    market::product::subscribe_query_products(&config.region)
+    market::product::subscribe_query_products(&config.region, &lmdb)?
         .run(&market_executor)
         .await?;
 
@@ -128,6 +137,7 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
         .with_state(State {
             market_executor,
             config,
+            lmdb,
         });
 
     #[cfg(debug_assertions)]

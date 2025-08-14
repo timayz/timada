@@ -15,8 +15,20 @@
 </p>
 {% else if let Some((_, ProductState::Failed(_,reason))) = log %}
 <p class="log">{{ reason|t }}</p>
+{% else if let Some((_, ProductState::Ready)) = log %}
+<p class="log"
+  ts-req="{{ crate::router::MARKET }}"
+  ts-req-selector=".products"
+  ts-target=".products"
+  ts-trigger="load delay 1s">
+</p>
 {% else %}
 <p class="log"></p>
 {% endif %}
 
+<div class="products">
+{% for product in products.edges %}
+<div>{{ product.node.name }}</div>
+{% endfor %}
+</div>
 {% endblock %}

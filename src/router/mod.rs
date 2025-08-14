@@ -20,12 +20,12 @@ pub fn create_router() -> Router<crate::State> {
     Router::new()
         .fallback(get(assets::static_handler))
         .route("/", get(index))
-        .route(MARKET_INDEX, get(market::index))
+        .route(MARKET, get(market::index))
         .route(MARKET_S_CREATE, post(market::create))
         .route(&market_s_create_status(None), get(market::status))
 }
 
-pub const MARKET_INDEX: &str = "/market";
+pub const MARKET: &str = "/market";
 pub const MARKET_S_CREATE: &str = "/market/-/create";
 
 pub fn market_s_create_status(id: Option<String>) -> String {
