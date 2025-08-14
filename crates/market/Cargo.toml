@@ -1,7 +1,12 @@
 [package]
-name = "market"
+name = "timada-market"
 version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0"
+publish = true
+description = "Manage Product, Category and Variant for timada"
+repository = "https://github.com/timayz/timada"
+documentation = "https://docs.rs/timada-market"
 
 [dependencies]
 anyhow = "1.0"
@@ -11,5 +16,5 @@ tracing = "0.1"
 tower-layer = "0.3"
 heed = "0.22"
 serde = { version = "1.0", features = ["derive"] }
-shared = { path = "../shared" }
+timada-shared = { path = "../shared" }
 evento = { version = "1.0.0-alpha.10", features = ["handler", "sqlite"] }

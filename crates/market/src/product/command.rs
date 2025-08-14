@@ -1,5 +1,6 @@
 use evento::{AggregatorName, SubscribeBuilder};
 use serde::Deserialize;
+use timada_shared::Metadata;
 use validator::Validate;
 
 use crate::product::{CreateRequested, Created, Product};
@@ -23,7 +24,7 @@ pub fn create(input: CreateInput) -> anyhow::Result<evento::SaveBuilder<Product>
 async fn command_create_requested<E: evento::Executor>(
     context: &evento::Context<'_, E>,
     _data: CreateRequested,
-    metadata: shared::Metadata,
+    metadata: Metadata,
 ) -> anyhow::Result<()> {
     let product =
         evento::load::<Product, _>(context.executor, &context.event.aggregator_id).await?;

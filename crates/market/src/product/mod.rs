@@ -3,11 +3,12 @@ mod query;
 
 use evento::{AggregatorName, EventData};
 use serde::{Deserialize, Serialize};
+use timada_shared::Metadata;
 
 pub use command::*;
 pub use query::*;
 
-type ProductEvent<D> = EventData<D, shared::Metadata>;
+type ProductEvent<D> = EventData<D, Metadata>;
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ProductState {

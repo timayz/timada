@@ -1,7 +1,12 @@
 [package]
-name = "shared"
+name = "timada-shared"
 version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0"
+publish = true
+description = "Common lib for timada"
+repository = "https://github.com/timayz/timada"
+documentation = "https://docs.rs/timada-shared"
 
 [dependencies]
 tracing = "0.1"

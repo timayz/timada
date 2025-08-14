@@ -1,0 +1,7 @@
+target
+.github
+docker-compose.yml
+Makefile
+.releaserc.yml
+.git
+Dockerfile
