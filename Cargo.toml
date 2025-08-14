@@ -25,8 +25,8 @@ config = "0.15"
 ulid = { version = "1.2", features = ["serde"] }
 tower-layer = "0.3"
 evento = { version = "1.0.0-alpha.10", features = ["handler", "sqlite"] }
-shared = { path = "./crates/shared" }
-market = { path = "./crates/market" }
+timada-shared = { path = "./crates/shared" }
+timada-market = { path = "./crates/market" }
 
 [workspace]
 members = [ 

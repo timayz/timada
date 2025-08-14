@@ -1,6 +1,7 @@
 use crate::product::{CreateFailed, CreateRequested, Created, Product, ProductState};
 use evento::{AggregatorName, SubscribeBuilder, cursor::Reader};
 use serde::{Deserialize, Serialize};
+use timada_shared::Metadata;
 
 type QueryProductDB = heed::Database<heed::types::Str, heed::types::SerdeBincode<QueryProduct>>;
 
@@ -70,7 +71,7 @@ impl evento::cursor::Bind for QueryProduct {
 async fn products_create_requested<E: evento::Executor>(
     context: &evento::Context<'_, E>,
     data: CreateRequested,
-    _metadata: shared::Metadata,
+    _metadata: Metadata,
 ) -> anyhow::Result<()> {
     let lmdb = context.extract::<heed::Env>();
     let mut wtxn = lmdb.write_txn()?;
@@ -95,7 +96,7 @@ async fn products_create_requested<E: evento::Executor>(
 async fn products_create_failed<E: evento::Executor>(
     context: &evento::Context<'_, E>,
     data: CreateFailed,
-    _metadata: shared::Metadata,
+    _metadata: Metadata,
 ) -> anyhow::Result<()> {
     let lmdb = context.extract::<heed::Env>();
     let mut wtxn = lmdb.write_txn()?;
@@ -118,7 +119,7 @@ async fn products_create_failed<E: evento::Executor>(
 async fn products_created<E: evento::Executor>(
     context: &evento::Context<'_, E>,
     data: Created,
-    _metadata: shared::Metadata,
+    _metadata: Metadata,
 ) -> anyhow::Result<()> {
     let lmdb = context.extract::<heed::Env>();
     let mut wtxn = lmdb.write_txn()?;
