@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html {% if let Ok(lang)="preferred_language_iso" |value::<String> %}lang="{{ lang }}"{% endif %}>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Timada{% endblock %}</title>
+  <link rel="stylesheet" href={{ ("main.css?v="|assets) ~ env!("CARGO_PKG_VERSION") }} crossorigin="anonymous" />
+  <!-- https://cdn.jsdelivr.net/gh/piranha/twinspark-js@main/dist/twinspark.min.js -->
+  <script src={{ "lib/twinspark.min.js?v=08-21-2024"|assets }} crossorigin="anonymous"></script>
+  {% block head %}{% endblock %}
+</head>
+
+<body>
+  <main>
+    {% block body %}{% endblock %}
+  </main>
+  {% block footer %}{% endblock %}
+</body>
+
+</html>
