@@ -1,0 +1,34 @@
+{% extends "_base.html" %}
+
+{% block body %}
+<form method="post" action="{{ crate::router::MARKET_S_CREATE }}" ts-req="" ts-req-selector=".log" ts-target="sibling .log">
+  <input type="text" name="name" value="">
+</form>
+
+{% if let Some((id, ProductState::Checking)) = log %}
+<p role="alert"
+  class="log p-4 mb-4 text-sm text-blue-800 rounded-lg bg-blue-50 dark:bg-gray-800 dark:text-blue-400"
+  ts-trigger="load delay 1s"
+  ts-req="{{ crate::router::market_s_create_status(Some(id.to_owned())) }}"
+  ts-req-selector=".log">
+    {{ "creating..."|t }}
+</p>
+{% else if let Some((_, ProductState::Failed(_,reason))) = log %}
+<p class="log">{{ reason|t }}</p>
+{% else if let Some((_, ProductState::Ready)) = log %}
+<p class="log"
+  ts-req="{{ crate::router::MARKET }}"
+  ts-req-selector=".products"
+  ts-target=".products"
+  ts-trigger="load delay 1s">
+</p>
+{% else %}
+<p class="log"></p>
+{% endif %}
+
+<div class="products">
+{% for product in products.edges %}
+<div>{{ product.node.name }}</div>
+{% endfor %}
+</div>
+{% endblock %}
