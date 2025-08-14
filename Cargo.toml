@@ -9,10 +9,12 @@ tokio = { version = "1.45", features = ["full"] }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "any", "sqlite"] }
-axum = "0.8"
+# axum = "0.8"
+axum = { version = "0.8", features=["macros"] }
 askama = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
 heed = "0.22"
 rust-embed = "8.7"
 mime_guess = "2.0"
@@ -20,16 +22,15 @@ rust-i18n = "3.1"
 tower-livereload = "0.9"
 clap = { version =  "4.5", features = ["cargo"] }
 config = "0.15"
-liteventd = { path = "./liteventd", features = ["handler", "sqlite"] }
-shared = { path = "./shared" }
-product = { path = "./product" }
+ulid = { version = "1.2", features = ["serde"] }
+tower-layer = "0.3"
+evento = { version = "1.0.0-alpha.10", features = ["handler", "sqlite"] }
+shared = { path = "./crates/shared" }
+market = { path = "./crates/market" }
 
 [workspace]
 members = [ 
-  "liteventd",
-  "liteventd-macro",
-  "product",
-  "shared"
+  "crates/*",
 ]
 
 [profile.release]

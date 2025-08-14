@@ -175,6 +175,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "021e862c184ae977658b36c4500f7feac3221ca5da43e3f25bd04ab6c79a29b5"
 dependencies = [
  "axum-core",
+ "axum-macros",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -220,6 +221,17 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum-macros"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "604fde5e028fea851ce1d8570bbdc034bec850d157f7569d10f347d06808c05c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -706,6 +718,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "evento"
+version = "1.0.0-alpha.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "946cfb01d2697ac538ebf91ccea2b70f001ca345b9a86c65c8edce6528de1903"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "backon",
+ "base64 0.22.1",
+ "ciborium",
+ "evento-macro",
+ "sea-query",
+ "sea-query-binder",
+ "serde",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "evento-macro"
+version = "1.0.0-alpha.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1782329a1e8e1a549801818ef748e4c641a585a05a3b30cc3a839e250d7a8940"
+dependencies = [
+ "convert_case 0.8.0",
+ "proc-macro2",
+ "quote",
+ "sha3",
+ "syn",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -788,17 +835,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e5c1b78ca4aae1ac06c48a526a655760685149f0d465d21f37abfe57ce075c6"
 
 [[package]]
-name = "futures-macro"
-version = "0.3.31"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "162ee34ebcb7c64a8abebc059ce0fee27c2262618d7b60ed8faf72fef13c3650"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "futures-sink"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -818,7 +854,6 @@ checksum = "9fa08315bb612088cc391249efdc3bc77536f16c91f6cf495e6fbe85b20a4a81"
 dependencies = [
  "futures-core",
  "futures-io",
- "futures-macro",
  "futures-sink",
  "futures-task",
  "memchr",
@@ -1359,40 +1394,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
 
 [[package]]
-name = "liteventd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "backon",
- "base64 0.22.1",
- "ciborium",
- "futures-util",
- "liteventd-macro",
- "rand 0.9.2",
- "sea-query",
- "sea-query-binder",
- "serde",
- "sqlx",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tracing",
- "ulid",
-]
-
-[[package]]
-name = "liteventd-macro"
-version = "0.1.0"
-dependencies = [
- "convert_case 0.8.0",
- "proc-macro2",
- "quote",
- "sha3",
- "syn",
-]
-
-[[package]]
 name = "lmdb-master-sys"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1418,6 +1419,21 @@ name = "log"
 version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
+
+[[package]]
+name = "market"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "evento",
+ "heed",
+ "serde",
+ "shared",
+ "sqlx",
+ "tower-layer",
+ "tracing",
+ "validator",
+]
 
 [[package]]
 name = "matchers"
@@ -1821,24 +1837,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "product"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "askama",
- "axum",
- "heed",
- "liteventd",
- "rust-i18n",
- "serde",
- "shared",
- "sqlx",
- "tower-layer",
- "tracing",
- "validator",
 ]
 
 [[package]]
@@ -2301,14 +2299,8 @@ dependencies = [
 name = "shared"
 version = "0.1.0"
 dependencies = [
- "askama",
- "async-trait",
- "axum",
- "rust-i18n",
  "serde",
- "tower-layer",
  "tracing",
- "ulid",
 ]
 
 [[package]]
@@ -2675,22 +2667,25 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "askama",
+ "async-trait",
  "axum",
  "clap",
  "config",
+ "evento",
  "heed",
- "liteventd",
+ "market",
  "mime_guess",
- "product",
  "rust-embed",
  "rust-i18n",
  "serde",
  "shared",
  "sqlx",
  "tokio",
+ "tower-layer",
  "tower-livereload",
  "tracing",
  "tracing-subscriber",
+ "ulid",
 ]
 
 [[package]]

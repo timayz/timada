@@ -1,10 +1,12 @@
 mod assets;
-mod routes;
+mod axum_extra;
+mod error;
+mod router;
 
+use axum_extra::TemplateConfig;
 use clap::{arg, command, Command};
 use config::Config;
 use serde::Deserialize;
-use shared::TemplateConfig;
 use sqlx::{any::install_default_drivers, migrate::MigrateDatabase};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -19,7 +21,7 @@ pub(crate) mod filters {
     }
 
     pub fn assets(value: &str, values: &dyn askama::Values) -> askama::Result<String> {
-        let config = askama::get_value::<shared::TemplateConfig>(values, "config")
+        let config = askama::get_value::<crate::axum_extra::TemplateConfig>(values, "config")
             .expect("Unable to get config from askama::get_value");
 
         Ok(format!("{}/{value}", config.assets_base_url))
@@ -51,9 +53,7 @@ async fn main() -> anyhow::Result<()> {
                 matches
                     .get_one::<String>("log")
                     .cloned()
-                    .unwrap_or_else(|| {
-                        format!("{}=error,liteventd=error", env!("CARGO_CRATE_NAME"))
-                    })
+                    .unwrap_or_else(|| format!("{}=error,evento=error", env!("CARGO_CRATE_NAME")))
                     .into()
             }),
         )
@@ -83,17 +83,23 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize)]
-struct Product {
+#[derive(Deserialize, Clone)]
+pub struct Market {
     pub dsn: String,
 }
 
-#[derive(Deserialize)]
-struct Serve {
+#[derive(Deserialize, Clone)]
+pub struct Serve {
     pub addr: String,
     pub region: String,
     pub assets_base_url: String,
-    pub product: Product,
+    pub market: Market,
+}
+
+#[derive(Clone)]
+pub struct State {
+    pub market_executor: evento::sql::Sql<sqlx::Sqlite>,
+    pub config: Serve,
 }
 
 pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
@@ -104,22 +110,24 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
         .build()?
         .try_deserialize()?;
 
-    let product_executor: liteventd::sql::Sql<sqlx::Sqlite> =
-        sqlx::SqlitePool::connect(&config.product.dsn).await?.into();
+    let market_executor: evento::sql::Sql<sqlx::Sqlite> =
+        sqlx::SqlitePool::connect(&config.market.dsn).await?.into();
 
-    product::product::subscribe_command(&config.region)
-        .run(&product_executor)
+    market::product::subscribe_command(&config.region)
+        .run(&market_executor)
         .await?;
 
-    product::product::subscribe_query_products(&config.region)
-        .run(&product_executor)
+    market::product::subscribe_query_products(&config.region)
+        .run(&market_executor)
         .await?;
 
-    let mut app = routes::create_router()
+    let addr = config.addr.to_owned();
+
+    let mut app = router::create_router()
         .layer(TemplateConfig::new(&config.assets_base_url))
-        .layer(product::State {
-            executor: product_executor.clone(),
-            region: config.region.to_owned(),
+        .with_state(State {
+            market_executor,
+            config,
         });
 
     #[cfg(debug_assertions)]
@@ -127,7 +135,7 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
         app = app.layer(tower_livereload::LiveReloadLayer::new());
     }
 
-    let listener = tokio::net::TcpListener::bind(&config.addr).await?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("listening on {}", listener.local_addr()?);
     axum::serve(listener, app).await?;
 
@@ -136,7 +144,7 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
 
 #[derive(Deserialize)]
 struct Migrate {
-    pub product: Product,
+    pub market: Market,
 }
 
 pub async fn migrate(config_path: impl Into<String>) -> anyhow::Result<()> {
@@ -149,25 +157,27 @@ pub async fn migrate(config_path: impl Into<String>) -> anyhow::Result<()> {
 
     install_default_drivers();
 
-    sqlx::Any::create_database(&config.product.dsn).await?;
+    sqlx::Any::create_database(&config.market.dsn).await?;
 
     let (pool, schema) = match config
-        .product
+        .market
         .dsn
         .split_once(":")
         .expect("Invalid product dsn")
         .0
     {
         "sqlite" => {
-            let pool = sqlx::Pool::<sqlx::Sqlite>::connect(&config.product.dsn).await?;
-            let schema = liteventd::sql::Sql::<sqlx::Sqlite>::get_schema();
+            let pool = sqlx::Pool::<sqlx::Sqlite>::connect(&config.market.dsn).await?;
+            let schema = evento::sql::Sql::<sqlx::Sqlite>::get_schema();
 
             (pool, schema)
         }
         name => panic!("'{name}' not supported, consider using SQLite"),
     };
 
-    sqlx::query(&schema).execute(&pool).await?;
+    for statement in schema {
+        sqlx::query(&statement).execute(&pool).await?;
+    }
 
     Ok(())
 }

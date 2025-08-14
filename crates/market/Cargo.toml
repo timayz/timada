@@ -1,0 +1,15 @@
+[package]
+name = "market"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+validator = { version = "0.20", features = ["derive"] }
+tracing = "0.1"
+tower-layer = "0.3"
+heed = "0.22"
+serde = { version = "1.0", features = ["derive"] }
+shared = { path = "../shared" }
+evento = { version = "1.0.0-alpha.10", features = ["handler", "sqlite"] }

@@ -1,21 +1,17 @@
-use askama::Template;
 use axum::{
     http::{header, StatusCode, Uri},
     response::IntoResponse,
 };
 use rust_embed::RustEmbed;
 
-use crate::filters;
+use crate::{axum_extra::Template, filters};
 
 #[derive(RustEmbed)]
 #[folder = "assets/"]
 #[prefix = "/assets/"]
 struct Assets;
 
-pub async fn static_handler(
-    uri: Uri,
-    html: shared::Template<NotFoundTemplate>,
-) -> impl IntoResponse {
+pub async fn static_handler(uri: Uri, html: Template<NotFoundTemplate>) -> impl IntoResponse {
     let mut path = uri.to_string();
 
     if !path.starts_with("/assets/") {
@@ -40,6 +36,6 @@ pub async fn static_handler(
     }
 }
 
-#[derive(Template)]
+#[derive(askama::Template)]
 #[template(path = "404.html")]
 pub struct NotFoundTemplate;
