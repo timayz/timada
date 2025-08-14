@@ -19,6 +19,9 @@ lint:
 test:
 	cargo test
 
+e2e:
+	npx playwright test --headed
+
 fmt:
 	cargo fmt -- --emit files
 
