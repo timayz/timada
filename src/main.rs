@@ -122,11 +122,11 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
     let market_executor: evento::sql::Sql<sqlx::Sqlite> =
         sqlx::SqlitePool::connect(&config.market.dsn).await?.into();
 
-    market::product::subscribe_command(&config.region)
+    timada_market::product::subscribe_command(&config.region)
         .run(&market_executor)
         .await?;
 
-    market::product::subscribe_query_products(&config.region, &lmdb)?
+    timada_market::product::subscribe_query_products(&config.region, &lmdb)?
         .run(&market_executor)
         .await?;
 

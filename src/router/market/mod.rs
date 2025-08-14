@@ -4,8 +4,8 @@ use axum::{
     response::IntoResponse,
     Form,
 };
-use market::product::{CreateInput, Product, ProductState, QueryProduct};
-use shared::Metadata;
+use timada_market::product::{CreateInput, Product, ProductState, QueryProduct};
+use timada_shared::Metadata;
 
 #[derive(askama::Template)]
 #[template(path = "market/index.html")]
@@ -18,7 +18,7 @@ pub async fn index(
     html: Template<IndexTemplate>,
     State(state): State<crate::State>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
-    let products = market::product::query_products(&state.lmdb)?;
+    let products = timada_market::product::query_products(&state.lmdb)?;
     Ok(html.template(IndexTemplate {
         log: None,
         products,
@@ -32,7 +32,7 @@ pub async fn create(
     metadata: Metadata,
     Form(input): Form<CreateInput>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
-    let id = market::product::create(input)?
+    let id = timada_market::product::create(input)?
         .metadata(&metadata)?
         .routing_key(state.config.region)
         .commit(&state.market_executor)
