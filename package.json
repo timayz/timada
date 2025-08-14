@@ -1,0 +1,30 @@
+{
+  "name": "timada",
+  "version": "1.0.0",
+  "main": "tailwind.config.js",
+  "directories": {
+    "test": "tests"
+  },
+  "dependencies": {
+    "playwright": "^1.54.2",
+    "playwright-core": "^1.54.2",
+    "undici-types": "^7.10.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.2",
+    "@types/node": "^24.2.1"
+  },
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/timayz/timada.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/timayz/timada/issues"
+  },
+  "homepage": "https://github.com/timayz/timada#readme",
+  "description": ""
+}
