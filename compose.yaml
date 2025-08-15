@@ -1,0 +1,37 @@
+services:
+  timada-migrate:
+    image: timayz/timada
+    command: migrate -c /home/timada/config.toml
+    volumes:
+      - timada:/var/lib/timada
+      - type: bind
+        source: timada.standalone.toml
+        target: /home/timada/config.toml
+    restart: on-failure
+    profiles:
+      - standalone
+    networks:
+      - intranet
+      
+  timada:
+    image: timayz/timada
+    command: serve -c /home/timada/config.toml
+    volumes:
+      - timada:/var/lib/timada
+      - type: bind
+        source: timada.standalone.toml
+        target: /home/timada/config.toml
+    restart: on-failure
+    profiles:
+      - standalone
+    networks:
+      - intranet
+    depends_on:
+      - timada-migrate
+
+volumes:
+  timada:
+
+networks:
+  intranet:
+    name: timada

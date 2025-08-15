@@ -48,6 +48,8 @@ RUN cargo chef cook --release --package=timada --package=timada-shared --package
 COPY . .
 RUN cargo build --release --bin timada --package timada --package timada-shared --package timada-market
 
+RUN mkdir /var/lib/timada
+
 FROM scratch
 
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
@@ -55,6 +57,7 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifi
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
 COPY --from=builder /app/target/release/timada /usr/bin/timada
+COPY --from=builder --chown=timada /var/lib/timada /var/lib/timada
 
 USER timada:timada
 
