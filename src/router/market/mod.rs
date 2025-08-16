@@ -10,7 +10,7 @@ use timada_shared::Metadata;
 #[derive(askama::Template)]
 #[template(path = "market/index.html")]
 pub struct IndexTemplate {
-    pub log: Option<(String, ProductState)>,
+    pub log: Option<(String, ProductState, String)>,
     pub products: evento::cursor::ReadResult<QueryProduct>,
 }
 
@@ -18,7 +18,7 @@ pub async fn index(
     html: Template<IndexTemplate>,
     State(state): State<crate::State>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
-    let products = timada_market::product::query_products(&state.lmdb)?;
+    let products = timada_market::product::query_products(&state.market_db).await?;
     Ok(html.template(IndexTemplate {
         log: None,
         products,
@@ -39,7 +39,7 @@ pub async fn create(
         .await?;
 
     Ok(html.template(IndexTemplate {
-        log: Some((id, ProductState::Checking)),
+        log: Some((id, ProductState::Checking, "".to_owned())),
         products: Default::default(),
     }))
 }
@@ -52,7 +52,7 @@ pub async fn status(
     let product = evento::load::<Product, _>(&state.market_executor, &id).await?;
 
     Ok(html.template(IndexTemplate {
-        log: Some((id, product.item.state)),
+        log: Some((id, product.item.state, product.item.failed_reason)),
         products: Default::default(),
     }))
 }
