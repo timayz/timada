@@ -1,6 +1,6 @@
 use crate::product::{CreateFailed, CreateRequested, Created, Product, ProductState};
 use evento::{AggregatorName, SubscribeBuilder, sql::Reader};
-use sea_query::{Expr, Query, SqliteQueryBuilder};
+use sea_query::{Expr, ExprTrait, Query, SqliteQueryBuilder};
 use sea_query_sqlx::SqlxBinder;
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, prelude::FromRow};
@@ -84,19 +84,22 @@ async fn products_create_failed<E: evento::Executor>(
     data: CreateFailed,
     _metadata: Metadata,
 ) -> anyhow::Result<()> {
-    // let lmdb = context.extract::<heed::Env>();
-    // let mut wtxn = lmdb.write_txn()?;
-    // let db: QueryProductDB = lmdb.create_database(&mut wtxn, Some("market-products"))?;
-    // let Some(mut product) = db.get(&wtxn, &context.event.aggregator_id)? else {
-    //     tracing::error!("QueryProduct {} not found", context.event.aggregator_id);
-    //
-    //     std::process::exit(1);
-    // };
-    //
-    // product.state = data.state;
-    // db.put(&mut wtxn, &context.event.aggregator_id, &product)?;
-    //
-    // wtxn.commit()?;
+    let pool = context.extract::<SqlitePool>();
+    let mut conn = pool.acquire().await?;
+    let statement = Query::update()
+        .table(QueryProductIden::Table)
+        .values([
+            (QueryProductIden::State, data.state.to_string().into()),
+            (
+                QueryProductIden::FailedReason,
+                data.failed_reason.to_owned().into(),
+            ),
+        ])
+        .and_where(Expr::col(QueryProductIden::Id).eq(context.event.aggregator_id.to_owned()))
+        .to_owned();
+
+    let (sql, values) = statement.build_sqlx(SqliteQueryBuilder);
+    sqlx::query_with(&sql, values).execute(&mut *conn).await?;
 
     Ok(())
 }
@@ -107,19 +110,16 @@ async fn products_created<E: evento::Executor>(
     data: Created,
     _metadata: Metadata,
 ) -> anyhow::Result<()> {
-    // let lmdb = context.extract::<heed::Env>();
-    // let mut wtxn = lmdb.write_txn()?;
-    // let db: QueryProductDB = lmdb.create_database(&mut wtxn, Some("market-products"))?;
-    // let Some(mut product) = db.get(&wtxn, &context.event.aggregator_id)? else {
-    //     tracing::error!("QueryProduct {} not found", context.event.aggregator_id);
-    //
-    //     std::process::exit(1);
-    // };
-    //
-    // product.state = data.state;
-    // db.put(&mut wtxn, &context.event.aggregator_id, &product)?;
-    //
-    // wtxn.commit()?;
+    let pool = context.extract::<SqlitePool>();
+    let mut conn = pool.acquire().await?;
+    let statement = Query::update()
+        .table(QueryProductIden::Table)
+        .values([(QueryProductIden::State, data.state.to_string().into())])
+        .and_where(Expr::col(QueryProductIden::Id).eq(context.event.aggregator_id.to_owned()))
+        .to_owned();
+
+    let (sql, values) = statement.build_sqlx(SqliteQueryBuilder);
+    sqlx::query_with(&sql, values).execute(&mut *conn).await?;
 
     Ok(())
 }
