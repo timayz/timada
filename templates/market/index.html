@@ -28,7 +28,7 @@
 
 <div class="products">
 {% for product in products.edges %}
-<div>{{ product.node.name }}</div>
+<div>{{ product.node.name }}:{{ product.node.state }}</div>
 {% endfor %}
 </div>
 {% endblock %}
