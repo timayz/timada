@@ -1,6 +1,6 @@
 [package]
 name = "timada"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "AGPL-3.0"
 
@@ -10,7 +10,6 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite"] }
 sqlx_migrator = { version = "0.18", features = ["postgres", "sqlite"] }
-# axum = "0.8"
 axum = { version = "0.8", features = ["macros"] }
 askama = "0.14"
 tracing = "0.1"
@@ -20,17 +19,17 @@ rust-embed = "8.7"
 mime_guess = "2.0"
 rust-i18n = "3.1"
 tower-livereload = "0.9"
-clap = { version =  "4.5", features = ["cargo"] }
+clap = { version = "4.5", features = ["cargo"] }
 config = "0.15"
 ulid = { version = "1.2", features = ["serde"] }
 tower-layer = "0.3"
 evento = { version = "1.0.0-alpha.14", features = ["postgres-migrator"] }
-timada-shared = { path = "./crates/shared", version = "0.2.0" }
-timada-market = { path = "./crates/market", version = "0.2.0" }
+timada-shared = { path = "./crates/shared", version = "0.2.1" }
+timada-market = { path = "./crates/market", version = "0.2.1" }
 
 [workspace]
-members = [ 
-  "crates/*",
+members = [
+	"crates/*",
 ]
 
 [profile.release]
@@ -38,4 +37,3 @@ codegen-units = 1
 panic = "abort"
 lto = true
 strip = true
-
