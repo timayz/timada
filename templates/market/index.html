@@ -5,7 +5,7 @@
   <input type="text" name="name" value="">
 </form>
 
-{% if let Some((id, ProductState::Checking)) = log %}
+{% if let Some((id, ProductState::Checking,_)) = log %}
 <p role="alert"
   class="log p-4 mb-4 text-sm text-blue-800 rounded-lg bg-blue-50 dark:bg-gray-800 dark:text-blue-400"
   ts-trigger="load delay 1s"
@@ -13,9 +13,9 @@
   ts-req-selector=".log">
     {{ "creating..."|t }}
 </p>
-{% else if let Some((_, ProductState::Failed(_,reason))) = log %}
+{% else if let Some((_, ProductState::Failed, reason)) = log %}
 <p class="log">{{ reason|t }}</p>
-{% else if let Some((_, ProductState::Ready)) = log %}
+{% else if let Some((_, ProductState::Ready, _)) = log %}
 <p class="log"
   ts-req="{{ crate::router::MARKET }}"
   ts-req-selector=".products"

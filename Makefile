@@ -1,4 +1,5 @@
 dev:
+	cargo run -- --log error,timada=debug,evento=debug migrate -c ./timada.toml
 	cargo watch -x 'run -- --log error,timada=debug,evento=debug serve -c ./timada.toml'
 
 tailwind:

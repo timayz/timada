@@ -1,4 +1,11 @@
 services:
+  db:
+    image: postgres:17.5-alpine
+    ports:
+      - 5432:5432
+    environment:
+        POSTGRES_PASSWORD: postgres
+
   timada-migrate:
     image: timayz/timada
     command: migrate -c /home/timada/config.toml
@@ -12,6 +19,8 @@ services:
       - standalone
     networks:
       - intranet
+    depends_on:
+      - db
       
   timada:
     image: timayz/timada
