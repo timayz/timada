@@ -2652,7 +2652,6 @@ dependencies = [
  "sqlx_migrator",
  "strum",
  "timada-shared",
- "tracing",
  "validator",
 ]
 

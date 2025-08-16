@@ -11,7 +11,7 @@ documentation = "https://docs.rs/timada-market"
 [dependencies]
 anyhow = "1.0"
 validator = { version = "0.20", features = ["derive"] }
-tracing = "0.1"
+# tracing = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 evento = { version = "1.0.0-alpha.14", features = ["postgres", "sqlite-migrator"] }
 sea-query = { version = "1.0.0-rc.1", default-features = false, features=["backend-sqlite", "derive", "audit"] }
