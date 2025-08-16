@@ -1,6 +1,6 @@
 [package]
 name = "timada-market"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "AGPL-3.0"
 publish = true
@@ -11,13 +11,12 @@ documentation = "https://docs.rs/timada-market"
 [dependencies]
 anyhow = "1.0"
 validator = { version = "0.20", features = ["derive"] }
-# tracing = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 evento = { version = "1.0.0-alpha.14", features = ["postgres", "sqlite-migrator"] }
-sea-query = { version = "1.0.0-rc.1", default-features = false, features=["backend-sqlite", "derive", "audit"] }
+sea-query = { version = "1.0.0-rc.1", default-features = false, features = ["backend-sqlite", "derive", "audit"] }
 sea-query-sqlx = { version = "0.8.0-rc.8", features = ["sqlx-sqlite", "runtime-tokio"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 async-trait = "0.1"
 strum = { version = "0.27", features = ["derive"] }
 sqlx_migrator = { version = "0.18", features = ["postgres", "sqlite"] }
-timada-shared = { path = "../shared", version = "0.2.0" }
+timada-shared = { path = "../shared", version = "0.2.1" }
