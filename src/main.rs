@@ -6,9 +6,9 @@ mod router;
 use axum_extra::TemplateConfig;
 use clap::{arg, command, Command};
 use config::Config;
-use heed::EnvOpenOptions;
 use serde::Deserialize;
-use sqlx::{any::install_default_drivers, migrate::MigrateDatabase};
+use sqlx::{migrate::MigrateDatabase, SqlitePool};
+use sqlx_migrator::Migrate as _;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 rust_i18n::i18n!("locales");
@@ -94,14 +94,15 @@ pub struct Serve {
     pub addr: String,
     pub region: String,
     pub assets_base_url: String,
+    pub data_dir: String,
     pub market: Market,
 }
 
 #[derive(Clone)]
 pub struct State {
-    pub market_executor: evento::sql::Sql<sqlx::Sqlite>,
     pub config: Serve,
-    pub lmdb: heed::Env,
+    pub market_executor: evento::Postgres,
+    pub market_db: SqlitePool,
 }
 
 pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
@@ -112,21 +113,15 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
         .build()?
         .try_deserialize()?;
 
-    let lmdb = unsafe {
-        EnvOpenOptions::new()
-            .map_size(10 * 1024 * 1024)
-            .max_dbs(3)
-            .open("target/tmp")?
-    };
-
-    let market_executor: evento::sql::Sql<sqlx::Sqlite> =
-        sqlx::SqlitePool::connect(&config.market.dsn).await?.into();
+    let market_executor: evento::Postgres = sqlx::PgPool::connect(&config.market.dsn).await?.into();
+    let market_db = sqlx::SqlitePool::connect(&format!("{}/market.db", &config.data_dir)).await?;
 
     timada_market::product::subscribe_command(&config.region)
         .run(&market_executor)
         .await?;
 
-    timada_market::product::subscribe_query_products(&config.region, &lmdb)?
+    timada_market::product::subscribe_query_products(&config.region)?
+        .data(market_db.clone())
         .run(&market_executor)
         .await?;
 
@@ -135,9 +130,9 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
     let mut app = router::create_router()
         .layer(TemplateConfig::new(&config.assets_base_url))
         .with_state(State {
-            market_executor,
             config,
-            lmdb,
+            market_executor,
+            market_db,
         });
 
     #[cfg(debug_assertions)]
@@ -154,6 +149,7 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
 
 #[derive(Deserialize)]
 struct Migrate {
+    pub data_dir: String,
     pub market: Market,
 }
 
@@ -165,29 +161,28 @@ pub async fn migrate(config_path: impl Into<String>) -> anyhow::Result<()> {
         .build()?
         .try_deserialize()?;
 
-    install_default_drivers();
-
-    sqlx::Any::create_database(&config.market.dsn).await?;
-
-    let (pool, schema) = match config
-        .market
-        .dsn
-        .split_once(":")
-        .expect("Invalid product dsn")
-        .0
-    {
-        "sqlite" => {
-            let pool = sqlx::Pool::<sqlx::Sqlite>::connect(&config.market.dsn).await?;
-            let schema = evento::sql::Sql::<sqlx::Sqlite>::get_schema();
-
-            (pool, schema)
-        }
-        name => panic!("'{name}' not supported, consider using SQLite"),
+    if let Err(err) = sqlx::Postgres::create_database(&config.market.dsn).await {
+        tracing::warn!("{err}");
     };
 
-    for statement in schema {
-        sqlx::query(&statement).execute(&pool).await?;
-    }
+    let pool = sqlx::PgPool::connect(&config.market.dsn).await?;
+    let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::Postgres>()?;
+    let mut conn = pool.acquire().await?;
+    evento_migrator
+        .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
+        .await?;
+
+    let dsn = format!("{}/market.db", config.data_dir);
+    if let Err(err) = sqlx::Sqlite::create_database(&dsn).await {
+        tracing::warn!("{err}");
+    };
+
+    let pool = sqlx::SqlitePool::connect(&dsn).await?;
+    let market_migrator = timada_market::migrator::new_market_migrator()?;
+    let mut conn = pool.acquire().await?;
+    market_migrator
+        .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
+        .await?;
 
     Ok(())
 }
