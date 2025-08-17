@@ -46,6 +46,11 @@ async fn main() -> anyhow::Result<()> {
                 .about("Create timada database")
                 .arg(arg!(-c --config <FILE> "path to configuration file").required(true)),
         )
+        .subcommand(
+            Command::new("reset")
+                .about("Reset timada database")
+                .arg(arg!(-c --config <FILE> "path to configuration file").required(true)),
+        )
         .get_matches();
 
     tracing_subscriber::registry()
@@ -63,16 +68,27 @@ async fn main() -> anyhow::Result<()> {
 
     match matches.subcommand() {
         Some(("serve", sub_matches)) => {
-            let config_path = sub_matches.get_one::<String>("config").expect("required");
-            if let Err(err) = serve(config_path).await {
+            let config = sub_matches.get_one::<String>("config").expect("required");
+            let config = expect_config(config);
+            if let Err(err) = serve(config).await {
                 tracing::error!("{err}");
 
                 std::process::exit(1);
             }
         }
         Some(("migrate", sub_matches)) => {
-            let config_path = sub_matches.get_one::<String>("config").expect("required");
-            if let Err(err) = migrate(config_path).await {
+            let config = sub_matches.get_one::<String>("config").expect("required");
+            let config = expect_config(config);
+            if let Err(err) = migrate(config).await {
+                tracing::error!("{err}");
+
+                std::process::exit(1);
+            }
+        }
+        Some(("reset", sub_matches)) => {
+            let config = sub_matches.get_one::<String>("config").expect("required");
+            let config = expect_config(config);
+            if let Err(err) = reset(config).await {
                 tracing::error!("{err}");
 
                 std::process::exit(1);
@@ -82,6 +98,25 @@ async fn main() -> anyhow::Result<()> {
     };
 
     Ok(())
+}
+
+fn expect_config<E: serde::de::DeserializeOwned>(path: &str) -> E {
+    match get_config::<E>(path) {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::error!("{err}");
+
+            std::process::exit(1);
+        }
+    }
+}
+
+fn get_config<E: serde::de::DeserializeOwned>(path: &str) -> Result<E, config::ConfigError> {
+    Config::builder()
+        .add_source(config::File::with_name(path).required(true))
+        .add_source(config::Environment::with_prefix(env!("CARGO_PKG_NAME")))
+        .build()?
+        .try_deserialize()
 }
 
 #[derive(Deserialize, Clone)]
@@ -105,14 +140,7 @@ pub struct State {
     pub market_db: SqlitePool,
 }
 
-pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
-    let config_path = config_path.into();
-    let config: Serve = Config::builder()
-        .add_source(config::File::with_name(&config_path).required(true))
-        .add_source(config::Environment::with_prefix(env!("CARGO_PKG_NAME")))
-        .build()?
-        .try_deserialize()?;
-
+pub async fn serve(config: Serve) -> anyhow::Result<()> {
     let mut executors: Vec<evento::Evento> = vec![];
     for dsn in [&config.market.dsn] {
         if dsn.starts_with("sqlite:") {
@@ -169,14 +197,7 @@ struct Migrate {
     pub market: Market,
 }
 
-pub async fn migrate(config_path: impl Into<String>) -> anyhow::Result<()> {
-    let config_path = config_path.into();
-    let config: Migrate = Config::builder()
-        .add_source(config::File::with_name(&config_path).required(true))
-        .add_source(config::Environment::with_prefix(env!("CARGO_PKG_NAME")))
-        .build()?
-        .try_deserialize()?;
-
+async fn migrate(config: Migrate) -> anyhow::Result<()> {
     install_default_drivers();
 
     for dsn in [&config.market.dsn] {
@@ -223,4 +244,27 @@ pub async fn migrate(config_path: impl Into<String>) -> anyhow::Result<()> {
         .await?;
 
     Ok(())
+}
+
+async fn reset(config: Migrate) -> anyhow::Result<()> {
+    #[cfg(debug_assertions)]
+    {
+        install_default_drivers();
+
+        for dsn in [&config.market.dsn] {
+            if let Err(err) = sqlx::any::Any::drop_database(dsn).await {
+                tracing::warn!("{err}");
+            };
+        }
+
+        let dsn = format!("{}/market_query.db", config.data_dir);
+        if let Err(err) = sqlx::Sqlite::drop_database(&dsn).await {
+            tracing::warn!("{err}");
+        };
+
+        migrate(config).await
+    }
+
+    #[cfg(not(debug_assertions))]
+    Err(anyhow::anyhow!("reset is disabled for production"))
 }

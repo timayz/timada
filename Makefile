@@ -5,6 +5,9 @@ dev:
 tailwind:
 	tailwindcss -i ./tailwind.css -o ./assets/main.css --watch
 
+reset:
+	cargo run -- --log error,timada=debug,evento=debug reset -c ./timada.toml
+
 up:
 	docker compose up -d --remove-orphans
 
