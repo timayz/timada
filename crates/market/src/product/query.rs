@@ -46,7 +46,7 @@ impl evento::sql::Bind for QueryProduct {
     fn values(
         cursor: <<Self as evento::sql::Bind>::Cursor as evento::cursor::Cursor>::T,
     ) -> Self::V {
-        [cursor.c.into(), cursor.i.to_string().into()]
+        [cursor.c.into(), cursor.i.into()]
     }
 }
 
@@ -66,7 +66,7 @@ async fn products_create_requested<E: evento::Executor>(
             QueryProductIden::State,
         ])
         .values_panic([
-            context.event.aggregator_id.to_string().into(),
+            context.event.aggregator_id.to_owned().into(),
             data.name.into(),
             data.state.to_string().into(),
         ])
