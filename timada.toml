@@ -4,4 +4,4 @@ region = "eu-west-3"
 data_dir = "target/tmp"
 
 [market]
-dsn = "postgres://postgres:postgres@localhost:5432/market"
+dsn = "sqlite:./target/market.db"
