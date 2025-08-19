@@ -1,6 +1,6 @@
 services:
   traefik:
-    image: "traefik:v3.0"
+    image: "traefik:v3.5"
     ports:
       - "80:80"
       - "443:443"
@@ -14,8 +14,8 @@ services:
     volumes:
       # - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "$XDG_RUNTIME_DIR/docker.sock:/var/run/docker.sock:ro"
-      - ".docker/traefik/traefik.yaml:/etc/traefik/traefik.yaml"
-      - ".docker/traefik/dynamic.yaml:/etc/traefik/dynamic.yaml"
+      - ".docker/traefik/traefik.yaml:/etc/traefik/traefik.yml"
+      - ".docker/traefik/dynamic.yaml:/etc/traefik/dynamic.yml"
       - ".docker/traefik/certs:/etc/traefik/certs"
     networks:
       - intranet
@@ -203,7 +203,9 @@ services:
       - intranet
 
   timada-migrate:
-    image: timayz/timada
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     command: migrate -c /home/timada/config.toml
     volumes:
       - type: volume
@@ -220,8 +222,10 @@ services:
       - intranet
 
   timada:
-    image: timayz/timada
-    command: serve -c /home/timada/config.toml
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: --log error serve -c /home/timada/config.toml
     volumes:
       - type: volume
         source: timada-data
@@ -237,6 +241,16 @@ services:
       - intranet
     depends_on:
       - timada-migrate
+    ports:
+      - 3000:3000
+    labels:
+      - "traefik.enable=true"
+
+      - "traefik.http.routers.timada.rule=Host(`st.timada.localhost`)"
+      - "traefik.http.routers.timada.tls=true"
+      - "traefik.http.routers.timada.entrypoints=https"
+      - "traefik.http.routers.timada.service=timada"
+      - "traefik.http.services.timada.loadbalancer.server.port=3000"
 
 volumes:
   timada-data:

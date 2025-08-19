@@ -47,8 +47,8 @@ errors:
 access_rules:
   matching_strategy: glob
   repositories:
-    - file:///etc/config/oathkeeper/rules/default.yml
-    - file:///etc/config/oathkeeper/rules/starter.yml 
+    - file:///etc/config/oathkeeper/rules/default.yaml
+    - file:///etc/config/oathkeeper/rules/standalone.yaml
 
 authenticators:
   anonymous:

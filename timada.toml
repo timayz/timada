@@ -1,4 +1,4 @@
-addr = "127.0.0.1:3000"
+addr = "0.0.0.0:3000"
 assets_base_url = "/assets"
 region = "eu-west-3"
 data_dir = "target/tmp"
