@@ -4,4 +4,4 @@ region = "eu-west-3"
 data_dir = "/var/lib/timada"
 
 [market]
-dsn = "postgres://postgres:postgres@db:5432/market"
+dsn = "sqlite:///var/lib/timada/market.db"

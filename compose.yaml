@@ -1,10 +1,204 @@
 services:
-  db:
-    image: postgres:17.5-alpine
+  traefik:
+    image: "traefik:v3.0"
     ports:
-      - 5432:5432
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`traefik.timada.localhost`)"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.entrypoints=https"
+      - "traefik.http.routers.api.service=api@internal"
+    volumes:
+      # - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "$XDG_RUNTIME_DIR/docker.sock:/var/run/docker.sock:ro"
+      - ".docker/traefik/traefik.yaml:/etc/traefik/traefik.yaml"
+      - ".docker/traefik/dynamic.yaml:/etc/traefik/dynamic.yaml"
+      - ".docker/traefik/certs:/etc/traefik/certs"
+    networks:
+      - intranet
+
+  kratos-migrate:
+    image: oryd/kratos:v1.3
     environment:
-        POSTGRES_PASSWORD: postgres
+      - DSN=sqlite:///var/lib/sqlite/kratos.db?_fk=true&mode=rwc
+    volumes:
+      - type: volume
+        source: kratos-data
+        target: /var/lib/sqlite
+        read_only: false
+      - type: bind
+        source: .docker/ory/kratos.yaml
+        target: /etc/config/kratos/kratos.yaml
+    command: -c /etc/config/kratos/kratos.yaml migrate sql -e --yes
+    restart: on-failure
+    networks:
+      - intranet
+
+  kratos:
+    depends_on:
+      - kratos-migrate
+    image: oryd/kratos:v1.3
+    labels:
+      - "traefik.enable=true"
+
+      - "traefik.http.middlewares.kratos-stripprefix.stripprefix.prefixes=/kratos"
+      - "traefik.http.routers.kratos.rule=Host(`timada.localhost`) && PathPrefix(`/kratos`)"
+      - "traefik.http.routers.kratos.tls=true"
+      - "traefik.http.routers.kratos.entrypoints=https"
+      - "traefik.http.routers.kratos.service=kratos"
+      - "traefik.http.routers.kratos.middlewares=kratos-stripprefix"
+
+      - "traefik.http.services.kratos.loadbalancer.server.port=4433"
+
+      # - "traefik.http.routers.kratos-admin.rule=Host(`admin-kratos.timada.localhost`)"
+      # - "traefik.http.routers.kratos-admin.tls=true"
+      # - "traefik.http.routers.kratos-admin.entrypoints=https"
+      # - "traefik.http.routers.kratos-admin.service=kratos-admin"
+      #
+      # - "traefik.http.services.kratos-admin.loadbalancer.server.port=4434"
+    restart: unless-stopped
+    environment:
+      - DSN=sqlite:///var/lib/sqlite/kratos.db?_fk=true
+      - LOG_LEVEL=trace
+    command: serve -c /etc/config/kratos/kratos.yaml --dev --watch-courier
+    volumes:
+      - type: volume
+        source: kratos-data
+        target: /var/lib/sqlite
+        read_only: false
+      - type: bind
+        source: .docker/ory/kratos.yaml
+        target: /etc/config/kratos/kratos.yaml
+      - type: bind
+        source: .docker/ory/schemas/default.json
+        target: /etc/config/kratos/default.schema.json
+      - type: bind
+        source: .docker/ory/schemas/organization.json
+        target: /etc/config/kratos/organization.schema.json
+    networks:
+      - intranet
+
+  oathkeeper:
+    image: oryd/oathkeeper:v0.40
+    labels:
+      - "traefik.enable=true"
+
+      - "traefik.http.routers.oathkeeper.rule=Host(`timada.localhost`)"
+      - "traefik.http.routers.oathkeeper.tls=true"
+      - "traefik.http.routers.oathkeeper.entrypoints=https"
+      - "traefik.http.routers.oathkeeper.service=oathkeeper"
+      - "traefik.http.services.oathkeeper.loadbalancer.server.port=4455"
+
+      # - "traefik.http.middlewares.oathkeeper-ws-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+      # - "traefik.http.middlewares.oathkeeper-ws-headers.headers.customrequestheaders.Connection=keep-alive, Upgrade"
+      # - "traefik.http.middlewares.oathkeeper-ws-headers.headers.customrequestheaders.Upgrade=WebSocket"
+      # - "traefik.http.routers.oathkeeper-ws.rule=Host(`ws.timada.localhost`)"
+      # - "traefik.http.routers.oathkeeper-ws.tls=true"
+      # - "traefik.http.routers.oathkeeper-ws.entrypoints=https"
+      # - "traefik.http.routers.oathkeeper-ws.service=oathkeeper"
+      # - "traefik.http.routers.oathkeeper-ws.middlewares=oathkeeper-ws-headers"
+      # - "traefik.http.services.oathkeeper-ws.loadbalancer.server.port=4455"
+
+      # - "traefik.http.routers.oathkeeper-admin.rule=Host(`admin.oathkeeper.localhost`)"
+      # - "traefik.http.routers.oathkeeper-admin.tls=true"
+      # - "traefik.http.routers.oathkeeper-admin.entrypoints=https"
+      # - "traefik.http.routers.oathkeeper-admin.service=oathkeeper-admin"
+      # - "traefik.http.services.oathkeeper-admin.loadbalancer.server.port=4456"
+    depends_on:
+      - kratos
+    command: serve proxy -c "/etc/config/oathkeeper/oathkeeper.yaml"
+    environment:
+      - LOG_LEVEL=debug
+    restart: on-failure
+    ports:
+      - "4456:4456"
+    volumes:
+      - .docker/ory/oathkeeper.yaml:/etc/config/oathkeeper/oathkeeper.yaml
+      - .docker/ory/id_token.jwks.json:/etc/config/oathkeeper/id_token.jwks.json
+      - .docker/ory/rules:/etc/config/oathkeeper/rules
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - intranet
+
+  keto-migrate:
+    image: oryd/keto:v0.14
+    volumes:
+      - type: volume
+        source: keto-data
+        target: /var/lib/sqlite
+        read_only: false
+      - type: bind
+        source: .docker/ory/keto.yaml
+        target: /home/ory/keto.yaml
+    environment:
+      - LOG_LEVEL=debug
+      - DSN=sqlite:///var/lib/sqlite/keto.db?_fk=true&mode=rwc
+    command: -c "/home/ory/keto.yaml" migrate up -y
+    restart: on-failure
+    networks:
+      - intranet
+
+  keto:
+    image: oryd/keto:v0.14
+    labels:
+      - "traefik.enable=true"
+
+      - "traefik.http.routers.keto.rule=Host(`keto.timada.localhost`)"
+      - "traefik.http.routers.keto.tls=true"
+      - "traefik.http.routers.keto.entrypoints=https"
+      - "traefik.http.routers.keto.service=keto"
+
+      - "traefik.http.services.keto.loadbalancer.server.port=4466"
+
+      # - "traefik.http.routers.keto-admin.rule=Host(`admin-keto.timada.localhost`)"
+      # - "traefik.http.routers.keto-admin.tls=true"
+      # - "traefik.http.routers.keto-admin.entrypoints=https"
+      # - "traefik.http.routers.keto-admin.service=keto-admin"
+      #
+      # - "traefik.http.services.keto-admin.loadbalancer.server.port=4467"
+    depends_on:
+      - keto-migrate
+    command: serve -c /home/ory/keto.yaml
+    environment:
+      - LOG_LEVEL=debug
+      - PORT=4466
+      - DSN=sqlite:///var/lib/sqlite/keto.db?_fk=true
+    restart: on-failure
+    volumes:
+      - type: volume
+        source: keto-data
+        target: /var/lib/sqlite
+        read_only: false
+      - type: bind
+        source: .docker/ory/keto.yaml
+        target: /home/ory/keto.yaml
+    networks:
+      - intranet
+
+  mailslurper:
+    image: oryd/mailslurper:latest-smtps
+    labels:
+      - "traefik.enable=true"
+
+      - "traefik.http.routers.mailslurper.rule=Host(`mailslurper.timada.localhost`)"
+      - "traefik.http.routers.mailslurper.tls=true"
+      - "traefik.http.routers.mailslurper.entrypoints=https"
+      - "traefik.http.routers.mailslurper.service=mailslurper"
+
+      - "traefik.http.services.mailslurper.loadbalancer.server.port=4436"
+
+      # - "traefik.http.routers.mailslurper-api.rule=Host(`api-mailslurper.timada.localhost`)"
+      # - "traefik.http.routers.mailslurper-api.tls=true"
+      # - "traefik.http.routers.mailslurper-api.entrypoints=https"
+      # - "traefik.http.routers.mailslurper-api.service=mailslurper-api"
+      #
+      # - "traefik.http.services.mailslurper-api.loadbalancer.server.port=4437"
+    ports:
+      - "4437:4437"
     networks:
       - intranet
 
@@ -12,22 +206,30 @@ services:
     image: timayz/timada
     command: migrate -c /home/timada/config.toml
     volumes:
-      - timada:/var/lib/timada
-      - timada.standalone.toml:/home/timada/config.toml
+      - type: volume
+        source: timada-data
+        target: /var/lib/timada
+        read_only: false
+      - type: bind
+        source: timada.standalone.toml
+        target: /home/timada/config.toml
     restart: on-failure
     profiles:
       - standalone
     networks:
       - intranet
-    depends_on:
-      - db
-      
+
   timada:
     image: timayz/timada
     command: serve -c /home/timada/config.toml
     volumes:
-      - timada:/var/lib/timada
-      - timada.standalone.toml:/home/timada/config.toml
+      - type: volume
+        source: timada-data
+        target: /var/lib/timada
+        read_only: false
+      - type: bind
+        source: timada.standalone.toml
+        target: /home/timada/config.toml
     restart: on-failure
     profiles:
       - standalone
@@ -35,10 +237,11 @@ services:
       - intranet
     depends_on:
       - timada-migrate
-      - db
 
 volumes:
-  timada:
+  timada-data:
+  kratos-data:
+  keto-data:
 
 networks:
   intranet:
