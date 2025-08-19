@@ -29,6 +29,7 @@
             cargo-watch
             tailwindcss
             playwright-test
+            mkcert
             (rust-bin.stable.latest.default.override {
               extensions = [ "rust-src" "rust-analyzer" ];
             })

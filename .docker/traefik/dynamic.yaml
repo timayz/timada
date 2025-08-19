@@ -1,0 +1,9 @@
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/timada.crt
+      keyFile: /etc/traefik/certs/timada.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/timada.crt
+        keyFile: /etc/traefik/certs/timada.key

@@ -8,6 +8,11 @@ tailwind:
 reset:
 	cargo run -- --log error,timada=debug,evento=debug reset -c ./timada.toml
 
+cert:
+	mkdir -p .docker/traefik/certs
+	mkcert -install
+	mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt timada.localhost standalone.timada.localhost *.timada.localhost
+
 up:
 	docker compose up -d --remove-orphans
 
@@ -15,7 +20,7 @@ stop:
 	docker compose stop
 
 down:
-	docker compose down -v --remove-orphans
+	docker compose down -v --rmi local --remove-orphans
 
 lint:
 	cargo clippy --fix --all-features -- -D warnings
