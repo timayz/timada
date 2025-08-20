@@ -21,7 +21,7 @@
 - id: "timada:root"
   upstream:
     preserve_host: true
-    url: "http://timada:3000"
+    url: "http://host.docker.internal:3000"
   match:
     url: "https://timada.localhost/<**>"
     methods:

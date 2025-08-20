@@ -7,18 +7,19 @@ services:
       - "8080:8080"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`traefik.timada.localhost`)"
+      - "traefik.http.routers.api.rule=Host(`traefik.localhost`)"
       - "traefik.http.routers.api.tls=true"
       - "traefik.http.routers.api.entrypoints=https"
       - "traefik.http.routers.api.service=api@internal"
     volumes:
-      # - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "$XDG_RUNTIME_DIR/docker.sock:/var/run/docker.sock:ro"
+      - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock:ro"
       - ".docker/traefik/traefik.yaml:/etc/traefik/traefik.yml"
       - ".docker/traefik/dynamic.yaml:/etc/traefik/dynamic.yml"
       - ".docker/traefik/certs:/etc/traefik/certs"
     networks:
       - intranet
+    environment:
+      - DOCKER_SOCK_FILE=/var/run/docker.sock
 
   kratos-migrate:
     image: oryd/kratos:v1.3
@@ -43,22 +44,13 @@ services:
     image: oryd/kratos:v1.3
     labels:
       - "traefik.enable=true"
-
       - "traefik.http.middlewares.kratos-stripprefix.stripprefix.prefixes=/kratos"
       - "traefik.http.routers.kratos.rule=Host(`timada.localhost`) && PathPrefix(`/kratos`)"
       - "traefik.http.routers.kratos.tls=true"
       - "traefik.http.routers.kratos.entrypoints=https"
       - "traefik.http.routers.kratos.service=kratos"
       - "traefik.http.routers.kratos.middlewares=kratos-stripprefix"
-
       - "traefik.http.services.kratos.loadbalancer.server.port=4433"
-
-      # - "traefik.http.routers.kratos-admin.rule=Host(`admin-kratos.timada.localhost`)"
-      # - "traefik.http.routers.kratos-admin.tls=true"
-      # - "traefik.http.routers.kratos-admin.entrypoints=https"
-      # - "traefik.http.routers.kratos-admin.service=kratos-admin"
-      #
-      # - "traefik.http.services.kratos-admin.loadbalancer.server.port=4434"
     restart: unless-stopped
     environment:
       - DSN=sqlite:///var/lib/sqlite/kratos.db?_fk=true
@@ -85,36 +77,17 @@ services:
     image: oryd/oathkeeper:v0.40
     labels:
       - "traefik.enable=true"
-
       - "traefik.http.routers.oathkeeper.rule=Host(`timada.localhost`)"
       - "traefik.http.routers.oathkeeper.tls=true"
       - "traefik.http.routers.oathkeeper.entrypoints=https"
       - "traefik.http.routers.oathkeeper.service=oathkeeper"
       - "traefik.http.services.oathkeeper.loadbalancer.server.port=4455"
-
-      # - "traefik.http.middlewares.oathkeeper-ws-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
-      # - "traefik.http.middlewares.oathkeeper-ws-headers.headers.customrequestheaders.Connection=keep-alive, Upgrade"
-      # - "traefik.http.middlewares.oathkeeper-ws-headers.headers.customrequestheaders.Upgrade=WebSocket"
-      # - "traefik.http.routers.oathkeeper-ws.rule=Host(`ws.timada.localhost`)"
-      # - "traefik.http.routers.oathkeeper-ws.tls=true"
-      # - "traefik.http.routers.oathkeeper-ws.entrypoints=https"
-      # - "traefik.http.routers.oathkeeper-ws.service=oathkeeper"
-      # - "traefik.http.routers.oathkeeper-ws.middlewares=oathkeeper-ws-headers"
-      # - "traefik.http.services.oathkeeper-ws.loadbalancer.server.port=4455"
-
-      # - "traefik.http.routers.oathkeeper-admin.rule=Host(`admin.oathkeeper.localhost`)"
-      # - "traefik.http.routers.oathkeeper-admin.tls=true"
-      # - "traefik.http.routers.oathkeeper-admin.entrypoints=https"
-      # - "traefik.http.routers.oathkeeper-admin.service=oathkeeper-admin"
-      # - "traefik.http.services.oathkeeper-admin.loadbalancer.server.port=4456"
     depends_on:
       - kratos
     command: serve proxy -c "/etc/config/oathkeeper/oathkeeper.yaml"
     environment:
       - LOG_LEVEL=debug
     restart: on-failure
-    ports:
-      - "4456:4456"
     volumes:
       - .docker/ory/oathkeeper.yaml:/etc/config/oathkeeper/oathkeeper.yaml
       - .docker/ory/id_token.jwks.json:/etc/config/oathkeeper/id_token.jwks.json
@@ -146,20 +119,11 @@ services:
     image: oryd/keto:v0.14
     labels:
       - "traefik.enable=true"
-
       - "traefik.http.routers.keto.rule=Host(`keto.timada.localhost`)"
       - "traefik.http.routers.keto.tls=true"
       - "traefik.http.routers.keto.entrypoints=https"
       - "traefik.http.routers.keto.service=keto"
-
       - "traefik.http.services.keto.loadbalancer.server.port=4466"
-
-      # - "traefik.http.routers.keto-admin.rule=Host(`admin-keto.timada.localhost`)"
-      # - "traefik.http.routers.keto-admin.tls=true"
-      # - "traefik.http.routers.keto-admin.entrypoints=https"
-      # - "traefik.http.routers.keto-admin.service=keto-admin"
-      #
-      # - "traefik.http.services.keto-admin.loadbalancer.server.port=4467"
     depends_on:
       - keto-migrate
     command: serve -c /home/ory/keto.yaml
@@ -183,12 +147,10 @@ services:
     image: oryd/mailslurper:latest-smtps
     labels:
       - "traefik.enable=true"
-
       - "traefik.http.routers.mailslurper.rule=Host(`mailslurper.timada.localhost`)"
       - "traefik.http.routers.mailslurper.tls=true"
       - "traefik.http.routers.mailslurper.entrypoints=https"
       - "traefik.http.routers.mailslurper.service=mailslurper"
-
       - "traefik.http.services.mailslurper.loadbalancer.server.port=4436"
 
       # - "traefik.http.routers.mailslurper-api.rule=Host(`api-mailslurper.timada.localhost`)"
@@ -203,9 +165,7 @@ services:
       - intranet
 
   timada-migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
+    build: .
     command: migrate -c /home/timada/config.toml
     volumes:
       - type: volume
@@ -222,9 +182,7 @@ services:
       - intranet
 
   timada:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
+    build: .
     command: --log error serve -c /home/timada/config.toml
     volumes:
       - type: volume
@@ -241,16 +199,6 @@ services:
       - intranet
     depends_on:
       - timada-migrate
-    ports:
-      - 3000:3000
-    labels:
-      - "traefik.enable=true"
-
-      - "traefik.http.routers.timada.rule=Host(`st.timada.localhost`)"
-      - "traefik.http.routers.timada.tls=true"
-      - "traefik.http.routers.timada.entrypoints=https"
-      - "traefik.http.routers.timada.service=timada"
-      - "traefik.http.services.timada.loadbalancer.server.port=3000"
 
 volumes:
   timada-data:
