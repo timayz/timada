@@ -5,7 +5,7 @@ use axum::{
     Form,
 };
 use timada_market::product::{CreateInput, Product, ProductState, QueryProduct};
-use timada_shared::Metadata;
+use timada_shared::RequestMetadata;
 
 #[derive(askama::Template)]
 #[template(path = "market/index.html")]
@@ -29,7 +29,7 @@ pub async fn index(
 pub async fn create(
     html: Template<IndexTemplate>,
     State(state): State<crate::State>,
-    metadata: Metadata,
+    metadata: RequestMetadata,
     Form(input): Form<CreateInput>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
     let id = timada_market::product::create(input)?

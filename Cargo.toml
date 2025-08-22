@@ -23,7 +23,7 @@ clap = { version = "4.5", features = ["cargo"] }
 config = "0.15"
 ulid = { version = "1.2", features = ["serde"] }
 tower-layer = "0.3"
-evento = { version = "1.0.0-alpha.15", features = ["postgres-migrator", "sqlite-migrator", "mysql-migrator"] }
+evento = { version = "1.0.0-alpha.16", features = ["postgres-migrator", "sqlite-migrator", "mysql-migrator"] }
 timada-shared = { path = "./crates/shared", version = "0.2.1" }
 timada-market = { path = "./crates/market", version = "0.2.1" }
 

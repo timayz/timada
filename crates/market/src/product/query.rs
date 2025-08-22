@@ -1,10 +1,12 @@
-use crate::product::{CreateFailed, CreateRequested, Created, Product, ProductState};
+use crate::{
+    RequestEvent,
+    product::{CreateFailed, CreateRequested, Created, Product, ProductState},
+};
 use evento::{AggregatorName, SubscribeBuilder, sql::Reader};
 use sea_query::{Expr, ExprTrait, Query, SqliteQueryBuilder};
 use sea_query_sqlx::SqlxBinder;
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, prelude::FromRow};
-use timada_shared::Metadata;
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, FromRow)]
 #[sea_query::enum_def]
@@ -53,8 +55,7 @@ impl evento::sql::Bind for QueryProduct {
 #[evento::handler(Product)]
 async fn products_create_requested<E: evento::Executor>(
     context: &evento::Context<'_, E>,
-    data: CreateRequested,
-    _metadata: Metadata,
+    event: RequestEvent<CreateRequested>,
 ) -> anyhow::Result<()> {
     let pool = context.extract::<SqlitePool>();
     let mut conn = pool.acquire().await?;
@@ -66,9 +67,9 @@ async fn products_create_requested<E: evento::Executor>(
             QueryProductIden::State,
         ])
         .values_panic([
-            context.event.aggregator_id.to_owned().into(),
-            data.name.into(),
-            data.state.to_string().into(),
+            event.aggregator_id.to_owned().into(),
+            event.data.name.into(),
+            event.data.state.to_string().into(),
         ])
         .to_owned();
 
@@ -81,21 +82,20 @@ async fn products_create_requested<E: evento::Executor>(
 #[evento::handler(Product)]
 async fn products_create_failed<E: evento::Executor>(
     context: &evento::Context<'_, E>,
-    data: CreateFailed,
-    _metadata: Metadata,
+    event: RequestEvent<CreateFailed>,
 ) -> anyhow::Result<()> {
     let pool = context.extract::<SqlitePool>();
     let mut conn = pool.acquire().await?;
     let statement = Query::update()
         .table(QueryProductIden::Table)
         .values([
-            (QueryProductIden::State, data.state.to_string().into()),
+            (QueryProductIden::State, event.data.state.to_string().into()),
             (
                 QueryProductIden::FailedReason,
-                data.failed_reason.to_owned().into(),
+                event.data.failed_reason.to_owned().into(),
             ),
         ])
-        .and_where(Expr::col(QueryProductIden::Id).eq(context.event.aggregator_id.to_owned()))
+        .and_where(Expr::col(QueryProductIden::Id).eq(event.aggregator_id.to_owned()))
         .to_owned();
 
     let (sql, values) = statement.build_sqlx(SqliteQueryBuilder);
@@ -107,15 +107,14 @@ async fn products_create_failed<E: evento::Executor>(
 #[evento::handler(Product)]
 async fn products_created<E: evento::Executor>(
     context: &evento::Context<'_, E>,
-    data: Created,
-    _metadata: Metadata,
+    event: RequestEvent<Created>,
 ) -> anyhow::Result<()> {
     let pool = context.extract::<SqlitePool>();
     let mut conn = pool.acquire().await?;
     let statement = Query::update()
         .table(QueryProductIden::Table)
-        .values([(QueryProductIden::State, data.state.to_string().into())])
-        .and_where(Expr::col(QueryProductIden::Id).eq(context.event.aggregator_id.to_owned()))
+        .values([(QueryProductIden::State, event.data.state.to_string().into())])
+        .and_where(Expr::col(QueryProductIden::Id).eq(event.aggregator_id.to_owned()))
         .to_owned();
 
     let (sql, values) = statement.build_sqlx(SqliteQueryBuilder);

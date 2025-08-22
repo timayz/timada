@@ -1,15 +1,14 @@
 mod command;
 mod query;
 
-use evento::{AggregatorName, EventData};
+use evento::AggregatorName;
 use serde::{Deserialize, Serialize};
 use strum::Display;
-use timada_shared::Metadata;
 
 pub use command::*;
 pub use query::*;
 
-type ProductEvent<D> = EventData<D, Metadata>;
+use crate::RequestEvent;
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, sqlx::Type, Display)]
 #[sqlx(type_name = "product_state", rename_all = "kebab-case")]
@@ -32,7 +31,7 @@ pub struct Product {
 impl Product {
     async fn create_requested(
         &mut self,
-        event: ProductEvent<CreateRequested>,
+        event: RequestEvent<CreateRequested>,
     ) -> anyhow::Result<()> {
         self.name = event.data.name;
         self.state = event.data.state;
@@ -40,13 +39,13 @@ impl Product {
         Ok(())
     }
 
-    async fn create_failed(&mut self, event: ProductEvent<CreateFailed>) -> anyhow::Result<()> {
+    async fn create_failed(&mut self, event: RequestEvent<CreateFailed>) -> anyhow::Result<()> {
         self.state = event.data.state;
 
         Ok(())
     }
 
-    async fn created(&mut self, event: ProductEvent<Created>) -> anyhow::Result<()> {
+    async fn created(&mut self, event: RequestEvent<Created>) -> anyhow::Result<()> {
         self.state = event.data.state;
 
         Ok(())
@@ -59,12 +58,12 @@ pub struct CreateRequested {
     pub state: ProductState,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorName)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, AggregatorName)]
 pub struct Created {
     pub state: ProductState,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorName)]
+#[derive(Default, Debug, Serialize, Deserialize, PartialEq, AggregatorName)]
 pub struct CreateFailed {
     pub state: ProductState,
     pub failed_reason: String,
