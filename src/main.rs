@@ -85,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
+        #[cfg(debug_assertions)]
         Some(("reset", sub_matches)) => {
             let config = sub_matches.get_one::<String>("config").expect("required");
             let config = expect_config(config);
@@ -93,6 +94,12 @@ async fn main() -> anyhow::Result<()> {
 
                 std::process::exit(1);
             }
+        }
+        #[cfg(not(debug_assertions))]
+        Some(("reset", _sub_matches)) => {
+            tracing::error!("reset command not allow in prodoction");
+
+            std::process::exit(1);
         }
         _ => unreachable!("Exhausted list of subcommands and subcommand_required prevents `None`"),
     };
@@ -123,7 +130,9 @@ fn get_config<E: serde::de::DeserializeOwned>(path: &str) -> Result<E, config::C
 pub struct Serve {
     pub addr: String,
     pub region: String,
+    #[serde(rename = "assets-base-url")]
     pub assets_base_url: String,
+    #[serde(rename = "data-dir")]
     pub data_dir: String,
     pub dsn: String,
 }
@@ -147,9 +156,9 @@ pub async fn serve(config: Serve) -> anyhow::Result<()> {
         executor.into()
     } else {
         anyhow::bail!(
-            "{} not supported, consider using sqlite, mysql or postgres",
+            "{} not supported, consider using Sqlite, MySql or Postgres",
             config.dsn
-        );
+        )
     };
 
     let query_db =
@@ -188,6 +197,7 @@ pub async fn serve(config: Serve) -> anyhow::Result<()> {
 
 #[derive(Deserialize)]
 struct Migrate {
+    #[serde(rename = "data-dir")]
     pub data_dir: String,
     pub dsn: String,
 }
@@ -206,22 +216,25 @@ async fn migrate(config: Migrate) -> anyhow::Result<()> {
         evento_migrator
             .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
             .await?;
-    }
-    if config.dsn.starts_with("mysql:") {
+    } else if config.dsn.starts_with("mysql:") {
         let pool = sqlx::MySqlPool::connect(&config.dsn).await?;
         let mut conn = pool.acquire().await?;
         let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::MySql>()?;
         evento_migrator
             .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
             .await?;
-    }
-    if config.dsn.starts_with("postgres:") {
+    } else if config.dsn.starts_with("postgres:") {
         let pool = sqlx::PgPool::connect(&config.dsn).await?;
         let mut conn = pool.acquire().await?;
         let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::Postgres>()?;
         evento_migrator
             .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
             .await?;
+    } else {
+        anyhow::bail!(
+            "{} not supported, consider using Sqlite, MySql or Postgres",
+            config.dsn
+        )
     }
 
     let dsn = format!("{}/query.sqlite3", config.data_dir);
@@ -240,23 +253,18 @@ async fn migrate(config: Migrate) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(debug_assertions)]
 async fn reset(config: Migrate) -> anyhow::Result<()> {
-    #[cfg(debug_assertions)]
-    {
-        install_default_drivers();
+    install_default_drivers();
 
-        if let Err(err) = sqlx::any::Any::drop_database(&config.dsn).await {
-            tracing::warn!("{err}");
-        };
+    if let Err(err) = sqlx::any::Any::drop_database(&config.dsn).await {
+        tracing::warn!("{err}");
+    };
 
-        let dsn = format!("{}/query.sqlite3", config.data_dir);
-        if let Err(err) = sqlx::Sqlite::drop_database(&dsn).await {
-            tracing::warn!("{err}");
-        };
+    let dsn = format!("{}/query.sqlite3", config.data_dir);
+    if let Err(err) = sqlx::Sqlite::drop_database(&dsn).await {
+        tracing::warn!("{err}");
+    };
 
-        migrate(config).await
-    }
-
-    #[cfg(not(debug_assertions))]
-    Err(anyhow::anyhow!("reset is disabled for production"))
+    migrate(config).await
 }

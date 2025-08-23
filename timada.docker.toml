@@ -1,5 +1,5 @@
 addr = "0.0.0.0:3000"
-assets_base_url = "/assets"
+assets-base-url = "/assets"
 region = "eu-west-3"
-data_dir = "/var/lib/timada"
+data-dir = "/var/lib/timada"
 dsn = "sqlite:///var/lib/timada/evento.sqlite3"
