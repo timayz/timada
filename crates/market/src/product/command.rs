@@ -1,4 +1,4 @@
-use evento::{AggregatorName, SkipHandler, SubscribeBuilder};
+use evento::{AggregatorName, SubscribeBuilder};
 use serde::Deserialize;
 use validator::Validate;
 
@@ -46,7 +46,7 @@ pub fn subscribe_command<E: evento::Executor + Clone>(
     evento::subscribe(format!("market.{region}.product.command"))
         .routing_key(region)
         .aggregator::<Product>()
-        .handler(SkipHandler::<Product, CreateFailed>::default())
-        .handler(SkipHandler::<Product, Created>::default())
+        .skip::<Product, CreateFailed>()
+        .skip::<Product, Created>()
         .handler(command_create_requested())
 }

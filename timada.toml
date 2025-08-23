@@ -2,6 +2,4 @@ addr = "0.0.0.0:3000"
 assets_base_url = "/assets"
 region = "eu-west-3"
 data_dir = "target/tmp"
-
-[market]
-dsn = "sqlite:./target/market.db"
+dsn = "sqlite:./target/evento.sqlite3"

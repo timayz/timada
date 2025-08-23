@@ -120,53 +120,48 @@ fn get_config<E: serde::de::DeserializeOwned>(path: &str) -> Result<E, config::C
 }
 
 #[derive(Deserialize, Clone)]
-pub struct Market {
-    pub dsn: String,
-}
-
-#[derive(Deserialize, Clone)]
 pub struct Serve {
     pub addr: String,
     pub region: String,
     pub assets_base_url: String,
     pub data_dir: String,
-    pub market: Market,
+    pub dsn: String,
 }
 
 #[derive(Clone)]
 pub struct State {
     pub config: Serve,
-    pub market_executor: evento::Evento,
-    pub market_db: SqlitePool,
+    pub evento: evento::Evento,
+    pub query_pool: SqlitePool,
 }
 
 pub async fn serve(config: Serve) -> anyhow::Result<()> {
-    let mut executors: Vec<evento::Evento> = vec![];
-    for dsn in [&config.market.dsn] {
-        if dsn.starts_with("sqlite:") {
-            let executor: evento::Sqlite = sqlx::SqlitePool::connect(dsn).await?.into();
-            executors.push(executor.into())
-        }
-        if dsn.starts_with("mysql:") {
-            let executor: evento::MySql = sqlx::MySqlPool::connect(dsn).await?.into();
-            executors.push(executor.into())
-        }
-        if dsn.starts_with("postgres:") {
-            let executor: evento::Postgres = sqlx::PgPool::connect(dsn).await?.into();
-            executors.push(executor.into())
-        }
-    }
+    let evento_executor: evento::Evento = if config.dsn.starts_with("sqlite:") {
+        let executor: evento::Sqlite = sqlx::SqlitePool::connect(&config.dsn).await?.into();
+        executor.into()
+    } else if config.dsn.starts_with("mysql:") {
+        let executor: evento::MySql = sqlx::MySqlPool::connect(&config.dsn).await?.into();
+        executor.into()
+    } else if config.dsn.starts_with("postgres:") {
+        let executor: evento::Postgres = sqlx::PgPool::connect(&config.dsn).await?.into();
+        executor.into()
+    } else {
+        anyhow::bail!(
+            "{} not supported, consider using sqlite, mysql or postgres",
+            config.dsn
+        );
+    };
 
-    let market_db =
-        sqlx::SqlitePool::connect(&format!("{}/market_query.db", &config.data_dir)).await?;
+    let query_db =
+        sqlx::SqlitePool::connect(&format!("{}/query.sqlite3", &config.data_dir)).await?;
 
     timada_market::product::subscribe_command(&config.region)
-        .run(&executors[0])
+        .run(&evento_executor)
         .await?;
 
     timada_market::product::subscribe_query_products(&config.region)?
-        .data(market_db.clone())
-        .run(&executors[0])
+        .data(query_db.clone())
+        .run(&evento_executor)
         .await?;
 
     let addr = config.addr.to_owned();
@@ -175,8 +170,8 @@ pub async fn serve(config: Serve) -> anyhow::Result<()> {
         .layer(TemplateConfig::new(&config.assets_base_url))
         .with_state(State {
             config,
-            market_executor: executors[0].clone(),
-            market_db, // should be read sqlite ?
+            evento: evento_executor.clone(),
+            query_pool: query_db, // should be read sqlite ?
         });
 
     #[cfg(debug_assertions)]
@@ -194,52 +189,51 @@ pub async fn serve(config: Serve) -> anyhow::Result<()> {
 #[derive(Deserialize)]
 struct Migrate {
     pub data_dir: String,
-    pub market: Market,
+    pub dsn: String,
 }
 
 async fn migrate(config: Migrate) -> anyhow::Result<()> {
     install_default_drivers();
 
-    for dsn in [&config.market.dsn] {
-        if let Err(err) = sqlx::any::Any::create_database(dsn).await {
-            tracing::warn!("{err}");
-        };
+    if let Err(err) = sqlx::any::Any::create_database(&config.dsn).await {
+        tracing::warn!("{err}");
+    };
 
-        if dsn.starts_with("sqlite:") {
-            let pool = sqlx::SqlitePool::connect(dsn).await?;
-            let mut conn = pool.acquire().await?;
-            let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::Sqlite>()?;
-            evento_migrator
-                .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
-                .await?;
-        }
-        if dsn.starts_with("mysql:") {
-            let pool = sqlx::MySqlPool::connect(dsn).await?;
-            let mut conn = pool.acquire().await?;
-            let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::MySql>()?;
-            evento_migrator
-                .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
-                .await?;
-        }
-        if dsn.starts_with("postgres:") {
-            let pool = sqlx::PgPool::connect(dsn).await?;
-            let mut conn = pool.acquire().await?;
-            let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::Postgres>()?;
-            evento_migrator
-                .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
-                .await?;
-        }
+    if config.dsn.starts_with("sqlite:") {
+        let pool = sqlx::SqlitePool::connect(&config.dsn).await?;
+        let mut conn = pool.acquire().await?;
+        let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::Sqlite>()?;
+        evento_migrator
+            .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
+            .await?;
+    }
+    if config.dsn.starts_with("mysql:") {
+        let pool = sqlx::MySqlPool::connect(&config.dsn).await?;
+        let mut conn = pool.acquire().await?;
+        let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::MySql>()?;
+        evento_migrator
+            .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
+            .await?;
+    }
+    if config.dsn.starts_with("postgres:") {
+        let pool = sqlx::PgPool::connect(&config.dsn).await?;
+        let mut conn = pool.acquire().await?;
+        let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::Postgres>()?;
+        evento_migrator
+            .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
+            .await?;
     }
 
-    let dsn = format!("{}/market_query.db", config.data_dir);
+    let dsn = format!("{}/query.sqlite3", config.data_dir);
     if let Err(err) = sqlx::Sqlite::create_database(&dsn).await {
         tracing::warn!("{err}");
     };
 
     let pool = sqlx::SqlitePool::connect(&dsn).await?;
-    let market_migrator = timada_market::migrator::new_market_migrator()?;
     let mut conn = pool.acquire().await?;
-    market_migrator
+    let mut migrator = sqlx_migrator::Migrator::default();
+    timada_market::migrator::add_migrations(&mut migrator)?;
+    migrator
         .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
         .await?;
 
@@ -251,13 +245,11 @@ async fn reset(config: Migrate) -> anyhow::Result<()> {
     {
         install_default_drivers();
 
-        for dsn in [&config.market.dsn] {
-            if let Err(err) = sqlx::any::Any::drop_database(dsn).await {
-                tracing::warn!("{err}");
-            };
-        }
+        if let Err(err) = sqlx::any::Any::drop_database(&config.dsn).await {
+            tracing::warn!("{err}");
+        };
 
-        let dsn = format!("{}/market_query.db", config.data_dir);
+        let dsn = format!("{}/query.sqlite3", config.data_dir);
         if let Err(err) = sqlx::Sqlite::drop_database(&dsn).await {
             tracing::warn!("{err}");
         };

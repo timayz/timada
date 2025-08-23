@@ -18,7 +18,7 @@ pub async fn index(
     html: Template<IndexTemplate>,
     State(state): State<crate::State>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
-    let products = timada_market::product::query_products(&state.market_db).await?;
+    let products = timada_market::product::query_products(&state.query_pool).await?;
     Ok(html.template(IndexTemplate {
         log: None,
         products,
@@ -35,7 +35,7 @@ pub async fn create(
     let id = timada_market::product::create(input)?
         .metadata(&metadata)?
         .routing_key(state.config.region)
-        .commit(&state.market_executor)
+        .commit(&state.evento)
         .await?;
 
     Ok(html.template(IndexTemplate {
@@ -49,7 +49,7 @@ pub async fn status(
     State(state): State<crate::State>,
     Path((id,)): Path<(String,)>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
-    let product = evento::load::<Product, _>(&state.market_executor, &id).await?;
+    let product = evento::load::<Product, _>(&state.evento, &id).await?;
 
     Ok(html.template(IndexTemplate {
         log: Some((id, product.item.state, product.item.failed_reason)),
