@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Metadata {
-    pub request_id: String,
-    pub request_by: String,
-    pub request_as: Option<String>,
+pub struct RequestMetadata {
+    pub id: String,
+    pub user_id: String,
+    pub user_owner_id: Option<String>,
 }

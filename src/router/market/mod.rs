@@ -5,7 +5,7 @@ use axum::{
     Form,
 };
 use timada_market::product::{CreateInput, Product, ProductState, QueryProduct};
-use timada_shared::Metadata;
+use timada_shared::RequestMetadata;
 
 #[derive(askama::Template)]
 #[template(path = "market/index.html")]
@@ -18,7 +18,7 @@ pub async fn index(
     html: Template<IndexTemplate>,
     State(state): State<crate::State>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
-    let products = timada_market::product::query_products(&state.market_db).await?;
+    let products = timada_market::product::query_products(&state.query_pool).await?;
     Ok(html.template(IndexTemplate {
         log: None,
         products,
@@ -29,13 +29,13 @@ pub async fn index(
 pub async fn create(
     html: Template<IndexTemplate>,
     State(state): State<crate::State>,
-    metadata: Metadata,
+    metadata: RequestMetadata,
     Form(input): Form<CreateInput>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
     let id = timada_market::product::create(input)?
         .metadata(&metadata)?
         .routing_key(state.config.region)
-        .commit(&state.market_executor)
+        .commit(&state.evento)
         .await?;
 
     Ok(html.template(IndexTemplate {
@@ -49,7 +49,7 @@ pub async fn status(
     State(state): State<crate::State>,
     Path((id,)): Path<(String,)>,
 ) -> Result<impl IntoResponse, crate::error::AppError> {
-    let product = evento::load::<Product, _>(&state.market_executor, &id).await?;
+    let product = evento::load::<Product, _>(&state.evento, &id).await?;
 
     Ok(html.template(IndexTemplate {
         log: Some((id, product.item.state, product.item.failed_reason)),

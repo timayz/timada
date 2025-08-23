@@ -8,8 +8,8 @@ license = "AGPL-3.0"
 tokio = { version = "1.45", features = ["full"] }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite"] }
-sqlx_migrator = { version = "0.18", features = ["postgres", "sqlite"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite", "mysql"] }
+sqlx_migrator = { version = "0.18", features = ["sqlite"] }
 axum = { version = "0.8", features = ["macros"] }
 askama = "0.14"
 tracing = "0.1"
@@ -23,7 +23,7 @@ clap = { version = "4.5", features = ["cargo"] }
 config = "0.15"
 ulid = { version = "1.2", features = ["serde"] }
 tower-layer = "0.3"
-evento = { version = "1.0.0-alpha.14", features = ["postgres-migrator"] }
+evento = { version = "1.0.0-alpha.17", features = ["postgres-migrator", "sqlite-migrator", "mysql-migrator"] }
 timada-shared = { path = "./crates/shared", version = "0.2.1" }
 timada-market = { path = "./crates/market", version = "0.2.1" }
 

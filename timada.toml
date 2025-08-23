@@ -1,7 +1,5 @@
-addr = "127.0.0.1:3000"
-assets_base_url = "/assets"
+addr = "0.0.0.0:3000"
+assets-base-url = "/assets"
 region = "eu-west-3"
-data_dir = "target/tmp"
-
-[market]
-dsn = "postgres://postgres:postgres@localhost:5432/market"
+data-dir = "target/tmp"
+dsn = "sqlite:./target/evento.sqlite3"

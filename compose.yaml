@@ -1,45 +1,67 @@
 services:
-  db:
-    image: postgres:17.5-alpine
+  traefik:
+    image: "traefik:v3.5"
     ports:
-      - 5432:5432
-    environment:
-        POSTGRES_PASSWORD: postgres
-
-  timada-migrate:
-    image: timayz/timada
-    command: migrate -c /home/timada/config.toml
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.entrypoints=https"
+      - "traefik.http.routers.api.service=api@internal"
     volumes:
-      - timada:/var/lib/timada
-      - type: bind
-        source: timada.standalone.toml
-        target: /home/timada/config.toml
-    restart: on-failure
-    profiles:
-      - standalone
+      - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock:ro"
+      - ".docker/traefik/traefik.yaml:/etc/traefik/traefik.yml"
+      - ".docker/traefik/dynamic.yaml:/etc/traefik/dynamic.yml"
+      - ".docker/traefik/certs:/etc/traefik/certs"
     networks:
       - intranet
-    depends_on:
-      - db
-      
-  timada:
-    image: timayz/timada
-    command: serve -c /home/timada/config.toml
+    environment:
+      - DOCKER_SOCK_FILE=/var/run/docker.sock
+
+  timada-migrate:
+    build: .
+    command: migrate -c /home/timada/config.toml
     volumes:
-      - timada:/var/lib/timada
+      - type: volume
+        source: timada-data
+        target: /var/lib/timada
+        read_only: false
       - type: bind
-        source: timada.standalone.toml
+        source: timada.docker.toml
         target: /home/timada/config.toml
     restart: on-failure
-    profiles:
-      - standalone
+    networks:
+      - intranet
+
+  timada:
+    build: .
+    command: --log error serve -c /home/timada/config.toml
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.timada.rule=Host(`timada.localhost`)"
+      - "traefik.http.routers.timada.tls=true"
+      - "traefik.http.routers.timada.entrypoints=https"
+      - "traefik.http.routers.timada.service=timada"
+      - "traefik.http.services.timada.loadbalancer.server.port=3000"
+    volumes:
+      - type: volume
+        source: timada-data
+        target: /var/lib/timada
+        read_only: false
+      - type: bind
+        source: timada.docker.toml
+        target: /home/timada/config.toml
+    restart: on-failure
     networks:
       - intranet
     depends_on:
       - timada-migrate
 
 volumes:
-  timada:
+  timada-data:
 
 networks:
   intranet:

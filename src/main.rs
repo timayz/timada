@@ -7,7 +7,7 @@ use axum_extra::TemplateConfig;
 use clap::{arg, command, Command};
 use config::Config;
 use serde::Deserialize;
-use sqlx::{migrate::MigrateDatabase, SqlitePool};
+use sqlx::{any::install_default_drivers, migrate::MigrateDatabase, SqlitePool};
 use sqlx_migrator::Migrate as _;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -46,6 +46,11 @@ async fn main() -> anyhow::Result<()> {
                 .about("Create timada database")
                 .arg(arg!(-c --config <FILE> "path to configuration file").required(true)),
         )
+        .subcommand(
+            Command::new("reset")
+                .about("Reset timada database")
+                .arg(arg!(-c --config <FILE> "path to configuration file").required(true)),
+        )
         .get_matches();
 
     tracing_subscriber::registry()
@@ -63,20 +68,38 @@ async fn main() -> anyhow::Result<()> {
 
     match matches.subcommand() {
         Some(("serve", sub_matches)) => {
-            let config_path = sub_matches.get_one::<String>("config").expect("required");
-            if let Err(err) = serve(config_path).await {
+            let config = sub_matches.get_one::<String>("config").expect("required");
+            let config = expect_config(config);
+            if let Err(err) = serve(config).await {
                 tracing::error!("{err}");
 
                 std::process::exit(1);
             }
         }
         Some(("migrate", sub_matches)) => {
-            let config_path = sub_matches.get_one::<String>("config").expect("required");
-            if let Err(err) = migrate(config_path).await {
+            let config = sub_matches.get_one::<String>("config").expect("required");
+            let config = expect_config(config);
+            if let Err(err) = migrate(config).await {
                 tracing::error!("{err}");
 
                 std::process::exit(1);
             }
+        }
+        #[cfg(debug_assertions)]
+        Some(("reset", sub_matches)) => {
+            let config = sub_matches.get_one::<String>("config").expect("required");
+            let config = expect_config(config);
+            if let Err(err) = reset(config).await {
+                tracing::error!("{err}");
+
+                std::process::exit(1);
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        Some(("reset", _sub_matches)) => {
+            tracing::error!("reset command not allow in prodoction");
+
+            std::process::exit(1);
         }
         _ => unreachable!("Exhausted list of subcommands and subcommand_required prevents `None`"),
     };
@@ -84,45 +107,70 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize, Clone)]
-pub struct Market {
-    pub dsn: String,
+fn expect_config<E: serde::de::DeserializeOwned>(path: &str) -> E {
+    match get_config::<E>(path) {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::error!("{err}");
+
+            std::process::exit(1);
+        }
+    }
+}
+
+fn get_config<E: serde::de::DeserializeOwned>(path: &str) -> Result<E, config::ConfigError> {
+    Config::builder()
+        .add_source(config::File::with_name(path).required(true))
+        .add_source(config::Environment::with_prefix(env!("CARGO_PKG_NAME")))
+        .build()?
+        .try_deserialize()
 }
 
 #[derive(Deserialize, Clone)]
 pub struct Serve {
     pub addr: String,
     pub region: String,
+    #[serde(rename = "assets-base-url")]
     pub assets_base_url: String,
+    #[serde(rename = "data-dir")]
     pub data_dir: String,
-    pub market: Market,
+    pub dsn: String,
 }
 
 #[derive(Clone)]
 pub struct State {
     pub config: Serve,
-    pub market_executor: evento::Postgres,
-    pub market_db: SqlitePool,
+    pub evento: evento::Evento,
+    pub query_pool: SqlitePool,
 }
 
-pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
-    let config_path = config_path.into();
-    let config: Serve = Config::builder()
-        .add_source(config::File::with_name(&config_path).required(true))
-        .add_source(config::Environment::with_prefix(env!("CARGO_PKG_NAME")))
-        .build()?
-        .try_deserialize()?;
+pub async fn serve(config: Serve) -> anyhow::Result<()> {
+    let evento_executor: evento::Evento = if config.dsn.starts_with("sqlite:") {
+        let executor: evento::Sqlite = sqlx::SqlitePool::connect(&config.dsn).await?.into();
+        executor.into()
+    } else if config.dsn.starts_with("mysql:") {
+        let executor: evento::MySql = sqlx::MySqlPool::connect(&config.dsn).await?.into();
+        executor.into()
+    } else if config.dsn.starts_with("postgres:") {
+        let executor: evento::Postgres = sqlx::PgPool::connect(&config.dsn).await?.into();
+        executor.into()
+    } else {
+        anyhow::bail!(
+            "{} not supported, consider using Sqlite, MySql or Postgres",
+            config.dsn
+        )
+    };
 
-    let market_executor: evento::Postgres = sqlx::PgPool::connect(&config.market.dsn).await?.into();
-    let market_db = sqlx::SqlitePool::connect(&format!("{}/market.db", &config.data_dir)).await?;
+    let query_db =
+        sqlx::SqlitePool::connect(&format!("{}/query.sqlite3", &config.data_dir)).await?;
 
     timada_market::product::subscribe_command(&config.region)
-        .run(&market_executor)
+        .run(&evento_executor)
         .await?;
 
     timada_market::product::subscribe_query_products(&config.region)?
-        .data(market_db.clone())
-        .run(&market_executor)
+        .data(query_db.clone())
+        .run(&evento_executor)
         .await?;
 
     let addr = config.addr.to_owned();
@@ -131,8 +179,8 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
         .layer(TemplateConfig::new(&config.assets_base_url))
         .with_state(State {
             config,
-            market_executor,
-            market_db,
+            evento: evento_executor.clone(),
+            query_pool: query_db, // should be read sqlite ?
         });
 
     #[cfg(debug_assertions)]
@@ -149,40 +197,74 @@ pub async fn serve(config_path: impl Into<String>) -> anyhow::Result<()> {
 
 #[derive(Deserialize)]
 struct Migrate {
+    #[serde(rename = "data-dir")]
     pub data_dir: String,
-    pub market: Market,
+    pub dsn: String,
 }
 
-pub async fn migrate(config_path: impl Into<String>) -> anyhow::Result<()> {
-    let config_path = config_path.into();
-    let config: Migrate = Config::builder()
-        .add_source(config::File::with_name(&config_path).required(true))
-        .add_source(config::Environment::with_prefix(env!("CARGO_PKG_NAME")))
-        .build()?
-        .try_deserialize()?;
+async fn migrate(config: Migrate) -> anyhow::Result<()> {
+    install_default_drivers();
 
-    if let Err(err) = sqlx::Postgres::create_database(&config.market.dsn).await {
+    if let Err(err) = sqlx::any::Any::create_database(&config.dsn).await {
         tracing::warn!("{err}");
     };
 
-    let pool = sqlx::PgPool::connect(&config.market.dsn).await?;
-    let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::Postgres>()?;
-    let mut conn = pool.acquire().await?;
-    evento_migrator
-        .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
-        .await?;
+    if config.dsn.starts_with("sqlite:") {
+        let pool = sqlx::SqlitePool::connect(&config.dsn).await?;
+        let mut conn = pool.acquire().await?;
+        let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::Sqlite>()?;
+        evento_migrator
+            .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
+            .await?;
+    } else if config.dsn.starts_with("mysql:") {
+        let pool = sqlx::MySqlPool::connect(&config.dsn).await?;
+        let mut conn = pool.acquire().await?;
+        let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::MySql>()?;
+        evento_migrator
+            .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
+            .await?;
+    } else if config.dsn.starts_with("postgres:") {
+        let pool = sqlx::PgPool::connect(&config.dsn).await?;
+        let mut conn = pool.acquire().await?;
+        let evento_migrator = evento::sql_migrator::new_migrator::<sqlx::Postgres>()?;
+        evento_migrator
+            .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
+            .await?;
+    } else {
+        anyhow::bail!(
+            "{} not supported, consider using Sqlite, MySql or Postgres",
+            config.dsn
+        )
+    }
 
-    let dsn = format!("{}/market.db", config.data_dir);
+    let dsn = format!("{}/query.sqlite3", config.data_dir);
     if let Err(err) = sqlx::Sqlite::create_database(&dsn).await {
         tracing::warn!("{err}");
     };
 
     let pool = sqlx::SqlitePool::connect(&dsn).await?;
-    let market_migrator = timada_market::migrator::new_market_migrator()?;
     let mut conn = pool.acquire().await?;
-    market_migrator
+    let mut migrator = sqlx_migrator::Migrator::default();
+    timada_market::migrator::add_migrations(&mut migrator)?;
+    migrator
         .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
         .await?;
 
     Ok(())
+}
+
+#[cfg(debug_assertions)]
+async fn reset(config: Migrate) -> anyhow::Result<()> {
+    install_default_drivers();
+
+    if let Err(err) = sqlx::any::Any::drop_database(&config.dsn).await {
+        tracing::warn!("{err}");
+    };
+
+    let dsn = format!("{}/query.sqlite3", config.data_dir);
+    if let Err(err) = sqlx::Sqlite::drop_database(&dsn).await {
+        tracing::warn!("{err}");
+    };
+
+    migrate(config).await
 }

@@ -29,6 +29,7 @@
             cargo-watch
             tailwindcss
             playwright-test
+            mkcert
             (rust-bin.stable.latest.default.override {
               extensions = [ "rust-src" "rust-analyzer" ];
             })
@@ -36,6 +37,7 @@
           shellHook = ''
             export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
             export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
+            export DOCKER_SOCK="$XDG_RUNTIME_DIR/docker.sock"
           '';
         };
       }
