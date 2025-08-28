@@ -14,13 +14,13 @@ cert:
 	mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt timada.localhost traefik.localhost *.timada.localhost
 
 up:
-	docker compose up -d --remove-orphans
+	sudo docker compose up -d --remove-orphans
 
 stop:
-	docker compose stop
+	sudo docker compose stop
 
 down:
-	docker compose down -v --rmi local --remove-orphans
+	sudo docker compose down -v --rmi local --remove-orphans
 
 lint:
 	cargo clippy --fix --all-features -- -D warnings
