@@ -7,3 +7,19 @@ tls:
       defaultCertificate:
         certFile: /etc/traefik/certs/timada.crt
         keyFile: /etc/traefik/certs/timada.key
+
+http:
+  routers:
+    timada-dev:
+      rule: "Host(`timada.localhost`)"
+      tls: true
+      service: timada-dev
+      priority: 25
+      entryPoints:
+        - https
+
+  services:
+    timada-dev:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3000"

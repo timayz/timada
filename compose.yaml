@@ -16,10 +16,10 @@ services:
       - ".docker/traefik/traefik.yaml:/etc/traefik/traefik.yml"
       - ".docker/traefik/dynamic.yaml:/etc/traefik/dynamic.yml"
       - ".docker/traefik/certs:/etc/traefik/certs"
-    networks:
-      - intranet
     environment:
       - DOCKER_SOCK_FILE=/var/run/docker.sock
+    extra_hosts:
+      - host.docker.internal:host-gateway
 
   timada-migrate:
     build: .
@@ -33,15 +33,15 @@ services:
         source: timada.docker.toml
         target: /home/timada/config.toml
     restart: on-failure
-    networks:
-      - intranet
+    profiles:
+      - standalone
 
   timada:
     build: .
     command: --log error serve -c /home/timada/config.toml
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.timada.rule=Host(`timada.localhost`)"
+      - "traefik.http.routers.timada.rule=Host(`prod.timada.localhost`)"
       - "traefik.http.routers.timada.tls=true"
       - "traefik.http.routers.timada.entrypoints=https"
       - "traefik.http.routers.timada.service=timada"
@@ -55,14 +55,10 @@ services:
         source: timada.docker.toml
         target: /home/timada/config.toml
     restart: on-failure
-    networks:
-      - intranet
     depends_on:
       - timada-migrate
+    profiles:
+      - standalone
 
 volumes:
   timada-data:
-
-networks:
-  intranet:
-    name: timada
