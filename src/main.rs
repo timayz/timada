@@ -161,15 +161,14 @@ pub async fn serve(config: Serve) -> anyhow::Result<()> {
         )
     };
 
-    let query_db =
-        sqlx::SqlitePool::connect(&format!("{}/query.sqlite3", &config.data_dir)).await?;
+    let db = sqlx::SqlitePool::connect(&format!("{}/timada.sqlite3", &config.data_dir)).await?;
 
     timada_market::product::subscribe_command(&config.region)
         .run(&evento_executor)
         .await?;
 
     timada_market::product::subscribe_query_products(&config.region)?
-        .data(query_db.clone())
+        .data(db.clone())
         .run(&evento_executor)
         .await?;
 
@@ -180,7 +179,7 @@ pub async fn serve(config: Serve) -> anyhow::Result<()> {
         .with_state(State {
             config,
             evento: evento_executor.clone(),
-            query_pool: query_db, // should be read sqlite ?
+            query_pool: db, // should be read sqlite ?
         });
 
     #[cfg(debug_assertions)]
@@ -237,7 +236,7 @@ async fn migrate(config: Migrate) -> anyhow::Result<()> {
         )
     }
 
-    let dsn = format!("{}/query.sqlite3", config.data_dir);
+    let dsn = format!("{}/timada.sqlite3", config.data_dir);
     if let Err(err) = sqlx::Sqlite::create_database(&dsn).await {
         tracing::warn!("{err}");
     };
@@ -261,7 +260,7 @@ async fn reset(config: Migrate) -> anyhow::Result<()> {
         tracing::warn!("{err}");
     };
 
-    let dsn = format!("{}/query.sqlite3", config.data_dir);
+    let dsn = format!("{}/timada.sqlite3", config.data_dir);
     if let Err(err) = sqlx::Sqlite::drop_database(&dsn).await {
         tracing::warn!("{err}");
     };

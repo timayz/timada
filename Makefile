@@ -10,8 +10,10 @@ reset:
 
 cert:
 	mkdir -p .docker/traefik/certs
-	mkcert -install
 	mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt timada.localhost traefik.localhost *.timada.localhost
+
+cert.install:
+	mkcert -install
 
 up:
 	sudo docker compose up -d --remove-orphans

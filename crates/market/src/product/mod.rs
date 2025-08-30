@@ -1,6 +1,7 @@
 mod command;
 mod query;
 
+use bincode::{Decode, Encode};
 use evento::AggregatorName;
 use serde::{Deserialize, Serialize};
 use strum::Display;
@@ -10,7 +11,9 @@ pub use query::*;
 
 use crate::RequestEvent;
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, sqlx::Type, Display)]
+#[derive(
+    Debug, Default, Serialize, Deserialize, Clone, PartialEq, sqlx::Type, Display, Encode, Decode,
+)]
 #[sqlx(type_name = "product_state", rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab_case")]
 pub enum ProductState {
@@ -20,7 +23,7 @@ pub enum ProductState {
     Ready,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Encode, Decode, Clone)]
 pub struct Product {
     pub name: String,
     pub state: ProductState,
@@ -52,18 +55,18 @@ impl Product {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, AggregatorName)]
+#[derive(Debug, Encode, Decode, PartialEq, AggregatorName)]
 pub struct CreateRequested {
     pub name: String,
     pub state: ProductState,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, AggregatorName)]
+#[derive(Debug, Default, Encode, Decode, PartialEq, AggregatorName)]
 pub struct Created {
     pub state: ProductState,
 }
 
-#[derive(Default, Debug, Serialize, Deserialize, PartialEq, AggregatorName)]
+#[derive(Debug, Default, Encode, Decode, PartialEq, AggregatorName)]
 pub struct CreateFailed {
     pub state: ProductState,
     pub failed_reason: String,

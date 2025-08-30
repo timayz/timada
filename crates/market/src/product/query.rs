@@ -2,6 +2,7 @@ use crate::{
     RequestEvent,
     product::{CreateFailed, CreateRequested, Created, Product, ProductState},
 };
+use bincode::{Decode, Encode};
 use evento::{AggregatorName, SubscribeBuilder, sql::Reader};
 use sea_query::{Expr, ExprTrait, Query, SqliteQueryBuilder};
 use sea_query_sqlx::SqlxBinder;
@@ -18,7 +19,7 @@ pub struct QueryProduct {
     pub created_at: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Encode, Decode, Debug)]
 pub struct QueryProductCursor {
     pub i: String,
     pub c: String,

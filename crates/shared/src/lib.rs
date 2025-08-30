@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
+use bincode::{Decode, Encode};
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Encode, Decode)]
 pub struct RequestMetadata {
     pub id: String,
     pub user_id: String,
