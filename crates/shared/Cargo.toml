@@ -9,5 +9,4 @@ repository = "https://github.com/timayz/timada"
 documentation = "https://docs.rs/timada-shared"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
 bincode = "2.0"
