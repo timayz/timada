@@ -1,0 +1,18 @@
+[package]
+name = "timada-tax"
+description = "Timada tax assessment: TaxCalculator trait and a built-in fixed-rate VAT implementation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+timada-core.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

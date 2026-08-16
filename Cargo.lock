@@ -2415,6 +2415,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-tax"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "thiserror",
+ "timada-core",
+ "tokio",
+]
+
+[[package]]
 name = "timada-web"
 version = "0.1.0"
 dependencies = [
