@@ -61,6 +61,14 @@
       >
         Refresh status
       </button>
+      {% if order.payment_id.is_some() %}
+        <a
+          href="/orders/{{ order.id }}/invoice"
+          class="mt-4 ml-2 inline-block rounded border border-stone-300 px-3 py-2 text-sm font-medium hover:bg-stone-100"
+        >
+          View invoice
+        </a>
+      {% endif %}
     </div>
   {% endblock %}
 

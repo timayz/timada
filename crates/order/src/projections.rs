@@ -45,41 +45,10 @@ impl AdminOrderRow {
         )
     }
 
-    /// `YYYY-MM-DD HH:MM UTC`, so the list is readable without pulling in a
-    /// date library for one column.
+    /// `YYYY-MM-DD HH:MM UTC`, so the list is readable at a glance.
     pub fn created(&self) -> String {
-        let seconds = self.created_at.div_euclid(1000);
-        let (year, month, day) = civil_from_days(seconds.div_euclid(86_400));
-        let second_of_day = seconds.rem_euclid(86_400);
-
-        format!(
-            "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
-            second_of_day / 3600,
-            (second_of_day % 3600) / 60
-        )
+        timada_core::format_utc_datetime(self.created_at)
     }
-}
-
-/// Days since 1970-01-01 to a civil `(year, month, day)`, by Howard Hinnant's
-/// `civil_from_days`. Exact for every date this table can hold.
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let shifted = days + 719_468;
-    let era = shifted.div_euclid(146_097);
-    let day_of_era = shifted.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_position = (5 * day_of_year + 2) / 153;
-
-    let day = day_of_year - (153 * month_position + 2) / 5 + 1;
-    let month = if month_position < 10 {
-        month_position + 3
-    } else {
-        month_position - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-
-    (year, month, day)
 }
 
 /// Newest orders first, capped so the page stays cheap.

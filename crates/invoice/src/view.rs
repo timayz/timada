@@ -29,6 +29,8 @@ pub struct InvoiceView {
     /// `Some` once the invoice has been reversed.
     pub credit_note_number: Option<String>,
     pub credit_note_reason: Option<String>,
+    /// When the invoice was issued (the `InvoiceIssued` event's timestamp).
+    pub issued_at_ms: i64,
 }
 
 impl ProjectionAggregate for InvoiceView {
@@ -41,6 +43,11 @@ impl InvoiceView {
     /// Has this invoice been reversed by a credit note?
     pub fn is_credited(&self) -> bool {
         self.credit_note_number.is_some()
+    }
+
+    /// Issue date as `YYYY-MM-DD` (UTC), for the printed document.
+    pub fn issued_on(&self) -> String {
+        timada_core::format_utc_date(self.issued_at_ms)
     }
 }
 
@@ -55,6 +62,10 @@ async fn apply_issued(event: Event<InvoiceIssued>, view: &mut InvoiceView) -> an
     view.total_net = event.data.total_net;
     view.total_tax = event.data.total_tax;
     view.total_gross = event.data.total_gross;
+    view.issued_at_ms = i64::try_from(event.timestamp)
+        .unwrap_or_default()
+        .saturating_mul(1000)
+        .saturating_add(i64::from(event.timestamp_subsec));
     Ok(())
 }
 

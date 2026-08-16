@@ -18,6 +18,7 @@ timada-catalog.workspace = true
 timada-core.workspace = true
 timada-dropship.workspace = true
 timada-dropship-aliexpress.workspace = true
+timada-invoice.workspace = true
 timada-order.workspace = true
 timada-payment.workspace = true
 timada-shipping.workspace = true

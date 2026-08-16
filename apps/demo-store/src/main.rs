@@ -24,6 +24,7 @@ use timada_catalog::CatalogState;
 use timada_core::ServiceContext;
 use timada_dropship::{DropshipState, MockSupplier, Supplier as _, SupplierRegistry};
 use timada_dropship_aliexpress::AliExpressSupplier;
+use timada_invoice::{InvoiceConfig, InvoiceState, Party};
 use timada_order::OrderState;
 use timada_payment::{FakePaymentProvider, PaymentProvider, PaymentState};
 use timada_shipping::ShippingState;
@@ -61,6 +62,7 @@ enum Command {
 fn all_migrations() -> Vec<Box<dyn sqlx_migrator::migration::Migration<sqlx::Sqlite>>> {
     let mut migrations = timada_catalog::migrations();
     migrations.extend(timada_order::migrations());
+    migrations.extend(timada_invoice::migrations());
     migrations.extend(timada_payment::migrations());
     migrations.extend(timada_shipping::migrations());
     migrations.extend(timada_dropship::migrations());
@@ -162,6 +164,17 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         ctx: ctx.clone(),
         registry: registry.clone(),
     };
+    let invoice = InvoiceState {
+        ctx: ctx.clone(),
+        config: InvoiceConfig::new(Party {
+            name: "Timada Demo Store".into(),
+            street: "42 Framework Avenue".into(),
+            city: "Paris".into(),
+            postal_code: "75002".into(),
+            country: "FR".into(),
+            email: "billing@timada.example".into(),
+        }),
+    };
 
     let mut subscriptions = Vec::new();
     subscriptions.extend(timada_catalog::start_subscriptions(&catalog).await?);
@@ -169,10 +182,12 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
     subscriptions.extend(timada_payment::start_subscriptions(&payment).await?);
     subscriptions.extend(timada_shipping::start_subscriptions(&shipping).await?);
     subscriptions.extend(timada_dropship::start_subscriptions(&dropship).await?);
+    subscriptions.extend(timada_invoice::start_subscriptions(&invoice).await?);
 
     let services = AdminServices {
         catalog: catalog.clone(),
         order: order.clone(),
+        invoice: invoice.clone(),
         payment,
         shipping,
         dropship,
@@ -183,6 +198,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         .merge(timada_catalog::store_router(catalog))
         .merge(timada_cart::store_router(cart))
         .merge(timada_order::store_router(order))
+        .merge(timada_invoice::store_router(invoice))
         .nest(
             "/admin",
             timada_admin::router(services).layer(middleware::from_fn(demo_auth)),

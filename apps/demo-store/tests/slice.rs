@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 use sqlx_migrator::migrator::{Info as _, Migrate as _, Migrator, Plan};
 use timada_core::{Executor, ServiceContext, new_id};
 use timada_dropship::{MockSupplier, Supplier as _, SupplierRegistry};
+use timada_invoice::{InvoiceConfig, invoice_id, load_invoice};
 use timada_order::{Address, OrderStatus, fulfillment_subscription, load_order, place_order};
 use timada_payment::{FakePaymentProvider, PaymentProvider};
 use timada_tax::{FixedRateVat, TaxCalculator};
@@ -34,6 +35,7 @@ impl TestApp {
 
         let mut migrations = timada_catalog::migrations();
         migrations.extend(timada_order::migrations());
+        migrations.extend(timada_invoice::migrations());
         migrations.extend(timada_payment::migrations());
         migrations.extend(timada_shipping::migrations());
         migrations.extend(timada_dropship::migrations());
@@ -123,6 +125,19 @@ impl TestApp {
         Ok(order_id)
     }
 
+    /// Drain the invoice-issuance subscription once (invoices are issued by
+    /// reacting to order events, exactly as in the served app).
+    async fn issue_invoices(&self) -> anyhow::Result<()> {
+        timada_invoice::issuance_subscription(
+            self.executor().clone(),
+            self.pool.clone(),
+            InvoiceConfig::default(),
+        )
+        .no_retry()
+        .run_once(self.executor())
+        .await
+    }
+
     /// Drain every admin read-model subscription once.
     async fn refresh_admin_tables(&self) -> anyhow::Result<()> {
         timada_catalog::read_models_subscription(self.pool.clone())
@@ -142,6 +157,10 @@ impl TestApp {
             .run_once(self.executor())
             .await?;
         timada_dropship::admin_subscription(self.pool.clone())
+            .no_retry()
+            .run_once(self.executor())
+            .await?;
+        timada_invoice::admin_subscription(self.pool.clone())
             .no_retry()
             .run_once(self.executor())
             .await?;
@@ -210,6 +229,22 @@ async fn the_full_journey_ends_with_a_delivered_order() -> anyhow::Result<()> {
     );
     assert!(order.payment_id.is_some(), "payment recorded on the order");
 
+    // The paid order was invoiced, with a reconciling VAT breakdown.
+    app.issue_invoices().await?;
+    let invoice = load_invoice(app.executor(), &invoice_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("paid order must have an invoice"))?;
+    assert_eq!(invoice.invoice_number, "INV-000001");
+    assert_eq!(invoice.order_id, order_id);
+    assert_eq!(invoice.buyer.email, "customer@example.com");
+    assert_eq!(
+        invoice.total_net.add(invoice.total_tax)?,
+        invoice.total_gross,
+        "net + VAT must equal the charged gross"
+    );
+    assert_eq!(invoice.total_gross, order.total);
+    assert!(!invoice.is_credited());
+
     // Admin read models agree end-to-end.
     app.refresh_admin_tables().await?;
     assert_eq!(app.admin_order_status(&order_id).await?, "delivered");
@@ -249,6 +284,15 @@ async fn a_declined_charge_cancels_the_order() -> anyhow::Result<()> {
         .cancel_reason
         .ok_or_else(|| anyhow::anyhow!("cancelled order must carry a reason"))?;
     assert!(reason.contains("declined"), "reason was: {reason}");
+
+    // Never paid → never invoiced.
+    app.issue_invoices().await?;
+    assert!(
+        load_invoice(app.executor(), &invoice_id(&order_id))
+            .await?
+            .is_none(),
+        "an order that never got paid must not be invoiced"
+    );
 
     Ok(())
 }

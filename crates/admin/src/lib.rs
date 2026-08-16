@@ -22,6 +22,7 @@ use timada_web::HtmlTemplate;
 pub struct AdminServices {
     pub catalog: timada_catalog::CatalogState,
     pub order: timada_order::OrderState,
+    pub invoice: timada_invoice::InvoiceState,
     pub payment: timada_payment::PaymentState,
     pub shipping: timada_shipping::ShippingState,
     pub dropship: timada_dropship::DropshipState,
@@ -41,6 +42,7 @@ pub fn router(services: AdminServices) -> Router {
         .route("/", get(dashboard))
         .nest("/catalog", timada_catalog::admin_router(services.catalog))
         .nest("/orders", timada_order::admin_router(services.order))
+        .nest("/invoices", timada_invoice::admin_router(services.invoice))
         .nest("/payments", timada_payment::admin_router(services.payment))
         .nest(
             "/shipping",

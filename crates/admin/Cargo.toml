@@ -11,6 +11,7 @@ askama.workspace = true
 axum.workspace = true
 timada-catalog.workspace = true
 timada-dropship.workspace = true
+timada-invoice.workspace = true
 timada-order.workspace = true
 timada-payment.workspace = true
 timada-shipping.workspace = true
