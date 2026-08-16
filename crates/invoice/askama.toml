@@ -1,0 +1,5 @@
+[general]
+# `../web/templates` puts `timada-web`'s base layouts on the search path so this
+# crate's admin page can `{% extends "admin/layout.html" %}`. The printable
+# invoice deliberately extends nothing.
+dirs = ["templates", "../web/templates"]

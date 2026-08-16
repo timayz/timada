@@ -1,0 +1,65 @@
+{% extends "admin/layout.html" %}
+
+{% block meta %}
+  <title>Invoices · Timada Admin</title>
+{% endblock %}
+
+{% block content %}
+  <h1 class="text-xl font-semibold sm:text-2xl">Invoices</h1>
+  <p class="mt-2 text-sm text-stone-600">
+    Newest first. Invoices are issued automatically when an order is paid; an order cancelled after
+    that — a refund — is reversed by a credit note rather than by editing the invoice.
+  </p>
+
+  {% if invoices.is_empty() %}
+    <p class="mt-6 rounded border border-stone-300 bg-white p-4 text-sm text-stone-600">
+      No invoice yet.
+    </p>
+  {% else %}
+    <div class="mt-6 overflow-x-auto rounded border border-stone-300 bg-white">
+      <table class="w-full min-w-3xl border-collapse text-left text-sm">
+        <caption class="sr-only">Invoices, newest first</caption>
+        <thead class="border-b border-stone-300 text-xs font-medium tracking-wide text-stone-600 uppercase">
+          <tr>
+            <th scope="col" class="px-4 py-3">Number</th>
+            <th scope="col" class="px-4 py-3">Order</th>
+            <th scope="col" class="px-4 py-3 text-right">Total</th>
+            <th scope="col" class="px-4 py-3">Status</th>
+            <th scope="col" class="px-4 py-3">Credit note</th>
+            <th scope="col" class="px-4 py-3">Document</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for invoice in invoices %}
+            <tr class="border-b border-stone-200 last:border-b-0">
+              <td class="px-4 py-3 font-mono whitespace-nowrap">{{ invoice.number }}</td>
+              <td class="px-4 py-3">
+                <a href="/admin/orders/{{ invoice.order_id }}" class="font-mono break-all underline hover:text-stone-600">
+                  {{ invoice.order_id }}
+                </a>
+              </td>
+              <td class="px-4 py-3 text-right whitespace-nowrap">{{ invoice.total() }}</td>
+              <td class="px-4 py-3">
+                {% if invoice.is_credited() %}
+                  <span class="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-900">credited</span>
+                {% else %}
+                  <span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">issued</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3 font-mono whitespace-nowrap">
+                {% if let Some(credit_note_number) = invoice.credit_note_number %}
+                  {{ credit_note_number }}
+                {% else %}
+                  <span class="text-stone-500">—</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3">
+                <a href="/orders/{{ invoice.order_id }}/invoice" class="underline hover:text-stone-600">View</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

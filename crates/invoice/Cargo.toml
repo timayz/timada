@@ -1,0 +1,31 @@
+[package]
+name = "timada-invoice"
+description = "Timada invoicing: automatic invoice issuance, credit notes, printable documents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+askama.workspace = true
+axum.workspace = true
+bitcode.workspace = true
+evento.workspace = true
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+timada-core.workspace = true
+timada-order.workspace = true
+timada-web.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+timada-cart.workspace = true
+timada-catalog.workspace = true
+timada-dropship.workspace = true
+timada-payment.workspace = true
+timada-tax.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -2354,6 +2354,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-invoice"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "askama",
+ "axum",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "timada-cart",
+ "timada-catalog",
+ "timada-core",
+ "timada-dropship",
+ "timada-order",
+ "timada-payment",
+ "timada-tax",
+ "timada-web",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "timada-order"
 version = "0.1.0"
 dependencies = [
