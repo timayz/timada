@@ -21,11 +21,9 @@ where
 {
     fn into_response(self) -> Response {
         match self.0.render() {
-            Ok(body) => (
-                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                body,
-            )
-                .into_response(),
+            Ok(body) => {
+                ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response()
+            }
             Err(source) => {
                 tracing::error!(error = ?source, "template rendering failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
