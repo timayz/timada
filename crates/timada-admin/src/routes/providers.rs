@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use askama::Template;
-use axum::extract::{Path, State};
-use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
+use axum::extract::{Path, Query, State};
+use axum::response::{IntoResponse, Redirect, Response};
 use timada::provider_connection::ProviderConnectionState;
+use timada::read_model::catalog_detail;
 use timada::read_model::provider_list::{self, ProviderListRow};
+use timada_provider::{Provider, ProviderContext, ProviderError};
 
 use crate::AdminContext;
 use crate::render::{AdminError, html};
@@ -231,5 +234,179 @@ async fn status_fragment(ctx: &AdminContext, id: &str) -> Result<Response, Admin
     html(&StatusFragment {
         base_path: ctx.base_path.clone(),
         connection: (&state).into(),
+    })
+}
+
+fn provider_context(state: &ProviderConnectionState) -> ProviderContext {
+    ProviderContext {
+        connection_id: state.id.clone(),
+        config: state.config.iter().cloned().collect(),
+    }
+}
+
+fn registered_provider(ctx: &AdminContext, kind: &str) -> Result<Arc<dyn Provider>, AdminError> {
+    ctx.providers.get(kind).ok_or_else(|| {
+        AdminError::Invalid(format!(
+            "provider kind {kind:?} is not registered in this app"
+        ))
+    })
+}
+
+fn provider_error(error: ProviderError) -> AdminError {
+    match error {
+        ProviderError::NotFound(reference) => {
+            AdminError::Invalid(format!("not found at provider: {reference}"))
+        }
+        ProviderError::Auth => AdminError::Invalid(
+            "authentication with the provider failed — check credentials".to_owned(),
+        ),
+        ProviderError::RateLimited => {
+            AdminError::Invalid("rate limited by the provider — try again later".to_owned())
+        }
+        ProviderError::Unsupported => {
+            AdminError::Invalid("this provider does not support that operation".to_owned())
+        }
+        ProviderError::Other(error) => AdminError::Internal(error),
+    }
+}
+
+/// One provider search result on the import page.
+struct ImportItemView {
+    external_ref: String,
+    title: String,
+    thumbnail_url: String,
+    price: String,
+    currency: String,
+    /// The already-imported product for this reference, if any.
+    imported_product_id: Option<String>,
+}
+
+impl ImportItemView {
+    fn new(source: &timada_provider::SourceProduct, imported_product_id: Option<String>) -> Self {
+        Self {
+            external_ref: source.external_ref.clone(),
+            title: source.title.clone(),
+            thumbnail_url: source.image_urls.first().cloned().unwrap_or_default(),
+            price: super::catalog::format_amount(source.price.amount_minor),
+            currency: source.price.currency.clone(),
+            imported_product_id,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "providers/import.html")]
+struct ImportPage {
+    base_path: String,
+    connection: ConnectionView,
+    q: String,
+    error: Option<String>,
+    items: Vec<ImportItemView>,
+}
+
+#[derive(Template)]
+#[template(path = "providers/import_item.html")]
+struct ImportItemFragment {
+    base_path: String,
+    connection: ConnectionView,
+    item: ImportItemView,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct ImportPageQuery {
+    #[serde(default)]
+    q: String,
+}
+
+pub(crate) async fn import_page(
+    State(ctx): State<AdminContext>,
+    Path(id): Path<String>,
+    Query(query): Query<ImportPageQuery>,
+) -> Result<Response, AdminError> {
+    let state = timada::provider_connection::load(&ctx.evento, &id)
+        .await?
+        .ok_or(AdminError::NotFound)?;
+
+    let mut error = None;
+    let mut items = Vec::new();
+    if state.enabled {
+        let provider = registered_provider(&ctx, &state.provider_kind)?;
+        match provider
+            .search_products(&provider_context(&state), &query.q, None)
+            .await
+        {
+            Ok(page) => {
+                for source in &page.items {
+                    let imported = catalog_detail::find_by_source(
+                        &ctx.read_db,
+                        &state.id,
+                        &source.external_ref,
+                    )
+                    .await?;
+                    items.push(ImportItemView::new(source, imported));
+                }
+            }
+            Err(provider_failure) => match provider_error(provider_failure) {
+                AdminError::Invalid(message) => error = Some(message),
+                other => return Err(other),
+            },
+        }
+    }
+
+    html(&ImportPage {
+        base_path: ctx.base_path.clone(),
+        connection: (&state).into(),
+        q: query.q,
+        error,
+        items,
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct ImportForm {
+    external_ref: String,
+}
+
+pub(crate) async fn import(
+    State(ctx): State<AdminContext>,
+    Path(id): Path<String>,
+    Form(form): Form<ImportForm>,
+) -> Result<Response, AdminError> {
+    let state = timada::provider_connection::load(&ctx.evento, &id)
+        .await?
+        .ok_or(AdminError::NotFound)?;
+    if !state.enabled {
+        return Err(AdminError::Invalid(
+            "enable the connection before importing".to_owned(),
+        ));
+    }
+    let provider = registered_provider(&ctx, &state.provider_kind)?;
+
+    let source = provider
+        .fetch_product(&provider_context(&state), &form.external_ref)
+        .await
+        .map_err(provider_error)?;
+
+    // Best-effort dedup against the projection: a re-import racing the
+    // subscription can still create a duplicate — an annoyance the admin can
+    // archive, not corruption — so this stays a UI guard, not an invariant.
+    let imported =
+        match catalog_detail::find_by_source(&ctx.read_db, &state.id, &form.external_ref).await? {
+            Some(existing) => existing,
+            None => {
+                timada::product::import_product(
+                    &ctx.evento,
+                    source.clone(),
+                    &state.provider_kind,
+                    &state.id,
+                )
+                .await?
+            }
+        };
+
+    html(&ImportItemFragment {
+        base_path: ctx.base_path.clone(),
+        connection: (&state).into(),
+        item: ImportItemView::new(&source, Some(imported)),
     })
 }

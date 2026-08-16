@@ -131,6 +131,23 @@ pub async fn search_self_inventory(
     rows.into_iter().map(CatalogDetail::try_from).collect()
 }
 
+/// The product previously imported from this provider connection + reference,
+/// if any. Backs the "already imported" state of the admin import page.
+pub async fn find_by_source(
+    db: &SqlitePool,
+    connection_id: &str,
+    external_ref: &str,
+) -> Result<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM catalog_detail WHERE connection_id = ? AND external_ref = ? LIMIT 1",
+    )
+    .bind(connection_id)
+    .bind(external_ref)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 fn db<E: Executor>(ctx: &Context<'_, E>) -> Result<SqlitePool> {
     ctx.get::<SqlitePool>()
         .ok_or_else(|| anyhow::anyhow!("SqlitePool not injected into subscription"))

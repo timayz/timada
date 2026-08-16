@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Import from {{ connection.display_name }} · Timada Admin{% endblock %}
+
+{% block content %}
+<nav aria-label="Breadcrumb" class="text-sm text-stone-500">
+  <a href="{{ base_path }}/providers" class="hover:text-stone-900">Providers</a>
+  <span aria-hidden="true">/</span>
+  <a href="{{ base_path }}/providers/{{ connection.id }}" class="hover:text-stone-900">{{ connection.display_name }}</a>
+  <span aria-hidden="true">/</span>
+  <span class="text-stone-900">Import</span>
+</nav>
+
+<h1 class="mt-2 text-xl font-semibold">Import from {{ connection.display_name }}</h1>
+
+{% if !connection.enabled %}
+<p class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+  This connection is disabled.
+  <a href="{{ base_path }}/providers/{{ connection.id }}" class="underline">Enable it</a>
+  before importing products.
+</p>
+{% else %}
+<form method="get" action="{{ base_path }}/providers/{{ connection.id }}/import" class="mt-4 flex max-w-md gap-3">
+  <label for="import-search" class="sr-only">Search provider catalog</label>
+  <input id="import-search" name="q" type="search" value="{{ q }}" placeholder="Search {{ connection.display_name }}…"
+         class="flex-1 rounded-md border border-stone-300 bg-white px-3 py-2 text-sm">
+  <button class="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700">
+    Search
+  </button>
+</form>
+
+{% if let Some(error) = error %}
+<p class="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">{{ error }}</p>
+{% else if items.is_empty() %}
+<p class="mt-4 text-sm text-stone-600">No result.</p>
+{% else %}
+<ul class="mt-4 divide-y divide-stone-200 rounded-lg border border-stone-200 bg-white">
+  {% for item in items %}
+  <li class="flex items-center gap-4 px-4 py-3">
+    {% if item.thumbnail_url.is_empty() %}
+    <span class="h-10 w-10 shrink-0 rounded bg-stone-200" aria-hidden="true"></span>
+    {% else %}
+    <img src="{{ item.thumbnail_url }}" alt="" width="40" height="40" loading="lazy"
+         class="h-10 w-10 shrink-0 rounded object-cover">
+    {% endif %}
+    <span class="min-w-0 flex-1">
+      <span class="block truncate font-medium">{{ item.title }}</span>
+      <span class="block text-sm text-stone-500">{{ item.price }} {{ item.currency }} · {{ item.external_ref }}</span>
+    </span>
+    {% include "providers/import_item.html" %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endif %}
+{% endblock %}

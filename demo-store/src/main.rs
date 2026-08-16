@@ -176,7 +176,8 @@ async fn main() -> anyhow::Result<()> {
 
     let subscriptions = timada::subscriptions::start(&executor, write_pool.clone()).await?;
 
-    let admin = timada_admin::AdminContext::new(executor, read_pool.clone(), Arc::clone(&providers));
+    let admin =
+        timada_admin::AdminContext::new(executor, read_pool.clone(), Arc::clone(&providers));
 
     let app = axum::Router::new()
         .route("/", get(home))

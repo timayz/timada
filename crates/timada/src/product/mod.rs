@@ -47,8 +47,14 @@ pub enum Product {
         currency: String,
         variants: Vec<ImportedVariant>,
     },
-    ProductDetailsRevised { title: String, description: String },
-    ProductRepriced { amount_minor: i64, currency: String },
+    ProductDetailsRevised {
+        title: String,
+        description: String,
+    },
+    ProductRepriced {
+        amount_minor: i64,
+        currency: String,
+    },
     ProductPublished,
     ProductUnpublished,
     ProductArchived,

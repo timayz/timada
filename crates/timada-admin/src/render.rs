@@ -31,9 +31,5 @@ impl IntoResponse for AdminError {
 /// Render an Askama template as a `text/html` response.
 pub(crate) fn html<T: Template>(template: &T) -> Result<Response, AdminError> {
     let body = template.render().map_err(anyhow::Error::from)?;
-    Ok((
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        body,
-    )
-        .into_response())
+    Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response())
 }

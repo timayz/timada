@@ -586,6 +586,7 @@ dependencies = [
  "askama",
  "axum",
  "evento",
+ "sqlx",
  "thiserror",
  "timada",
  "timada-admin",
@@ -1552,6 +1553,7 @@ version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "546040c653a705e60ec65ecd3191a809603734bebbc225775916dea9ae409b31"
 dependencies = [
+ "itoa",
  "sea-query-derive",
 ]
 
@@ -2070,6 +2072,9 @@ dependencies = [
  "async-trait",
  "bitcode",
  "evento",
+ "sea-query",
+ "serde",
+ "serde_json",
  "sqlx",
  "sqlx_migrator",
  "timada-provider",

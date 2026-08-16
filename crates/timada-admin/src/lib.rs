@@ -76,7 +76,10 @@ pub fn router(ctx: AdminContext) -> axum::Router {
         )
         .route("/catalog/new", get(routes::catalog::new))
         .route("/catalog/{id}", get(routes::catalog::show))
-        .route("/catalog/{id}/details", post(routes::catalog::revise_details))
+        .route(
+            "/catalog/{id}/details",
+            post(routes::catalog::revise_details),
+        )
         .route("/catalog/{id}/price", post(routes::catalog::reprice))
         .route("/catalog/{id}/publish", post(routes::catalog::publish))
         .route("/catalog/{id}/unpublish", post(routes::catalog::unpublish))
@@ -93,5 +96,9 @@ pub fn router(ctx: AdminContext) -> axum::Router {
         )
         .route("/providers/{id}/enable", post(routes::providers::enable))
         .route("/providers/{id}/disable", post(routes::providers::disable))
+        .route(
+            "/providers/{id}/import",
+            get(routes::providers::import_page).post(routes::providers::import),
+        )
         .with_state(ctx)
 }

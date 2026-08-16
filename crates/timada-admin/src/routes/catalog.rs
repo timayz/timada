@@ -12,7 +12,7 @@ use crate::render::{AdminError, html};
 const PAGE_SIZE: u16 = 20;
 
 /// Format minor units as a decimal, e.g. `1234` → `"12.34"`.
-fn format_amount(amount_minor: i64) -> String {
+pub(crate) fn format_amount(amount_minor: i64) -> String {
     format!("{}.{:02}", amount_minor / 100, (amount_minor % 100).abs())
 }
 
@@ -87,21 +87,24 @@ pub(crate) async fn index(
     State(ctx): State<AdminContext>,
     Query(query): Query<IndexQuery>,
 ) -> Result<Response, AdminError> {
-    let page = catalog_list::page(
-        &ctx.read_db,
-        PAGE_SIZE,
-        query.after,
-        Some(&query.q),
-        false,
-    )
-    .await?;
+    let page =
+        catalog_list::page(&ctx.read_db, PAGE_SIZE, query.after, Some(&query.q), false).await?;
 
     let next = page
         .page_info
         .has_next_page
-        .then(|| page.page_info.end_cursor.as_ref().map(|cursor| cursor.0.clone()))
+        .then(|| {
+            page.page_info
+                .end_cursor
+                .as_ref()
+                .map(|cursor| cursor.0.clone())
+        })
         .flatten();
-    let rows = page.edges.into_iter().map(|edge| edge.node.into()).collect();
+    let rows = page
+        .edges
+        .into_iter()
+        .map(|edge| edge.node.into())
+        .collect();
 
     html(&IndexPage {
         base_path: ctx.base_path.clone(),
@@ -161,9 +164,8 @@ pub(crate) async fn create(
         variants: Vec::new(),
     };
 
-    let id =
-        timada::product::import_product(&ctx.evento, source, timada::self_inventory::KIND, "")
-            .await?;
+    let id = timada::product::import_product(&ctx.evento, source, timada::self_inventory::KIND, "")
+        .await?;
 
     let initial_stock = form.initial_stock.trim();
     if !initial_stock.is_empty() {
@@ -285,8 +287,7 @@ pub(crate) async fn revise_details(
     Path(id): Path<String>,
     Form(form): Form<DetailsForm>,
 ) -> Result<Response, AdminError> {
-    timada::product::revise_product_details(&ctx.evento, &id, form.title, form.description)
-        .await?;
+    timada::product::revise_product_details(&ctx.evento, &id, form.title, form.description).await?;
 
     let state = load_product(&ctx, &id).await?;
     html(&DetailsFragment {

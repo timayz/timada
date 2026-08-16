@@ -24,7 +24,9 @@ pub enum ProviderConnection {
     /// Credentials/settings for the connection were configured.
     /// The config is a full replacement, keyed by the provider's
     /// `ConfigField::key`s.
-    ProviderCredentialsConfigured { config: Vec<(String, String)> },
+    ProviderCredentialsConfigured {
+        config: Vec<(String, String)>,
+    },
     ProviderEnabled,
     ProviderDisabled,
 }

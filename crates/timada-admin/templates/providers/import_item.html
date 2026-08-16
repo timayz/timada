@@ -1,0 +1,16 @@
+<div id="import-{{ item.external_ref }}" class="flex shrink-0 items-center gap-3">
+  {% if let Some(product_id) = item.imported_product_id %}
+  <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">Imported</span>
+  <a href="{{ base_path }}/catalog/{{ product_id }}"
+     class="text-sm text-stone-500 underline hover:text-stone-900">View product</a>
+  {% else %}
+  <form method="post" action="{{ base_path }}/providers/{{ connection.id }}/import"
+        ts-req="{{ base_path }}/providers/{{ connection.id }}/import"
+        ts-target="#import-{{ item.external_ref }}">
+    <input type="hidden" name="external_ref" value="{{ item.external_ref }}">
+    <button class="rounded-md bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-700">
+      Import
+    </button>
+  </form>
+  {% endif %}
+</div>

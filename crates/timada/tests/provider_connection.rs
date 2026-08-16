@@ -113,7 +113,10 @@ async fn connect_known_kind_records_the_connection() {
         .await
         .unwrap();
 
-    let state = provider_connection::load(&executor, &id).await.unwrap().unwrap();
+    let state = provider_connection::load(&executor, &id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(state.provider_kind, "test");
     assert_eq!(state.display_name, "Test Provider");
     assert!(!state.enabled);
@@ -152,7 +155,10 @@ async fn enable_after_credentials_succeeds() {
         .await
         .unwrap();
 
-    let state = provider_connection::load(&executor, &id).await.unwrap().unwrap();
+    let state = provider_connection::load(&executor, &id)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(state.enabled);
 }
 

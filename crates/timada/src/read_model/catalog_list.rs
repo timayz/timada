@@ -2,11 +2,11 @@
 //! product grid. One denormalized row per product.
 
 use anyhow::Result;
+use evento::Executor;
 use evento::cursor::ReadResult;
 use evento::metadata::Event;
 use evento::sql::{Reader, RwSqlite};
 use evento::subscription::{Context, Subscription, SubscriptionBuilder};
-use evento::Executor;
 use sea_query::{Expr, ExprTrait, Query};
 use sqlx::SqlitePool;
 use sqlx_migrator::{sqlite_migration, vec_box};
@@ -99,7 +99,9 @@ pub async fn page(
 
     let mut reader = Reader::new(stmt);
     reader.desc().forward(first, after.map(Into::into));
-    let result = reader.execute::<sqlx::Sqlite, CatalogListRow, _>(db).await?;
+    let result = reader
+        .execute::<sqlx::Sqlite, CatalogListRow, _>(db)
+        .await?;
     Ok(result)
 }
 
@@ -127,7 +129,14 @@ async fn on_product_imported<E: Executor>(
     )
     .bind(&event.aggregate_id)
     .bind(&event.data.title)
-    .bind(event.data.image_urls.first().map(String::as_str).unwrap_or_default())
+    .bind(
+        event
+            .data
+            .image_urls
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default(),
+    )
     .bind(event.data.price_amount_minor)
     .bind(&event.data.currency)
     .bind(&event.data.provider_kind)
