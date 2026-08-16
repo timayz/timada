@@ -20,6 +20,8 @@ the product delivered, with admin UIs you can mount into your own axum app.
 | `timada-cart` | Guest shopping cart (cookie-based), TwinSpark fragments |
 | `timada-order` | Checkout, `Order` aggregate, the order-fulfillment saga, customer order status, admin |
 | `timada-payment` | `PaymentProvider` trait, `Payment` aggregate, built-in `FakePaymentProvider` |
+| `timada-tax` | `TaxCalculator` trait, built-in `FixedRateVat` (tax-inclusive, per-country rates) |
+| `timada-invoice` | `Invoice` aggregate: sequential numbering, credit notes on refund, printable HTML documents |
 | `timada-shipping` | `Shipment` aggregate, tracking refresh via the supplier registry, admin |
 | `timada-dropship` | `Supplier` trait, `SupplierRegistry`, `SupplierOrder` aggregate, built-in `MockSupplier` |
 | `timada-dropship-aliexpress` | AliExpress `Supplier` adapter (stub — needs approved API credentials) |
@@ -63,6 +65,12 @@ watch the order at `/orders/{id}` progress Placed → Paid → Forwarded, and us
 `/admin/shipping` "Refresh tracking" to advance the mock supplier's shipment to
 Dispatched and then Delivered. A product priced ending in `.99` triggers the
 fake payment provider's decline path — the order compensates to Cancelled.
+
+Prices are tax-inclusive (EU B2C style): checkout extracts the destination
+country's VAT and snapshots the net/tax split onto the order. When an order is
+paid, an invoice (INV-000001, …) is issued automatically and printable at
+`/orders/{id}/invoice`; a paid order that ends up cancelled gets a sequential
+credit note reversing it. See `/admin/invoices`.
 
 ## Things to know
 
