@@ -1,3 +1,4 @@
+pub(crate) mod catalog;
 pub(crate) mod providers;
 
 use askama::Template;

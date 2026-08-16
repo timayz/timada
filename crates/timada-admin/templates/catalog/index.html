@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Catalog · Timada Admin{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between gap-4">
+  <h1 class="text-xl font-semibold">Catalog</h1>
+  <a href="{{ base_path }}/catalog/new"
+     class="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700">
+    Add product
+  </a>
+</div>
+
+<div class="mt-4">
+  <label for="catalog-search" class="sr-only">Search products</label>
+  <input id="catalog-search" name="q" type="search" value="{{ q }}" placeholder="Search products…"
+         ts-req="{{ base_path }}/catalog" ts-req-selector="#catalog-rows" ts-target="#catalog-rows"
+         ts-trigger="input changed delay:300" ts-req-strategy="last"
+         class="w-full max-w-sm rounded-md border border-stone-300 bg-white px-3 py-2 text-sm">
+</div>
+
+<div id="catalog-rows" class="mt-4">
+  {% if rows.is_empty() %}
+  <p class="text-sm text-stone-600">No product found.</p>
+  {% else %}
+  <ul class="divide-y divide-stone-200 rounded-lg border border-stone-200 bg-white">
+    {% for row in rows %}
+    <li>
+      <a href="{{ base_path }}/catalog/{{ row.id }}"
+         class="flex items-center gap-4 px-4 py-3 hover:bg-stone-50">
+        {% if row.thumbnail_url.is_empty() %}
+        <span class="h-10 w-10 shrink-0 rounded bg-stone-200" aria-hidden="true"></span>
+        {% else %}
+        <img src="{{ row.thumbnail_url }}" alt="" width="40" height="40"
+             class="h-10 w-10 shrink-0 rounded object-cover">
+        {% endif %}
+        <span class="min-w-0 flex-1">
+          <span class="block truncate font-medium">{{ row.title }}</span>
+          <span class="block text-sm text-stone-500">
+            {{ row.price }} {{ row.currency }}
+            · {{ row.provider_kind }}
+            {% if row.provider_kind == "self_inventory" %}· {{ row.stock_available }} in stock{% endif %}
+          </span>
+        </span>
+        {% if row.status == "published" %}
+        <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">Published</span>
+        {% else if row.status == "archived" %}
+        <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">Archived</span>
+        {% else %}
+        <span class="rounded-full bg-stone-100 px-2 py-0.5 text-xs font-medium text-stone-600">Draft</span>
+        {% endif %}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if let Some(next) = next %}
+  <p class="mt-3">
+    <a href="{{ base_path }}/catalog?q={{ q|urlencode }}&after={{ next|urlencode }}"
+       class="text-sm text-stone-500 underline hover:text-stone-900">Older →</a>
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

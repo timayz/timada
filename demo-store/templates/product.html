@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} · Timada Demo Store{% endblock %}
+
+{% block content %}
+<nav aria-label="Breadcrumb" class="text-sm text-slate-500">
+  <a href="/" class="hover:text-slate-900">Shop</a>
+  <span aria-hidden="true">/</span>
+  <span class="text-slate-900">{{ title }}</span>
+</nav>
+
+<article class="mt-4 grid gap-8 md:grid-cols-2">
+  <div>
+    {% if image_urls.is_empty() %}
+    <span class="block aspect-square rounded-lg bg-slate-100" aria-hidden="true"></span>
+    {% else %}
+    <img src="{{ image_urls[0] }}" alt="{{ title }}"
+         class="aspect-square w-full rounded-lg bg-slate-100 object-cover">
+    {% if image_urls.len() > 1 %}
+    <ul class="mt-2 flex gap-2">
+      {% for url in image_urls %}
+      <li><img src="{{ url }}" alt="" loading="lazy" class="h-16 w-16 rounded object-cover"></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% endif %}
+  </div>
+  <div>
+    <h1 class="text-2xl font-semibold">{{ title }}</h1>
+    <p class="mt-2 text-xl">{{ price }} {{ currency }}</p>
+    {% if in_stock %}
+    <p class="mt-1 text-sm font-medium text-green-700">In stock</p>
+    {% else %}
+    <p class="mt-1 text-sm font-medium text-slate-500">Out of stock</p>
+    {% endif %}
+    {% if !description.is_empty() %}
+    <p class="mt-4 whitespace-pre-line text-slate-700">{{ description }}</p>
+    {% endif %}
+    {% if !variants.is_empty() %}
+    <h2 class="mt-6 text-sm font-medium text-slate-500">Variants</h2>
+    <ul class="mt-2 space-y-1">
+      {% for variant in variants %}
+      <li class="flex justify-between rounded border border-slate-200 px-3 py-2 text-sm">
+        <span>{{ variant.title }}</span>
+        <span>{{ variant.price }} {{ variant.currency }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+</article>
+{% endblock %}

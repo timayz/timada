@@ -7,6 +7,8 @@ use axum::response::{IntoResponse, Response};
 pub enum AdminError {
     #[error("not found")]
     NotFound,
+    #[error("{0}")]
+    Invalid(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -15,6 +17,9 @@ impl IntoResponse for AdminError {
     fn into_response(self) -> Response {
         match self {
             AdminError::NotFound => (StatusCode::NOT_FOUND, "Not found").into_response(),
+            AdminError::Invalid(message) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, message).into_response()
+            }
             AdminError::Internal(error) => {
                 tracing::error!(error = ?error, "admin request failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()

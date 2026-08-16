@@ -71,6 +71,18 @@ pub fn router(ctx: AdminContext) -> axum::Router {
         .route("/assets/admin.css", get(routes::admin_css))
         .route("/assets/twinspark.min.js", get(routes::twinspark_js))
         .route(
+            "/catalog",
+            get(routes::catalog::index).post(routes::catalog::create),
+        )
+        .route("/catalog/new", get(routes::catalog::new))
+        .route("/catalog/{id}", get(routes::catalog::show))
+        .route("/catalog/{id}/details", post(routes::catalog::revise_details))
+        .route("/catalog/{id}/price", post(routes::catalog::reprice))
+        .route("/catalog/{id}/publish", post(routes::catalog::publish))
+        .route("/catalog/{id}/unpublish", post(routes::catalog::unpublish))
+        .route("/catalog/{id}/archive", post(routes::catalog::archive))
+        .route("/catalog/{id}/stock", post(routes::catalog::adjust_stock))
+        .route(
             "/providers",
             get(routes::providers::index).post(routes::providers::connect),
         )

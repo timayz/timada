@@ -16,6 +16,9 @@ pub struct Subscriptions(Vec<Subscription>);
 pub async fn start(executor: &RwSqlite, write_pool: SqlitePool) -> Result<Subscriptions> {
     let subscriptions = vec![
         crate::read_model::provider_list::start(executor, write_pool.clone()).await?,
+        crate::read_model::catalog_list::start(executor, write_pool.clone()).await?,
+        crate::read_model::catalog_detail::start(executor, write_pool.clone()).await?,
+        crate::read_model::stock_levels::start(executor, write_pool.clone()).await?,
     ];
 
     tracing::info!("read-model subscriptions started");
