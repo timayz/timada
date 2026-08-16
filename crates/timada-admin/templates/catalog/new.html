@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Add product · Timada Admin{% endblock %}
+
+{% block content %}
+<nav aria-label="Breadcrumb" class="text-sm text-stone-500">
+  <a href="{{ base_path }}/catalog" class="hover:text-stone-900">Catalog</a>
+  <span aria-hidden="true">/</span>
+  <span class="text-stone-900">Add product</span>
+</nav>
+
+<h1 class="mt-2 text-xl font-semibold">Add product</h1>
+<p class="mt-1 text-sm text-stone-500">Created in your own inventory.</p>
+
+<form method="post" action="{{ base_path }}/catalog"
+      class="mt-6 max-w-md space-y-4 rounded-lg border border-stone-200 bg-white p-4">
+  <div>
+    <label for="new-title" class="block text-sm font-medium">Title</label>
+    <input id="new-title" name="title" type="text" required
+           class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm">
+  </div>
+  <div>
+    <label for="new-description" class="block text-sm font-medium">Description</label>
+    <textarea id="new-description" name="description" rows="4"
+              class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm"></textarea>
+  </div>
+  <div class="flex gap-3">
+    <div class="flex-1">
+      <label for="new-price" class="block text-sm font-medium">Price</label>
+      <input id="new-price" name="price" type="text" inputmode="decimal" required placeholder="12.34"
+             class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm">
+    </div>
+    <div class="w-24">
+      <label for="new-currency" class="block text-sm font-medium">Currency</label>
+      <input id="new-currency" name="currency" type="text" value="USD" required
+             class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm uppercase">
+    </div>
+  </div>
+  <div>
+    <label for="new-image-url" class="block text-sm font-medium">Image URL <span class="font-normal text-stone-500">(optional)</span></label>
+    <input id="new-image-url" name="image_url" type="url"
+           class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm">
+  </div>
+  <div>
+    <label for="new-initial-stock" class="block text-sm font-medium">Initial stock <span class="font-normal text-stone-500">(optional)</span></label>
+    <input id="new-initial-stock" name="initial_stock" type="number" min="0"
+           class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm">
+  </div>
+  <button class="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700">
+    Add product
+  </button>
+</form>
+{% endblock %}

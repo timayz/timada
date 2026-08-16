@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/timada",
+    "crates/timada-provider",
+    "crates/timada-provider-aliexpress",
+    "crates/timada-admin",
+    "demo-store",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/timayz/timada"
+
+[workspace.dependencies]
+timada = { path = "crates/timada" }
+timada-provider = { path = "crates/timada-provider" }
+timada-provider-aliexpress = { path = "crates/timada-provider-aliexpress" }
+timada-admin = { path = "crates/timada-admin" }
+
+# `version = "2"` will NOT resolve a pre-release — pin the alpha exactly.
+evento = { version = "=2.0.0-alpha.26", features = ["sqlite", "rw"] }
+bitcode = "0.6"
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
+sqlx_migrator = { version = "0.19", default-features = false, features = ["sqlite"] }
+sea-query = "1.0.2"
+sea-query-sqlx = { version = "0.9", features = ["sqlx-sqlite"] }
+axum = "0.8"
+askama = "0.16"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

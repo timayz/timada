@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold">Shop</h1>
+
+{% if products.is_empty() %}
+<p class="mt-4 text-slate-600">
+  Nothing for sale yet — publish products from the
+  <a href="/admin/catalog" class="underline">admin catalog</a>.
+</p>
+{% else %}
+<ul class="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+  {% for product in products %}
+  <li>
+    <a href="/products/{{ product.id }}" class="group block">
+      {% if product.thumbnail_url.is_empty() %}
+      <span class="block aspect-square rounded-lg bg-slate-100" aria-hidden="true"></span>
+      {% else %}
+      <img src="{{ product.thumbnail_url }}" alt="" loading="lazy"
+           class="aspect-square w-full rounded-lg bg-slate-100 object-cover">
+      {% endif %}
+      <span class="mt-2 block truncate font-medium group-hover:underline">{{ product.title }}</span>
+      <span class="block text-sm text-slate-600">{{ product.price }} {{ product.currency }}</span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

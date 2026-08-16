@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.title }} · Timada Admin{% endblock %}
+
+{% block content %}
+<nav aria-label="Breadcrumb" class="text-sm text-stone-500">
+  <a href="{{ base_path }}/catalog" class="hover:text-stone-900">Catalog</a>
+  <span aria-hidden="true">/</span>
+  <span class="text-stone-900">{{ product.title }}</span>
+</nav>
+
+<h1 class="mt-2 text-xl font-semibold">{{ product.title }}</h1>
+<p class="mt-1 text-sm text-stone-500">{{ product.provider_kind }}</p>
+
+{% block status %}
+<div id="product-status" class="mt-6 flex items-center gap-3 rounded-lg border border-stone-200 bg-white p-4">
+  {% if product.archived %}
+  <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">Archived</span>
+  <p class="text-sm text-stone-600">Archived products cannot be changed.</p>
+  {% else %}
+  {% if product.published %}
+  <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">Published</span>
+  <form method="post" action="{{ base_path }}/catalog/{{ product.id }}/unpublish"
+        ts-req="{{ base_path }}/catalog/{{ product.id }}/unpublish" ts-target="#product-status">
+    <button class="rounded-md border border-stone-300 px-3 py-1.5 text-sm font-medium hover:bg-stone-50">
+      Unpublish
+    </button>
+  </form>
+  {% else %}
+  <span class="rounded-full bg-stone-100 px-2 py-0.5 text-xs font-medium text-stone-600">Draft</span>
+  <form method="post" action="{{ base_path }}/catalog/{{ product.id }}/publish"
+        ts-req="{{ base_path }}/catalog/{{ product.id }}/publish" ts-target="#product-status">
+    <button class="rounded-md bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-700">
+      Publish
+    </button>
+  </form>
+  {% endif %}
+  <form method="post" action="{{ base_path }}/catalog/{{ product.id }}/archive"
+        ts-req="{{ base_path }}/catalog/{{ product.id }}/archive" ts-target="#product-status"
+        class="ml-auto">
+    <button class="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50">
+      Archive
+    </button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block details %}
+<section id="product-details" class="mt-8" aria-label="Details">
+  <h2 class="text-sm font-medium text-stone-500">Details</h2>
+  <form method="post" action="{{ base_path }}/catalog/{{ product.id }}/details"
+        ts-req="{{ base_path }}/catalog/{{ product.id }}/details" ts-target="#product-details"
+        class="mt-2 max-w-md space-y-4 rounded-lg border border-stone-200 bg-white p-4">
+    <div>
+      <label for="details-title" class="block text-sm font-medium">Title</label>
+      <input id="details-title" name="title" type="text" required value="{{ product.title }}"
+             {% if product.archived %}disabled{% endif %}
+             class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm disabled:bg-stone-100">
+    </div>
+    <div>
+      <label for="details-description" class="block text-sm font-medium">Description</label>
+      <textarea id="details-description" name="description" rows="4"
+                {% if product.archived %}disabled{% endif %}
+                class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm disabled:bg-stone-100">{{ product.description }}</textarea>
+    </div>
+    {% if !product.archived %}
+    <button class="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700">
+      Save details
+    </button>
+    {% endif %}
+  </form>
+</section>
+{% endblock %}
+
+{% block price %}
+<section id="product-price" class="mt-8" aria-label="Price">
+  <h2 class="text-sm font-medium text-stone-500">Price</h2>
+  <form method="post" action="{{ base_path }}/catalog/{{ product.id }}/price"
+        ts-req="{{ base_path }}/catalog/{{ product.id }}/price" ts-target="#product-price"
+        class="mt-2 flex max-w-md items-end gap-3 rounded-lg border border-stone-200 bg-white p-4">
+    <div class="flex-1">
+      <label for="price-amount" class="block text-sm font-medium">Price</label>
+      <input id="price-amount" name="price" type="text" inputmode="decimal" required
+             value="{{ product.price }}" {% if product.archived %}disabled{% endif %}
+             class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm disabled:bg-stone-100">
+    </div>
+    <div class="w-24">
+      <label for="price-currency" class="block text-sm font-medium">Currency</label>
+      <input id="price-currency" name="currency" type="text" required value="{{ product.currency }}"
+             {% if product.archived %}disabled{% endif %}
+             class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm uppercase disabled:bg-stone-100">
+    </div>
+    {% if !product.archived %}
+    <button class="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700">
+      Save price
+    </button>
+    {% endif %}
+  </form>
+</section>
+{% endblock %}
+
+{% block stock %}
+<section id="product-stock" class="mt-8" aria-label="Stock">
+  {% if product.self_inventory %}
+  <h2 class="text-sm font-medium text-stone-500">Stock</h2>
+  <div class="mt-2 max-w-md rounded-lg border border-stone-200 bg-white p-4">
+    <p class="text-sm"><span class="text-2xl font-semibold">{{ stock_available }}</span> in stock</p>
+    {% if !product.archived %}
+    <form method="post" action="{{ base_path }}/catalog/{{ product.id }}/stock"
+          ts-req="{{ base_path }}/catalog/{{ product.id }}/stock" ts-target="#product-stock"
+          class="mt-3 flex items-end gap-3">
+      <div class="w-32">
+        <label for="stock-change" class="block text-sm font-medium">Adjust by</label>
+        <input id="stock-change" name="quantity_change" type="number" required placeholder="5 or -2"
+               class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm">
+      </div>
+      <div class="flex-1">
+        <label for="stock-reason" class="block text-sm font-medium">Reason</label>
+        <input id="stock-reason" name="reason" type="text" placeholder="restock"
+               class="mt-1 w-full rounded-md border border-stone-300 px-3 py-2 text-sm">
+      </div>
+      <button class="rounded-md bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700">
+        Adjust
+      </button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}
+  <h2 class="text-sm font-medium text-stone-500">Stock</h2>
+  <p class="mt-2 text-sm text-stone-600">Stock is managed by the provider for imported products.</p>
+  {% endif %}
+</section>
+{% endblock %}
+{% endblock %}

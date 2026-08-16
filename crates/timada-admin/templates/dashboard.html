@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard · Timada Admin{% endblock %}
+
+{% block content %}
+<h1 class="text-xl font-semibold">Dashboard</h1>
+
+<section class="mt-6" aria-labelledby="registered-providers">
+  <h2 id="registered-providers" class="text-sm font-medium text-stone-500">
+    Registered providers
+  </h2>
+  {% if providers.is_empty() %}
+  <p class="mt-2 text-sm text-stone-600">
+    No providers registered. Register one on the
+    <code class="rounded bg-stone-200 px-1">ProviderRegistry</code> at startup.
+  </p>
+  {% else %}
+  <ul class="mt-2 grid gap-3 sm:grid-cols-2">
+    {% for provider in providers %}
+    <li class="rounded-lg border border-stone-200 bg-white p-4">
+      <p class="font-medium">{{ provider.name }}</p>
+      <p class="mt-1 text-sm text-stone-500">{{ provider.kind }}</p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endblock %}

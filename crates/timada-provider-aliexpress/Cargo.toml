@@ -1,0 +1,14 @@
+[package]
+name = "timada-provider-aliexpress"
+description = "AliExpress dropshipping provider for timada e-commerce stores"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+timada-provider = { workspace = true }
+
+[lints]
+workspace = true

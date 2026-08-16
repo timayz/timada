@@ -1,0 +1,15 @@
+[package]
+name = "timada-provider"
+description = "Provider abstraction for timada e-commerce stores: catalog sourcing, stock sync, and order fulfillment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

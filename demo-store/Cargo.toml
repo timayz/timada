@@ -1,0 +1,26 @@
+[package]
+name = "demo-store"
+description = "Example storefront built on the timada framework"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+askama = { workspace = true }
+axum = { workspace = true }
+evento = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+timada = { workspace = true }
+timada-admin = { workspace = true }
+timada-provider = { workspace = true }
+timada-provider-aliexpress = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

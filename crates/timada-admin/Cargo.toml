@@ -1,0 +1,23 @@
+[package]
+name = "timada-admin"
+description = "Drop-in admin UI for timada e-commerce stores, mountable into any axum router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+include = ["src/**", "templates/**", "assets/**", "Cargo.toml"]
+
+[dependencies]
+anyhow = { workspace = true }
+askama = { workspace = true }
+axum = { workspace = true }
+evento = { workspace = true }
+serde = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+timada = { workspace = true }
+timada-provider = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
