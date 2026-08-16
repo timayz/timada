@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex">
+    <title>{% block title %}Timada Admin{% endblock %}</title>
+    <link rel="stylesheet" href="{{ base_path }}/assets/admin.css">
+    <script src="{{ base_path }}/assets/twinspark.min.js" defer></script>
+  </head>
+  <body class="min-h-screen bg-stone-100 text-stone-900">
+    <header class="border-b border-stone-200 bg-white">
+      <nav class="mx-auto flex max-w-5xl items-center gap-4 px-4 py-3" aria-label="Admin">
+        <a href="{{ base_path }}" class="text-base font-semibold">Timada Admin</a>
+      </nav>
+    </header>
+    <main class="mx-auto max-w-5xl px-4 py-6">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>
