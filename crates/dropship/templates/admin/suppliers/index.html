@@ -1,0 +1,76 @@
+{% extends "admin/layout.html" %}
+
+{% block meta %}
+  <title>Suppliers · Timada Admin</title>
+{% endblock %}
+
+{% block content %}
+  <h1 class="text-xl font-semibold sm:text-2xl">Suppliers</h1>
+
+  <section aria-labelledby="registered-heading" class="mt-6">
+    <h2 id="registered-heading" class="text-base font-medium">Registered suppliers</h2>
+    {% if suppliers.is_empty() %}
+      <p class="mt-2 text-sm text-stone-600">
+        No supplier is registered. Build a <code>SupplierRegistry</code> and pass it to
+        <code>DropshipState</code>.
+      </p>
+    {% else %}
+      <ul class="mt-2 flex flex-wrap gap-2">
+        {% for supplier in suppliers %}
+          <li class="rounded-full border border-stone-300 bg-white px-3 py-1 text-sm font-medium">
+            {{ supplier }}
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+
+  <section aria-labelledby="orders-heading" class="mt-8">
+    <h2 id="orders-heading" class="text-base font-medium">Recent supplier orders</h2>
+
+    {% if orders.is_empty() %}
+      <p class="mt-2 text-sm text-stone-600">
+        Nothing forwarded yet. Supplier orders appear here once an order is paid.
+      </p>
+    {% else %}
+      <ul class="mt-2 flex flex-col gap-3">
+        {% for order in orders %}
+          <li class="rounded border border-stone-300 bg-white p-4">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-medium">{{ order.supplier_id }}</span>
+              {% if order.status == "confirmed" %}
+                <span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">confirmed</span>
+              {% else if order.status == "rejected" %}
+                <span class="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-900">rejected</span>
+              {% else %}
+                <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">placed</span>
+              {% endif %}
+            </div>
+            <dl class="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
+              <div class="flex gap-2">
+                <dt class="text-stone-600">Order</dt>
+                <dd class="font-mono break-all">{{ order.order_id }}</dd>
+              </div>
+              <div class="flex gap-2">
+                <dt class="text-stone-600">Supplier order</dt>
+                <dd class="font-mono break-all">{{ order.id }}</dd>
+              </div>
+              {% if let Some(external_ref) = order.external_ref %}
+                <div class="flex gap-2">
+                  <dt class="text-stone-600">Supplier ref</dt>
+                  <dd class="font-mono break-all">{{ external_ref }}</dd>
+                </div>
+              {% endif %}
+              {% if let Some(reason) = order.reason %}
+                <div class="flex gap-2">
+                  <dt class="text-stone-600">Reason</dt>
+                  <dd class="text-red-900">{{ reason }}</dd>
+                </div>
+              {% endif %}
+            </dl>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+{% endblock %}
