@@ -1,0 +1,5 @@
+[general]
+# `../web/templates` puts `timada-web`'s base layouts on the search path so this
+# crate's pages can `{% extends "layout.html" %}` / `{% extends
+# "admin/layout.html" %}`.
+dirs = ["templates", "../web/templates"]
