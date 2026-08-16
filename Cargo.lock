@@ -2242,6 +2242,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-admin"
+version = "0.1.0"
+dependencies = [
+ "askama",
+ "axum",
+ "timada-catalog",
+ "timada-dropship",
+ "timada-order",
+ "timada-payment",
+ "timada-shipping",
+ "timada-web",
+]
+
+[[package]]
 name = "timada-cart"
 version = "0.1.0"
 dependencies = [

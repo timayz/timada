@@ -1,0 +1,35 @@
+{% extends "admin/layout.html" %}
+
+{% block meta %}
+  <title>Dashboard — Timada Admin</title>
+{% endblock %}
+
+{% block content %}
+  <h1 class="mb-6 text-2xl font-semibold">Dashboard</h1>
+  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <a href="/admin/catalog" class="rounded-lg border border-stone-300 bg-white p-4 hover:border-stone-400">
+      <h2 class="font-semibold">Catalog</h2>
+      <p class="mt-1 text-sm text-stone-600">Products imported from suppliers; publish or archive them.</p>
+    </a>
+    <a href="/admin/catalog/import" class="rounded-lg border border-stone-300 bg-white p-4 hover:border-stone-400">
+      <h2 class="font-semibold">Import products</h2>
+      <p class="mt-1 text-sm text-stone-600">Search a supplier's catalog and import products to sell.</p>
+    </a>
+    <a href="/admin/orders" class="rounded-lg border border-stone-300 bg-white p-4 hover:border-stone-400">
+      <h2 class="font-semibold">Orders</h2>
+      <p class="mt-1 text-sm text-stone-600">Customer orders and their fulfillment progress.</p>
+    </a>
+    <a href="/admin/payments" class="rounded-lg border border-stone-300 bg-white p-4 hover:border-stone-400">
+      <h2 class="font-semibold">Payments</h2>
+      <p class="mt-1 text-sm text-stone-600">Charges, declines, and refunds per order.</p>
+    </a>
+    <a href="/admin/shipping" class="rounded-lg border border-stone-300 bg-white p-4 hover:border-stone-400">
+      <h2 class="font-semibold">Shipping</h2>
+      <p class="mt-1 text-sm text-stone-600">Shipments with tracking; refresh supplier tracking here.</p>
+    </a>
+    <a href="/admin/suppliers" class="rounded-lg border border-stone-300 bg-white p-4 hover:border-stone-400">
+      <h2 class="font-semibold">Suppliers</h2>
+      <p class="mt-1 text-sm text-stone-600">Registered dropshipping suppliers and forwarded orders.</p>
+    </a>
+  </div>
+{% endblock %}
