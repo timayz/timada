@@ -2244,6 +2244,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-dropship-aliexpress"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "timada-dropship",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "timada-payment"
 version = "0.1.0"
 dependencies = [
