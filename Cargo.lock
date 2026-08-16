@@ -2190,6 +2190,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-catalog"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "askama",
+ "axum",
+ "bitcode",
+ "evento",
+ "serde",
+ "sqlx",
+ "sqlx_migrator",
+ "timada-core",
+ "timada-dropship",
+ "timada-web",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "timada-core"
 version = "0.1.0"
 dependencies = [
@@ -2238,6 +2257,24 @@ dependencies = [
  "sqlx_migrator",
  "thiserror",
  "timada-core",
+ "timada-web",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "timada-shipping"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "askama",
+ "axum",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "timada-core",
+ "timada-dropship",
  "timada-web",
  "tokio",
  "tracing",
