@@ -1,0 +1,16 @@
+[package]
+name = "demo-store"
+description = "Demo storefront + admin wiring the whole Timada framework together"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
