@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    {% block meta %}
+      <title>Timada Admin</title>
+    {% endblock %}
+    <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/twinspark.js" defer></script>
+  </head>
+  <body class="min-h-screen bg-stone-100 text-stone-900">
+    <header class="border-b border-stone-300 bg-white">
+      <nav aria-label="Admin" class="mx-auto flex max-w-6xl flex-wrap items-center gap-1 px-4 py-3">
+        <a href="/admin" class="mr-4 text-lg font-semibold">Timada Admin</a>
+        <a href="/admin/catalog" class="rounded px-3 py-2 text-sm font-medium hover:bg-stone-100">Catalog</a>
+        <a href="/admin/orders" class="rounded px-3 py-2 text-sm font-medium hover:bg-stone-100">Orders</a>
+        <a href="/admin/payments" class="rounded px-3 py-2 text-sm font-medium hover:bg-stone-100">Payments</a>
+        <a href="/admin/shipping" class="rounded px-3 py-2 text-sm font-medium hover:bg-stone-100">Shipping</a>
+        <a href="/admin/suppliers" class="rounded px-3 py-2 text-sm font-medium hover:bg-stone-100">Suppliers</a>
+      </nav>
+    </header>
+    <main class="mx-auto max-w-6xl px-4 py-6">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

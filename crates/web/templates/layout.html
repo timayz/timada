@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    {% block meta %}
+      <title>Timada Store</title>
+      <meta name="description" content="Timada demo store" />
+    {% endblock %}
+    <link rel="stylesheet" href="/assets/app.css" />
+    <script src="/assets/twinspark.js" defer></script>
+  </head>
+  <body class="min-h-screen bg-stone-50 text-stone-900">
+    <header class="border-b border-stone-200 bg-white">
+      <nav aria-label="Main" class="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+        <a href="/" class="text-lg font-semibold">Timada Store</a>
+        <a href="/cart" class="rounded px-3 py-2 text-sm font-medium hover:bg-stone-100">Cart</a>
+      </nav>
+    </header>
+    <main class="mx-auto max-w-5xl px-4 py-6">
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>
