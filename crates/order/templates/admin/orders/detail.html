@@ -1,0 +1,113 @@
+{% extends "admin/layout.html" %}
+
+{% block meta %}
+  <title>Order · Timada Admin</title>
+{% endblock %}
+
+{% block content %}
+  <p class="text-sm"><a href="/admin/orders" class="underline hover:text-stone-600">← All orders</a></p>
+  <h1 class="mt-2 text-xl font-semibold break-all sm:text-2xl">Order {{ order.id }}</h1>
+  <p class="mt-2 text-sm text-stone-600">
+    Replayed from the event store, so this is the order exactly as the customer sees it — not the
+    eventually-consistent list table.
+  </p>
+
+  {% if let Some(reason) = order.cancel_reason %}
+    <p role="status" class="mt-4 rounded bg-red-50 p-4 text-sm text-red-900">
+      <span class="font-semibold">Cancelled:</span> {{ reason }}
+    </p>
+  {% endif %}
+
+  <dl class="mt-6 grid gap-4 rounded border border-stone-300 bg-white p-4 text-sm sm:grid-cols-2">
+    <div>
+      <dt class="font-medium text-stone-600">Status</dt>
+      <dd class="mt-1">{{ order.status.as_str() }}</dd>
+    </div>
+    <div>
+      <dt class="font-medium text-stone-600">Total</dt>
+      <dd class="mt-1">{{ order.total }}</dd>
+    </div>
+    <div>
+      <dt class="font-medium text-stone-600">Email</dt>
+      <dd class="mt-1 break-all">{{ order.email }}</dd>
+    </div>
+    <div>
+      <dt class="font-medium text-stone-600">Cart</dt>
+      <dd class="mt-1 font-mono break-all">{{ order.cart_id }}</dd>
+    </div>
+    <div>
+      <dt class="font-medium text-stone-600">Payment</dt>
+      <dd class="mt-1 font-mono break-all">
+        {% if let Some(payment_id) = order.payment_id %}
+          {{ payment_id }}
+        {% else %}
+          <span class="text-stone-500">—</span>
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt class="font-medium text-stone-600">Tracking number</dt>
+      <dd class="mt-1 font-mono break-all">
+        {% if let Some(tracking_number) = order.tracking_number %}
+          {{ tracking_number }}
+        {% else %}
+          <span class="text-stone-500">—</span>
+        {% endif %}
+      </dd>
+    </div>
+    <div class="sm:col-span-2">
+      <dt class="font-medium text-stone-600">Supplier orders</dt>
+      <dd class="mt-1">
+        {% if order.supplier_order_ids.is_empty() %}
+          <span class="text-stone-500">—</span>
+        {% else %}
+          <ul class="grid gap-1 font-mono break-all">
+            {% for supplier_order_id in order.supplier_order_ids %}
+              <li>{{ supplier_order_id }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </dd>
+    </div>
+    <div class="sm:col-span-2">
+      <dt class="font-medium text-stone-600">Delivery address</dt>
+      <dd class="mt-1">
+        <address class="not-italic">
+          {{ order.shipping_address.full_name }}<br />
+          {{ order.shipping_address.street }}<br />
+          {{ order.shipping_address.postal_code }} {{ order.shipping_address.city }}<br />
+          {{ order.shipping_address.country }}
+        </address>
+      </dd>
+    </div>
+  </dl>
+
+  <h2 class="mt-8 text-base font-semibold">Lines</h2>
+  <div class="mt-3 overflow-x-auto rounded border border-stone-300 bg-white">
+    <table class="w-full min-w-3xl border-collapse text-left text-sm">
+      <caption class="sr-only">Order lines</caption>
+      <thead class="border-b border-stone-300 text-xs font-medium tracking-wide text-stone-600 uppercase">
+        <tr>
+          <th scope="col" class="px-4 py-3">Product</th>
+          <th scope="col" class="px-4 py-3">Supplier</th>
+          <th scope="col" class="px-4 py-3">Supplier ref</th>
+          <th scope="col" class="px-4 py-3 text-right">Unit price</th>
+          <th scope="col" class="px-4 py-3 text-right">Qty</th>
+          <th scope="col" class="px-4 py-3 text-right">Line total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for line in order.lines %}
+          <tr class="border-b border-stone-200 last:border-b-0">
+            <td class="px-4 py-3">{{ line.title }}</td>
+            <td class="px-4 py-3 font-medium">{{ line.supplier_id }}</td>
+            <td class="px-4 py-3 font-mono break-all">{{ line.supplier_product_ref }}</td>
+            <td class="px-4 py-3 text-right whitespace-nowrap">{{ line.unit_price }}</td>
+            <td class="px-4 py-3 text-right">{{ line.quantity }}</td>
+            <td class="px-4 py-3 text-right whitespace-nowrap">{{ line.line_total() }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}
