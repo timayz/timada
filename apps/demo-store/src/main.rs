@@ -27,6 +27,7 @@ use timada_dropship_aliexpress::AliExpressSupplier;
 use timada_order::OrderState;
 use timada_payment::{FakePaymentProvider, PaymentProvider, PaymentState};
 use timada_shipping::ShippingState;
+use timada_tax::{FixedRateVat, TaxCalculator};
 
 #[derive(Parser)]
 #[command(name = "demo-store", about = "Timada demo store")]
@@ -131,6 +132,12 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         .register(Arc::new(AliExpressSupplier::new()))
         .build();
     let provider: Arc<dyn PaymentProvider> = Arc::new(FakePaymentProvider);
+    // 20 % default VAT with a couple of per-country overrides, tax-inclusive.
+    let tax: Arc<dyn TaxCalculator> = Arc::new(
+        FixedRateVat::new(2000)
+            .with_country("DE", 1900)
+            .with_country("LU", 1700),
+    );
 
     let catalog = CatalogState {
         ctx: ctx.clone(),
@@ -141,6 +148,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         ctx: ctx.clone(),
         registry: registry.clone(),
         provider: provider.clone(),
+        tax,
     };
     let payment = PaymentState {
         ctx: ctx.clone(),

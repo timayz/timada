@@ -21,6 +21,7 @@ timada-dropship-aliexpress.workspace = true
 timada-order.workspace = true
 timada-payment.workspace = true
 timada-shipping.workspace = true
+timada-tax.workspace = true
 timada-web.workspace = true
 tokio.workspace = true
 tracing.workspace = true

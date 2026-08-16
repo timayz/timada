@@ -11,8 +11,11 @@
 //! purpose — it is the amount the payment provider is asked to charge, so it
 //! must be the number the customer saw, not a number recomputed later from
 //! lines that could round differently.
+//!
+//! Prices are tax-inclusive, so the tax amounts are snapshotted for the same
+//! reason and then some: an invoice reprinted years later must show the rate
+//! that applied on the day of the sale, not today's.
 
-use timada_cart::CartLine;
 use timada_core::Money;
 
 /// Where the parcel goes. Nested in `OrderPlaced`, hence the bitcode derives.
@@ -34,6 +37,10 @@ pub struct Address {
 /// `supplier_id` and `supplier_product_ref` ride along from the cart line so
 /// the saga can group the order by supplier without asking the catalog again —
 /// the product may have been archived or re-imported since.
+///
+/// `unit_price` is the tax-inclusive price of one unit, exactly as the
+/// storefront showed it. `net` and `tax` are *line* amounts covering all
+/// `quantity` units, so `net + tax == line_total()`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, bitcode::Encode, bitcode::Decode)]
 pub struct OrderLine {
     pub product_id: String,
@@ -42,37 +49,34 @@ pub struct OrderLine {
     pub supplier_id: String,
     pub supplier_product_ref: String,
     pub quantity: u32,
+    /// Rate applied to this line, in basis points (2000 = 20 %).
+    pub tax_rate_bps: u32,
+    pub net: Money,
+    pub tax: Money,
 }
 
 impl OrderLine {
-    /// What this line costs: unit price times quantity.
+    /// What this line costs, tax included: unit price times quantity.
     pub fn line_total(&self) -> Money {
         self.unit_price.multiply(self.quantity)
-    }
-}
-
-impl From<&CartLine> for OrderLine {
-    fn from(line: &CartLine) -> Self {
-        Self {
-            product_id: line.product_id.clone(),
-            title: line.title.clone(),
-            unit_price: line.unit_price,
-            supplier_id: line.supplier_id.clone(),
-            supplier_product_ref: line.supplier_product_ref.clone(),
-            quantity: line.quantity,
-        }
     }
 }
 
 #[evento::aggregate]
 pub enum Order {
     /// Checkout succeeded: the cart became an order nobody can edit any more.
+    ///
+    /// `total` is what the customer pays; `total_net` and `total_tax` are the
+    /// assessed split of it, both snapshotted so an invoice never has to
+    /// re-derive tax from rates that may have moved since.
     OrderPlaced {
         cart_id: String,
         email: String,
         shipping_address: Address,
         lines: Vec<OrderLine>,
         total: Money,
+        total_net: Money,
+        total_tax: Money,
     },
     /// The payment context captured the charge.
     OrderPaid { payment_id: String },

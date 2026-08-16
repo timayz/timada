@@ -22,6 +22,7 @@ timada-core.workspace = true
 timada-dropship.workspace = true
 timada-payment.workspace = true
 timada-shipping.workspace = true
+timada-tax.workspace = true
 timada-web.workspace = true
 tracing.workspace = true
 

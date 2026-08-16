@@ -115,6 +115,9 @@
         <span class="font-medium">Total</span>
         <span class="font-semibold">{{ cart.total() }}</span>
       </p>
+      <p class="mt-1 text-xs text-stone-600">
+        Includes {{ total_tax }} VAT · the final rate depends on your delivery country
+      </p>
 
       <a href="/cart" class="mt-3 inline-block text-sm underline hover:text-stone-900">Back to cart</a>
     </section>

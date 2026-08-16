@@ -8,7 +8,8 @@ use axum::routing::get;
 use axum::{Form, Router};
 use axum_extra::extract::cookie::CookieJar;
 use timada_cart::{CartView, cart_cookie_id, load_cart};
-use timada_core::{AppError, AppResult};
+use timada_core::{AppError, AppResult, Money};
+use timada_tax::{TaxAssessmentRequest, TaxableLine};
 use timada_web::HtmlTemplate;
 
 use crate::aggregate::Address;
@@ -28,6 +29,9 @@ pub fn store_router(state: OrderState) -> Router {
 #[template(path = "store/checkout.html")]
 struct CheckoutTemplate {
     cart: CartView,
+    /// Indicative: the country is not known until the form is submitted, so
+    /// this is the calculator's default rate. The page says as much.
+    total_tax: Money,
 }
 
 #[derive(Template)]
@@ -58,7 +62,31 @@ async fn checkout_page(State(state): State<OrderState>, jar: CookieJar) -> AppRe
         return Ok(Redirect::to("/cart").into_response());
     };
 
-    Ok(HtmlTemplate(CheckoutTemplate { cart }).into_response())
+    // Prices are tax-inclusive, so this only breaks out how much of the total
+    // is tax. The destination country arrives with the form, so the preview
+    // uses the calculator's default rate and the page labels it as such.
+    let assessment = state
+        .tax
+        .assess(TaxAssessmentRequest {
+            country: String::new(),
+            lines: cart
+                .lines
+                .iter()
+                .map(|line| TaxableLine {
+                    reference: line.product_id.clone(),
+                    gross_unit_price: line.unit_price,
+                    quantity: line.quantity,
+                })
+                .collect(),
+        })
+        .await
+        .map_err(anyhow::Error::from)?;
+
+    Ok(HtmlTemplate(CheckoutTemplate {
+        cart,
+        total_tax: assessment.total_tax,
+    })
+    .into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -95,7 +123,15 @@ async fn submit_checkout(
     // A refused checkout is the customer's mistake, not a server fault, so it
     // answers 400 with the reason instead of the blanket 500 that `?` on the
     // error type would produce.
-    let order_id = match place_order(&state.ctx.executor, &cart_id, form.email, address).await {
+    let order_id = match place_order(
+        &state.ctx.executor,
+        &state.tax,
+        &cart_id,
+        form.email,
+        address,
+    )
+    .await
+    {
         Ok(order_id) => order_id,
         Err(PlaceOrderError::Storage(error)) => return Err(AppError::Internal(error)),
         Err(refused) => return Err(AppError::BadRequest(refused.to_string())),

@@ -24,6 +24,7 @@ use timada_order::{
 };
 use timada_payment::{FakePaymentProvider, PaymentStatus, load_payment};
 use timada_shipping::{load_shipment, refresh_tracking, shipment_id};
+use timada_tax::{FixedRateVat, TaxCalculator};
 
 /// A temp-file database plus the state every test needs, torn down on drop.
 struct TestDb {
@@ -60,12 +61,18 @@ impl TestDb {
                 ctx,
                 registry,
                 provider: Arc::new(FakePaymentProvider),
+                // 20 % everywhere, so a 4200-cent line splits 3500 + 700.
+                tax: Arc::new(FixedRateVat::new(2000)),
             },
         })
     }
 
     fn executor(&self) -> &timada_core::Executor {
         &self.state.ctx.executor
+    }
+
+    fn tax(&self) -> &Arc<dyn TaxCalculator> {
+        &self.state.tax
     }
 
     /// One saga pass: drain whatever is pending right now and return.
@@ -170,6 +177,7 @@ async fn an_order_walks_from_placed_to_delivered() -> anyhow::Result<()> {
 
     let order_id = place_order(
         db.executor(),
+        db.tax(),
         &cart_id,
         "ada@example.com".to_owned(),
         db.address(),
@@ -249,6 +257,7 @@ async fn a_declined_charge_cancels_the_order() -> anyhow::Result<()> {
 
     let order_id = place_order(
         db.executor(),
+        db.tax(),
         &cart_id,
         "ada@example.com".to_owned(),
         db.address(),
@@ -295,6 +304,7 @@ async fn a_supplier_rejection_refunds_and_cancels() -> anyhow::Result<()> {
 
     let order_id = place_order(
         db.executor(),
+        db.tax(),
         &cart_id,
         "ada@example.com".to_owned(),
         db.address(),
@@ -332,11 +342,49 @@ async fn a_supplier_rejection_refunds_and_cancels() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn checkout_snapshots_the_tax_split_of_a_tax_inclusive_total() -> anyhow::Result<()> {
+    let db = TestDb::new().await?;
+    let cart_id = db.cart_with("mock", 4200).await?;
+
+    let order_id = place_order(
+        db.executor(),
+        db.tax(),
+        &cart_id,
+        "ada@example.com".to_owned(),
+        db.address(),
+    )
+    .await?;
+    let order = db.order(&order_id).await?;
+
+    // Tax-inclusive: the customer still pays the price they saw.
+    assert_eq!(order.total, Money::new(4200, Currency::Eur));
+    assert_eq!(order.total_net.add(order.total_tax)?, order.total);
+    // 42.00 gross at 20 % inclusive → 35.00 net + 7.00 tax.
+    assert_eq!(order.total_tax, Money::new(700, Currency::Eur));
+    assert_eq!(order.total_net, Money::new(3500, Currency::Eur));
+
+    assert_eq!(order.lines.len(), 1);
+    for line in &order.lines {
+        assert_eq!(line.tax_rate_bps, 2000);
+        assert_eq!(
+            line.net.add(line.tax)?,
+            line.unit_price.multiply(line.quantity),
+            "line {} must reconcile against its gross",
+            line.product_id
+        );
+    }
+
+    db.close().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result<()> {
     let db = TestDb::new().await?;
 
     let unknown = place_order(
         db.executor(),
+        db.tax(),
         &new_id(),
         "ada@example.com".to_owned(),
         db.address(),
@@ -354,6 +402,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     .await?;
     let empty = place_order(
         db.executor(),
+        db.tax(),
         &cart_id,
         "ada@example.com".to_owned(),
         db.address(),
@@ -364,6 +413,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     let cart_id = db.cart_with("mock", 3300).await?;
     let bad_email = place_order(
         db.executor(),
+        db.tax(),
         &cart_id,
         "not-an-email".to_owned(),
         db.address(),
@@ -373,6 +423,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
 
     let blank_city = place_order(
         db.executor(),
+        db.tax(),
         &cart_id,
         "ada@example.com".to_owned(),
         Address {
@@ -386,6 +437,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     // The valid checkout closes the cart, so a second one is refused.
     place_order(
         db.executor(),
+        db.tax(),
         &cart_id,
         "ada@example.com".to_owned(),
         db.address(),
@@ -393,6 +445,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     .await?;
     let again = place_order(
         db.executor(),
+        db.tax(),
         &cart_id,
         "ada@example.com".to_owned(),
         db.address(),

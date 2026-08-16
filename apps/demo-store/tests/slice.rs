@@ -14,6 +14,7 @@ use timada_core::{Executor, ServiceContext, new_id};
 use timada_dropship::{MockSupplier, Supplier as _, SupplierRegistry};
 use timada_order::{Address, OrderStatus, fulfillment_subscription, load_order, place_order};
 use timada_payment::{FakePaymentProvider, PaymentProvider};
+use timada_tax::{FixedRateVat, TaxCalculator};
 
 struct TestApp {
     dir: std::path::PathBuf,
@@ -21,6 +22,7 @@ struct TestApp {
     ctx: ServiceContext,
     registry: SupplierRegistry,
     provider: Arc<dyn PaymentProvider>,
+    tax: Arc<dyn TaxCalculator>,
 }
 
 impl TestApp {
@@ -52,6 +54,7 @@ impl TestApp {
             ctx,
             registry,
             provider: Arc::new(FakePaymentProvider),
+            tax: Arc::new(FixedRateVat::new(2000)),
         })
     }
 
@@ -105,6 +108,7 @@ impl TestApp {
         timada_cart::add_item(self.executor(), &cart_id, &product, quantity).await?;
         let order_id = place_order(
             self.executor(),
+            &self.tax,
             &cart_id,
             "customer@example.com".into(),
             Address {

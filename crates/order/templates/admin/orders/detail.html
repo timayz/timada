@@ -25,7 +25,10 @@
     </div>
     <div>
       <dt class="font-medium text-stone-600">Total</dt>
-      <dd class="mt-1">{{ order.total }}</dd>
+      <dd class="mt-1">
+        {{ order.total }}
+        <span class="block text-xs text-stone-600">Includes {{ order.total_tax }} VAT</span>
+      </dd>
     </div>
     <div>
       <dt class="font-medium text-stone-600">Email</dt>

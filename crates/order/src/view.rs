@@ -61,7 +61,12 @@ pub struct OrderView {
     pub email: String,
     pub shipping_address: Address,
     pub lines: Vec<OrderLine>,
+    /// Tax-inclusive: what the customer pays, and what is charged.
     pub total: Money,
+    /// The assessed split of [`total`](Self::total): `total_net + total_tax`
+    /// equals it.
+    pub total_net: Money,
+    pub total_tax: Money,
     pub status: OrderStatus,
     /// `Some` once the charge was captured.
     pub payment_id: Option<String>,
@@ -117,6 +122,8 @@ async fn apply_placed(event: Event<OrderPlaced>, view: &mut OrderView) -> anyhow
     view.shipping_address = event.data.shipping_address.clone();
     view.lines = event.data.lines.clone();
     view.total = event.data.total;
+    view.total_net = event.data.total_net;
+    view.total_tax = event.data.total_tax;
     view.status = OrderStatus::Placed;
     Ok(())
 }
