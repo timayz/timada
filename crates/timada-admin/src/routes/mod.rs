@@ -1,3 +1,5 @@
+pub(crate) mod providers;
+
 use askama::Template;
 use axum::extract::State;
 use axum::http::header;
@@ -6,8 +8,8 @@ use axum::response::{IntoResponse, Response};
 use crate::AdminContext;
 use crate::render::{AdminError, html};
 
-const ADMIN_CSS: &str = include_str!("../assets/admin.css");
-const TWINSPARK_JS: &str = include_str!("../assets/twinspark.min.js");
+const ADMIN_CSS: &str = include_str!("../../assets/admin.css");
+const TWINSPARK_JS: &str = include_str!("../../assets/twinspark.min.js");
 
 pub(crate) async fn admin_css() -> impl IntoResponse {
     (

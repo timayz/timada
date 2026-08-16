@@ -6,12 +6,14 @@
 
 use sqlx::Sqlite;
 use sqlx_migrator::migration::Migration;
+use sqlx_migrator::vec_box;
+
+pub mod provider_list;
 
 /// All read-model migrations (app name `"timada"`), in registration order.
 ///
 /// The evento event-store schema is NOT part of this list — it is owned by
 /// `evento::sql_migrator`. [`crate::db::migrate`] runs both.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    // Read-model migrations are registered here as they land.
-    Vec::new()
+    vec_box![provider_list::M0001CreateProviderList]
 }

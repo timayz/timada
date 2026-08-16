@@ -8,10 +8,16 @@ repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+bitcode = { workspace = true }
 evento = { workspace = true }
 sqlx = { workspace = true }
 sqlx_migrator = { workspace = true }
+timada-provider = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

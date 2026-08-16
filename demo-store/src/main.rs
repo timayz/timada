@@ -80,6 +80,8 @@ async fn main() -> anyhow::Result<()> {
 
     let providers = Arc::new(ProviderRegistry::default().register(Arc::new(AliExpress)));
 
+    let subscriptions = timada::subscriptions::start(&executor, write_pool.clone()).await?;
+
     let admin = timada_admin::AdminContext::new(executor, read_pool, Arc::clone(&providers));
 
     let app = axum::Router::new()
@@ -98,5 +100,6 @@ async fn main() -> anyhow::Result<()> {
         })
         .await?;
 
+    subscriptions.shutdown().await?;
     Ok(())
 }

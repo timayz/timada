@@ -12,8 +12,10 @@ anyhow = { workspace = true }
 askama = { workspace = true }
 axum = { workspace = true }
 evento = { workspace = true }
+serde = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
+timada = { workspace = true }
 timada-provider = { workspace = true }
 tracing = { workspace = true }
 

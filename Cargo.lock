@@ -2067,9 +2067,13 @@ name = "timada"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "bitcode",
  "evento",
  "sqlx",
  "sqlx_migrator",
+ "timada-provider",
+ "tokio",
  "tracing",
 ]
 
@@ -2081,8 +2085,10 @@ dependencies = [
  "askama",
  "axum",
  "evento",
+ "serde",
  "sqlx",
  "thiserror",
+ "timada",
  "timada-provider",
  "tracing",
 ]

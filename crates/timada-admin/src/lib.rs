@@ -64,11 +64,22 @@ impl AdminContext {
 ///
 /// The router performs no authentication — wrap it with your own layer.
 pub fn router(ctx: AdminContext) -> axum::Router {
-    use axum::routing::get;
+    use axum::routing::{get, post};
 
     axum::Router::new()
         .route("/", get(routes::dashboard))
         .route("/assets/admin.css", get(routes::admin_css))
         .route("/assets/twinspark.min.js", get(routes::twinspark_js))
+        .route(
+            "/providers",
+            get(routes::providers::index).post(routes::providers::connect),
+        )
+        .route("/providers/{id}", get(routes::providers::show))
+        .route(
+            "/providers/{id}/credentials",
+            post(routes::providers::save_credentials),
+        )
+        .route("/providers/{id}/enable", post(routes::providers::enable))
+        .route("/providers/{id}/disable", post(routes::providers::disable))
         .with_state(ctx)
 }

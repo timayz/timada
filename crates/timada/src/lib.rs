@@ -8,4 +8,6 @@
 //! orphans every event already written to a store's database.
 
 pub mod db;
+pub mod provider_connection;
 pub mod read_model;
+pub mod subscriptions;
