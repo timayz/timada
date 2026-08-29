@@ -29,6 +29,7 @@ use timada_dropship_aliexpress::AliExpressSupplier;
 use timada_invoice::{InvoiceConfig, InvoiceState, Party};
 use timada_order::OrderState;
 use timada_payment::{FakePaymentProvider, PaymentProvider, PaymentState};
+use timada_promotion::PromotionState;
 use timada_region::{RegionCountry, RegionState, RegionVat};
 use timada_shipping::ShippingState;
 use timada_tax::TaxCalculator;
@@ -75,6 +76,7 @@ fn all_migrations() -> Vec<Box<dyn sqlx_migrator::migration::Migration<sqlx::Sql
     migrations.extend(timada_customer::migrations());
     migrations.extend(timada_catalog::migrations());
     migrations.extend(timada_region::migrations());
+    migrations.extend(timada_promotion::migrations());
     migrations.extend(timada_order::migrations());
     migrations.extend(timada_invoice::migrations());
     migrations.extend(timada_payment::migrations());
@@ -162,6 +164,23 @@ async fn seed(database_url: &str) -> anyhow::Result<()> {
         .await?;
         tracing::info!("seeded the Europe (EUR) and United States (USD) regions");
     }
+
+    // 10 % off, first 100 uses — code ids derive from the code, so re-seeding
+    // just reports the code as taken.
+    match timada_promotion::create_discount(
+        &ctx.executor,
+        "WELCOME10",
+        timada_promotion::DiscountKind::Percentage { bps: 1000 },
+        timada_core::now_millis(),
+        None,
+        Some(100),
+    )
+    .await
+    {
+        Ok(_) => tracing::info!("seeded the WELCOME10 discount (10 %, limit 100)"),
+        Err(timada_promotion::CreateDiscountError::CodeTaken) => {}
+        Err(refused) => anyhow::bail!("failed to seed WELCOME10: {refused}"),
+    }
     Ok(())
 }
 
@@ -198,6 +217,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         registry: registry.clone(),
     };
     let region = RegionState { ctx: ctx.clone() };
+    let promotion = PromotionState { ctx: ctx.clone() };
     let cart = CartState { ctx: ctx.clone() };
     let customer = CustomerState {
         ctx: ctx.clone(),
@@ -237,6 +257,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
     let mut subscriptions = Vec::new();
     subscriptions.extend(timada_catalog::start_subscriptions(&catalog).await?);
     subscriptions.extend(timada_region::start_subscriptions(&region).await?);
+    subscriptions.extend(timada_promotion::start_subscriptions(&promotion).await?);
     subscriptions.extend(timada_order::start_subscriptions(&order).await?);
     subscriptions.extend(timada_payment::start_subscriptions(&payment).await?);
     subscriptions.extend(timada_shipping::start_subscriptions(&shipping).await?);
@@ -246,6 +267,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
     let services = AdminServices {
         catalog: catalog.clone(),
         region: region.clone(),
+        promotion: promotion.clone(),
         order: order.clone(),
         invoice: invoice.clone(),
         payment,

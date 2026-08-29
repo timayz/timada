@@ -95,6 +95,16 @@ impl Money {
         )
     }
 
+    pub fn subtract(&self, other: Self) -> Result<Self, MoneyError> {
+        if self.currency != other.currency {
+            return Err(MoneyError::CurrencyMismatch(self.currency, other.currency));
+        }
+        Ok(Self::new(
+            self.amount_cents.saturating_sub(other.amount_cents),
+            self.currency,
+        ))
+    }
+
     pub fn add(&self, other: Self) -> Result<Self, MoneyError> {
         if self.currency != other.currency {
             return Err(MoneyError::CurrencyMismatch(self.currency, other.currency));

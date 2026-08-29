@@ -16,4 +16,4 @@ pub use error::{AppError, AppResult};
 pub use executor::{Executor, ServiceContext};
 pub use id::new_id;
 pub use money::{Currency, Money, MoneyError};
-pub use time::{format_utc_date, format_utc_datetime};
+pub use time::{format_utc_date, format_utc_datetime, now_millis};

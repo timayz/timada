@@ -47,6 +47,16 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
+/// Current wall-clock time as epoch milliseconds, the workspace's timestamp
+/// convention. A clock before 1970 yields 0, which fails safe everywhere a
+/// timestamp gates validity.
+pub fn now_millis() -> i64 {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
+        Err(_) => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

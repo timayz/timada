@@ -17,6 +17,7 @@ timada-cart = { path = "crates/cart" }
 timada-customer = { path = "crates/customer" }
 timada-order = { path = "crates/order" }
 timada-payment = { path = "crates/payment" }
+timada-promotion = { path = "crates/promotion" }
 timada-region = { path = "crates/region" }
 timada-shipping = { path = "crates/shipping" }
 timada-tax = { path = "crates/tax" }

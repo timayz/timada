@@ -665,6 +665,7 @@ dependencies = [
  "timada-invoice",
  "timada-order",
  "timada-payment",
+ "timada-promotion",
  "timada-region",
  "timada-shipping",
  "timada-tax",
@@ -2313,6 +2314,7 @@ dependencies = [
  "timada-invoice",
  "timada-order",
  "timada-payment",
+ "timada-promotion",
  "timada-region",
  "timada-shipping",
  "timada-web",
@@ -2508,6 +2510,25 @@ dependencies = [
  "axum",
  "bitcode",
  "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror",
+ "timada-core",
+ "timada-web",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "timada-promotion"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "askama",
+ "axum",
+ "bitcode",
+ "evento",
+ "serde",
  "sqlx",
  "sqlx_migrator",
  "thiserror",

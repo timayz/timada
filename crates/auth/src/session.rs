@@ -41,16 +41,7 @@ pub struct Session {
     pub expires_at: i64,
 }
 
-/// Current wall-clock time as epoch milliseconds, the workspace's timestamp
-/// convention.
-pub fn now_millis() -> i64 {
-    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        Ok(elapsed) => i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
-        // A clock before 1970 yields the epoch; sessions created then simply
-        // read as expired, which fails safe.
-        Err(_) => 0,
-    }
-}
+pub use timada_core::now_millis;
 
 /// 256 bits from the OS RNG, hex-encoded.
 fn new_session_token() -> String {

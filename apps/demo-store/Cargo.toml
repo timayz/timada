@@ -23,6 +23,7 @@ timada-dropship-aliexpress.workspace = true
 timada-invoice.workspace = true
 timada-order.workspace = true
 timada-payment.workspace = true
+timada-promotion.workspace = true
 timada-region.workspace = true
 timada-shipping.workspace = true
 timada-tax.workspace = true
