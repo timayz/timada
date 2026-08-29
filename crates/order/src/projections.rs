@@ -25,6 +25,8 @@ pub const ADMIN_SUBSCRIPTION: &str = "order-admin";
 #[derive(Debug, sqlx::FromRow)]
 pub struct AdminOrderRow {
     pub id: String,
+    /// `None` for guest orders.
+    pub customer_id: Option<String>,
     pub email: String,
     pub total_cents: i64,
     /// ISO code; parsed back into a [`Currency`] for display.
@@ -57,11 +59,38 @@ pub async fn recent_orders(
     limit: i64,
 ) -> anyhow::Result<Vec<AdminOrderRow>> {
     let rows = sqlx::query_as::<_, AdminOrderRow>(
-        "SELECT id, email, total_cents, currency, status, tracking_number, created_at \
+        "SELECT id, customer_id, email, total_cents, currency, status, tracking_number, \
+             created_at \
          FROM admin_order_list \
          ORDER BY created_at DESC, id DESC \
          LIMIT ?",
     )
+    .bind(limit)
+    .fetch_all(read_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+/// One customer's orders, newest first — the account order-history page.
+///
+/// Reads the eventually-consistent list table: a just-placed order may lag a
+/// beat here, but the checkout redirect lands on the order's own page (a
+/// replay), so the history list is never the first place the customer looks.
+pub async fn orders_for_customer(
+    read_pool: &SqlitePool,
+    customer_id: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<AdminOrderRow>> {
+    let rows = sqlx::query_as::<_, AdminOrderRow>(
+        "SELECT id, customer_id, email, total_cents, currency, status, tracking_number, \
+             created_at \
+         FROM admin_order_list \
+         WHERE customer_id = ? \
+         ORDER BY created_at DESC, id DESC \
+         LIMIT ?",
+    )
+    .bind(customer_id)
     .bind(limit)
     .fetch_all(read_pool)
     .await?;
@@ -140,11 +169,12 @@ async fn on_order_placed<E: evento::Executor>(
 
     sqlx::query(
         "INSERT INTO admin_order_list \
-             (id, email, total_cents, currency, status, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?) \
+             (id, customer_id, email, total_cents, currency, status, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(id) DO NOTHING",
     )
     .bind(&event.aggregate_id)
+    .bind(&event.data.customer_id)
     .bind(&event.data.email)
     .bind(event.data.total.amount_cents)
     .bind(event.data.total.currency.code())
@@ -213,6 +243,7 @@ mod tests {
     fn formats_epoch_millis_as_a_readable_utc_stamp() {
         let row = |created_at| AdminOrderRow {
             id: "01".to_owned(),
+            customer_id: None,
             email: "a@b.c".to_owned(),
             total_cents: 0,
             currency: "EUR".to_owned(),
@@ -230,6 +261,7 @@ mod tests {
     fn parses_the_stored_currency_back_for_display() {
         let row = AdminOrderRow {
             id: "01".to_owned(),
+            customer_id: None,
             email: "a@b.c".to_owned(),
             total_cents: 1234,
             currency: "USD".to_owned(),

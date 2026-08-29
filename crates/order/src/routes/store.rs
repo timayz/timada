@@ -12,16 +12,23 @@ use timada_core::{AppError, AppResult, Money};
 use timada_tax::{TaxAssessmentRequest, TaxableLine};
 use timada_web::HtmlTemplate;
 
+use timada_customer::current_customer;
+
 use crate::aggregate::Address;
 use crate::commands::{PlaceOrderError, place_order};
+use crate::projections::{AdminOrderRow, orders_for_customer};
 use crate::state::OrderState;
 use crate::view::{OrderView, load_order};
+
+/// Enough history rows for an account page without paginating.
+const HISTORY_LIMIT: i64 = 100;
 
 pub fn store_router(state: OrderState) -> Router {
     Router::new()
         .route("/checkout", get(checkout_page).post(submit_checkout))
         .route("/orders/{order_id}", get(order_page))
         .route("/orders/{order_id}/status", get(order_status_fragment))
+        .route("/account/orders", get(account_orders_page))
         .with_state(state)
 }
 
@@ -32,6 +39,14 @@ struct CheckoutTemplate {
     /// Indicative: the country is not known until the form is submitted, so
     /// this is the calculator's default rate. The page says as much.
     total_tax: Money,
+    /// Prefilled from the signed-in customer; empty for guests.
+    email: String,
+}
+
+#[derive(Template)]
+#[template(path = "store/account_orders.html")]
+struct AccountOrdersTemplate {
+    orders: Vec<AdminOrderRow>,
 }
 
 #[derive(Template)]
@@ -82,9 +97,15 @@ async fn checkout_page(State(state): State<OrderState>, jar: CookieJar) -> AppRe
         .await
         .map_err(anyhow::Error::from)?;
 
+    let email = current_customer(&state.customer, &jar)
+        .await?
+        .map(|customer| customer.email)
+        .unwrap_or_default();
+
     Ok(HtmlTemplate(CheckoutTemplate {
         cart,
         total_tax: assessment.total_tax,
+        email,
     })
     .into_response())
 }
@@ -120,6 +141,12 @@ async fn submit_checkout(
         country: form.country,
     };
 
+    // A guest and a signed-in customer share the same form; the session is
+    // the only difference, resolved here and snapshotted onto the order.
+    let customer_id = current_customer(&state.customer, &jar)
+        .await?
+        .map(|customer| customer.id);
+
     // A refused checkout is the customer's mistake, not a server fault, so it
     // answers 400 with the reason instead of the blanket 500 that `?` on the
     // error type would produce.
@@ -127,6 +154,7 @@ async fn submit_checkout(
         &state.ctx.executor,
         &state.tax,
         &cart_id,
+        customer_id,
         form.email,
         address,
     )
@@ -157,6 +185,20 @@ async fn order_status_fragment(
     Ok(HtmlTemplate(OrderStatusFragment {
         order: current_order(&state, &order_id).await?,
     }))
+}
+
+/// The signed-in customer's order history. Guests are sent to the login form.
+async fn account_orders_page(
+    State(state): State<OrderState>,
+    jar: CookieJar,
+) -> AppResult<Response> {
+    let Some(customer) = current_customer(&state.customer, &jar).await? else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+
+    let orders = orders_for_customer(&state.ctx.read_pool, &customer.id, HISTORY_LIMIT).await?;
+
+    Ok(HtmlTemplate(AccountOrdersTemplate { orders }).into_response())
 }
 
 /// Replay the order rather than reading `admin_order_list`.

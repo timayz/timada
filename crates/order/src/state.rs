@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use timada_core::ServiceContext;
+use timada_customer::CustomerState;
 use timada_dropship::SupplierRegistry;
 use timada_payment::PaymentProvider;
 use timada_tax::TaxCalculator;
@@ -19,4 +20,7 @@ pub struct OrderState {
     /// Used by checkout only — tax is assessed once, at `place_order`, and
     /// then snapshotted onto the order.
     pub tax: Arc<dyn TaxCalculator>,
+    /// Resolves the session cookie so checkout can attach the order to the
+    /// signed-in customer and the account page can list their orders.
+    pub customer: CustomerState,
 }

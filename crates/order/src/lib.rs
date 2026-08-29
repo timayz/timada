@@ -31,7 +31,8 @@ pub use aggregate::{
 pub use commands::{PlaceOrderError, place_order};
 pub use migrations::migrations;
 pub use projections::{
-    ADMIN_SUBSCRIPTION, AdminOrderRow, admin_subscription, recent_orders, start_subscriptions,
+    ADMIN_SUBSCRIPTION, AdminOrderRow, admin_subscription, orders_for_customer, recent_orders,
+    start_subscriptions,
 };
 pub use routes::{admin_router, store_router};
 pub use saga::{FULFILLMENT_SUBSCRIPTION, fulfillment_subscription};

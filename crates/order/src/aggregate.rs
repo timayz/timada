@@ -71,6 +71,9 @@ pub enum Order {
     /// re-derive tax from rates that may have moved since.
     OrderPlaced {
         cart_id: String,
+        /// The signed-in customer this order belongs to; `None` for guests.
+        /// Snapshotted at checkout — logging in later never rewrites history.
+        customer_id: Option<String>,
         email: String,
         shipping_address: Address,
         lines: Vec<OrderLine>,

@@ -51,6 +51,7 @@ pub async fn place_order(
     executor: &Executor,
     tax: &Arc<dyn TaxCalculator>,
     cart_id: &str,
+    customer_id: Option<String>,
     email: String,
     shipping_address: Address,
 ) -> Result<String, PlaceOrderError> {
@@ -126,6 +127,7 @@ pub async fn place_order(
     let order_id = evento::create()
         .event(&OrderPlaced {
             cart_id: cart_id.to_owned(),
+            customer_id,
             email,
             shipping_address,
             lines,

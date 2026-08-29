@@ -53,6 +53,13 @@ impl TestDb {
         let registry = SupplierRegistry::builder()
             .register(Arc::new(MockSupplier::new()))
             .build();
+        let customer = timada_customer::CustomerState {
+            ctx: ctx.clone(),
+            auth: timada_auth::AuthState {
+                read_pool: pool.clone(),
+                write_pool: pool.clone(),
+            },
+        };
 
         Ok(Self {
             dir,
@@ -63,6 +70,7 @@ impl TestDb {
                 provider: Arc::new(FakePaymentProvider),
                 // 20 % everywhere, so a 4200-cent line splits 3500 + 700.
                 tax: Arc::new(FixedRateVat::new(2000)),
+                customer,
             },
         })
     }
@@ -179,6 +187,7 @@ async fn an_order_walks_from_placed_to_delivered() -> anyhow::Result<()> {
         db.executor(),
         db.tax(),
         &cart_id,
+        None,
         "ada@example.com".to_owned(),
         db.address(),
     )
@@ -259,6 +268,7 @@ async fn a_declined_charge_cancels_the_order() -> anyhow::Result<()> {
         db.executor(),
         db.tax(),
         &cart_id,
+        None,
         "ada@example.com".to_owned(),
         db.address(),
     )
@@ -306,6 +316,7 @@ async fn a_supplier_rejection_refunds_and_cancels() -> anyhow::Result<()> {
         db.executor(),
         db.tax(),
         &cart_id,
+        None,
         "ada@example.com".to_owned(),
         db.address(),
     )
@@ -350,6 +361,7 @@ async fn checkout_snapshots_the_tax_split_of_a_tax_inclusive_total() -> anyhow::
         db.executor(),
         db.tax(),
         &cart_id,
+        None,
         "ada@example.com".to_owned(),
         db.address(),
     )
@@ -386,6 +398,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
         db.executor(),
         db.tax(),
         &new_id(),
+        None,
         "ada@example.com".to_owned(),
         db.address(),
     )
@@ -404,6 +417,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
         db.executor(),
         db.tax(),
         &cart_id,
+        None,
         "ada@example.com".to_owned(),
         db.address(),
     )
@@ -415,6 +429,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
         db.executor(),
         db.tax(),
         &cart_id,
+        None,
         "not-an-email".to_owned(),
         db.address(),
     )
@@ -425,6 +440,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
         db.executor(),
         db.tax(),
         &cart_id,
+        None,
         "ada@example.com".to_owned(),
         Address {
             city: "  ".to_owned(),
@@ -439,6 +455,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
         db.executor(),
         db.tax(),
         &cart_id,
+        None,
         "ada@example.com".to_owned(),
         db.address(),
     )
@@ -447,6 +464,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
         db.executor(),
         db.tax(),
         &cart_id,
+        None,
         "ada@example.com".to_owned(),
         db.address(),
     )

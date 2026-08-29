@@ -58,13 +58,20 @@ impl TestDb {
 
         Ok(Self {
             dir,
-            pool,
+            pool: pool.clone(),
             order: OrderState {
                 ctx: ctx.clone(),
                 registry,
                 provider: Arc::new(FakePaymentProvider),
                 // 20 % everywhere, so a 4200-cent line splits 3500 + 700.
                 tax: Arc::new(FixedRateVat::new(2000)),
+                customer: timada_customer::CustomerState {
+                    ctx: ctx.clone(),
+                    auth: timada_auth::AuthState {
+                        read_pool: pool.clone(),
+                        write_pool: pool.clone(),
+                    },
+                },
             },
             invoice: InvoiceState {
                 ctx,
@@ -172,6 +179,7 @@ impl TestDb {
             self.executor(),
             &self.order.tax,
             &cart_id,
+            None,
             "ada@example.com".to_owned(),
             Address {
                 full_name: "Ada Lovelace".to_owned(),

@@ -35,6 +35,16 @@
       <dd class="mt-1 break-all">{{ order.email }}</dd>
     </div>
     <div>
+      <dt class="font-medium text-stone-600">Customer</dt>
+      <dd class="mt-1 font-mono break-all">
+        {% if let Some(customer_id) = order.customer_id %}
+          {{ customer_id }}
+        {% else %}
+          <span class="text-stone-500">guest</span>
+        {% endif %}
+      </dd>
+    </div>
+    <div>
       <dt class="font-medium text-stone-600">Cart</dt>
       <dd class="mt-1 font-mono break-all">{{ order.cart_id }}</dd>
     </div>

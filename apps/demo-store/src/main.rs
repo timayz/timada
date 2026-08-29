@@ -165,6 +165,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         registry: registry.clone(),
         provider: provider.clone(),
         tax,
+        customer: customer.clone(),
     };
     let payment = PaymentState {
         ctx: ctx.clone(),

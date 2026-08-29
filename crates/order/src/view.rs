@@ -58,6 +58,8 @@ impl OrderStatus {
 pub struct OrderView {
     pub id: String,
     pub cart_id: String,
+    /// The signed-in customer this order belongs to; `None` for guests.
+    pub customer_id: Option<String>,
     pub email: String,
     pub shipping_address: Address,
     pub lines: Vec<OrderLine>,
@@ -118,6 +120,7 @@ impl OrderView {
 async fn apply_placed(event: Event<OrderPlaced>, view: &mut OrderView) -> anyhow::Result<()> {
     view.id = event.aggregate_id.clone();
     view.cart_id = event.data.cart_id.clone();
+    view.customer_id = event.data.customer_id.clone();
     view.email = event.data.email.clone();
     view.shipping_address = event.data.shipping_address.clone();
     view.lines = event.data.lines.clone();

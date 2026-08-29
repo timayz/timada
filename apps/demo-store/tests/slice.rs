@@ -33,7 +33,9 @@ impl TestApp {
         let url = format!("sqlite://{}?mode=rwc", dir.join("demo.db").display());
         let pool = timada_core::db::create_pool(&url, 2).await?;
 
-        let mut migrations = timada_catalog::migrations();
+        let mut migrations = timada_auth::migrations();
+        migrations.extend(timada_customer::migrations());
+        migrations.extend(timada_catalog::migrations());
         migrations.extend(timada_order::migrations());
         migrations.extend(timada_invoice::migrations());
         migrations.extend(timada_payment::migrations());
@@ -102,7 +104,12 @@ impl TestApp {
         anyhow::bail!("the saga never settled for order {order_id}")
     }
 
-    async fn checkout(&self, product_id: &str, quantity: u32) -> anyhow::Result<String> {
+    async fn checkout(
+        &self,
+        product_id: &str,
+        quantity: u32,
+        customer_id: Option<String>,
+    ) -> anyhow::Result<String> {
         let cart_id = new_id();
         let product = timada_catalog::load_product(self.executor(), product_id)
             .await?
@@ -112,6 +119,7 @@ impl TestApp {
             self.executor(),
             &self.tax,
             &cart_id,
+            customer_id,
             "customer@example.com".into(),
             Address {
                 full_name: "Ada Lovelace".into(),
@@ -208,7 +216,7 @@ async fn the_full_journey_ends_with_a_delivered_order() -> anyhow::Result<()> {
     assert_eq!(count, 1, "published product must appear in the storefront");
 
     // Cart → checkout → saga: charge captured, forwarded to the supplier.
-    let order_id = app.checkout(&product_id, 2).await?;
+    let order_id = app.checkout(&product_id, 2, None).await?;
     assert_eq!(app.settle(&order_id).await?, OrderStatus::Forwarded);
 
     // First tracking poll dispatches the mock shipment.
@@ -268,13 +276,53 @@ async fn the_full_journey_ends_with_a_delivered_order() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn a_signed_in_customers_order_lands_in_their_history() -> anyhow::Result<()> {
+    let app = TestApp::new().await?;
+
+    let customer_id = timada_customer::register_customer(
+        app.executor(),
+        &app.pool,
+        "jane@example.com",
+        "Jane Doe",
+        "long-enough-pass",
+    )
+    .await?;
+
+    let product_id = app.seed_product(|cents| cents % 100 != 99).await?;
+    let order_id = app
+        .checkout(&product_id, 1, Some(customer_id.clone()))
+        .await?;
+    assert_eq!(app.settle(&order_id).await?, OrderStatus::Forwarded);
+
+    let order = load_order(app.executor(), &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not found"))?;
+    assert_eq!(order.customer_id.as_deref(), Some(customer_id.as_str()));
+
+    // The account history (an admin_order_list query) shows exactly this order.
+    app.refresh_admin_tables().await?;
+    let history = timada_order::orders_for_customer(&app.pool, &customer_id, 10).await?;
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].id, order_id);
+
+    // A guest order never leaks into anyone's history.
+    let guest_order = app.checkout(&product_id, 1, None).await?;
+    app.settle(&guest_order).await?;
+    app.refresh_admin_tables().await?;
+    let history = timada_order::orders_for_customer(&app.pool, &customer_id, 10).await?;
+    assert_eq!(history.len(), 1, "guest orders belong to nobody");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_declined_charge_cancels_the_order() -> anyhow::Result<()> {
     let app = TestApp::new().await?;
 
     // The mock catalog deliberately contains one …99 price — the fake
     // provider's decline trigger.
     let product_id = app.seed_product(|cents| cents % 100 == 99).await?;
-    let order_id = app.checkout(&product_id, 1).await?;
+    let order_id = app.checkout(&product_id, 1, None).await?;
 
     assert_eq!(app.settle(&order_id).await?, OrderStatus::Cancelled);
     let order = load_order(app.executor(), &order_id)
