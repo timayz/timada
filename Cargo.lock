@@ -659,6 +659,7 @@ dependencies = [
  "timada-cart",
  "timada-catalog",
  "timada-core",
+ "timada-customer",
  "timada-dropship",
  "timada-dropship-aliexpress",
  "timada-invoice",
@@ -2387,6 +2388,27 @@ dependencies = [
  "tokio",
  "tracing",
  "ulid 1.2.1",
+]
+
+[[package]]
+name = "timada-customer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "askama",
+ "axum",
+ "axum-extra",
+ "bitcode",
+ "evento",
+ "serde",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror",
+ "timada-auth",
+ "timada-core",
+ "timada-web",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

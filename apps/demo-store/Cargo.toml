@@ -15,6 +15,7 @@ sqlx_migrator.workspace = true
 timada-admin.workspace = true
 timada-auth.workspace = true
 timada-cart.workspace = true
+timada-customer.workspace = true
 timada-catalog.workspace = true
 timada-core.workspace = true
 timada-dropship.workspace = true

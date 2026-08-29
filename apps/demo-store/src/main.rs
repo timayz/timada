@@ -23,6 +23,7 @@ use timada_auth::AuthState;
 use timada_cart::CartState;
 use timada_catalog::CatalogState;
 use timada_core::ServiceContext;
+use timada_customer::CustomerState;
 use timada_dropship::{DropshipState, MockSupplier, Supplier as _, SupplierRegistry};
 use timada_dropship_aliexpress::AliExpressSupplier;
 use timada_invoice::{InvoiceConfig, InvoiceState, Party};
@@ -70,6 +71,7 @@ enum Command {
 /// Every crate's read-model migrations, applied by one migrator.
 fn all_migrations() -> Vec<Box<dyn sqlx_migrator::migration::Migration<sqlx::Sqlite>>> {
     let mut migrations = timada_auth::migrations();
+    migrations.extend(timada_customer::migrations());
     migrations.extend(timada_catalog::migrations());
     migrations.extend(timada_order::migrations());
     migrations.extend(timada_invoice::migrations());
@@ -154,6 +156,10 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         registry: registry.clone(),
     };
     let cart = CartState { ctx: ctx.clone() };
+    let customer = CustomerState {
+        ctx: ctx.clone(),
+        auth: auth.clone(),
+    };
     let order = OrderState {
         ctx: ctx.clone(),
         registry: registry.clone(),
@@ -205,6 +211,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         .merge(timada_web::asset_router())
         .merge(timada_catalog::store_router(catalog))
         .merge(timada_cart::store_router(cart))
+        .merge(timada_customer::store_router(customer))
         .merge(timada_order::store_router(order))
         .merge(timada_invoice::store_router(invoice))
         .merge(timada_auth::admin_auth_router(auth.clone()))

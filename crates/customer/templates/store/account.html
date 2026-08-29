@@ -1,0 +1,34 @@
+{% extends "layout.html" %}
+
+{% block meta %}
+  <title>Your account · Timada Store</title>
+{% endblock %}
+
+{% block content %}
+  <h1 class="text-xl font-semibold sm:text-2xl">Your account</h1>
+  <div class="mt-6 rounded border border-stone-200 bg-white p-6">
+    <dl class="space-y-3 text-sm">
+      <div>
+        <dt class="font-medium text-stone-600">Name</dt>
+        <dd>{{ customer.full_name }}</dd>
+      </div>
+      <div>
+        <dt class="font-medium text-stone-600">Email</dt>
+        <dd>{{ customer.email }}</dd>
+      </div>
+    </dl>
+  </div>
+  <div class="mt-6 flex items-center gap-4">
+    <a
+      href="/"
+      class="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-medium hover:bg-stone-100"
+    >
+      Keep shopping
+    </a>
+    <form method="post" action="/logout">
+      <button type="submit" class="rounded px-3 py-2 text-sm font-medium text-stone-600 hover:bg-stone-100">
+        Sign out
+      </button>
+    </form>
+  </div>
+{% endblock %}
