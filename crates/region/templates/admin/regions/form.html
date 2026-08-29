@@ -1,0 +1,102 @@
+{% extends "admin/layout.html" %}
+
+{% block meta %}
+  {% if region.is_some() %}
+    <title>Edit region · Timada Admin</title>
+  {% else %}
+    <title>New region · Timada Admin</title>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+  <p class="text-sm"><a href="/admin/regions" class="underline hover:text-stone-600">← All regions</a></p>
+
+  {% if let Some(region) = region %}
+    <h1 class="mt-2 text-xl font-semibold sm:text-2xl">Edit {{ region.name }}</h1>
+    <form method="post" action="/admin/regions/{{ region.id }}" class="mt-6 grid max-w-lg gap-4">
+      <div class="grid gap-1">
+        <label for="name" class="text-sm font-medium">Name</label>
+        <input
+          type="text"
+          id="name"
+          name="name"
+          value="{{ region.name }}"
+          required
+          class="rounded border border-stone-300 bg-white px-3 py-2"
+        />
+      </div>
+      <div class="grid gap-1">
+        <span class="text-sm font-medium">Currency</span>
+        <p class="text-sm text-stone-600">
+          {{ region.currency }} — fixed at creation; carts and prices key on it, so a different
+          currency means a new region.
+        </p>
+      </div>
+      <div class="grid gap-1">
+        <label for="countries" class="text-sm font-medium">Countries</label>
+        <textarea
+          id="countries"
+          name="countries"
+          rows="6"
+          required
+          aria-describedby="countries-hint"
+          class="rounded border border-stone-300 bg-white px-3 py-2 font-mono text-sm"
+        >{{ countries_text }}</textarea>
+        <p id="countries-hint" class="text-xs text-stone-600">
+          One <code>CODE:RATE_BPS</code> pair per line (or comma-separated), e.g.
+          <code>FR:2000</code> for 20&nbsp;% French VAT.
+        </p>
+      </div>
+      <button
+        type="submit"
+        class="rounded bg-stone-900 px-4 py-3 font-medium text-white hover:bg-stone-700"
+      >
+        Save region
+      </button>
+    </form>
+  {% else %}
+    <h1 class="mt-2 text-xl font-semibold sm:text-2xl">New region</h1>
+    <form method="post" action="/admin/regions" class="mt-6 grid max-w-lg gap-4">
+      <div class="grid gap-1">
+        <label for="name" class="text-sm font-medium">Name</label>
+        <input
+          type="text"
+          id="name"
+          name="name"
+          required
+          class="rounded border border-stone-300 bg-white px-3 py-2"
+        />
+      </div>
+      <div class="grid gap-1">
+        <label for="currency" class="text-sm font-medium">Currency</label>
+        <select id="currency" name="currency" class="rounded border border-stone-300 bg-white px-3 py-2">
+          <option value="EUR">EUR</option>
+          <option value="USD">USD</option>
+        </select>
+        <p class="text-xs text-stone-600">Fixed once the region is created.</p>
+      </div>
+      <div class="grid gap-1">
+        <label for="countries" class="text-sm font-medium">Countries</label>
+        <textarea
+          id="countries"
+          name="countries"
+          rows="6"
+          required
+          aria-describedby="countries-hint"
+          placeholder="FR:2000&#10;DE:1900&#10;LU:1700"
+          class="rounded border border-stone-300 bg-white px-3 py-2 font-mono text-sm"
+        ></textarea>
+        <p id="countries-hint" class="text-xs text-stone-600">
+          One <code>CODE:RATE_BPS</code> pair per line (or comma-separated), e.g.
+          <code>FR:2000</code> for 20&nbsp;% French VAT.
+        </p>
+      </div>
+      <button
+        type="submit"
+        class="rounded bg-stone-900 px-4 py-3 font-medium text-white hover:bg-stone-700"
+      >
+        Create region
+      </button>
+    </form>
+  {% endif %}
+{% endblock %}

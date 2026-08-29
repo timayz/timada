@@ -29,8 +29,9 @@ use timada_dropship_aliexpress::AliExpressSupplier;
 use timada_invoice::{InvoiceConfig, InvoiceState, Party};
 use timada_order::OrderState;
 use timada_payment::{FakePaymentProvider, PaymentProvider, PaymentState};
+use timada_region::{RegionCountry, RegionState, RegionVat};
 use timada_shipping::ShippingState;
-use timada_tax::{FixedRateVat, TaxCalculator};
+use timada_tax::TaxCalculator;
 
 #[derive(Parser)]
 #[command(name = "demo-store", about = "Timada demo store")]
@@ -73,6 +74,7 @@ fn all_migrations() -> Vec<Box<dyn sqlx_migrator::migration::Migration<sqlx::Sql
     let mut migrations = timada_auth::migrations();
     migrations.extend(timada_customer::migrations());
     migrations.extend(timada_catalog::migrations());
+    migrations.extend(timada_region::migrations());
     migrations.extend(timada_order::migrations());
     migrations.extend(timada_invoice::migrations());
     migrations.extend(timada_payment::migrations());
@@ -117,6 +119,38 @@ async fn seed(database_url: &str) -> anyhow::Result<()> {
     // Demo credentials only — reset them with `create-admin` for anything real.
     timada_auth::create_admin_user(&pool, "admin@timada.example", "admin").await?;
     tracing::info!("seeded the demo admin user (admin@timada.example / admin)");
+
+    // Region ids are server-generated, so idempotency comes from looking at
+    // the read model: drain the subscription once, seed only when empty.
+    timada_region::read_models_subscription(pool.clone())
+        .no_retry()
+        .run_once(&ctx.executor)
+        .await?;
+    if timada_region::list_regions(&pool).await?.is_empty() {
+        let country = |code: &str, bps: u32| RegionCountry {
+            code: code.to_owned(),
+            tax_rate_bps: bps,
+        };
+        timada_region::create_region(
+            &ctx.executor,
+            "Europe",
+            timada_core::Currency::Eur,
+            vec![
+                country("FR", 2000),
+                country("DE", 1900),
+                country("LU", 1700),
+            ],
+        )
+        .await?;
+        timada_region::create_region(
+            &ctx.executor,
+            "United States",
+            timada_core::Currency::Usd,
+            vec![country("US", 0)],
+        )
+        .await?;
+        tracing::info!("seeded the Europe (EUR) and United States (USD) regions");
+    }
     Ok(())
 }
 
@@ -140,12 +174,9 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         .register(Arc::new(AliExpressSupplier::new()))
         .build();
     let provider: Arc<dyn PaymentProvider> = Arc::new(FakePaymentProvider);
-    // 20 % default VAT with a couple of per-country overrides, tax-inclusive.
-    let tax: Arc<dyn TaxCalculator> = Arc::new(
-        FixedRateVat::new(2000)
-            .with_country("DE", 1900)
-            .with_country("LU", 1700),
-    );
+    // Region-backed tax-inclusive VAT: per-country rates come from the
+    // admin-edited regions; unclaimed countries fall back to 20 %.
+    let tax: Arc<dyn TaxCalculator> = Arc::new(RegionVat::new(ctx.read_pool.clone(), 2000));
 
     let auth = AuthState {
         read_pool: ctx.read_pool.clone(),
@@ -155,6 +186,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         ctx: ctx.clone(),
         registry: registry.clone(),
     };
+    let region = RegionState { ctx: ctx.clone() };
     let cart = CartState { ctx: ctx.clone() };
     let customer = CustomerState {
         ctx: ctx.clone(),
@@ -193,6 +225,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
 
     let mut subscriptions = Vec::new();
     subscriptions.extend(timada_catalog::start_subscriptions(&catalog).await?);
+    subscriptions.extend(timada_region::start_subscriptions(&region).await?);
     subscriptions.extend(timada_order::start_subscriptions(&order).await?);
     subscriptions.extend(timada_payment::start_subscriptions(&payment).await?);
     subscriptions.extend(timada_shipping::start_subscriptions(&shipping).await?);
@@ -201,6 +234,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
 
     let services = AdminServices {
         catalog: catalog.clone(),
+        region: region.clone(),
         order: order.clone(),
         invoice: invoice.clone(),
         payment,
@@ -213,6 +247,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         .merge(timada_catalog::store_router(catalog))
         .merge(timada_cart::store_router(cart))
         .merge(timada_customer::store_router(customer))
+        .merge(timada_region::store_router(region))
         .merge(timada_order::store_router(order))
         .merge(timada_invoice::store_router(invoice))
         .merge(timada_auth::admin_auth_router(auth.clone()))

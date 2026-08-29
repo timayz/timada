@@ -1,0 +1,38 @@
+{% extends "layout.html" %}
+
+{% block meta %}
+  <title>Choose your region · Timada Store</title>
+{% endblock %}
+
+{% block content %}
+  <div class="mx-auto max-w-sm">
+    <h1 class="text-xl font-semibold sm:text-2xl">Choose your region</h1>
+    <p class="mt-2 text-sm text-stone-600">
+      The region sets the currency you shop in. Items already in your cart keep their currency —
+      empty the cart to switch mid-shop.
+    </p>
+
+    {% if regions.is_empty() %}
+      <p class="mt-6 rounded border border-stone-200 bg-white p-4 text-sm text-stone-600">
+        No region is configured yet.
+      </p>
+    {% else %}
+      <ul class="mt-6 grid gap-3">
+        {% for region in regions %}
+          <li>
+            <form method="post" action="/region">
+              <input type="hidden" name="region_id" value="{{ region.id }}" />
+              <button
+                type="submit"
+                class="flex w-full items-baseline justify-between gap-2 rounded border {% if region.id == current_id %}border-stone-900 bg-stone-100{% else %}border-stone-200 bg-white hover:bg-stone-100{% endif %} p-4 text-left text-sm"
+              >
+                <span class="font-medium">{{ region.name }}</span>
+                <span class="text-stone-600">{{ region.currency }}</span>
+              </button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+{% endblock %}

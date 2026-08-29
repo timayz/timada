@@ -21,6 +21,7 @@ use timada_web::HtmlTemplate;
 /// The per-service states the admin router composes.
 pub struct AdminServices {
     pub catalog: timada_catalog::CatalogState,
+    pub region: timada_region::RegionState,
     pub order: timada_order::OrderState,
     pub invoice: timada_invoice::InvoiceState,
     pub payment: timada_payment::PaymentState,
@@ -41,6 +42,7 @@ pub fn router(services: AdminServices) -> Router {
     Router::new()
         .route("/", get(dashboard))
         .nest("/catalog", timada_catalog::admin_router(services.catalog))
+        .nest("/regions", timada_region::admin_router(services.region))
         .nest("/orders", timada_order::admin_router(services.order))
         .nest("/invoices", timada_invoice::admin_router(services.invoice))
         .nest("/payments", timada_payment::admin_router(services.payment))
