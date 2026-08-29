@@ -4,21 +4,22 @@
 //!
 //! - `migrate` — apply the event-store schema and every crate's read-model
 //!   migrations.
-//! - `seed` — import and publish the mock supplier's demo catalog.
+//! - `seed` — import and publish the mock supplier's demo catalog, and create
+//!   the demo admin user (`admin@timada.example` / `admin`).
+//! - `create-admin` — create an admin user, or reset an existing one's
+//!   password.
 //! - `serve` — run the storefront plus the admin nested at `/admin` behind a
-//!   demo HTTP Basic auth layer (`admin` / `admin`).
+//!   session login (`/admin/login`).
 
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use axum::Router;
-use axum::extract::Request;
-use axum::http::{StatusCode, header};
-use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::middleware;
 use clap::{Parser, Subcommand};
 use sqlx_migrator::migrator::{Info as _, Migrate as _, Migrator, Plan};
 use timada_admin::AdminServices;
+use timada_auth::AuthState;
 use timada_cart::CartState;
 use timada_catalog::CatalogState;
 use timada_core::ServiceContext;
@@ -49,8 +50,16 @@ struct Cli {
 enum Command {
     /// Apply the event-store schema and all read-model migrations
     Migrate,
-    /// Import and publish the mock supplier's demo catalog
+    /// Import and publish the mock supplier's demo catalog, and create the
+    /// demo admin user
     Seed,
+    /// Create an admin user, or reset an existing one's password
+    CreateAdmin {
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        password: String,
+    },
     /// Serve the storefront and admin
     Serve {
         #[arg(long, default_value = "127.0.0.1:3000")]
@@ -60,7 +69,8 @@ enum Command {
 
 /// Every crate's read-model migrations, applied by one migrator.
 fn all_migrations() -> Vec<Box<dyn sqlx_migrator::migration::Migration<sqlx::Sqlite>>> {
-    let mut migrations = timada_catalog::migrations();
+    let mut migrations = timada_auth::migrations();
+    migrations.extend(timada_catalog::migrations());
     migrations.extend(timada_order::migrations());
     migrations.extend(timada_invoice::migrations());
     migrations.extend(timada_payment::migrations());
@@ -101,23 +111,17 @@ async fn seed(database_url: &str) -> anyhow::Result<()> {
         timada_catalog::publish_product(&ctx.executor, &id).await?;
     }
     tracing::info!(count, "seeded and published the mock supplier's catalog");
+
+    // Demo credentials only — reset them with `create-admin` for anything real.
+    timada_auth::create_admin_user(&pool, "admin@timada.example", "admin").await?;
+    tracing::info!("seeded the demo admin user (admin@timada.example / admin)");
     Ok(())
 }
 
-/// Demo admin auth: HTTP Basic with `admin` / `admin`. Replace this layer with
-/// your real authentication when mounting `timada_admin::router` in your app.
-async fn demo_auth(req: Request, next: Next) -> Response {
-    // base64("admin:admin")
-    const EXPECTED: &[u8] = b"Basic YWRtaW46YWRtaW4=";
-    match req.headers().get(header::AUTHORIZATION) {
-        Some(value) if value.as_bytes() == EXPECTED => next.run(req).await,
-        _ => (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, "Basic realm=\"Timada Admin\"")],
-            "authentication required",
-        )
-            .into_response(),
-    }
+async fn create_admin(database_url: &str, email: &str, password: &str) -> anyhow::Result<()> {
+    let pool = migrate(database_url).await?;
+    timada_auth::create_admin_user(&pool, email, password).await?;
+    Ok(())
 }
 
 async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
@@ -141,6 +145,10 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
             .with_country("LU", 1700),
     );
 
+    let auth = AuthState {
+        read_pool: ctx.read_pool.clone(),
+        write_pool: ctx.write_pool.clone(),
+    };
     let catalog = CatalogState {
         ctx: ctx.clone(),
         registry: registry.clone(),
@@ -199,15 +207,22 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         .merge(timada_cart::store_router(cart))
         .merge(timada_order::store_router(order))
         .merge(timada_invoice::store_router(invoice))
+        .merge(timada_auth::admin_auth_router(auth.clone()))
         .nest(
             "/admin",
-            timada_admin::router(services).layer(middleware::from_fn(demo_auth)),
+            timada_admin::router(services).layer(middleware::from_fn_with_state(
+                auth,
+                timada_auth::require_admin,
+            )),
         );
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind {addr}"))?;
-    tracing::info!(%addr, "demo store listening (admin at /admin, user: admin, password: admin)");
+    tracing::info!(
+        %addr,
+        "demo store listening (admin at /admin, sign in at /admin/login with the seeded admin)"
+    );
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -244,6 +259,9 @@ async fn main() -> anyhow::Result<()> {
             migrate(&cli.database_url).await?;
         }
         Command::Seed => seed(&cli.database_url).await?,
+        Command::CreateAdmin { email, password } => {
+            create_admin(&cli.database_url, &email, &password).await?;
+        }
         Command::Serve { addr } => serve(&cli.database_url, &addr).await?,
     }
     Ok(())

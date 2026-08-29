@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/timayz/timada"
 
 [workspace.dependencies]
+timada-auth = { path = "crates/auth" }
 timada-core = { path = "crates/core" }
 timada-web = { path = "crates/web" }
 timada-catalog = { path = "crates/catalog" }
@@ -23,6 +24,10 @@ timada-dropship-aliexpress = { path = "crates/dropship-aliexpress" }
 timada-admin = { path = "crates/admin" }
 
 anyhow = "1"
+argon2 = "0.5"
+# Direct dep only to switch on `getrandom`, which argon2's re-export needs for
+# `OsRng`; code imports it through `argon2::password_hash`.
+password-hash = { version = "0.5", features = ["getrandom"] }
 askama = "0.16"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["macros"] }
@@ -42,7 +47,7 @@ sqlx = { version = "0.9", default-features = false, features = [
 sqlx_migrator = { version = "0.19", features = ["sqlite"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-tower = "0.5"
+tower = { version = "0.5", features = ["util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ulid = "1"
