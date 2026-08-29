@@ -9,11 +9,13 @@ repository.workspace = true
 [dependencies]
 timada-core.workspace = true
 timada-dropship.workspace = true
+timada-region.workspace = true
 timada-web.workspace = true
 
 anyhow.workspace = true
 askama.workspace = true
 axum.workspace = true
+axum-extra.workspace = true
 bitcode.workspace = true
 evento.workspace = true
 serde.workspace = true

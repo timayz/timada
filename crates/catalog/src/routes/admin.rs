@@ -14,7 +14,7 @@ use timada_core::{AppError, AppResult, Currency, Money};
 use timada_dropship::SupplierProduct;
 use timada_web::HtmlTemplate;
 
-use crate::commands::{archive_product, import_product, publish_product};
+use crate::commands::{archive_product, import_product, publish_product, set_product_price};
 use crate::state::CatalogState;
 
 /// Enough rows to see what is happening without paginating.
@@ -28,6 +28,7 @@ pub fn admin_router(state: CatalogState) -> Router {
         .route("/", get(index))
         .route("/products/{id}/publish", post(publish))
         .route("/products/{id}/archive", post(archive))
+        .route("/products/{id}/price", post(set_price))
         .route("/import", get(import_page).post(import))
         .route("/import/search", get(import_search))
         .with_state(state)
@@ -99,6 +100,37 @@ async fn publish(State(state): State<CatalogState>, Path(id): Path<String>) -> A
 
 async fn archive(State(state): State<CatalogState>, Path(id): Path<String>) -> AppResult<Redirect> {
     archive_product(&state.ctx.executor, &id).await?;
+
+    Ok(Redirect::to(INDEX_PATH))
+}
+
+#[derive(serde::Deserialize)]
+struct SetPriceForm {
+    currency: String,
+    /// Minor units — cents — matching how every price is stored.
+    amount_cents: i64,
+}
+
+async fn set_price(
+    State(state): State<CatalogState>,
+    Path(id): Path<String>,
+    Form(form): Form<SetPriceForm>,
+) -> AppResult<Redirect> {
+    let currency = Currency::from_code(form.currency.trim())
+        .map_err(|source| AppError::BadRequest(source.to_string()))?;
+    if form.amount_cents <= 0 {
+        return Err(AppError::BadRequest(
+            "the price must be a positive amount in cents".to_owned(),
+        ));
+    }
+
+    set_product_price(
+        &state.ctx.executor,
+        &id,
+        Money::new(form.amount_cents, currency),
+    )
+    .await
+    .map_err(|source| AppError::BadRequest(source.to_string()))?;
 
     Ok(Redirect::to(INDEX_PATH))
 }

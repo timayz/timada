@@ -173,7 +173,7 @@ impl TestDb {
         let product = load_product(self.executor(), &product_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("no such product: {product_id}"))?;
-        timada_cart::add_item(self.executor(), &cart_id, &product, 1).await?;
+        timada_cart::add_item(self.executor(), &cart_id, &product, product.base_price(), 1).await?;
 
         let order_id = place_order(
             self.executor(),

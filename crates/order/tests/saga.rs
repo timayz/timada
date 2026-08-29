@@ -150,7 +150,7 @@ impl TestDb {
         let product = load_product(self.executor(), &product_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("no such product: {product_id}"))?;
-        add_item(self.executor(), cart_id, &product, 1).await?;
+        add_item(self.executor(), cart_id, &product, product.base_price(), 1).await?;
 
         Ok(())
     }

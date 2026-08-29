@@ -4,10 +4,10 @@
 //! the publish/archive buttons double-clicked without producing a second event.
 
 use evento::{AggregateExt as _, ProjectionAggregate as _};
-use timada_core::Executor;
+use timada_core::{Executor, Money};
 use timada_dropship::SupplierProduct;
 
-use crate::aggregate::{ProductArchived, ProductImported, ProductPublished};
+use crate::aggregate::{ProductArchived, ProductImported, ProductPriceSet, ProductPublished};
 use crate::view::load_product;
 
 /// The catalog id of a supplier's product.
@@ -108,5 +108,33 @@ pub async fn archive_product(executor: &Executor, product_id: &str) -> anyhow::R
         .await?;
 
     tracing::info!(product_id, "product archived");
+    Ok(())
+}
+
+/// Set (or replace) this product's price in `price`'s currency.
+///
+/// The import price stays the base; explicit prices override it per currency,
+/// latest event winning. An archived product keeps its history but refuses new
+/// prices — there is nothing left to sell.
+#[tracing::instrument(skip(executor))]
+pub async fn set_product_price(
+    executor: &Executor,
+    product_id: &str,
+    price: Money,
+) -> anyhow::Result<()> {
+    let Some(product) = load_product(executor, product_id).await? else {
+        anyhow::bail!("cannot price an unknown product: {product_id}");
+    };
+    if product.archived {
+        anyhow::bail!("cannot price an archived product: {product_id}");
+    }
+
+    product
+        .write()?
+        .event(&ProductPriceSet { price })
+        .commit(executor)
+        .await?;
+
+    tracing::info!(product_id, %price, "product price set");
     Ok(())
 }

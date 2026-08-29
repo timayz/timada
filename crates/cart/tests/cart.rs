@@ -55,9 +55,9 @@ async fn adding_the_same_product_twice_merges_into_one_line() -> anyhow::Result<
     let mug = product("Mug", 1250);
     let socks = product("Socks", 799);
 
-    add_item(&db.ctx.executor, &cart_id, &mug, 2).await?;
-    add_item(&db.ctx.executor, &cart_id, &socks, 1).await?;
-    add_item(&db.ctx.executor, &cart_id, &mug, 3).await?;
+    add_item(&db.ctx.executor, &cart_id, &mug, mug.base_price(), 2).await?;
+    add_item(&db.ctx.executor, &cart_id, &socks, socks.base_price(), 1).await?;
+    add_item(&db.ctx.executor, &cart_id, &mug, mug.base_price(), 3).await?;
 
     let cart = load_cart(&db.ctx.executor, &cart_id)
         .await?
@@ -89,17 +89,24 @@ async fn add_rejects_bad_quantity_and_unavailable_products() -> anyhow::Result<(
     let cart_id = new_id();
     let mug = product("Mug", 1250);
 
-    let refused = add_item(&db.ctx.executor, &cart_id, &mug, 0).await;
+    let refused = add_item(&db.ctx.executor, &cart_id, &mug, mug.base_price(), 0).await;
     assert!(matches!(refused, Err(AddItemError::InvalidQuantity)));
 
     let mut draft = product("Draft", 100);
     draft.published = false;
-    let refused = add_item(&db.ctx.executor, &cart_id, &draft, 1).await;
+    let refused = add_item(&db.ctx.executor, &cart_id, &draft, draft.base_price(), 1).await;
     assert!(matches!(refused, Err(AddItemError::ProductUnavailable)));
 
     let mut archived = product("Archived", 100);
     archived.archived = true;
-    let refused = add_item(&db.ctx.executor, &cart_id, &archived, 1).await;
+    let refused = add_item(
+        &db.ctx.executor,
+        &cart_id,
+        &archived,
+        archived.base_price(),
+        1,
+    )
+    .await;
     assert!(matches!(refused, Err(AddItemError::ProductUnavailable)));
 
     assert!(
@@ -118,8 +125,8 @@ async fn removing_drops_the_line_and_a_missing_line_is_a_no_op() -> anyhow::Resu
     let mug = product("Mug", 1250);
     let socks = product("Socks", 799);
 
-    add_item(&db.ctx.executor, &cart_id, &mug, 2).await?;
-    add_item(&db.ctx.executor, &cart_id, &socks, 1).await?;
+    add_item(&db.ctx.executor, &cart_id, &mug, mug.base_price(), 2).await?;
+    add_item(&db.ctx.executor, &cart_id, &socks, socks.base_price(), 1).await?;
     remove_item(&db.ctx.executor, &cart_id, &mug.id).await?;
 
     let cart = load_cart(&db.ctx.executor, &cart_id)
@@ -153,7 +160,7 @@ async fn checkout_closes_the_cart_and_is_idempotent() -> anyhow::Result<()> {
     let cart_id = new_id();
     let mug = product("Mug", 1250);
 
-    add_item(&db.ctx.executor, &cart_id, &mug, 1).await?;
+    add_item(&db.ctx.executor, &cart_id, &mug, mug.base_price(), 1).await?;
     mark_checked_out(&db.ctx.executor, &cart_id).await?;
 
     let cart = load_cart(&db.ctx.executor, &cart_id)
@@ -174,7 +181,7 @@ async fn checkout_closes_the_cart_and_is_idempotent() -> anyhow::Result<()> {
     );
 
     // A stale cookie must not reopen a cart that became an order.
-    let refused = add_item(&db.ctx.executor, &cart_id, &mug, 1).await;
+    let refused = add_item(&db.ctx.executor, &cart_id, &mug, mug.base_price(), 1).await;
     assert!(matches!(refused, Err(AddItemError::CartCheckedOut)));
     // Removing from it is refused too, but silently — see `remove_item`.
     remove_item(&db.ctx.executor, &cart_id, &mug.id).await?;
@@ -196,8 +203,8 @@ async fn a_full_cart_lifecycle_replays_consistently() -> anyhow::Result<()> {
     let mug = product("Mug", 1250);
     let socks = product("Socks", 799);
 
-    add_item(&db.ctx.executor, &cart_id, &mug, 1).await?;
-    add_item(&db.ctx.executor, &cart_id, &socks, 4).await?;
+    add_item(&db.ctx.executor, &cart_id, &mug, mug.base_price(), 1).await?;
+    add_item(&db.ctx.executor, &cart_id, &socks, socks.base_price(), 4).await?;
     remove_item(&db.ctx.executor, &cart_id, &mug.id).await?;
     mark_checked_out(&db.ctx.executor, &cart_id).await?;
 
@@ -215,4 +222,59 @@ async fn a_full_cart_lifecycle_replays_consistently() -> anyhow::Result<()> {
 
     db.close().await;
     Ok(())
+}
+
+#[tokio::test]
+async fn a_cart_is_locked_to_its_first_lines_currency() -> anyhow::Result<()> {
+    let db = TestDb::new().await?;
+    let cart_id = new_id();
+    let mug = product("Mug", 1250);
+    let socks = product("Socks", 799);
+
+    add_item(&db.ctx.executor, &cart_id, &mug, mug.base_price(), 1).await?;
+
+    // The same product priced for a USD region must not slip into a EUR cart.
+    let refused = add_item(
+        &db.ctx.executor,
+        &cart_id,
+        &socks,
+        Money::new(899, Currency::Usd),
+        1,
+    )
+    .await;
+    assert!(matches!(refused, Err(AddItemError::CurrencyMismatch(_, _))));
+
+    // The cart is untouched by the refusal.
+    let cart = load_cart(&db.ctx.executor, &cart_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("cart should exist"))?;
+    assert_eq!(cart.lines.len(), 1);
+    assert_eq!(cart.total(), Money::new(1250, Currency::Eur));
+
+    db.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn price_in_prefers_explicit_prices_over_the_base() {
+    let mut mug = product("Mug", 1250);
+    assert_eq!(
+        mug.price_in(Currency::Eur),
+        Some(Money::new(1250, Currency::Eur)),
+        "the base price answers for its own currency"
+    );
+    assert_eq!(mug.price_in(Currency::Usd), None);
+
+    mug.prices.push(Money::new(1399, Currency::Usd));
+    assert_eq!(
+        mug.price_in(Currency::Usd),
+        Some(Money::new(1399, Currency::Usd))
+    );
+
+    // An explicit price in the base currency overrides the import price.
+    mug.prices.push(Money::new(1100, Currency::Eur));
+    assert_eq!(
+        mug.price_in(Currency::Eur),
+        Some(Money::new(1100, Currency::Eur))
+    );
 }

@@ -9,9 +9,11 @@
 use evento::ProjectionAggregate;
 use evento::metadata::Event;
 use evento::projection::Projection;
-use timada_core::{Currency, Executor};
+use timada_core::{Currency, Executor, Money};
 
-use crate::aggregate::{Product, ProductArchived, ProductImported, ProductPublished};
+use crate::aggregate::{
+    Product, ProductArchived, ProductImported, ProductPriceSet, ProductPublished,
+};
 
 /// Everything known about one product, rebuilt from its event stream.
 ///
@@ -28,9 +30,30 @@ pub struct ProductView {
     pub description: String,
     pub price_cents: i64,
     pub currency: Currency,
+    /// Explicit per-currency prices set after import, one entry per currency,
+    /// latest `ProductPriceSet` winning. The import price above stays the base.
+    pub prices: Vec<Money>,
     pub image_url: String,
     pub published: bool,
     pub archived: bool,
+}
+
+impl ProductView {
+    /// The price the supplier quoted at import.
+    pub fn base_price(&self) -> Money {
+        Money::new(self.price_cents, self.currency)
+    }
+
+    /// The price to sell at in `currency`: an explicit per-currency price
+    /// wins, the base price answers for its own currency, anything else is
+    /// simply not for sale in that currency.
+    pub fn price_in(&self, currency: Currency) -> Option<Money> {
+        self.prices
+            .iter()
+            .find(|price| price.currency == currency)
+            .copied()
+            .or_else(|| (self.currency == currency).then(|| self.base_price()))
+    }
 }
 
 impl ProjectionAggregate for ProductView {
@@ -52,6 +75,23 @@ async fn apply_imported(
     product.price_cents = event.data.price.amount_cents;
     product.currency = event.data.price.currency;
     product.image_url = event.data.image_url.clone();
+    Ok(())
+}
+
+#[evento::handler]
+async fn apply_price_set(
+    event: Event<ProductPriceSet>,
+    product: &mut ProductView,
+) -> anyhow::Result<()> {
+    let price = event.data.price;
+    match product
+        .prices
+        .iter_mut()
+        .find(|existing| existing.currency == price.currency)
+    {
+        Some(existing) => *existing = price,
+        None => product.prices.push(price),
+    }
     Ok(())
 }
 
@@ -85,6 +125,7 @@ pub async fn load_product(
 fn projection() -> Projection<Executor, ProductView> {
     Projection::<Executor, ProductView>::new::<Product>()
         .handler(apply_imported())
+        .handler(apply_price_set())
         .handler(apply_published())
         .handler(apply_archived())
         .strict()

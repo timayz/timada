@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 use sqlx_migrator::migrator::{Info as _, Migrate as _, Migrator, Plan};
 use timada_catalog::{
     CatalogState, Product, archive_product, import_product, load_product, migrations, product_id,
-    publish_product, read_models_subscription,
+    publish_product, read_models_subscription, set_product_price,
 };
 use timada_core::{Currency, Money, ServiceContext, new_id};
 use timada_dropship::{MockSupplier, SupplierProduct, SupplierRegistry};
@@ -291,6 +291,48 @@ async fn the_read_models_follow_the_product_lifecycle() -> anyhow::Result<()> {
         .fetch_one(&db.pool)
         .await?;
     assert_eq!(admin_count, 1);
+
+    db.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn per_currency_prices_replace_and_project() -> anyhow::Result<()> {
+    let db = TestDb::new().await?;
+    let id = import_product(&db.state.ctx.executor, "mock", lamp()).await?;
+    publish_product(&db.state.ctx.executor, &id).await?;
+
+    set_product_price(&db.state.ctx.executor, &id, Money::new(3999, Currency::Usd)).await?;
+    // Latest set wins for a currency, on the view and in SQL alike.
+    set_product_price(&db.state.ctx.executor, &id, Money::new(3499, Currency::Usd)).await?;
+
+    let product = load_product(&db.state.ctx.executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("product should replay"))?;
+    assert_eq!(
+        product.price_in(Currency::Usd),
+        Some(Money::new(3499, Currency::Usd))
+    );
+    assert_eq!(product.price_in(Currency::Eur), Some(product.base_price()));
+
+    db.drain_read_models().await?;
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT currency, amount_cents FROM store_product_prices WHERE product_id = ? ORDER BY currency",
+    )
+    .bind(&id)
+    .fetch_all(&db.pool)
+    .await?;
+    assert_eq!(rows.len(), 2, "base EUR price plus the explicit USD one");
+    assert_eq!(rows[0], ("EUR".to_owned(), lamp().price.amount_cents));
+    assert_eq!(rows[1], ("USD".to_owned(), 3499));
+
+    // An archived product refuses new prices.
+    archive_product(&db.state.ctx.executor, &id).await?;
+    assert!(
+        set_product_price(&db.state.ctx.executor, &id, Money::new(1, Currency::Usd))
+            .await
+            .is_err()
+    );
 
     db.close().await;
     Ok(())

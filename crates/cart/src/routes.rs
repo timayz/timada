@@ -61,6 +61,9 @@ fn one() -> u32 {
 /// A plain form post, answered with a redirect so a reload does not re-add the
 /// item. The jar is returned along with the redirect because this is where a
 /// brand-new cart's cookie gets minted.
+///
+/// The price snapshotted onto the line is the one for the shopper's region's
+/// currency; a store with no regions falls back to the product's base price.
 async fn add_to_cart(
     State(state): State<CartState>,
     jar: CookieJar,
@@ -70,9 +73,30 @@ async fn add_to_cart(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    let unit_price = match timada_region::current_region(&state.ctx.read_pool, &jar).await? {
+        Some(region) => {
+            let currency =
+                timada_core::Currency::from_code(&region.currency).map_err(anyhow::Error::from)?;
+            product.price_in(currency).ok_or_else(|| {
+                AppError::BadRequest(format!(
+                    "this product is not available in your region ({currency})"
+                ))
+            })?
+        }
+        None => product.base_price(),
+    };
+
     let (jar, cart_id) = ensure_cart_id(&state, jar).await?;
 
-    match add_item(&state.ctx.executor, &cart_id, &product, form.quantity).await {
+    match add_item(
+        &state.ctx.executor,
+        &cart_id,
+        &product,
+        unit_price,
+        form.quantity,
+    )
+    .await
+    {
         Ok(()) => {}
         Err(AddItemError::Storage(error)) => return Err(AppError::Internal(error)),
         Err(refused) => return Err(AppError::BadRequest(refused.to_string())),

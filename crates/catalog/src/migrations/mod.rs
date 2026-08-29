@@ -6,9 +6,13 @@ use sqlx_migrator::migration::Migration;
 use sqlx_migrator::vec_box;
 
 mod m0001_product_read_models;
+mod m0002_product_prices;
 
 /// Register these with the application's `Migrator` alongside every other
 /// service crate's migrations.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![m0001_product_read_models::M0001ProductReadModels]
+    vec_box![
+        m0001_product_read_models::M0001ProductReadModels,
+        m0002_product_prices::M0002ProductPrices
+    ]
 }

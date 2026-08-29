@@ -21,29 +21,37 @@
 
     <div>
       <h1 class="text-xl font-semibold sm:text-2xl">{{ product.title }}</h1>
-      <p class="mt-2 text-lg font-medium">{{ product.price() }}</p>
-      <p class="mt-4 text-sm text-stone-700">{{ product.description }}</p>
+      {% if let Some(price) = price %}
+        <p class="mt-2 text-lg font-medium">{{ price }}</p>
+        <p class="mt-4 text-sm text-stone-700">{{ product.description }}</p>
 
-      <form method="post" action="/cart/items" class="mt-6 flex flex-wrap items-end gap-3">
-        <input type="hidden" name="product_id" value="{{ product.id }}" />
-        <div>
-          <label for="quantity" class="block text-sm font-medium">Quantity</label>
-          <input
-            id="quantity"
-            type="number"
-            name="quantity"
-            value="1"
-            min="1"
-            class="mt-1 w-24 rounded border border-stone-300 px-3 py-2"
-          />
-        </div>
-        <button
-          type="submit"
-          class="rounded bg-stone-900 px-4 py-2 font-medium text-white hover:bg-stone-700"
-        >
-          Add to cart
-        </button>
-      </form>
+        <form method="post" action="/cart/items" class="mt-6 flex flex-wrap items-end gap-3">
+          <input type="hidden" name="product_id" value="{{ product.id }}" />
+          <div>
+            <label for="quantity" class="block text-sm font-medium">Quantity</label>
+            <input
+              id="quantity"
+              type="number"
+              name="quantity"
+              value="1"
+              min="1"
+              class="mt-1 w-24 rounded border border-stone-300 px-3 py-2"
+            />
+          </div>
+          <button
+            type="submit"
+            class="rounded bg-stone-900 px-4 py-2 font-medium text-white hover:bg-stone-700"
+          >
+            Add to cart
+          </button>
+        </form>
+      {% else %}
+        <p class="mt-4 text-sm text-stone-700">{{ product.description }}</p>
+        <p role="status" class="mt-6 rounded bg-amber-50 p-4 text-sm text-amber-900">
+          Not available in your region — it has no price in your currency.
+          <a href="/region" class="font-medium underline">Switch region</a>
+        </p>
+      {% endif %}
     </div>
   </article>
 {% endblock %}

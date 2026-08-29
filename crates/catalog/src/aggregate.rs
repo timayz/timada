@@ -21,6 +21,11 @@ pub enum Product {
     },
     /// Visible in the storefront and orderable.
     ProductPublished,
+    /// The price for one currency was set or replaced. The import price stays
+    /// the base; each `ProductPriceSet` overrides the price in its own
+    /// currency, latest event winning — how a product becomes sellable in a
+    /// region whose currency the supplier does not quote.
+    ProductPriceSet { price: Money },
     /// Withdrawn from the storefront. Past orders keep their snapshotted lines.
     ProductArchived,
 }

@@ -61,6 +61,37 @@
                   Archive
                 </button>
               </form>
+              <form
+                method="post"
+                action="/admin/catalog/products/{{ product.id }}/price"
+                class="flex flex-wrap items-center gap-2"
+              >
+                <label for="price-currency-{{ product.id }}" class="sr-only">Currency</label>
+                <select
+                  id="price-currency-{{ product.id }}"
+                  name="currency"
+                  class="rounded border border-stone-300 bg-white px-2 py-2 text-sm"
+                >
+                  <option value="EUR">EUR</option>
+                  <option value="USD">USD</option>
+                </select>
+                <label for="price-cents-{{ product.id }}" class="sr-only">Price in cents</label>
+                <input
+                  id="price-cents-{{ product.id }}"
+                  type="number"
+                  name="amount_cents"
+                  min="1"
+                  required
+                  placeholder="cents"
+                  class="w-28 rounded border border-stone-300 px-2 py-2 text-sm"
+                />
+                <button
+                  type="submit"
+                  class="rounded border border-stone-400 px-3 py-2 text-sm font-medium hover:bg-stone-100"
+                >
+                  Set price
+                </button>
+              </form>
             {% endif %}
           </div>
         </li>

@@ -110,9 +110,20 @@ async fn seed(database_url: &str) -> anyhow::Result<()> {
         .await
         .map_err(anyhow::Error::from)?;
     let count = products.len();
-    for product in products {
+    for (index, product) in products.into_iter().enumerate() {
+        let price_cents = product.price.amount_cents;
         let id = timada_catalog::import_product(&ctx.executor, supplier.id(), product).await?;
         timada_catalog::publish_product(&ctx.executor, &id).await?;
+        // Price every other product in USD too, so switching to the US region
+        // demonstrably hides the EUR-only rest of the catalog.
+        if index % 2 == 0 {
+            timada_catalog::set_product_price(
+                &ctx.executor,
+                &id,
+                timada_core::Money::new(price_cents, timada_core::Currency::Usd),
+            )
+            .await?;
+        }
     }
     tracing::info!(count, "seeded and published the mock supplier's catalog");
 

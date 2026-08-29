@@ -114,7 +114,14 @@ impl TestApp {
         let product = timada_catalog::load_product(self.executor(), product_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("product not found"))?;
-        timada_cart::add_item(self.executor(), &cart_id, &product, quantity).await?;
+        timada_cart::add_item(
+            self.executor(),
+            &cart_id,
+            &product,
+            product.base_price(),
+            quantity,
+        )
+        .await?;
         let order_id = place_order(
             self.executor(),
             &self.tax,

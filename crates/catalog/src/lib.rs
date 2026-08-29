@@ -22,8 +22,10 @@ mod routes;
 mod state;
 mod view;
 
-pub use aggregate::{Product, ProductArchived, ProductImported, ProductPublished};
-pub use commands::{archive_product, import_product, product_id, publish_product};
+pub use aggregate::{Product, ProductArchived, ProductImported, ProductPriceSet, ProductPublished};
+pub use commands::{
+    archive_product, import_product, product_id, publish_product, set_product_price,
+};
 pub use migrations::migrations;
 pub use projections::{READ_MODELS_SUBSCRIPTION, read_models_subscription, start_subscriptions};
 pub use routes::{admin_router, store_router};

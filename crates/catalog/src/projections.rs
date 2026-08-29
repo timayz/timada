@@ -15,7 +15,7 @@ use evento::subscription::{Context, Subscription, SubscriptionBuilder};
 use sqlx::SqlitePool;
 use timada_core::Executor;
 
-use crate::aggregate::{ProductArchived, ProductImported, ProductPublished};
+use crate::aggregate::{ProductArchived, ProductImported, ProductPriceSet, ProductPublished};
 use crate::state::CatalogState;
 
 /// Subscription key; also the cursor row's key in evento's `subscriber` table.
@@ -86,6 +86,36 @@ async fn on_product_imported<E: evento::Executor>(
     .bind(&event.data.supplier_product_ref)
     .bind(created_at)
     .execute(&pool)
+    .await?;
+
+    // The base price answers for its own currency until an explicit
+    // `ProductPriceSet` overrides it.
+    sqlx::query(
+        "INSERT OR REPLACE INTO store_product_prices (product_id, currency, amount_cents)
+         VALUES (?, ?, ?)",
+    )
+    .bind(&event.aggregate_id)
+    .bind(currency)
+    .bind(event.data.price.amount_cents)
+    .execute(&pool)
+    .await?;
+
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_product_price_set<E: evento::Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ProductPriceSet>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT OR REPLACE INTO store_product_prices (product_id, currency, amount_cents)
+         VALUES (?, ?, ?)",
+    )
+    .bind(&event.aggregate_id)
+    .bind(event.data.price.currency.code())
+    .bind(event.data.price.amount_cents)
+    .execute(&write_pool(ctx)?)
     .await?;
 
     Ok(())
@@ -162,6 +192,7 @@ pub fn read_models_subscription(write_pool: SqlitePool) -> SubscriptionBuilder<E
     SubscriptionBuilder::<Executor>::new(READ_MODELS_SUBSCRIPTION)
         .data(write_pool)
         .handler(on_product_imported())
+        .handler(on_product_price_set())
         .handler(on_product_published())
         .handler(on_product_archived())
         .strict()

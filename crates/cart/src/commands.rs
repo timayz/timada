@@ -25,15 +25,22 @@ pub enum AddItemError {
     ProductUnavailable,
     #[error("cart already checked out")]
     CartCheckedOut,
+    #[error("your cart is in {0} but this item is priced in {1} — switch region or empty the cart")]
+    CurrencyMismatch(timada_core::Currency, timada_core::Currency),
     #[error(transparent)]
     Storage(#[from] anyhow::Error),
 }
 
-/// Put `quantity` units of `product` in the cart.
+/// Put `quantity` units of `product` in the cart, at `unit_price`.
 ///
 /// The product is passed in rather than looked up here so the caller owns the
 /// "does this product exist" answer (a 404, not a 400) and so the cart never
-/// depends on the catalog's eventually-consistent read models.
+/// depends on the catalog's eventually-consistent read models. The price is
+/// passed in too: the caller resolved it for the shopper's region
+/// (`ProductView::price_in`), and this command's job is only to snapshot it.
+///
+/// A cart is locked to one currency — its first line's. Mixing currencies is
+/// refused with the reason the storefront shows verbatim.
 ///
 /// A checked-out cart is refused rather than silently reopened: the cookie is
 /// stale, and the caller's job is to mint a fresh cart id and retry.
@@ -42,6 +49,7 @@ pub async fn add_item(
     executor: &Executor,
     cart_id: &str,
     product: &ProductView,
+    unit_price: Money,
     quantity: u32,
 ) -> Result<(), AddItemError> {
     if quantity == 0 {
@@ -54,7 +62,7 @@ pub async fn add_item(
     let added = CartItemAdded {
         product_id: product.id.clone(),
         title: product.title.clone(),
-        unit_price: Money::new(product.price_cents, product.currency),
+        unit_price,
         supplier_id: product.supplier_id.clone(),
         supplier_product_ref: product.supplier_product_ref.clone(),
         quantity,
@@ -62,7 +70,17 @@ pub async fn add_item(
 
     let mut write = match load_cart(executor, cart_id).await? {
         Some(cart) if cart.checked_out => return Err(AddItemError::CartCheckedOut),
-        Some(cart) => cart.write()?,
+        Some(cart) => {
+            if let Some(line) = cart.lines.first()
+                && line.unit_price.currency != unit_price.currency
+            {
+                return Err(AddItemError::CurrencyMismatch(
+                    line.unit_price.currency,
+                    unit_price.currency,
+                ));
+            }
+            cart.write()?
+        }
         // First event of a cart the customer's cookie already names: append at
         // the builder's default `original_version` of 0, which is exactly the
         // expected version of an id with no events yet.
