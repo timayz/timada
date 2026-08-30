@@ -3,6 +3,7 @@
 //! ```text
 //! OrderPaid      → issue_invoice      → InvoiceIssued
 //! OrderCancelled → issue_credit_note  → CreditNoteIssued (only if invoiced)
+//! ReturnRefunded → issue_credit_note  → CreditNoteIssued (only if invoiced)
 //! ```
 //!
 //! It lives here and not in the order context on purpose: billing is the
@@ -33,6 +34,7 @@ use evento::subscription::{Context, SubscriptionBuilder};
 use sqlx::SqlitePool;
 use timada_core::Executor;
 use timada_order::{OrderCancelled, OrderPaid, load_order};
+use timada_return::ReturnRefunded;
 
 use crate::commands::{issue_credit_note, issue_invoice};
 use crate::state::InvoiceConfig;
@@ -57,6 +59,7 @@ pub fn issuance_subscription(
         .data(config)
         .handler(on_order_paid())
         .handler(on_order_cancelled())
+        .handler(on_return_refunded())
 }
 
 fn missing(what: &str) -> anyhow::Error {
@@ -109,6 +112,24 @@ async fn on_order_cancelled<E: evento::Executor>(
         &config(ctx)?,
         &event.aggregate_id,
         &event.data.reason,
+    )
+    .await
+}
+
+/// A delivered order came back and was refunded in full — the invoice is
+/// reversed. `ReturnRefunded` carries the order id precisely so this handler
+/// never has to replay the return.
+#[evento::subscription]
+async fn on_return_refunded<E: evento::Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ReturnRefunded>,
+) -> anyhow::Result<()> {
+    issue_credit_note(
+        &executor(ctx)?,
+        &write_pool(ctx)?,
+        &config(ctx)?,
+        &event.data.order_id,
+        "order returned",
     )
     .await
 }

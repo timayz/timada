@@ -1,6 +1,6 @@
 [package]
-name = "timada-invoice"
-description = "Timada invoicing: automatic invoice issuance, credit notes, printable documents"
+name = "timada-return"
+description = "Timada returns: full-order RMA flow with refunds through the payment provider"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,11 +12,13 @@ askama.workspace = true
 axum.workspace = true
 bitcode.workspace = true
 evento.workspace = true
+serde.workspace = true
 sqlx.workspace = true
 sqlx_migrator.workspace = true
+thiserror.workspace = true
 timada-core.workspace = true
 timada-order.workspace = true
-timada-return.workspace = true
+timada-payment.workspace = true
 timada-web.workspace = true
 tracing.workspace = true
 
@@ -26,7 +28,7 @@ timada-cart.workspace = true
 timada-catalog.workspace = true
 timada-customer.workspace = true
 timada-dropship.workspace = true
-timada-payment.workspace = true
+timada-shipping.workspace = true
 timada-tax.workspace = true
 tokio.workspace = true
 

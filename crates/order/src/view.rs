@@ -79,6 +79,9 @@ pub struct OrderView {
     pub supplier_order_ids: Vec<String>,
     /// `Some` once a parcel is on its way.
     pub tracking_number: Option<String>,
+    /// When the order reached `Delivered`, epoch milliseconds — the clock the
+    /// return window is measured against.
+    pub delivered_at: Option<i64>,
     /// `Some` only once cancelled.
     pub cancel_reason: Option<String>,
 }
@@ -170,10 +173,13 @@ async fn apply_shipped(event: Event<OrderShipped>, view: &mut OrderView) -> anyh
 }
 
 #[evento::handler]
-async fn apply_delivered(
-    _event: Event<OrderDelivered>,
-    view: &mut OrderView,
-) -> anyhow::Result<()> {
+async fn apply_delivered(event: Event<OrderDelivered>, view: &mut OrderView) -> anyhow::Result<()> {
+    view.delivered_at = Some(
+        i64::try_from(event.timestamp)
+            .unwrap_or_default()
+            .saturating_mul(1000)
+            .saturating_add(i64::from(event.timestamp_subsec)),
+    );
     view.status = OrderStatus::Delivered;
     Ok(())
 }

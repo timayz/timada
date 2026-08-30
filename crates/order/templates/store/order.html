@@ -69,6 +69,14 @@
           View invoice
         </a>
       {% endif %}
+      {% if order.is_delivered() %}
+        <a
+          href="/orders/{{ order.id }}/return"
+          class="mt-4 ml-2 inline-block rounded border border-stone-300 px-3 py-2 text-sm font-medium hover:bg-stone-100"
+        >
+          Request a return
+        </a>
+      {% endif %}
     </div>
   {% endblock %}
 

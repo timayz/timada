@@ -31,6 +31,7 @@ use timada_order::OrderState;
 use timada_payment::{FakePaymentProvider, PaymentProvider, PaymentState};
 use timada_promotion::PromotionState;
 use timada_region::{RegionCountry, RegionState, RegionVat};
+use timada_return::{ReturnPolicy, ReturnState};
 use timada_shipping::ShippingState;
 use timada_tax::TaxCalculator;
 
@@ -78,6 +79,7 @@ fn all_migrations() -> Vec<Box<dyn sqlx_migrator::migration::Migration<sqlx::Sql
     migrations.extend(timada_region::migrations());
     migrations.extend(timada_promotion::migrations());
     migrations.extend(timada_order::migrations());
+    migrations.extend(timada_return::migrations());
     migrations.extend(timada_invoice::migrations());
     migrations.extend(timada_payment::migrations());
     migrations.extend(timada_shipping::migrations());
@@ -234,6 +236,11 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         ctx: ctx.clone(),
         provider: provider.clone(),
     };
+    let returns = ReturnState {
+        ctx: ctx.clone(),
+        provider: provider.clone(),
+        policy: ReturnPolicy { window_days: 30 },
+    };
     let shipping = ShippingState {
         ctx: ctx.clone(),
         registry: registry.clone(),
@@ -263,6 +270,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
     subscriptions.extend(timada_shipping::start_subscriptions(&shipping).await?);
     subscriptions.extend(timada_dropship::start_subscriptions(&dropship).await?);
     subscriptions.extend(timada_invoice::start_subscriptions(&invoice).await?);
+    subscriptions.extend(timada_return::start_subscriptions(&returns).await?);
 
     let services = AdminServices {
         catalog: catalog.clone(),
@@ -273,6 +281,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         payment,
         shipping,
         dropship,
+        returns: returns.clone(),
     };
 
     let app = Router::new()
@@ -283,6 +292,7 @@ async fn serve(database_url: &str, addr: &str) -> anyhow::Result<()> {
         .merge(timada_region::store_router(region))
         .merge(timada_order::store_router(order))
         .merge(timada_invoice::store_router(invoice))
+        .merge(timada_return::store_router(returns))
         .merge(timada_auth::admin_auth_router(auth.clone()))
         .nest(
             "/admin",

@@ -38,6 +38,7 @@ impl TestApp {
         migrations.extend(timada_catalog::migrations());
         migrations.extend(timada_promotion::migrations());
         migrations.extend(timada_order::migrations());
+        migrations.extend(timada_return::migrations());
         migrations.extend(timada_invoice::migrations());
         migrations.extend(timada_payment::migrations());
         migrations.extend(timada_shipping::migrations());
@@ -262,17 +263,50 @@ async fn the_full_journey_ends_with_a_delivered_order() -> anyhow::Result<()> {
     assert_eq!(invoice.total_gross, order.total);
     assert!(!invoice.is_credited());
 
+    // Deliver → return → approve → refund → credit note, and the order's own
+    // history stays exactly as it was.
+    let policy = timada_return::ReturnPolicy { window_days: 30 };
+    let return_id =
+        timada_return::request_return(app.executor(), &policy, &order_id, "does not fit").await?;
+    timada_return::approve_return(app.executor(), &return_id).await?;
+    for _ in 0..5 {
+        timada_return::return_flow_subscription(app.executor().clone(), app.provider.clone())
+            .no_retry()
+            .run_once(app.executor())
+            .await?;
+    }
+    let current = timada_return::load_return(app.executor(), &return_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return should exist"))?;
+    assert_eq!(current.status, timada_return::ReturnStatus::Refunded);
+    assert_eq!(
+        app.settle(&order_id).await?,
+        OrderStatus::Delivered,
+        "a refunded return never rewrites the order's history"
+    );
+
+    // The refund reversed the invoice with a credit note.
+    app.issue_invoices().await?;
+    let invoice = load_invoice(app.executor(), &invoice_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invoice should exist"))?;
+    assert!(invoice.is_credited(), "returned order must be credited");
+    assert_eq!(
+        invoice.credit_note_reason.as_deref(),
+        Some("order returned")
+    );
+
     // Admin read models agree end-to-end.
     app.refresh_admin_tables().await?;
     assert_eq!(app.admin_order_status(&order_id).await?, "delivered");
     assert_eq!(app.admin_shipment_status(&shipment_id).await?, "delivered");
     let (payments,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM admin_payment_list WHERE order_id = ? AND status = 'captured'",
+        "SELECT COUNT(*) FROM admin_payment_list WHERE order_id = ? AND status = 'refunded'",
     )
     .bind(&order_id)
     .fetch_one(&app.pool)
     .await?;
-    assert_eq!(payments, 1, "captured payment visible in admin");
+    assert_eq!(payments, 1, "refunded payment visible in admin");
     let (confirmed,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM admin_supplier_order_list WHERE order_id = ? AND status = 'confirmed'",
     )

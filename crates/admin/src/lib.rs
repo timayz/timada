@@ -27,6 +27,8 @@ pub struct AdminServices {
     pub invoice: timada_invoice::InvoiceState,
     pub payment: timada_payment::PaymentState,
     pub shipping: timada_shipping::ShippingState,
+    /// `return` is a keyword, hence the plural.
+    pub returns: timada_return::ReturnState,
     pub dropship: timada_dropship::DropshipState,
 }
 
@@ -49,6 +51,7 @@ pub fn router(services: AdminServices) -> Router {
             timada_promotion::admin_router(services.promotion),
         )
         .nest("/orders", timada_order::admin_router(services.order))
+        .nest("/returns", timada_return::admin_router(services.returns))
         .nest("/invoices", timada_invoice::admin_router(services.invoice))
         .nest("/payments", timada_payment::admin_router(services.payment))
         .nest(
