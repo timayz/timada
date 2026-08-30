@@ -63,6 +63,9 @@ pub struct OrderView {
     pub email: String,
     pub shipping_address: Address,
     pub lines: Vec<OrderLine>,
+    /// The code redeemed at checkout, if any, and what it took off.
+    pub discount_code: Option<String>,
+    pub discount_amount: Option<Money>,
     /// Tax-inclusive: what the customer pays, and what is charged.
     pub total: Money,
     /// The assessed split of [`total`](Self::total): `total_net + total_tax`
@@ -124,6 +127,8 @@ async fn apply_placed(event: Event<OrderPlaced>, view: &mut OrderView) -> anyhow
     view.email = event.data.email.clone();
     view.shipping_address = event.data.shipping_address.clone();
     view.lines = event.data.lines.clone();
+    view.discount_code = event.data.discount_code.clone();
+    view.discount_amount = event.data.discount_amount;
     view.total = event.data.total;
     view.total_net = event.data.total_net;
     view.total_tax = event.data.total_tax;

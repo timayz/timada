@@ -62,9 +62,10 @@ pub async fn issue_invoice(
             quantity: line.quantity,
             unit_price_gross: line.unit_price,
             tax_rate_bps: line.tax_rate_bps,
+            discount: line.discount,
             net: line.net,
             tax: line.tax,
-            gross: line.line_total(),
+            gross: line.charged(),
         })
         .collect();
 
@@ -85,6 +86,8 @@ pub async fn issue_invoice(
             seller: config.seller.clone(),
             buyer,
             lines,
+            discount_code: order.discount_code.clone(),
+            discount_amount: order.discount_amount,
             total_net: order.total_net,
             total_tax: order.total_tax,
             total_gross: order.total,

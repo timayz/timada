@@ -36,6 +36,7 @@ impl TestApp {
         let mut migrations = timada_auth::migrations();
         migrations.extend(timada_customer::migrations());
         migrations.extend(timada_catalog::migrations());
+        migrations.extend(timada_promotion::migrations());
         migrations.extend(timada_order::migrations());
         migrations.extend(timada_invoice::migrations());
         migrations.extend(timada_payment::migrations());
@@ -125,6 +126,7 @@ impl TestApp {
         let order_id = place_order(
             self.executor(),
             &self.tax,
+            &self.pool,
             &cart_id,
             customer_id,
             "customer@example.com".into(),
@@ -318,6 +320,125 @@ async fn a_signed_in_customers_order_lands_in_their_history() -> anyhow::Result<
     app.refresh_admin_tables().await?;
     let history = timada_order::orders_for_customer(&app.pool, &customer_id, 10).await?;
     assert_eq!(history.len(), 1, "guest orders belong to nobody");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_discount_flows_from_cart_through_checkout_to_the_invoice() -> anyhow::Result<()> {
+    let app = TestApp::new().await?;
+    let product_id = app.seed_product(|cents| cents % 100 != 99).await?;
+
+    // A 10 % code with a single redemption slot: enough to prove the flow and
+    // the exhaustion in one journey.
+    timada_promotion::create_discount(
+        app.executor(),
+        "WELCOME10",
+        timada_promotion::DiscountKind::Percentage { bps: 1000 },
+        timada_core::now_millis() - 1000,
+        None,
+        Some(1),
+    )
+    .await?;
+
+    // Cart with the code applied (case-insensitively), then checkout.
+    let cart_id = new_id();
+    let product = timada_catalog::load_product(app.executor(), &product_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("product not found"))?;
+    timada_cart::add_item(app.executor(), &cart_id, &product, product.base_price(), 2).await?;
+    timada_cart::apply_discount(app.executor(), &cart_id, "welcome10").await?;
+
+    let gross = product.base_price().multiply(2);
+    let expected_discount = timada_core::Money::new(gross.amount_cents / 10, gross.currency);
+    let order_id = place_order(
+        app.executor(),
+        &app.tax,
+        &app.pool,
+        &cart_id,
+        None,
+        "customer@example.com".into(),
+        Address {
+            full_name: "Ada Lovelace".into(),
+            street: "1 Analytical Engine Way".into(),
+            city: "London".into(),
+            postal_code: "N1 9GU".into(),
+            country: "GB".into(),
+        },
+    )
+    .await?;
+
+    let order = load_order(app.executor(), &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not found"))?;
+    assert_eq!(order.discount_code.as_deref(), Some("WELCOME10"));
+    assert_eq!(order.discount_amount, Some(expected_discount));
+    assert_eq!(
+        order.total,
+        gross.subtract(expected_discount)?,
+        "the charged total is the discounted one"
+    );
+    let allocated: i64 = order.lines.iter().map(|l| l.discount.amount_cents).sum();
+    assert_eq!(
+        allocated, expected_discount.amount_cents,
+        "allocation is exact"
+    );
+
+    // The payment charges the discounted amount, and the invoice prints it.
+    assert_eq!(app.settle(&order_id).await?, OrderStatus::Forwarded);
+    let paid_order = load_order(app.executor(), &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not found"))?;
+    let payment = timada_payment::load_payment(
+        app.executor(),
+        paid_order
+            .payment_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("paid order must know its payment"))?,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("payment not found"))?;
+    assert_eq!(payment.amount, order.total);
+
+    app.issue_invoices().await?;
+    let invoice = load_invoice(app.executor(), &invoice_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("paid order must have an invoice"))?;
+    assert_eq!(invoice.discount_code.as_deref(), Some("WELCOME10"));
+    assert_eq!(invoice.discount_amount, Some(expected_discount));
+    assert_eq!(invoice.total_gross, order.total);
+    assert_eq!(
+        invoice.total_net.add(invoice.total_tax)?,
+        invoice.total_gross
+    );
+
+    // The single redemption slot is spent: a second checkout with the same
+    // code refuses with a readable reason.
+    let cart_id = new_id();
+    timada_cart::add_item(app.executor(), &cart_id, &product, product.base_price(), 1).await?;
+    timada_cart::apply_discount(app.executor(), &cart_id, "WELCOME10").await?;
+    let refused = place_order(
+        app.executor(),
+        &app.tax,
+        &app.pool,
+        &cart_id,
+        None,
+        "customer@example.com".into(),
+        Address {
+            full_name: "Ada Lovelace".into(),
+            street: "1 Analytical Engine Way".into(),
+            city: "London".into(),
+            postal_code: "N1 9GU".into(),
+            country: "GB".into(),
+        },
+    )
+    .await;
+    match refused {
+        Err(timada_order::PlaceOrderError::Invalid(reason)) => {
+            assert!(reason.contains("fully used"), "reason was: {reason}");
+        }
+        other => anyhow::bail!("expected a fully-used refusal, got {other:?}"),
+    }
 
     Ok(())
 }

@@ -10,7 +10,9 @@ use evento::ProjectionAggregate as _;
 use timada_catalog::ProductView;
 use timada_core::{Executor, Money};
 
-use crate::aggregate::{CartCheckedOut, CartItemAdded, CartItemRemoved};
+use crate::aggregate::{
+    CartCheckedOut, CartDiscountApplied, CartDiscountRemoved, CartItemAdded, CartItemRemoved,
+};
 use crate::view::load_cart;
 
 /// Why an "add to cart" was refused.
@@ -159,5 +161,57 @@ pub async fn mark_checked_out(executor: &Executor, cart_id: &str) -> anyhow::Res
         .await?;
 
     tracing::info!(cart_id, "cart checked out");
+    Ok(())
+}
+
+/// Attach a discount code to the cart. The code is stored uppercase; whether
+/// it is valid is the caller's advisory check and checkout's authoritative
+/// one — the cart only remembers what the customer typed.
+#[tracing::instrument(skip(executor))]
+pub async fn apply_discount(executor: &Executor, cart_id: &str, code: &str) -> anyhow::Result<()> {
+    let code = code.trim().to_uppercase();
+    anyhow::ensure!(!code.is_empty(), "a discount code cannot be empty");
+
+    let Some(cart) = load_cart(executor, cart_id).await? else {
+        anyhow::bail!("cannot apply a discount to an unknown cart");
+    };
+    anyhow::ensure!(
+        !cart.checked_out,
+        "cannot apply a discount to a checked-out cart"
+    );
+
+    if cart.discount_code.as_deref() == Some(code.as_str()) {
+        tracing::info!(cart_id, %code, "discount already applied");
+        return Ok(());
+    }
+
+    cart.write()?
+        .event(&CartDiscountApplied { code: code.clone() })
+        .commit(executor)
+        .await?;
+
+    tracing::info!(cart_id, %code, "cart discount applied");
+    Ok(())
+}
+
+/// Take the discount code off again. Every no-op case is logged and ignored —
+/// a double-clicked Remove button should not produce an error page.
+#[tracing::instrument(skip(executor))]
+pub async fn remove_discount(executor: &Executor, cart_id: &str) -> anyhow::Result<()> {
+    let Some(cart) = load_cart(executor, cart_id).await? else {
+        tracing::warn!(cart_id, "cannot remove a discount from an unknown cart");
+        return Ok(());
+    };
+    if cart.checked_out || cart.discount_code.is_none() {
+        tracing::info!(cart_id, "no discount to remove");
+        return Ok(());
+    }
+
+    cart.write()?
+        .event(&CartDiscountRemoved)
+        .commit(executor)
+        .await?;
+
+    tracing::info!(cart_id, "cart discount removed");
     Ok(())
 }

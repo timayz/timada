@@ -46,6 +46,9 @@ pub struct InvoiceLine {
     pub unit_price_gross: Money,
     /// Rate applied to this line, in basis points (2000 = 20 %).
     pub tax_rate_bps: u32,
+    /// This line's share of the order's discount; zero when none. `gross` is
+    /// the discounted amount: `net + tax == gross == unit × qty − discount`.
+    pub discount: Money,
     pub net: Money,
     pub tax: Money,
     pub gross: Money,
@@ -63,6 +66,10 @@ pub enum Invoice {
         seller: Party,
         buyer: Party,
         lines: Vec<InvoiceLine>,
+        /// The code the customer redeemed, and what it took off — printed on
+        /// the document so the arithmetic on paper adds up.
+        discount_code: Option<String>,
+        discount_amount: Option<Money>,
         total_net: Money,
         total_tax: Money,
         total_gross: Money,

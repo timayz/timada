@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 timada-catalog.workspace = true
+timada-promotion.workspace = true
 timada-region.workspace = true
 timada-core.workspace = true
 timada-web.workspace = true

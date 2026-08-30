@@ -93,7 +93,8 @@
         type="submit"
         class="rounded bg-stone-900 px-4 py-3 font-medium text-white hover:bg-stone-700"
       >
-        Place order · {{ cart.total() }}
+        Place order ·
+        {% if let Some(discount) = discount %}{{ discount.total_after }}{% else %}{{ cart.total() }}{% endif %}
       </button>
     </form>
 
@@ -112,10 +113,21 @@
         {% endfor %}
       </ul>
 
-      <p class="mt-4 flex items-baseline justify-between border-t border-stone-200 pt-3 text-base">
-        <span class="font-medium">Total</span>
-        <span class="font-semibold">{{ cart.total() }}</span>
-      </p>
+      {% if let Some(discount) = discount %}
+        <p class="mt-3 flex items-baseline justify-between text-sm">
+          <span>Code <span class="font-mono font-medium">{{ discount.code }}</span></span>
+          <span class="text-emerald-800">−{{ discount.amount }}</span>
+        </p>
+        <p class="mt-2 flex items-baseline justify-between border-t border-stone-200 pt-3 text-base">
+          <span class="font-medium">Total</span>
+          <span class="font-semibold">{{ discount.total_after }}</span>
+        </p>
+      {% else %}
+        <p class="mt-4 flex items-baseline justify-between border-t border-stone-200 pt-3 text-base">
+          <span class="font-medium">Total</span>
+          <span class="font-semibold">{{ cart.total() }}</span>
+        </p>
+      {% endif %}
       <p class="mt-1 text-xs text-stone-600">
         Includes {{ total_tax }} VAT · the final rate depends on your delivery country
       </p>

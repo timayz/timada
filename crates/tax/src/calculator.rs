@@ -28,6 +28,23 @@ pub struct TaxableLine {
     /// Tax-inclusive unit price.
     pub gross_unit_price: Money,
     pub quantity: u32,
+    /// Amount already taken off this line — VAT is extracted from what the
+    /// customer actually pays (`unit × quantity − discount`), never from the
+    /// undiscounted price. Zero when no discount applies; a non-zero discount
+    /// must share the line's currency.
+    pub discount: Money,
+}
+
+impl TaxableLine {
+    /// A line with no discount, in the unit price's currency.
+    pub fn undiscounted(reference: String, gross_unit_price: Money, quantity: u32) -> Self {
+        Self {
+            reference,
+            discount: Money::zero(gross_unit_price.currency),
+            gross_unit_price,
+            quantity,
+        }
+    }
 }
 
 /// The assessed breakdown. Per line and in total: `net + tax == gross`.

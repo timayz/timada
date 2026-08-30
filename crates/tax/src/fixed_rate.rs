@@ -77,7 +77,14 @@ impl TaxCalculator for FixedRateVat {
             if line.gross_unit_price.currency != currency {
                 return Err(TaxError::MixedCurrencies);
             }
-            let gross = line.gross_unit_price.multiply(line.quantity);
+            if line.discount.amount_cents != 0 && line.discount.currency != currency {
+                return Err(TaxError::MixedCurrencies);
+            }
+            let gross = Money::new(
+                line.gross_unit_price.multiply(line.quantity).amount_cents
+                    - line.discount.amount_cents,
+                currency,
+            );
             let net = Money::new(net_of_gross(gross.amount_cents, rate_bps), currency);
             let tax = Money::new(gross.amount_cents - net.amount_cents, currency);
 
@@ -113,11 +120,11 @@ mod tests {
     use crate::calculator::TaxableLine;
 
     fn line(reference: &str, gross_cents: i64, quantity: u32) -> TaxableLine {
-        TaxableLine {
-            reference: reference.into(),
-            gross_unit_price: Money::new(gross_cents, Currency::Eur),
+        TaxableLine::undiscounted(
+            reference.into(),
+            Money::new(gross_cents, Currency::Eur),
             quantity,
-        }
+        )
     }
 
     #[tokio::test]
@@ -193,14 +200,40 @@ mod tests {
                 country: "FR".into(),
                 lines: vec![
                     line("a", 1000, 1),
-                    TaxableLine {
-                        reference: "b".into(),
-                        gross_unit_price: Money::new(1000, Currency::Usd),
-                        quantity: 1,
-                    },
+                    TaxableLine::undiscounted("b".into(), Money::new(1000, Currency::Usd), 1),
                 ],
             })
             .await;
         assert!(matches!(result, Err(TaxError::MixedCurrencies)));
+    }
+}
+
+#[cfg(test)]
+mod discount_tests {
+    use timada_core::{Currency, Money};
+
+    use super::*;
+    use crate::calculator::{TaxAssessmentRequest, TaxableLine};
+
+    #[tokio::test]
+    async fn vat_is_extracted_from_the_discounted_gross() {
+        let vat = FixedRateVat::new(2000);
+        let assessment = vat
+            .assess(TaxAssessmentRequest {
+                country: "FR".into(),
+                lines: vec![TaxableLine {
+                    reference: "a".into(),
+                    gross_unit_price: Money::new(1200, Currency::Eur),
+                    quantity: 1,
+                    discount: Money::new(120, Currency::Eur),
+                }],
+            })
+            .await
+            .unwrap();
+
+        // 12.00 − 1.20 = 10.80 gross at 20 % inclusive → 9.00 net + 1.80 tax.
+        assert_eq!(assessment.total_gross.amount_cents, 1080);
+        assert_eq!(assessment.total_net.amount_cents, 900);
+        assert_eq!(assessment.total_tax.amount_cents, 180);
     }
 }

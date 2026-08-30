@@ -77,11 +77,7 @@ impl TestDb {
 }
 
 fn eur_line(gross_cents: i64) -> TaxableLine {
-    TaxableLine {
-        reference: "p1".into(),
-        gross_unit_price: Money::new(gross_cents, Currency::Eur),
-        quantity: 1,
-    }
+    TaxableLine::undiscounted("p1".into(), Money::new(gross_cents, Currency::Eur), 1)
 }
 
 #[tokio::test]

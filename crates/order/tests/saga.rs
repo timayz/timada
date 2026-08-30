@@ -186,6 +186,7 @@ async fn an_order_walks_from_placed_to_delivered() -> anyhow::Result<()> {
     let order_id = place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &cart_id,
         None,
         "ada@example.com".to_owned(),
@@ -267,6 +268,7 @@ async fn a_declined_charge_cancels_the_order() -> anyhow::Result<()> {
     let order_id = place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &cart_id,
         None,
         "ada@example.com".to_owned(),
@@ -315,6 +317,7 @@ async fn a_supplier_rejection_refunds_and_cancels() -> anyhow::Result<()> {
     let order_id = place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &cart_id,
         None,
         "ada@example.com".to_owned(),
@@ -360,6 +363,7 @@ async fn checkout_snapshots_the_tax_split_of_a_tax_inclusive_total() -> anyhow::
     let order_id = place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &cart_id,
         None,
         "ada@example.com".to_owned(),
@@ -397,6 +401,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     let unknown = place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &new_id(),
         None,
         "ada@example.com".to_owned(),
@@ -416,6 +421,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     let empty = place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &cart_id,
         None,
         "ada@example.com".to_owned(),
@@ -428,6 +434,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     let bad_email = place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &cart_id,
         None,
         "not-an-email".to_owned(),
@@ -439,6 +446,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     let blank_city = place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &cart_id,
         None,
         "ada@example.com".to_owned(),
@@ -454,6 +462,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &cart_id,
         None,
         "ada@example.com".to_owned(),
@@ -463,6 +472,7 @@ async fn checkout_refuses_carts_it_cannot_turn_into_an_order() -> anyhow::Result
     let again = place_order(
         db.executor(),
         db.tax(),
+        &db.pool,
         &cart_id,
         None,
         "ada@example.com".to_owned(),

@@ -32,6 +32,14 @@ pub fn store_router(state: OrderState) -> Router {
         .with_state(state)
 }
 
+/// The applied code as the summary shows it. Indicative like the tax line —
+/// the authoritative redemption happens on submit.
+struct CheckoutDiscount {
+    code: String,
+    amount: Money,
+    total_after: Money,
+}
+
 #[derive(Template)]
 #[template(path = "store/checkout.html")]
 struct CheckoutTemplate {
@@ -39,6 +47,7 @@ struct CheckoutTemplate {
     /// Indicative: the country is not known until the form is submitted, so
     /// this is the calculator's default rate. The page says as much.
     total_tax: Money,
+    discount: Option<CheckoutDiscount>,
     /// Prefilled from the signed-in customer; empty for guests.
     email: String,
 }
@@ -77,6 +86,40 @@ async fn checkout_page(State(state): State<OrderState>, jar: CookieJar) -> AppRe
         return Ok(Redirect::to("/cart").into_response());
     };
 
+    // The applied code, resolved the same advisory way the cart page does; a
+    // code that stopped working shows up as a refusal on submit.
+    let discount = match cart.discount_code.as_deref() {
+        Some(code) => {
+            match timada_promotion::load_discount(
+                &state.ctx.executor,
+                &timada_promotion::discount_id(code),
+            )
+            .await?
+            {
+                Some(view)
+                    if timada_promotion::validate(&view, timada_core::now_millis()).is_ok() =>
+                {
+                    timada_promotion::discount_amount(view.kind, cart.total())
+                        .ok()
+                        .map(|amount| CheckoutDiscount {
+                            code: view.code,
+                            amount,
+                            total_after: cart
+                                .total()
+                                .subtract(amount)
+                                .unwrap_or_else(|_| cart.total()),
+                        })
+                }
+                _ => None,
+            }
+        }
+        None => None,
+    };
+    let per_line_discount = match &discount {
+        Some(discount) => crate::commands::allocate_discount(&cart.lines, discount.amount),
+        None => vec![0; cart.lines.len()],
+    };
+
     // Prices are tax-inclusive, so this only breaks out how much of the total
     // is tax. The destination country arrives with the form, so the preview
     // uses the calculator's default rate and the page labels it as such.
@@ -87,10 +130,12 @@ async fn checkout_page(State(state): State<OrderState>, jar: CookieJar) -> AppRe
             lines: cart
                 .lines
                 .iter()
-                .map(|line| TaxableLine {
+                .zip(&per_line_discount)
+                .map(|(line, discount_cents)| TaxableLine {
                     reference: line.product_id.clone(),
                     gross_unit_price: line.unit_price,
                     quantity: line.quantity,
+                    discount: Money::new(*discount_cents, line.unit_price.currency),
                 })
                 .collect(),
         })
@@ -105,6 +150,7 @@ async fn checkout_page(State(state): State<OrderState>, jar: CookieJar) -> AppRe
     Ok(HtmlTemplate(CheckoutTemplate {
         cart,
         total_tax: assessment.total_tax,
+        discount,
         email,
     })
     .into_response())
@@ -153,6 +199,7 @@ async fn submit_checkout(
     let order_id = match place_order(
         &state.ctx.executor,
         &state.tax,
+        &state.ctx.write_pool,
         &cart_id,
         customer_id,
         form.email,

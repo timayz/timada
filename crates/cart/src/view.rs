@@ -8,7 +8,9 @@ use evento::metadata::Event;
 use evento::projection::Projection;
 use timada_core::{Executor, Money};
 
-use crate::aggregate::{Cart, CartCheckedOut, CartItemAdded, CartItemRemoved};
+use crate::aggregate::{
+    Cart, CartCheckedOut, CartDiscountApplied, CartDiscountRemoved, CartItemAdded, CartItemRemoved,
+};
 
 /// One product in a cart, at the price and title it had when it was added.
 #[derive(Debug, Clone, PartialEq, Eq, Default, bitcode::Encode, bitcode::Decode)]
@@ -34,6 +36,9 @@ impl CartLine {
 pub struct CartView {
     pub id: String,
     pub lines: Vec<CartLine>,
+    /// The discount code attached to this cart, if any. Advisory until
+    /// checkout re-validates it.
+    pub discount_code: Option<String>,
     pub checked_out: bool,
 }
 
@@ -134,6 +139,24 @@ async fn apply_item_removed(
 }
 
 #[evento::handler]
+async fn apply_discount_applied(
+    event: Event<CartDiscountApplied>,
+    cart: &mut CartView,
+) -> anyhow::Result<()> {
+    cart.discount_code = Some(event.data.code.clone());
+    Ok(())
+}
+
+#[evento::handler]
+async fn apply_discount_removed(
+    _event: Event<CartDiscountRemoved>,
+    cart: &mut CartView,
+) -> anyhow::Result<()> {
+    cart.discount_code = None;
+    Ok(())
+}
+
+#[evento::handler]
 async fn apply_checked_out(
     _event: Event<CartCheckedOut>,
     cart: &mut CartView,
@@ -152,6 +175,8 @@ fn projection() -> Projection<Executor, CartView> {
     Projection::<Executor, CartView>::new::<Cart>()
         .handler(apply_item_added())
         .handler(apply_item_removed())
+        .handler(apply_discount_applied())
+        .handler(apply_discount_removed())
         .handler(apply_checked_out())
         .strict()
 }

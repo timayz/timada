@@ -95,6 +95,15 @@
 
       <div class="mt-6 flex justify-end">
         <dl class="w-full max-w-xs text-sm sm:w-72">
+          {% if let Some(discount_amount) = invoice.discount_amount %}
+            <div class="flex justify-between border-b border-stone-200 py-2">
+              <dt class="text-stone-600">
+                Discount
+                {% if let Some(code) = invoice.discount_code %}({{ code }}){% endif %}
+              </dt>
+              <dd class="whitespace-nowrap">−{{ discount_amount }}</dd>
+            </div>
+          {% endif %}
           <div class="flex justify-between border-b border-stone-200 py-2">
             <dt class="text-stone-600">Net</dt>
             <dd class="whitespace-nowrap">{{ invoice.total_net }}</dd>

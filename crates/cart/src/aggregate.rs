@@ -26,6 +26,14 @@ pub enum Cart {
     CartItemRemoved {
         product_id: String,
     },
+    /// A discount code was attached. Only the code is stored — validity and
+    /// the amount are re-checked authoritatively at checkout, so a code that
+    /// expires while it sits in the cart simply refuses there.
+    CartDiscountApplied {
+        code: String,
+    },
+    /// The customer took the code off again.
+    CartDiscountRemoved,
     /// Terminal: the cart became an order. A checked-out cart is never
     /// reopened — the customer starts a new one with a fresh id.
     CartCheckedOut,

@@ -28,6 +28,13 @@
       <dd class="mt-1">
         {{ order.total }}
         <span class="block text-xs text-stone-600">Includes {{ order.total_tax }} VAT</span>
+        {% if let Some(discount_amount) = order.discount_amount %}
+          <span class="block text-xs text-emerald-800">
+            After
+            {% if let Some(code) = order.discount_code %}{{ code }}{% endif %}
+            −{{ discount_amount }}
+          </span>
+        {% endif %}
       </dd>
     </div>
     <div>

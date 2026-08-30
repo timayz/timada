@@ -92,7 +92,14 @@ impl TaxCalculator for RegionVat {
             if line.gross_unit_price.currency != currency {
                 return Err(TaxError::MixedCurrencies);
             }
-            let gross = line.gross_unit_price.multiply(line.quantity);
+            if line.discount.amount_cents != 0 && line.discount.currency != currency {
+                return Err(TaxError::MixedCurrencies);
+            }
+            let gross = Money::new(
+                line.gross_unit_price.multiply(line.quantity).amount_cents
+                    - line.discount.amount_cents,
+                currency,
+            );
             let net = Money::new(net_of_gross(gross.amount_cents, rate_bps), currency);
             let tax = Money::new(gross.amount_cents - net.amount_cents, currency);
 

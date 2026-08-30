@@ -24,8 +24,12 @@ mod routes;
 mod state;
 mod view;
 
-pub use aggregate::{Cart, CartCheckedOut, CartItemAdded, CartItemRemoved};
-pub use commands::{AddItemError, add_item, mark_checked_out, remove_item};
+pub use aggregate::{
+    Cart, CartCheckedOut, CartDiscountApplied, CartDiscountRemoved, CartItemAdded, CartItemRemoved,
+};
+pub use commands::{
+    AddItemError, add_item, apply_discount, mark_checked_out, remove_discount, remove_item,
+};
 pub use cookie::{CART_COOKIE, cart_cookie_id};
 pub use routes::store_router;
 pub use state::CartState;

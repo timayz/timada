@@ -178,6 +178,7 @@ impl TestDb {
         let order_id = place_order(
             self.executor(),
             &self.order.tax,
+            &self.pool,
             &cart_id,
             None,
             "ada@example.com".to_owned(),

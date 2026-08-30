@@ -28,7 +28,7 @@ pub use aggregate::{
     Address, Order, OrderCancelled, OrderDelivered, OrderForwardedToSupplier, OrderLine, OrderPaid,
     OrderPlaced, OrderShipped,
 };
-pub use commands::{PlaceOrderError, place_order};
+pub use commands::{PlaceOrderError, allocate_discount, place_order};
 pub use migrations::migrations;
 pub use projections::{
     ADMIN_SUBSCRIPTION, AdminOrderRow, admin_subscription, orders_for_customer, recent_orders,

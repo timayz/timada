@@ -22,6 +22,9 @@ pub struct InvoiceView {
     pub seller: Party,
     pub buyer: Party,
     pub lines: Vec<InvoiceLine>,
+    /// The code redeemed at checkout, if any, and what it took off.
+    pub discount_code: Option<String>,
+    pub discount_amount: Option<Money>,
     pub total_net: Money,
     pub total_tax: Money,
     /// Tax-inclusive: `total_net + total_tax`, and the amount that was charged.
@@ -59,6 +62,8 @@ async fn apply_issued(event: Event<InvoiceIssued>, view: &mut InvoiceView) -> an
     view.seller = event.data.seller.clone();
     view.buyer = event.data.buyer.clone();
     view.lines = event.data.lines.clone();
+    view.discount_code = event.data.discount_code.clone();
+    view.discount_amount = event.data.discount_amount;
     view.total_net = event.data.total_net;
     view.total_tax = event.data.total_tax;
     view.total_gross = event.data.total_gross;

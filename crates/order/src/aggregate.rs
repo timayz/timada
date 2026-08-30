@@ -51,14 +51,25 @@ pub struct OrderLine {
     pub quantity: u32,
     /// Rate applied to this line, in basis points (2000 = 20 %).
     pub tax_rate_bps: u32,
+    /// This line's allocated share of the order's discount; zero when none.
+    /// `net + tax == line_total() − discount`.
+    pub discount: Money,
     pub net: Money,
     pub tax: Money,
 }
 
 impl OrderLine {
-    /// What this line costs, tax included: unit price times quantity.
+    /// What this line costs before any discount: unit price times quantity.
     pub fn line_total(&self) -> Money {
         self.unit_price.multiply(self.quantity)
+    }
+
+    /// What the customer actually pays for this line.
+    pub fn charged(&self) -> Money {
+        Money::new(
+            self.line_total().amount_cents - self.discount.amount_cents,
+            self.unit_price.currency,
+        )
     }
 }
 
@@ -77,6 +88,10 @@ pub enum Order {
         email: String,
         shipping_address: Address,
         lines: Vec<OrderLine>,
+        /// The code that was redeemed at checkout, if any.
+        discount_code: Option<String>,
+        /// What that code took off the pre-discount total.
+        discount_amount: Option<Money>,
         total: Money,
         total_net: Money,
         total_tax: Money,

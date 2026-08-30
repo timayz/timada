@@ -86,6 +86,17 @@
           </li>
         {% endfor %}
       </ul>
+      {% if let Some(discount_amount) = order.discount_amount %}
+        <p class="mt-3 flex items-baseline justify-between text-sm">
+          <span>
+            Discount
+            {% if let Some(code) = order.discount_code %}
+              <span class="font-mono font-medium">{{ code }}</span>
+            {% endif %}
+          </span>
+          <span class="text-emerald-800">−{{ discount_amount }}</span>
+        </p>
+      {% endif %}
       <p class="mt-4 flex items-baseline justify-between border-t border-stone-200 pt-3">
         <span class="font-medium">Total</span>
         <span class="font-semibold">{{ order.total }}</span>
