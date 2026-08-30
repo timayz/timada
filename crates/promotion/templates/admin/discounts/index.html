@@ -1,0 +1,138 @@
+{% extends "admin/layout.html" %}
+
+{% block meta %}
+  <title>Discounts · Timada Admin</title>
+{% endblock %}
+
+{% block content %}
+  <h1 class="text-xl font-semibold sm:text-2xl">Discounts</h1>
+  <p class="mt-2 text-sm text-stone-600">
+    Codes customers can apply at the cart. Percentages come off the tax-inclusive total; fixed
+    amounts only apply to carts in their own currency. Disabling is permanent — a fresh campaign
+    is a fresh code.
+  </p>
+
+  <form method="post" action="/admin/discounts" class="mt-6 grid max-w-2xl gap-4 rounded border border-stone-300 bg-white p-4 sm:grid-cols-2">
+    <div class="grid gap-1">
+      <label for="code" class="text-sm font-medium">Code</label>
+      <input
+        type="text"
+        id="code"
+        name="code"
+        required
+        placeholder="WELCOME10"
+        class="rounded border border-stone-300 px-3 py-2 text-sm uppercase"
+      />
+    </div>
+    <div class="grid gap-1">
+      <label for="kind" class="text-sm font-medium">Kind</label>
+      <select id="kind" name="kind" class="rounded border border-stone-300 bg-white px-3 py-2 text-sm">
+        <option value="percentage">Percentage</option>
+        <option value="fixed">Fixed amount</option>
+      </select>
+    </div>
+    <div class="grid gap-1">
+      <label for="value" class="text-sm font-medium">Value</label>
+      <input
+        type="number"
+        id="value"
+        name="value"
+        required
+        min="1"
+        aria-describedby="value-hint"
+        class="rounded border border-stone-300 px-3 py-2 text-sm"
+      />
+      <p id="value-hint" class="text-xs text-stone-600">
+        Basis points for a percentage (1000 = 10&nbsp;%), cents for a fixed amount.
+      </p>
+    </div>
+    <div class="grid gap-1">
+      <label for="currency" class="text-sm font-medium">Currency (fixed only)</label>
+      <select id="currency" name="currency" class="rounded border border-stone-300 bg-white px-3 py-2 text-sm">
+        <option value="EUR">EUR</option>
+        <option value="USD">USD</option>
+      </select>
+    </div>
+    <div class="grid gap-1">
+      <label for="valid_days" class="text-sm font-medium">Valid for (days)</label>
+      <input
+        type="number"
+        id="valid_days"
+        name="valid_days"
+        min="1"
+        placeholder="open-ended"
+        class="rounded border border-stone-300 px-3 py-2 text-sm"
+      />
+    </div>
+    <div class="grid gap-1">
+      <label for="usage_limit" class="text-sm font-medium">Usage limit</label>
+      <input
+        type="number"
+        id="usage_limit"
+        name="usage_limit"
+        min="1"
+        placeholder="unlimited"
+        class="rounded border border-stone-300 px-3 py-2 text-sm"
+      />
+    </div>
+    <div class="sm:col-span-2">
+      <button
+        type="submit"
+        class="rounded bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700"
+      >
+        Create discount
+      </button>
+    </div>
+  </form>
+
+  {% if discounts.is_empty() %}
+    <p class="mt-6 rounded border border-stone-300 bg-white p-4 text-sm text-stone-600">
+      No discount yet.
+    </p>
+  {% else %}
+    <div class="mt-6 overflow-x-auto rounded border border-stone-300 bg-white">
+      <table class="w-full min-w-3xl border-collapse text-left text-sm">
+        <caption class="sr-only">Discounts, newest first</caption>
+        <thead class="border-b border-stone-300 text-xs font-medium tracking-wide text-stone-600 uppercase">
+          <tr>
+            <th scope="col" class="px-4 py-3">Code</th>
+            <th scope="col" class="px-4 py-3">Takes off</th>
+            <th scope="col" class="px-4 py-3">Window</th>
+            <th scope="col" class="px-4 py-3">Used</th>
+            <th scope="col" class="px-4 py-3">Status</th>
+            <th scope="col" class="px-4 py-3"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for discount in discounts %}
+            <tr class="border-b border-stone-200 last:border-b-0">
+              <td class="px-4 py-3 font-mono font-medium">{{ discount.code }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ discount.describe() }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ discount.window() }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ discount.usage() }}</td>
+              <td class="px-4 py-3">
+                {% if discount.status == "disabled" %}
+                  <span class="rounded bg-stone-200 px-2 py-0.5 text-xs font-medium text-stone-700">disabled</span>
+                {% else %}
+                  <span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">active</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3">
+                {% if discount.status != "disabled" %}
+                  <form method="post" action="/admin/discounts/{{ discount.id }}/disable">
+                    <button
+                      type="submit"
+                      class="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-medium hover:bg-stone-100"
+                    >
+                      Disable
+                    </button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,37 @@
+[package]
+name = "demo-store"
+description = "Demo storefront + admin wiring the whole Timada framework together"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+timada-admin.workspace = true
+timada-auth.workspace = true
+timada-cart.workspace = true
+timada-customer.workspace = true
+timada-catalog.workspace = true
+timada-core.workspace = true
+timada-dropship.workspace = true
+timada-dropship-aliexpress.workspace = true
+timada-invoice.workspace = true
+timada-order.workspace = true
+timada-payment.workspace = true
+timada-promotion.workspace = true
+timada-region.workspace = true
+timada-return.workspace = true
+timada-shipping.workspace = true
+timada-tax.workspace = true
+timada-web.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

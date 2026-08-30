@@ -1,0 +1,15 @@
+[package]
+name = "timada-web"
+description = "Timada shared web plumbing: base layouts, embedded assets, template responder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+askama.workspace = true
+axum.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

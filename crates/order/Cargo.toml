@@ -1,0 +1,37 @@
+[package]
+name = "timada-order"
+description = "Timada orders: checkout, Order aggregate, fulfillment saga, customer order status"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+askama.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+bitcode.workspace = true
+evento.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+thiserror.workspace = true
+timada-cart.workspace = true
+timada-core.workspace = true
+timada-customer.workspace = true
+timada-dropship.workspace = true
+timada-payment.workspace = true
+timada-promotion.workspace = true
+timada-shipping.workspace = true
+timada-tax.workspace = true
+timada-web.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+timada-auth.workspace = true
+timada-catalog.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

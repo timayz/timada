@@ -1,0 +1,30 @@
+[package]
+name = "timada-cart"
+description = "Timada cart: guest Cart aggregate, cookie-scoped cart view, storefront routes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+timada-catalog.workspace = true
+timada-promotion.workspace = true
+timada-region.workspace = true
+timada-core.workspace = true
+timada-web.workspace = true
+
+anyhow.workspace = true
+askama.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+bitcode.workspace = true
+evento.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

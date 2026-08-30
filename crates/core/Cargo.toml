@@ -1,0 +1,24 @@
+[package]
+name = "timada-core"
+description = "Timada shared kernel: value objects, errors, SQLite pools, evento executor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+bitcode.workspace = true
+evento.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

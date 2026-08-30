@@ -1,0 +1,36 @@
+[package]
+name = "timada-return"
+description = "Timada returns: full-order RMA flow with refunds through the payment provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+askama.workspace = true
+axum.workspace = true
+bitcode.workspace = true
+evento.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+thiserror.workspace = true
+timada-core.workspace = true
+timada-order.workspace = true
+timada-payment.workspace = true
+timada-web.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+timada-auth.workspace = true
+timada-cart.workspace = true
+timada-catalog.workspace = true
+timada-customer.workspace = true
+timada-dropship.workspace = true
+timada-shipping.workspace = true
+timada-tax.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

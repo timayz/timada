@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/timayz/timada"
+
+[workspace.dependencies]
+timada-auth = { path = "crates/auth" }
+timada-core = { path = "crates/core" }
+timada-web = { path = "crates/web" }
+timada-catalog = { path = "crates/catalog" }
+timada-cart = { path = "crates/cart" }
+timada-customer = { path = "crates/customer" }
+timada-order = { path = "crates/order" }
+timada-payment = { path = "crates/payment" }
+timada-promotion = { path = "crates/promotion" }
+timada-region = { path = "crates/region" }
+timada-return = { path = "crates/return" }
+timada-shipping = { path = "crates/shipping" }
+timada-tax = { path = "crates/tax" }
+timada-invoice = { path = "crates/invoice" }
+timada-dropship = { path = "crates/dropship" }
+timada-dropship-aliexpress = { path = "crates/dropship-aliexpress" }
+timada-admin = { path = "crates/admin" }
+
+anyhow = "1"
+argon2 = "0.5"
+# Direct dep only to switch on `getrandom`, which argon2's re-export needs for
+# `OsRng`; code imports it through `argon2::password_hash`.
+password-hash = { version = "0.5", features = ["getrandom"] }
+askama = "0.16"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.10", features = ["cookie"] }
+bitcode = "0.6"
+clap = { version = "4", features = ["derive", "env"] }
+evento = { version = "=2.0.0-alpha.26", features = ["sqlite", "rw"] }
+sea-query = "1.0.2"
+sea-query-sqlx = { version = "0.9", features = ["sqlx-sqlite"] }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.9", default-features = false, features = [
+  "runtime-tokio",
+  "tls-rustls",
+  "sqlite",
+  "macros",
+] }
+sqlx_migrator = { version = "0.19", features = ["sqlite"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ulid = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

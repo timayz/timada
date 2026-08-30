@@ -1,0 +1,18 @@
+[package]
+name = "timada-dropship-aliexpress"
+description = "AliExpress supplier adapter for Timada (stub pending approved API credentials)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+timada-dropship.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

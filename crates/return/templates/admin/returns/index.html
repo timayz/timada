@@ -1,0 +1,88 @@
+{% extends "admin/layout.html" %}
+
+{% block meta %}
+  <title>Returns · Timada Admin</title>
+{% endblock %}
+
+{% block content %}
+  <h1 class="text-xl font-semibold sm:text-2xl">Returns</h1>
+  <p class="mt-2 text-sm text-stone-600">
+    Approving refunds the full charge through the payment provider and issues a credit note;
+    rejecting tells the customer why. The refund lands a beat after approval — refresh to see it.
+  </p>
+
+  {% if returns.is_empty() %}
+    <p class="mt-6 rounded border border-stone-300 bg-white p-4 text-sm text-stone-600">
+      No return requested yet.
+    </p>
+  {% else %}
+    <div class="mt-6 overflow-x-auto rounded border border-stone-300 bg-white">
+      <table class="w-full min-w-3xl border-collapse text-left text-sm">
+        <caption class="sr-only">Returns, newest first</caption>
+        <thead class="border-b border-stone-300 text-xs font-medium tracking-wide text-stone-600 uppercase">
+          <tr>
+            <th scope="col" class="px-4 py-3">Order</th>
+            <th scope="col" class="px-4 py-3">Requested</th>
+            <th scope="col" class="px-4 py-3">Customer's reason</th>
+            <th scope="col" class="px-4 py-3">Status</th>
+            <th scope="col" class="px-4 py-3"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ret in returns %}
+            <tr class="border-b border-stone-200 last:border-b-0">
+              <td class="px-4 py-3">
+                <a href="/admin/orders/{{ ret.order_id }}" class="font-mono break-all underline hover:text-stone-600">
+                  {{ ret.order_id }}
+                </a>
+              </td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ ret.requested() }}</td>
+              <td class="px-4 py-3">{{ ret.reason }}</td>
+              <td class="px-4 py-3">
+                {% if ret.status == "refunded" %}
+                  <span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">refunded</span>
+                {% else if ret.status == "approved" %}
+                  <span class="rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">approved</span>
+                {% else if ret.status == "rejected" %}
+                  <span class="rounded bg-stone-200 px-2 py-0.5 text-xs font-medium text-stone-700">rejected</span>
+                {% else %}
+                  <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">requested</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3">
+                {% if ret.status == "requested" %}
+                  <div class="flex flex-wrap items-center gap-2">
+                    <form method="post" action="/admin/returns/{{ ret.id }}/approve">
+                      <button
+                        type="submit"
+                        class="rounded bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+                      >
+                        Approve &amp; refund
+                      </button>
+                    </form>
+                    <form method="post" action="/admin/returns/{{ ret.id }}/reject" class="flex items-center gap-2">
+                      <label for="reject-{{ ret.id }}" class="sr-only">Rejection reason</label>
+                      <input
+                        id="reject-{{ ret.id }}"
+                        type="text"
+                        name="reason"
+                        placeholder="reason"
+                        class="w-36 rounded border border-stone-300 px-2 py-2 text-sm"
+                      />
+                      <button
+                        type="submit"
+                        class="rounded border border-stone-400 px-3 py-2 text-sm font-medium hover:bg-stone-100"
+                      >
+                        Reject
+                      </button>
+                    </form>
+                  </div>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

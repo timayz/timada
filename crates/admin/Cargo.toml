@@ -1,0 +1,24 @@
+[package]
+name = "timada-admin"
+description = "Timada umbrella admin: composes every service crate's admin router behind one mountable router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+askama.workspace = true
+axum.workspace = true
+timada-catalog.workspace = true
+timada-dropship.workspace = true
+timada-invoice.workspace = true
+timada-order.workspace = true
+timada-payment.workspace = true
+timada-promotion.workspace = true
+timada-region.workspace = true
+timada-return.workspace = true
+timada-shipping.workspace = true
+timada-web.workspace = true
+
+[lints]
+workspace = true

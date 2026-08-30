@@ -1,0 +1,81 @@
+{% extends "admin/layout.html" %}
+
+{% block meta %}
+  <title>Shipping · Timada Admin</title>
+{% endblock %}
+
+{% block content %}
+  <h1 class="text-xl font-semibold sm:text-2xl">Shipping</h1>
+  <p class="mt-2 text-sm text-stone-600">
+    Shipments appear once a supplier confirms a forwarded order. Refreshing asks the supplier
+    where the parcel is; the mock supplier dispatches on the first refresh and delivers on the
+    next.
+  </p>
+
+  {% if shipments.is_empty() %}
+    <p class="mt-6 rounded border border-stone-300 bg-white p-4 text-sm text-stone-600">
+      No shipment yet.
+    </p>
+  {% else %}
+    <div class="mt-6 overflow-x-auto rounded border border-stone-300 bg-white">
+      <table class="w-full min-w-3xl border-collapse text-left text-sm">
+        <caption class="sr-only">Shipments, newest first</caption>
+        <thead class="border-b border-stone-300 text-xs font-medium tracking-wide text-stone-600 uppercase">
+          <tr>
+            <th scope="col" class="px-4 py-3">Order</th>
+            <th scope="col" class="px-4 py-3">Supplier</th>
+            <th scope="col" class="px-4 py-3">Supplier ref</th>
+            <th scope="col" class="px-4 py-3">Tracking number</th>
+            <th scope="col" class="px-4 py-3">Carrier</th>
+            <th scope="col" class="px-4 py-3">Status</th>
+            <th scope="col" class="px-4 py-3"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for shipment in shipments %}
+            <tr class="border-b border-stone-200 last:border-b-0">
+              <td class="px-4 py-3 font-mono break-all">{{ shipment.order_id }}</td>
+              <td class="px-4 py-3 font-medium">{{ shipment.supplier_id }}</td>
+              <td class="px-4 py-3 font-mono break-all">{{ shipment.external_ref }}</td>
+              <td class="px-4 py-3 font-mono break-all">
+                {% if let Some(tracking_number) = shipment.tracking_number %}
+                  {{ tracking_number }}
+                {% else %}
+                  <span class="text-stone-500">—</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3">
+                {% if let Some(carrier) = shipment.carrier %}
+                  {{ carrier }}
+                {% else %}
+                  <span class="text-stone-500">—</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3">
+                {% if shipment.status == "delivered" %}
+                  <span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">delivered</span>
+                {% else if shipment.status == "dispatched" %}
+                  <span class="rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">dispatched</span>
+                {% else %}
+                  <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">created</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3">
+                {% if shipment.is_refreshable() %}
+                  <form method="post" action="/admin/shipping/{{ shipment.id }}/refresh">
+                    <button
+                      type="submit"
+                      class="rounded border border-stone-300 bg-white px-3 py-2 text-sm font-medium hover:bg-stone-100"
+                    >
+                      Refresh tracking
+                    </button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

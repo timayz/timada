@@ -1,0 +1,30 @@
+[package]
+name = "timada-region"
+description = "Timada regions: currency zones with per-country VAT rates and the storefront region picker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+askama.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+bitcode.workspace = true
+evento.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+thiserror.workspace = true
+timada-core.workspace = true
+timada-tax.workspace = true
+timada-web.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,69 @@
+{% extends "admin/layout.html" %}
+
+{% block meta %}
+  <title>Orders · Timada Admin</title>
+{% endblock %}
+
+{% block content %}
+  <h1 class="text-xl font-semibold sm:text-2xl">Orders</h1>
+  <p class="mt-2 text-sm text-stone-600">
+    Newest first. The status is driven by the fulfillment saga: paid, forwarded to the supplier,
+    shipped, delivered — or cancelled when a charge is refused or a supplier refuses the order.
+  </p>
+
+  {% if orders.is_empty() %}
+    <p class="mt-6 rounded border border-stone-300 bg-white p-4 text-sm text-stone-600">
+      No order yet.
+    </p>
+  {% else %}
+    <div class="mt-6 overflow-x-auto rounded border border-stone-300 bg-white">
+      <table class="w-full min-w-3xl border-collapse text-left text-sm">
+        <caption class="sr-only">Orders, newest first</caption>
+        <thead class="border-b border-stone-300 text-xs font-medium tracking-wide text-stone-600 uppercase">
+          <tr>
+            <th scope="col" class="px-4 py-3">Order</th>
+            <th scope="col" class="px-4 py-3">Email</th>
+            <th scope="col" class="px-4 py-3 text-right">Total</th>
+            <th scope="col" class="px-4 py-3">Status</th>
+            <th scope="col" class="px-4 py-3">Tracking</th>
+            <th scope="col" class="px-4 py-3">Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for order in orders %}
+            <tr class="border-b border-stone-200 last:border-b-0">
+              <td class="px-4 py-3">
+                <a href="/admin/orders/{{ order.id }}" class="font-mono break-all underline hover:text-stone-600">
+                  {{ order.id }}
+                </a>
+              </td>
+              <td class="px-4 py-3 break-all">{{ order.email }}</td>
+              <td class="px-4 py-3 text-right whitespace-nowrap">{{ order.total() }}</td>
+              <td class="px-4 py-3">
+                {% if order.status == "delivered" %}
+                  <span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">delivered</span>
+                {% else if order.status == "cancelled" %}
+                  <span class="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-900">cancelled</span>
+                {% else if order.status == "shipped" %}
+                  <span class="rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">shipped</span>
+                {% else if order.status == "placed" %}
+                  <span class="rounded bg-stone-200 px-2 py-0.5 text-xs font-medium text-stone-900">placed</span>
+                {% else %}
+                  <span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">{{ order.status }}</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3 font-mono break-all">
+                {% if let Some(tracking_number) = order.tracking_number %}
+                  {{ tracking_number }}
+                {% else %}
+                  <span class="text-stone-500">—</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3 whitespace-nowrap">{{ order.created() }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

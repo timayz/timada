@@ -1,0 +1,30 @@
+[package]
+name = "timada-catalog"
+description = "Timada catalog: Product aggregate, storefront and admin read models, supplier import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+timada-core.workspace = true
+timada-dropship.workspace = true
+timada-region.workspace = true
+timada-web.workspace = true
+
+anyhow.workspace = true
+askama.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+bitcode.workspace = true
+evento.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

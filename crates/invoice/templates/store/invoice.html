@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Invoice {{ invoice.invoice_number }} · Timada</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body class="min-h-screen bg-stone-100 text-stone-900 print:bg-white">
+    <main class="mx-auto max-w-3xl bg-white p-5 sm:my-8 sm:rounded sm:border sm:border-stone-300 sm:p-10 print:my-0 print:max-w-none print:rounded-none print:border-0 print:p-0">
+      <div class="flex justify-end print:hidden">
+        <button
+          type="button"
+          onclick="window.print()"
+          class="rounded bg-stone-900 px-4 py-2 text-sm font-medium text-white hover:bg-stone-700"
+        >
+          Print
+        </button>
+      </div>
+
+      {% if let Some(credit_note_number) = invoice.credit_note_number %}
+        <p role="status" class="mt-4 rounded border border-red-300 bg-red-50 p-4 text-sm text-red-900">
+          <span class="font-semibold">Credit note {{ credit_note_number }}</span>
+          {%- if let Some(reason) = invoice.credit_note_reason %} — {{ reason }}{% endif %}
+          <span class="mt-1 block">This invoice has been reversed in full and is no longer due.</span>
+        </p>
+      {% endif %}
+
+      <header class="mt-6 flex flex-col gap-4 border-b border-stone-300 pb-6 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 class="text-2xl font-semibold">Invoice</h1>
+          <p class="mt-1 font-mono text-sm">{{ invoice.invoice_number }}</p>
+        </div>
+        <dl class="text-sm">
+          <dt class="font-medium text-stone-600">Issued</dt>
+          <dd class="mt-1">{{ invoice.issued_on() }}</dd>
+          <dt class="mt-3 font-medium text-stone-600">Order</dt>
+          <dd class="mt-1 font-mono break-all">{{ invoice.order_id }}</dd>
+        </dl>
+      </header>
+
+      <div class="mt-6 grid gap-6 text-sm sm:grid-cols-2">
+        <section>
+          <h2 class="text-xs font-medium tracking-wide text-stone-600 uppercase">From</h2>
+          <address class="mt-2 not-italic">
+            <span class="font-medium">{{ invoice.seller.name }}</span><br />
+            {{ invoice.seller.street }}<br />
+            {{ invoice.seller.postal_code }} {{ invoice.seller.city }}<br />
+            {{ invoice.seller.country }}
+            {%- if !invoice.seller.email.is_empty() %}<br />{{ invoice.seller.email }}{% endif %}
+          </address>
+        </section>
+        <section>
+          <h2 class="text-xs font-medium tracking-wide text-stone-600 uppercase">Billed to</h2>
+          <address class="mt-2 not-italic">
+            <span class="font-medium">{{ invoice.buyer.name }}</span><br />
+            {{ invoice.buyer.street }}<br />
+            {{ invoice.buyer.postal_code }} {{ invoice.buyer.city }}<br />
+            {{ invoice.buyer.country }}
+            {%- if !invoice.buyer.email.is_empty() %}<br /><span class="break-all">{{ invoice.buyer.email }}</span>{% endif %}
+          </address>
+        </section>
+      </div>
+
+      <div class="mt-8 overflow-x-auto">
+        <table class="w-full min-w-2xl border-collapse text-left text-sm">
+          <caption class="sr-only">Invoice lines</caption>
+          <thead class="border-b border-stone-300 text-xs font-medium tracking-wide text-stone-600 uppercase">
+            <tr>
+              <th scope="col" class="py-2 pr-4">Description</th>
+              <th scope="col" class="px-2 py-2 text-right">Qty</th>
+              <th scope="col" class="px-2 py-2 text-right">Unit price</th>
+              <th scope="col" class="px-2 py-2 text-right">Rate</th>
+              <th scope="col" class="px-2 py-2 text-right">Net</th>
+              <th scope="col" class="px-2 py-2 text-right">VAT</th>
+              <th scope="col" class="py-2 pl-2 text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for line in invoice.lines %}
+              <tr class="border-b border-stone-200 last:border-b-0">
+                <td class="py-2 pr-4">{{ line.description }}</td>
+                <td class="px-2 py-2 text-right">{{ line.quantity }}</td>
+                <td class="px-2 py-2 text-right whitespace-nowrap">{{ line.unit_price_gross }}</td>
+                <td class="px-2 py-2 text-right whitespace-nowrap">{{ line.tax_rate_bps / 100 }} %</td>
+                <td class="px-2 py-2 text-right whitespace-nowrap">{{ line.net }}</td>
+                <td class="px-2 py-2 text-right whitespace-nowrap">{{ line.tax }}</td>
+                <td class="py-2 pl-2 text-right whitespace-nowrap">{{ line.gross }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mt-6 flex justify-end">
+        <dl class="w-full max-w-xs text-sm sm:w-72">
+          {% if let Some(discount_amount) = invoice.discount_amount %}
+            <div class="flex justify-between border-b border-stone-200 py-2">
+              <dt class="text-stone-600">
+                Discount
+                {% if let Some(code) = invoice.discount_code %}({{ code }}){% endif %}
+              </dt>
+              <dd class="whitespace-nowrap">−{{ discount_amount }}</dd>
+            </div>
+          {% endif %}
+          <div class="flex justify-between border-b border-stone-200 py-2">
+            <dt class="text-stone-600">Net</dt>
+            <dd class="whitespace-nowrap">{{ invoice.total_net }}</dd>
+          </div>
+          <div class="flex justify-between border-b border-stone-200 py-2">
+            <dt class="text-stone-600">VAT</dt>
+            <dd class="whitespace-nowrap">{{ invoice.total_tax }}</dd>
+          </div>
+          <div class="flex justify-between py-2 text-base font-semibold">
+            <dt>Total</dt>
+            <dd class="whitespace-nowrap">{{ invoice.total_gross }}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <p class="mt-8 text-xs text-stone-600">
+        Prices are tax-inclusive. VAT is shown as the assessed share of the total charged.
+      </p>
+    </main>
+  </body>
+</html>
