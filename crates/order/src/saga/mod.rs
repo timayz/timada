@@ -1,0 +1,207 @@
+//! The `order-fulfillment` process manager: an orchestration saga that drives
+//! one order from placement to shipment across inventory, payment and
+//! shipping, and compensates when stock or payment falls through.
+//!
+//! State lives in the `OrderFulfillment` aggregate; each transition is one
+//! subscription handler in its own file. Handlers are idempotent — they load
+//! the saga, check its status and rely on the upstream commands' own
+//! idempotency (deterministic ids, status guards) — so a redelivery after a
+//! partial failure converges. The subscription is deliberately not strict:
+//! it listens to a subset of four aggregates' events.
+
+mod on_order_placed;
+mod on_payment_captured;
+mod on_payment_declined;
+mod on_shipment_dispatched;
+mod on_stock_reservation_rejected;
+mod on_stock_reserved;
+
+use evento::{
+    Executor, Projection, ProjectionAggregate, metadata::Event, subscription::SubscriptionBuilder,
+};
+use timada_core::Money;
+use timada_inventory::StockLocation;
+
+use crate::{
+    aggregator::{
+        FulfillmentCompensated, FulfillmentCompleted, FulfillmentStarted, LineStockReserved,
+        OrderFulfillment, PaymentCaptured, PaymentRequested, ShipmentRequested,
+    },
+    command::Command,
+    value_object::{FulfillmentLine, FulfillmentStatus, PaymentMode},
+};
+
+pub const ORDER_FULFILLMENT_SUBSCRIPTION: &str = "order-fulfillment";
+
+pub fn fulfillment_id(order_id: &str) -> String {
+    timada_core::id::derived(&[order_id], "fulfillment")
+}
+
+pub fn order_fulfillment_subscription<E: Executor>() -> SubscriptionBuilder<E> {
+    SubscriptionBuilder::new(ORDER_FULFILLMENT_SUBSCRIPTION)
+        .handler(on_order_placed::start_fulfillment())
+        .handler(on_stock_reserved::record_line_reserved())
+        .handler(on_stock_reservation_rejected::compensate_out_of_stock())
+        .handler(on_payment_captured::request_shipment())
+        .handler(on_payment_declined::compensate_declined_payment())
+        .handler(on_shipment_dispatched::complete_fulfillment())
+}
+
+#[evento::projection(id = id)]
+#[evento::snapshot(none)]
+pub struct FulfillmentState {
+    pub id: String,
+    pub order_id: String,
+    pub lines: Vec<FulfillmentLine>,
+    pub reserved_product_ids: Vec<String>,
+    pub pickup_store_id: Option<String>,
+    pub amount: Money,
+    pub payment_mode: PaymentMode,
+    pub status: FulfillmentStatus,
+    pub payment_id: Option<String>,
+    pub shipment_id: Option<String>,
+}
+
+impl FulfillmentState {
+    /// Where this order's stock is taken from.
+    pub fn stock_location(&self) -> StockLocation {
+        stock_location(self.pickup_store_id.as_deref())
+    }
+
+    pub fn all_reserved(&self) -> bool {
+        self.lines
+            .iter()
+            .all(|l| self.reserved_product_ids.contains(&l.product_id))
+    }
+
+    /// The line whose stock item has the given aggregate id, if any.
+    pub fn line_for_stock_item(&self, stock_item_id: &str) -> Option<&FulfillmentLine> {
+        let location = self.stock_location();
+        self.lines
+            .iter()
+            .find(|l| timada_inventory::stock_item_id(&l.product_id, &location) == stock_item_id)
+    }
+}
+
+pub fn stock_location(pickup_store_id: Option<&str>) -> StockLocation {
+    match pickup_store_id {
+        Some(store_id) => StockLocation::Store {
+            store_id: store_id.to_owned(),
+        },
+        None => StockLocation::Warehouse,
+    }
+}
+
+pub fn create_projection<E: Executor>() -> Projection<E, FulfillmentState> {
+    Projection::new::<OrderFulfillment>()
+        .handler(on_fulfillment_started())
+        .handler(on_line_stock_reserved())
+        .handler(on_payment_requested())
+        .skip::<PaymentCaptured>()
+        .handler(on_shipment_requested())
+        .handler(on_fulfillment_completed())
+        .handler(on_fulfillment_compensated())
+        .strict()
+}
+
+pub async fn load_fulfillment<E: Executor>(
+    executor: &E,
+    order_id: &str,
+) -> anyhow::Result<Option<FulfillmentState>> {
+    create_projection()
+        .load(fulfillment_id(order_id))
+        .execute(executor)
+        .await
+}
+
+/// Releases every reservation this saga holds, cancels the order and closes
+/// the saga. Every step is idempotent, so a retry after a crash converges.
+async fn compensate<E: Executor>(
+    executor: &E,
+    saga: &FulfillmentState,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let inventory = timada_inventory::Command(executor);
+    let location = saga.stock_location();
+    for product_id in &saga.reserved_product_ids {
+        inventory
+            .release_stock(
+                timada_inventory::stock_item_id(product_id, &location),
+                &saga.order_id,
+            )
+            .await?;
+    }
+    Command(executor)
+        .cancel_order(&saga.order_id, reason)
+        .await?;
+    saga.write()?
+        .event(&FulfillmentCompensated {
+            reason: reason.to_owned(),
+        })
+        .commit(executor)
+        .await?;
+    tracing::warn!(order_id = %saga.order_id, %reason, "order fulfillment compensated");
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_fulfillment_started(
+    event: Event<FulfillmentStarted>,
+    row: &mut FulfillmentState,
+) -> anyhow::Result<()> {
+    row.id = event.aggregate_id.to_owned();
+    row.order_id = event.data.order_id;
+    row.lines = event.data.lines;
+    row.pickup_store_id = event.data.pickup_store_id;
+    row.amount = event.data.amount;
+    row.payment_mode = event.data.payment_mode;
+    row.status = FulfillmentStatus::ReservingStock;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_line_stock_reserved(
+    event: Event<LineStockReserved>,
+    row: &mut FulfillmentState,
+) -> anyhow::Result<()> {
+    row.reserved_product_ids.push(event.data.product_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payment_requested(
+    event: Event<PaymentRequested>,
+    row: &mut FulfillmentState,
+) -> anyhow::Result<()> {
+    row.payment_id = Some(event.data.payment_id);
+    row.status = FulfillmentStatus::AwaitingPayment;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_shipment_requested(
+    event: Event<ShipmentRequested>,
+    row: &mut FulfillmentState,
+) -> anyhow::Result<()> {
+    row.shipment_id = Some(event.data.shipment_id);
+    row.status = FulfillmentStatus::AwaitingShipment;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_fulfillment_completed(
+    _event: Event<FulfillmentCompleted>,
+    row: &mut FulfillmentState,
+) -> anyhow::Result<()> {
+    row.status = FulfillmentStatus::Completed;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_fulfillment_compensated(
+    _event: Event<FulfillmentCompensated>,
+    row: &mut FulfillmentState,
+) -> anyhow::Result<()> {
+    row.status = FulfillmentStatus::Compensated;
+    Ok(())
+}
