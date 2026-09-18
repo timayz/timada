@@ -7,9 +7,9 @@ use timada_cart::{AddLine, Checkout};
 use timada_core::{Address, Money};
 use timada_inventory::{RegisterStockItem, StockLocation, stock_item_id};
 use timada_order::{
-    FulfillmentStatus, OrderStatus, PaymentMode, history, load_fulfillment, load_order_details,
-    migrations, order_checkout_subscription, order_fulfillment_subscription,
-    order_history_subscription, order_id,
+    FulfillmentStatus, ListOrders, OrderStatus, PaymentMode, count_orders, history, list_orders,
+    load_fulfillment, load_order_details, migrations, order_checkout_subscription,
+    order_fulfillment_subscription, order_history_subscription, order_id, orders_of_customer,
 };
 use timada_payment::payment_id;
 use timada_shipping::shipment_id;
@@ -180,6 +180,16 @@ async fn cart_checkout_is_fulfilled_through_payment_and_shipping() -> anyhow::Re
     assert_eq!(rows[0].status, "shipped");
     assert_eq!(rows[0].total_minor, 27_836);
     assert!(history(&db, CUSTOMER, year - 1).await?.is_empty());
+
+    // Admin listings across customers and years.
+    assert_eq!(list_orders(&db, &ListOrders::default()).await?.len(), 1);
+    let cancelled = ListOrders {
+        status: Some(OrderStatus::Cancelled),
+        ..ListOrders::default()
+    };
+    assert!(list_orders(&db, &cancelled).await?.is_empty());
+    assert_eq!(orders_of_customer(&db, CUSTOMER).await?.len(), 1);
+    assert_eq!(count_orders(&db, None).await?, 1);
 
     Ok(())
 }

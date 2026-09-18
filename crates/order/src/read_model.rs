@@ -56,6 +56,65 @@ pub async fn history(
     .await
 }
 
+/// Every order of a customer, all years, newest first.
+pub async fn orders_of_customer(
+    db: &SqlitePool,
+    customer_id: &str,
+) -> sqlx::Result<Vec<OrderHistoryRow>> {
+    sqlx::query_as(
+        "SELECT order_id, customer_id, placed_at, year, seller, status, total_minor, currency
+         FROM order_history
+         WHERE customer_id = ?
+         ORDER BY placed_at DESC, order_id",
+    )
+    .bind(customer_id)
+    .fetch_all(db)
+    .await
+}
+
+/// Admin listing across all customers, newest first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListOrders {
+    pub status: Option<OrderStatus>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+impl Default for ListOrders {
+    fn default() -> Self {
+        Self {
+            status: None,
+            limit: 50,
+            offset: 0,
+        }
+    }
+}
+
+pub async fn list_orders(
+    db: &SqlitePool,
+    query: &ListOrders,
+) -> sqlx::Result<Vec<OrderHistoryRow>> {
+    sqlx::query_as(
+        "SELECT order_id, customer_id, placed_at, year, seller, status, total_minor, currency
+         FROM order_history
+         WHERE (?1 IS NULL OR status = ?1)
+         ORDER BY placed_at DESC, order_id
+         LIMIT ?2 OFFSET ?3",
+    )
+    .bind(query.status.map(OrderStatus::as_str))
+    .bind(query.limit)
+    .bind(query.offset)
+    .fetch_all(db)
+    .await
+}
+
+pub async fn count_orders(db: &SqlitePool, status: Option<OrderStatus>) -> sqlx::Result<i64> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM order_history WHERE (?1 IS NULL OR status = ?1)")
+        .bind(status.map(OrderStatus::as_str))
+        .fetch_one(db)
+        .await
+}
+
 fn pool<E: Executor>(ctx: &Context<'_, E>) -> anyhow::Result<SqlitePool> {
     ctx.get::<SqlitePool>()
         .ok_or_else(|| anyhow::anyhow!("SqlitePool missing from subscription context"))

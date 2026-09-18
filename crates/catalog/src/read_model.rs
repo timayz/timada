@@ -50,6 +50,69 @@ pub async fn list_by_brand(db: &SqlitePool, brand_slug: &str) -> sqlx::Result<Ve
     .await
 }
 
+/// Admin listing: free-text search on name or SKU, archived products hidden
+/// unless asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListProducts {
+    pub q: Option<String>,
+    pub include_archived: bool,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+impl Default for ListProducts {
+    fn default() -> Self {
+        Self {
+            q: None,
+            include_archived: false,
+            limit: 50,
+            offset: 0,
+        }
+    }
+}
+
+fn like_pattern(q: Option<&str>) -> Option<String> {
+    q.map(str::trim)
+        .filter(|q| !q.is_empty())
+        .map(|q| format!("%{q}%"))
+}
+
+pub async fn list_products(
+    db: &SqlitePool,
+    query: &ListProducts,
+) -> sqlx::Result<Vec<ProductListRow>> {
+    sqlx::query_as(
+        "SELECT id, sku, name, brand_slug, category_path, archived
+         FROM catalog_product
+         WHERE (?1 IS NULL OR name LIKE ?1 OR sku LIKE ?1)
+           AND (?2 OR archived = 0)
+         ORDER BY name
+         LIMIT ?3 OFFSET ?4",
+    )
+    .bind(like_pattern(query.q.as_deref()))
+    .bind(query.include_archived)
+    .bind(query.limit)
+    .bind(query.offset)
+    .fetch_all(db)
+    .await
+}
+
+pub async fn count_products(
+    db: &SqlitePool,
+    q: Option<&str>,
+    include_archived: bool,
+) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM catalog_product
+         WHERE (?1 IS NULL OR name LIKE ?1 OR sku LIKE ?1)
+           AND (?2 OR archived = 0)",
+    )
+    .bind(like_pattern(q))
+    .bind(include_archived)
+    .fetch_one(db)
+    .await
+}
+
 fn pool<E: Executor>(ctx: &Context<'_, E>) -> anyhow::Result<SqlitePool> {
     ctx.get::<SqlitePool>()
         .ok_or_else(|| anyhow::anyhow!("SqlitePool missing from subscription context"))
