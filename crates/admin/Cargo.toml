@@ -1,0 +1,45 @@
+[package]
+name = "timada-admin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Mountable topcoat admin for the timada e-commerce contexts"
+
+[features]
+axum = ["dep:axum"]
+
+[dependencies]
+timada-core.workspace = true
+timada-catalog.workspace = true
+timada-pricing.workspace = true
+timada-inventory.workspace = true
+timada-review.workspace = true
+timada-customer.workspace = true
+timada-order.workspace = true
+timada-payment.workspace = true
+timada-shipping.workspace = true
+evento.workspace = true
+topcoat = { workspace = true, features = ["router", "view", "cookie", "session", "asset", "tower", "tailwind", "discover"] }
+inventory = "0.3"
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+serde.workspace = true
+argon2.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+axum = { version = "0.8", optional = true }
+
+[build-dependencies]
+topcoat = { workspace = true, features = ["tailwind"] }
+
+[dev-dependencies]
+timada-core = { workspace = true, features = ["test-support"] }
+topcoat = { workspace = true, features = ["serve"] }
+tokio.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+
+[lints]
+workspace = true
