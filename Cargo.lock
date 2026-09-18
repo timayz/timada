@@ -1726,6 +1726,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-cart"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "thiserror",
+ "timada-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "timada-catalog"
 version = "0.1.0"
 dependencies = [
@@ -1750,6 +1763,88 @@ dependencies = [
  "sqlx",
  "sqlx_migrator",
  "thiserror",
+]
+
+[[package]]
+name = "timada-customer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "thiserror",
+ "timada-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "timada-inventory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror",
+ "timada-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "timada-payment"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "thiserror",
+ "timada-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "timada-pricing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "thiserror",
+ "timada-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "timada-review"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror",
+ "timada-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "timada-shipping"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "thiserror",
+ "timada-core",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
