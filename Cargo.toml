@@ -9,3 +9,32 @@ license = "MIT"
 repository = "https://github.com/timayz/timada"
 
 [workspace.dependencies]
+timada-core = { path = "crates/core" }
+timada-catalog = { path = "crates/catalog" }
+timada-pricing = { path = "crates/pricing" }
+timada-inventory = { path = "crates/inventory" }
+timada-review = { path = "crates/review" }
+timada-customer = { path = "crates/customer" }
+timada-cart = { path = "crates/cart" }
+timada-payment = { path = "crates/payment" }
+timada-shipping = { path = "crates/shipping" }
+timada-order = { path = "crates/order" }
+timada-invoice = { path = "crates/invoice" }
+timada-promotion = { path = "crates/promotion" }
+
+# 2.x is a pre-release: a bare "2" would not resolve, so pin the alpha exactly.
+evento = { version = "=2.0.0-alpha.28", features = ["sqlite"] }
+bitcode = "0.6"
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
+sqlx_migrator = { version = "0.19", features = ["sqlite"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing = "0.1"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
