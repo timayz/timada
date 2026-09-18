@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Mountable topcoat admin for the timada e-commerce contexts"
+readme = "README.md"
 
 [features]
 axum = ["dep:axum"]
