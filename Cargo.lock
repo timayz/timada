@@ -633,9 +633,13 @@ name = "demo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
  "evento",
+ "http",
+ "serde",
  "sqlx",
  "sqlx_migrator",
+ "thiserror",
  "timada-admin",
  "timada-cart",
  "timada-catalog",
@@ -647,6 +651,7 @@ dependencies = [
  "timada-pricing",
  "timada-promotion",
  "timada-review",
+ "timada-shipping",
  "tokio",
  "topcoat",
  "tracing",

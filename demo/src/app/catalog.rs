@@ -1,5 +1,4 @@
-//! Storefront pages. Explicit paths on purpose: the host must not use
-//! `module_router!()` while the admin's module-derived pages are linked in.
+//! `/` and `/p/{product_id}`: the catalogue and the product page.
 
 use timada_catalog::{ListProducts, ProductListRow, list_products, load_product_page};
 use timada_inventory::{StockLocation, stock_item_id};
@@ -8,39 +7,14 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{error::RouterErrorExt, href, page, path_param, path_param as param},
-    view::{Child, View, component, view},
+    view::{View, component, view},
 };
 
+use super::{cart, document, format::money};
 use crate::Store;
 
-#[component]
-async fn document(title: &str, child: Child<'_>) -> Result<impl View> {
-    Ok(view! {
-        <!DOCTYPE html>
-        <html lang="fr">
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>(title) " · Timada demo"</title>
-                <style>
-                    "body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5}"
-                    "header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #ddd;padding-bottom:.5rem}"
-                    "a{color:#0b5fa5}ul{padding-left:1.2rem}.price{font-size:1.5rem;font-weight:600}.muted{color:#666}"
-                </style>
-            </head>
-            <body>
-                <header>
-                    <a href=(href!(home))><strong>"Timada demo"</strong></a>
-                    <a href="/admin" class="muted">"Administration"</a>
-                </header>
-                <main>(child)</main>
-            </body>
-        </html>
-    })
-}
-
 #[page("/")]
-async fn home(cx: &Cx) -> Result<impl View> {
+pub async fn home(cx: &Cx) -> Result<impl View> {
     let store = app_context::<Store>(cx);
     let products = list_products(&store.db, &ListProducts::default()).await?;
     Ok(view! {
@@ -62,28 +36,27 @@ async fn home(cx: &Cx) -> Result<impl View> {
 async fn product_item(cx: &Cx, product: &ProductListRow) -> Result<impl View> {
     let link = href!(product_page, ProductId(product.id.clone())).resolve(cx);
     Ok(view! {
-        <li><a href=(link)>(product.name.clone())</a> <span class="muted">(product.sku.clone())</span></li>
+        <li><a href=(link)>(product.name.clone())</a> " " <span class="muted">(product.sku.clone())</span></li>
     })
 }
 
-path_param!(product_id: String, error = not_found);
+path_param!(pub product_id: String, error = not_found);
 
 #[page("/p/{product_id}")]
-async fn product_page(cx: &Cx) -> Result<impl View> {
+pub async fn product_page(cx: &Cx) -> Result<impl View> {
     let id = param::<ProductId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     let product = load_product_page(&store.executor, &id)
         .await?
         .ok_or_not_found()?;
-    let price = load_product_price(&store.executor, price_id(&id)).await?;
-    let stock = timada_inventory::load_stock_availability(
-        &store.executor,
-        stock_item_id(&id, &StockLocation::Warehouse),
-    )
-    .await?;
-    let availability = match stock {
-        Some(s) if s.available > 0 => format!("En stock ({} disponibles)", s.available),
-        _ => "Rupture".to_owned(),
+    let price = load_product_price(&store.executor, price_id(&id))
+        .await?
+        .filter(|p| !p.withdrawn);
+    let available = available_stock(store, &id).await?;
+    let availability = if available > 0 {
+        format!("En stock ({available} disponibles)")
+    } else {
+        "Rupture".to_owned()
     };
 
     Ok(view! {
@@ -94,14 +67,24 @@ async fn product_page(cx: &Cx) -> Result<impl View> {
             <p>(product.short_description.clone())</p>
             match &price {
                 Some(price) => {
-                    <p class="price">(format!("{},{:02} €", price.price_incl_tax.minor / 100, price.price_incl_tax.minor % 100))</p>
+                    <p class="price">(money(&price.price_incl_tax))</p>
                     if let Some(amount) = &price.installment_amount {
-                        <p class="muted">"ou 3 × " (format!("{},{:02} €", amount.minor / 100, amount.minor % 100))</p>
+                        <p class="muted">"ou 3 × " (money(amount))</p>
                     }
                 }
                 None => <p class="muted">"Prix indisponible"</p>,
             }
             <p>(availability) " · garantie " (product.warranty_months.to_string()) " mois"</p>
+            if price.is_some() && available > 0 && !product.archived {
+                <form method="post" action=(href!(cart::add))>
+                    <input type="hidden" name="product_id" value=(id.clone())>
+                    <label for="quantity">"Quantité"</label>
+                    " "
+                    <input id="quantity" name="quantity" type="number" min="1" max=(available.to_string()) value="1" required=(true)>
+                    " "
+                    <button type="submit">"Ajouter au panier"</button>
+                </form>
+            }
             if !product.key_features.is_empty() {
                 <h2>"Caractéristiques principales"</h2>
                 <ul>for feature in &product.key_features { <li>(feature.clone())</li> }</ul>
@@ -109,4 +92,14 @@ async fn product_page(cx: &Cx) -> Result<impl View> {
             if !product.long_description.is_empty() { <p>(product.long_description.clone())</p> }
         )
     })
+}
+
+/// Units the warehouse can still promise for a product.
+pub async fn available_stock(store: &Store, product_id: &str) -> anyhow::Result<u32> {
+    let stock = timada_inventory::load_stock_availability(
+        &store.executor,
+        stock_item_id(product_id, &StockLocation::Warehouse),
+    )
+    .await?;
+    Ok(stock.map_or(0, |s| s.available))
 }

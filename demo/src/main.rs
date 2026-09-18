@@ -1,20 +1,26 @@
-//! Demo storefront: a topcoat app over the timada contexts that mounts the
-//! admin under `/admin`.
+//! Demo storefront: a topcoat app over the timada contexts (catalogue, cart,
+//! checkout, customer account) that mounts the admin under `/admin`.
 //!
 //! ```text
-//! cargo run -p demo -- --seed          # sample catalog, customer, order and admin account
+//! cargo run -p demo -- --seed          # sample catalog, customer, order, shopper and admin accounts
 //! topcoat dev -p demo                  # bundle assets, watch, serve on :3000
 //! ```
 
 mod app;
+mod auth;
+mod cart_session;
 mod db;
 mod seed;
+#[cfg(test)]
+mod tests;
 
 use std::env;
 
 use topcoat::{
     asset::{AssetBundle, AssetCatalog, AssetConfig, RouterBuilderAssetExt},
+    cookie::RouterBuilderCookieExt,
     router::{Router, RouterBuilderDiscoverExt},
+    session::{RouterBuilderSessionExt, SessionConfig, cookie::CookieTokenStore},
 };
 
 use timada_admin::{AdminConfig, AdminServices, Stylesheet};
@@ -47,6 +53,11 @@ async fn main() -> anyhow::Result<()> {
             seed::run(&store).await?;
             db::run_subscriptions_once(&store).await?;
             tracing::info!("seeded; admin login is admin@timada.example / admin");
+            tracing::info!(
+                "shopper login is {} / {}",
+                seed::SHOPPER_EMAIL,
+                seed::SHOPPER_PASSWORD
+            );
             return Ok(());
         }
         Some("--create-admin") => {
@@ -77,22 +88,33 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    let router = router(store, assets, stylesheet);
+
+    tracing::info!("storefront on http://127.0.0.1:3000, admin on /admin");
+    topcoat::start(router).await?;
+    Ok(())
+}
+
+/// The storefront pages (discovered) with shopper sessions, plus the admin.
+fn router(store: Store, assets: AssetConfig, stylesheet: Stylesheet) -> Router {
+    let sessions = SessionConfig::builder()
+        .token_store(CookieTokenStore::new().name(auth::SESSION_COOKIE))
+        .build();
+    let services = AdminServices::new(store.executor.clone(), store.db.clone());
     let builder = Router::builder()
         .discover()
-        .app_context(store.clone())
+        .app_context(store)
+        .cookies()
+        .sessions(sessions)
         .assets(assets.clone());
-    let router = timada_admin::mount(
+    timada_admin::mount(
         builder,
         AdminConfig {
             mount: "admin".into(),
             stylesheet,
         },
         assets,
-        AdminServices::new(executor, pool),
+        services,
     )
-    .build();
-
-    tracing::info!("storefront on http://127.0.0.1:3000, admin on /admin");
-    topcoat::start(router).await?;
-    Ok(())
+    .build()
 }

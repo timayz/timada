@@ -1,7 +1,7 @@
 use timada_core::{Address, Money};
 use timada_shipping::{
     Command, CreateShipment, DeliveryKind, DeliveryMethod, ShipmentLine, ShipmentStatus,
-    ShippingError, load_shipment, shipment_id, shipping_fee,
+    ShippingError, delivery_offers, load_shipment, shipment_id, shipping_fee,
 };
 
 fn dom_address() -> Address {
@@ -41,6 +41,17 @@ fn resolves_delivery_methods() {
     assert_eq!(shipping_fee("chronopost-dom"), Some(Money::eur(2_395)));
     assert_eq!(shipping_fee("store-pickup"), Some(Money::eur(0)));
     assert_eq!(shipping_fee("pigeon"), None);
+}
+
+#[test]
+fn every_offer_resolves_and_has_its_fee() {
+    let offers = delivery_offers();
+    assert!(!offers.is_empty());
+    for offer in offers {
+        let store = offer.requires_pickup_store.then(|| "toulouse".to_owned());
+        assert!(DeliveryMethod::resolve(offer.code, store).is_some());
+        assert_eq!(shipping_fee(offer.code), Some(offer.fee));
+    }
 }
 
 #[tokio::test]

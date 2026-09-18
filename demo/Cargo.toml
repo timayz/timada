@@ -15,17 +15,25 @@ timada-review.workspace = true
 timada-customer.workspace = true
 timada-cart.workspace = true
 timada-order.workspace = true
+timada-shipping.workspace = true
 timada-invoice.workspace = true
 timada-promotion.workspace = true
 timada-admin.workspace = true
 evento.workspace = true
-topcoat = { workspace = true, features = ["router", "view", "asset", "serve", "discover", "tower"] }
+topcoat = { workspace = true, features = ["router", "view", "cookie", "session", "asset", "serve", "discover", "tower"] }
 sqlx.workspace = true
 sqlx_migrator.workspace = true
+serde.workspace = true
+argon2.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+timada-core = { workspace = true, features = ["test-support"] }
+http = "1"
 
 [lints]
 workspace = true

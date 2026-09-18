@@ -46,6 +46,29 @@ impl DeliveryMethod {
     }
 }
 
+/// A delivery method as offered on the checkout page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeliveryOffer {
+    pub code: &'static str,
+    pub carrier: &'static str,
+    /// "Retrait en boutique": the customer must pick a store.
+    pub requires_pickup_store: bool,
+    pub fee: Money,
+}
+
+/// Every delivery method the shop offers, in display order.
+pub fn delivery_offers() -> Vec<DeliveryOffer> {
+    METHODS
+        .iter()
+        .map(|(code, carrier, pickup, fee)| DeliveryOffer {
+            code,
+            carrier,
+            requires_pickup_store: *pickup,
+            fee: Money::eur(*fee),
+        })
+        .collect()
+}
+
 /// Shipping fee charged for a delivery method, if the code is known.
 pub fn shipping_fee(code: &str) -> Option<Money> {
     METHODS

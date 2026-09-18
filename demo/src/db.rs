@@ -36,7 +36,7 @@ pub async fn open(path: &str) -> anyhow::Result<(evento::Sqlite, SqlitePool)> {
     Ok((pool.clone().into(), pool))
 }
 
-fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
+pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     let mut all = Vec::new();
     all.extend(timada_catalog::migrations());
     all.extend(timada_inventory::migrations());
@@ -46,6 +46,7 @@ fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     all.extend(timada_invoice::migrations());
     all.extend(timada_promotion::migrations());
     all.extend(timada_admin::migrations());
+    all.extend(crate::auth::migrations());
     all
 }
 
