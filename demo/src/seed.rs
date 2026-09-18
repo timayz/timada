@@ -1,6 +1,6 @@
 //! Sample data: the AOC monitor from the mockups, stock, a customer with the
 //! mockup's addresses, one checked-out cart (which the process managers turn
-//! into an order), and the admin account.
+//! into an order), the shopper's login and the admin account.
 
 use timada_cart::{AddLine, Checkout};
 use timada_catalog::{Brand, CreateProduct, DescribeProduct, Spec};
@@ -10,6 +10,9 @@ use timada_inventory::{RegisterStockItem, StockLocation};
 use timada_pricing::{InstallmentOffer, ListPrice};
 
 use crate::Store;
+
+pub const SHOPPER_EMAIL: &str = "jonathan@example.com";
+pub const SHOPPER_PASSWORD: &str = "demo1234";
 
 pub async fn run(store: &Store) -> anyhow::Result<()> {
     let executor = &store.executor;
@@ -44,7 +47,7 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
         Ok(id) => id,
         Err(timada_catalog::CatalogError::SkuAlreadyExists(_)) => {
             tracing::info!("already seeded");
-            return Ok(());
+            return attach_shopper_login(store).await;
         }
         Err(err) => return Err(err.into()),
     };
@@ -111,12 +114,13 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
     let customers = timada_customer::Command(executor);
     let customer_id = customers
         .register_customer(RegisterCustomer {
-            email: "jonathan@example.com".into(),
+            email: SHOPPER_EMAIL.into(),
             civility: Civility::Mr,
             first_name: "Jonathan".into(),
             last_name: "Lapiquonne".into(),
         })
         .await?;
+    crate::auth::attach_account(store, SHOPPER_EMAIL, SHOPPER_PASSWORD, &customer_id).await?;
     let billing = Address {
         civility: Civility::Mr,
         first_name: "Jonathan".into(),
@@ -174,5 +178,28 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
     .await?;
 
     tracing::info!(%product_id, %customer_id, %cart_id, "seeded");
+    Ok(())
+}
+
+/// A database seeded before shopper accounts existed has the customer but no
+/// login; the customer list read model says which customer it is.
+async fn attach_shopper_login(store: &Store) -> anyhow::Result<()> {
+    let customers = timada_customer::list_customers(
+        &store.db,
+        &timada_customer::ListCustomers {
+            q: Some(SHOPPER_EMAIL.into()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    if let Some(customer) = customers.iter().find(|c| c.email == SHOPPER_EMAIL) {
+        crate::auth::attach_account(
+            store,
+            SHOPPER_EMAIL,
+            SHOPPER_PASSWORD,
+            &customer.customer_id,
+        )
+        .await?;
+    }
     Ok(())
 }
