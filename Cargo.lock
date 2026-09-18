@@ -1794,6 +1794,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-invoice"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror",
+ "timada-core",
+ "timada-order",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "timada-order"
 version = "0.1.0"
 dependencies = [
@@ -1834,6 +1850,22 @@ dependencies = [
  "evento",
  "thiserror",
  "timada-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "timada-promotion"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror",
+ "timada-core",
+ "timada-order",
  "tokio",
  "tracing",
 ]
