@@ -49,6 +49,18 @@
               extensions = [ "rust-src" "rust-analyzer" ];
             })
           ];
+          shellHook = ''
+            # timada-admin's build.rs runs Tailwind; use the packaged CLI instead of downloading it.
+            export TAILWIND_CLI="$(command -v tailwindcss)"
+
+            # topcoat-cli (`topcoat dev`, `topcoat asset bundle`, `topcoat ui`) is not in
+            # nixpkgs; install it with cargo, pinned to the topcoat version the workspace uses.
+            export PATH="$HOME/.cargo/bin:$PATH"
+            TOPCOAT_CLI_VERSION="0.8.1"
+            if ! cargo install --list 2>/dev/null | grep -q "^topcoat-cli v$TOPCOAT_CLI_VERSION:"; then
+              cargo install topcoat-cli --version "$TOPCOAT_CLI_VERSION" --locked
+            fi
+          '';
           # shellHook = ''
           #   export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
           #   export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"

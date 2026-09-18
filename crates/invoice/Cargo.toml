@@ -1,0 +1,24 @@
+[package]
+name = "timada-invoice"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+timada-core.workspace = true
+timada-order.workspace = true
+evento.workspace = true
+bitcode.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+
+[dev-dependencies]
+timada-core = { workspace = true, features = ["test-support"] }
+tokio.workspace = true
+
+[lints]
+workspace = true
