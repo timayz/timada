@@ -1,0 +1,20 @@
+[package]
+name = "timada-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+test-support = ["dep:sqlx", "dep:sqlx_migrator"]
+
+[dependencies]
+evento.workspace = true
+bitcode.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+sqlx = { workspace = true, optional = true }
+sqlx_migrator = { workspace = true, optional = true }
+
+[lints]
+workspace = true
