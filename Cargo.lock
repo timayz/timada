@@ -1726,6 +1726,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-catalog"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror",
+ "timada-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "timada-core"
 version = "0.1.0"
 dependencies = [
