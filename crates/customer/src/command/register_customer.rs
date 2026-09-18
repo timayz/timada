@@ -12,7 +12,7 @@ pub struct RegisterCustomer {
 }
 
 #[evento::command]
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Creates a customer account. Credentials are handled elsewhere.
     pub async fn register_customer(
         &self,
@@ -35,7 +35,7 @@ impl<E: Executor> super::Command<E> {
                 first_name: cmd.first_name,
                 last_name: cmd.last_name,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         tracing::info!(customer_id = %id, "customer registered");
         Ok(id)

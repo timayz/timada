@@ -8,7 +8,7 @@ use crate::{
 
 use super::address_id;
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Adds a delivery address; the first one becomes the preferred address
     /// in the same commit.
     pub async fn add_delivery_address(
@@ -30,7 +30,7 @@ impl<E: Executor> super::Command<E> {
                 address_id: address_id.clone(),
             });
         }
-        write.commit(&self.0).await?;
+        write.commit(self.0).await?;
         Ok(address_id)
     }
 }

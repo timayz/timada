@@ -18,7 +18,7 @@ pub struct CreateShipment {
 }
 
 #[evento::command]
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Prepares the shipment for an order. The id is derived from the order
     /// id, so a retry (e.g. from the fulfillment saga) finds the shipment
     /// already created and returns its id instead of failing.
@@ -44,7 +44,7 @@ impl<E: Executor> super::Command<E> {
                 destination: cmd.destination,
                 lines: cmd.lines,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await;
 
         match result {

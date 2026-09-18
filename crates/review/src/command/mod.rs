@@ -25,26 +25,26 @@ pub fn review_id(product_id: &str, customer_id: &str) -> String {
     timada_core::id::derived(&[product_id, customer_id], "review")
 }
 
-pub struct Command<E: Executor>(pub E);
+pub struct Command<'a, E: Executor>(pub &'a E);
 
-impl<E: Executor> Deref for Command<E> {
+impl<E: Executor> Deref for Command<'_, E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }
 
-impl<E: Executor> Command<E> {
+impl<E: Executor> Command<'_, E> {
     pub async fn load_review(&self, id: impl Into<String>) -> anyhow::Result<Option<ReviewState>> {
-        review_projection().load(id).execute(&self.0).await
+        review_projection().load(id).execute(self.0).await
     }
 
     pub async fn load_question(
         &self,
         id: impl Into<String>,
     ) -> anyhow::Result<Option<QuestionState>> {
-        question_projection().load(id).execute(&self.0).await
+        question_projection().load(id).execute(self.0).await
     }
 
     /// Loads a review that must exist and still await moderation.

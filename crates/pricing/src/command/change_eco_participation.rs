@@ -3,7 +3,7 @@ use timada_core::Money;
 
 use crate::{aggregator::EcoParticipationChanged, error::PricingError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn change_eco_participation(
         &self,
         id: impl Into<String>,
@@ -18,7 +18,7 @@ impl<E: Executor> super::Command<E> {
         price
             .write()?
             .event(&EcoParticipationChanged { eco_participation })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

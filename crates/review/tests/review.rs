@@ -19,7 +19,7 @@ fn review(customer_id: &str, rating: u8) -> SubmitReview {
 #[tokio::test]
 async fn published_reviews_feed_the_product_rating() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let too_high = cmd.submit_review(review("jonathan", 6)).await;
     assert!(matches!(too_high, Err(ReviewError::InvalidRating(6))));
@@ -56,7 +56,7 @@ async fn published_reviews_feed_the_product_rating() -> anyhow::Result<()> {
 #[tokio::test]
 async fn rejected_reviews_stay_out_of_the_rating() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd.submit_review(review("paul", 1)).await?;
     cmd.reject_review(&id, "insulting".into()).await?;
@@ -81,7 +81,7 @@ async fn rejected_reviews_stay_out_of_the_rating() -> anyhow::Result<()> {
 #[tokio::test]
 async fn questions_collect_answers() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd
         .ask_question(AskQuestion {

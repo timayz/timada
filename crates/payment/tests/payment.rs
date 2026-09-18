@@ -17,7 +17,7 @@ fn installments_request() -> RequestPayment {
 #[tokio::test]
 async fn capture_then_partial_and_full_refund() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd.request_payment(installments_request()).await?;
     assert_eq!(id, payment_id("order-4112117449224J"));
@@ -61,7 +61,7 @@ async fn capture_then_partial_and_full_refund() -> anyhow::Result<()> {
 #[tokio::test]
 async fn declined_payment_cannot_be_captured() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd
         .request_payment(RequestPayment {
@@ -91,7 +91,7 @@ async fn declined_payment_cannot_be_captured() -> anyhow::Result<()> {
 #[tokio::test]
 async fn rejects_invalid_requests() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let zero = cmd
         .request_payment(RequestPayment {

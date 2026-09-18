@@ -5,7 +5,7 @@ use crate::{
     aggregator::InstallmentOfferAttached, error::PricingError, value_object::InstallmentOffer,
 };
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn attach_installment_offer(
         &self,
         id: impl Into<String>,
@@ -23,7 +23,7 @@ impl<E: Executor> super::Command<E> {
         price
             .write()?
             .event(&InstallmentOfferAttached { offer })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

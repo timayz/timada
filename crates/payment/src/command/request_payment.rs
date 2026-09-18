@@ -13,7 +13,7 @@ pub struct RequestPayment {
 }
 
 #[evento::command]
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Requests the payment of an order. The id is derived from the order id,
     /// so a retry (the fulfillment saga may replay) returns the existing id.
     pub async fn request_payment(
@@ -46,7 +46,7 @@ impl<E: Executor> super::Command<E> {
                 amount: cmd.amount,
                 method: cmd.method,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await;
 
         match result {

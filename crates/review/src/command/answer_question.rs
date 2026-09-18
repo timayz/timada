@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::QuestionAnswered, error::ReviewError, value_object::AnswerAuthor};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Adds an answer; a question may collect several.
     pub async fn answer_question(
         &self,
@@ -20,7 +20,7 @@ impl<E: Executor> super::Command<E> {
         question
             .write()?
             .event(&QuestionAnswered { author, body })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

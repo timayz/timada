@@ -3,7 +3,7 @@ use timada_core::Address;
 
 use crate::{aggregator::BillingAddressSet, error::CustomerError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn set_billing_address(
         &self,
         id: impl Into<String>,
@@ -15,7 +15,7 @@ impl<E: Executor> super::Command<E> {
         customer
             .write()?
             .event(&BillingAddressSet { address })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

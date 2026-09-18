@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::ShipmentDelivered, error::ShippingError, value_object::ShipmentStatus};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn mark_delivered(&self, id: impl Into<String>) -> Result<(), ShippingError> {
         let shipment = self.load_existing(id).await?;
         if shipment.status != ShipmentStatus::Dispatched {
@@ -12,7 +12,7 @@ impl<E: Executor> super::Command<E> {
         shipment
             .write()?
             .event(&ShipmentDelivered)
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

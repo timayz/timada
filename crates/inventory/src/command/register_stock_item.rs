@@ -11,7 +11,7 @@ pub struct RegisterStockItem {
 }
 
 #[evento::command]
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Starts tracking a product at a location. The id is derived from both,
     /// so registering the same pair twice is rejected atomically by the store.
     pub async fn register_stock_item(
@@ -35,7 +35,7 @@ impl<E: Executor> super::Command<E> {
                 product_id: cmd.product_id.clone(),
                 location: cmd.location,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await;
 
         match result {

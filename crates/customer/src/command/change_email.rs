@@ -4,7 +4,7 @@ use crate::{aggregator::CustomerEmailChanged, error::CustomerError};
 
 use super::register_customer::validate_email;
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn change_email(
         &self,
         id: impl Into<String>,
@@ -16,7 +16,7 @@ impl<E: Executor> super::Command<E> {
         customer
             .write()?
             .event(&CustomerEmailChanged { email })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

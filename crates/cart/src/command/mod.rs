@@ -22,19 +22,19 @@ use crate::{
     value_object::CartStatus,
 };
 
-pub struct Command<E: Executor>(pub E);
+pub struct Command<'a, E: Executor>(pub &'a E);
 
-impl<E: Executor> Deref for Command<E> {
+impl<E: Executor> Deref for Command<'_, E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }
 
-impl<E: Executor> Command<E> {
+impl<E: Executor> Command<'_, E> {
     pub async fn load(&self, id: impl Into<String>) -> anyhow::Result<Option<CartState>> {
-        create_projection().load(id).execute(&self.0).await
+        create_projection().load(id).execute(self.0).await
     }
 
     /// Loads a cart that must exist and still be editable.

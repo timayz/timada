@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::StockReceived, error::InventoryError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn receive_stock(
         &self,
         id: impl Into<String>,
@@ -15,7 +15,7 @@ impl<E: Executor> super::Command<E> {
 
         item.write()?
             .event(&StockReceived { quantity })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

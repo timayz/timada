@@ -23,19 +23,19 @@ pub fn price_id(product_id: &str) -> String {
     timada_core::id::derived(&[product_id], "price")
 }
 
-pub struct Command<E: Executor>(pub E);
+pub struct Command<'a, E: Executor>(pub &'a E);
 
-impl<E: Executor> Deref for Command<E> {
+impl<E: Executor> Deref for Command<'_, E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }
 
-impl<E: Executor> Command<E> {
+impl<E: Executor> Command<'_, E> {
     pub async fn load(&self, id: impl Into<String>) -> anyhow::Result<Option<ProductPriceState>> {
-        create_projection().load(id).execute(&self.0).await
+        create_projection().load(id).execute(self.0).await
     }
 
     /// Loads a price that must exist and not be withdrawn.

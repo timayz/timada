@@ -46,7 +46,7 @@ fn resolves_delivery_methods() {
 #[tokio::test]
 async fn shipment_lifecycle() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(Vec::new()).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let create = CreateShipment {
         order_id: "order-1".into(),
@@ -90,7 +90,7 @@ async fn shipment_lifecycle() -> anyhow::Result<()> {
 #[tokio::test]
 async fn rejects_invalid_shipments() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(Vec::new()).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let no_lines = cmd
         .create_shipment(CreateShipment {

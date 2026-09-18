@@ -25,7 +25,7 @@ fn aoc_monitor() -> CreateProduct {
 #[tokio::test]
 async fn product_page_reflects_commands() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd.create_product(aoc_monitor()).await?;
     cmd.describe_product(
@@ -88,7 +88,7 @@ async fn product_page_reflects_commands() -> anyhow::Result<()> {
 #[tokio::test]
 async fn sku_is_unique_and_archiving_is_final() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd.create_product(aoc_monitor()).await?;
     let duplicate = cmd.create_product(aoc_monitor()).await;

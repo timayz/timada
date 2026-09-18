@@ -43,7 +43,7 @@ fn ramonville() -> Address {
 #[tokio::test]
 async fn address_book_follows_preferred_rules() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd.register_customer(jonathan()).await?;
     let first = cmd.add_delivery_address(&id, gwada()).await?;
@@ -97,7 +97,7 @@ async fn address_book_follows_preferred_rules() -> anyhow::Result<()> {
 #[tokio::test]
 async fn billing_address_and_validation() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let bad_email = cmd
         .register_customer(RegisterCustomer {

@@ -15,7 +15,7 @@ pub struct SubmitReview {
 }
 
 #[evento::command]
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Leaves a review. The id is derived from (product, customer), so a
     /// second review by the same customer is rejected atomically by the store.
     pub async fn submit_review(
@@ -47,7 +47,7 @@ impl<E: Executor> super::Command<E> {
                 title: cmd.title,
                 body: cmd.body,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await;
 
         match result {

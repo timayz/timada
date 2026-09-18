@@ -13,7 +13,7 @@ fn aoc_price() -> ListPrice {
 #[tokio::test]
 async fn price_view_reflects_commands() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd.list_price(aoc_price()).await?;
     cmd.attach_installment_offer(
@@ -54,7 +54,7 @@ async fn price_view_reflects_commands() -> anyhow::Result<()> {
 #[tokio::test]
 async fn listing_is_unique_and_withdrawal_is_final() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd.list_price(aoc_price()).await?;
     let duplicate = cmd.list_price(aoc_price()).await;

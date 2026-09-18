@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::CartLineRemoved, error::CartError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn remove_line(
         &self,
         id: impl Into<String>,
@@ -15,7 +15,7 @@ impl<E: Executor> super::Command<E> {
 
         cart.write()?
             .event(&CartLineRemoved { product_id })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

@@ -3,7 +3,7 @@ use timada_core::Money;
 
 use crate::{aggregator::ProductPriceChanged, error::PricingError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn change_price(
         &self,
         id: impl Into<String>,
@@ -18,7 +18,7 @@ impl<E: Executor> super::Command<E> {
         price
             .write()?
             .event(&ProductPriceChanged { price_incl_tax })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

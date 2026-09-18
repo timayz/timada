@@ -9,7 +9,7 @@ const PRODUCT: &str = "aoc-24g4xe";
 #[tokio::test]
 async fn reservations_are_bounded_and_idempotent() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd
         .register_stock_item(RegisterStockItem {
@@ -69,7 +69,7 @@ async fn reservations_are_bounded_and_idempotent() -> anyhow::Result<()> {
 #[tokio::test]
 async fn back_in_stock_alert_fires_on_restock() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let item = cmd
         .register_stock_item(RegisterStockItem {

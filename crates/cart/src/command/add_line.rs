@@ -12,7 +12,7 @@ pub struct AddLine {
     pub warranty_months: u16,
 }
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Puts a product in the cart with the price seen at that moment. A cart
     /// is locked to the currency of its first line.
     pub async fn add_line(&self, id: impl Into<String>, cmd: AddLine) -> Result<(), CartError> {
@@ -35,7 +35,7 @@ impl<E: Executor> super::Command<E> {
                 unit_price: cmd.unit_price,
                 warranty_months: cmd.warranty_months,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

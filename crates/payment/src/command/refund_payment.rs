@@ -3,7 +3,7 @@ use timada_core::Money;
 
 use crate::{aggregator::PaymentRefunded, error::PaymentError, value_object::PaymentStatus};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Refunds part or all of a captured payment; several partial refunds may
     /// follow each other up to the captured amount.
     pub async fn refund_payment(
@@ -27,7 +27,7 @@ impl<E: Executor> super::Command<E> {
         payment
             .write()?
             .event(&PaymentRefunded { amount, reason })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

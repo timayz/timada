@@ -63,7 +63,7 @@ fn checkout_in_3x(customer_id: Option<&str>) -> Checkout {
 #[tokio::test]
 async fn cart_details_reflect_commands_through_checkout() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd.open_cart(None).await?;
     cmd.add_line(&id, aoc_monitor()).await?;
@@ -101,7 +101,7 @@ async fn cart_details_reflect_commands_through_checkout() -> anyhow::Result<()> 
 #[tokio::test]
 async fn checkout_guards() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
-    let cmd = Command(executor.clone());
+    let cmd = Command(&executor);
 
     let id = cmd.open_cart(None).await?;
     let empty = cmd.checkout(&id, checkout_in_3x(Some("customer-1"))).await;

@@ -33,29 +33,29 @@ pub fn alert_id(product_id: &str, customer_id: &str) -> String {
     timada_core::id::derived(&[product_id, customer_id], "alert")
 }
 
-pub struct Command<E: Executor>(pub E);
+pub struct Command<'a, E: Executor>(pub &'a E);
 
-impl<E: Executor> Deref for Command<E> {
+impl<E: Executor> Deref for Command<'_, E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }
 
-impl<E: Executor> Command<E> {
+impl<E: Executor> Command<'_, E> {
     pub async fn load_stock_item(
         &self,
         id: impl Into<String>,
     ) -> anyhow::Result<Option<StockItemState>> {
-        load_stock_item(&self.0, id).await
+        load_stock_item(self.0, id).await
     }
 
     pub async fn load_alert(
         &self,
         id: impl Into<String>,
     ) -> anyhow::Result<Option<BackInStockAlertState>> {
-        load_alert(&self.0, id).await
+        load_alert(self.0, id).await
     }
 
     async fn require_stock_item(

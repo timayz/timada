@@ -2,13 +2,13 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::BackInStockAlertTriggered, error::InventoryError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Marks the alert as sent. A no-op once triggered.
     pub async fn trigger_back_in_stock_alert(
         &self,
         id: impl Into<String>,
     ) -> Result<(), InventoryError> {
-        trigger_alert(&self.0, id).await
+        trigger_alert(self.0, id).await
     }
 }
 

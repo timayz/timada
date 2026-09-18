@@ -6,7 +6,7 @@ use crate::{
     value_object::ReservationOutcome,
 };
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Puts units aside for an order. Idempotent per order: a repeated call
     /// for an order that already holds a reservation reports `Reserved`
     /// without writing. Both outcomes are recorded so the fulfillment saga can
@@ -34,7 +34,7 @@ impl<E: Executor> super::Command<E> {
         if available >= quantity {
             item.write()?
                 .event(&StockReserved { order_id, quantity })
-                .commit(&self.0)
+                .commit(self.0)
                 .await?;
             return Ok(ReservationOutcome::Reserved);
         }
@@ -45,7 +45,7 @@ impl<E: Executor> super::Command<E> {
                 requested: quantity,
                 available,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(ReservationOutcome::Rejected { available })
     }

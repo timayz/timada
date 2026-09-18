@@ -14,7 +14,7 @@ pub struct ListPrice {
 }
 
 #[evento::command]
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Lists a product's price. The id is derived from the product id, so a
     /// second listing for the same product is rejected atomically by the store.
     pub async fn list_price(
@@ -43,7 +43,7 @@ impl<E: Executor> super::Command<E> {
                 vat_rate_bp: cmd.vat_rate_bp,
                 eco_participation: cmd.eco_participation,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await;
 
         match result {

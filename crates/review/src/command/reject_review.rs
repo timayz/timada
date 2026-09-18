@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::ReviewRejected, error::ReviewError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn reject_review(
         &self,
         id: impl Into<String>,
@@ -16,7 +16,7 @@ impl<E: Executor> super::Command<E> {
         review
             .write()?
             .event(&ReviewRejected { reason })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         tracing::info!(review_id = %review.id, "review rejected");
         Ok(())

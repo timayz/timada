@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::ShipmentDispatched, error::ShippingError, value_object::ShipmentStatus};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn dispatch_shipment(
         &self,
         id: impl Into<String>,
@@ -23,7 +23,7 @@ impl<E: Executor> super::Command<E> {
                 carrier,
                 tracking_number: tracking_number.clone(),
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         tracing::info!(shipment_id = %shipment.id, %tracking_number, "shipment dispatched");
         Ok(())

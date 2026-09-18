@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::ProductEnergyLabelled, error::CatalogError, value_object::EnergyClass};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn label_product_energy(
         &self,
         id: impl Into<String>,
@@ -20,7 +20,7 @@ impl<E: Executor> super::Command<E> {
                 class,
                 info_sheet_url,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

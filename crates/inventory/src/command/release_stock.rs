@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::StockReservationReleased, error::InventoryError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Gives an order's reservation back. A no-op when the order holds none,
     /// so compensations can be retried freely.
     pub async fn release_stock(
@@ -19,7 +19,7 @@ impl<E: Executor> super::Command<E> {
 
         item.write()?
             .event(&StockReservationReleased { order_id, quantity })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

@@ -21,19 +21,19 @@ pub fn payment_id(order_id: &str) -> String {
     timada_core::id::derived(&[order_id], "payment")
 }
 
-pub struct Command<E: Executor>(pub E);
+pub struct Command<'a, E: Executor>(pub &'a E);
 
-impl<E: Executor> Deref for Command<E> {
+impl<E: Executor> Deref for Command<'_, E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }
 
-impl<E: Executor> Command<E> {
+impl<E: Executor> Command<'_, E> {
     pub async fn load(&self, id: impl Into<String>) -> anyhow::Result<Option<PaymentState>> {
-        create_projection().load(id).execute(&self.0).await
+        create_projection().load(id).execute(self.0).await
     }
 
     async fn load_existing(&self, id: impl Into<String>) -> Result<PaymentState, PaymentError> {

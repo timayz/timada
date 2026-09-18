@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::CartSaved, error::CartError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Keeps the cart under a name in "mes paniers sauvegardés".
     pub async fn save_cart(&self, id: impl Into<String>, name: String) -> Result<(), CartError> {
         let name = name.trim().to_owned();
@@ -13,7 +13,7 @@ impl<E: Executor> super::Command<E> {
 
         cart.write()?
             .event(&CartSaved { name })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

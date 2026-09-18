@@ -12,7 +12,7 @@ pub struct RequestBackInStockAlert {
 }
 
 #[evento::command]
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Registers a customer's "alerte disponibilité" for a product. One per
     /// product and customer, enforced by the derived id.
     pub async fn request_back_in_stock_alert(
@@ -38,7 +38,7 @@ impl<E: Executor> super::Command<E> {
                 customer_id: cmd.customer_id,
                 email: cmd.email,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await;
 
         match result {

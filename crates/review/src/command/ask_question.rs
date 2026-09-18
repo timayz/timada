@@ -10,7 +10,7 @@ pub struct AskQuestion {
 }
 
 #[evento::command]
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn ask_question(
         &self,
         cmd: AskQuestion,
@@ -33,7 +33,7 @@ impl<E: Executor> super::Command<E> {
                 customer_id: cmd.customer_id,
                 body: cmd.body,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         tracing::info!(question_id = %id, "question asked");
         Ok(id)

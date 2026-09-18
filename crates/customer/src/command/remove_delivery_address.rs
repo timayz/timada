@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::DeliveryAddressRemoved, error::CustomerError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Removes a delivery address. The preferred one can only go once it is
     /// the last address left.
     pub async fn remove_delivery_address(
@@ -22,7 +22,7 @@ impl<E: Executor> super::Command<E> {
         customer
             .write()?
             .event(&DeliveryAddressRemoved { address_id })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

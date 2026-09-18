@@ -17,7 +17,7 @@ pub struct Checkout {
     pub payment_mode: PaymentMode,
 }
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// "Passer commande": freezes the cart and publishes the checkout fact the
     /// order context turns into an order.
     pub async fn checkout(&self, id: impl Into<String>, cmd: Checkout) -> Result<(), CartError> {
@@ -47,7 +47,7 @@ impl<E: Executor> super::Command<E> {
                 delivery: cmd.delivery,
                 payment_mode: cmd.payment_mode,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         tracing::info!(cart_id = %cart.id, %customer_id, "cart checked out");
         Ok(())

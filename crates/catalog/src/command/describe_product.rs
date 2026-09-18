@@ -8,7 +8,7 @@ pub struct DescribeProduct {
     pub key_features: Vec<String>,
 }
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn describe_product(
         &self,
         id: impl Into<String>,
@@ -22,7 +22,7 @@ impl<E: Executor> super::Command<E> {
                 long_description: cmd.long_description,
                 key_features: cmd.key_features,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

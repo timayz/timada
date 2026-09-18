@@ -15,7 +15,7 @@ pub struct CreateProduct {
 }
 
 #[evento::command]
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     /// Enters a product into the catalog. The id is derived from the SKU, so
     /// a second product with the same SKU is rejected atomically by the store.
     pub async fn create_product(
@@ -45,7 +45,7 @@ impl<E: Executor> super::Command<E> {
                 short_description: cmd.short_description,
                 warranty_months: cmd.warranty_months,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await;
 
         match result {

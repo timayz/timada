@@ -3,7 +3,7 @@ use timada_core::Address;
 
 use crate::{aggregator::DeliveryAddressChanged, error::CustomerError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn change_delivery_address(
         &self,
         id: impl Into<String>,
@@ -22,7 +22,7 @@ impl<E: Executor> super::Command<E> {
                 address_id,
                 address,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }

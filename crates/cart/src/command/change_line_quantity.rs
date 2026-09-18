@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{aggregator::CartLineQuantityChanged, error::CartError};
 
-impl<E: Executor> super::Command<E> {
+impl<E: Executor> super::Command<'_, E> {
     pub async fn change_line_quantity(
         &self,
         id: impl Into<String>,
@@ -22,7 +22,7 @@ impl<E: Executor> super::Command<E> {
                 product_id,
                 quantity,
             })
-            .commit(&self.0)
+            .commit(self.0)
             .await?;
         Ok(())
     }
