@@ -49,6 +49,10 @@
               extensions = [ "rust-src" "rust-analyzer" ];
             })
           ];
+          shellHook = ''
+            # timada-admin's build.rs runs Tailwind; use the packaged CLI instead of downloading it.
+            export TAILWIND_CLI="$(command -v tailwindcss)"
+          '';
           # shellHook = ''
           #   export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
           #   export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
