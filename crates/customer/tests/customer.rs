@@ -1,5 +1,8 @@
 use timada_core::{Address, Civility};
-use timada_customer::{Command, CustomerError, RegisterCustomer, load_address_book};
+use timada_customer::{
+    Command, CustomerError, ListCustomers, RegisterCustomer, count_customers,
+    customer_list_subscription, list_customers, load_address_book, migrations,
+};
 
 fn jonathan() -> RegisterCustomer {
     RegisterCustomer {
@@ -42,7 +45,7 @@ fn ramonville() -> Address {
 
 #[tokio::test]
 async fn address_book_follows_preferred_rules() -> anyhow::Result<()> {
-    let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
+    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
     let cmd = Command(&executor);
 
     let id = cmd.register_customer(jonathan()).await?;
@@ -96,7 +99,7 @@ async fn address_book_follows_preferred_rules() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn billing_address_and_validation() -> anyhow::Result<()> {
-    let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
+    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
     let cmd = Command(&executor);
 
     let bad_email = cmd
@@ -126,6 +129,50 @@ async fn billing_address_and_validation() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("address book missing"))?;
     assert_eq!(view.billing.map(|a| a.postal_code), Some("31520".into()));
     assert!(view.deliveries.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn customer_list_follows_registrations_and_email_changes() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command(&executor);
+
+    let first = cmd.register_customer(jonathan()).await?;
+    let second = cmd
+        .register_customer(RegisterCustomer {
+            email: "marie@example.com".into(),
+            civility: Civility::Mrs,
+            first_name: "Marie".into(),
+            last_name: "Curie".into(),
+        })
+        .await?;
+    cmd.change_email(&first, "jonathan.l@example.com".into())
+        .await?;
+
+    customer_list_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+
+    let all = list_customers(&db, &ListCustomers::default()).await?;
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].customer_id, second, "newest registration first");
+    assert_eq!(count_customers(&db, None).await?, 2);
+
+    let filtered = list_customers(
+        &db,
+        &ListCustomers {
+            q: Some("jonathan".into()),
+            ..ListCustomers::default()
+        },
+    )
+    .await?;
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].customer_id, first);
+    assert_eq!(filtered[0].email, "jonathan.l@example.com");
+    assert_eq!(count_customers(&db, Some("jonathan")).await?, 1);
+    assert_eq!(count_customers(&db, Some("nobody")).await?, 0);
 
     Ok(())
 }
