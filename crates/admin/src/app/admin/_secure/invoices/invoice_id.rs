@@ -20,7 +20,7 @@ use crate::{
     },
     components::card::{card, card_content, card_header, card_title},
     config::AdminServices,
-    ui::{date, money, page_header},
+    ui::{date, money, page_header, vat_rate},
 };
 
 path_param!(pub invoice_id: String, error = not_found);
@@ -60,6 +60,21 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         ));
     }
     let net = money(&invoice.total.checked_sub(&credited)?);
+    // What an invoice must show: the VAT per rate, or why there is none.
+    let vat_lines: Vec<(String, String, String, String)> = invoice
+        .tax
+        .iter()
+        .flat_map(|tax| &tax.vat_lines)
+        .map(|line| {
+            (
+                vat_rate(line.rate_bp),
+                money(&line.base),
+                money(&line.vat),
+                money(&line.total),
+            )
+        })
+        .collect();
+    let vat_mention = invoice.tax.as_ref().and_then(|tax| tax.exemption_mention());
     let mut lines = Vec::with_capacity(invoice.lines.len());
     for line in &invoice.lines {
         lines.push((
@@ -113,6 +128,34 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         </table>
                     )
                 )
+                if !vat_lines.is_empty() {
+                    card(
+                        card_header(card_title("TVA"))
+                        card_content(
+                            <table class="w-full text-sm">
+                                <thead>
+                                    <tr class="border-b border-border text-left text-muted-foreground">
+                                        <th scope="col" class="py-2 font-normal">"Taux"</th>
+                                        <th scope="col" class="py-2 text-right font-normal">"Base HT"</th>
+                                        <th scope="col" class="py-2 text-right font-normal">"TVA"</th>
+                                        <th scope="col" class="py-2 text-right font-normal">"TTC"</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    for (rate, base, vat, total) in &vat_lines {
+                                        <tr class="border-b border-border last:border-0">
+                                            <td class="py-2">(rate.clone())</td>
+                                            <td class="py-2 text-right tabular-nums">(base.clone())</td>
+                                            <td class="py-2 text-right tabular-nums">(vat.clone())</td>
+                                            <td class="py-2 text-right tabular-nums">(total.clone())</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                            if let Some(mention) = vat_mention { <p class="mt-3 text-xs text-muted-foreground">(mention)</p> }
+                        )
+                    )
+                }
                 if !credit_notes.is_empty() {
                     card(
                         card_header(card_title("Avoirs"))

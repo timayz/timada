@@ -149,7 +149,12 @@ async fn place_order(h: &Harness) -> anyhow::Result<String> {
             promo_code: None,
             discount: None,
             order_number: Some("C2026-000042".into()),
-            tax: None,
+            tax: Some(timada_order::OrderTax {
+                zone_code: "fr".into(),
+                treatment: timada_tax::TaxTreatment::Domestic,
+                line_rates: vec![("aoc-24g4xe".into(), 2_000)],
+                shipping_rate_bp: 2_000,
+            }),
         })
         .await?;
     order_history_subscription()
@@ -577,6 +582,10 @@ async fn invoices_are_listed_and_payments_refunded() -> anyhow::Result<()> {
     let detail = text(detail).await?;
     assert!(detail.contains(&format!("Facture {number}")), "{detail}");
     assert!(detail.contains("AOC 23.8"), "{detail}");
+    // 143,90 TTC at 20 %: 119,92 HT + 23,98 of VAT.
+    assert!(detail.contains("Base HT"), "{detail}");
+    assert!(detail.contains("119,92 €"), "{detail}");
+    assert!(detail.contains("23,98 €"), "{detail}");
     let missing = h
         .router
         .handle(get("/admin/invoices/nope", Some(&cookie)))
@@ -588,6 +597,8 @@ async fn invoices_are_listed_and_payments_refunded() -> anyhow::Result<()> {
     let order_page = text(h.router.handle(get(&order_uri, Some(&cookie))).await).await?;
     assert!(order_page.contains(&number), "{order_page}");
     assert!(order_page.contains("Rembourser"), "{order_page}");
+    assert!(order_page.contains("Zone fiscale"), "{order_page}");
+    assert!(order_page.contains("TVA 20 % sur 119,92 €"), "{order_page}");
 
     let refunded = h
         .router

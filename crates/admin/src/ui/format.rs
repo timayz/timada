@@ -6,7 +6,7 @@ use topcoat::{
 
 use crate::components::badge::{BadgeVariant, badge};
 
-pub use timada_core::format::{date, money};
+pub use timada_core::format::{date, money, vat_rate};
 
 #[component]
 pub async fn order_status_badge(status: OrderStatus) -> Result<impl View> {

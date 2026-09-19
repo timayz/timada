@@ -2592,6 +2592,7 @@ dependencies = [
  "timada-returns",
  "timada-review",
  "timada-shipping",
+ "timada-tax",
  "tokio",
  "topcoat",
  "tower",

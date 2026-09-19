@@ -28,7 +28,7 @@ use crate::{
         separator::separator,
     },
     config::AdminServices,
-    ui::{date, money, order_status_badge, page_header},
+    ui::{date, money, order_status_badge, page_header, vat_rate},
 };
 
 path_param!(pub order_id: String, error = not_found);
@@ -77,6 +77,17 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         (link, label)
     });
     let title = format!("Commande {}", order.display_number());
+    let tax_zone = order.tax.as_ref().map(|tax| tax.zone_code.clone());
+    let vat_lines: Vec<(String, String, String)> = order
+        .tax
+        .iter()
+        .flat_map(|tax| &tax.vat_lines)
+        .map(|line| (vat_rate(line.rate_bp), money(&line.base), money(&line.vat)))
+        .collect();
+    let vat_mention = order
+        .tax
+        .as_ref()
+        .and_then(|tax| tax.treatment.exemption_mention());
     let order_returns: Vec<(String, String)> = timada_returns::returns_of_order(&services.db, &id)
         .await?
         .into_iter()
@@ -146,8 +157,12 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     <tr><td class="text-muted-foreground">"Remise (" (discount.code.clone()) ")"</td><td class="text-right tabular-nums">"− " (money(&discount.amount))</td></tr>
                                 }
                                 <tr class="font-semibold"><td class="pt-2">"Total"</td><td class="pt-2 text-right tabular-nums">(money(&order.total))</td></tr>
+                                for (rate, base, vat) in &vat_lines {
+                                    <tr class="text-muted-foreground"><td>"TVA " (rate.clone()) " sur " (base.clone())</td><td class="text-right tabular-nums">(vat.clone())</td></tr>
+                                }
                             </tbody>
                         </table>
+                        if let Some(mention) = vat_mention { <p class="mt-3 text-xs text-muted-foreground">(mention)</p> }
                     )
                 )
                 card(
@@ -169,6 +184,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     card_content(
                         <dl class="flex flex-col gap-2 text-sm">
                             <div><dt class="text-muted-foreground">"Client"</dt><dd class="font-mono text-xs">(order.customer_id.clone())</dd></div>
+                            if let Some(zone) = &tax_zone {
+                                <div><dt class="text-muted-foreground">"Zone fiscale"</dt><dd class="font-mono text-xs">(zone.clone())</dd></div>
+                            }
                             <div><dt class="text-muted-foreground">"Paiement"</dt><dd>(payment_label)</dd></div>
                             if let Some(refunded) = &refunded {
                                 <div><dt class="text-muted-foreground">"Remboursé"</dt><dd class="tabular-nums">(refunded.clone())</dd></div>

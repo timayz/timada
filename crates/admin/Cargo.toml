@@ -45,6 +45,7 @@ topcoat = { workspace = true, features = ["serve"] }
 tokio.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http = "1"
+timada-tax.workspace = true
 
 [lints]
 workspace = true
