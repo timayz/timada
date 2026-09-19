@@ -4,6 +4,7 @@ mod change_line_quantity;
 mod checkout;
 mod open_cart;
 mod remove_line;
+mod remove_promo_code;
 mod save_cart;
 
 use std::ops::Deref;
@@ -16,7 +17,7 @@ use evento::{Executor, Projection, metadata::Event};
 use crate::{
     aggregator::{
         Cart, CartCheckedOut, CartLineAdded, CartLineQuantityChanged, CartLineRemoved, CartOpened,
-        CartSaved, PromoCodeApplied,
+        CartSaved, PromoCodeApplied, PromoCodeRemoved,
     },
     error::CartError,
     value_object::CartStatus,
@@ -58,6 +59,7 @@ pub struct CartState {
     pub customer_id: Option<String>,
     pub products: Vec<String>,
     pub currency: Option<String>,
+    pub has_promo_code: bool,
 }
 
 // Strict + explicit skips: a non-strict projection only *reads* the events it
@@ -69,8 +71,9 @@ fn create_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_cart_line_removed())
         .handler(on_cart_saved())
         .handler(on_cart_checked_out())
+        .handler(on_promo_code_applied())
+        .handler(on_promo_code_removed())
         .skip::<CartLineQuantityChanged>()
-        .skip::<PromoCodeApplied>()
         .strict()
 }
 
@@ -97,6 +100,24 @@ async fn on_cart_line_removed(
     row: &mut CartState,
 ) -> anyhow::Result<()> {
     row.products.retain(|p| p != &event.data.product_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_promo_code_applied(
+    _event: Event<PromoCodeApplied>,
+    row: &mut CartState,
+) -> anyhow::Result<()> {
+    row.has_promo_code = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_promo_code_removed(
+    _event: Event<PromoCodeRemoved>,
+    row: &mut CartState,
+) -> anyhow::Result<()> {
+    row.has_promo_code = false;
     Ok(())
 }
 

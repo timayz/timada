@@ -174,6 +174,21 @@ pub async fn apply_promo(cx: &Cx, Form(form): Form<PromoForm>) -> Result<impl Vi
     }
 }
 
+#[page(POST "/cart/promo/remove")]
+pub async fn remove_promo(cx: &Cx) -> Result<impl View> {
+    let store = app_context::<Store>(cx);
+    let cart_id = ensure_cart(cx).await?;
+    let outcome = user_facing(
+        timada_cart::Command(&store.executor)
+            .remove_promo_code(&cart_id)
+            .await,
+    )?;
+    match outcome {
+        Ok(()) => Err(see_other(href!(show).resolve(cx)).into()),
+        Err(message) => Ok(view! { cart_view(error: Some(message)) }),
+    }
+}
+
 /// Why a code cannot be used right now, if it cannot.
 async fn promo_problem(store: &Store, code: &str) -> anyhow::Result<Option<&'static str>> {
     let now = std::time::SystemTime::now()
@@ -303,6 +318,11 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                         " "
                         <button type="submit">"Appliquer"</button>
                     </form>
+                    if let Some(code) = &cart.promo_code {
+                        <form method="post" action=(href!(remove_promo)) class="inline">
+                            <button type="submit" class="link">"Retirer le code " <span class="muted">(code.clone())</span></button>
+                        </form>
+                    }
                     promo_notice(promo: &promo)
                     <p>
                         <a href=(href!(checkout::show))><strong>"Passer commande"</strong></a>
