@@ -27,7 +27,7 @@ use super::{
 };
 use crate::{
     Store,
-    auth::{self, ChangeEmailError, SignUpError, require_account},
+    auth::{self, ChangeEmailError, ChangePasswordError, SignUpError, require_account},
     cart_session::forget_cart,
 };
 
@@ -179,8 +179,10 @@ pub async fn overview(cx: &Cx) -> Result<impl View> {
             <ul>
                 <li><a href=(href!(orders))>"Historique de mes commandes"</a></li>
                 <li><a href=(href!(addresses))>"Mes adresses"</a></li>
+                <li><a href=(href!(saved_carts))>"Mes paniers sauvegardés"</a></li>
                 <li><a href=(href!(alerts))>"Mes alertes de disponibilité"</a></li>
                 <li><a href=(href!(email))>"Modifier mon adresse email"</a></li>
+                <li><a href=(href!(password))>"Modifier mon mot de passe"</a></li>
             </ul>
         )
     })
@@ -234,6 +236,186 @@ async fn email_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
                 <button type="submit">"Modifier"</button>
             </form>
             <p class="muted">"Un message est envoyé à l'ancienne adresse pour signaler le changement."</p>
+            <p><a href=(href!(overview))>"Retour à mon compte"</a></p>
+        )
+    })
+}
+
+// --------------------------------------------------------------- password
+
+#[derive(Debug, Deserialize)]
+pub struct PasswordForm {
+    current: String,
+    new: String,
+    confirm: String,
+}
+
+#[page("/account/password")]
+pub async fn password(cx: &Cx) -> Result<impl View> {
+    require_account(cx).await?;
+    Ok(view! { password_form(error: None) })
+}
+
+/// Changes the password and signs every other browser out.
+#[page(POST "/account/password")]
+pub async fn change_password(cx: &Cx, Form(form): Form<PasswordForm>) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let error = if form.new != form.confirm {
+        "Les deux mots de passe ne sont pas identiques.".to_owned()
+    } else {
+        match auth::change_password(cx, &account, &form.current, &form.new).await {
+            Ok(()) => return Err(see_other(href!(overview).resolve(cx)).into()),
+            Err(ChangePasswordError::Server(err)) => return Err(err.into()),
+            Err(refused) => refused.to_string(),
+        }
+    };
+    Ok(view! { password_form(error: Some(error)) })
+}
+
+#[component]
+async fn password_form(error: Option<String>) -> Result<impl View> {
+    Ok(view! {
+        document(
+            title: "Modifier mon mot de passe",
+            <h1>"Modifier mon mot de passe"</h1>
+            if let Some(error) = &error { <p role="alert" class="error">(error.clone())</p> }
+            <form method="post" action=(href!(change_password)) class="stack">
+                <label>"Mot de passe actuel"
+                    <input name="current" type="password" required=(true) autocomplete="current-password">
+                </label>
+                <label>"Nouveau mot de passe"
+                    <input name="new" type="password" required=(true) minlength="8" autocomplete="new-password">
+                </label>
+                <label>"Confirmer le nouveau mot de passe"
+                    <input name="confirm" type="password" required=(true) minlength="8" autocomplete="new-password">
+                </label>
+                <button type="submit">"Modifier"</button>
+            </form>
+            <p class="muted">"Vos autres appareils seront déconnectés."</p>
+            <p><a href=(href!(overview))>"Retour à mon compte"</a></p>
+        )
+    })
+}
+
+// ------------------------------------------------------------ saved carts
+
+path_param!(pub cart_id: String, error = not_found);
+
+#[page("/account/carts")]
+pub async fn saved_carts() -> Result<impl View> {
+    Ok(view! { saved_carts_view(error: None) })
+}
+
+/// Makes a saved cart the current one again. Refused while the current cart
+/// holds articles: reopening would silently abandon them.
+#[page(POST "/account/carts/{cart_id}/reopen")]
+pub async fn reopen_cart(cx: &Cx) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let id = param::<CartId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    let busy = match crate::cart_session::current_cart(cx).await {
+        Ok(cart) => cart.as_ref().is_some_and(|c| !c.lines.is_empty()),
+        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+    };
+    let error = if busy {
+        "Votre panier actuel contient des articles : sauvegardez-le ou videz-le avant de reprendre un autre panier."
+    } else {
+        match timada_cart::Command(&store.executor)
+            .reopen_cart(&id, &account.customer_id)
+            .await
+        {
+            Ok(()) => {
+                crate::cart_session::use_cart(cx, &id);
+                return Err(see_other(href!(super::cart::show).resolve(cx)).into());
+            }
+            Err(timada_cart::CartError::CartNotFound) => {
+                None::<()>.ok_or_not_found().map(|()| "")?
+            }
+            Err(_) => "Ce panier ne peut plus être repris.",
+        }
+    };
+    Ok(view! { saved_carts_view(error: Some(error.to_owned())) })
+}
+
+#[page(POST "/account/carts/{cart_id}/discard")]
+pub async fn discard_cart(cx: &Cx) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let id = param::<CartId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    match timada_cart::Command(&store.executor)
+        .discard_cart(&id, &account.customer_id)
+        .await
+    {
+        // Already reopened or ordered in the meantime: the list says so.
+        Ok(())
+        | Err(timada_cart::CartError::NotSaved | timada_cart::CartError::CartAlreadyCheckedOut) => {
+        }
+        Err(timada_cart::CartError::CartNotFound) => None::<()>.ok_or_not_found()?,
+        Err(err) => return Err(anyhow::Error::from(err).into()),
+    }
+    Err::<(), _>(see_other(href!(saved_carts).resolve(cx)).into())
+}
+
+#[component]
+async fn saved_carts_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let store = app_context::<Store>(cx);
+    let listed: Vec<(String, String, String, String, String, String)> =
+        timada_cart::saved_carts_of_customer(&store.db, &account.customer_id)
+            .await?
+            .into_iter()
+            .map(|row| {
+                (
+                    row.name,
+                    date(row.saved_at.max(0) as u64),
+                    row.units.to_string(),
+                    money(&timada_core::Money::new(row.subtotal_minor, &row.currency)),
+                    href!(reopen_cart, CartId(row.cart_id.clone())).resolve(cx),
+                    href!(discard_cart, CartId(row.cart_id)).resolve(cx),
+                )
+            })
+            .collect();
+
+    Ok(view! {
+        document(
+            title: "Mes paniers sauvegardés",
+            <h1>"Mes paniers sauvegardés"</h1>
+            if let Some(error) = &error { <p role="alert" class="error">(error.clone())</p> }
+            if listed.is_empty() {
+                <p class="muted">"Aucun panier sauvegardé. Depuis votre panier, donnez-lui un nom pour le retrouver ici."</p>
+            } else {
+                <table>
+                    <caption class="muted">"Du plus récent au plus ancien. Les prix sont ceux du jour où les articles ont été ajoutés."</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">"Panier"</th>
+                            <th scope="col">"Sauvegardé le"</th>
+                            <th scope="col" class="num">"Articles"</th>
+                            <th scope="col" class="num">"Sous-total"</th>
+                            <th scope="col"><span class="muted">"Actions"</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        for (name, saved, units, subtotal, reopen_action, discard_action) in &listed {
+                            <tr>
+                                <th scope="row">(name.clone())</th>
+                                <td>(saved.clone())</td>
+                                <td class="num">(units.clone())</td>
+                                <td class="num">(subtotal.clone())</td>
+                                <td>
+                                    <form method="post" action=(reopen_action.clone()) class="inline">
+                                        <button type="submit">"Reprendre " <span class="muted">(name.clone())</span></button>
+                                    </form>
+                                    " "
+                                    <form method="post" action=(discard_action.clone()) class="inline">
+                                        <button type="submit" class="link">"Supprimer " <span class="muted">(name.clone())</span></button>
+                                    </form>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
             <p><a href=(href!(overview))>"Retour à mon compte"</a></p>
         )
     })

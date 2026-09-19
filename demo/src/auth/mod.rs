@@ -163,6 +163,61 @@ pub async fn change_email(
     })
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ChangePasswordError {
+    #[error("Mot de passe actuel incorrect.")]
+    WrongPassword,
+    #[error("Le mot de passe doit contenir au moins {MIN_PASSWORD_LEN} caractères.")]
+    WeakPassword,
+    #[error(transparent)]
+    Server(#[from] anyhow::Error),
+}
+
+/// Replaces the signed-in shopper's password after checking the current one,
+/// signs every *other* browser out, and tells the shopper by e-mail.
+pub async fn change_password(
+    cx: &Cx,
+    account: &Account,
+    current: &str,
+    new: &str,
+) -> Result<(), ChangePasswordError> {
+    let store = app_context::<Store>(cx);
+    let credentials = store::find_credentials(&store.db, &account.email)
+        .await
+        .map_err(anyhow::Error::from)?;
+    if !credentials.is_some_and(|(_, hash)| password::verify(current, &hash)) {
+        return Err(ChangePasswordError::WrongPassword);
+    }
+    if new.chars().count() < MIN_PASSWORD_LEN {
+        return Err(ChangePasswordError::WeakPassword);
+    }
+    let hash = password::hash(new).ok_or_else(|| anyhow::anyhow!("password hashing failed"))?;
+    let keep = session::token_hash(cx)
+        .await
+        .map_err(|err| anyhow::anyhow!("{err:#}"))?;
+    store::replace_password(&store.db, &account.customer_id, &hash, keep.as_ref()).await?;
+
+    let config = crate::db::mailer_config();
+    let notice = timada_mailer::Email {
+        from: config.from.clone(),
+        to: account.email.clone(),
+        subject: format!("Votre mot de passe {} a été modifié", config.shop_name),
+        body: format!(
+            "Bonjour,\n\nLe mot de passe de votre compte {} vient d'être modifié, et vos autres \
+             appareils ont été déconnectés.\n\nSi vous n'êtes pas à l'origine de ce changement, \
+             contactez-nous sans attendre.\n\nÀ bientôt,\n{}\n",
+            config.shop_name, config.shop_name
+        ),
+    };
+    let now = timada_core::time::now_unix_secs()?.to_string();
+    let message_id = timada_core::id::derived(&[&account.customer_id, &now], "password-changed");
+    timada_mailer::enqueue(&store.db, &message_id, "password-changed", &notice)
+        .await
+        .map_err(anyhow::Error::from)?;
+    tracing::info!(customer_id = %account.customer_id, "shopper changed their password");
+    Ok(())
+}
+
 /// The shopper the request's session belongs to, if any. Memoized per request.
 #[memoize(as_ref)]
 pub async fn current_account(cx: &Cx) -> topcoat::Result<Option<Account>> {

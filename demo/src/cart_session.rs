@@ -34,7 +34,8 @@ pub async fn current_cart(cx: &Cx) -> topcoat::Result<Option<CartDetailsView>> {
     let Some(cart) = load_cart_details(&store.executor, cookie.value_trimmed()).await? else {
         return Ok(None);
     };
-    if cart.status == CartStatus::CheckedOut {
+    // Checked out, parked in the saved carts, or deleted: not being filled.
+    if cart.status != CartStatus::Open {
         return Ok(None);
     }
     // A cart opened by a signed-in shopper stays theirs.
@@ -71,7 +72,15 @@ pub async fn ensure_cart(cx: &Cx) -> topcoat::Result<String> {
     Ok(id)
 }
 
-/// Drops the cookie (after checkout, or when the shopper signs out).
+/// Makes `cart_id` the cart this browser is filling (a saved cart reopened).
+pub fn use_cart(cx: &Cx, cart_id: &str) {
+    jar(cx)
+        .override_max_age(Duration::days(CART_COOKIE_DAYS))
+        .add(Cookie::new(CART_COOKIE, cart_id.to_owned()));
+}
+
+/// Drops the cookie (after checkout, when the cart is saved for later, or
+/// when the shopper signs out).
 pub fn forget_cart(cx: &Cx) {
     jar(cx).remove(Cookie::new(CART_COOKIE, ""));
 }

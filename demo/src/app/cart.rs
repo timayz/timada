@@ -16,13 +16,15 @@ use topcoat::{
 };
 
 use super::{
+    account,
     catalog::{self, ProductId, available_stock},
     checkout, document,
     format::money,
 };
 use crate::{
     Store,
-    cart_session::{current_cart, ensure_cart},
+    auth::{current_account, require_account},
+    cart_session::{current_cart, ensure_cart, forget_cart},
 };
 
 #[page("/cart")]
@@ -189,6 +191,34 @@ pub async fn remove_promo(cx: &Cx) -> Result<impl View> {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SaveForm {
+    name: String,
+}
+
+/// Parks the cart in the shopper's saved carts; the browser starts a new one.
+#[page(POST "/cart/save")]
+pub async fn save(cx: &Cx, Form(form): Form<SaveForm>) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let store = app_context::<Store>(cx);
+    let cart_id = ensure_cart(cx).await?;
+    let carts = timada_cart::Command(&store.executor);
+    let saved = match carts.assign_customer(&cart_id, &account.customer_id).await {
+        Ok(()) => carts.save_cart(&cart_id, form.name).await,
+        Err(err) => Err(err),
+    };
+    let error = match saved {
+        Ok(()) => {
+            forget_cart(cx);
+            return Err(see_other(href!(account::saved_carts).resolve(cx)).into());
+        }
+        Err(CartError::Required(_)) => "Donnez un nom à ce panier.",
+        Err(CartError::EmptyCart) => "Votre panier est vide.",
+        Err(err) => return Err(anyhow::Error::from(err).into()),
+    };
+    Ok(view! { cart_view(error: Some(error.to_owned())) })
+}
+
 /// Why a code cannot be used right now, if it cannot.
 async fn promo_problem(store: &Store, code: &str) -> anyhow::Result<Option<&'static str>> {
     let now = std::time::SystemTime::now()
@@ -283,6 +313,13 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
         Some(cart) => promo_line(app_context::<Store>(cx), cart).await?,
         None => None,
     };
+    let signed_in = match current_account(cx).await {
+        Ok(account) => account.is_some(),
+        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+    };
+    let login_link = href!(account::login)
+        .query([("next", href!(show).resolve(cx))])
+        .resolve(cx);
 
     Ok(view! {
         document(
@@ -324,6 +361,17 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                         </form>
                     }
                     promo_notice(promo: &promo)
+                    if signed_in {
+                        <form method="post" action=(href!(save))>
+                            <label for="cart-name">"Sauvegarder ce panier pour plus tard"</label>
+                            " "
+                            <input id="cart-name" name="name" required=(true) maxlength="80" placeholder="Nom du panier" autocomplete="off">
+                            " "
+                            <button type="submit">"Sauvegarder"</button>
+                        </form>
+                    } else {
+                        <p class="muted"><a href=(login_link.clone())>"Connectez-vous"</a> " pour sauvegarder ce panier."</p>
+                    }
                     <p>
                         <a href=(href!(checkout::show))><strong>"Passer commande"</strong></a>
                         " · "
