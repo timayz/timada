@@ -578,11 +578,38 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
         .await?
         .filter(|o| o.customer_id == account.customer_id)
         .ok_or_not_found()?;
-    Ok(view! { order_view(order: &order) })
+
+    // What went back to the shopper, and the credit notes documenting it.
+    let refunded = timada_payment::load_payment(&store.executor, timada_payment::payment_id(&id))
+        .await?
+        .filter(|p| p.refunded.is_positive())
+        .map(|p| money(&p.refunded));
+    let credit_notes: Vec<CreditNoteLine> =
+        timada_invoice::credit_notes_of_invoice(&store.db, &timada_invoice::invoice_id(&id))
+            .await?
+            .into_iter()
+            .map(|note| CreditNoteLine {
+                number: note.credit_note_number,
+                issued: date(note.issued_at as u64),
+                amount: money(&timada_core::Money::new(note.amount_minor, note.currency)),
+            })
+            .collect();
+    Ok(view! { order_view(order: &order, refunded: refunded, credit_notes: &credit_notes) })
+}
+
+/// One credit note ("avoir") as the order page shows it.
+struct CreditNoteLine {
+    number: String,
+    issued: String,
+    amount: String,
 }
 
 #[component]
-async fn order_view(order: &OrderDetailsView) -> Result<impl View> {
+async fn order_view(
+    order: &OrderDetailsView,
+    refunded: Option<String>,
+    credit_notes: &Vec<CreditNoteLine>,
+) -> Result<impl View> {
     let payment = match order.payment_mode {
         // The code covered the whole total: nothing was charged.
         _ if !order.total.is_positive() => "Aucun paiement requis".to_owned(),
@@ -645,6 +672,30 @@ async fn order_view(order: &OrderDetailsView) -> Result<impl View> {
                 </tbody>
             </table>
             <p>"Paiement : " (payment)</p>
+            if let Some(refunded) = &refunded {
+                <p role="status" class="notice">"Remboursé : " <strong>(refunded.clone())</strong></p>
+            }
+            if !credit_notes.is_empty() {
+                <table>
+                    <caption class="muted">"Avoirs émis pour cette commande"</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">"Avoir"</th>
+                            <th scope="col">"Date"</th>
+                            <th scope="col" class="num">"Montant"</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        for note in credit_notes {
+                            <tr>
+                                <th scope="row">(note.number.clone())</th>
+                                <td>(note.issued.clone())</td>
+                                <td class="num">(note.amount.clone())</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
             <div class="cards">
                 <div class="card"><h2>"Livraison"</h2> address_block(address: &order.delivery_address)</div>
                 <div class="card"><h2>"Facturation"</h2> address_block(address: &order.billing_address)</div>
