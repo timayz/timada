@@ -26,7 +26,7 @@ use evento::{
 use timada_core::Money;
 use timada_inventory::StockLocation;
 use timada_payment::PaymentStatus;
-use timada_shipping::{CreateShipment, DeliveryMethod, ShipmentLine};
+use timada_shipping::{CreateShipment, DeliveryMethod, ShipmentLine, ShippingError};
 
 use crate::{
     aggregator::{
@@ -183,9 +183,33 @@ async fn refund_captured<E: Executor>(
     Ok(())
 }
 
-/// Releases every reservation this saga holds, refunds what was captured,
-/// cancels the order and closes the saga. Every step is idempotent, so a
-/// retry after a crash converges.
+/// Stops the parcel that was waiting for the carrier. One that already left
+/// cannot be called back: that is logged and the rest of the compensation
+/// goes on.
+async fn cancel_pending_shipment<E: Executor>(
+    executor: &E,
+    saga: &FulfillmentState,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let Some(shipment_id) = &saga.shipment_id else {
+        return Ok(());
+    };
+    match timada_shipping::Command(executor)
+        .cancel_shipment(shipment_id, format!("order cancelled: {reason}"))
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(ShippingError::NotCreated) => {
+            tracing::warn!(order_id = %saga.order_id, "order cancelled after its parcel left");
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Releases every reservation this saga holds, stops the pending shipment,
+/// refunds what was captured, cancels the order and closes the saga. Every
+/// step is idempotent, so a retry after a crash converges.
 async fn compensate<E: Executor>(
     executor: &E,
     saga: &FulfillmentState,
@@ -201,6 +225,7 @@ async fn compensate<E: Executor>(
             )
             .await?;
     }
+    cancel_pending_shipment(executor, saga, reason).await?;
     refund_captured(executor, saga, reason).await?;
     Command(executor)
         .cancel_order(&saga.order_id, reason)
