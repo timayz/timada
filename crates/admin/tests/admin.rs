@@ -610,5 +610,26 @@ async fn invoices_are_listed_and_payments_refunded() -> anyhow::Result<()> {
     assert!(refunds.contains("Geste commercial"), "{refunds}");
     assert!(refunds.contains("20,00 €"), "{refunds}");
     assert!(!refunds.contains("Oups"), "{refunds}");
+
+    // The refund's credit note shows in the journal and under the invoice.
+    timada_invoice::credit_notes_from_refunds_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    timada_invoice::credit_note_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let credit_note = format!("A{year}-000001");
+    let refunds = text(h.router.handle(get("/admin/refunds", Some(&cookie))).await).await?;
+    assert!(refunds.contains(&credit_note), "{refunds}");
+    let detail = h
+        .router
+        .handle(get(&format!("/admin/invoices/{invoice_id}"), Some(&cookie)))
+        .await;
+    let detail = text(detail).await?;
+    assert!(detail.contains(&credit_note), "{detail}");
+    assert!(detail.contains("Net après avoirs"), "{detail}");
+    assert!(detail.contains("123,90 €"), "{detail}");
     Ok(())
 }

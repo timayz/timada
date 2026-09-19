@@ -1,7 +1,9 @@
 //! `/{mount}/invoices/{invoice_id}`: one invoice as it will be printed —
-//! lines, fees, reduction and total. Read-only: orders drive its lifecycle.
+//! lines, fees, reduction and total — and the credit notes issued against
+//! it. Read-only: orders drive its lifecycle, refunds its credit notes.
 
-use timada_invoice::load_invoice;
+use timada_core::Money;
+use timada_invoice::{credit_notes_of_invoice, load_invoice};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -17,7 +19,7 @@ use crate::{
     },
     components::card::{card, card_content, card_header, card_title},
     config::AdminServices,
-    ui::{money, page_header},
+    ui::{date, money, page_header},
 };
 
 path_param!(pub invoice_id: String, error = not_found);
@@ -40,6 +42,19 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         customer_id::CustomerId(invoice.customer_id.clone())
     )
     .resolve(cx);
+    let mut credited = Money::zero(&invoice.total.currency);
+    let mut credit_notes = Vec::new();
+    for note in credit_notes_of_invoice(&services.db, &id).await? {
+        let amount = Money::new(note.amount_minor, &note.currency);
+        credited = credited.checked_add(&amount)?;
+        credit_notes.push((
+            note.credit_note_number,
+            date(note.issued_at as u64),
+            note.reason,
+            money(&amount),
+        ));
+    }
+    let net = money(&invoice.total.checked_sub(&credited)?);
     let mut lines = Vec::with_capacity(invoice.lines.len());
     for line in &invoice.lines {
         lines.push((
@@ -58,7 +73,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         <p class="-mt-4 mb-6 font-mono text-xs text-muted-foreground">(id.clone())</p>
 
         <div class="grid gap-6 lg:grid-cols-3">
-            <div class="lg:col-span-2">
+            <div class="flex flex-col gap-6 lg:col-span-2">
                 card(
                     card_header(card_title("Lignes"))
                     card_content(
@@ -93,6 +108,36 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         </table>
                     )
                 )
+                if !credit_notes.is_empty() {
+                    card(
+                        card_header(card_title("Avoirs"))
+                        card_content(
+                            <table class="w-full text-sm">
+                                <thead>
+                                    <tr class="border-b border-border text-left text-muted-foreground">
+                                        <th scope="col" class="py-2 font-normal">"Numéro"</th>
+                                        <th scope="col" class="py-2 font-normal">"Date"</th>
+                                        <th scope="col" class="py-2 font-normal">"Motif"</th>
+                                        <th scope="col" class="py-2 text-right font-normal">"Montant"</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    for (number, issued, reason, amount) in &credit_notes {
+                                        <tr class="border-b border-border">
+                                            <td class="py-2 font-mono text-xs">(number.clone())</td>
+                                            <td class="py-2">(issued.clone())</td>
+                                            <td class="py-2">(reason.clone())</td>
+                                            <td class="py-2 text-right tabular-nums">"− " (amount.clone())</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                                <tfoot>
+                                    <tr class="font-semibold"><td colspan="3" class="pt-2">"Net après avoirs"</td><td class="pt-2 text-right tabular-nums">(net.clone())</td></tr>
+                                </tfoot>
+                            </table>
+                        )
+                    )
+                }
             </div>
 
             <div class="flex flex-col gap-6">

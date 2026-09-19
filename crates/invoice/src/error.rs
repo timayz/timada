@@ -8,6 +8,12 @@ pub enum InvoiceError {
     InvalidDiscount,
     #[error("invoice is voided")]
     InvoiceVoided,
+    #[error("invoice has not been issued")]
+    InvoiceNotIssued,
+    #[error("credit amount must be positive")]
+    InvalidCreditAmount,
+    #[error("credit notes would exceed the invoice total")]
+    CreditExceedsInvoice,
     #[error("`{0}` is required")]
     Required(&'static str),
     #[error(transparent)]

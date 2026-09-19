@@ -2664,6 +2664,7 @@ dependencies = [
  "thiserror",
  "timada-core",
  "timada-order",
+ "timada-payment",
  "tokio",
  "tracing",
 ]

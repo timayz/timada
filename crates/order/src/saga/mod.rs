@@ -7,10 +7,12 @@
 //! the saga, check its status and rely on the upstream commands' own
 //! idempotency (deterministic ids, status guards) — so a redelivery after a
 //! partial failure converges. An order whose code covered the whole total
-//! skips the payment leg: it is settled and goes straight to shipping. The
-//! subscription is deliberately not strict:
+//! skips the payment leg: it is settled and goes straight to shipping. An
+//! order cancelled from outside (an operator, the customer) is compensated
+//! the same way as a failed one, captured money included. The subscription is deliberately not strict:
 //! it listens to a subset of four aggregates' events.
 
+mod on_order_cancelled;
 mod on_order_placed;
 mod on_payment_captured;
 mod on_payment_declined;
@@ -23,6 +25,7 @@ use evento::{
 };
 use timada_core::Money;
 use timada_inventory::StockLocation;
+use timada_payment::PaymentStatus;
 use timada_shipping::{CreateShipment, DeliveryMethod, ShipmentLine};
 
 use crate::{
@@ -45,6 +48,7 @@ pub fn fulfillment_id(order_id: &str) -> String {
 pub fn order_fulfillment_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ORDER_FULFILLMENT_SUBSCRIPTION)
         .handler(on_order_placed::start_fulfillment())
+        .handler(on_order_cancelled::compensate_cancelled_order())
         .handler(on_stock_reserved::record_line_reserved())
         .handler(on_stock_reservation_rejected::compensate_out_of_stock())
         .handler(on_payment_captured::request_shipment())
@@ -152,8 +156,36 @@ async fn create_shipment<E: Executor>(
     Ok(shipment_id)
 }
 
-/// Releases every reservation this saga holds, cancels the order and closes
-/// the saga. Every step is idempotent, so a retry after a crash converges.
+/// Gives back whatever was captured for the order and not refunded yet. The
+/// amount is what is left at that moment, so a retry refunds nothing twice.
+async fn refund_captured<E: Executor>(
+    executor: &E,
+    saga: &FulfillmentState,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let Some(payment_id) = &saga.payment_id else {
+        return Ok(());
+    };
+    let Some(payment) = timada_payment::load_payment(executor, payment_id).await? else {
+        return Ok(());
+    };
+    if payment.status != PaymentStatus::Captured {
+        return Ok(());
+    }
+    let left = payment.amount.checked_sub(&payment.refunded)?;
+    if !left.is_positive() {
+        return Ok(());
+    }
+    timada_payment::Command(executor)
+        .refund_payment(payment_id, left, format!("order cancelled: {reason}"))
+        .await?;
+    tracing::info!(order_id = %saga.order_id, "captured payment refunded");
+    Ok(())
+}
+
+/// Releases every reservation this saga holds, refunds what was captured,
+/// cancels the order and closes the saga. Every step is idempotent, so a
+/// retry after a crash converges.
 async fn compensate<E: Executor>(
     executor: &E,
     saga: &FulfillmentState,
@@ -169,6 +201,7 @@ async fn compensate<E: Executor>(
             )
             .await?;
     }
+    refund_captured(executor, saga, reason).await?;
     Command(executor)
         .cancel_order(&saga.order_id, reason)
         .await?;

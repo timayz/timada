@@ -24,3 +24,20 @@ pub enum Invoice {
     /// The order will not be fulfilled.
     InvoiceVoided { reason: String },
 }
+
+/// A credit note ("avoir"): the legal counterpart of a refund. An issued
+/// invoice is never edited — what goes back to the customer is credited
+/// against it, under its own number.
+#[evento::aggregate(name = "timada-invoice/CreditNote")]
+pub enum CreditNote {
+    CreditNoteIssued {
+        credit_note_number: String,
+        /// The refund this note documents (the payment context's event id).
+        refund_id: String,
+        invoice_id: String,
+        invoice_number: String,
+        order_id: String,
+        amount: Money,
+        reason: String,
+    },
+}

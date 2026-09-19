@@ -46,14 +46,18 @@ subscriptions: `timada_order::order_history_subscription`,
 `timada_inventory::stock_list_subscription`,
 `timada_customer::customer_list_subscription`,
 `timada_promotion::code_list_subscription`,
-`timada_invoice::invoice_list_subscription` and
+`timada_invoice::invoice_list_subscription`,
+`timada_invoice::credit_note_list_subscription` and
 `timada_payment::refund_list_subscription`, each with `.data(pool)` — and
 their migrations (`timada_payment::migrations()` is new with the refunds
 section).
 
 Refunds are issued from an order's page once its payment is captured, in one
-or several goes up to the captured amount; the refunds section is their
-journal. Invoices are read-only: orders drive their lifecycle.
+or several goes up to the captured amount — and by the fulfillment saga when a
+paid order is cancelled; the refunds section is their journal. Invoices are
+read-only: orders drive their lifecycle, and every refund is documented by a
+credit note shown under its invoice, provided the host runs
+`timada_invoice::credit_notes_from_refunds_subscription`.
 
 ## Assets and styling
 

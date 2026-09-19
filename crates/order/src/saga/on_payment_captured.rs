@@ -7,7 +7,7 @@ use crate::{
     value_object::FulfillmentStatus,
 };
 
-use super::{create_shipment, load_fulfillment};
+use super::{create_shipment, load_fulfillment, refund_captured};
 
 /// `PaymentCaptured` → mark the order paid and hand it to shipping. Shipment
 /// creation is idempotent (id derived from the order) and `mark_paid` accepts
@@ -27,9 +27,15 @@ pub(super) async fn request_shipment<E: Executor>(
     let Some(saga) = load_fulfillment(ctx.executor, &payment.order_id).await? else {
         return Ok(());
     };
-    if saga.status != FulfillmentStatus::AwaitingPayment
-        || saga.payment_id.as_deref() != Some(&payment.id)
-    {
+    if saga.payment_id.as_deref() != Some(&payment.id) {
+        return Ok(());
+    }
+    // The order was cancelled while the payment was pending: the money that
+    // just came in goes straight back.
+    if saga.status == FulfillmentStatus::Compensated {
+        return refund_captured(ctx.executor, &saga, "payment captured after cancellation").await;
+    }
+    if saga.status != FulfillmentStatus::AwaitingPayment {
         return Ok(());
     }
 

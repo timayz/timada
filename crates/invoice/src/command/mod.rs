@@ -1,21 +1,29 @@
 mod draft_invoice;
+mod issue_credit_note;
 mod issue_invoice;
 mod void_invoice;
 
 pub use draft_invoice::DraftInvoice;
+pub use issue_credit_note::IssueCreditNote;
 
 use evento::{Executor, Projection, metadata::Event};
 use sqlx::SqlitePool;
+use timada_core::Money;
 
 use crate::{
     aggregator::{Invoice, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceVoided},
     error::InvoiceError,
-    value_object::InvoiceStatus,
+    value_object::{InvoiceStatus, invoice_total},
 };
 
 /// Deterministic invoice id: one invoice per order.
 pub fn invoice_id(order_id: &str) -> String {
     timada_core::id::derived(&[order_id], "invoice")
+}
+
+/// Deterministic credit note id: one credit note per refund.
+pub fn credit_note_id(refund_id: &str) -> String {
+    timada_core::id::derived(&[refund_id], "credit-note")
 }
 
 /// Invoice numbers are a contended, gapless-per-order counter, so they live
@@ -43,12 +51,14 @@ pub struct InvoiceState {
     pub order_id: String,
     pub status: InvoiceStatus,
     pub invoice_number: Option<String>,
+    /// Net of the discount: the most credit notes may give back.
+    pub total: Money,
 }
 
 fn create_projection<E: Executor>() -> Projection<E, InvoiceState> {
     Projection::new::<Invoice>()
         .handler(on_invoice_drafted())
-        .skip::<InvoiceDiscountApplied>()
+        .handler(on_invoice_discount_applied())
         .handler(on_invoice_issued())
         .handler(on_invoice_voided())
         .strict()
@@ -62,6 +72,20 @@ async fn on_invoice_drafted(
     row.id = event.aggregate_id.to_owned();
     row.order_id = event.data.order_id;
     row.status = InvoiceStatus::Draft;
+    (_, row.total) = invoice_total(
+        &event.data.lines,
+        &event.data.shipping_fee,
+        &event.data.handling_fee,
+    )?;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoice_discount_applied(
+    event: Event<InvoiceDiscountApplied>,
+    row: &mut InvoiceState,
+) -> anyhow::Result<()> {
+    row.total = row.total.checked_sub(&event.data.amount)?;
     Ok(())
 }
 

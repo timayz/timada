@@ -388,3 +388,63 @@ async fn promo_code_lowers_the_order_total() -> anyhow::Result<()> {
     assert_eq!(invoice.total, timada_core::Money::eur(11_385));
     Ok(())
 }
+
+#[tokio::test]
+async fn cancelling_a_paid_order_refunds_it_with_a_credit_note() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+    let checkout = text(browser.get("/checkout").await).await?;
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address radio"))?
+        .to_owned();
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    db::run_subscriptions_once(&store).await?;
+
+    // Paid, invoiced, then cancelled by an operator.
+    let payment_id = timada_payment::payment_id(&order_id);
+    timada_payment::Command(&store.executor)
+        .capture_payment(&payment_id, "psp-1".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    timada_order::Command(&store.executor)
+        .cancel_order(&order_id, "rupture fournisseur")
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+
+    let payment = timada_payment::load_payment(&store.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.status, timada_payment::PaymentStatus::Refunded);
+
+    // The invoice stays issued; one credit note gives the whole total back.
+    let invoice_id = timada_invoice::invoice_id(&order_id);
+    let invoice = timada_invoice::load_invoice(&store.executor, &invoice_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invoice missing"))?;
+    assert_eq!(invoice.status, timada_invoice::InvoiceStatus::Issued);
+    let notes = timada_invoice::credit_notes_of_invoice(&store.db, &invoice_id).await?;
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].amount_minor, invoice.total.minor);
+    assert!(notes[0].reason.contains("rupture fournisseur"));
+    Ok(())
+}

@@ -2,8 +2,8 @@
 //! requested/captured → shipment created/dispatched → order shipped, plus
 //! the two compensation branches (out of stock, payment declined) and the
 //! cart's promo code: redeemed before the order is placed, given back when
-//! the order is cancelled — and the payment-less path of an order the code
-//! paid for entirely.
+//! the order is cancelled — the payment-less path of an order the code paid
+//! for entirely, and the refund of an order cancelled after it was paid.
 
 use evento::Executor;
 use timada_cart::{AddLine, Checkout};
@@ -563,5 +563,88 @@ async fn order_covered_by_a_voucher_skips_the_payment() -> anyhow::Result<()> {
     let rows = list_orders(&db, &shipped).await?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].total_minor, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_a_paid_order_refunds_what_is_left_and_frees_the_stock() -> anyhow::Result<()> {
+    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cart_id = checkout_cart(&executor, 5, 2, timada_cart::PaymentMode::Card).await?;
+    let order_id = order_id(&cart_id);
+    drain(&executor).await?;
+    let payments = timada_payment::Command(&executor);
+    payments
+        .capture_payment(payment_id(&order_id), "psp-123".into())
+        .await?;
+    drain(&executor).await?;
+
+    // A goodwill gesture first, then the operator cancels the order.
+    payments
+        .refund_payment(payment_id(&order_id), Money::eur(1_000), "goodwill".into())
+        .await?;
+    timada_order::Command(&executor)
+        .cancel_order(&order_id, "customer changed mind")
+        .await?;
+    drain(&executor).await?;
+
+    let payment = timada_payment::load_payment(&executor, payment_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.status, timada_payment::PaymentStatus::Refunded);
+    assert_eq!(payment.refunded, payment.amount);
+    let stock = timada_inventory::load_stock_availability(
+        &executor,
+        stock_item_id(PRODUCT, &StockLocation::Warehouse),
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("stock item missing"))?;
+    assert_eq!((stock.reserved, stock.available), (0, 5));
+    let saga = load_fulfillment(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("saga missing"))?;
+    assert_eq!(saga.status, FulfillmentStatus::Compensated);
+
+    // Redelivery refunds nothing more.
+    drain(&executor).await?;
+    let again = timada_payment::load_payment(&executor, payment_id(&order_id)).await?;
+    assert_eq!(again.as_ref(), Some(&payment));
+    Ok(())
+}
+
+#[tokio::test]
+async fn payment_captured_after_a_cancellation_is_refunded() -> anyhow::Result<()> {
+    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cart_id = checkout_cart(&executor, 5, 1, timada_cart::PaymentMode::Card).await?;
+    let order_id = order_id(&cart_id);
+    drain(&executor).await?;
+
+    // Cancelled while the payment is pending: nothing to refund yet.
+    timada_order::Command(&executor)
+        .cancel_order(&order_id, "customer changed mind")
+        .await?;
+    drain(&executor).await?;
+    let saga = load_fulfillment(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("saga missing"))?;
+    assert_eq!(saga.status, FulfillmentStatus::Compensated);
+
+    // The PSP confirms the capture anyway: the money goes straight back.
+    timada_payment::Command(&executor)
+        .capture_payment(payment_id(&order_id), "psp-late".into())
+        .await?;
+    drain(&executor).await?;
+    let payment = timada_payment::load_payment(&executor, payment_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.status, timada_payment::PaymentStatus::Refunded);
+    let order = load_order_details(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order missing"))?;
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert!(
+        timada_shipping::load_shipment(&executor, shipment_id(&order_id))
+            .await?
+            .is_none()
+    );
     Ok(())
 }
