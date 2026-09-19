@@ -48,8 +48,9 @@ async fn insert_on_alert_requested<E: Executor>(
     event: Event<BackInStockAlertRequested>,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT OR IGNORE INTO inventory_back_in_stock_alert (alert_id, product_id)
-         VALUES (?, ?)",
+        "INSERT INTO inventory_back_in_stock_alert (alert_id, product_id)
+         VALUES (?, ?)
+         ON CONFLICT (alert_id) DO UPDATE SET triggered = 0",
     )
     .bind(&event.aggregate_id)
     .bind(&event.data.product_id)
