@@ -178,6 +178,7 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
             promo_code: None,
             discount: None,
             order_number: Some("C2026-000042".into()),
+            tax: None,
         })
         .await?;
     sync().await?;

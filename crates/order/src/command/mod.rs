@@ -7,14 +7,14 @@ mod settle_order;
 
 use std::ops::Deref;
 
-pub use place_order::PlaceOrder;
+pub use place_order::{OrderTax, PlaceOrder};
 
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::{
     aggregator::{
         Order, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderNumberAssigned,
-        OrderPaid, OrderPlaced, OrderSettled, OrderShipped,
+        OrderPaid, OrderPlaced, OrderSettled, OrderShipped, OrderTaxed,
     },
     error::OrderError,
     value_object::OrderStatus,
@@ -80,6 +80,7 @@ fn create_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_order_shipped())
         .handler(on_order_cancelled())
         .skip::<OrderNumberAssigned>()
+        .skip::<OrderTaxed>()
         .skip::<OrderDiscountApplied>()
         .skip::<OrderConfirmationResent>()
         .strict()

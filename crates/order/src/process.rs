@@ -12,11 +12,13 @@ use evento::{
 use sqlx::SqlitePool;
 use timada_cart::aggregator::CartCheckedOut;
 use timada_core::Money;
+use timada_pricing::price_id;
 use timada_promotion::{CodeKind, PromotionError};
+use timada_tax::TaxZones;
 
 use crate::{
     aggregator::OrderCancelled,
-    command::{Command, PlaceOrder, order_id},
+    command::{Command, OrderTax, PlaceOrder, order_id},
     error::OrderError,
     numbering::allocate_order_number,
     query::load_order_details,
@@ -33,7 +35,9 @@ pub const ORDER_PROMO_RELEASE_SUBSCRIPTION: &str = "order-promo-release";
 pub const INSTALLMENT_HANDLING_FEE_MINOR: i64 = 449;
 
 /// Needs the `SqlitePool` as subscription data: order numbers are allocated
-/// and promo-code redemption caps counted in SQL.
+/// and promo-code redemption caps counted in SQL. Takes the host's
+/// `timada_tax::TaxZones` the same way; without one it uses
+/// `TaxZones::default()` (metropolitan France, overseas as exports).
 pub fn order_checkout_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ORDER_CHECKOUT_SUBSCRIPTION).handler(place_order_on_cart_checked_out())
 }
@@ -66,11 +70,22 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         anyhow::bail!("cart {cart_id} checked out but its details cannot be loaded");
     };
 
+    // Where the order goes decides how it is taxed. The storefront only lets
+    // deliverable countries through; should one slip by, the order is kept
+    // and taxed as a domestic one rather than lost.
+    let zones = ctx.get::<TaxZones>().unwrap_or_default();
+    let country = &event.data.delivery_address.country_code;
+    let zone = zones.zone_of(country).unwrap_or_else(|| {
+        tracing::warn!(%cart_id, %country, "delivery country outside every tax zone");
+        zones.default_zone()
+    });
+
     let currency = cart.subtotal.currency.clone();
-    let shipping_fee =
+    let listed_fee =
         timada_shipping::shipping_fee(&event.data.delivery.method_code).ok_or_else(|| {
             OrderError::UnknownDeliveryMethod(event.data.delivery.method_code.clone())
         })?;
+    let shipping_fee = zone.charged(&listed_fee, zones.fee_vat_rate_bp);
     let handling_fee = match event.data.payment_mode {
         timada_cart::PaymentMode::Card => Money::zero(&currency),
         timada_cart::PaymentMode::Installments { .. } => {
@@ -78,7 +93,28 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         }
     };
 
-    let lines: Vec<OrderLine> = cart.lines.into_iter().map(order_line).collect();
+    // Cart lines hold the listed, tax-inclusive price of the day they were
+    // added; the order's lines hold what is charged in the zone.
+    let mut lines = Vec::with_capacity(cart.lines.len());
+    let mut line_rates = Vec::with_capacity(cart.lines.len());
+    for line in cart.lines {
+        let listed_rate =
+            timada_pricing::load_product_price(ctx.executor, price_id(&line.product_id))
+                .await?
+                .map_or(zones.fallback_vat_rate_bp, |price| price.vat_rate_bp);
+        line_rates.push((line.product_id.clone(), zone.applied_rate_bp(listed_rate)));
+        let unit_price = zone.charged(&line.unit_price, listed_rate);
+        lines.push(OrderLine {
+            unit_price,
+            ..order_line(line)
+        });
+    }
+    let tax = OrderTax {
+        zone_code: zone.code.clone(),
+        treatment: zone.treatment,
+        line_rates,
+        shipping_rate_bp: zone.applied_rate_bp(zones.fee_vat_rate_bp),
+    };
     let totals = order_total(&lines, &shipping_fee, &handling_fee)?;
     let discount = match cart.promo_code.as_deref() {
         Some(code) => redeem_code(ctx, code, &order_id(&cart_id), &totals).await?,
@@ -111,6 +147,7 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         promo_code: cart.promo_code,
         discount,
         order_number: Some(order_number),
+        tax: Some(tax),
     };
 
     match Command(ctx.executor).place_order(cmd).await {

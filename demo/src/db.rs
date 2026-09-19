@@ -54,6 +54,12 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     all
 }
 
+/// Where the shop delivers and how each destination is taxed: metropolitan
+/// France as listed, the overseas territories without French VAT.
+pub fn tax_zones() -> timada_tax::TaxZones {
+    timada_tax::TaxZones::france_with_overseas()
+}
+
 /// Where shoppers send their returns: on the return slip and in the e-mail.
 pub const RETURNS_ADDRESS: &str =
     "Timada demo — Service retours\n1 rue de l'Entrepôt\n31000 Toulouse\nFrance";
@@ -118,6 +124,7 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .await?,
         timada_order::order_checkout_subscription()
             .data(db.clone())
+            .data(tax_zones())
             .start(executor)
             .await?,
         timada_order::order_fulfillment_subscription()
@@ -217,6 +224,7 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .await?;
         timada_order::order_checkout_subscription()
             .data(db.clone())
+            .data(tax_zones())
             .run_once(executor)
             .await?;
         timada_order::order_fulfillment_subscription()

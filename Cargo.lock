@@ -655,6 +655,7 @@ dependencies = [
  "timada-returns",
  "timada-review",
  "timada-shipping",
+ "timada-tax",
  "tokio",
  "topcoat",
  "tracing",
@@ -2691,6 +2692,7 @@ dependencies = [
  "timada-core",
  "timada-order",
  "timada-payment",
+ "timada-tax",
  "tokio",
  "tracing",
 ]
@@ -2731,8 +2733,10 @@ dependencies = [
  "timada-core",
  "timada-inventory",
  "timada-payment",
+ "timada-pricing",
  "timada-promotion",
  "timada-shipping",
+ "timada-tax",
  "tokio",
  "tracing",
 ]
@@ -2825,6 +2829,15 @@ dependencies = [
  "timada-core",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "timada-tax"
+version = "0.1.0"
+dependencies = [
+ "bitcode",
+ "thiserror",
+ "timada-core",
 ]
 
 [[package]]

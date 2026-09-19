@@ -43,6 +43,7 @@ fn place_order(cart_id: &str) -> PlaceOrder {
         promo_code: None,
         discount: None,
         order_number: None,
+        tax: None,
     }
 }
 
@@ -343,6 +344,64 @@ async fn refunds_are_documented_by_credit_notes() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn an_invoice_carries_the_vat_of_its_order() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let orders = timada_order::Command(&executor);
+    let taxed = |zone: &str, treatment, rate_bp| timada_order::OrderTax {
+        zone_code: zone.into(),
+        treatment,
+        line_rates: vec![("aoc-24g4xe".into(), rate_bp)],
+        shipping_rate_bp: rate_bp,
+    };
+
+    // Domestic: 2 × 124,96 + 23,95 + 4,49 of instalment fee (no VAT on it).
+    let domestic = orders
+        .place_order(PlaceOrder {
+            tax: Some(taxed("fr", timada_tax::TaxTreatment::Domestic, 2_000)),
+            ..place_order("cart-fr")
+        })
+        .await?;
+    // Export: the same order, charged without VAT.
+    let export = orders
+        .place_order(PlaceOrder {
+            tax: Some(taxed("fr-overseas", timada_tax::TaxTreatment::Export, 0)),
+            ..place_order("cart-mq")
+        })
+        .await?;
+    sync_invoices(&executor, db.clone()).await?;
+
+    let invoice = load_invoice(&executor, invoice_id(&domestic))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invoice not drafted"))?;
+    let tax = invoice
+        .tax
+        .ok_or_else(|| anyhow::anyhow!("invoice without VAT summary"))?;
+    assert_eq!(tax.exemption_mention(), None);
+    let rates: Vec<(u16, i64, i64)> = tax
+        .vat_lines
+        .iter()
+        .map(|l| (l.rate_bp, l.base.minor, l.vat.minor))
+        .collect();
+    // 273,87 TTC at 20 % → 228,23 HT + 45,64 of VAT; the fee apart at 0 %.
+    assert_eq!(rates, [(2_000, 22_823, 4_564), (0, 449, 0)]);
+    let charged: i64 = tax.vat_lines.iter().map(|l| l.total.minor).sum();
+    assert_eq!(charged, invoice.total.minor);
+
+    let invoice = load_invoice(&executor, invoice_id(&export))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invoice not drafted"))?;
+    let tax = invoice
+        .tax
+        .ok_or_else(|| anyhow::anyhow!("invoice without VAT summary"))?;
+    assert!(
+        tax.exemption_mention()
+            .is_some_and(|mention| mention.contains("262"))
+    );
+    assert!(tax.vat_lines.iter().all(|l| l.vat.minor == 0));
+    Ok(())
+}
+
+#[tokio::test]
 async fn drafting_twice_returns_the_same_invoice() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let cmd = Command {
@@ -362,6 +421,7 @@ async fn drafting_twice_returns_the_same_invoice() -> anyhow::Result<()> {
         shipping_fee: Money::eur(0),
         handling_fee: Money::eur(0),
         discount: None,
+        tax: None,
     };
     let first = cmd.draft_invoice(draft.clone()).await?;
     let second = cmd.draft_invoice(draft.clone()).await?;

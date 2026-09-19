@@ -11,7 +11,9 @@ use sqlx::SqlitePool;
 use timada_core::Money;
 
 use crate::{
-    aggregator::{Invoice, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceVoided},
+    aggregator::{
+        Invoice, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceTaxed, InvoiceVoided,
+    },
     error::InvoiceError,
     value_object::{InvoiceStatus, invoice_total},
 };
@@ -59,6 +61,7 @@ fn create_projection<E: Executor>() -> Projection<E, InvoiceState> {
     Projection::new::<Invoice>()
         .handler(on_invoice_drafted())
         .handler(on_invoice_discount_applied())
+        .skip::<InvoiceTaxed>()
         .handler(on_invoice_issued())
         .handler(on_invoice_voided())
         .strict()

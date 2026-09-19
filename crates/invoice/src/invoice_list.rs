@@ -10,7 +10,9 @@ use evento::{
 use sqlx::SqlitePool;
 
 use crate::{
-    aggregator::{InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceVoided},
+    aggregator::{
+        InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceTaxed, InvoiceVoided,
+    },
     query::load_invoice,
     value_object::InvoiceStatus,
 };
@@ -61,6 +63,7 @@ pub fn invoice_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         // Committed together with `InvoiceDrafted`, which already writes the
         // total net of it.
         .skip::<InvoiceDiscountApplied>()
+        .skip::<InvoiceTaxed>()
         .strict()
 }
 

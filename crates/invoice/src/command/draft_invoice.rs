@@ -2,9 +2,9 @@ use evento::Executor;
 use timada_core::{Address, Money};
 
 use crate::{
-    aggregator::{InvoiceDiscountApplied, InvoiceDrafted},
+    aggregator::{InvoiceDiscountApplied, InvoiceDrafted, InvoiceTaxed},
     error::InvoiceError,
-    value_object::{InvoiceDiscount, InvoiceLine, invoice_total},
+    value_object::{InvoiceDiscount, InvoiceLine, InvoiceTax, invoice_total},
 };
 
 use super::invoice_id;
@@ -18,6 +18,8 @@ pub struct DraftInvoice {
     pub shipping_fee: Money,
     pub handling_fee: Money,
     pub discount: Option<InvoiceDiscount>,
+    /// The order's VAT summary, as its `OrderTaxed` recorded it.
+    pub tax: Option<InvoiceTax>,
 }
 
 #[evento::command]
@@ -54,6 +56,13 @@ impl<E: Executor> super::Command<'_, E> {
             shipping_fee: cmd.shipping_fee,
             handling_fee: cmd.handling_fee,
         });
+        if let Some(tax) = cmd.tax {
+            write.event(&InvoiceTaxed {
+                zone_code: tax.zone_code,
+                treatment: tax.treatment,
+                vat_lines: tax.vat_lines,
+            });
+        }
         if let Some(discount) = cmd.discount {
             write.event(&InvoiceDiscountApplied {
                 label: discount.label,

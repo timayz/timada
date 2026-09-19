@@ -99,6 +99,7 @@ impl Shop {
                 promo_code: discount.as_ref().map(|d| d.code.clone()),
                 discount,
                 order_number: None,
+                tax: None,
             })
             .await?;
         let payments = timada_payment::Command(&self.executor);

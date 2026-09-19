@@ -19,7 +19,7 @@ use crate::{
     command::{Command, DraftInvoice, IssueCreditNote, invoice_id},
     error::InvoiceError,
     query::load_invoice,
-    value_object::{InvoiceDiscount, InvoiceLine, InvoiceStatus},
+    value_object::{InvoiceDiscount, InvoiceLine, InvoiceStatus, InvoiceTax},
 };
 
 pub const INVOICE_FROM_ORDERS_SUBSCRIPTION: &str = "invoice-from-orders";
@@ -87,6 +87,11 @@ async fn draft_on_order_placed<E: Executor>(
             shipping_fee: event.data.shipping_fee,
             handling_fee: event.data.handling_fee,
             discount,
+            tax: order.tax.map(|tax| InvoiceTax {
+                zone_code: tax.zone_code,
+                treatment: tax.treatment,
+                vat_lines: tax.vat_lines,
+            }),
         })
         .await?;
     Ok(())

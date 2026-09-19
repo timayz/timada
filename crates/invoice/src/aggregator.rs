@@ -1,5 +1,7 @@
 use timada_core::{Address, Money};
 
+use timada_tax::{TaxTreatment, VatLine};
+
 use crate::value_object::InvoiceLine;
 
 #[evento::aggregate(name = "timada-invoice/Invoice")]
@@ -17,6 +19,15 @@ pub enum Invoice {
     /// The order's promo code or voucher: `amount` comes off the total.
     /// Committed together with `InvoiceDrafted`, never on its own.
     InvoiceDiscountApplied { label: String, amount: Money },
+
+    /// How the invoiced amounts are taxed: the zone, and the VAT per rate that
+    /// an invoice must show. Committed together with `InvoiceDrafted`, never on
+    /// its own; invoices of orders older than tax zones have none.
+    InvoiceTaxed {
+        zone_code: String,
+        treatment: TaxTreatment,
+        vat_lines: Vec<VatLine>,
+    },
 
     /// The order was paid: the invoice got its legal number.
     InvoiceIssued { invoice_number: String },
