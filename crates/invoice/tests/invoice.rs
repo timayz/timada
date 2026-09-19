@@ -43,6 +43,7 @@ fn place_order(cart_id: &str) -> PlaceOrder {
         promo_code: None,
         discount: None,
         order_number: None,
+        tax: None,
     }
 }
 

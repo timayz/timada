@@ -3,11 +3,12 @@
 
 use evento::{Executor, metadata::Event, projection::Projection};
 use timada_core::{Address, Money};
+use timada_tax::{TaxTreatment, VatLine};
 
 use crate::{
     aggregator::{
         Order, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderNumberAssigned,
-        OrderPaid, OrderPlaced, OrderSettled, OrderShipped,
+        OrderPaid, OrderPlaced, OrderSettled, OrderShipped, OrderTaxed,
     },
     value_object::{
         DeliveryChoice, OrderDiscount, OrderLine, OrderStatus, PaymentMode, Seller, order_total,
@@ -36,6 +37,8 @@ pub struct OrderDetailsView {
     pub subtotal: Money,
     /// The honoured code and what it takes off; `total` is already net of it.
     pub discount: Option<OrderDiscount>,
+    /// How the order was taxed; `None` for orders older than tax zones.
+    pub tax: Option<OrderTaxSummary>,
     pub total: Money,
     /// The code typed in the cart, honoured or not.
     pub promo_code: Option<String>,
@@ -59,9 +62,10 @@ pub fn create_projection<E: Executor>() -> Projection<E, OrderDetailsView> {
         .handler(on_order_cancelled())
         .handler(on_order_confirmation_resent())
         .handler(on_order_number_assigned())
-        // The view gained `order_number`: snapshots taken with the previous
-        // shape must not be decoded.
-        .revision(1)
+        .handler(on_order_taxed())
+        // The view gained `order_number`, then `tax`: snapshots taken with a
+        // previous shape must not be decoded.
+        .revision(2)
         .strict()
 }
 
@@ -98,6 +102,42 @@ async fn on_order_placed(
     row.subtotal = totals.subtotal;
     row.total = totals.total;
     row.promo_code = event.data.promo_code;
+    Ok(())
+}
+
+/// The zone an order was taxed in and the VAT inside what was charged.
+#[derive(Debug, Clone, PartialEq, Eq, Default, bitcode::Encode, bitcode::Decode)]
+pub struct OrderTaxSummary {
+    pub zone_code: String,
+    pub treatment: TaxTreatment,
+    pub vat_lines: Vec<VatLine>,
+}
+
+impl OrderTaxSummary {
+    /// The VAT of all rates together.
+    pub fn vat_total(&self) -> Result<Money, timada_core::MoneyError> {
+        let currency = self
+            .vat_lines
+            .first()
+            .map_or_else(|| Money::EUR.to_owned(), |l| l.vat.currency.clone());
+        let mut total = Money::zero(currency);
+        for line in &self.vat_lines {
+            total = total.checked_add(&line.vat)?;
+        }
+        Ok(total)
+    }
+}
+
+#[evento::handler]
+async fn on_order_taxed(
+    event: Event<OrderTaxed>,
+    row: &mut OrderDetailsView,
+) -> anyhow::Result<()> {
+    row.tax = Some(OrderTaxSummary {
+        zone_code: event.data.zone_code,
+        treatment: event.data.treatment,
+        vat_lines: event.data.vat_lines,
+    });
     Ok(())
 }
 

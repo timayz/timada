@@ -1,4 +1,5 @@
 use timada_core::{Address, Money};
+use timada_tax::{TaxTreatment, VatLine};
 
 use crate::value_object::{
     DeliveryChoice, FulfillmentLine, OrderLine, PaymentMode, PromoKind, Seller,
@@ -24,6 +25,16 @@ pub enum Order {
     /// The human-readable number shown to the customer ("C2026-000042").
     /// Committed together with `OrderPlaced`, never on its own.
     OrderNumberAssigned { order_number: String },
+
+    /// How the order was taxed: the zone its delivery address falls in, and
+    /// the VAT inside what is charged, per rate. Committed together with
+    /// `OrderPlaced`, whose lines and fees already are the amounts charged in
+    /// that zone. Orders placed before tax zones existed have none.
+    OrderTaxed {
+        zone_code: String,
+        treatment: TaxTreatment,
+        vat_lines: Vec<VatLine>,
+    },
 
     /// The cart's code was honoured: `amount` comes off the total. Committed
     /// together with `OrderPlaced`, never on its own.

@@ -132,10 +132,23 @@ async fn cart_checkout_is_fulfilled_through_payment_and_shipping() -> anyhow::Re
     assert_eq!(order.status, OrderStatus::Placed);
     assert_eq!(order.customer_id, CUSTOMER);
     assert_eq!(order.payment_mode, PaymentMode::Installments { count: 3 });
-    assert_eq!(order.subtotal, Money::eur(24_992));
-    assert_eq!(order.shipping_fee, Money::eur(2_395));
+    // Delivered to Martinique: an export. The listed prices (2 × 124,96 and
+    // 23,95 of delivery, French VAT included) are charged without that VAT;
+    // the instalment fee never carried any.
+    assert_eq!(order.subtotal, Money::eur(20_826));
+    assert_eq!(order.shipping_fee, Money::eur(1_996));
     assert_eq!(order.handling_fee, Money::eur(449));
-    assert_eq!(order.total, Money::eur(27_836));
+    assert_eq!(order.total, Money::eur(23_271));
+    let tax = order
+        .tax
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("order not taxed"))?;
+    assert_eq!(tax.zone_code, "fr-overseas");
+    assert_eq!(tax.treatment, timada_tax::TaxTreatment::Export);
+    assert_eq!(tax.vat_lines.len(), 1);
+    assert_eq!(tax.vat_lines[0].rate_bp, 0);
+    assert_eq!(tax.vat_lines[0].total, Money::eur(23_271));
+    assert_eq!(tax.vat_total()?, Money::eur(0));
 
     let saga = load_fulfillment(&executor, &order_id)
         .await?
@@ -157,7 +170,7 @@ async fn cart_checkout_is_fulfilled_through_payment_and_shipping() -> anyhow::Re
     let payment = timada_payment::load_payment(&executor, payment_id(&order_id))
         .await?
         .ok_or_else(|| anyhow::anyhow!("payment not requested"))?;
-    assert_eq!(payment.amount, Money::eur(27_836));
+    assert_eq!(payment.amount, Money::eur(23_271));
 
     // PSP captures → order paid, shipment created.
     timada_payment::Command(&executor)
@@ -204,7 +217,7 @@ async fn cart_checkout_is_fulfilled_through_payment_and_shipping() -> anyhow::Re
     let rows = history(&db, CUSTOMER, year).await?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, "shipped");
-    assert_eq!(rows[0].total_minor, 27_836);
+    assert_eq!(rows[0].total_minor, 23_271);
     assert!(history(&db, CUSTOMER, year - 1).await?.is_empty());
 
     // Admin listings across customers and years.
@@ -363,21 +376,22 @@ async fn promo_code_lowers_what_is_paid() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("discount not applied"))?;
     assert_eq!(discount.code, "WELCOME10");
     assert_eq!(discount.kind, PromoKind::Discount);
-    assert_eq!(discount.amount, Money::eur(2_499));
-    assert_eq!(order.subtotal, Money::eur(24_992));
-    assert_eq!(order.total, Money::eur(24_888));
+    // 10 % of the goods as charged in the zone (export prices, see above).
+    assert_eq!(discount.amount, Money::eur(2_083));
+    assert_eq!(order.subtotal, Money::eur(20_826));
+    assert_eq!(order.total, Money::eur(20_739));
 
     // The payment and the order history carry the discounted total.
     let payment = timada_payment::load_payment(&executor, payment_id(&order_id))
         .await?
         .ok_or_else(|| anyhow::anyhow!("payment not requested"))?;
-    assert_eq!(payment.amount, Money::eur(24_888));
+    assert_eq!(payment.amount, Money::eur(20_739));
     order_history_subscription()
         .data(db.clone())
         .run_once(&executor)
         .await?;
     let rows = orders_of_customer(&db, CUSTOMER).await?;
-    assert_eq!(rows[0].total_minor, 24_888);
+    assert_eq!(rows[0].total_minor, 20_739);
 
     let code = timada_promotion::load_discount_details(
         &executor,
@@ -437,7 +451,7 @@ async fn voucher_is_spent_on_the_order_and_a_dead_code_is_ignored() -> anyhow::R
         .ok_or_else(|| anyhow::anyhow!("voucher not applied"))?;
     assert_eq!(discount.kind, PromoKind::Voucher);
     assert_eq!(discount.amount, Money::eur(5_000));
-    assert_eq!(order.total, Money::eur(12_496 + 2_395 - 5_000));
+    assert_eq!(order.total, Money::eur(10_413 + 1_996 - 5_000));
     let voucher = timada_promotion::load_voucher_balance(&executor, &voucher_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("voucher missing"))?;
@@ -478,7 +492,7 @@ async fn voucher_is_spent_on_the_order_and_a_dead_code_is_ignored() -> anyhow::R
         .ok_or_else(|| anyhow::anyhow!("second order not placed"))?;
     assert_eq!(order.discount, None);
     assert_eq!(order.promo_code.as_deref(), Some("GIFT50"));
-    assert_eq!(order.total, Money::eur(12_496 + 2_395));
+    assert_eq!(order.total, Money::eur(10_413 + 1_996));
 
     Ok(())
 }
@@ -547,6 +561,22 @@ async fn order_covered_by_a_voucher_skips_the_payment() -> anyhow::Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
     assert_eq!(order.total, Money::eur(0));
+    // Collected in Toulouse: domestic. The voucher paid for the goods, it did
+    // not reduce them — the VAT is that of the full price.
+    let tax = order
+        .tax
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("order not taxed"))?;
+    assert_eq!(tax.zone_code, "fr");
+    assert_eq!(tax.vat_lines.len(), 1);
+    assert_eq!(
+        (
+            tax.vat_lines[0].rate_bp,
+            &tax.vat_lines[0].base,
+            &tax.vat_lines[0].vat
+        ),
+        (2_000, &Money::eur(10_413), &Money::eur(2_083))
+    );
     assert_eq!(order.status, OrderStatus::Paid);
     assert_eq!(order.payment_id, None);
     assert!(

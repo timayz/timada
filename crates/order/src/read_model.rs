@@ -12,7 +12,7 @@ use sqlx::SqlitePool;
 use crate::{
     aggregator::{
         OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderNumberAssigned,
-        OrderPaid, OrderPlaced, OrderSettled, OrderShipped,
+        OrderPaid, OrderPlaced, OrderSettled, OrderShipped, OrderTaxed,
     },
     query::load_order_details,
     value_object::{OrderStatus, Seller},
@@ -44,6 +44,7 @@ pub fn order_history_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         // Both are committed together with `OrderPlaced`, whose handler
         // reads them through the details view.
         .skip::<OrderNumberAssigned>()
+        .skip::<OrderTaxed>()
         .skip::<OrderDiscountApplied>()
         .skip::<OrderConfirmationResent>()
         .strict()

@@ -1,13 +1,28 @@
 use evento::Executor;
 use timada_core::{Address, Money};
+use timada_tax::{Charged, TaxTreatment, vat_breakdown};
 
 use crate::{
-    aggregator::{OrderDiscountApplied, OrderNumberAssigned, OrderPlaced},
+    aggregator::{OrderDiscountApplied, OrderNumberAssigned, OrderPlaced, OrderTaxed},
     error::OrderError,
-    value_object::{DeliveryChoice, OrderDiscount, OrderLine, PaymentMode, Seller, order_total},
+    value_object::{
+        DeliveryChoice, OrderDiscount, OrderLine, PaymentMode, PromoKind, Seller, order_total,
+    },
 };
 
 use super::order_id;
+
+/// How the amounts of a [`PlaceOrder`] were taxed. The lines and fees of the
+/// command already are what is charged in that zone; this says which VAT rate
+/// is inside each of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderTax {
+    pub zone_code: String,
+    pub treatment: TaxTreatment,
+    /// `(product_id, rate in basis points)` for every line.
+    pub line_rates: Vec<(String, u16)>,
+    pub shipping_rate_bp: u16,
+}
 
 #[derive(Debug, Clone)]
 pub struct PlaceOrder {
@@ -28,6 +43,8 @@ pub struct PlaceOrder {
     /// The number shown to the customer, from [`crate::allocate_order_number`];
     /// without one the order goes by its id.
     pub order_number: Option<String>,
+    /// From the tax zones of the host; without it the order records no VAT.
+    pub tax: Option<OrderTax>,
 }
 
 #[evento::command]
@@ -66,6 +83,47 @@ impl<E: Executor> super::Command<'_, E> {
             }
         }
 
+        // The VAT inside what is charged. A promo code reduces the goods; a
+        // voucher pays for them and reduces nothing. Handling fees carry none.
+        let taxed = match &cmd.tax {
+            Some(tax) => {
+                let mut goods = Vec::with_capacity(cmd.lines.len());
+                for line in &cmd.lines {
+                    let rate_bp = tax
+                        .line_rates
+                        .iter()
+                        .find(|(product_id, _)| *product_id == line.product_id)
+                        .map(|(_, rate_bp)| *rate_bp)
+                        .ok_or(OrderError::Required("tax.line_rates"))?;
+                    goods.push(Charged {
+                        total: line.total()?,
+                        rate_bp,
+                    });
+                }
+                let reduction = cmd
+                    .discount
+                    .as_ref()
+                    .filter(|d| d.kind == PromoKind::Discount)
+                    .map(|d| &d.amount);
+                let fees = [
+                    Charged {
+                        total: cmd.shipping_fee.clone(),
+                        rate_bp: tax.shipping_rate_bp,
+                    },
+                    Charged {
+                        total: cmd.handling_fee.clone(),
+                        rate_bp: 0,
+                    },
+                ];
+                Some(OrderTaxed {
+                    zone_code: tax.zone_code.clone(),
+                    treatment: tax.treatment,
+                    vat_lines: vat_breakdown(&goods, reduction, &fees)?,
+                })
+            }
+            None => None,
+        };
+
         let id = order_id(&cmd.cart_id);
         let mut write = evento::append(&id);
         write.routing_key_opt(routing_key).event(&OrderPlaced {
@@ -83,6 +141,9 @@ impl<E: Executor> super::Command<'_, E> {
         });
         if let Some(order_number) = cmd.order_number.filter(|n| !n.trim().is_empty()) {
             write.event(&OrderNumberAssigned { order_number });
+        }
+        if let Some(taxed) = &taxed {
+            write.event(taxed);
         }
         if let Some(discount) = cmd.discount {
             write.event(&OrderDiscountApplied {
