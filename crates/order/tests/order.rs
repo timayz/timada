@@ -3,7 +3,8 @@
 //! the two compensation branches (out of stock, payment declined) and the
 //! cart's promo code: redeemed before the order is placed, given back when
 //! the order is cancelled — the payment-less path of an order the code paid
-//! for entirely, and the refund of an order cancelled after it was paid.
+//! for entirely, the refund of an order cancelled after it was paid, and
+//! resuming a half-started saga.
 
 use evento::Executor;
 use timada_cart::{AddLine, Checkout};
@@ -683,5 +684,49 @@ async fn payment_captured_after_a_cancellation_is_refunded() -> anyhow::Result<(
             .await?
             .is_none()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_saga_interrupted_while_reserving_is_resumed() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cart_id = checkout_cart(&executor, 5, 2, timada_cart::PaymentMode::Card).await?;
+    let order_id = order_id(&cart_id);
+    order_checkout_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    let order = load_order_details(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
+
+    // What a crash right after opening the saga leaves behind: the saga
+    // exists, no stock was asked for, and `OrderPlaced` will be redelivered.
+    evento::append(timada_order::fulfillment_id(&order_id))
+        .event(&timada_order::aggregator::FulfillmentStarted {
+            order_id: order_id.clone(),
+            lines: vec![timada_order::FulfillmentLine {
+                product_id: PRODUCT.into(),
+                quantity: 2,
+            }],
+            pickup_store_id: None,
+            amount: order.total.clone(),
+            payment_mode: PaymentMode::Card,
+        })
+        .commit(&executor)
+        .await?;
+
+    drain(&executor, &db).await?;
+    let saga = load_fulfillment(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("saga missing"))?;
+    assert_eq!(saga.status, FulfillmentStatus::AwaitingPayment);
+    let stock = timada_inventory::load_stock_availability(
+        &executor,
+        stock_item_id(PRODUCT, &StockLocation::Warehouse),
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("stock item missing"))?;
+    assert_eq!((stock.reserved, stock.available), (2, 3));
     Ok(())
 }
