@@ -3,6 +3,7 @@ mod mark_paid;
 mod mark_shipped;
 mod place_order;
 mod resend_confirmation;
+mod settle_order;
 
 use std::ops::Deref;
 
@@ -13,7 +14,7 @@ use evento::{Executor, Projection, metadata::Event};
 use crate::{
     aggregator::{
         Order, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderPaid,
-        OrderPlaced, OrderShipped,
+        OrderPlaced, OrderSettled, OrderShipped,
     },
     error::OrderError,
     value_object::OrderStatus,
@@ -75,6 +76,7 @@ fn create_projection<E: Executor>() -> Projection<E, OrderState> {
     Projection::new::<Order>()
         .handler(on_order_placed())
         .handler(on_order_paid())
+        .handler(on_order_settled())
         .handler(on_order_shipped())
         .handler(on_order_cancelled())
         .skip::<OrderDiscountApplied>()
@@ -94,6 +96,12 @@ async fn on_order_placed(event: Event<OrderPlaced>, row: &mut OrderState) -> any
 async fn on_order_paid(event: Event<OrderPaid>, row: &mut OrderState) -> anyhow::Result<()> {
     row.status = OrderStatus::Paid;
     row.payment_id = Some(event.data.payment_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_settled(_event: Event<OrderSettled>, row: &mut OrderState) -> anyhow::Result<()> {
+    row.status = OrderStatus::Paid;
     Ok(())
 }
 

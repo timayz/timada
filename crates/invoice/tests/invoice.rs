@@ -153,6 +153,41 @@ async fn orders_drive_drafting_numbering_and_voiding() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn order_settled_without_payment_is_invoiced_at_zero() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let orders = timada_order::Command(&executor);
+    // Collected in store and entirely covered by a voucher.
+    let order = orders
+        .place_order(PlaceOrder {
+            delivery: DeliveryChoice {
+                method_code: "store-pickup".into(),
+                pickup_store_id: Some("store-toulouse".into()),
+            },
+            payment_mode: PaymentMode::Card,
+            shipping_fee: Money::eur(0),
+            handling_fee: Money::eur(0),
+            promo_code: Some("GIFT250".into()),
+            discount: Some(timada_order::OrderDiscount {
+                code: "GIFT250".into(),
+                kind: timada_order::PromoKind::Voucher,
+                amount: Money::eur(24_992),
+            }),
+            ..place_order("cart-free")
+        })
+        .await?;
+    orders.settle_order(&order).await?;
+    sync_invoices(&executor, db.clone()).await?;
+
+    let invoice = load_invoice(&executor, invoice_id(&order))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invoice not drafted"))?;
+    assert_eq!(invoice.status, InvoiceStatus::Issued);
+    assert!(invoice.invoice_number.is_some());
+    assert_eq!(invoice.total, Money::eur(0));
+    Ok(())
+}
+
+#[tokio::test]
 async fn drafting_twice_returns_the_same_invoice() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let cmd = Command {

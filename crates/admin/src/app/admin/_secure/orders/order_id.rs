@@ -52,6 +52,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let shipment = timada_shipping::load_shipment(&services.executor, shipment_id(&id)).await?;
     let fulfillment = load_fulfillment(&services.executor, &id).await?;
 
+    let payment_label = match &payment {
+        Some(p) => format!("{:?}", p.status),
+        None if !order.total.is_positive() => "aucun paiement requis".to_owned(),
+        None => "non demandé".to_owned(),
+    };
     let can_capture = payment
         .as_ref()
         .is_some_and(|p| p.status == PaymentStatus::Requested);
@@ -118,7 +123,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     card_content(
                         <dl class="flex flex-col gap-2 text-sm">
                             <div><dt class="text-muted-foreground">"Client"</dt><dd class="font-mono text-xs">(order.customer_id.clone())</dd></div>
-                            <div><dt class="text-muted-foreground">"Paiement"</dt><dd>(payment.as_ref().map(|p| format!("{:?}", p.status)).unwrap_or_else(|| "non demandé".into()))</dd></div>
+                            <div><dt class="text-muted-foreground">"Paiement"</dt><dd>(payment_label)</dd></div>
                             <div><dt class="text-muted-foreground">"Expédition"</dt><dd>(shipment.as_ref().map(|s| format!("{:?}", s.status)).unwrap_or_else(|| "—".into()))</dd></div>
                             <div><dt class="text-muted-foreground">"Traitement"</dt><dd>(fulfillment_label)</dd></div>
                             if let Some(reason) = &order.cancelled_reason {
