@@ -15,7 +15,8 @@ pub struct RequestBackInStockAlert {
 impl<E: Executor> super::Command<'_, E> {
     /// Registers a customer's "alerte disponibilité" for a product. One per
     /// product and customer, enforced by the derived id: asking again while
-    /// it is pending is refused, asking again once it fired re-arms it.
+    /// it is pending is refused, asking again once it fired or was cancelled
+    /// re-arms it.
     pub async fn request_back_in_stock_alert(
         &self,
         cmd: RequestBackInStockAlert,
@@ -33,7 +34,7 @@ impl<E: Executor> super::Command<'_, E> {
 
         let id = alert_id(&cmd.product_id, &cmd.customer_id);
         if let Some(alert) = super::load_alert(self.0, &id).await? {
-            if !alert.triggered {
+            if alert.is_pending() {
                 return Err(InventoryError::AlreadyRequested);
             }
             alert

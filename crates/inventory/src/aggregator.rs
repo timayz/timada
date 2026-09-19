@@ -40,4 +40,7 @@ pub enum BackInStockAlert {
 
     /// The product came back and the customer was notified.
     BackInStockAlertTriggered,
+
+    /// The customer no longer wants to be told.
+    BackInStockAlertCancelled,
 }

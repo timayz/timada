@@ -163,5 +163,36 @@ async fn back_in_stock_alert_fires_on_restock() -> anyhow::Result<()> {
     assert_eq!(mine.len(), 1);
     assert_eq!(mine[0].triggered_at, None);
 
+    // The customer changes their mind: the alert is gone and will not fire.
+    // Nobody else can cancel it, and it can be asked for again later.
+    let stranger = cmd.cancel_back_in_stock_alert(&alert, "customer-2").await;
+    assert!(matches!(stranger, Err(InventoryError::AlertNotFound)));
+    cmd.cancel_back_in_stock_alert(&alert, "customer-1").await?;
+    cmd.cancel_back_in_stock_alert(&alert, "customer-1").await?;
+    back_in_stock_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    sync_list().await?;
+    assert!(pending_alerts(&db, PRODUCT).await?.is_empty());
+    assert!(alerts_of_customer(&db, "customer-1").await?.is_empty());
+    cmd.trigger_back_in_stock_alert(&alert).await?;
+    let state = cmd
+        .load_alert(&alert)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("alert missing"))?;
+    assert!(state.cancelled && !state.triggered);
+    cmd.request_back_in_stock_alert(RequestBackInStockAlert {
+        product_id: PRODUCT.into(),
+        customer_id: "customer-1".into(),
+        email: "jonathan@example.test".into(),
+    })
+    .await?;
+    back_in_stock_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    assert_eq!(pending_alerts(&db, PRODUCT).await?, vec![alert.clone()]);
+
     Ok(())
 }

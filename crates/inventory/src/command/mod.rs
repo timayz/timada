@@ -1,3 +1,4 @@
+mod cancel_back_in_stock_alert;
 mod receive_stock;
 mod register_stock_item;
 mod release_stock;
@@ -16,9 +17,9 @@ use evento::{Executor, Projection, metadata::Event};
 
 use crate::{
     aggregator::{
-        BackInStockAlert, BackInStockAlertRequested, BackInStockAlertTriggered, StockItem,
-        StockItemRegistered, StockReceived, StockReservationRejected, StockReservationReleased,
-        StockReserved, StockReturned,
+        BackInStockAlert, BackInStockAlertCancelled, BackInStockAlertRequested,
+        BackInStockAlertTriggered, StockItem, StockItemRegistered, StockReceived,
+        StockReservationRejected, StockReservationReleased, StockReserved, StockReturned,
     },
     error::InventoryError,
     value_object::StockLocation,
@@ -185,12 +186,21 @@ pub struct BackInStockAlertState {
     pub customer_id: String,
     pub email: String,
     pub triggered: bool,
+    pub cancelled: bool,
+}
+
+impl BackInStockAlertState {
+    /// Still waiting for the product to come back.
+    pub fn is_pending(&self) -> bool {
+        !self.triggered && !self.cancelled
+    }
 }
 
 fn alert_projection<E: Executor>() -> Projection<E, BackInStockAlertState> {
     Projection::new::<BackInStockAlert>()
         .handler(on_alert_requested())
         .handler(on_alert_triggered())
+        .handler(on_alert_cancelled())
         .strict()
 }
 
@@ -203,8 +213,9 @@ async fn on_alert_requested(
     row.product_id = event.data.product_id;
     row.customer_id = event.data.customer_id;
     row.email = event.data.email;
-    // A request after the alert fired arms it again.
+    // A request after the alert fired, or was cancelled, arms it again.
     row.triggered = false;
+    row.cancelled = false;
     Ok(())
 }
 
@@ -214,5 +225,14 @@ async fn on_alert_triggered(
     row: &mut BackInStockAlertState,
 ) -> anyhow::Result<()> {
     row.triggered = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_alert_cancelled(
+    _event: Event<BackInStockAlertCancelled>,
+    row: &mut BackInStockAlertState,
+) -> anyhow::Result<()> {
+    row.cancelled = true;
     Ok(())
 }
