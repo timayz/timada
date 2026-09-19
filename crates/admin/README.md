@@ -1,7 +1,7 @@
 # timada-admin
 
 A [topcoat](https://github.com/tokio-rs/topcoat) admin for the timada contexts
-(orders, products, stock, customers, promotions) that you mount into your own app — a topcoat app
+(orders, products, stock, customers, promotions, invoices, refunds) that you mount into your own app — a topcoat app
 or any tower/axum app.
 
 The admin is a self-contained topcoat `Router`: its own layout, session, auth
@@ -44,8 +44,16 @@ The listings read the contexts' SQL read models, so the host must run their
 subscriptions: `timada_order::order_history_subscription`,
 `timada_catalog::product_list_subscription`,
 `timada_inventory::stock_list_subscription`,
-`timada_customer::customer_list_subscription` and
-`timada_promotion::code_list_subscription`, each with `.data(pool)`.
+`timada_customer::customer_list_subscription`,
+`timada_promotion::code_list_subscription`,
+`timada_invoice::invoice_list_subscription` and
+`timada_payment::refund_list_subscription`, each with `.data(pool)` — and
+their migrations (`timada_payment::migrations()` is new with the refunds
+section).
+
+Refunds are issued from an order's page once its payment is captured, in one
+or several goes up to the captured amount; the refunds section is their
+journal. Invoices are read-only: orders drive their lifecycle.
 
 ## Assets and styling
 

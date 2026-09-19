@@ -1,24 +1,26 @@
 //! `/{mount}/orders/{order_id}`: the order, its payment, shipment and
-//! fulfillment state, and the operator actions.
+//! fulfillment state, and the operator actions — refunds included.
 
 use serde::Deserialize;
-use timada_core::Address;
+use timada_core::{Address, Money};
+use timada_invoice::{invoice_id as invoice_id_of, load_invoice};
 use timada_order::{
     FulfillmentStatus, OrderDetailsView, OrderStatus, load_fulfillment, load_order_details,
 };
-use timada_payment::{PaymentStatus, payment_id};
+use timada_payment::{PaymentError, PaymentStatus, payment_id};
 use timada_shipping::{ShipmentStatus, shipment_id};
 use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{
         content::Form, error::RouterErrorExt, error::see_other, href, page, path_param,
-        path_param as param,
+        path_param as param, query_params, query_params as query,
     },
     view::{View, view},
 };
 
 use crate::{
+    app::admin::_secure::invoices::invoice_id,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -30,6 +32,21 @@ use crate::{
 };
 
 path_param!(pub order_id: String, error = not_found);
+
+/// Set by [`refund`] when the payment context refuses the refund.
+#[query_params(error = bad_request)]
+struct ShowQuery {
+    refund_error: Option<String>,
+}
+
+fn refund_error_message(code: Option<&str>) -> Option<&'static str> {
+    match code? {
+        "exceeds" => Some("Le remboursement dépasse le montant encaissé restant."),
+        "amount" => Some("Le montant à rembourser doit être positif."),
+        "state" => Some("Seul un paiement encaissé peut être remboursé."),
+        _ => None,
+    }
+}
 
 async fn load(cx: &Cx) -> Result<(String, OrderDetailsView)> {
     let id = param::<OrderId>(cx)?.clone();
@@ -51,7 +68,26 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let payment = timada_payment::load_payment(&services.executor, payment_id(&id)).await?;
     let shipment = timada_shipping::load_shipment(&services.executor, shipment_id(&id)).await?;
     let fulfillment = load_fulfillment(&services.executor, &id).await?;
+    let invoice = load_invoice(&services.executor, invoice_id_of(&id)).await?;
+    let invoice_link = invoice.map(|i| {
+        let label = i
+            .invoice_number
+            .unwrap_or_else(|| "non numérotée".to_owned());
+        let link = href!(invoice_id::show, invoice_id::InvoiceId(i.id)).resolve(cx);
+        (link, label)
+    });
+    let refund_error = refund_error_message(query::<ShowQuery>(cx)?.refund_error.as_deref());
 
+    // What is still refundable, in cents, once the payment is captured.
+    let refundable = payment
+        .as_ref()
+        .filter(|p| p.status == PaymentStatus::Captured)
+        .map(|p| p.amount.minor - p.refunded.minor)
+        .filter(|left| *left > 0);
+    let refunded = payment
+        .as_ref()
+        .filter(|p| p.refunded.is_positive())
+        .map(|p| money(&p.refunded));
     let payment_label = match &payment {
         Some(p) => format!("{:?}", p.status),
         None if !order.total.is_positive() => "aucun paiement requis".to_owned(),
@@ -124,6 +160,12 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         <dl class="flex flex-col gap-2 text-sm">
                             <div><dt class="text-muted-foreground">"Client"</dt><dd class="font-mono text-xs">(order.customer_id.clone())</dd></div>
                             <div><dt class="text-muted-foreground">"Paiement"</dt><dd>(payment_label)</dd></div>
+                            if let Some(refunded) = &refunded {
+                                <div><dt class="text-muted-foreground">"Remboursé"</dt><dd class="tabular-nums">(refunded.clone())</dd></div>
+                            }
+                            if let Some((link, label)) = &invoice_link {
+                                <div><dt class="text-muted-foreground">"Facture"</dt><dd><a href=(link.clone()) class="font-mono text-xs underline-offset-4 hover:underline">(label.clone())</a></dd></div>
+                            }
                             <div><dt class="text-muted-foreground">"Expédition"</dt><dd>(shipment.as_ref().map(|s| format!("{:?}", s.status)).unwrap_or_else(|| "—".into()))</dd></div>
                             <div><dt class="text-muted-foreground">"Traitement"</dt><dd>(fulfillment_label)</dd></div>
                             if let Some(reason) = &order.cancelled_reason {
@@ -153,6 +195,18 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Renvoyer la confirmation")
                                 </form>
                             }
+                            if let Some(left) = refundable {
+                                separator()
+                                <form method="post" action=(href!(refund, OrderId(id.clone()))) class="flex flex-col gap-2">
+                                    <label for="refund-amount" class="text-sm text-muted-foreground">"Montant à rembourser (centimes)"</label>
+                                    input(attrs: topcoat::view::attributes! { id="refund-amount" name="amount_cents" type="number" min="1" max=(left.to_string()) value=(left.to_string()) required=(true) })
+                                    input(attrs: topcoat::view::attributes! { name="reason" placeholder="Motif du remboursement" aria-label="Motif du remboursement" required=(true) })
+                                    if let Some(error) = refund_error {
+                                        <p role="alert" class="text-sm text-destructive">(error)</p>
+                                    }
+                                    button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Rembourser")
+                                </form>
+                            }
                             if can_cancel {
                                 separator()
                                 <form method="post" action=(href!(cancel, OrderId(id.clone()))) class="flex flex-col gap-2">
@@ -169,7 +223,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 }
 
 #[topcoat::view::component]
-async fn address_lines(address: &Address) -> Result<impl View> {
+pub async fn address_lines(address: &Address) -> Result<impl View> {
     Ok(view! {
         <span class="block">(address.full_name())</span>
         <span class="block">(address.line1.clone())</span>
@@ -229,4 +283,37 @@ pub async fn capture_payment(cx: &Cx) -> Result<impl View> {
         .capture_payment(payment_id(&id), format!("manual-{id}"))
         .await?;
     Err::<(), _>(see_other(back(cx, &id)).into())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RefundForm {
+    amount_cents: i64,
+    reason: String,
+}
+
+/// Returns part or all of the captured payment. What the payment context
+/// refuses comes back as a message on the order page.
+#[page(POST "./refund")]
+pub async fn refund(cx: &Cx, Form(form): Form<RefundForm>) -> Result<impl View> {
+    let (id, order) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let refunded = timada_payment::Command(&services.executor)
+        .refund_payment(
+            payment_id(&id),
+            Money::new(form.amount_cents, &order.total.currency),
+            form.reason.trim().to_owned(),
+        )
+        .await;
+    let refused = match refunded {
+        Ok(()) => None,
+        Err(PaymentError::RefundExceedsCapture) => Some("exceeds"),
+        Err(PaymentError::InvalidAmount) => Some("amount"),
+        Err(PaymentError::NotCaptured | PaymentError::PaymentNotFound) => Some("state"),
+        Err(err) => return Err(anyhow::Error::from(err).into()),
+    };
+    let target = match refused {
+        Some(code) => format!("{}?refund_error={code}", back(cx, &id)),
+        None => back(cx, &id),
+    };
+    Err::<(), _>(see_other(target).into())
 }

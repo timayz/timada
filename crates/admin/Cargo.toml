@@ -18,6 +18,7 @@ timada-inventory.workspace = true
 timada-review.workspace = true
 timada-customer.workspace = true
 timada-order.workspace = true
+timada-invoice.workspace = true
 timada-payment.workspace = true
 timada-promotion.workspace = true
 timada-shipping.workspace = true

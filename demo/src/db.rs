@@ -43,6 +43,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     all.extend(timada_review::migrations());
     all.extend(timada_customer::migrations());
     all.extend(timada_order::migrations());
+    all.extend(timada_payment::migrations());
     all.extend(timada_invoice::migrations());
     all.extend(timada_promotion::migrations());
     all.extend(timada_admin::migrations());
@@ -86,6 +87,14 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .start(executor)
             .await?,
         timada_invoice::invoice_from_orders_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
+        timada_invoice::invoice_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
+        timada_payment::refund_list_subscription()
             .data(db.clone())
             .start(executor)
             .await?,
@@ -136,6 +145,14 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .run_once(executor)
             .await?;
         timada_invoice::invoice_from_orders_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_invoice::invoice_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_payment::refund_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;

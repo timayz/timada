@@ -1,5 +1,6 @@
 //! Socket-free tests through `Router::handle`: auth, mounting under a custom
-//! segment, the orders, promotions and inventory sections, branded 404s.
+//! segment, the orders, promotions, inventory, invoices and refunds sections,
+//! branded 404s.
 
 use timada_admin::{AdminConfig, AdminServices, Stylesheet, create_admin, migrations};
 use timada_core::{Address, Money};
@@ -27,6 +28,8 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
     all.extend(timada_customer::migrations());
     all.extend(timada_promotion::migrations());
     all.extend(timada_inventory::migrations());
+    all.extend(timada_invoice::migrations());
+    all.extend(timada_payment::migrations());
     let (executor, db) = timada_core::testing::memory_executor(all).await?;
     create_admin(&db, EMAIL, PASSWORD).await?;
 
@@ -505,5 +508,107 @@ async fn stock_is_tracked_received_and_filtered() -> anyhow::Result<()> {
     )
     .await?;
     assert!(low.contains("AOC 23.8"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn invoices_are_listed_and_payments_refunded() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let order_id = place_order(&h).await?;
+
+    // Stand in for the fulfillment saga: request, capture, mark paid.
+    let payments = timada_payment::Command(&h.executor);
+    let payment_id = payments
+        .request_payment(timada_payment::RequestPayment {
+            order_id: order_id.clone(),
+            amount: Money::eur(14_390),
+            method: timada_payment::PaymentMethod::Card,
+        })
+        .await?;
+    payments
+        .capture_payment(&payment_id, "psp-1".into())
+        .await?;
+    timada_order::Command(&h.executor)
+        .mark_paid(&order_id, &payment_id)
+        .await?;
+    timada_invoice::invoice_from_orders_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    timada_invoice::invoice_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+
+    let year = timada_core::time::year_of(timada_core::time::now_unix_secs()?);
+    let number = format!("F{year}-000001");
+    let list = text(h.router.handle(get("/admin/invoices", Some(&cookie))).await).await?;
+    assert!(list.contains(&number), "{list}");
+    let drafts = h
+        .router
+        .handle(get("/admin/invoices?status=draft", Some(&cookie)))
+        .await;
+    assert!(text(drafts).await?.contains("Aucune facture."));
+
+    let invoice_id = timada_invoice::invoice_id(&order_id);
+    let detail = h
+        .router
+        .handle(get(&format!("/admin/invoices/{invoice_id}"), Some(&cookie)))
+        .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = text(detail).await?;
+    assert!(detail.contains(&format!("Facture {number}")), "{detail}");
+    assert!(detail.contains("AOC 23.8"), "{detail}");
+    let missing = h
+        .router
+        .handle(get("/admin/invoices/nope", Some(&cookie)))
+        .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    // The order page links the invoice and offers the refund.
+    let order_uri = format!("/admin/orders/{order_id}");
+    let order_page = text(h.router.handle(get(&order_uri, Some(&cookie))).await).await?;
+    assert!(order_page.contains(&number), "{order_page}");
+    assert!(order_page.contains("Rembourser"), "{order_page}");
+
+    let refunded = h
+        .router
+        .handle(post(
+            &format!("{order_uri}/refund"),
+            "amount_cents=2000&reason=Geste+commercial",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(refunded.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&refunded), order_uri);
+    let payment = timada_payment::load_payment(&h.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.refunded, Money::eur(2_000));
+
+    // More than what is left is refused with a message, nothing is written.
+    let too_much = h
+        .router
+        .handle(post(
+            &format!("{order_uri}/refund"),
+            "amount_cents=99999&reason=Oups",
+            Some(&cookie),
+        ))
+        .await;
+    let back = location(&too_much);
+    assert_eq!(back, format!("{order_uri}?refund_error=exceeds"));
+    let order_page = text(h.router.handle(get(&back, Some(&cookie))).await).await?;
+    assert!(order_page.contains("dépasse"), "{order_page}");
+    assert!(order_page.contains("20,00 €"), "{order_page}");
+
+    timada_payment::refund_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let refunds = text(h.router.handle(get("/admin/refunds", Some(&cookie))).await).await?;
+    assert!(refunds.contains("Geste commercial"), "{refunds}");
+    assert!(refunds.contains("20,00 €"), "{refunds}");
+    assert!(!refunds.contains("Oups"), "{refunds}");
     Ok(())
 }
