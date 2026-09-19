@@ -3,9 +3,11 @@
 
 pub mod customers;
 pub mod inventory;
+pub mod invoices;
 pub mod orders;
 pub mod products;
 pub mod promotions;
+pub mod refunds;
 
 use topcoat::{
     Result,
