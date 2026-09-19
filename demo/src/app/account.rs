@@ -23,7 +23,7 @@ use super::{
     checkout::OrderId,
     document,
     format::{address_lines, date, money, order_status},
-    safe_next,
+    returns, safe_next,
 };
 use crate::{
     Store,
@@ -669,7 +669,37 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
                 amount: money(&timada_core::Money::new(note.amount_minor, note.currency)),
             })
             .collect();
-    Ok(view! { order_view(order: &order, refunded: refunded, credit_notes: &credit_notes) })
+    // The order's returns, and whether another one can still be asked for.
+    let order_returns: Vec<ReturnLink> = timada_returns::returns_of_order(&store.db, &id)
+        .await?
+        .into_iter()
+        .map(|row| ReturnLink {
+            link: href!(returns::show, returns::ReturnId(row.return_id)).resolve(cx),
+            number: row.rma_number,
+            requested: date(row.requested_at.max(0) as u64),
+            status: returns::return_status(&row.status),
+        })
+        .collect();
+    let new_return = returns::can_request_return(store, &order)
+        .await?
+        .then(|| href!(returns::new_return, OrderId(id.clone())).resolve(cx));
+    Ok(view! {
+        order_view(
+            order: &order,
+            refunded: refunded,
+            credit_notes: &credit_notes,
+            order_returns: &order_returns,
+            new_return: new_return
+        )
+    })
+}
+
+/// One return of the order as its page lists it.
+struct ReturnLink {
+    link: String,
+    number: String,
+    requested: String,
+    status: &'static str,
 }
 
 /// One credit note ("avoir") as the order page shows it.
@@ -684,6 +714,8 @@ async fn order_view(
     order: &OrderDetailsView,
     refunded: Option<String>,
     credit_notes: &Vec<CreditNoteLine>,
+    order_returns: &Vec<ReturnLink>,
+    new_return: Option<String>,
 ) -> Result<impl View> {
     let payment = match order.payment_mode {
         // The code covered the whole total: nothing was charged.
@@ -770,6 +802,30 @@ async fn order_view(
                         }
                     </tbody>
                 </table>
+            }
+            if !order_returns.is_empty() {
+                <table>
+                    <caption class="muted">"Retours de cette commande"</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">"Retour"</th>
+                            <th scope="col">"Demandé le"</th>
+                            <th scope="col">"État"</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        for item in order_returns {
+                            <tr>
+                                <th scope="row"><a href=(item.link.clone())>(item.number.clone())</a></th>
+                                <td>(item.requested.clone())</td>
+                                <td>(item.status)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            if let Some(link) = &new_return {
+                <p><a href=(link.clone())>"Retourner des articles"</a></p>
             }
             <div class="cards">
                 <div class="card"><h2>"Livraison"</h2> address_block(address: &order.delivery_address)</div>

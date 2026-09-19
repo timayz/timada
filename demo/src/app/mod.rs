@@ -6,6 +6,7 @@ pub mod cart;
 pub mod catalog;
 pub mod checkout;
 mod format;
+pub mod returns;
 
 use topcoat::{
     Result,
