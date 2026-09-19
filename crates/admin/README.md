@@ -1,8 +1,8 @@
 # timada-admin
 
 A [topcoat](https://github.com/tokio-rs/topcoat) admin for the timada contexts
-(orders, products, stock, customers, promotions, invoices, refunds, reviews,
-questions, e-mails) that you mount into your own app — a topcoat app or any tower/axum
+(orders, products, stock, customers, promotions, invoices, refunds, returns,
+reviews, questions, e-mails) that you mount into your own app — a topcoat app or any tower/axum
 app.
 
 The admin is a self-contained topcoat `Router`: its own layout, session, auth
@@ -50,6 +50,7 @@ subscriptions: `timada_order::order_history_subscription`,
 `timada_invoice::invoice_list_subscription`,
 `timada_invoice::credit_note_list_subscription`,
 `timada_payment::refund_list_subscription`,
+`timada_returns::return_list_subscription`,
 `timada_review::review_list_subscription` and
 `timada_review::question_list_subscription`, each with `.data(pool)` — and
 their migrations (`timada_payment::migrations()` is new with the refunds
@@ -66,6 +67,12 @@ Reviews wait in the reviews section until an operator publishes or rejects
 them; only published ones reach the storefront and the product rating. Product
 questions work the other way round: nothing is moderated, but a question only
 shows on the storefront once the questions section gave it an answer.
+
+The returns section is where a customer's return is reviewed (accept or
+refuse) and, once the parcel is in, received: what is taken back line by line,
+whether it goes into stock again, and whether the customer gets their money or
+store credit. Restocking and refunding are then done by
+`timada_returns::return_processing_subscription`, which the host must run.
 
 The e-mails section reads `timada-mailer`'s outbox (`timada_mailer::migrations()`):
 what was written to customers, what waits for the delivery worker, and what

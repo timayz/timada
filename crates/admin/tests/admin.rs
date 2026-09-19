@@ -1,6 +1,6 @@
 //! Socket-free tests through `Router::handle`: auth, mounting under a custom
-//! segment, the orders, promotions, inventory, invoices, refunds, reviews,
-//! questions and e-mails sections, branded 404s.
+//! segment, the orders, promotions, inventory, invoices, refunds, returns,
+//! reviews, questions and e-mails sections, branded 404s.
 
 use timada_admin::{AdminConfig, AdminServices, Stylesheet, create_admin, migrations};
 use timada_core::{Address, Money};
@@ -32,6 +32,7 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
     all.extend(timada_payment::migrations());
     all.extend(timada_review::migrations());
     all.extend(timada_mailer::migrations());
+    all.extend(timada_returns::migrations());
     let (executor, db) = timada_core::testing::memory_executor(all).await?;
     create_admin(&db, EMAIL, PASSWORD).await?;
 
@@ -879,5 +880,136 @@ async fn the_outbox_is_listed_and_failed_emails_can_be_retried() -> anyhow::Resu
         .handle(get("/admin/emails/nope", Some(&cookie)))
         .await;
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn returns_are_reviewed_and_received_from_the_queue() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let order_id = place_order(&h).await?;
+
+    // Paid and shipped, then the customer asks to send the monitor back.
+    let payments = timada_payment::Command(&h.executor);
+    let payment_id = payments
+        .request_payment(timada_payment::RequestPayment {
+            order_id: order_id.clone(),
+            amount: Money::eur(14_390),
+            method: timada_payment::PaymentMethod::Card,
+        })
+        .await?;
+    payments
+        .capture_payment(&payment_id, "psp-1".into())
+        .await?;
+    let orders = timada_order::Command(&h.executor);
+    orders.mark_paid(&order_id, &payment_id).await?;
+    orders
+        .mark_shipped(&order_id, "shipment-1", "Chronopost".into(), "XY123".into())
+        .await?;
+    let returns = timada_returns::Command {
+        executor: &h.executor,
+        db: h.db.clone(),
+        policy: timada_returns::ReturnPolicy::default(),
+    };
+    let return_id = returns
+        .request_return(timada_returns::RequestReturn {
+            order_id: order_id.clone(),
+            customer_id: "customer-1".into(),
+            lines: vec![timada_returns::RequestedLine {
+                product_id: "aoc-24g4xe".into(),
+                quantity: 1,
+            }],
+            reason: "Pixel mort".into(),
+        })
+        .await?;
+    let sync = || async {
+        for _ in 0..2 {
+            timada_returns::return_processing_subscription()
+                .data(h.db.clone())
+                .run_once(&h.executor)
+                .await?;
+            timada_returns::return_list_subscription()
+                .data(h.db.clone())
+                .run_once(&h.executor)
+                .await?;
+        }
+        anyhow::Ok(())
+    };
+    sync().await?;
+
+    // The queue opens on what is to be reviewed.
+    let year = timada_core::time::year_of(timada_core::time::now_unix_secs()?);
+    let rma = format!("R{year}-000001");
+    let queue = text(h.router.handle(get("/admin/returns", Some(&cookie))).await).await?;
+    assert!(queue.contains(&rma), "{queue}");
+    assert!(queue.contains("Pixel mort"), "{queue}");
+    assert!(queue.contains("C2026-000042"), "{queue}");
+
+    let detail_uri = format!("/admin/returns/{return_id}");
+    let detail = text(h.router.handle(get(&detail_uri, Some(&cookie))).await).await?;
+    assert!(detail.contains("Accepter le retour"), "{detail}");
+    assert!(!detail.contains("Réceptionner le colis"), "{detail}");
+
+    let approved = h
+        .router
+        .handle(post(&format!("{detail_uri}/approve"), "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&approved), detail_uri);
+    let detail = text(h.router.handle(get(&detail_uri, Some(&cookie))).await).await?;
+    assert!(detail.contains("Réceptionner le colis"), "{detail}");
+
+    // More than was asked for is refused with a message.
+    let too_many = h
+        .router
+        .handle(post(
+            &format!("{detail_uri}/receive"),
+            "product_0=aoc-24g4xe&accepted_0=3&restock_0=on&refund_method=original",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&too_many), format!("{detail_uri}?error=accepted"));
+    let warned = text(
+        h.router
+            .handle(get(&location(&too_many), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(warned.contains("articles que demandé"), "{warned}");
+
+    // Taken back, damaged (box unchecked), refunded as store credit.
+    let received = h
+        .router
+        .handle(post(
+            &format!("{detail_uri}/receive"),
+            "product_0=aoc-24g4xe&accepted_0=1&refund_method=credit",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&received), detail_uri);
+    sync().await?;
+
+    let detail = text(h.router.handle(get(&detail_uri, Some(&cookie))).await).await?;
+    assert!(detail.contains("Traité"), "{detail}");
+    assert!(detail.contains("non remis en stock"), "{detail}");
+    assert!(detail.contains(&format!("AVOIR-{rma}")), "{detail}");
+    assert!(detail.contains("119,95 €"), "{detail}");
+    let payment = timada_payment::load_payment(&h.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.refunded, Money::eur(0));
+
+    // Out of the default queue, listed under its status, linked from the order.
+    let queue = text(h.router.handle(get("/admin/returns", Some(&cookie))).await).await?;
+    assert!(queue.contains("Aucun retour dans cette file."), "{queue}");
+    let done = h
+        .router
+        .handle(get("/admin/returns?status=completed", Some(&cookie)))
+        .await;
+    assert!(text(done).await?.contains(&rma));
+    let order_page = h
+        .router
+        .handle(get(&format!("/admin/orders/{order_id}"), Some(&cookie)))
+        .await;
+    assert!(text(order_page).await?.contains(&rma));
     Ok(())
 }

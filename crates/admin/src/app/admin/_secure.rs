@@ -10,6 +10,7 @@ pub mod products;
 pub mod promotions;
 pub mod questions;
 pub mod refunds;
+pub mod returns;
 pub mod reviews;
 
 use topcoat::{

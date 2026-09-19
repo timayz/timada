@@ -20,7 +20,7 @@ use topcoat::{
 };
 
 use crate::{
-    app::admin::_secure::invoices::invoice_id,
+    app::admin::_secure::{invoices::invoice_id, returns::return_id},
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -77,6 +77,14 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         (link, label)
     });
     let title = format!("Commande {}", order.display_number());
+    let order_returns: Vec<(String, String)> = timada_returns::returns_of_order(&services.db, &id)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let link = href!(return_id::show, return_id::ReturnId(row.return_id)).resolve(cx);
+            (link, row.rma_number)
+        })
+        .collect();
     let refund_error = refund_error_message(query::<ShowQuery>(cx)?.refund_error.as_deref());
 
     // What is still refundable, in cents, once the payment is captured.
@@ -172,6 +180,16 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             <div><dt class="text-muted-foreground">"Traitement"</dt><dd>(fulfillment_label)</dd></div>
                             if let Some(reason) = &order.cancelled_reason {
                                 <div><dt class="text-muted-foreground">"Motif d'annulation"</dt><dd>(reason.clone())</dd></div>
+                            }
+                            if !order_returns.is_empty() {
+                                <div>
+                                    <dt class="text-muted-foreground">"Retours"</dt>
+                                    <dd class="flex flex-wrap gap-2">
+                                        for (link, number) in &order_returns {
+                                            <a href=(link.clone()) class="font-mono text-xs underline-offset-4 hover:underline">(number.clone())</a>
+                                        }
+                                    </dd>
+                                </div>
                             }
                         </dl>
                     )
