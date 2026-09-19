@@ -134,13 +134,23 @@ async fn voucher_detail(cx: &Cx, id: &str, voucher: &VoucherView) -> Result<impl
         .customer_id
         .clone()
         .unwrap_or_else(|| "Au porteur".to_owned());
+    let db = &app_context::<AdminServices>(cx).db;
+    let order_ids: Vec<String> = voucher
+        .redemptions
+        .iter()
+        .map(|r| r.order_id.clone())
+        .collect();
+    let order_numbers = timada_order::order_numbers_by_ids(db, &order_ids).await?;
     let redemptions: Vec<(String, String, String)> = voucher
         .redemptions
         .iter()
         .map(|r| {
             (
                 href!(order_id::show, order_id::OrderId(r.order_id.clone())).resolve(cx),
-                r.order_id.clone(),
+                order_numbers
+                    .get(&r.order_id)
+                    .unwrap_or(&r.order_id)
+                    .clone(),
                 money(&r.amount),
             )
         })

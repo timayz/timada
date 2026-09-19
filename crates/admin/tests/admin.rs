@@ -146,6 +146,7 @@ async fn place_order(h: &Harness) -> anyhow::Result<String> {
             handling_fee: Money::eur(0),
             promo_code: None,
             discount: None,
+            order_number: Some("C2026-000042".into()),
         })
         .await?;
     order_history_subscription()
@@ -221,10 +222,22 @@ async fn orders_can_be_listed_viewed_and_cancelled() -> anyhow::Result<()> {
 
     let body = text(h.router.handle(get("/admin/orders", Some(&cookie))).await).await?;
     assert!(body.contains(&order_id));
+    assert!(body.contains("C2026-000042"), "{body}");
     assert!(body.contains("143,90"), "total should be formatted: {body}");
+    let found = h
+        .router
+        .handle(get("/admin/orders?number=C2026-0000", Some(&cookie)))
+        .await;
+    assert!(text(found).await?.contains("C2026-000042"));
+    let none = h
+        .router
+        .handle(get("/admin/orders?number=C1999", Some(&cookie)))
+        .await;
+    assert!(text(none).await?.contains("Aucune commande."));
 
     let detail = format!("/admin/orders/{order_id}");
     let body = text(h.router.handle(get(&detail, Some(&cookie))).await).await?;
+    assert!(body.contains("Commande C2026-000042"), "{body}");
     assert!(body.contains("AOC 23.8"));
     assert!(body.contains("Annuler la commande"));
 

@@ -42,6 +42,7 @@ fn place_order(cart_id: &str) -> PlaceOrder {
         handling_fee: Money::eur(449),
         promo_code: None,
         discount: None,
+        order_number: None,
     }
 }
 

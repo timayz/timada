@@ -76,6 +76,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         let link = href!(invoice_id::show, invoice_id::InvoiceId(i.id)).resolve(cx);
         (link, label)
     });
+    let title = format!("Commande {}", order.display_number());
     let refund_error = refund_error_message(query::<ShowQuery>(cx)?.refund_error.as_deref());
 
     // What is still refundable, in cents, once the payment is captured.
@@ -112,7 +113,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
-            title: "Commande",
+            title: &title,
             order_status_badge(status: order.status)
         )
         <p class="-mt-4 mb-6 font-mono text-xs text-muted-foreground">(id.clone()) " · passée le " (date(order.placed_at))</p>

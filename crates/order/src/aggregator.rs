@@ -21,6 +21,10 @@ pub enum Order {
         promo_code: Option<String>,
     },
 
+    /// The human-readable number shown to the customer ("C2026-000042").
+    /// Committed together with `OrderPlaced`, never on its own.
+    OrderNumberAssigned { order_number: String },
+
     /// The cart's code was honoured: `amount` comes off the total. Committed
     /// together with `OrderPlaced`, never on its own.
     OrderDiscountApplied {

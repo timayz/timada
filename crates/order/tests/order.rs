@@ -12,7 +12,7 @@ use timada_inventory::{RegisterStockItem, StockLocation, stock_item_id};
 use timada_order::{
     FulfillmentStatus, ListOrders, OrderStatus, PaymentMode, PromoKind, count_orders, history,
     list_orders, load_fulfillment, load_order_details, migrations, order_checkout_subscription,
-    order_fulfillment_subscription, order_history_subscription, order_id,
+    order_fulfillment_subscription, order_history_subscription, order_id, order_numbers_by_ids,
     order_promo_release_subscription, orders_of_customer,
 };
 use timada_payment::payment_id;
@@ -94,10 +94,17 @@ async fn checkout_cart_with_code<E: Executor>(
     Ok(cart_id)
 }
 
-/// Drains the checkout ACL and the saga until they stop producing events.
-async fn drain<E: Executor + Clone + 'static>(executor: &E) -> anyhow::Result<()> {
+/// Drains the checkout ACL (which allocates the order number in SQL) and the
+/// saga until they stop producing events.
+async fn drain<E: Executor + Clone + 'static>(
+    executor: &E,
+    db: &sqlx::SqlitePool,
+) -> anyhow::Result<()> {
     for _ in 0..4 {
-        order_checkout_subscription().run_once(executor).await?;
+        order_checkout_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
         order_fulfillment_subscription().run_once(executor).await?;
     }
     Ok(())
@@ -116,7 +123,7 @@ async fn cart_checkout_is_fulfilled_through_payment_and_shipping() -> anyhow::Re
     let order_id = order_id(&cart_id);
 
     // Checkout → order placed → stock reserved → payment requested.
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
     let order = load_order_details(&executor, &order_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
@@ -154,7 +161,7 @@ async fn cart_checkout_is_fulfilled_through_payment_and_shipping() -> anyhow::Re
     timada_payment::Command(&executor)
         .capture_payment(payment_id(&order_id), "psp-123".into())
         .await?;
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
     let order = load_order_details(&executor, &order_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("order missing"))?;
@@ -169,7 +176,7 @@ async fn cart_checkout_is_fulfilled_through_payment_and_shipping() -> anyhow::Re
     timada_shipping::Command(&executor)
         .dispatch_shipment(shipment_id(&order_id), "Chronopost".into(), "XY123".into())
         .await?;
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
     let order = load_order_details(&executor, &order_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("order missing"))?;
@@ -182,7 +189,7 @@ async fn cart_checkout_is_fulfilled_through_payment_and_shipping() -> anyhow::Re
     assert_eq!(saga.status, FulfillmentStatus::Completed);
 
     // Redelivering everything changes nothing.
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
     let again = load_order_details(&executor, &order_id).await?;
     assert_eq!(again.as_ref(), Some(&order));
 
@@ -206,18 +213,43 @@ async fn cart_checkout_is_fulfilled_through_payment_and_shipping() -> anyhow::Re
     };
     assert!(list_orders(&db, &cancelled).await?.is_empty());
     assert_eq!(orders_of_customer(&db, CUSTOMER).await?.len(), 1);
-    assert_eq!(count_orders(&db, None).await?, 1);
+    assert_eq!(count_orders(&db, &ListOrders::default()).await?, 1);
+
+    // The checkout gave the order a number, found again by its start.
+    let year = timada_core::time::year_of(order.placed_at);
+    let number = format!("C{year}-000001");
+    assert_eq!(order.order_number.as_deref(), Some(number.as_str()));
+    assert_eq!(order.display_number(), number);
+    assert_eq!(rows[0].order_number.as_deref(), Some(number.as_str()));
+    let by_number = ListOrders {
+        number: Some(format!("C{year}-")),
+        ..ListOrders::default()
+    };
+    assert_eq!(list_orders(&db, &by_number).await?.len(), 1);
+    assert_eq!(count_orders(&db, &by_number).await?, 1);
+    let by_id = ListOrders {
+        number: Some(order_id.clone()),
+        ..ListOrders::default()
+    };
+    assert_eq!(list_orders(&db, &by_id).await?.len(), 1);
+    let unknown = ListOrders {
+        number: Some("C1999-".into()),
+        ..ListOrders::default()
+    };
+    assert!(list_orders(&db, &unknown).await?.is_empty());
+    let numbers = order_numbers_by_ids(&db, std::slice::from_ref(&order_id)).await?;
+    assert_eq!(numbers.get(&order_id), Some(&number));
 
     Ok(())
 }
 
 #[tokio::test]
 async fn out_of_stock_cancels_the_order() -> anyhow::Result<()> {
-    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let cart_id = checkout_cart(&executor, 1, 2, timada_cart::PaymentMode::Card).await?;
     let order_id = order_id(&cart_id);
 
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
 
     let order = load_order_details(&executor, &order_id)
         .await?
@@ -238,15 +270,15 @@ async fn out_of_stock_cancels_the_order() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn declined_payment_releases_stock_and_cancels() -> anyhow::Result<()> {
-    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let cart_id = checkout_cart(&executor, 5, 2, timada_cart::PaymentMode::Card).await?;
     let order_id = order_id(&cart_id);
 
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
     timada_payment::Command(&executor)
         .decline_payment(payment_id(&order_id), "insufficient funds".into())
         .await?;
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
 
     let order = load_order_details(&executor, &order_id)
         .await?
@@ -569,15 +601,15 @@ async fn order_covered_by_a_voucher_skips_the_payment() -> anyhow::Result<()> {
 #[tokio::test]
 async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel()
 -> anyhow::Result<()> {
-    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let cart_id = checkout_cart(&executor, 5, 2, timada_cart::PaymentMode::Card).await?;
     let order_id = order_id(&cart_id);
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
     let payments = timada_payment::Command(&executor);
     payments
         .capture_payment(payment_id(&order_id), "psp-123".into())
         .await?;
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
 
     // A goodwill gesture first, then the operator cancels the order.
     payments
@@ -586,7 +618,7 @@ async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel
     timada_order::Command(&executor)
         .cancel_order(&order_id, "customer changed mind")
         .await?;
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
 
     let payment = timada_payment::load_payment(&executor, payment_id(&order_id))
         .await?
@@ -610,7 +642,7 @@ async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel
     assert_eq!(shipment.status, timada_shipping::ShipmentStatus::Cancelled);
 
     // Redelivery refunds nothing more.
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
     let again = timada_payment::load_payment(&executor, payment_id(&order_id)).await?;
     assert_eq!(again.as_ref(), Some(&payment));
     Ok(())
@@ -618,16 +650,16 @@ async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel
 
 #[tokio::test]
 async fn payment_captured_after_a_cancellation_is_refunded() -> anyhow::Result<()> {
-    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let cart_id = checkout_cart(&executor, 5, 1, timada_cart::PaymentMode::Card).await?;
     let order_id = order_id(&cart_id);
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
 
     // Cancelled while the payment is pending: nothing to refund yet.
     timada_order::Command(&executor)
         .cancel_order(&order_id, "customer changed mind")
         .await?;
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
     let saga = load_fulfillment(&executor, &order_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("saga missing"))?;
@@ -637,7 +669,7 @@ async fn payment_captured_after_a_cancellation_is_refunded() -> anyhow::Result<(
     timada_payment::Command(&executor)
         .capture_payment(payment_id(&order_id), "psp-late".into())
         .await?;
-    drain(&executor).await?;
+    drain(&executor, &db).await?;
     let payment = timada_payment::load_payment(&executor, payment_id(&order_id))
         .await?
         .ok_or_else(|| anyhow::anyhow!("payment missing"))?;

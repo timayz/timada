@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use timada_core::Money;
 use timada_invoice::credit_notes_of_refunds;
+use timada_order::order_numbers_by_ids;
 use timada_payment::{RefundListRow, count_refunds, list_refunds};
 use topcoat::{
     Result,
@@ -43,11 +44,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .into_iter()
         .map(|n| (n.refund_id, (n.credit_note_number, n.invoice_id)))
         .collect();
-    let lines: Vec<(RefundListRow, Option<(String, String)>)> = rows
+    let order_ids: Vec<String> = rows.iter().map(|r| r.order_id.clone()).collect();
+    let order_numbers = order_numbers_by_ids(db, &order_ids).await?;
+    let lines: Vec<RefundLine> = rows
         .into_iter()
-        .map(|row| {
-            let note = notes.get(&row.refund_id).cloned();
-            (row, note)
+        .map(|row| RefundLine {
+            note: notes.get(&row.refund_id).cloned(),
+            order_label: order_numbers
+                .get(&row.order_id)
+                .unwrap_or(&row.order_id)
+                .clone(),
+            row,
         })
         .collect();
 
@@ -62,8 +69,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Montant")
                 ))
                 table_body(
-                    for (row, note) in &lines {
-                        refund_row(row: row, note: note)
+                    for line in &lines {
+                        refund_row(line: line)
                     }
                 )
             )
@@ -72,12 +79,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     })
 }
 
+/// One refund of the journal, ready to render.
+struct RefundLine {
+    row: RefundListRow,
+    /// The order's number, or its id when it has none.
+    order_label: String,
+    /// `(credit note number, invoice id)`, once the note exists.
+    note: Option<(String, String)>,
+}
+
 #[component]
-async fn refund_row(
-    cx: &Cx,
-    row: &RefundListRow,
-    note: &Option<(String, String)>,
-) -> Result<impl View> {
+async fn refund_row(cx: &Cx, line: &RefundLine) -> Result<impl View> {
+    let RefundLine {
+        row,
+        order_label,
+        note,
+    } = line;
     let note_link = note.clone().map(|(number, invoice)| {
         let link = href!(invoice_id::show, invoice_id::InvoiceId(invoice)).resolve(cx);
         (number, link)
@@ -87,7 +104,7 @@ async fn refund_row(
     Ok(view! {
         table_row(
             table_cell((date(row.refunded_at as u64)))
-            table_cell(<a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(row.order_id.clone())</a>)
+            table_cell(<a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label.clone())</a>)
             table_cell(
                 match &note_link {
                     Some((number, link)) => { <a href=(link.clone()) class="font-mono text-xs underline-offset-4 hover:underline">(number.clone())</a> }

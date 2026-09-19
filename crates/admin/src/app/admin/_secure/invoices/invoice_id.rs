@@ -4,6 +4,7 @@
 
 use timada_core::Money;
 use timada_invoice::{credit_notes_of_invoice, load_invoice};
+use timada_order::order_numbers_by_ids;
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -36,6 +37,10 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         Some(number) => format!("Facture {number}"),
         None => "Facture non numérotée".to_owned(),
     };
+    let order_label = order_numbers_by_ids(&services.db, std::slice::from_ref(&invoice.order_id))
+        .await?
+        .remove(&invoice.order_id)
+        .unwrap_or_else(|| invoice.order_id.clone());
     let order_link = href!(order_id::show, order_id::OrderId(invoice.order_id.clone())).resolve(cx);
     let customer_link = href!(
         customer_id::show,
@@ -151,7 +156,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     card_header(card_title("Références"))
                     card_content(
                         <dl class="flex flex-col gap-2 text-sm">
-                            <div><dt class="text-muted-foreground">"Commande"</dt><dd><a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(invoice.order_id.clone())</a></dd></div>
+                            <div><dt class="text-muted-foreground">"Commande"</dt><dd><a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label)</a></dd></div>
                             <div><dt class="text-muted-foreground">"Client"</dt><dd><a href=(customer_link) class="font-mono text-xs underline-offset-4 hover:underline">(invoice.customer_id.clone())</a></dd></div>
                             if let Some(reason) = &invoice.voided_reason {
                                 <div><dt class="text-muted-foreground">"Motif d'annulation"</dt><dd>(reason.clone())</dd></div>

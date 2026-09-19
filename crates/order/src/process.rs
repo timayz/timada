@@ -18,6 +18,7 @@ use crate::{
     aggregator::OrderCancelled,
     command::{Command, PlaceOrder, order_id},
     error::OrderError,
+    numbering::allocate_order_number,
     query::load_order_details,
     value_object::{
         DeliveryChoice, OrderDiscount, OrderLine, OrderTotals, PaymentMode, PromoKind, Seller,
@@ -31,8 +32,8 @@ pub const ORDER_PROMO_RELEASE_SUBSCRIPTION: &str = "order-promo-release";
 /// "Frais de dossier" charged on instalment plans, in minor units.
 pub const INSTALLMENT_HANDLING_FEE_MINOR: i64 = 449;
 
-/// Needs the `SqlitePool` as subscription data: promo-code redemption caps
-/// are counted in SQL.
+/// Needs the `SqlitePool` as subscription data: order numbers are allocated
+/// and promo-code redemption caps counted in SQL.
 pub fn order_checkout_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ORDER_CHECKOUT_SUBSCRIPTION).handler(place_order_on_cart_checked_out())
 }
@@ -84,6 +85,12 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         None => None,
     };
 
+    // Keyed by the order id: a redelivery gets the number it already has.
+    let db = ctx
+        .get::<SqlitePool>()
+        .ok_or_else(|| anyhow::anyhow!("SqlitePool missing from subscription context"))?;
+    let order_number = allocate_order_number(&db, &order_id(&cart_id)).await?;
+
     let cmd = PlaceOrder {
         cart_id: cart_id.clone(),
         customer_id: event.data.customer_id,
@@ -103,6 +110,7 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         handling_fee,
         promo_code: cart.promo_code,
         discount,
+        order_number: Some(order_number),
     };
 
     match Command(ctx.executor).place_order(cmd).await {

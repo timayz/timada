@@ -2,7 +2,7 @@ use evento::Executor;
 use timada_core::{Address, Money};
 
 use crate::{
-    aggregator::{OrderDiscountApplied, OrderPlaced},
+    aggregator::{OrderDiscountApplied, OrderNumberAssigned, OrderPlaced},
     error::OrderError,
     value_object::{DeliveryChoice, OrderDiscount, OrderLine, PaymentMode, Seller, order_total},
 };
@@ -25,6 +25,9 @@ pub struct PlaceOrder {
     pub promo_code: Option<String>,
     /// What the promotion context granted for that code, already redeemed.
     pub discount: Option<OrderDiscount>,
+    /// The number shown to the customer, from [`crate::allocate_order_number`];
+    /// without one the order goes by its id.
+    pub order_number: Option<String>,
 }
 
 #[evento::command]
@@ -78,6 +81,9 @@ impl<E: Executor> super::Command<'_, E> {
             handling_fee: cmd.handling_fee,
             promo_code: cmd.promo_code,
         });
+        if let Some(order_number) = cmd.order_number.filter(|n| !n.trim().is_empty()) {
+            write.event(&OrderNumberAssigned { order_number });
+        }
         if let Some(discount) = cmd.discount {
             write.event(&OrderDiscountApplied {
                 code: discount.code,

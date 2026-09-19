@@ -11,8 +11,8 @@ use sqlx::SqlitePool;
 
 use crate::{
     aggregator::{
-        OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderPaid, OrderPlaced,
-        OrderSettled, OrderShipped,
+        OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderNumberAssigned,
+        OrderPaid, OrderPlaced, OrderSettled, OrderShipped,
     },
     query::load_order_details,
     value_object::{OrderStatus, Seller},
@@ -23,6 +23,8 @@ pub const ORDER_HISTORY_SUBSCRIPTION: &str = "order-history";
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct OrderHistoryRow {
     pub order_id: String,
+    /// "C2026-000042"; `None` for an order placed without a number.
+    pub order_number: Option<String>,
     pub customer_id: String,
     pub placed_at: i64,
     pub year: i64,
@@ -39,6 +41,9 @@ pub fn order_history_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(status_on_order_settled())
         .handler(status_on_order_shipped())
         .handler(status_on_order_cancelled())
+        // Both are committed together with `OrderPlaced`, whose handler
+        // reads them through the details view.
+        .skip::<OrderNumberAssigned>()
         .skip::<OrderDiscountApplied>()
         .skip::<OrderConfirmationResent>()
         .strict()
@@ -51,7 +56,8 @@ pub async fn history(
     year: i32,
 ) -> sqlx::Result<Vec<OrderHistoryRow>> {
     sqlx::query_as(
-        "SELECT order_id, customer_id, placed_at, year, seller, status, total_minor, currency
+        "SELECT order_id, order_number, customer_id, placed_at, year, seller, status,
+                total_minor, currency
          FROM order_history
          WHERE customer_id = ? AND year = ?
          ORDER BY placed_at DESC",
@@ -68,7 +74,8 @@ pub async fn orders_of_customer(
     customer_id: &str,
 ) -> sqlx::Result<Vec<OrderHistoryRow>> {
     sqlx::query_as(
-        "SELECT order_id, customer_id, placed_at, year, seller, status, total_minor, currency
+        "SELECT order_id, order_number, customer_id, placed_at, year, seller, status,
+                total_minor, currency
          FROM order_history
          WHERE customer_id = ?
          ORDER BY placed_at DESC, order_id",
@@ -82,6 +89,8 @@ pub async fn orders_of_customer(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListOrders {
     pub status: Option<OrderStatus>,
+    /// Matches the start of the order number, or the whole order id.
+    pub number: Option<String>,
     pub limit: u32,
     pub offset: u32,
 }
@@ -90,6 +99,7 @@ impl Default for ListOrders {
     fn default() -> Self {
         Self {
             status: None,
+            number: None,
             limit: 50,
             offset: 0,
         }
@@ -101,24 +111,59 @@ pub async fn list_orders(
     query: &ListOrders,
 ) -> sqlx::Result<Vec<OrderHistoryRow>> {
     sqlx::query_as(
-        "SELECT order_id, customer_id, placed_at, year, seller, status, total_minor, currency
+        "SELECT order_id, order_number, customer_id, placed_at, year, seller, status,
+                total_minor, currency
          FROM order_history
          WHERE (?1 IS NULL OR status = ?1)
+           AND (?2 IS NULL OR order_number LIKE ?2 || '%' OR order_id = ?2)
          ORDER BY placed_at DESC, order_id
-         LIMIT ?2 OFFSET ?3",
+         LIMIT ?3 OFFSET ?4",
     )
     .bind(query.status.map(OrderStatus::as_str))
+    .bind(number_filter(query.number.as_deref()))
     .bind(query.limit)
     .bind(query.offset)
     .fetch_all(db)
     .await
 }
 
-pub async fn count_orders(db: &SqlitePool, status: Option<OrderStatus>) -> sqlx::Result<i64> {
-    sqlx::query_scalar("SELECT COUNT(*) FROM order_history WHERE (?1 IS NULL OR status = ?1)")
-        .bind(status.map(OrderStatus::as_str))
-        .fetch_one(db)
-        .await
+pub async fn count_orders(db: &SqlitePool, query: &ListOrders) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM order_history
+         WHERE (?1 IS NULL OR status = ?1)
+           AND (?2 IS NULL OR order_number LIKE ?2 || '%' OR order_id = ?2)",
+    )
+    .bind(query.status.map(OrderStatus::as_str))
+    .bind(number_filter(query.number.as_deref()))
+    .fetch_one(db)
+    .await
+}
+
+fn number_filter(number: Option<&str>) -> Option<String> {
+    let number = number?.trim().replace(['%', '_'], "");
+    (!number.is_empty()).then_some(number)
+}
+
+/// The numbers of the given orders, for pages of other contexts that only
+/// hold order ids. Orders without a number are absent.
+pub async fn order_numbers_by_ids(
+    db: &SqlitePool,
+    order_ids: &[String],
+) -> sqlx::Result<std::collections::HashMap<String, String>> {
+    if order_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT order_id, order_number FROM order_history
+         WHERE order_number IS NOT NULL AND order_id IN (",
+    );
+    let mut bound = query.separated(", ");
+    for id in order_ids {
+        bound.push_bind(id);
+    }
+    query.push(")");
+    let rows: Vec<(String, String)> = query.build_query_as().fetch_all(db).await?;
+    Ok(rows.into_iter().collect())
 }
 
 fn pool<E: Executor>(ctx: &Context<'_, E>) -> anyhow::Result<SqlitePool> {
@@ -144,8 +189,9 @@ async fn insert_on_order_placed<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderPlaced>,
 ) -> anyhow::Result<()> {
-    // The total net of `OrderDiscountApplied`, which is committed together
-    // with this event: the details view is the one place that folds both.
+    // The number and the total net of the discount come from companion
+    // events committed together with this one: the details view is the one
+    // place that folds them.
     let Some(order) = load_order_details(ctx.executor, &event.aggregate_id).await? else {
         anyhow::bail!("order {} placed but cannot be loaded", event.aggregate_id);
     };
@@ -155,10 +201,12 @@ async fn insert_on_order_placed<E: Executor>(
     };
     sqlx::query(
         "INSERT OR IGNORE INTO order_history
-            (order_id, customer_id, placed_at, year, seller, status, total_minor, currency)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (order_id, order_number, customer_id, placed_at, year, seller, status, total_minor,
+             currency)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&event.aggregate_id)
+    .bind(&order.order_number)
     .bind(&event.data.customer_id)
     .bind(event.timestamp as i64)
     .bind(timada_core::time::year_of(event.timestamp))
