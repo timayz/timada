@@ -611,3 +611,63 @@ async fn questions_show_on_the_product_page_once_answered() -> anyhow::Result<()
     assert!(!own.contains("en attente de réponse"), "{own}");
     Ok(())
 }
+
+#[tokio::test]
+async fn shoppers_are_told_when_a_product_is_back_in_stock() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    let product = format!("/p/{product_id}");
+    let inventory = timada_inventory::Command(&store.executor);
+    let stock_item =
+        timada_inventory::stock_item_id(&product_id, &timada_inventory::StockLocation::Warehouse);
+
+    // In stock: no alert to ask for, and asking anyway registers nothing.
+    let page = text(browser.get(&product).await).await?;
+    assert!(!page.contains("retour en stock"), "{page}");
+    browser.post("/register", REGISTER).await;
+    browser.post(&format!("{product}/alert"), "").await;
+    db::run_subscriptions_once(&store).await?;
+    let none = text(browser.get("/account/alerts").await).await?;
+    assert!(none.contains("Aucune alerte."), "{none}");
+
+    // Someone else takes the last units.
+    let left = crate::app::catalog::available_stock(&store, &product_id).await?;
+    inventory
+        .reserve_stock(&stock_item, "order-elsewhere", left)
+        .await?;
+    let guest = text(Browser::new(&router).get(&product).await).await?;
+    assert!(guest.contains("Rupture"), "{guest}");
+    assert!(
+        guest.contains("pour être alerté du retour en stock"),
+        "{guest}"
+    );
+
+    let page = text(browser.get(&product).await).await?;
+    assert!(
+        page.contains("alerter du retour en stock</button>"),
+        "{page}"
+    );
+    let asked = browser.post(&format!("{product}/alert"), "").await;
+    assert_eq!(location(&asked), product);
+    // Asking twice is harmless.
+    let twice = browser.post(&format!("{product}/alert"), "").await;
+    assert_eq!(twice.status(), StatusCode::SEE_OTHER);
+    db::run_subscriptions_once(&store).await?;
+    let page = text(browser.get(&product).await).await?;
+    assert!(page.contains("Alerte enregistrée"), "{page}");
+    let waiting = text(browser.get("/account/alerts").await).await?;
+    assert!(
+        waiting.contains("En attente du retour en stock"),
+        "{waiting}"
+    );
+
+    // A delivery arrives: the alert fires and the shopper's list says so.
+    inventory.receive_stock(&stock_item, 3).await?;
+    db::run_subscriptions_once(&store).await?;
+    let back = text(browser.get("/account/alerts").await).await?;
+    assert!(back.contains("De nouveau disponible"), "{back}");
+    let page = text(browser.get(&product).await).await?;
+    assert!(page.contains("En stock"), "{page}");
+    assert!(!page.contains("Alerte enregistrée"), "{page}");
+    Ok(())
+}

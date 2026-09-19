@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use timada_catalog::{ListProducts, ProductListRow, list_products, load_product_page};
 use timada_customer::customers_by_ids;
-use timada_inventory::{StockLocation, stock_item_id};
+use timada_inventory::{
+    InventoryError, RequestBackInStockAlert, StockLocation, alert_id, stock_item_id,
+};
 use timada_order::{OrderStatus, load_order_details, orders_of_customer};
 use timada_pricing::{load_product_price, price_id};
 use timada_review::{
@@ -109,6 +111,34 @@ pub async fn submit_review(cx: &Cx, Form(form): Form<ReviewForm>) -> Result<impl
         Err(err) => return Err(anyhow::Error::from(err).into()),
     };
     Ok(view! { product_view(review_error: Some(error.to_owned()), question_error: None) })
+}
+
+/// "M'alerter du retour en stock": a signed-in shopper asks to be told when
+/// an out-of-stock product is back. Asking twice, or for a product that is
+/// in stock, changes nothing.
+#[page(POST "/p/{product_id}/alert")]
+pub async fn request_alert(cx: &Cx) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let id = param::<ProductId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    load_product_page(&store.executor, &id)
+        .await?
+        .ok_or_not_found()?;
+
+    if available_stock(store, &id).await? == 0 {
+        let requested = timada_inventory::Command(&store.executor)
+            .request_back_in_stock_alert(RequestBackInStockAlert {
+                product_id: id.clone(),
+                customer_id: account.customer_id.clone(),
+                email: account.email.clone(),
+            })
+            .await;
+        match requested {
+            Ok(_) | Err(InventoryError::AlreadyRequested) => {}
+            Err(err) => return Err(anyhow::Error::from(err).into()),
+        }
+    }
+    Err::<(), _>(see_other(href!(product_page, ProductId(id)).resolve(cx)).into())
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,6 +331,15 @@ async fn product_view(
             .collect(),
         None => Vec::new(),
     };
+    // Out of stock: can this shopper ask for an alert, or is one pending?
+    let alert_pending = match &account {
+        Some(account) if available == 0 => timada_inventory::Command(&store.executor)
+            .load_alert(alert_id(&id, &account.customer_id))
+            .await?
+            .is_some_and(|alert| !alert.triggered),
+        _ => false,
+    };
+    let alert_action = href!(request_alert, ProductId(id.clone())).resolve(cx);
     let signed_in = account.is_some();
     let login_link = href!(account::login)
         .query([(
@@ -361,6 +400,17 @@ async fn product_view(
                     " "
                     <button type="submit">"Ajouter au panier"</button>
                 </form>
+            }
+            if available == 0 && !product.archived {
+                if alert_pending {
+                    <p role="status" class="notice">"Alerte enregistrée : vous serez prévenu du retour en stock dans " <a href=(href!(account::alerts))>"vos alertes"</a> "."</p>
+                } else if signed_in {
+                    <form method="post" action=(alert_action.clone())>
+                        <button type="submit">"M'alerter du retour en stock"</button>
+                    </form>
+                } else {
+                    <p><a href=(login_link.clone())>"Connectez-vous"</a> " pour être alerté du retour en stock."</p>
+                }
             }
             if !product.key_features.is_empty() {
                 <h2>"Caractéristiques principales"</h2>
