@@ -751,3 +751,166 @@ async fn an_order_left_unpaid_is_cancelled_and_the_shopper_told() -> anyhow::Res
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=2"))
+        .await;
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+    let checkout = text(browser.get("/checkout").await).await?;
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address radio"))?
+        .to_owned();
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let order_page = format!("/account/orders/{order_id}");
+    db::run_subscriptions_once(&store).await?;
+
+    // Not shipped yet: nothing to return.
+    let page = text(browser.get(&order_page).await).await?;
+    assert!(!page.contains("Retourner des articles"), "{page}");
+    timada_payment::Command(&store.executor)
+        .capture_payment(timada_payment::payment_id(&order_id), "psp-1".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    timada_shipping::Command(&store.executor)
+        .dispatch_shipment(
+            timada_shipping::shipment_id(&order_id),
+            "Colissimo".into(),
+            "XY123".into(),
+        )
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+
+    let page = text(browser.get(&order_page).await).await?;
+    assert!(page.contains("Retourner des articles"), "{page}");
+    let form_uri = format!("{order_page}/return");
+    let form = text(browser.get(&form_uri).await).await?;
+    assert!(form.contains("Quantité à retourner"), "{form}");
+
+    // Nothing ticked, then more than was bought: both come back with a message.
+    let nothing = browser
+        .post(
+            &form_uri,
+            &format!("product_0={product_id}&quantity_0=0&reason=Autre"),
+        )
+        .await;
+    assert!(text(nothing).await?.contains("au moins un article"));
+    let greedy = browser
+        .post(
+            &form_uri,
+            &format!("product_0={product_id}&quantity_0=3&reason=Autre"),
+        )
+        .await;
+    assert!(text(greedy).await?.contains("plus retourner que 2"));
+
+    let asked = browser
+        .post(
+            &form_uri,
+            &format!(
+                "product_0={product_id}&quantity_0=1&reason=Ne+convient+pas&details=Trop+grand"
+            ),
+        )
+        .await;
+    let slip_uri = location(&asked);
+    assert!(slip_uri.starts_with("/account/returns/"), "{slip_uri}");
+    let return_id = slip_uri.rsplit('/').next().unwrap_or_default().to_owned();
+    db::run_subscriptions_once(&store).await?;
+    let slip = text(browser.get(&slip_uri).await).await?;
+    assert!(slip.contains("Demande en cours d"), "{slip}");
+    assert!(slip.contains("Ne convient pas — Trop grand"), "{slip}");
+    // Someone else cannot read it.
+    let mut other = Browser::new(&router);
+    other
+        .post(
+            "/login",
+            &format!(
+                "email={}&password={}",
+                seed::SHOPPER_EMAIL.replace('@', "%40"),
+                seed::SHOPPER_PASSWORD
+            ),
+        )
+        .await;
+    assert_eq!(other.get(&slip_uri).await.status(), StatusCode::NOT_FOUND);
+
+    // Approved: the slip gives the address; received: refunded and restocked.
+    let returns = timada_returns::Command {
+        executor: &store.executor,
+        db: store.db.clone(),
+        policy: timada_returns::ReturnPolicy::default(),
+    };
+    returns.approve_return(&return_id).await?;
+    db::run_subscriptions_once(&store).await?;
+    let slip = text(browser.get(&slip_uri).await).await?;
+    assert!(slip.contains("Envoyer votre colis"), "{slip}");
+    assert!(slip.contains("Service retours"), "{slip}");
+    let stock_before = crate::app::catalog::available_stock(&store, &product_id).await?;
+    returns
+        .receive_return(
+            &return_id,
+            timada_returns::ReceiveReturn {
+                lines: vec![timada_returns::ReceivedLine {
+                    product_id: product_id.clone(),
+                    accepted: 1,
+                    restock: true,
+                }],
+                refund_method: timada_returns::RefundMethod::OriginalPayment,
+            },
+        )
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+
+    let slip = text(browser.get(&slip_uri).await).await?;
+    assert!(slip.contains("Traité"), "{slip}");
+    assert!(slip.contains("119,95 €"), "{slip}");
+    assert_eq!(
+        crate::app::catalog::available_stock(&store, &product_id).await?,
+        stock_before + 1
+    );
+    // The order page lists the return, shows the refund and its credit note,
+    // and still offers to return the unit that is left.
+    let page = text(browser.get(&order_page).await).await?;
+    assert!(page.contains("Retours de cette commande"), "{page}");
+    assert!(page.contains("Remboursé"), "{page}");
+    assert!(page.contains("Avoirs émis"), "{page}");
+    assert!(page.contains("Retourner des articles"), "{page}");
+
+    // The shopper was written to at each step.
+    let outbox = timada_mailer::list_outbox(&store.db, None, 100, 0).await?;
+    let kinds: Vec<&str> = outbox
+        .iter()
+        .filter(|m| m.recipient == "ada@example.com")
+        .map(|m| m.kind.as_str())
+        .collect();
+    for kind in ["return-approved", "return-completed", "refund"] {
+        assert!(kinds.contains(&kind), "{kind} missing from {kinds:?}");
+    }
+    let approved = outbox
+        .iter()
+        .find(|m| m.kind == "return-approved")
+        .ok_or_else(|| anyhow::anyhow!("no approval e-mail"))?;
+    assert!(
+        approved.body.contains("Service retours"),
+        "{}",
+        approved.body
+    );
+    Ok(())
+}

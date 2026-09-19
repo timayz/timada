@@ -1,5 +1,5 @@
 //! Which facts of the other contexts are worth an e-mail. One subscription,
-//! not strict: it listens to a handful of events across five aggregates.
+//! not strict: it listens to a handful of events across six aggregates.
 //! Every handler only enqueues (see [`crate::enqueue`]); the message id is
 //! derived from the event id, so a redelivery never writes a second e-mail.
 
@@ -15,6 +15,10 @@ use timada_order::{
     aggregator::{OrderCancelled, OrderConfirmationResent, OrderPlaced, OrderShipped},
 };
 use timada_payment::aggregator::PaymentRefunded;
+use timada_returns::{
+    ReturnView,
+    aggregator::{ReturnApproved, ReturnCompleted, ReturnRefused},
+};
 use timada_review::aggregator::QuestionAnswered;
 
 use crate::{
@@ -36,6 +40,9 @@ pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(notify_on_payment_refunded())
         .handler(notify_on_alert_triggered())
         .handler(notify_on_question_answered())
+        .handler(notify_on_return_approved())
+        .handler(notify_on_return_refused())
+        .handler(notify_on_return_completed())
 }
 
 /// The subscription data and whether the event is recent enough to be worth
@@ -279,6 +286,87 @@ async fn notify_on_question_answered<E: Executor>(
         &event.id.to_string(),
         "question-answered",
         &customer.email,
+        content,
+    )
+    .await
+}
+
+/// The return and who asked for it: `(return, e-mail, first name)`.
+async fn return_and_customer<E: Executor>(
+    executor: &E,
+    return_id: &str,
+) -> anyhow::Result<(ReturnView, String, String)> {
+    let Some(request) = timada_returns::load_return(executor, return_id).await? else {
+        anyhow::bail!("return {return_id} cannot be loaded");
+    };
+    let Some(customer) = timada_customer::load_address_book(executor, &request.customer_id).await?
+    else {
+        anyhow::bail!(
+            "customer {} of return {return_id} cannot be loaded",
+            request.customer_id
+        );
+    };
+    Ok((request, customer.email, customer.first_name))
+}
+
+#[evento::subscription]
+async fn notify_on_return_approved<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ReturnApproved>,
+) -> anyhow::Result<()> {
+    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let content = template::return_approved(&config, &first_name, &request);
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "return-approved",
+        &to,
+        content,
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn notify_on_return_refused<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ReturnRefused>,
+) -> anyhow::Result<()> {
+    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let content = template::return_refused(&config, &first_name, &request);
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "return-refused",
+        &to,
+        content,
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn notify_on_return_completed<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ReturnCompleted>,
+) -> anyhow::Result<()> {
+    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let content = template::return_completed(&config, &first_name, &request);
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "return-completed",
+        &to,
         content,
     )
     .await

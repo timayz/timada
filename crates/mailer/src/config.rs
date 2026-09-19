@@ -8,6 +8,9 @@ pub struct MailerConfig {
     pub shop_name: String,
     /// Absolute storefront URL without a trailing slash, for links.
     pub base_url: String,
+    /// Where customers send their returns, one line per address line; printed
+    /// in the "return approved" e-mail.
+    pub returns_address: String,
     /// Events older than this many seconds are not e-mailed about. A
     /// subscription replays history when it first starts (or after a long
     /// outage): without this guard, plugging the mailer into an existing shop

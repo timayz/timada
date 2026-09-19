@@ -53,6 +53,10 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     all
 }
 
+/// Where shoppers send their returns: on the return slip and in the e-mail.
+pub const RETURNS_ADDRESS: &str =
+    "Timada demo — Service retours\n1 rue de l'Entrepôt\n31000 Toulouse\nFrance";
+
 /// What the e-mails say about the shop; `TIMADA_BASE_URL` and
 /// `TIMADA_MAIL_FROM` override the development defaults.
 pub fn mailer_config() -> timada_mailer::MailerConfig {
@@ -62,6 +66,7 @@ pub fn mailer_config() -> timada_mailer::MailerConfig {
         shop_name: "Timada demo".to_owned(),
         base_url: std::env::var("TIMADA_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:3000".to_owned()),
+        returns_address: RETURNS_ADDRESS.to_owned(),
         max_event_age_secs: timada_mailer::MailerConfig::DEFAULT_MAX_EVENT_AGE_SECS,
     }
 }
