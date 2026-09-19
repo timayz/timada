@@ -3,7 +3,8 @@
 //! the two compensation branches (out of stock, payment declined) and the
 //! cart's promo code: redeemed before the order is placed, given back when
 //! the order is cancelled — the payment-less path of an order the code paid
-//! for entirely, and the refund of an order cancelled after it was paid.
+//! for entirely, the refund of an order cancelled after it was paid, the
+//! timeout of a payment nobody completes, and resuming a half-started saga.
 
 use evento::Executor;
 use timada_cart::{AddLine, Checkout};
@@ -13,7 +14,8 @@ use timada_order::{
     FulfillmentStatus, ListOrders, OrderStatus, PaymentMode, PromoKind, count_orders, history,
     list_orders, load_fulfillment, load_order_details, migrations, order_checkout_subscription,
     order_fulfillment_subscription, order_history_subscription, order_id, order_numbers_by_ids,
-    order_promo_release_subscription, orders_of_customer,
+    order_promo_release_subscription, orders_awaiting_payment, orders_of_customer,
+    payment_deadline_subscription,
 };
 use timada_payment::payment_id;
 use timada_shipping::shipment_id;
@@ -683,5 +685,137 @@ async fn payment_captured_after_a_cancellation_is_refunded() -> anyhow::Result<(
             .await?
             .is_none()
     );
+    Ok(())
+}
+
+/// Drains everything plus the list of orders waiting for their payment.
+async fn drain_with_deadlines<E: Executor + Clone + 'static>(
+    executor: &E,
+    db: &sqlx::SqlitePool,
+) -> anyhow::Result<()> {
+    drain(executor, db).await?;
+    payment_deadline_subscription()
+        .data(db.clone())
+        .run_once(executor)
+        .await
+}
+
+#[tokio::test]
+async fn a_payment_nobody_completes_times_out_and_frees_the_stock() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let abandoned = checkout_cart(&executor, 5, 2, timada_cart::PaymentMode::Card).await?;
+    let abandoned = order_id(&abandoned);
+    drain_with_deadlines(&executor, &db).await?;
+    let now = timada_core::time::now_unix_secs()?;
+
+    // Requested a moment ago: inside the delay, nothing expires.
+    assert_eq!(orders_awaiting_payment(&db, now + 1).await?.len(), 1);
+    assert_eq!(
+        timada_order::expire_unpaid_orders(&executor, &db, now.saturating_sub(1_800)).await?,
+        0
+    );
+
+    // Past the delay: the payment is declined, the saga compensates.
+    assert_eq!(
+        timada_order::expire_unpaid_orders(&executor, &db, now + 1).await?,
+        1
+    );
+    drain_with_deadlines(&executor, &db).await?;
+    let order = load_order_details(&executor, &abandoned)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order missing"))?;
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(order.cancelled_reason.as_deref(), Some("payment timed out"));
+    let stock = timada_inventory::load_stock_availability(
+        &executor,
+        stock_item_id(PRODUCT, &StockLocation::Warehouse),
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("stock item missing"))?;
+    assert_eq!((stock.reserved, stock.available), (0, 5));
+    assert!(orders_awaiting_payment(&db, now + 1).await?.is_empty());
+
+    // The PSP callback that finally comes in is refused: nothing to refund.
+    let late = timada_payment::Command(&executor)
+        .capture_payment(payment_id(&abandoned), "psp-late".into())
+        .await;
+    assert!(matches!(
+        late,
+        Err(timada_payment::PaymentError::NotRequested)
+    ));
+    // Sweeping again finds nothing.
+    assert_eq!(
+        timada_order::expire_unpaid_orders(&executor, &db, now + 1).await?,
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_captured_payment_is_never_timed_out() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cart_id = checkout_cart(&executor, 5, 1, timada_cart::PaymentMode::Card).await?;
+    let order_id = order_id(&cart_id);
+    drain_with_deadlines(&executor, &db).await?;
+
+    // Captured, but the saga has not caught up yet: the sweep must leave it.
+    timada_payment::Command(&executor)
+        .capture_payment(payment_id(&order_id), "psp-1".into())
+        .await?;
+    let now = timada_core::time::now_unix_secs()?;
+    assert_eq!(
+        timada_order::expire_unpaid_orders(&executor, &db, now + 1).await?,
+        0
+    );
+    drain_with_deadlines(&executor, &db).await?;
+    let order = load_order_details(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order missing"))?;
+    assert_eq!(order.status, OrderStatus::Paid);
+    assert!(orders_awaiting_payment(&db, now + 1).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_saga_interrupted_while_reserving_is_resumed() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cart_id = checkout_cart(&executor, 5, 2, timada_cart::PaymentMode::Card).await?;
+    let order_id = order_id(&cart_id);
+    order_checkout_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    let order = load_order_details(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
+
+    // What a crash right after opening the saga leaves behind: the saga
+    // exists, no stock was asked for, and `OrderPlaced` will be redelivered.
+    evento::append(timada_order::fulfillment_id(&order_id))
+        .event(&timada_order::aggregator::FulfillmentStarted {
+            order_id: order_id.clone(),
+            lines: vec![timada_order::FulfillmentLine {
+                product_id: PRODUCT.into(),
+                quantity: 2,
+            }],
+            pickup_store_id: None,
+            amount: order.total.clone(),
+            payment_mode: PaymentMode::Card,
+        })
+        .commit(&executor)
+        .await?;
+
+    drain(&executor, &db).await?;
+    let saga = load_fulfillment(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("saga missing"))?;
+    assert_eq!(saga.status, FulfillmentStatus::AwaitingPayment);
+    let stock = timada_inventory::load_stock_availability(
+        &executor,
+        stock_item_id(PRODUCT, &StockLocation::Warehouse),
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("stock item missing"))?;
+    assert_eq!((stock.reserved, stock.available), (2, 3));
     Ok(())
 }

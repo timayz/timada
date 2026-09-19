@@ -6,7 +6,8 @@
 //! topcoat dev -p demo                  # bundle assets, watch, serve on :3000
 //! ```
 //!
-//! E-mails are queued in the mailer's outbox (see `/admin/emails`) and only
+//! An order still unpaid after `TIMADA_PAYMENT_TIMEOUT_SECS` (30 minutes by
+//! default) is cancelled and its stock released. E-mails are queued in the mailer's outbox (see `/admin/emails`) and only
 //! logged, unless built with `--features smtp` and given `TIMADA_SMTP_URL`.
 
 mod app;
@@ -77,6 +78,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let _subscriptions = db::start_subscriptions(&store).await?;
+    // An order whose payment is never completed gives its stock back.
+    let payment_timeout = env::var("TIMADA_PAYMENT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+        .unwrap_or(1_800);
+    tokio::spawn(timada_order::run_payment_timeouts(
+        executor.clone(),
+        pool.clone(),
+        std::time::Duration::from_secs(payment_timeout),
+        std::time::Duration::from_secs(60),
+    ));
     tokio::spawn(timada_mailer::run_delivery(
         pool.clone(),
         mail_transport()?,

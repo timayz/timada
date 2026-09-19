@@ -56,8 +56,31 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0003AwaitingPayment;
+
+sqlite_migration!(
+    M0003AwaitingPayment,
+    "order",
+    "m0003_awaiting_payment",
+    vec_box![M0002OrderNumber],
+    vec_box![
+        (
+            "CREATE TABLE order_awaiting_payment (
+                order_id TEXT PRIMARY KEY,
+                payment_id TEXT NOT NULL,
+                since INTEGER NOT NULL
+            )",
+            "DROP TABLE order_awaiting_payment"
+        ),
+        (
+            "CREATE INDEX order_awaiting_payment_since ON order_awaiting_payment (since)",
+            "DROP INDEX order_awaiting_payment_since"
+        )
+    ]
+);
+
 /// Write-side and read-model migrations for this context, to register
 /// alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001OrderHistory, M0002OrderNumber]
+    vec_box![M0001OrderHistory, M0002OrderNumber, M0003AwaitingPayment]
 }

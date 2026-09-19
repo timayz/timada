@@ -4,8 +4,10 @@ use timada_payment::aggregator::PaymentDeclined;
 use crate::value_object::FulfillmentStatus;
 
 use super::{compensate, load_fulfillment};
+use crate::payment_deadline::PAYMENT_TIMED_OUT;
 
-/// `PaymentDeclined` → give the stock back and cancel the order.
+/// `PaymentDeclined` → give the stock back and cancel the order. A payment
+/// declined by [`crate::expire_unpaid_orders`] cancels it as timed out.
 #[evento::subscription]
 pub(super) async fn compensate_declined_payment<E: Executor>(
     ctx: &Context<'_, E>,
@@ -26,5 +28,10 @@ pub(super) async fn compensate_declined_payment<E: Executor>(
     {
         return Ok(());
     }
-    compensate(ctx.executor, &saga, "payment declined").await
+    let reason = if event.data.reason == PAYMENT_TIMED_OUT {
+        PAYMENT_TIMED_OUT
+    } else {
+        "payment declined"
+    };
+    compensate(ctx.executor, &saga, reason).await
 }

@@ -4,7 +4,7 @@ use timada_inventory::{InventoryError, ReservationOutcome};
 use crate::{
     aggregator::{FulfillmentStarted, OrderPlaced},
     query::load_order_details,
-    value_object::FulfillmentLine,
+    value_object::{FulfillmentLine, FulfillmentStatus},
 };
 
 use super::{compensate, fulfillment_id, load_fulfillment, stock_location};
@@ -18,9 +18,14 @@ pub(super) async fn start_fulfillment<E: Executor>(
     event: Event<OrderPlaced>,
 ) -> anyhow::Result<()> {
     let order_id = event.aggregate_id.to_owned();
-    if load_fulfillment(ctx.executor, &order_id).await?.is_some() {
-        return Ok(());
-    }
+    // A saga that exists and is still reserving is a previous delivery that
+    // stopped half-way (a crash between two reservations): carry on, the
+    // reservations are idempotent. Any later status means the work is done.
+    let resuming = match load_fulfillment(ctx.executor, &order_id).await? {
+        Some(saga) if saga.status != FulfillmentStatus::ReservingStock => return Ok(()),
+        Some(_) => true,
+        None => false,
+    };
 
     // What is left to pay once `OrderDiscountApplied` (committed together
     // with this event) is taken off.
@@ -37,23 +42,27 @@ pub(super) async fn start_fulfillment<E: Executor>(
         })
         .collect();
 
-    let started = evento::append(fulfillment_id(&order_id))
-        .event(&FulfillmentStarted {
-            order_id: order_id.clone(),
-            lines: lines.clone(),
-            pickup_store_id: event.data.delivery.pickup_store_id.clone(),
-            amount: order.total,
-            payment_mode: event.data.payment_mode.clone(),
-        })
-        .commit(ctx.executor)
-        .await;
+    let started = if resuming {
+        Ok(String::new())
+    } else {
+        evento::append(fulfillment_id(&order_id))
+            .event(&FulfillmentStarted {
+                order_id: order_id.clone(),
+                lines: lines.clone(),
+                pickup_store_id: event.data.delivery.pickup_store_id.clone(),
+                amount: order.total,
+                payment_mode: event.data.payment_mode.clone(),
+            })
+            .commit(ctx.executor)
+            .await
+    };
     match started {
         Ok(_) => {}
         // Lost the race with a concurrent delivery of the same event.
         Err(evento::WriteError::InvalidOriginalVersion) => return Ok(()),
         Err(err) => return Err(err.into()),
     }
-    tracing::info!(%order_id, "order fulfillment started");
+    tracing::info!(%order_id, resuming, "order fulfillment started");
 
     let location = stock_location(event.data.delivery.pickup_store_id.as_deref());
     let inventory = timada_inventory::Command(ctx.executor);
