@@ -689,3 +689,65 @@ async fn shoppers_are_told_when_a_product_is_back_in_stock() -> anyhow::Result<(
     assert!(!page.contains("Alerte enregistrée"), "{page}");
     Ok(())
 }
+
+#[tokio::test]
+async fn an_order_left_unpaid_is_cancelled_and_the_shopper_told() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=2"))
+        .await;
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+    let checkout = text(browser.get("/checkout").await).await?;
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address radio"))?
+        .to_owned();
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    db::run_subscriptions_once(&store).await?;
+    let before = crate::app::catalog::available_stock(&store, &product_id).await?;
+
+    // Nobody completes the payment: the sweep expires it.
+    let now = timada_core::time::now_unix_secs()?;
+    // Two orders expire: this one and the seeded order, which nobody paid either.
+    let expired = timada_order::expire_unpaid_orders(&store.executor, &store.db, now + 1).await?;
+    assert_eq!(expired, 2);
+    db::run_subscriptions_once(&store).await?;
+
+    let after = crate::app::catalog::available_stock(&store, &product_id).await?;
+    assert!(after >= before + 2, "{before} → {after}");
+    let detail = text(browser.get(&format!("/account/orders/{order_id}")).await).await?;
+    assert!(detail.contains("Annulée"), "{detail}");
+    assert!(
+        detail.contains("paiement non finalisé dans les délais"),
+        "{detail}"
+    );
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let cancelled = outbox
+        .iter()
+        .find(|m| m.kind == "order-cancelled" && m.recipient == "ada@example.com")
+        .ok_or_else(|| anyhow::anyhow!("no cancellation e-mail: {outbox:?}"))?;
+    assert!(
+        cancelled
+            .body
+            .contains("paiement non finalisé dans les délais"),
+        "{}",
+        cancelled.body
+    );
+    Ok(())
+}

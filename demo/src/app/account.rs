@@ -711,7 +711,7 @@ async fn order_view(
                     if let Some(tracking) = &order.tracking_number { " — suivi " (tracking.clone()) }
                 </p>
             }
-            if let Some(reason) = &order.cancelled_reason { <p>"Motif d'annulation : " (reason.clone())</p> }
+            if let Some(reason) = &order.cancelled_reason { <p>"Motif d'annulation : " (timada_order::cancellation_reason_label(reason).to_owned())</p> }
             <table>
                 <caption class="muted">"Articles commandés"</caption>
                 <thead>

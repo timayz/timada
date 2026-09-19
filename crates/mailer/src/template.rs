@@ -104,7 +104,10 @@ pub(crate) fn order_cancelled(
             config,
             first_name,
             &[
-                format!("Votre commande {number} a été annulée. Motif : {reason}."),
+                format!(
+                    "Votre commande {number} a été annulée. Motif : {}.",
+                    timada_order::cancellation_reason_label(reason)
+                ),
                 "Si un paiement avait été encaissé, il vous est remboursé ; vous recevrez un \
                  e-mail de confirmation du remboursement."
                     .to_owned(),
