@@ -1,6 +1,7 @@
 use timada_core::Money;
 use timada_payment::{
-    Command, PaymentError, PaymentMethod, PaymentStatus, RequestPayment, load_payment, payment_id,
+    Command, PaymentError, PaymentMethod, PaymentStatus, RequestPayment, count_refunds,
+    list_refunds, load_payment, migrations, payment_id, refund_list_subscription,
 };
 
 fn installments_request() -> RequestPayment {
@@ -16,7 +17,7 @@ fn installments_request() -> RequestPayment {
 
 #[tokio::test]
 async fn capture_then_partial_and_full_refund() -> anyhow::Result<()> {
-    let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let cmd = Command(&executor);
 
     let id = cmd.request_payment(installments_request()).await?;
@@ -54,6 +55,23 @@ async fn capture_then_partial_and_full_refund() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
     assert_eq!(view.status, PaymentStatus::Refunded);
     assert_eq!(view.refunded, Money::eur(12_496));
+
+    // The admin listing has one row per refund; a redelivery adds nothing.
+    for _ in 0..2 {
+        refund_list_subscription()
+            .data(db.clone())
+            .run_once(&executor)
+            .await?;
+    }
+    let rows = list_refunds(&db, 50, 0).await?;
+    assert_eq!(count_refunds(&db).await?, 2);
+    let mut amounts: Vec<(i64, &str)> = rows
+        .iter()
+        .map(|r| (r.amount_minor, r.reason.as_str()))
+        .collect();
+    amounts.sort_unstable();
+    assert_eq!(amounts, [(2_496, "goodwill"), (10_000, "returned")]);
+    assert!(rows.iter().all(|r| r.order_id == "order-4112117449224J"));
 
     Ok(())
 }
