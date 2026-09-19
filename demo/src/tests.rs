@@ -322,3 +322,64 @@ async fn only_honoured_promo_codes_are_recorded() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn promo_code_lowers_the_order_total() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    let applied = browser
+        .post("/cart/promo", &format!("code={}", seed::PROMO_CODE))
+        .await;
+    assert_eq!(applied.status(), StatusCode::SEE_OTHER);
+
+    // 10 % off 119,95 €, shown before anything is ordered.
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("Code promo BIENVENUE10"), "{cart}");
+    assert!(cart.contains("12,00 €"), "{cart}");
+    assert!(cart.contains("107,95 €"), "{cart}");
+
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+    let checkout = text(browser.get("/checkout").await).await?;
+    assert!(checkout.contains("107,95 €"), "{checkout}");
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address radio"))?
+        .to_owned();
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    let confirmation = location(&placed);
+    db::run_subscriptions_once(&store).await?;
+
+    // 107,95 + 5,90 of shipping: the order, its history row and its detail.
+    let done = text(browser.get(&confirmation).await).await?;
+    assert!(done.contains("113,85 €"), "{done}");
+    let order_id = confirmation
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let history = text(browser.get("/account/orders").await).await?;
+    assert!(history.contains("113,85 €"), "{history}");
+    let detail = text(browser.get(&format!("/account/orders/{order_id}")).await).await?;
+    assert!(detail.contains("Remise (BIENVENUE10)"), "{detail}");
+    assert!(detail.contains("113,85 €"), "{detail}");
+
+    let invoice =
+        timada_invoice::load_invoice(&store.executor, timada_invoice::invoice_id(&order_id))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("invoice not drafted"))?;
+    assert_eq!(invoice.total, timada_core::Money::eur(11_385));
+    Ok(())
+}

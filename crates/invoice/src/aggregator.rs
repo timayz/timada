@@ -14,6 +14,10 @@ pub enum Invoice {
         handling_fee: Money,
     },
 
+    /// The order's promo code or voucher: `amount` comes off the total.
+    /// Committed together with `InvoiceDrafted`, never on its own.
+    InvoiceDiscountApplied { label: String, amount: Money },
+
     /// The order was paid: the invoice got its legal number.
     InvoiceIssued { invoice_number: String },
 

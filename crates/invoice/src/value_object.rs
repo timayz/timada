@@ -15,6 +15,13 @@ impl InvoiceLine {
     }
 }
 
+/// The reduction line of an invoice ("Code promo WELCOME10").
+#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+pub struct InvoiceDiscount {
+    pub label: String,
+    pub amount: Money,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
 pub enum InvoiceStatus {
     #[default]

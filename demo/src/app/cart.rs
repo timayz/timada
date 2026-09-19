@@ -2,10 +2,12 @@
 //! line is added; the form only says which product and how many.
 
 use serde::Deserialize;
-use timada_cart::{AddLine, CartError, CartLine};
+use timada_cart::{AddLine, CartDetailsView, CartError, CartLine};
 use timada_catalog::load_product_page;
 use timada_pricing::{load_product_price, price_id};
-use timada_promotion::{discount_id, load_discount_details, load_voucher_balance, voucher_id};
+use timada_promotion::{
+    CodeKind, discount_id, load_discount_details, load_voucher_balance, quote_code, voucher_id,
+};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -205,6 +207,41 @@ async fn promo_problem(store: &Store, code: &str) -> anyhow::Result<Option<&'sta
     Ok(Some("Code promo ou bon d'achat inconnu."))
 }
 
+/// The cart's code as the cart and checkout pages show it.
+pub(super) struct PromoLine {
+    pub label: String,
+    /// What the code takes off and the subtotal once it did; `None` when the
+    /// code stopped being usable since it was typed in.
+    pub effect: Option<(String, String)>,
+}
+
+/// An estimate on the goods alone — the binding amount is set when the order
+/// is placed, by the order context redeeming the code.
+pub(super) async fn promo_line(
+    store: &Store,
+    cart: &CartDetailsView,
+) -> anyhow::Result<Option<PromoLine>> {
+    let Some(code) = &cart.promo_code else {
+        return Ok(None);
+    };
+    let quote = quote_code(&store.executor, code, &cart.subtotal, &cart.subtotal).await?;
+    let Some(quote) = quote else {
+        return Ok(Some(PromoLine {
+            label: code.clone(),
+            effect: None,
+        }));
+    };
+    let label = match quote.kind {
+        CodeKind::Discount => format!("Code promo {}", quote.code),
+        CodeKind::Voucher => format!("Bon d'achat {}", quote.code),
+    };
+    let net = cart.subtotal.checked_sub(&quote.amount)?;
+    Ok(Some(PromoLine {
+        label,
+        effect: Some((money(&quote.amount), money(&net))),
+    }))
+}
+
 /// Domain refusals become a message on the cart page; the rest is a 500.
 fn user_facing(
     result: std::result::Result<(), CartError>,
@@ -226,6 +263,10 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
     let cart = match current_cart(cx).await {
         Ok(cart) => cart.clone().filter(|c| !c.lines.is_empty()),
         Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+    };
+    let promo = match &cart {
+        Some(cart) => promo_line(app_context::<Store>(cx), cart).await?,
+        None => None,
     };
 
     Ok(view! {
@@ -252,7 +293,7 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                     </table>
                     <table class="totals">
                         <tbody>
-                            <tr class="total"><td>"Sous-total TTC"</td><td class="num">(money(&cart.subtotal))</td></tr>
+                            promo_totals(subtotal: money(&cart.subtotal), promo: &promo)
                         </tbody>
                     </table>
                     <form method="post" action=(href!(apply_promo))>
@@ -262,9 +303,7 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                         " "
                         <button type="submit">"Appliquer"</button>
                     </form>
-                    if let Some(code) = &cart.promo_code {
-                        <p class="muted">"Code enregistré : " <strong>(code.clone())</strong> ". Il sera pris en compte au traitement de la commande."</p>
-                    }
+                    promo_notice(promo: &promo)
                     <p>
                         <a href=(href!(checkout::show))><strong>"Passer commande"</strong></a>
                         " · "
@@ -277,6 +316,40 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                 }
             }
         )
+    })
+}
+
+/// The subtotal rows of the cart and checkout pages, net of the cart's code.
+#[component]
+pub(super) async fn promo_totals(subtotal: String, promo: &Option<PromoLine>) -> Result<impl View> {
+    let effect = promo
+        .as_ref()
+        .and_then(|p| Some((p.label.clone(), p.effect.clone()?)));
+    Ok(view! {
+        match &effect {
+            Some((label, (amount, net))) => {
+                <tr><td>"Sous-total TTC"</td><td class="num">(subtotal.clone())</td></tr>
+                <tr><td>(label.clone())</td><td class="num">"− " (amount.clone())</td></tr>
+                <tr class="total"><td>"Sous-total après remise"</td><td class="num">(net.clone())</td></tr>
+            }
+            None => {
+                <tr class="total"><td>"Sous-total TTC"</td><td class="num">(subtotal.clone())</td></tr>
+            }
+        }
+    })
+}
+
+/// Says so when the cart's code will not be honoured after all.
+#[component]
+pub(super) async fn promo_notice(promo: &Option<PromoLine>) -> Result<impl View> {
+    let dead_code = promo
+        .as_ref()
+        .filter(|p| p.effect.is_none())
+        .map(|p| p.label.clone());
+    Ok(view! {
+        if let Some(code) = &dead_code {
+            <p role="status" class="notice">"Le code " <strong>(code.clone())</strong> " n'est plus valable : il ne sera pas appliqué à la commande."</p>
+        }
     })
 }
 

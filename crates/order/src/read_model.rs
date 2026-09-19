@@ -10,8 +10,12 @@ use evento::{
 use sqlx::SqlitePool;
 
 use crate::{
-    aggregator::{OrderCancelled, OrderConfirmationResent, OrderPaid, OrderPlaced, OrderShipped},
-    value_object::{OrderStatus, Seller, order_total},
+    aggregator::{
+        OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderPaid, OrderPlaced,
+        OrderShipped,
+    },
+    query::load_order_details,
+    value_object::{OrderStatus, Seller},
 };
 
 pub const ORDER_HISTORY_SUBSCRIPTION: &str = "order-history";
@@ -34,6 +38,7 @@ pub fn order_history_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(status_on_order_paid())
         .handler(status_on_order_shipped())
         .handler(status_on_order_cancelled())
+        .skip::<OrderDiscountApplied>()
         .skip::<OrderConfirmationResent>()
         .strict()
 }
@@ -138,11 +143,11 @@ async fn insert_on_order_placed<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderPlaced>,
 ) -> anyhow::Result<()> {
-    let totals = order_total(
-        &event.data.lines,
-        &event.data.shipping_fee,
-        &event.data.handling_fee,
-    )?;
+    // The total net of `OrderDiscountApplied`, which is committed together
+    // with this event: the details view is the one place that folds both.
+    let Some(order) = load_order_details(ctx.executor, &event.aggregate_id).await? else {
+        anyhow::bail!("order {} placed but cannot be loaded", event.aggregate_id);
+    };
     let seller = match &event.data.seller {
         Seller::Ldlc => "LDLC".to_owned(),
         Seller::Marketplace { name } => name.clone(),
@@ -158,8 +163,8 @@ async fn insert_on_order_placed<E: Executor>(
     .bind(timada_core::time::year_of(event.timestamp))
     .bind(seller)
     .bind(OrderStatus::Placed.as_str())
-    .bind(totals.total.minor)
-    .bind(&totals.total.currency)
+    .bind(order.total.minor)
+    .bind(&order.total.currency)
     .execute(&pool(ctx)?)
     .await?;
     Ok(())

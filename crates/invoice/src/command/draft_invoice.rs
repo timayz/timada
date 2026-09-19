@@ -2,9 +2,9 @@ use evento::Executor;
 use timada_core::{Address, Money};
 
 use crate::{
-    aggregator::InvoiceDrafted,
+    aggregator::{InvoiceDiscountApplied, InvoiceDrafted},
     error::InvoiceError,
-    value_object::{InvoiceLine, invoice_total},
+    value_object::{InvoiceDiscount, InvoiceLine, invoice_total},
 };
 
 use super::invoice_id;
@@ -17,6 +17,7 @@ pub struct DraftInvoice {
     pub lines: Vec<InvoiceLine>,
     pub shipping_fee: Money,
     pub handling_fee: Money,
+    pub discount: Option<InvoiceDiscount>,
 }
 
 #[evento::command]
@@ -35,21 +36,31 @@ impl<E: Executor> super::Command<'_, E> {
             return Err(InvoiceError::NoLines);
         }
         // Rejects mixed currencies and overflow before anything is written.
-        invoice_total(&cmd.lines, &cmd.shipping_fee, &cmd.handling_fee)?;
+        let (_, total) = invoice_total(&cmd.lines, &cmd.shipping_fee, &cmd.handling_fee)?;
+        if let Some(discount) = &cmd.discount {
+            discount.amount.same_currency(&total)?;
+            if !discount.amount.is_positive() || discount.amount.minor > total.minor {
+                return Err(InvoiceError::InvalidDiscount);
+            }
+        }
 
         let id = invoice_id(&cmd.order_id);
-        let result = evento::append(&id)
-            .routing_key_opt(routing_key)
-            .event(&InvoiceDrafted {
-                order_id: cmd.order_id.clone(),
-                customer_id: cmd.customer_id,
-                billing_address: cmd.billing_address,
-                lines: cmd.lines,
-                shipping_fee: cmd.shipping_fee,
-                handling_fee: cmd.handling_fee,
-            })
-            .commit(self.executor)
-            .await;
+        let mut write = evento::append(&id);
+        write.routing_key_opt(routing_key).event(&InvoiceDrafted {
+            order_id: cmd.order_id.clone(),
+            customer_id: cmd.customer_id,
+            billing_address: cmd.billing_address,
+            lines: cmd.lines,
+            shipping_fee: cmd.shipping_fee,
+            handling_fee: cmd.handling_fee,
+        });
+        if let Some(discount) = cmd.discount {
+            write.event(&InvoiceDiscountApplied {
+                label: discount.label,
+                amount: discount.amount,
+            });
+        }
+        let result = write.commit(self.executor).await;
 
         match result {
             Ok(id) => {

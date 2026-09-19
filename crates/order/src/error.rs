@@ -13,6 +13,8 @@ pub enum OrderError {
         expected: &'static str,
         actual: &'static str,
     },
+    #[error("discount must be positive and at most {} {}", max.minor, max.currency)]
+    InvalidDiscount { max: timada_core::Money },
     #[error("unknown delivery method `{0}`")]
     UnknownDeliveryMethod(String),
     #[error("`{0}` is required")]

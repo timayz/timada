@@ -11,6 +11,7 @@ use timada_pricing::{InstallmentOffer, ListPrice};
 
 use crate::Store;
 
+pub const PROMO_CODE: &str = "BIENVENUE10";
 pub const SHOPPER_EMAIL: &str = "jonathan@example.com";
 pub const SHOPPER_PASSWORD: &str = "demo1234";
 
@@ -19,6 +20,24 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
 
     match timada_admin::create_admin(&store.db, "admin@timada.example", "admin").await {
         Ok(_) | Err(timada_admin::AdminError::EmailTaken(_)) => {}
+        Err(err) => return Err(err.into()),
+    }
+
+    // A promo code to try in the cart: 10 % off the goods.
+    let promotion = timada_promotion::Command {
+        executor,
+        db: store.db.clone(),
+    };
+    match promotion
+        .create_discount(timada_promotion::CreateDiscount {
+            code: PROMO_CODE.into(),
+            kind: timada_promotion::DiscountKind::Percent { bp: 1_000 },
+            max_redemptions: None,
+            valid_until: None,
+        })
+        .await
+    {
+        Ok(_) | Err(timada_promotion::PromotionError::CodeAlreadyExists(_)) => {}
         Err(err) => return Err(err.into()),
     }
 

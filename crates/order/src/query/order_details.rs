@@ -6,9 +6,12 @@ use timada_core::{Address, Money};
 
 use crate::{
     aggregator::{
-        Order, OrderCancelled, OrderConfirmationResent, OrderPaid, OrderPlaced, OrderShipped,
+        Order, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderPaid,
+        OrderPlaced, OrderShipped,
     },
-    value_object::{DeliveryChoice, OrderLine, OrderStatus, PaymentMode, Seller, order_total},
+    value_object::{
+        DeliveryChoice, OrderDiscount, OrderLine, OrderStatus, PaymentMode, Seller, order_total,
+    },
 };
 
 #[evento::projection(bitcode::Encode, bitcode::Decode)]
@@ -29,7 +32,10 @@ pub struct OrderDetailsView {
     pub shipping_fee: Money,
     pub handling_fee: Money,
     pub subtotal: Money,
+    /// The honoured code and what it takes off; `total` is already net of it.
+    pub discount: Option<OrderDiscount>,
     pub total: Money,
+    /// The code typed in the cart, honoured or not.
     pub promo_code: Option<String>,
     pub payment_id: Option<String>,
     pub shipment_id: Option<String>,
@@ -44,6 +50,7 @@ pub struct OrderDetailsView {
 pub fn create_projection<E: Executor>() -> Projection<E, OrderDetailsView> {
     Projection::new::<Order>()
         .handler(on_order_placed())
+        .handler(on_order_discount_applied())
         .handler(on_order_paid())
         .handler(on_order_shipped())
         .handler(on_order_cancelled())
@@ -84,6 +91,20 @@ async fn on_order_placed(
     row.subtotal = totals.subtotal;
     row.total = totals.total;
     row.promo_code = event.data.promo_code;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_discount_applied(
+    event: Event<OrderDiscountApplied>,
+    row: &mut OrderDetailsView,
+) -> anyhow::Result<()> {
+    row.total = row.total.checked_sub(&event.data.amount)?;
+    row.discount = Some(OrderDiscount {
+        code: event.data.code,
+        kind: event.data.kind,
+        amount: event.data.amount,
+    });
     Ok(())
 }
 

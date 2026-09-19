@@ -4,7 +4,9 @@ use evento::{Executor, metadata::Event, projection::Projection};
 use timada_core::Money;
 
 use crate::{
-    aggregator::{Voucher, VoucherCancelled, VoucherIssued, VoucherRedeemed},
+    aggregator::{
+        Voucher, VoucherCancelled, VoucherIssued, VoucherRedeemed, VoucherRedemptionRefunded,
+    },
     value_object::{VoucherKind, VoucherRedemption},
 };
 
@@ -28,6 +30,7 @@ pub fn create_projection<E: Executor>() -> Projection<E, VoucherView> {
         .handler(on_voucher_issued())
         .handler(on_voucher_redeemed())
         .handler(on_voucher_cancelled())
+        .handler(on_voucher_redemption_refunded())
         .strict()
 }
 
@@ -73,5 +76,16 @@ async fn on_voucher_cancelled(
 ) -> anyhow::Result<()> {
     row.cancelled = true;
     row.cancelled_reason = Some(event.data.reason);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_voucher_redemption_refunded(
+    event: Event<VoucherRedemptionRefunded>,
+    row: &mut VoucherView,
+) -> anyhow::Result<()> {
+    row.remaining = row.remaining.checked_add(&event.data.amount)?;
+    row.redemptions
+        .retain(|r| r.order_id != event.data.order_id);
     Ok(())
 }

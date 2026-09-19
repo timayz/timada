@@ -139,6 +139,7 @@ async fn place_order(h: &Harness) -> anyhow::Result<String> {
             shipping_fee: Money::eur(2_395),
             handling_fee: Money::eur(0),
             promo_code: None,
+            discount: None,
         })
         .await?;
     order_history_subscription()

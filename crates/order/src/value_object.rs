@@ -43,6 +43,33 @@ pub struct OrderTotals {
     pub total: Money,
 }
 
+impl OrderTotals {
+    /// The most a promo code or voucher may take off: the goods, never the
+    /// fees — and always one minor unit short of the total, because the
+    /// fulfillment saga has no path for an order with nothing to pay.
+    pub fn max_discount(&self) -> Money {
+        let minor = self.subtotal.minor.min(self.total.minor - 1).max(0);
+        Money::new(minor, &self.total.currency)
+    }
+}
+
+/// What the cart's code was: a promo code (a price reduction) or a voucher /
+/// credit note (a balance spent on the order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
+pub enum PromoKind {
+    #[default]
+    Discount,
+    Voucher,
+}
+
+/// A code honoured on an order and what it takes off the total.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+pub struct OrderDiscount {
+    pub code: String,
+    pub kind: PromoKind,
+    pub amount: Money,
+}
+
 /// Who sold the goods: the shop itself or a marketplace vendor.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
 pub enum Seller {
