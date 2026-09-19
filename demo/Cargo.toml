@@ -24,6 +24,7 @@ timada-invoice.workspace = true
 timada-payment.workspace = true
 timada-mailer.workspace = true
 timada-returns.workspace = true
+timada-tax.workspace = true
 timada-promotion.workspace = true
 timada-admin.workspace = true
 evento.workspace = true
