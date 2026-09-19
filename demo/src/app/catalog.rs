@@ -1,5 +1,5 @@
 //! `/` and `/p/{product_id}`: the catalogue and the product page, with its
-//! customer reviews and the form to leave one.
+//! customer reviews, its questions & answers, and the forms to add to both.
 
 use std::collections::HashMap;
 
@@ -10,8 +10,8 @@ use timada_inventory::{StockLocation, stock_item_id};
 use timada_order::{OrderStatus, load_order_details, orders_of_customer};
 use timada_pricing::{load_product_price, price_id};
 use timada_review::{
-    ReviewError, ReviewStatus, SubmitReview, load_review_details, product_rating,
-    published_reviews, review_id,
+    AskQuestion, ReviewError, ReviewStatus, SubmitReview, answered_questions, answers_of_questions,
+    load_review_details, product_rating, published_reviews, review_id, unanswered_questions_of,
 };
 use topcoat::{
     Result,
@@ -63,10 +63,11 @@ path_param!(pub product_id: String, error = not_found);
 
 /// Reviews shown on a product page; the rest is a follow-up (pagination).
 const REVIEWS_SHOWN: u32 = 20;
+const QUESTIONS_SHOWN: u32 = 20;
 
 #[page("/p/{product_id}")]
 pub async fn product_page() -> Result<impl View> {
-    Ok(view! { product_view(review_error: None) })
+    Ok(view! { product_view(review_error: None, question_error: None) })
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,7 +108,44 @@ pub async fn submit_review(cx: &Cx, Form(form): Form<ReviewForm>) -> Result<impl
         Err(ReviewError::AlreadyReviewed) => "Vous avez déjà donné votre avis sur ce produit.",
         Err(err) => return Err(anyhow::Error::from(err).into()),
     };
-    Ok(view! { product_view(review_error: Some(error.to_owned())) })
+    Ok(view! { product_view(review_error: Some(error.to_owned()), question_error: None) })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QuestionForm {
+    body: String,
+}
+
+/// A signed-in shopper asks about the product; the question shows to
+/// everyone once it is answered.
+#[page(POST "/p/{product_id}/questions")]
+pub async fn ask_question(cx: &Cx, Form(form): Form<QuestionForm>) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let id = param::<ProductId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    load_product_page(&store.executor, &id)
+        .await?
+        .ok_or_not_found()?;
+
+    let asked = timada_review::Command(&store.executor)
+        .ask_question(AskQuestion {
+            product_id: id.clone(),
+            customer_id: account.customer_id.clone(),
+            body: form.body.trim().to_owned(),
+        })
+        .await;
+    let error = match asked {
+        Ok(_) => {
+            let back = format!(
+                "{}#questions",
+                href!(product_page, ProductId(id)).resolve(cx)
+            );
+            return Err(see_other(back).into());
+        }
+        Err(ReviewError::Required(_)) => "Écrivez votre question avant de l'envoyer.",
+        Err(err) => return Err(anyhow::Error::from(err).into()),
+    };
+    Ok(view! { product_view(review_error: None, question_error: Some(error.to_owned())) })
 }
 
 /// The shopper's order that contains the product, if any: it makes the
@@ -142,6 +180,14 @@ struct ReviewLine {
     verified: bool,
 }
 
+/// One answered question with its answers, ready to render.
+struct QuestionLine {
+    body: String,
+    asked: String,
+    /// `(author, text, date)`.
+    answers: Vec<(String, String, String)>,
+}
+
 /// What the signed-in shopper may do in the reviews section.
 enum ReviewAccess {
     SignIn(String),
@@ -157,7 +203,11 @@ fn stars(rating: i64) -> String {
 }
 
 #[component]
-async fn product_view(cx: &Cx, review_error: Option<String>) -> Result<impl View> {
+async fn product_view(
+    cx: &Cx,
+    review_error: Option<String>,
+    question_error: Option<String>,
+) -> Result<impl View> {
     let id = param::<ProductId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     let product = load_product_page(&store.executor, &id)
@@ -214,6 +264,51 @@ async fn product_view(cx: &Cx, review_error: Option<String>) -> Result<impl View
         Ok(account) => account.clone(),
         Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
     };
+
+    let asked = answered_questions(&store.db, &id, QUESTIONS_SHOWN, 0).await?;
+    let question_ids: Vec<String> = asked.iter().map(|q| q.question_id.clone()).collect();
+    let mut answers_by_question: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
+    for answer in answers_of_questions(&store.db, &question_ids).await? {
+        let author = match answer.author_customer_id {
+            None => "Réponse de la boutique",
+            Some(_) => "Réponse d'un client",
+        };
+        answers_by_question
+            .entry(answer.question_id)
+            .or_default()
+            .push((
+                author.to_owned(),
+                answer.body,
+                date(answer.answered_at as u64),
+            ));
+    }
+    let questions: Vec<QuestionLine> = asked
+        .into_iter()
+        .map(|q| QuestionLine {
+            answers: answers_by_question
+                .remove(&q.question_id)
+                .unwrap_or_default(),
+            body: q.body,
+            asked: date(q.asked_at as u64),
+        })
+        .collect();
+    // The shopper's own questions still waiting for an answer.
+    let own_questions: Vec<String> = match &account {
+        Some(account) => unanswered_questions_of(&store.db, &id, &account.customer_id)
+            .await?
+            .into_iter()
+            .map(|q| q.body)
+            .collect(),
+        None => Vec::new(),
+    };
+    let signed_in = account.is_some();
+    let login_link = href!(account::login)
+        .query([(
+            "next",
+            href!(product_page, ProductId(id.clone())).resolve(cx),
+        )])
+        .resolve(cx);
+    let question_action = href!(ask_question, ProductId(id.clone())).resolve(cx);
     let access = match account {
         None => ReviewAccess::SignIn(
             href!(account::login)
@@ -330,6 +425,37 @@ async fn product_view(cx: &Cx, review_error: Option<String>) -> Result<impl View
                 ReviewAccess::Rejected(reason) => {
                     <p role="status" class="notice">"Votre avis n'a pas été retenu : " (reason.clone())</p>
                 }
+            }
+
+            <h2 id="questions">"Questions & réponses"</h2>
+            if questions.is_empty() {
+                <p class="muted">"Aucune question pour le moment."</p>
+            }
+            for question in &questions {
+                <article class="card">
+                    <h3>(question.body.clone())</h3>
+                    <p class="muted">"Posée le " (question.asked.clone())</p>
+                    for (author, text, answered) in &question.answers {
+                        <p><strong>(author.clone())</strong> " — " (text.clone()) <span class="muted">" (" (answered.clone()) ")"</span></p>
+                    }
+                </article>
+            }
+            if !own_questions.is_empty() {
+                <p role="status" class="notice">"Vos questions en attente de réponse :"</p>
+                <ul>for body in &own_questions { <li>(body.clone())</li> }</ul>
+            }
+            if let Some(error) = &question_error { <p role="alert" class="error">(error.clone())</p> }
+            if signed_in {
+                <form method="post" action=(question_action.clone())>
+                    <p>
+                        <label for="question-body">"Votre question sur ce produit"</label>
+                        <br>
+                        <textarea id="question-body" name="body" rows="3" cols="60" maxlength="1000" required=(true)></textarea>
+                    </p>
+                    <button type="submit">"Poser ma question"</button>
+                </form>
+            } else {
+                <p><a href=(login_link.clone())>"Connectez-vous"</a> " pour poser une question."</p>
             }
         )
     })
