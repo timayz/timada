@@ -446,5 +446,18 @@ async fn cancelling_a_paid_order_refunds_it_with_a_credit_note() -> anyhow::Resu
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].amount_minor, invoice.total.minor);
     assert!(notes[0].reason.contains("rupture fournisseur"));
+
+    // The parcel that was waiting for the carrier will not leave.
+    let shipment =
+        timada_shipping::load_shipment(&store.executor, timada_shipping::shipment_id(&order_id))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("shipment missing"))?;
+    assert_eq!(shipment.status, timada_shipping::ShipmentStatus::Cancelled);
+
+    // The shopper sees the refund and its credit note on the order page.
+    let detail = text(browser.get(&format!("/account/orders/{order_id}")).await).await?;
+    assert!(detail.contains("Remboursé"), "{detail}");
+    assert!(detail.contains(&notes[0].credit_note_number), "{detail}");
+    assert!(detail.contains("rupture fournisseur"), "{detail}");
     Ok(())
 }

@@ -4,7 +4,7 @@ pub enum ShippingError {
     ShipmentNotFound,
     #[error("shipment has no lines")]
     NoLines,
-    #[error("shipment has already been dispatched")]
+    #[error("shipment is no longer awaiting dispatch")]
     NotCreated,
     #[error("shipment has not been dispatched")]
     NotDispatched,

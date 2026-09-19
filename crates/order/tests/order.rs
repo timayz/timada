@@ -567,7 +567,8 @@ async fn order_covered_by_a_voucher_skips_the_payment() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn cancelling_a_paid_order_refunds_what_is_left_and_frees_the_stock() -> anyhow::Result<()> {
+async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel()
+-> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
     let cart_id = checkout_cart(&executor, 5, 2, timada_cart::PaymentMode::Card).await?;
     let order_id = order_id(&cart_id);
@@ -603,6 +604,10 @@ async fn cancelling_a_paid_order_refunds_what_is_left_and_frees_the_stock() -> a
         .await?
         .ok_or_else(|| anyhow::anyhow!("saga missing"))?;
     assert_eq!(saga.status, FulfillmentStatus::Compensated);
+    let shipment = timada_shipping::load_shipment(&executor, shipment_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("shipment missing"))?;
+    assert_eq!(shipment.status, timada_shipping::ShipmentStatus::Cancelled);
 
     // Redelivery refunds nothing more.
     drain(&executor).await?;

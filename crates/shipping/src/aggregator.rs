@@ -22,4 +22,7 @@ pub enum Shipment {
 
     /// The parcel reached its destination.
     ShipmentDelivered,
+
+    /// The order was cancelled before the parcel left: nothing will ship.
+    ShipmentCancelled { reason: String },
 }
