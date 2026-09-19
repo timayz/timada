@@ -96,9 +96,10 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let can_capture = payment
         .as_ref()
         .is_some_and(|p| p.status == PaymentStatus::Requested);
-    let can_ship = shipment
-        .as_ref()
-        .is_some_and(|s| s.status == ShipmentStatus::Created);
+    let can_ship = order.status != OrderStatus::Cancelled
+        && shipment
+            .as_ref()
+            .is_some_and(|s| s.status == ShipmentStatus::Created);
     let can_cancel = matches!(order.status, OrderStatus::Placed | OrderStatus::Paid);
     let fulfillment_label = match fulfillment.map(|f| f.status) {
         None => "non démarrée",
