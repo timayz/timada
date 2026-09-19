@@ -6,7 +6,9 @@ use topcoat::{
 };
 
 use crate::{
-    app::admin::_secure::{customers, inventory, invoices, orders, products, promotions, refunds},
+    app::admin::_secure::{
+        customers, inventory, invoices, orders, products, promotions, refunds, reviews,
+    },
     auth::signed_in_admin,
     config::{AdminConfig, Stylesheet},
 };
@@ -23,6 +25,7 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
     let promotions_link = href!(promotions::index);
     let invoices_link = href!(invoices::index);
     let refunds_link = href!(refunds::index);
+    let reviews_link = href!(reviews::index);
 
     Ok(view! {
         <!DOCTYPE html>
@@ -49,6 +52,7 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
                                 nav_link(link: promotions_link.resolve(cx), current: promotions_link.is_current(cx), "Promotions")
                                 nav_link(link: invoices_link.resolve(cx), current: invoices_link.is_current(cx), "Factures")
                                 nav_link(link: refunds_link.resolve(cx), current: refunds_link.is_current(cx), "Remboursements")
+                                nav_link(link: reviews_link.resolve(cx), current: reviews_link.is_current(cx), "Avis")
                             </nav>
                             <form method="post" action=(href!(crate::app::admin::logout)) class="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
                                 if let Some(admin) = admin { <span>(admin.email.clone())</span> }

@@ -386,6 +386,19 @@ async fn promo_code_lowers_the_order_total() -> anyhow::Result<()> {
             .await?
             .ok_or_else(|| anyhow::anyhow!("invoice not drafted"))?;
     assert_eq!(invoice.total, timada_core::Money::eur(11_385));
+
+    // Having ordered the product makes the shopper's review a verified purchase.
+    browser
+        .post(
+            &format!("/p/{product_id}/reviews"),
+            "rating=5&title=&body=Conforme",
+        )
+        .await;
+    db::run_subscriptions_once(&store).await?;
+    let reviews =
+        timada_review::list_reviews(&store.db, &timada_review::ListReviews::default()).await?;
+    assert_eq!(reviews.len(), 1);
+    assert!(reviews[0].verified_purchase);
     Ok(())
 }
 
@@ -459,5 +472,71 @@ async fn cancelling_a_paid_order_refunds_it_with_a_credit_note() -> anyhow::Resu
     assert!(detail.contains("Remboursé"), "{detail}");
     assert!(detail.contains(&notes[0].credit_note_number), "{detail}");
     assert!(detail.contains("rupture fournisseur"), "{detail}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn reviews_wait_for_moderation_before_showing_on_the_product_page() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    let product = format!("/p/{product_id}");
+
+    // Guests are invited to sign in; posting sends them to the login page.
+    let page = text(browser.get(&product).await).await?;
+    assert!(page.contains("Aucun avis pour le moment."), "{page}");
+    assert!(page.contains("Connectez-vous"), "{page}");
+    let guest = browser
+        .post(
+            &format!("{product}/reviews"),
+            "rating=5&title=Top&body=Super",
+        )
+        .await;
+    assert!(
+        location(&guest).starts_with("/login"),
+        "{}",
+        location(&guest)
+    );
+
+    browser.post("/register", REGISTER).await;
+    let empty = browser
+        .post(&format!("{product}/reviews"), "rating=5&title=Top&body=+")
+        .await;
+    assert_eq!(empty.status(), StatusCode::OK);
+    assert!(text(empty).await?.contains("Écrivez votre avis"));
+
+    let sent = browser
+        .post(
+            &format!("{product}/reviews"),
+            "rating=4&title=Tr%C3%A8s+bon+%C3%A9cran&body=Fluide+et+lumineux.",
+        )
+        .await;
+    assert_eq!(location(&sent), format!("{product}#avis"));
+    db::run_subscriptions_once(&store).await?;
+
+    // Pending: the author is told so, nobody sees the text yet.
+    let page = text(browser.get(&product).await).await?;
+    assert!(page.contains("une fois validé"), "{page}");
+    assert!(!page.contains("Fluide et lumineux."), "{page}");
+    let twice = browser
+        .post(
+            &format!("{product}/reviews"),
+            "rating=1&title=Bis&body=Encore",
+        )
+        .await;
+    assert!(text(twice).await?.contains("déjà donné votre avis"));
+
+    // Published by an operator: it shows, with the rating summary.
+    let rows =
+        timada_review::list_reviews(&store.db, &timada_review::ListReviews::default()).await?;
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].verified_purchase);
+    timada_review::Command(&store.executor)
+        .publish_review(&rows[0].review_id)
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let page = text(Browser::new(&router).get(&product).await).await?;
+    assert!(page.contains("Fluide et lumineux."), "{page}");
+    assert!(page.contains("Ada L."), "{page}");
+    assert!(page.contains("4,0 / 5 — 1 avis"), "{page}");
     Ok(())
 }

@@ -1,6 +1,6 @@
 //! Socket-free tests through `Router::handle`: auth, mounting under a custom
-//! segment, the orders, promotions, inventory, invoices and refunds sections,
-//! branded 404s.
+//! segment, the orders, promotions, inventory, invoices, refunds and reviews
+//! sections, branded 404s.
 
 use timada_admin::{AdminConfig, AdminServices, Stylesheet, create_admin, migrations};
 use timada_core::{Address, Money};
@@ -30,6 +30,7 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
     all.extend(timada_inventory::migrations());
     all.extend(timada_invoice::migrations());
     all.extend(timada_payment::migrations());
+    all.extend(timada_review::migrations());
     let (executor, db) = timada_core::testing::memory_executor(all).await?;
     create_admin(&db, EMAIL, PASSWORD).await?;
 
@@ -631,5 +632,94 @@ async fn invoices_are_listed_and_payments_refunded() -> anyhow::Result<()> {
     assert!(detail.contains(&credit_note), "{detail}");
     assert!(detail.contains("Net après avoirs"), "{detail}");
     assert!(detail.contains("123,90 €"), "{detail}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn reviews_are_moderated_from_the_queue() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let reviews = timada_review::Command(&h.executor);
+    let submit = |customer: &str, body: &str| timada_review::SubmitReview {
+        product_id: "aoc-24g4xe".into(),
+        customer_id: customer.into(),
+        order_id: Some("order-1".into()),
+        rating: 4,
+        title: "Bon écran".into(),
+        body: body.into(),
+    };
+    let kept = reviews
+        .submit_review(submit("customer-1", "Rien à redire."))
+        .await?;
+    let refused = reviews
+        .submit_review(submit("customer-2", "Texte hors sujet."))
+        .await?;
+    let sync = || async {
+        timada_review::review_list_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await
+    };
+    sync().await?;
+
+    // Both wait in the queue, which is the default view.
+    let queue = text(h.router.handle(get("/admin/reviews", Some(&cookie))).await).await?;
+    assert!(queue.contains("Rien à redire."), "{queue}");
+    assert!(queue.contains("Texte hors sujet."), "{queue}");
+    assert!(queue.contains("Achat vérifié"), "{queue}");
+
+    let published = h
+        .router
+        .handle(post(
+            "/admin/reviews/publish",
+            &format!("review_id={kept}"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(published.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&published), "/admin/reviews");
+    let rejected = h
+        .router
+        .handle(post(
+            "/admin/reviews/reject",
+            &format!("review_id={refused}&reason=Hors+sujet"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(rejected.status(), StatusCode::SEE_OTHER);
+    // Moderating twice (a double click, another operator) changes nothing.
+    let again = h
+        .router
+        .handle(post(
+            "/admin/reviews/reject",
+            &format!("review_id={kept}&reason=Trop+tard"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(again.status(), StatusCode::SEE_OTHER);
+    sync().await?;
+
+    let view = timada_review::load_review_details(&h.executor, &kept)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("review missing"))?;
+    assert_eq!(view.status, timada_review::ReviewStatus::Published);
+
+    let queue = text(h.router.handle(get("/admin/reviews", Some(&cookie))).await).await?;
+    assert!(queue.contains("Aucun avis dans cette file."), "{queue}");
+    let refused_list = h
+        .router
+        .handle(get("/admin/reviews?status=rejected", Some(&cookie)))
+        .await;
+    let refused_list = text(refused_list).await?;
+    assert!(refused_list.contains("Hors sujet"), "{refused_list}");
+    assert!(!refused_list.contains("Rien à redire."), "{refused_list}");
+    let all = text(
+        h.router
+            .handle(get("/admin/reviews?status=all", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(all.contains("Rien à redire."), "{all}");
+    assert!(all.contains("Publié"), "{all}");
     Ok(())
 }

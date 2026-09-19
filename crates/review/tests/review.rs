@@ -1,6 +1,7 @@
 use timada_review::{
-    AnswerAuthor, AskQuestion, Command, ReviewError, ReviewStatus, SubmitReview,
-    load_review_details, migrations, product_rating, product_summary_subscription,
+    AnswerAuthor, AskQuestion, Command, ListReviews, ReviewError, ReviewStatus, SubmitReview,
+    count_reviews, list_reviews, load_review_details, migrations, product_rating,
+    product_summary_subscription, published_reviews, review_list_subscription,
 };
 
 const PRODUCT: &str = "aoc-24g4xe";
@@ -75,6 +76,56 @@ async fn rejected_reviews_stay_out_of_the_rating() -> anyhow::Result<()> {
     assert_eq!(rating.review_count, 0);
     assert_eq!(rating.average_rating, None);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_review_list_feeds_the_product_page_and_the_moderation_queue() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command(&executor);
+
+    let kept = cmd.submit_review(review("jonathan", 4)).await?;
+    let refused = cmd
+        .submit_review(SubmitReview {
+            order_id: None,
+            ..review("paul", 1)
+        })
+        .await?;
+    let waiting = cmd.submit_review(review("marie", 5)).await?;
+    cmd.publish_review(&kept).await?;
+    cmd.reject_review(&refused, "insulting".into()).await?;
+    for _ in 0..2 {
+        review_list_subscription()
+            .data(db.clone())
+            .run_once(&executor)
+            .await?;
+    }
+
+    // The product page only shows what moderation let through.
+    let shown = published_reviews(&db, PRODUCT, 10, 0).await?;
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].review_id, kept);
+    assert_eq!(shown[0].title, "Construisez vos victoires");
+    assert!(shown[0].verified_purchase);
+    assert!(published_reviews(&db, "other", 10, 0).await?.is_empty());
+
+    // The queue: everything, or one status.
+    assert_eq!(count_reviews(&db, None).await?, 3);
+    let pending = ListReviews {
+        status: Some(ReviewStatus::Pending),
+        ..ListReviews::default()
+    };
+    let queue = list_reviews(&db, &pending).await?;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].review_id, waiting);
+    let rejected = ListReviews {
+        status: Some(ReviewStatus::Rejected),
+        ..ListReviews::default()
+    };
+    let rows = list_reviews(&db, &rejected).await?;
+    assert_eq!(rows[0].rejection_reason.as_deref(), Some("insulting"));
+    assert!(!rows[0].verified_purchase);
+    assert_eq!(count_reviews(&db, Some(&ReviewStatus::Rejected)).await?, 1);
     Ok(())
 }
 

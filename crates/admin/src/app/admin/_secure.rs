@@ -8,6 +8,7 @@ pub mod orders;
 pub mod products;
 pub mod promotions;
 pub mod refunds;
+pub mod reviews;
 
 use topcoat::{
     Result,
