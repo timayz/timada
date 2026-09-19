@@ -2,6 +2,7 @@
 
 use timada_core::format::{date, money};
 use timada_order::OrderDetailsView;
+use timada_returns::ReturnView;
 
 use crate::config::MailerConfig;
 
@@ -195,5 +196,114 @@ pub(crate) fn question_answered(
                 ),
             ],
         ),
+    )
+}
+
+fn return_link(config: &MailerConfig, request: &ReturnView) -> String {
+    config.url(&format!("/account/returns/{}", request.id))
+}
+
+fn return_lines(request: &ReturnView) -> String {
+    request
+        .lines
+        .iter()
+        .map(|l| format!("  {} × {}", l.quantity, l.name))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(crate) fn return_approved(
+    config: &MailerConfig,
+    first_name: &str,
+    request: &ReturnView,
+) -> Content {
+    let number = &request.rma_number;
+    (
+        format!("Votre retour {number} est accepté"),
+        signed(
+            config,
+            first_name,
+            &[
+                format!("Votre demande de retour {number} est acceptée pour :"),
+                return_lines(request),
+                format!(
+                    "Inscrivez le numéro {number} sur le colis et envoyez-le à :\n{}",
+                    config.returns_address
+                ),
+                format!(
+                    "Le bon de retour et le suivi de votre demande : {}",
+                    return_link(config, request)
+                ),
+            ],
+        ),
+    )
+}
+
+pub(crate) fn return_refused(
+    config: &MailerConfig,
+    first_name: &str,
+    request: &ReturnView,
+) -> Content {
+    let number = &request.rma_number;
+    let reason = request.refused_reason.as_deref().unwrap_or("non précisé");
+    (
+        format!("Votre demande de retour {number} n'a pas été acceptée"),
+        signed(
+            config,
+            first_name,
+            &[
+                format!("Nous ne pouvons pas accepter votre demande de retour {number}."),
+                format!("Motif : {reason}"),
+                format!(
+                    "Le détail de votre demande : {}",
+                    return_link(config, request)
+                ),
+            ],
+        ),
+    )
+}
+
+/// The parcel was handled. The card refund has its own e-mail; this one says
+/// what was taken back and carries the store-credit code, if any.
+pub(crate) fn return_completed(
+    config: &MailerConfig,
+    first_name: &str,
+    request: &ReturnView,
+) -> Content {
+    let number = &request.rma_number;
+    let accepted: u32 = request.received.iter().map(|l| l.accepted).sum();
+    let mut paragraphs = vec![format!(
+        "Nous avons bien reçu votre colis pour le retour {number} : {accepted} article(s) repris \
+         sur {} demandé(s).",
+        request.units()
+    )];
+    if request.money.is_positive() {
+        paragraphs.push(format!(
+            "{} vous sont remboursés sur votre moyen de paiement.",
+            money(&request.money)
+        ));
+    }
+    if let Some(code) = request
+        .voucher_code
+        .as_deref()
+        .filter(|_| request.credit.is_positive())
+    {
+        paragraphs.push(format!(
+            "{} vous sont crédités sous forme d'avoir : saisissez le code {code} dans votre \
+             panier lors d'une prochaine commande.",
+            money(&request.credit)
+        ));
+    }
+    if !request.money.is_positive() && !request.credit.is_positive() {
+        paragraphs
+            .push("Aucun article n'ayant pu être repris, aucun remboursement n'est dû.".to_owned());
+    }
+    paragraphs.push(format!(
+        "Le détail de votre retour : {}",
+        return_link(config, request)
+    ));
+    (
+        format!("Votre retour {number} est traité"),
+        signed(config, first_name, &paragraphs),
     )
 }

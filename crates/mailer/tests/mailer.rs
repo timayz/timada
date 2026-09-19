@@ -16,6 +16,7 @@ fn config() -> MailerConfig {
         from: "Timada <no-reply@timada.example>".into(),
         shop_name: "Timada".into(),
         base_url: "https://shop.example/".into(),
+        returns_address: "Timada — Service retours\n1 rue de l'Entrepôt\n31000 Toulouse".into(),
         max_event_age_secs: MailerConfig::DEFAULT_MAX_EVENT_AGE_SECS,
     }
 }
