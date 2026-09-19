@@ -1,6 +1,6 @@
 //! The e-mails themselves: plain text, in French like the storefront.
 
-use timada_core::format::{date, money};
+use timada_core::format::{date, money, vat_rate};
 use timada_order::OrderDetailsView;
 use timada_returns::ReturnView;
 
@@ -40,7 +40,25 @@ fn order_lines(order: &OrderDetailsView) -> String {
             money(&discount.amount)
         ));
     }
-    lines.push(format!("  Total TTC — {}", money(&order.total)));
+    match &order.tax {
+        Some(tax) if tax.treatment.exemption_mention().is_some() => {
+            lines.push(format!("  Total HT — {}", money(&order.total)));
+            lines.push(
+                "  Vente hors TVA française (livraison hors du territoire fiscal).".to_owned(),
+            );
+        }
+        Some(tax) => {
+            lines.push(format!("  Total TTC — {}", money(&order.total)));
+            for line in tax.vat_lines.iter().filter(|l| l.rate_bp > 0) {
+                lines.push(format!(
+                    "  dont TVA {} — {}",
+                    vat_rate(line.rate_bp),
+                    money(&line.vat)
+                ));
+            }
+        }
+        None => lines.push(format!("  Total TTC — {}", money(&order.total))),
+    }
     lines.join("\n")
 }
 

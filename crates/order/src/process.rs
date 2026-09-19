@@ -14,7 +14,7 @@ use timada_cart::aggregator::CartCheckedOut;
 use timada_core::Money;
 use timada_pricing::price_id;
 use timada_promotion::{CodeKind, PromotionError};
-use timada_tax::TaxZones;
+use timada_tax::{TaxZone, TaxZones};
 
 use crate::{
     aggregator::OrderCancelled,
@@ -93,22 +93,12 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         }
     };
 
-    // Cart lines hold the listed, tax-inclusive price of the day they were
-    // added; the order's lines hold what is charged in the zone.
-    let mut lines = Vec::with_capacity(cart.lines.len());
-    let mut line_rates = Vec::with_capacity(cart.lines.len());
-    for line in cart.lines {
-        let listed_rate =
-            timada_pricing::load_product_price(ctx.executor, price_id(&line.product_id))
-                .await?
-                .map_or(zones.fallback_vat_rate_bp, |price| price.vat_rate_bp);
-        line_rates.push((line.product_id.clone(), zone.applied_rate_bp(listed_rate)));
-        let unit_price = zone.charged(&line.unit_price, listed_rate);
-        lines.push(OrderLine {
-            unit_price,
-            ..order_line(line)
-        });
-    }
+    let charged = lines_charged_in_zone(ctx.executor, &zones, zone, cart.lines).await?;
+    let line_rates = charged
+        .iter()
+        .map(|c| (c.line.product_id.clone(), c.rate_bp))
+        .collect();
+    let lines: Vec<OrderLine> = charged.into_iter().map(|c| c.line).collect();
     let tax = OrderTax {
         zone_code: zone.code.clone(),
         treatment: zone.treatment,
@@ -156,6 +146,41 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         Err(OrderError::AlreadyPlaced(_)) => Ok(()),
         Err(err) => Err(err.into()),
     }
+}
+
+/// A cart line as the order will carry it: priced for a tax zone, with the
+/// VAT rate inside that price.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChargedLine {
+    pub line: OrderLine,
+    pub rate_bp: u16,
+}
+
+/// What a cart's lines are charged in `zone`. Cart lines hold the listed,
+/// tax-inclusive price of the day they were added; each product's VAT rate is
+/// read from the pricing context. Public so a checkout page can show exactly
+/// what the order will be placed at.
+pub async fn lines_charged_in_zone<E: Executor>(
+    executor: &E,
+    zones: &TaxZones,
+    zone: &TaxZone,
+    cart_lines: Vec<timada_cart::CartLine>,
+) -> anyhow::Result<Vec<ChargedLine>> {
+    let mut charged = Vec::with_capacity(cart_lines.len());
+    for line in cart_lines {
+        let listed_rate = timada_pricing::load_product_price(executor, price_id(&line.product_id))
+            .await?
+            .map_or(zones.fallback_vat_rate_bp, |price| price.vat_rate_bp);
+        let unit_price = zone.charged(&line.unit_price, listed_rate);
+        charged.push(ChargedLine {
+            rate_bp: zone.applied_rate_bp(listed_rate),
+            line: OrderLine {
+                unit_price,
+                ..order_line(line)
+            },
+        });
+    }
+    Ok(charged)
 }
 
 /// Redeems the cart's code for the order about to be placed. Idempotent per

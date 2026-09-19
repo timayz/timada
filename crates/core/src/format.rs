@@ -24,6 +24,16 @@ pub fn money(money: &Money) -> String {
     format!("{sign}{grouped},{cents:02} {symbol}")
 }
 
+/// `20 %` or `5,5 %` from basis points.
+pub fn vat_rate(rate_bp: u16) -> String {
+    let (units, hundredths) = (rate_bp / 100, rate_bp % 100);
+    match hundredths {
+        0 => format!("{units} %"),
+        h if h % 10 == 0 => format!("{units},{} %", h / 10),
+        h => format!("{units},{h:02} %"),
+    }
+}
+
 /// `21/11/2024` from Unix seconds (UTC).
 pub fn date(unix_secs: u64) -> String {
     let days = (unix_secs / 86_400) as i64;
@@ -50,5 +60,8 @@ mod tests {
         assert_eq!(money(&Money::eur(-5)), "-0,05 €");
         assert_eq!(money(&Money::new(1_000_000, "CHF")), "10\u{202f}000,00 CHF");
         assert_eq!(date(1_732_147_200), "21/11/2024");
+        assert_eq!(vat_rate(2_000), "20 %");
+        assert_eq!(vat_rate(550), "5,5 %");
+        assert_eq!(vat_rate(825), "8,25 %");
     }
 }

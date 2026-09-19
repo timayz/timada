@@ -21,6 +21,16 @@ impl TaxTreatment {
             TaxTreatment::DestinationVat => "destination-vat",
         }
     }
+
+    /// The legal mention a document without VAT must carry.
+    pub fn exemption_mention(self) -> Option<&'static str> {
+        match self {
+            TaxTreatment::Export => Some(
+                "Exonération de TVA — articles 262 I et 294 du CGI (livraison hors du territoire fiscal)",
+            ),
+            TaxTreatment::Domestic | TaxTreatment::DestinationVat => None,
+        }
+    }
 }
 
 /// A set of delivery countries taxed the same way.
