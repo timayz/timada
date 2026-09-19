@@ -34,12 +34,7 @@ pub struct InvoiceTax {
 impl InvoiceTax {
     /// The legal mention an invoice without VAT must carry.
     pub fn exemption_mention(&self) -> Option<&'static str> {
-        match self.treatment {
-            TaxTreatment::Export => Some(
-                "Exonération de TVA — articles 262 I et 294 du CGI (livraison hors du territoire fiscal)",
-            ),
-            TaxTreatment::Domestic | TaxTreatment::DestinationVat => None,
-        }
+        self.treatment.exemption_mention()
     }
 }
 
