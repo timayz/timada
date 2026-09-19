@@ -679,6 +679,24 @@ async fn shoppers_are_told_when_a_product_is_back_in_stock() -> anyhow::Result<(
         "{waiting}"
     );
 
+    // Changed their mind, then asked again: cancelling is not final.
+    let cancelled = browser
+        .post(&format!("/account/alerts/{product_id}/cancel"), "")
+        .await;
+    assert_eq!(location(&cancelled), "/account/alerts");
+    db::run_subscriptions_once(&store).await?;
+    let none = text(browser.get("/account/alerts").await).await?;
+    assert!(none.contains("Aucune alerte."), "{none}");
+    let page = text(browser.get(&product).await).await?;
+    assert!(
+        page.contains("alerter du retour en stock</button>"),
+        "{page}"
+    );
+    browser.post(&format!("{product}/alert"), "").await;
+    db::run_subscriptions_once(&store).await?;
+    let waiting = text(browser.get("/account/alerts").await).await?;
+    assert!(waiting.contains("Supprimer l"), "{waiting}");
+
     // A delivery arrives: the alert fires and the shopper's list says so.
     inventory.receive_stock(&stock_item, 3).await?;
     db::run_subscriptions_once(&store).await?;
@@ -912,5 +930,106 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
         "{}",
         approved.body
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_shopper_changes_the_email_they_sign_in_with() -> anyhow::Result<()> {
+    let (router, store, _) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser.post("/register", REGISTER).await;
+    let form = text(browser.get("/account/email").await).await?;
+    assert!(form.contains("ada@example.com"), "{form}");
+
+    // The current password is asked again; a taken or unchanged address is refused.
+    let wrong = browser
+        .post(
+            "/account/email",
+            "email=ada.new%40example.com&password=nope",
+        )
+        .await;
+    assert_eq!(wrong.status(), StatusCode::OK);
+    assert!(text(wrong).await?.contains("Mot de passe incorrect"));
+    let taken = browser
+        .post(
+            "/account/email",
+            &format!(
+                "email={}&password=analytical-engine",
+                seed::SHOPPER_EMAIL.replace('@', "%40")
+            ),
+        )
+        .await;
+    assert!(text(taken).await?.contains("existe déjà"));
+    let same = browser
+        .post(
+            "/account/email",
+            "email=ADA%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert!(text(same).await?.contains("déjà l"));
+    let invalid = browser
+        .post(
+            "/account/email",
+            "email=not-an-email&password=analytical-engine",
+        )
+        .await;
+    assert!(text(invalid).await?.contains("invalide"));
+
+    let changed = browser
+        .post(
+            "/account/email",
+            "email=Ada.New%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert_eq!(location(&changed), "/account");
+    db::run_subscriptions_once(&store).await?;
+
+    // Still signed in, under the new address — on the account and the customer.
+    let account = text(browser.get("/account").await).await?;
+    assert!(account.contains("ada.new@example.com"), "{account}");
+    let customers = timada_customer::list_customers(
+        &store.db,
+        &timada_customer::ListCustomers {
+            q: Some("ada.new@example.com".into()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(customers.len(), 1);
+
+    // The old address no longer signs in, the new one does, and the old one
+    // was told about the change.
+    let mut old = Browser::new(&router);
+    let refused = old
+        .post(
+            "/login",
+            "email=ada%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::OK);
+    let mut new = Browser::new(&router);
+    let signed_in = new
+        .post(
+            "/login",
+            "email=ada.new%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert_eq!(location(&signed_in), "/account");
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let notice = outbox
+        .iter()
+        .find(|m| m.kind == "email-changed")
+        .ok_or_else(|| anyhow::anyhow!("no notice: {outbox:?}"))?;
+    assert_eq!(notice.recipient, "ada@example.com");
+    assert!(
+        notice.body.contains("ada.new@example.com"),
+        "{}",
+        notice.body
+    );
+
+    // The address left behind is free again for someone else.
+    let mut newcomer = Browser::new(&router);
+    let registered = newcomer.post("/register", REGISTER).await;
+    assert_eq!(registered.status(), StatusCode::SEE_OTHER);
     Ok(())
 }

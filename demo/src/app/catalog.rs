@@ -336,7 +336,7 @@ async fn product_view(
         Some(account) if available == 0 => timada_inventory::Command(&store.executor)
             .load_alert(alert_id(&id, &account.customer_id))
             .await?
-            .is_some_and(|alert| !alert.triggered),
+            .is_some_and(|alert| alert.is_pending()),
         _ => false,
     };
     let alert_action = href!(request_alert, ProductId(id.clone())).resolve(cx);

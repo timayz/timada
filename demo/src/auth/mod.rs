@@ -84,6 +84,85 @@ pub async fn sign_up(
     Ok(Account { customer_id, email })
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ChangeEmailError {
+    #[error("Mot de passe incorrect.")]
+    WrongPassword,
+    #[error("Adresse email invalide.")]
+    InvalidEmail,
+    #[error("Un compte existe déjà avec cette adresse email.")]
+    EmailTaken,
+    #[error("C'est déjà l'adresse email de votre compte.")]
+    Unchanged,
+    #[error(transparent)]
+    Server(#[from] anyhow::Error),
+}
+
+/// Moves the signed-in shopper to another e-mail address, which is both their
+/// login (SQL) and the customer's address (event). Same order as a sign-up:
+/// the address is taken in SQL first — its primary key is the uniqueness
+/// guard — then recorded on the customer; if that fails the login moves back.
+/// The old address is told, in case it was not the shopper who asked.
+pub async fn change_email(
+    store: &Store,
+    account: &Account,
+    new_email: &str,
+    password: &str,
+) -> Result<Account, ChangeEmailError> {
+    let credentials = store::find_credentials(&store.db, &account.email)
+        .await
+        .map_err(anyhow::Error::from)?;
+    let verified = credentials.is_some_and(|(_, hash)| password::verify(password, &hash));
+    if !verified {
+        return Err(ChangeEmailError::WrongPassword);
+    }
+    let new_email = store::normalize_email(new_email);
+    if new_email == account.email {
+        return Err(ChangeEmailError::Unchanged);
+    }
+    if !store::move_account(&store.db, &account.customer_id, &new_email).await? {
+        return Err(ChangeEmailError::EmailTaken);
+    }
+
+    let changed = timada_customer::Command(&store.executor)
+        .change_email(&account.customer_id, new_email.clone())
+        .await;
+    if let Err(err) = changed {
+        store::move_account(&store.db, &account.customer_id, &account.email).await?;
+        return Err(match err {
+            CustomerError::InvalidEmail(_) => ChangeEmailError::InvalidEmail,
+            other => ChangeEmailError::Server(other.into()),
+        });
+    }
+
+    // Straight into the outbox: only the host knows the address being left.
+    let config = crate::db::mailer_config();
+    let notice = timada_mailer::Email {
+        from: config.from.clone(),
+        to: account.email.clone(),
+        subject: format!("Votre adresse e-mail {} a été modifiée", config.shop_name),
+        body: format!(
+            "Bonjour,\n\nL'adresse e-mail de votre compte {} est désormais {new_email}. Vous ne \
+             recevrez plus nos messages à cette adresse.\n\nSi vous n'êtes pas à l'origine de ce \
+             changement, contactez-nous sans attendre.\n\nÀ bientôt,\n{}\n",
+            config.shop_name, config.shop_name
+        ),
+    };
+    let message_id = timada_core::id::derived(
+        &[&account.customer_id, &account.email, &new_email],
+        "email-changed",
+    );
+    timada_mailer::enqueue(&store.db, &message_id, "email-changed", &notice)
+        .await
+        .map_err(anyhow::Error::from)?;
+
+    tracing::info!(customer_id = %account.customer_id, "shopper changed their e-mail");
+    Ok(Account {
+        customer_id: account.customer_id.clone(),
+        email: new_email,
+    })
+}
+
 /// The shopper the request's session belongs to, if any. Memoized per request.
 #[memoize(as_ref)]
 pub async fn current_account(cx: &Cx) -> topcoat::Result<Option<Account>> {

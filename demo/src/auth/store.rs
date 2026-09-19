@@ -52,6 +52,34 @@ pub async fn claim_email(
     }
 }
 
+/// Moves an account to `new_email`. The primary key makes it atomic: either
+/// the address is free and now belongs to this account, or nothing changed
+/// (`Ok(false)`). A sign-up that died half-way does not keep an address.
+pub async fn move_account(
+    db: &SqlitePool,
+    customer_id: &str,
+    new_email: &str,
+) -> anyhow::Result<bool> {
+    sqlx::query(
+        "DELETE FROM shop_account WHERE email = ? AND customer_id IS NULL AND created_at < ?",
+    )
+    .bind(new_email)
+    .bind(now_secs()? - STALE_CLAIM_SECS)
+    .execute(db)
+    .await?;
+
+    let moved = sqlx::query("UPDATE shop_account SET email = ? WHERE customer_id = ?")
+        .bind(new_email)
+        .bind(customer_id)
+        .execute(db)
+        .await;
+    match moved {
+        Ok(done) => Ok(done.rows_affected() > 0),
+        Err(sqlx::Error::Database(err)) if err.is_unique_violation() => Ok(false),
+        Err(err) => Err(err.into()),
+    }
+}
+
 pub async fn release_claim(db: &SqlitePool, email: &str) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM shop_account WHERE email = ? AND customer_id IS NULL")
         .bind(email)
