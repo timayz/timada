@@ -1,5 +1,5 @@
 //! Socket-free tests through `Router::handle`: auth, mounting under a custom
-//! segment, the orders section, branded 404s.
+//! segment, the orders and promotions sections, branded 404s.
 
 use timada_admin::{AdminConfig, AdminServices, Stylesheet, create_admin, migrations};
 use timada_core::{Address, Money};
@@ -25,6 +25,7 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
     all.extend(timada_order::migrations());
     all.extend(timada_catalog::migrations());
     all.extend(timada_customer::migrations());
+    all.extend(timada_promotion::migrations());
     let (executor, db) = timada_core::testing::memory_executor(all).await?;
     create_admin(&db, EMAIL, PASSWORD).await?;
 
@@ -270,5 +271,128 @@ async fn the_mount_segment_is_configurable() -> anyhow::Result<()> {
 
     let response = h.router.handle(get("/admin/products", Some(&cookie))).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn promo_codes_and_vouchers_are_created_listed_and_ended() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+
+    let empty = h
+        .router
+        .handle(get("/admin/promotions", Some(&cookie)))
+        .await;
+    assert_eq!(empty.status(), StatusCode::OK);
+    assert!(text(empty).await?.contains("Aucun code."));
+
+    // A bad optional number is a form error, not a 400.
+    let bad = h
+        .router
+        .handle(post(
+            "/admin/promotions/new-discount",
+            "code=ete15&kind=percent&value=1500&max_redemptions=beaucoup&valid_days=",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(bad.status(), StatusCode::OK);
+    assert!(text(bad).await?.contains("nombre entier attendu"));
+
+    let created = h
+        .router
+        .handle(post(
+            "/admin/promotions/new-discount",
+            "code=ete15&kind=percent&value=1500&max_redemptions=100&valid_days=30",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    let discount_url = location(&created);
+    assert_eq!(
+        discount_url,
+        format!(
+            "/admin/promotions/{}",
+            timada_promotion::discount_id("ETE15")
+        )
+    );
+    let detail = text(h.router.handle(get(&discount_url, Some(&cookie))).await).await?;
+    assert!(detail.contains("ETE15"));
+    assert!(detail.contains("15 %"));
+    assert!(detail.contains("0 / 100"));
+
+    let duplicate = h
+        .router
+        .handle(post(
+            "/admin/promotions/new-discount",
+            "code=ETE15&kind=fixed&value=500&max_redemptions=&valid_days=",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(duplicate.status(), StatusCode::OK);
+    assert!(text(duplicate).await?.contains("already exists"));
+
+    let issued = h
+        .router
+        .handle(post(
+            "/admin/promotions/new-voucher",
+            "code=cadeau50&value_cents=5000&customer_id=&valid_days=",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(issued.status(), StatusCode::SEE_OTHER);
+    let voucher_url = location(&issued);
+
+    timada_promotion::code_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let list = text(
+        h.router
+            .handle(get("/admin/promotions", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(list.contains("ETE15"));
+    assert!(list.contains("CADEAU50"));
+    let vouchers = text(
+        h.router
+            .handle(get("/admin/promotions?kind=voucher", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(!vouchers.contains("ETE15"));
+
+    // Ending each kind of code.
+    let deactivated = h
+        .router
+        .handle(post(
+            &format!("{discount_url}/deactivate"),
+            "",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&deactivated), discount_url);
+    let detail = text(h.router.handle(get(&discount_url, Some(&cookie))).await).await?;
+    assert!(detail.contains("inactif"));
+    assert!(!detail.contains("Désactiver le code"));
+
+    let cancelled = h
+        .router
+        .handle(post(
+            &format!("{voucher_url}/cancel"),
+            "reason=erreur+de+saisie",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&cancelled), voucher_url);
+    let detail = text(h.router.handle(get(&voucher_url, Some(&cookie))).await).await?;
+    assert!(detail.contains("erreur de saisie"));
+    assert!(detail.contains("50,00 €"));
+
+    let missing = h
+        .router
+        .handle(get("/admin/promotions/nope", Some(&cookie)))
+        .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     Ok(())
 }

@@ -86,6 +86,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .start(executor)
             .await?,
         timada_order::order_promo_release_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
+        timada_promotion::code_list_subscription()
             .data(db)
             .start(executor)
             .await?,
@@ -128,6 +132,10 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .run_once(executor)
             .await?;
         timada_order::order_promo_release_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_promotion::code_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;

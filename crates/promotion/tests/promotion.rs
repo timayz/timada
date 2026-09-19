@@ -1,7 +1,8 @@
 use timada_core::Money;
 use timada_promotion::{
-    CodeKind, Command, CreateDiscount, DiscountKind, IssueVoucher, PromotionError, VoucherKind,
-    discount_id, load_discount_details, load_voucher_balance, migrations, quote_code, voucher_id,
+    CodeKind, Command, CreateDiscount, DISCOUNT, DiscountKind, IssueVoucher, ListCodes,
+    PromotionError, VOUCHER, VoucherKind, code_list_subscription, count_codes, discount_id,
+    list_codes, load_discount_details, load_voucher_balance, migrations, quote_code, voucher_id,
 };
 
 #[tokio::test]
@@ -240,5 +241,75 @@ async fn voucher_balance_is_spent_partially_then_cancelled() -> anyhow::Result<(
         .await;
     assert!(matches!(credit, Err(PromotionError::InvalidAmount)));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn code_list_follows_both_kinds_of_code() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command {
+        executor: &executor,
+        db: db.clone(),
+    };
+    let discount = cmd
+        .create_discount(CreateDiscount {
+            code: "welcome10".into(),
+            kind: DiscountKind::Percent { bp: 1_000 },
+            max_redemptions: None,
+            valid_until: None,
+        })
+        .await?;
+    let voucher = cmd
+        .issue_voucher(IssueVoucher {
+            code: "gift50".into(),
+            customer_id: None,
+            value: Money::eur(5_000),
+            kind: VoucherKind::GiftVoucher,
+            expires_at: None,
+        })
+        .await?;
+    // Events the list does not fold must not stall the strict subscription.
+    cmd.redeem_code(
+        "welcome10",
+        "order-1",
+        &Money::eur(1_000),
+        &Money::eur(1_000),
+    )
+    .await?;
+    cmd.redeem_code("gift50", "order-1", &Money::eur(1_000), &Money::eur(1_000))
+        .await?;
+    cmd.release_code("gift50", "order-1").await?;
+    cmd.cancel_voucher(&voucher, "fraud").await?;
+
+    code_list_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+
+    assert_eq!(count_codes(&db, None).await?, 2);
+    let discounts = list_codes(
+        &db,
+        &ListCodes {
+            kind: Some(DISCOUNT.into()),
+            ..ListCodes::default()
+        },
+    )
+    .await?;
+    assert_eq!(discounts.len(), 1);
+    assert_eq!(discounts[0].id, discount);
+    assert_eq!(discounts[0].code, "WELCOME10");
+    assert_eq!(discounts[0].percent_bp, Some(1_000));
+    assert!(discounts[0].active);
+
+    let vouchers = list_codes(
+        &db,
+        &ListCodes {
+            kind: Some(VOUCHER.into()),
+            ..ListCodes::default()
+        },
+    )
+    .await?;
+    assert_eq!(vouchers[0].amount_minor, Some(5_000));
+    assert!(!vouchers[0].active, "cancelled voucher");
     Ok(())
 }
