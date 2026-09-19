@@ -138,6 +138,7 @@ async fn checkout_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
     let offers = delivery_offers();
     let handling_fee =
         timada_core::Money::new(INSTALLMENT_HANDLING_FEE_MINOR, &cart.subtotal.currency);
+    let promo = cart::promo_line(store, &cart).await?;
 
     Ok(view! {
         document(
@@ -165,9 +166,10 @@ async fn checkout_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
             </table>
             <table class="totals">
                 <tbody>
-                    <tr class="total"><td>"Sous-total TTC"</td><td class="num">(money(&cart.subtotal))</td></tr>
+                    cart::promo_totals(subtotal: money(&cart.subtotal), promo: &promo)
                 </tbody>
             </table>
+            cart::promo_notice(promo: &promo)
             <p class="muted">"Les frais de livraison et de dossier s'ajoutent au sous-total. " <a href=(href!(cart::show))>"Modifier le panier"</a></p>
 
             if book.deliveries.is_empty() {

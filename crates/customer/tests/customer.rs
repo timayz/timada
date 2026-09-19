@@ -139,6 +139,8 @@ async fn customer_list_follows_registrations_and_email_changes() -> anyhow::Resu
     let cmd = Command(&executor);
 
     let first = cmd.register_customer(jonathan()).await?;
+    // Ids are ULIDs: within one millisecond their order is random.
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     let second = cmd
         .register_customer(RegisterCustomer {
             email: "marie@example.com".into(),

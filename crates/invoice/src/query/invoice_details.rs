@@ -5,8 +5,8 @@ use evento::{Executor, metadata::Event, projection::Projection};
 use timada_core::{Address, Money};
 
 use crate::{
-    aggregator::{Invoice, InvoiceDrafted, InvoiceIssued, InvoiceVoided},
-    value_object::{InvoiceLine, InvoiceStatus, invoice_total},
+    aggregator::{Invoice, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceVoided},
+    value_object::{InvoiceDiscount, InvoiceLine, InvoiceStatus, invoice_total},
 };
 
 #[evento::projection(bitcode::Encode, bitcode::Decode)]
@@ -21,6 +21,8 @@ pub struct InvoiceView {
     pub subtotal: Money,
     pub shipping_fee: Money,
     pub handling_fee: Money,
+    /// The order's code and what it takes off; `total` is already net of it.
+    pub discount: Option<InvoiceDiscount>,
     pub total: Money,
     pub status: InvoiceStatus,
     pub voided_reason: Option<String>,
@@ -29,6 +31,7 @@ pub struct InvoiceView {
 pub fn create_projection<E: Executor>() -> Projection<E, InvoiceView> {
     Projection::new::<Invoice>()
         .handler(on_invoice_drafted())
+        .handler(on_invoice_discount_applied())
         .handler(on_invoice_issued())
         .handler(on_invoice_voided())
         .strict()
@@ -61,6 +64,19 @@ async fn on_invoice_drafted(
     row.handling_fee = event.data.handling_fee;
     row.total = total;
     row.status = InvoiceStatus::Draft;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoice_discount_applied(
+    event: Event<InvoiceDiscountApplied>,
+    row: &mut InvoiceView,
+) -> anyhow::Result<()> {
+    row.total = row.total.checked_sub(&event.data.amount)?;
+    row.discount = Some(InvoiceDiscount {
+        label: event.data.label,
+        amount: event.data.amount,
+    });
     Ok(())
 }
 

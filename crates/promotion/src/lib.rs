@@ -6,13 +6,13 @@ pub mod aggregator;
 mod command;
 mod error;
 mod migration;
-mod process;
 mod query;
+mod read_model;
 mod value_object;
 
 pub use command::*;
 pub use error::*;
 pub use migration::migrations;
-pub use process::*;
 pub use query::*;
+pub use read_model::*;
 pub use value_object::*;

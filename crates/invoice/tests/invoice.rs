@@ -39,6 +39,7 @@ fn place_order(cart_id: &str) -> PlaceOrder {
         shipping_fee: Money::eur(2_395),
         handling_fee: Money::eur(449),
         promo_code: None,
+        discount: None,
     }
 }
 
@@ -54,7 +55,17 @@ async fn orders_drive_drafting_numbering_and_voiding() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let orders = timada_order::Command(&executor);
     let order_1 = orders.place_order(place_order("cart-1")).await?;
-    let order_2 = orders.place_order(place_order("cart-2")).await?;
+    let order_2 = orders
+        .place_order(PlaceOrder {
+            promo_code: Some("WELCOME10".into()),
+            discount: Some(timada_order::OrderDiscount {
+                code: "WELCOME10".into(),
+                kind: timada_order::PromoKind::Discount,
+                amount: Money::eur(2_499),
+            }),
+            ..place_order("cart-2")
+        })
+        .await?;
     assert_eq!(order_1, order_id("cart-1"));
 
     let sync = || sync_invoices(&executor, db.clone());
@@ -68,11 +79,16 @@ async fn orders_drive_drafting_numbering_and_voiding() -> anyhow::Result<()> {
     assert_eq!(draft.invoice_number, None);
     assert_eq!(draft.subtotal, Money::eur(24_992));
     assert_eq!(draft.total, Money::eur(27_836));
-    assert!(
-        load_invoice(&executor, invoice_id(&order_2))
-            .await?
-            .is_some()
+    assert_eq!(draft.discount, None);
+    // The order's code is a reduction line: the invoice bills what was paid.
+    let discounted = load_invoice(&executor, invoice_id(&order_2))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invoice 2 not drafted"))?;
+    assert_eq!(
+        discounted.discount.as_ref().map(|d| d.label.as_str()),
+        Some("Code promo WELCOME10")
     );
+    assert_eq!(discounted.total, Money::eur(27_836 - 2_499));
 
     // Paid → issued with the first number of the year.
     orders.mark_paid(&order_1, "pay-1").await?;
@@ -155,6 +171,7 @@ async fn drafting_twice_returns_the_same_invoice() -> anyhow::Result<()> {
         }],
         shipping_fee: Money::eur(0),
         handling_fee: Money::eur(0),
+        discount: None,
     };
     let first = cmd.draft_invoice(draft.clone()).await?;
     let second = cmd.draft_invoice(draft.clone()).await?;

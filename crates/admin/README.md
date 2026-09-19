@@ -1,7 +1,7 @@
 # timada-admin
 
 A [topcoat](https://github.com/tokio-rs/topcoat) admin for the timada contexts
-(orders, products, customers) that you mount into your own app — a topcoat app
+(orders, products, stock, customers, promotions) that you mount into your own app — a topcoat app
 or any tower/axum app.
 
 The admin is a self-contained topcoat `Router`: its own layout, session, auth
@@ -39,6 +39,13 @@ mount (axum `nest_service`) breaks generated URLs — don't use one.
 Run the admin's migrations next to the contexts' (`timada_admin::migrations()`),
 create an operator with `create_admin(&pool, email, password)`, then sign in
 at `/admin/login`. Sessions use a dedicated `__Host-timada_admin` cookie.
+
+The listings read the contexts' SQL read models, so the host must run their
+subscriptions: `timada_order::order_history_subscription`,
+`timada_catalog::product_list_subscription`,
+`timada_inventory::stock_list_subscription`,
+`timada_customer::customer_list_subscription` and
+`timada_promotion::code_list_subscription`, each with `.data(pool)`.
 
 ## Assets and styling
 

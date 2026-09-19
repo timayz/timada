@@ -2,9 +2,9 @@ use evento::Executor;
 use timada_core::{Address, Money};
 
 use crate::{
-    aggregator::OrderPlaced,
+    aggregator::{OrderDiscountApplied, OrderPlaced},
     error::OrderError,
-    value_object::{DeliveryChoice, OrderLine, PaymentMode, Seller, order_total},
+    value_object::{DeliveryChoice, OrderDiscount, OrderLine, PaymentMode, Seller, order_total},
 };
 
 use super::order_id;
@@ -21,7 +21,10 @@ pub struct PlaceOrder {
     pub payment_mode: PaymentMode,
     pub shipping_fee: Money,
     pub handling_fee: Money,
+    /// The code typed in the cart, honoured or not.
     pub promo_code: Option<String>,
+    /// What the promotion context granted for that code, already redeemed.
+    pub discount: Option<OrderDiscount>,
 }
 
 #[evento::command]
@@ -51,26 +54,38 @@ impl<E: Executor> super::Command<'_, E> {
         cmd.delivery_address.validate()?;
         cmd.billing_address.validate()?;
         // Rejects mixed currencies and overflow before anything is written.
-        order_total(&cmd.lines, &cmd.shipping_fee, &cmd.handling_fee)?;
+        let totals = order_total(&cmd.lines, &cmd.shipping_fee, &cmd.handling_fee)?;
+        if let Some(discount) = &cmd.discount {
+            let max = totals.max_discount();
+            discount.amount.same_currency(&max)?;
+            if !discount.amount.is_positive() || discount.amount.minor > max.minor {
+                return Err(OrderError::InvalidDiscount { max });
+            }
+        }
 
         let id = order_id(&cmd.cart_id);
-        let result = evento::append(&id)
-            .routing_key_opt(routing_key)
-            .event(&OrderPlaced {
-                cart_id: cmd.cart_id.clone(),
-                customer_id: cmd.customer_id,
-                seller: cmd.seller,
-                lines: cmd.lines,
-                delivery_address: cmd.delivery_address,
-                billing_address: cmd.billing_address,
-                delivery: cmd.delivery,
-                payment_mode: cmd.payment_mode,
-                shipping_fee: cmd.shipping_fee,
-                handling_fee: cmd.handling_fee,
-                promo_code: cmd.promo_code,
-            })
-            .commit(self.0)
-            .await;
+        let mut write = evento::append(&id);
+        write.routing_key_opt(routing_key).event(&OrderPlaced {
+            cart_id: cmd.cart_id.clone(),
+            customer_id: cmd.customer_id,
+            seller: cmd.seller,
+            lines: cmd.lines,
+            delivery_address: cmd.delivery_address,
+            billing_address: cmd.billing_address,
+            delivery: cmd.delivery,
+            payment_mode: cmd.payment_mode,
+            shipping_fee: cmd.shipping_fee,
+            handling_fee: cmd.handling_fee,
+            promo_code: cmd.promo_code,
+        });
+        if let Some(discount) = cmd.discount {
+            write.event(&OrderDiscountApplied {
+                code: discount.code,
+                kind: discount.kind,
+                amount: discount.amount,
+            });
+        }
+        let result = write.commit(self.0).await;
 
         match result {
             Ok(id) => {

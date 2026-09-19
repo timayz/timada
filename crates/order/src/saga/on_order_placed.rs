@@ -3,7 +3,8 @@ use timada_inventory::{InventoryError, ReservationOutcome};
 
 use crate::{
     aggregator::{FulfillmentStarted, OrderPlaced},
-    value_object::{FulfillmentLine, order_total},
+    query::load_order_details,
+    value_object::FulfillmentLine,
 };
 
 use super::{compensate, fulfillment_id, load_fulfillment, stock_location};
@@ -21,11 +22,11 @@ pub(super) async fn start_fulfillment<E: Executor>(
         return Ok(());
     }
 
-    let totals = order_total(
-        &event.data.lines,
-        &event.data.shipping_fee,
-        &event.data.handling_fee,
-    )?;
+    // What is left to pay once `OrderDiscountApplied` (committed together
+    // with this event) is taken off.
+    let Some(order) = load_order_details(ctx.executor, &order_id).await? else {
+        anyhow::bail!("order {order_id} placed but cannot be loaded");
+    };
     let lines: Vec<FulfillmentLine> = event
         .data
         .lines
@@ -41,7 +42,7 @@ pub(super) async fn start_fulfillment<E: Executor>(
             order_id: order_id.clone(),
             lines: lines.clone(),
             pickup_store_id: event.data.delivery.pickup_store_id.clone(),
-            amount: totals.total,
+            amount: order.total,
             payment_mode: event.data.payment_mode.clone(),
         })
         .commit(ctx.executor)

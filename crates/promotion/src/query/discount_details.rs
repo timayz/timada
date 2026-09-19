@@ -3,7 +3,10 @@
 use evento::{Executor, metadata::Event, projection::Projection};
 
 use crate::{
-    aggregator::{Discount, DiscountCreated, DiscountDeactivated, DiscountRedeemed},
+    aggregator::{
+        Discount, DiscountCreated, DiscountDeactivated, DiscountRedeemed,
+        DiscountRedemptionReleased,
+    },
     value_object::DiscountKind,
 };
 
@@ -24,6 +27,7 @@ pub fn create_projection<E: Executor>() -> Projection<E, DiscountView> {
         .handler(on_discount_created())
         .handler(on_discount_redeemed())
         .handler(on_discount_deactivated())
+        .handler(on_discount_redemption_released())
         .strict()
 }
 
@@ -63,5 +67,14 @@ async fn on_discount_deactivated(
     row: &mut DiscountView,
 ) -> anyhow::Result<()> {
     row.active = false;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_discount_redemption_released(
+    _event: Event<DiscountRedemptionReleased>,
+    row: &mut DiscountView,
+) -> anyhow::Result<()> {
+    row.redeemed = row.redeemed.saturating_sub(1);
     Ok(())
 }

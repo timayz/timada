@@ -50,6 +50,25 @@ pub async fn list_by_brand(db: &SqlitePool, brand_slug: &str) -> sqlx::Result<Ve
     .await
 }
 
+/// The list rows of the given products, in no particular order — for pages
+/// of another context (stock levels, order lines) that need names and SKUs.
+pub async fn products_by_ids(db: &SqlitePool, ids: &[String]) -> sqlx::Result<Vec<ProductListRow>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT id, sku, name, brand_slug, category_path, archived
+         FROM catalog_product
+         WHERE id IN (",
+    );
+    let mut bound = query.separated(", ");
+    for id in ids {
+        bound.push_bind(id);
+    }
+    query.push(")");
+    query.build_query_as().fetch_all(db).await
+}
+
 /// Admin listing: free-text search on name or SKU, archived products hidden
 /// unless asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]

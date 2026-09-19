@@ -62,6 +62,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
+        timada_inventory::stock_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
         timada_review::product_summary_subscription()
             .data(db.clone())
             .start(executor)
@@ -75,6 +79,7 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .start(executor)
             .await?,
         timada_order::order_checkout_subscription()
+            .data(db.clone())
             .start(executor)
             .await?,
         timada_order::order_fulfillment_subscription()
@@ -84,7 +89,11 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
-        timada_promotion::redeem_on_order_subscription()
+        timada_order::order_promo_release_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
+        timada_promotion::code_list_subscription()
             .data(db)
             .start(executor)
             .await?,
@@ -103,6 +112,10 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .data(db.clone())
             .run_once(executor)
             .await?;
+        timada_inventory::stock_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
         timada_review::product_summary_subscription()
             .data(db.clone())
             .run_once(executor)
@@ -116,6 +129,7 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .run_once(executor)
             .await?;
         timada_order::order_checkout_subscription()
+            .data(db.clone())
             .run_once(executor)
             .await?;
         timada_order::order_fulfillment_subscription()
@@ -125,7 +139,11 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .data(db.clone())
             .run_once(executor)
             .await?;
-        timada_promotion::redeem_on_order_subscription()
+        timada_order::order_promo_release_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_promotion::code_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;

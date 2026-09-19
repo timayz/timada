@@ -19,6 +19,7 @@ timada-review.workspace = true
 timada-customer.workspace = true
 timada-order.workspace = true
 timada-payment.workspace = true
+timada-promotion.workspace = true
 timada-shipping.workspace = true
 evento.workspace = true
 topcoat = { workspace = true, features = ["router", "view", "cookie", "session", "asset", "tower", "tailwind", "discover"] }

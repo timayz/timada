@@ -1,20 +1,24 @@
 use evento::{Executor, ProjectionAggregate};
+use timada_core::Money;
 
 use crate::{aggregator::DiscountRedeemed, error::PromotionError};
 
 use super::discount_id;
 
 impl<E: Executor> super::Command<'_, E> {
-    /// Uses a code on an order. The redemption cap is enforced by inserting
+    /// Uses a code on an order and returns what it takes off `subtotal`
+    /// (never more than `max`). The redemption cap is enforced by inserting
     /// into `promotion_redemption` under `BEGIN IMMEDIATE`, so concurrent
     /// checkouts cannot over-redeem; the event is appended afterwards. A
-    /// repeat for the same order (a retry, or a replayed `OrderPlaced`) is a
-    /// no-op.
+    /// repeat for the same order (a retry, or a replayed checkout) claims
+    /// nothing and returns the same amount.
     pub async fn redeem_discount(
         &self,
         code: &str,
         order_id: impl Into<String>,
-    ) -> Result<(), PromotionError> {
+        subtotal: &Money,
+        max: &Money,
+    ) -> Result<Money, PromotionError> {
         let order_id = order_id.into();
         if order_id.trim().is_empty() {
             return Err(PromotionError::Required("order_id"));
@@ -30,6 +34,11 @@ impl<E: Executor> super::Command<'_, E> {
         {
             return Err(PromotionError::Expired);
         }
+        // Before the slot is claimed: a code worth nothing here keeps its slot.
+        let amount = discount.kind.amount_off(subtotal, max)?;
+        if !amount.is_positive() {
+            return Err(PromotionError::NotApplicable);
+        }
 
         let mut conn = self.db.acquire().await?;
         sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
@@ -43,7 +52,7 @@ impl<E: Executor> super::Command<'_, E> {
         match outcome {
             Ok(Claim::AlreadyClaimed) => {
                 sqlx::query("ROLLBACK").execute(&mut *conn).await?;
-                return Ok(());
+                return Ok(amount);
             }
             Ok(Claim::Claimed) => {
                 sqlx::query("COMMIT").execute(&mut *conn).await?;
@@ -64,7 +73,7 @@ impl<E: Executor> super::Command<'_, E> {
             .commit(self.executor)
             .await?;
         tracing::info!(discount_id = %discount.id, %order_id, "discount redeemed");
-        Ok(())
+        Ok(amount)
     }
 }
 

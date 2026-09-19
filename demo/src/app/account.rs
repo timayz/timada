@@ -636,12 +636,13 @@ async fn order_view(order: &OrderDetailsView) -> Result<impl View> {
                     if order.handling_fee.is_positive() {
                         <tr><td>"Frais de dossier"</td><td class="num">(money(&order.handling_fee))</td></tr>
                     }
+                    if let Some(discount) = &order.discount {
+                        <tr><td>"Remise (" (discount.code.clone()) ")"</td><td class="num">"− " (money(&discount.amount))</td></tr>
+                    }
                     <tr class="total"><td>"Total TTC"</td><td class="num">(money(&order.total))</td></tr>
                 </tbody>
             </table>
-            <p>"Paiement : " (payment)
-                if let Some(code) = &order.promo_code { " · code " (code.clone()) }
-            </p>
+            <p>"Paiement : " (payment)</p>
             <div class="cards">
                 <div class="card"><h2>"Livraison"</h2> address_block(address: &order.delivery_address)</div>
                 <div class="card"><h2>"Facturation"</h2> address_block(address: &order.billing_address)</div>

@@ -1,15 +1,18 @@
 //! End-to-end: cart checkout → order placed → stock reserved → payment
 //! requested/captured → shipment created/dispatched → order shipped, plus
-//! the two compensation branches (out of stock, payment declined).
+//! the two compensation branches (out of stock, payment declined) and the
+//! cart's promo code: redeemed before the order is placed, given back when
+//! the order is cancelled.
 
 use evento::Executor;
 use timada_cart::{AddLine, Checkout};
 use timada_core::{Address, Money};
 use timada_inventory::{RegisterStockItem, StockLocation, stock_item_id};
 use timada_order::{
-    FulfillmentStatus, ListOrders, OrderStatus, PaymentMode, count_orders, history, list_orders,
-    load_fulfillment, load_order_details, migrations, order_checkout_subscription,
-    order_fulfillment_subscription, order_history_subscription, order_id, orders_of_customer,
+    FulfillmentStatus, ListOrders, OrderStatus, PaymentMode, PromoKind, count_orders, history,
+    list_orders, load_fulfillment, load_order_details, migrations, order_checkout_subscription,
+    order_fulfillment_subscription, order_history_subscription, order_id,
+    order_promo_release_subscription, orders_of_customer,
 };
 use timada_payment::payment_id;
 use timada_shipping::shipment_id;
@@ -36,6 +39,16 @@ async fn checkout_cart<E: Executor>(
     quantity: u32,
     payment_mode: timada_cart::PaymentMode,
 ) -> anyhow::Result<String> {
+    checkout_cart_with_code(executor, on_hand, quantity, payment_mode, None).await
+}
+
+async fn checkout_cart_with_code<E: Executor>(
+    executor: &E,
+    on_hand: u32,
+    quantity: u32,
+    payment_mode: timada_cart::PaymentMode,
+    promo_code: Option<&str>,
+) -> anyhow::Result<String> {
     let inventory = timada_inventory::Command(executor);
     let stock = inventory
         .register_stock_item(RegisterStockItem {
@@ -60,6 +73,9 @@ async fn checkout_cart<E: Executor>(
         },
     )
     .await?;
+    if let Some(code) = promo_code {
+        cart.apply_promo_code(&cart_id, code.into()).await?;
+    }
     cart.checkout(
         &cart_id,
         Checkout {
@@ -248,5 +264,186 @@ async fn declined_payment_releases_stock_and_cancels() -> anyhow::Result<()> {
             .await?
             .is_none()
     );
+    Ok(())
+}
+
+/// Order and promotion tables: the checkout ACL counts redemptions in SQL.
+fn migrations_with_promotion() -> Vec<Box<dyn sqlx_migrator::Migration<sqlx::Sqlite>>> {
+    let mut all = migrations();
+    all.extend(timada_promotion::migrations());
+    all
+}
+
+/// Like [`drain`], with the pool the promo-code steps need.
+async fn drain_with_promotion<E: Executor + Clone + 'static>(
+    executor: &E,
+    db: &sqlx::SqlitePool,
+) -> anyhow::Result<()> {
+    for _ in 0..4 {
+        order_checkout_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        order_fulfillment_subscription().run_once(executor).await?;
+        order_promo_release_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn promo_code_lowers_what_is_paid() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations_with_promotion()).await?;
+    timada_promotion::Command {
+        executor: &executor,
+        db: db.clone(),
+    }
+    .create_discount(timada_promotion::CreateDiscount {
+        code: "welcome10".into(),
+        kind: timada_promotion::DiscountKind::Percent { bp: 1_000 },
+        max_redemptions: Some(1),
+        valid_until: None,
+    })
+    .await?;
+
+    let cart_id = checkout_cart_with_code(
+        &executor,
+        5,
+        2,
+        timada_cart::PaymentMode::Card,
+        Some("welcome10"),
+    )
+    .await?;
+    let order_id = order_id(&cart_id);
+    drain_with_promotion(&executor, &db).await?;
+
+    // 10 % off the goods (249,92 €), not off the shipping fee.
+    let order = load_order_details(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
+    let discount = order
+        .discount
+        .ok_or_else(|| anyhow::anyhow!("discount not applied"))?;
+    assert_eq!(discount.code, "WELCOME10");
+    assert_eq!(discount.kind, PromoKind::Discount);
+    assert_eq!(discount.amount, Money::eur(2_499));
+    assert_eq!(order.subtotal, Money::eur(24_992));
+    assert_eq!(order.total, Money::eur(24_888));
+
+    // The payment and the order history carry the discounted total.
+    let payment = timada_payment::load_payment(&executor, payment_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment not requested"))?;
+    assert_eq!(payment.amount, Money::eur(24_888));
+    order_history_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    let rows = orders_of_customer(&db, CUSTOMER).await?;
+    assert_eq!(rows[0].total_minor, 24_888);
+
+    let code = timada_promotion::load_discount_details(
+        &executor,
+        timada_promotion::discount_id("welcome10"),
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("discount missing"))?;
+    assert_eq!(code.redeemed, 1);
+
+    // The payment falls through: the order is cancelled and the slot is free.
+    timada_payment::Command(&executor)
+        .decline_payment(payment_id(&order_id), "insufficient funds".into())
+        .await?;
+    drain_with_promotion(&executor, &db).await?;
+    let code = timada_promotion::load_discount_details(
+        &executor,
+        timada_promotion::discount_id("welcome10"),
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("discount missing"))?;
+    assert_eq!(code.redeemed, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn voucher_is_spent_on_the_order_and_a_dead_code_is_ignored() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations_with_promotion()).await?;
+    let promotion = timada_promotion::Command {
+        executor: &executor,
+        db: db.clone(),
+    };
+    let voucher_id = promotion
+        .issue_voucher(timada_promotion::IssueVoucher {
+            code: "gift50".into(),
+            customer_id: None,
+            value: Money::eur(5_000),
+            kind: timada_promotion::VoucherKind::GiftVoucher,
+            expires_at: None,
+        })
+        .await?;
+
+    let cart_id = checkout_cart_with_code(
+        &executor,
+        5,
+        1,
+        timada_cart::PaymentMode::Card,
+        Some("gift50"),
+    )
+    .await?;
+    drain_with_promotion(&executor, &db).await?;
+    let order = load_order_details(&executor, order_id(&cart_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
+    let discount = order
+        .discount
+        .ok_or_else(|| anyhow::anyhow!("voucher not applied"))?;
+    assert_eq!(discount.kind, PromoKind::Voucher);
+    assert_eq!(discount.amount, Money::eur(5_000));
+    assert_eq!(order.total, Money::eur(12_496 + 2_395 - 5_000));
+    let voucher = timada_promotion::load_voucher_balance(&executor, &voucher_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("voucher missing"))?;
+    assert_eq!(voucher.remaining, Money::eur(0));
+
+    // The voucher is now empty: the next order is placed at full price.
+    let cart = timada_cart::Command(&executor);
+    let second = cart.open_cart(Some(CUSTOMER.into())).await?;
+    cart.add_line(
+        &second,
+        AddLine {
+            product_id: PRODUCT.into(),
+            name: "AOC 23.8\" LED - 24G4XE".into(),
+            quantity: 1,
+            unit_price: Money::eur(12_496),
+            warranty_months: 60,
+        },
+    )
+    .await?;
+    cart.apply_promo_code(&second, "gift50".into()).await?;
+    cart.checkout(
+        &second,
+        Checkout {
+            customer_id: None,
+            delivery_address: address("La agnès", "97290", "Le Marin", "MQ"),
+            billing_address: address("121, Avenue Tolosane", "31520", "Ramonville", "FR"),
+            delivery: timada_cart::DeliveryChoice {
+                method_code: "chronopost-dom".into(),
+                pickup_store_id: None,
+            },
+            payment_mode: timada_cart::PaymentMode::Card,
+        },
+    )
+    .await?;
+    drain_with_promotion(&executor, &db).await?;
+    let order = load_order_details(&executor, order_id(&second))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("second order not placed"))?;
+    assert_eq!(order.discount, None);
+    assert_eq!(order.promo_code.as_deref(), Some("GIFT50"));
+    assert_eq!(order.total, Money::eur(12_496 + 2_395));
+
     Ok(())
 }

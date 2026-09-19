@@ -7,12 +7,15 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use sqlx::SqlitePool;
-use timada_order::aggregator::{OrderCancelled, OrderPaid, OrderPlaced};
+use timada_order::{
+    PromoKind,
+    aggregator::{OrderCancelled, OrderPaid, OrderPlaced},
+};
 
 use crate::{
     command::{Command, DraftInvoice, invoice_id},
     error::InvoiceError,
-    value_object::InvoiceLine,
+    value_object::{InvoiceDiscount, InvoiceLine},
 };
 
 pub const INVOICE_FROM_ORDERS_SUBSCRIPTION: &str = "invoice-from-orders";
@@ -39,6 +42,19 @@ async fn draft_on_order_placed<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderPlaced>,
 ) -> anyhow::Result<()> {
+    // The discount is its own order event, committed together with this one.
+    let Some(order) = timada_order::load_order_details(ctx.executor, &event.aggregate_id).await?
+    else {
+        anyhow::bail!("order {} placed but cannot be loaded", event.aggregate_id);
+    };
+    let discount = order.discount.map(|d| InvoiceDiscount {
+        label: match d.kind {
+            PromoKind::Discount => format!("Code promo {}", d.code),
+            PromoKind::Voucher => format!("Bon d'achat {}", d.code),
+        },
+        amount: d.amount,
+    });
+
     command(ctx)?
         .draft_invoice(DraftInvoice {
             order_id: event.aggregate_id.to_owned(),
@@ -57,6 +73,7 @@ async fn draft_on_order_placed<E: Executor>(
                 .collect(),
             shipping_fee: event.data.shipping_fee,
             handling_fee: event.data.handling_fee,
+            discount,
         })
         .await?;
     Ok(())

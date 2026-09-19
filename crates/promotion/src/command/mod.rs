@@ -2,8 +2,11 @@ mod cancel_voucher;
 mod create_discount;
 mod deactivate_discount;
 mod issue_voucher;
+mod redeem_code;
 mod redeem_discount;
 mod redeem_voucher;
+mod refund_voucher;
+mod release_discount;
 
 pub use create_discount::CreateDiscount;
 pub use issue_voucher::IssueVoucher;
@@ -14,10 +17,11 @@ use timada_core::Money;
 
 use crate::{
     aggregator::{
-        Discount, DiscountCreated, DiscountDeactivated, DiscountRedeemed, Voucher,
-        VoucherCancelled, VoucherIssued, VoucherRedeemed,
+        Discount, DiscountCreated, DiscountDeactivated, DiscountRedeemed,
+        DiscountRedemptionReleased, Voucher, VoucherCancelled, VoucherIssued, VoucherRedeemed,
+        VoucherRedemptionRefunded,
     },
-    value_object::normalize_code,
+    value_object::{DiscountKind, VoucherRedemption, normalize_code},
 };
 
 /// Deterministic discount id: one promo code per (normalised) code.
@@ -59,6 +63,7 @@ impl<E: Executor> Command<'_, E> {
 pub struct DiscountState {
     pub id: String,
     pub code: String,
+    pub kind: DiscountKind,
     pub active: bool,
     pub max_redemptions: Option<u32>,
     pub valid_until: Option<u64>,
@@ -71,6 +76,7 @@ fn discount_projection<E: Executor>() -> Projection<E, DiscountState> {
         .handler(on_discount_created())
         .handler(on_discount_deactivated())
         .skip::<DiscountRedeemed>()
+        .skip::<DiscountRedemptionReleased>()
         .strict()
 }
 
@@ -81,6 +87,7 @@ async fn on_discount_created(
 ) -> anyhow::Result<()> {
     row.id = event.aggregate_id.to_owned();
     row.code = event.data.code;
+    row.kind = event.data.kind;
     row.active = true;
     row.max_redemptions = event.data.max_redemptions;
     row.valid_until = event.data.valid_until;
@@ -96,15 +103,23 @@ async fn on_discount_deactivated(
     Ok(())
 }
 
-/// Write-side state for a voucher: the remaining balance.
+/// Write-side state for a voucher: the remaining balance and the orders it
+/// was spent on, which makes spending idempotent per order.
 #[evento::projection(id = id)]
 #[evento::snapshot(none)]
 pub struct VoucherState {
     pub id: String,
     pub code: String,
     pub remaining: Money,
+    pub redemptions: Vec<VoucherRedemption>,
     pub cancelled: bool,
     pub expires_at: Option<u64>,
+}
+
+impl VoucherState {
+    fn redemption_for(&self, order_id: &str) -> Option<&VoucherRedemption> {
+        self.redemptions.iter().find(|r| r.order_id == order_id)
+    }
 }
 
 fn voucher_projection<E: Executor>() -> Projection<E, VoucherState> {
@@ -112,6 +127,7 @@ fn voucher_projection<E: Executor>() -> Projection<E, VoucherState> {
         .handler(on_voucher_issued())
         .handler(on_voucher_redeemed())
         .handler(on_voucher_cancelled())
+        .handler(on_voucher_redemption_refunded())
         .strict()
 }
 
@@ -133,6 +149,21 @@ async fn on_voucher_redeemed(
     row: &mut VoucherState,
 ) -> anyhow::Result<()> {
     row.remaining = row.remaining.checked_sub(&event.data.amount)?;
+    row.redemptions.push(VoucherRedemption {
+        order_id: event.data.order_id,
+        amount: event.data.amount,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_voucher_redemption_refunded(
+    event: Event<VoucherRedemptionRefunded>,
+    row: &mut VoucherState,
+) -> anyhow::Result<()> {
+    row.remaining = row.remaining.checked_add(&event.data.amount)?;
+    row.redemptions
+        .retain(|r| r.order_id != event.data.order_id);
     Ok(())
 }
 

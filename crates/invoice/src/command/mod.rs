@@ -8,7 +8,7 @@ use evento::{Executor, Projection, metadata::Event};
 use sqlx::SqlitePool;
 
 use crate::{
-    aggregator::{Invoice, InvoiceDrafted, InvoiceIssued, InvoiceVoided},
+    aggregator::{Invoice, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceVoided},
     error::InvoiceError,
     value_object::InvoiceStatus,
 };
@@ -48,6 +48,7 @@ pub struct InvoiceState {
 fn create_projection<E: Executor>() -> Projection<E, InvoiceState> {
     Projection::new::<Invoice>()
         .handler(on_invoice_drafted())
+        .skip::<InvoiceDiscountApplied>()
         .handler(on_invoice_issued())
         .handler(on_invoice_voided())
         .strict()

@@ -2571,6 +2571,7 @@ dependencies = [
  "timada-order",
  "timada-payment",
  "timada-pricing",
+ "timada-promotion",
  "timada-review",
  "timada-shipping",
  "tokio",
@@ -2679,6 +2680,7 @@ dependencies = [
  "timada-core",
  "timada-inventory",
  "timada-payment",
+ "timada-promotion",
  "timada-shipping",
  "tokio",
  "tracing",
@@ -2721,7 +2723,6 @@ dependencies = [
  "sqlx_migrator",
  "thiserror",
  "timada-core",
- "timada-order",
  "tokio",
  "tracing",
 ]

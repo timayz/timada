@@ -4,6 +4,8 @@ pub enum InvoiceError {
     InvoiceNotFound,
     #[error("invoice has no lines")]
     NoLines,
+    #[error("discount must be positive and at most the invoice total")]
+    InvalidDiscount,
     #[error("invoice is voided")]
     InvoiceVoided,
     #[error("`{0}` is required")]

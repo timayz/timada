@@ -2,8 +2,10 @@
 //! URL segment; the layer wraps every page below it.
 
 pub mod customers;
+pub mod inventory;
 pub mod orders;
 pub mod products;
+pub mod promotions;
 
 use topcoat::{
     Result,

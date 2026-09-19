@@ -17,6 +17,9 @@ pub enum Discount {
 
     /// The code can no longer be used.
     DiscountDeactivated,
+
+    /// The order fell through: its redemption slot is free again.
+    DiscountRedemptionReleased { order_id: String },
 }
 
 #[evento::aggregate(name = "timada-promotion/Voucher")]
@@ -35,4 +38,7 @@ pub enum Voucher {
 
     /// The remaining balance was cancelled.
     VoucherCancelled { reason: String },
+
+    /// The order fell through: what it spent is back on the balance.
+    VoucherRedemptionRefunded { order_id: String, amount: Money },
 }

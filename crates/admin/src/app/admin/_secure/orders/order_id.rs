@@ -91,6 +91,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                 <tr><td class="pt-3 text-muted-foreground">"Sous-total"</td><td class="pt-3 text-right tabular-nums">(money(&order.subtotal))</td></tr>
                                 <tr><td class="text-muted-foreground">"Frais de port"</td><td class="text-right tabular-nums">(money(&order.shipping_fee))</td></tr>
                                 <tr><td class="text-muted-foreground">"Frais de dossier"</td><td class="text-right tabular-nums">(money(&order.handling_fee))</td></tr>
+                                if let Some(discount) = &order.discount {
+                                    <tr><td class="text-muted-foreground">"Remise (" (discount.code.clone()) ")"</td><td class="text-right tabular-nums">"− " (money(&discount.amount))</td></tr>
+                                }
                                 <tr class="font-semibold"><td class="pt-2">"Total"</td><td class="pt-2 text-right tabular-nums">(money(&order.total))</td></tr>
                             </tbody>
                         </table>

@@ -67,7 +67,7 @@ pub async fn list_customers(
         "SELECT customer_id, email, first_name, last_name, registered_at
          FROM customer_list
          WHERE (?1 IS NULL OR email LIKE ?1 OR first_name LIKE ?1 OR last_name LIKE ?1)
-         ORDER BY registered_at DESC, rowid DESC
+         ORDER BY registered_at DESC, customer_id DESC
          LIMIT ?2 OFFSET ?3",
     )
     .bind(like_pattern(filter.q.as_deref()))

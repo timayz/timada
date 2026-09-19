@@ -16,6 +16,8 @@ pub enum PromotionError {
     Cancelled,
     #[error("insufficient voucher balance: {} {} remaining", remaining.minor, remaining.currency)]
     InsufficientBalance { remaining: Money },
+    #[error("code takes nothing off this order")]
+    NotApplicable,
     #[error("invalid discount kind")]
     InvalidKind,
     #[error("amount must be positive")]
