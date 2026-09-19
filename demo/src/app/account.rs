@@ -23,7 +23,7 @@ use super::{
     checkout::OrderId,
     document,
     format::{address_lines, date, money, order_status, vat_rate},
-    returns, safe_next,
+    invoice, returns, safe_next,
 };
 use crate::{
     Store,
@@ -942,6 +942,11 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
             status: returns::return_status(&row.status),
         })
         .collect();
+    let invoice_link =
+        timada_invoice::load_invoice(&store.executor, timada_invoice::invoice_id(&id))
+            .await?
+            .filter(|invoice| invoice.status == timada_invoice::InvoiceStatus::Issued)
+            .map(|_| href!(invoice::show, OrderId(id.clone())).resolve(cx));
     let new_return = returns::can_request_return(store, &order)
         .await?
         .then(|| href!(returns::new_return, OrderId(id.clone())).resolve(cx));
@@ -951,7 +956,8 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
             refunded: refunded,
             credit_notes: &credit_notes,
             order_returns: &order_returns,
-            new_return: new_return
+            new_return: new_return,
+            invoice_link: invoice_link
         )
     })
 }
@@ -978,6 +984,7 @@ async fn order_view(
     credit_notes: &Vec<CreditNoteLine>,
     order_returns: &Vec<ReturnLink>,
     new_return: Option<String>,
+    invoice_link: Option<String>,
 ) -> Result<impl View> {
     let payment = match order.payment_mode {
         // The code covered the whole total: nothing was charged.
@@ -1057,6 +1064,9 @@ async fn order_view(
             </table>
             if let Some(mention) = vat_mention { <p class="muted">(mention)</p> }
             <p>"Paiement : " (payment)</p>
+            if let Some(link) = &invoice_link {
+                <p><a href=(link.clone())>"Télécharger la facture"</a></p>
+            }
             if let Some(refunded) = &refunded {
                 <p role="status" class="notice">"Remboursé : " <strong>(refunded.clone())</strong></p>
             }
