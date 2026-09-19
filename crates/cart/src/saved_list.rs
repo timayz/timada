@@ -12,8 +12,8 @@ use sqlx::SqlitePool;
 use crate::{
     aggregator::{
         CartAssignedToCustomer, CartCheckedOut, CartDiscarded, CartLineAdded,
-        CartLineQuantityChanged, CartLineRemoved, CartOpened, CartReopened, CartSaved,
-        PromoCodeApplied, PromoCodeRemoved,
+        CartLineQuantityChanged, CartLineRemoved, CartLineRepriced, CartOpened, CartReopened,
+        CartSaved, PromoCodeApplied, PromoCodeRemoved,
     },
     query::load_cart_details,
     value_object::CartStatus,
@@ -44,6 +44,7 @@ pub fn saved_cart_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(refresh_on_cart_line_added())
         .handler(refresh_on_cart_line_quantity_changed())
         .handler(refresh_on_cart_line_removed())
+        .handler(refresh_on_cart_line_repriced())
         .skip::<CartOpened>()
         .skip::<PromoCodeApplied>()
         .skip::<PromoCodeRemoved>()
@@ -170,6 +171,14 @@ async fn refresh_on_cart_line_quantity_changed<E: Executor>(
 async fn refresh_on_cart_line_removed<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<CartLineRemoved>,
+) -> anyhow::Result<()> {
+    refresh(ctx, &event.aggregate_id).await
+}
+
+#[evento::subscription]
+async fn refresh_on_cart_line_repriced<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<CartLineRepriced>,
 ) -> anyhow::Result<()> {
     refresh(ctx, &event.aggregate_id).await
 }

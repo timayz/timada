@@ -9,6 +9,7 @@ event timada-cart/Cart::CartDiscarded unit
 event timada-cart/Cart::CartLineAdded { product_id: String, name: String, quantity: u32, unit_price: Money, warranty_months: u16 }
 event timada-cart/Cart::CartLineQuantityChanged { product_id: String, quantity: u32 }
 event timada-cart/Cart::CartLineRemoved { product_id: String }
+event timada-cart/Cart::CartLineRepriced { product_id: String, unit_price: Money }
 event timada-cart/Cart::CartOpened { customer_id: Option<String> }
 event timada-cart/Cart::CartReopened unit
 event timada-cart/Cart::CartSaved { name: String }
