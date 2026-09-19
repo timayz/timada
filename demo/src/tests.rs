@@ -187,6 +187,11 @@ async fn guest_cart_to_placed_order() -> anyhow::Result<()> {
     let done = text(browser.get(&confirmation).await).await?;
     assert!(done.contains("votre commande est enregistrée"));
     assert!(done.contains("245,80 €"), "2 × 119,95 + 5,90: {done}");
+    // The shopper is given a readable number, not the internal id: the
+    // second of the sequence, the seeded order took the first.
+    let year = timada_core::time::year_of(timada_core::time::now_unix_secs()?);
+    let number = format!("C{year}-000002");
+    assert!(done.contains(&number), "{done}");
 
     let order_id = confirmation
         .rsplit('/')
@@ -195,9 +200,11 @@ async fn guest_cart_to_placed_order() -> anyhow::Result<()> {
         .to_owned();
     let history = text(browser.get("/account/orders").await).await?;
     assert!(history.contains(&order_id));
+    assert!(history.contains(&number), "{history}");
     let detail = browser.get(&format!("/account/orders/{order_id}")).await;
     assert_eq!(detail.status(), StatusCode::OK);
     let detail = text(detail).await?;
+    assert!(detail.contains(&format!("Commande {number}")), "{detail}");
     assert!(detail.contains("12 rue des Machines"));
     assert!(detail.contains("Carte bancaire"));
 
