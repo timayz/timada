@@ -13,14 +13,15 @@ use timada_order::{OrderStatus, load_order_details, orders_of_customer};
 use timada_pricing::{load_product_price, price_id};
 use timada_review::{
     AskQuestion, ReviewError, ReviewStatus, SubmitReview, answered_questions, answers_of_questions,
-    load_review_details, product_rating, published_reviews, review_id, unanswered_questions_of,
+    count_answered_questions, load_review_details, product_rating, published_reviews, review_id,
+    unanswered_questions_of,
 };
 use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{
         content::Form, error::RouterErrorExt, error::see_other, href, page, path_param,
-        path_param as param,
+        path_param as param, query_params, query_params as query,
     },
     view::{View, component, view},
 };
@@ -63,9 +64,50 @@ async fn product_item(cx: &Cx, product: &ProductListRow) -> Result<impl View> {
 
 path_param!(pub product_id: String, error = not_found);
 
-/// Reviews shown on a product page; the rest is a follow-up (pagination).
-const REVIEWS_SHOWN: u32 = 20;
-const QUESTIONS_SHOWN: u32 = 20;
+/// Reviews and questions are paged separately: `?avis=2`, `?questions=3`.
+const REVIEWS_PER_PAGE: u32 = 5;
+const QUESTIONS_PER_PAGE: u32 = 5;
+
+#[query_params(error = bad_request)]
+struct ProductQuery {
+    avis: Option<u32>,
+    questions: Option<u32>,
+}
+
+/// "Plus récents" / "plus anciens" links of one of the two lists.
+struct Pager {
+    current: u32,
+    pages: u32,
+    previous: Option<String>,
+    next: Option<String>,
+}
+
+/// The pager of the list paged by `param`; `other` is the other list's
+/// parameter and page, which the links keep.
+fn pager(
+    base: &str,
+    param: &str,
+    other: (&str, u32),
+    current: u32,
+    total: i64,
+    per_page: u32,
+) -> Pager {
+    let pages = (total.max(0) as u32).div_ceil(per_page).max(1);
+    let current = current.clamp(1, pages);
+    let link = |page: u32| {
+        let mut query = vec![format!("{param}={page}")];
+        if other.1 > 1 {
+            query.push(format!("{}={}", other.0, other.1));
+        }
+        format!("{base}?{}#{param}", query.join("&"))
+    };
+    Pager {
+        current,
+        pages,
+        previous: (current > 1).then(|| link(current - 1)),
+        next: (current < pages).then(|| link(current + 1)),
+    }
+}
 
 #[page("/p/{product_id}")]
 pub async fn product_page() -> Result<impl View> {
@@ -261,7 +303,35 @@ async fn product_view(
             rating.review_count
         )
     });
-    let rows = published_reviews(&store.db, &id, REVIEWS_SHOWN, 0).await?;
+    let query = query::<ProductQuery>(cx)?;
+    let (review_page, question_page) = (
+        query.avis.unwrap_or(1).max(1),
+        query.questions.unwrap_or(1).max(1),
+    );
+    let base = href!(product_page, ProductId(id.clone())).resolve(cx);
+    let reviews_pager = pager(
+        &base,
+        "avis",
+        ("questions", question_page),
+        review_page,
+        rating.review_count,
+        REVIEWS_PER_PAGE,
+    );
+    let questions_pager = pager(
+        &base,
+        "questions",
+        ("avis", review_page),
+        question_page,
+        count_answered_questions(&store.db, &id).await?,
+        QUESTIONS_PER_PAGE,
+    );
+    let rows = published_reviews(
+        &store.db,
+        &id,
+        REVIEWS_PER_PAGE,
+        (reviews_pager.current - 1) * REVIEWS_PER_PAGE,
+    )
+    .await?;
     let author_ids: Vec<String> = rows.iter().map(|r| r.customer_id.clone()).collect();
     let authors: HashMap<String, String> = customers_by_ids(&store.db, &author_ids)
         .await?
@@ -295,7 +365,13 @@ async fn product_view(
         Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
     };
 
-    let asked = answered_questions(&store.db, &id, QUESTIONS_SHOWN, 0).await?;
+    let asked = answered_questions(
+        &store.db,
+        &id,
+        QUESTIONS_PER_PAGE,
+        (questions_pager.current - 1) * QUESTIONS_PER_PAGE,
+    )
+    .await?;
     let question_ids: Vec<String> = asked.iter().map(|q| q.question_id.clone()).collect();
     let mut answers_by_question: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
     for answer in answers_of_questions(&store.db, &question_ids).await? {
@@ -437,6 +513,7 @@ async fn product_view(
                 </article>
             }
             if let Some(error) = &review_error { <p role="alert" class="error">(error.clone())</p> }
+            page_links(pager: &reviews_pager, label: "Avis")
             match &access {
                 ReviewAccess::SignIn(login) => {
                     <p><a href=(login.clone())>"Connectez-vous"</a> " pour donner votre avis."</p>
@@ -490,6 +567,7 @@ async fn product_view(
                     }
                 </article>
             }
+            page_links(pager: &questions_pager, label: "Questions")
             if !own_questions.is_empty() {
                 <p role="status" class="notice">"Vos questions en attente de réponse :"</p>
                 <ul>for body in &own_questions { <li>(body.clone())</li> }</ul>
@@ -508,6 +586,22 @@ async fn product_view(
                 <p><a href=(login_link.clone())>"Connectez-vous"</a> " pour poser une question."</p>
             }
         )
+    })
+}
+
+#[component]
+async fn page_links(pager: &Pager, label: &str) -> Result<impl View> {
+    let position = format!("{label} — page {} sur {}", pager.current, pager.pages);
+    Ok(view! {
+        if pager.pages > 1 {
+            <nav aria-label=(position.clone())>
+                <p class="muted">
+                    if let Some(link) = &pager.previous { <a href=(link.clone()) rel="prev">"← Plus récents"</a> " · " }
+                    (position.clone())
+                    if let Some(link) = &pager.next { " · " <a href=(link.clone()) rel="next">"Plus anciens →"</a> }
+                </p>
+            </nav>
+        }
     })
 }
 

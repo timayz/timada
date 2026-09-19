@@ -30,7 +30,7 @@ use super::{
 use crate::{
     Store,
     auth::require_account,
-    cart_session::{current_cart, forget_cart},
+    cart_session::{current_cart, forget_cart, fresh_cart},
     db::tax_zones,
 };
 
@@ -88,6 +88,16 @@ async fn check_out(
         Ok(None) => return Err(back_to_cart().into()),
         Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
     };
+    // Never confirm a total the shopper has not seen: if a price moved since
+    // the page was shown, show it again first.
+    if let Some((_, notices)) = fresh_cart(cx).await?
+        && !notices.is_empty()
+    {
+        return refuse(&format!(
+            "{} Vérifiez le nouveau total avant de valider.",
+            notices.join(" ")
+        ));
+    }
     let book = load_address_book(&store.executor, &account.customer_id)
         .await?
         .ok_or_not_found()?;
@@ -174,10 +184,9 @@ async fn checkout_view(
 ) -> Result<impl View> {
     let account = require_account(cx).await?;
     let store = app_context::<Store>(cx);
-    let cart = match current_cart(cx).await {
-        Ok(Some(cart)) if !cart.lines.is_empty() => cart.clone(),
-        Ok(_) => return Err(see_other(href!(cart::show).resolve(cx)).into()),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+    let (cart, price_notices) = match fresh_cart(cx).await? {
+        Some((cart, notices)) if !cart.lines.is_empty() => (cart, notices),
+        _ => return Err(see_other(href!(cart::show).resolve(cx)).into()),
     };
     let book = load_address_book(&store.executor, &account.customer_id)
         .await?
@@ -248,6 +257,7 @@ async fn checkout_view(
             title: "Passer commande",
             <h1>"Passer commande"</h1>
             if let Some(error) = &error { <p role="alert" class="error">(error.clone())</p> }
+            for notice in &price_notices { <p role="status" class="notice">(notice.clone())</p> }
 
             if book.deliveries.is_empty() {
                 <p class="notice">"Ajoutez une adresse de livraison pour continuer : " <a href=(new_address.clone())>"nouvelle adresse"</a></p>

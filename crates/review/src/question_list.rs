@@ -87,6 +87,16 @@ pub async fn answered_questions(
     .await
 }
 
+/// How many answered questions a product has: the pages of [`answered_questions`].
+pub async fn count_answered_questions(db: &SqlitePool, product_id: &str) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM review_question_list WHERE product_id = ? AND answer_count > 0",
+    )
+    .bind(product_id)
+    .fetch_one(db)
+    .await
+}
+
 /// What a customer asked about a product and nobody answered yet — shown to
 /// them alone.
 pub async fn unanswered_questions_of(
