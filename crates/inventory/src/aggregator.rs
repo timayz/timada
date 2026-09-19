@@ -11,6 +11,10 @@ pub enum StockItem {
     /// Units arrived (delivery, return to stock).
     StockReceived { quantity: u32 },
 
+    /// Units a customer sent back went into stock again. One event per
+    /// return, which is what makes restocking safe to retry.
+    StockReturned { return_id: String, quantity: u32 },
+
     /// Units were put aside for an order.
     StockReserved { order_id: String, quantity: u32 },
 
