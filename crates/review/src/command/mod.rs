@@ -1,5 +1,6 @@
 mod answer_question;
 mod ask_question;
+mod moderate_question;
 mod publish_review;
 mod reject_review;
 mod submit_review;
@@ -13,12 +14,18 @@ use evento::{Executor, Projection, metadata::Event};
 
 use crate::{
     aggregator::{
-        Question, QuestionAnswered, QuestionAsked, Review, ReviewPublished, ReviewRejected,
-        ReviewSubmitted,
+        AnswerPublished, AnswerRejected, AnswerSubmitted, Question, QuestionAnswered,
+        QuestionAsked, QuestionPublished, QuestionRejected, Review, ReviewPublished,
+        ReviewRejected, ReviewSubmitted,
     },
     error::ReviewError,
-    value_object::ReviewStatus,
+    value_object::{AnswerAuthor, ModerationStatus, ReviewStatus},
 };
+
+/// Deterministic id of a customer's answer: one per customer per question.
+pub fn answer_id(question_id: &str, customer_id: &str) -> String {
+    timada_core::id::derived(&[question_id, customer_id], "answer")
+}
 
 /// Deterministic review id: one review per customer per product.
 pub fn review_id(product_id: &str, customer_id: &str) -> String {
@@ -114,7 +121,19 @@ pub struct QuestionState {
     /// Who asked: the one to tell when an answer comes in.
     pub customer_id: String,
     pub body: String,
+    pub status: ModerationStatus,
+    /// Published answers, the shop's and customers' alike.
     pub answer_count: u32,
+    pub customer_answers: Vec<CustomerAnswer>,
+}
+
+/// A customer's answer to a question, as the write side knows it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CustomerAnswer {
+    pub answer_id: String,
+    pub customer_id: String,
+    pub body: String,
+    pub status: ModerationStatus,
 }
 
 impl QuestionState {
@@ -127,6 +146,11 @@ fn question_projection<E: Executor>() -> Projection<E, QuestionState> {
     Projection::new::<Question>()
         .handler(on_question_asked())
         .handler(on_question_answered())
+        .handler(on_question_published())
+        .handler(on_question_rejected())
+        .handler(on_answer_submitted())
+        .handler(on_answer_published())
+        .handler(on_answer_rejected())
         .strict()
 }
 
@@ -144,9 +168,74 @@ async fn on_question_asked(
 
 #[evento::handler]
 async fn on_question_answered(
-    _event: Event<QuestionAnswered>,
+    event: Event<QuestionAnswered>,
     row: &mut QuestionState,
 ) -> anyhow::Result<()> {
     row.answer_count += 1;
+    // The shop answering a question is the shop letting it through.
+    if event.data.author == AnswerAuthor::Staff && row.status == ModerationStatus::Pending {
+        row.status = ModerationStatus::Published;
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_question_published(
+    _event: Event<QuestionPublished>,
+    row: &mut QuestionState,
+) -> anyhow::Result<()> {
+    row.status = ModerationStatus::Published;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_question_rejected(
+    _event: Event<QuestionRejected>,
+    row: &mut QuestionState,
+) -> anyhow::Result<()> {
+    row.status = ModerationStatus::Rejected;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_answer_submitted(
+    event: Event<AnswerSubmitted>,
+    row: &mut QuestionState,
+) -> anyhow::Result<()> {
+    row.customer_answers.push(CustomerAnswer {
+        answer_id: event.data.answer_id,
+        customer_id: event.data.customer_id,
+        body: event.data.body,
+        status: ModerationStatus::Pending,
+    });
+    Ok(())
+}
+
+fn set_answer_status(row: &mut QuestionState, answer_id: &str, status: ModerationStatus) {
+    if let Some(answer) = row
+        .customer_answers
+        .iter_mut()
+        .find(|a| a.answer_id == answer_id)
+    {
+        answer.status = status;
+    }
+}
+
+#[evento::handler]
+async fn on_answer_published(
+    event: Event<AnswerPublished>,
+    row: &mut QuestionState,
+) -> anyhow::Result<()> {
+    set_answer_status(row, &event.data.answer_id, ModerationStatus::Published);
+    row.answer_count += 1;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_answer_rejected(
+    event: Event<AnswerRejected>,
+    row: &mut QuestionState,
+) -> anyhow::Result<()> {
+    set_answer_status(row, &event.data.answer_id, ModerationStatus::Rejected);
     Ok(())
 }

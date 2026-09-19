@@ -1,9 +1,9 @@
 use timada_review::{
-    AnswerAuthor, AskQuestion, Command, ListQuestions, ListReviews, ReviewError, ReviewStatus,
-    SubmitReview, answered_questions, answers_of_questions, count_questions, count_reviews,
-    list_questions, list_reviews, load_review_details, migrations, product_rating,
-    product_summary_subscription, published_reviews, question_list_subscription,
-    review_list_subscription, unanswered_questions_of,
+    AnswerAuthor, AskQuestion, Command, ListReviews, QuestionFilter, ReviewError, ReviewStatus,
+    SubmitReview, answers_of_questions, count_published_questions, count_questions, count_reviews,
+    list_questions, list_reviews, load_review_details, migrations, own_unpublished_questions,
+    product_rating, product_summary_subscription, published_questions, published_reviews,
+    question_list_subscription, review_list_subscription,
 };
 
 const PRODUCT: &str = "aoc-24g4xe";
@@ -173,7 +173,7 @@ async fn questions_collect_answers() -> anyhow::Result<()> {
         .await;
     assert!(matches!(missing, Err(ReviewError::QuestionNotFound)));
 
-    // A second question nobody answered yet.
+    // A second question: it awaits moderation, so only its author sees it.
     let waiting = cmd
         .ask_question(AskQuestion {
             product_id: PRODUCT.into(),
@@ -181,47 +181,118 @@ async fn questions_collect_answers() -> anyhow::Result<()> {
             body: "Pied réglable en hauteur ?".into(),
         })
         .await?;
-    for _ in 0..2 {
-        question_list_subscription()
-            .data(db.clone())
-            .run_once(&executor)
-            .await?;
-    }
+    // A third one is refused.
+    let refused = cmd
+        .ask_question(AskQuestion {
+            product_id: PRODUCT.into(),
+            customer_id: "paul".into(),
+            body: "spam".into(),
+        })
+        .await?;
+    cmd.reject_question(&refused, "Hors sujet".into()).await?;
+    let sync = || async {
+        for _ in 0..2 {
+            question_list_subscription()
+                .data(db.clone())
+                .run_once(&executor)
+                .await?;
+        }
+        anyhow::Ok(())
+    };
+    sync().await?;
 
-    // The product page shows answered questions; an unanswered one only to
-    // whoever asked it.
-    let shown = answered_questions(&db, PRODUCT, 10, 0).await?;
+    // The shop's answer published the first question; the two answers given
+    // through `answer_question` are public as written.
+    let shown = published_questions(&db, PRODUCT, 10, 0).await?;
     assert_eq!(shown.len(), 1);
     assert_eq!(shown[0].question_id, id);
     assert_eq!(shown[0].answer_count, 2);
-    let answers = answers_of_questions(&db, std::slice::from_ref(&id)).await?;
-    let bodies: Vec<&str> = answers.iter().map(|a| a.body.as_str()).collect();
-    assert_eq!(bodies.len(), 2);
-    assert!(bodies.contains(&"Oui, G-SYNC Compatible."));
-    let by_staff = answers
-        .iter()
-        .find(|a| a.author_customer_id.is_none())
-        .ok_or_else(|| anyhow::anyhow!("staff answer missing"))?;
-    assert_eq!(by_staff.body, "Oui, G-SYNC Compatible.");
-    let own = unanswered_questions_of(&db, PRODUCT, "paul").await?;
-    assert_eq!(own.len(), 1);
-    assert_eq!(own[0].question_id, waiting);
+    assert_eq!(count_published_questions(&db, PRODUCT).await?, 1);
+    let own = own_unpublished_questions(&db, PRODUCT, "paul").await?;
+    assert_eq!(own.len(), 2);
     assert!(
-        unanswered_questions_of(&db, PRODUCT, "jonathan")
+        own.iter().any(
+            |q| q.question_id == refused && q.rejection_reason.as_deref() == Some("Hors sujet")
+        )
+    );
+    assert!(
+        own_unpublished_questions(&db, PRODUCT, "jonathan")
             .await?
             .is_empty()
     );
 
-    // The admin queue.
-    let unanswered = ListQuestions {
-        answered: Some(false),
-        ..ListQuestions::default()
-    };
-    let queue = list_questions(&db, &unanswered).await?;
+    // A customer cannot answer what is not published.
+    let too_early = cmd.submit_answer(&waiting, "marie", "Oui.".into()).await;
+    assert!(matches!(too_early, Err(ReviewError::QuestionNotPublished)));
+    cmd.publish_question(&waiting).await?;
+    cmd.publish_question(&waiting).await?;
+    assert!(matches!(
+        cmd.reject_question(&waiting, "trop tard".into()).await,
+        Err(ReviewError::QuestionNotPending)
+    ));
+
+    // Published, the question can be answered — once per customer — and the
+    // answer waits for moderation.
+    let helpful = cmd
+        .submit_answer(&waiting, "marie", "Oui, sur 13 cm.".into())
+        .await?;
+    assert!(matches!(
+        cmd.submit_answer(&waiting, "marie", "Encore moi.".into())
+            .await,
+        Err(ReviewError::AlreadyAnswered)
+    ));
+    let rude = cmd
+        .submit_answer(&waiting, "jonathan", "Cherche sur Google.".into())
+        .await?;
+    sync().await?;
+    assert!(
+        answers_of_questions(&db, std::slice::from_ref(&waiting), true)
+            .await?
+            .is_empty()
+    );
+    assert_eq!(
+        answers_of_questions(&db, std::slice::from_ref(&waiting), false)
+            .await?
+            .len(),
+        2
+    );
+    // Both the question (its answers) and nothing else are to review.
+    let queue = list_questions(&db, QuestionFilter::ToReview, 10, 0).await?;
     assert_eq!(queue.len(), 1);
     assert_eq!(queue[0].question_id, waiting);
-    assert_eq!(count_questions(&db, Some(true)).await?, 1);
-    assert_eq!(count_questions(&db, None).await?, 2);
+    assert_eq!(count_questions(&db, QuestionFilter::Unanswered).await?, 1);
+
+    cmd.publish_answer(&waiting, &helpful).await?;
+    cmd.reject_answer(&waiting, &rude, "Désobligeant".into())
+        .await?;
+    assert!(matches!(
+        cmd.publish_answer(&waiting, &rude).await,
+        Err(ReviewError::AnswerNotPending)
+    ));
+    assert!(matches!(
+        cmd.publish_answer(&waiting, "nope").await,
+        Err(ReviewError::AnswerNotFound)
+    ));
+    sync().await?;
+    let public = answers_of_questions(&db, std::slice::from_ref(&waiting), true).await?;
+    assert_eq!(public.len(), 1);
+    assert_eq!(public[0].body, "Oui, sur 13 cm.");
+    assert_eq!(public[0].author_customer_id.as_deref(), Some("marie"));
+    assert!(
+        list_questions(&db, QuestionFilter::ToReview, 10, 0)
+            .await?
+            .is_empty()
+    );
+    assert_eq!(count_questions(&db, QuestionFilter::Answered).await?, 2);
+    assert_eq!(count_questions(&db, QuestionFilter::Rejected).await?, 1);
+    assert_eq!(count_questions(&db, QuestionFilter::All).await?, 3);
+
+    // The shop cannot answer a refused question.
+    assert!(matches!(
+        cmd.answer_question(&refused, AnswerAuthor::Staff, "…".into())
+            .await,
+        Err(ReviewError::QuestionNotPublished)
+    ));
 
     Ok(())
 }

@@ -774,39 +774,51 @@ async fn reviews_are_moderated_from_the_queue() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn questions_are_answered_from_the_queue() -> anyhow::Result<()> {
+async fn questions_and_answers_are_moderated_from_the_queue() -> anyhow::Result<()> {
     let h = harness("admin").await?;
     let cookie = sign_in(&h, "admin").await?;
-    let question = timada_review::Command(&h.executor)
-        .ask_question(timada_review::AskQuestion {
-            product_id: "aoc-24g4xe".into(),
-            customer_id: "customer-1".into(),
-            body: "Compatible G-SYNC ?".into(),
-        })
-        .await?;
+    let reviews = timada_review::Command(&h.executor);
+    let ask = |body: &str| timada_review::AskQuestion {
+        product_id: "aoc-24g4xe".into(),
+        customer_id: "customer-1".into(),
+        body: body.into(),
+    };
+    let answered = reviews.ask_question(ask("Compatible G-SYNC ?")).await?;
+    let open = reviews.ask_question(ask("Pied réglable ?")).await?;
+    let spam = reviews.ask_question(ask("Achetez mes cryptos")).await?;
     let sync = || async {
-        timada_review::question_list_subscription()
-            .data(h.db.clone())
-            .run_once(&h.executor)
-            .await
+        for _ in 0..2 {
+            timada_review::question_list_subscription()
+                .data(h.db.clone())
+                .run_once(&h.executor)
+                .await?;
+        }
+        anyhow::Ok(())
     };
     sync().await?;
 
+    // All three await moderation: that is the default view.
     let queue = text(
         h.router
             .handle(get("/admin/questions", Some(&cookie)))
             .await,
     )
     .await?;
-    assert!(queue.contains("Compatible G-SYNC ?"), "{queue}");
-    assert!(queue.contains("Sans réponse"), "{queue}");
+    for body in [
+        "Compatible G-SYNC ?",
+        "Pied réglable ?",
+        "Achetez mes cryptos",
+    ] {
+        assert!(queue.contains(body), "{queue}");
+    }
+    assert!(queue.contains("À modérer"), "{queue}");
 
     // An empty answer is refused with a message, nothing is written.
     let empty = h
         .router
         .handle(post(
             "/admin/questions/answer",
-            &format!("question_id={question}&body=+"),
+            &format!("question_id={answered}&body=+"),
             Some(&cookie),
         ))
         .await;
@@ -814,19 +826,33 @@ async fn questions_are_answered_from_the_queue() -> anyhow::Result<()> {
     let warned = text(h.router.handle(get(&location(&empty), Some(&cookie))).await).await?;
     assert!(warned.contains("Écrivez une réponse"), "{warned}");
 
-    let answered = h
+    // Answering one publishes it; one is published as it is; one is refused.
+    for (uri, form) in [
+        (
+            "/admin/questions/answer",
+            format!("question_id={answered}&body=Oui%2C+G-SYNC+Compatible."),
+        ),
+        ("/admin/questions/publish", format!("question_id={open}")),
+        (
+            "/admin/questions/refuse",
+            format!("question_id={spam}&reason=Publicit%C3%A9"),
+        ),
+    ] {
+        let done = h.router.handle(post(uri, &form, Some(&cookie))).await;
+        assert_eq!(location(&done), "/admin/questions", "{uri}");
+    }
+    // A double click on a moderated question is harmless.
+    let again = h
         .router
         .handle(post(
-            "/admin/questions/answer",
-            &format!("question_id={question}&body=Oui%2C+G-SYNC+Compatible."),
+            "/admin/questions/refuse",
+            &format!("question_id={open}&reason=Trop+tard"),
             Some(&cookie),
         ))
         .await;
-    assert_eq!(answered.status(), StatusCode::SEE_OTHER);
-    assert_eq!(location(&answered), "/admin/questions");
+    assert_eq!(location(&again), "/admin/questions?error=stale");
     sync().await?;
 
-    // Answered: out of the default queue, listed with its answer elsewhere.
     let queue = text(
         h.router
             .handle(get("/admin/questions", Some(&cookie)))
@@ -837,16 +863,74 @@ async fn questions_are_answered_from_the_queue() -> anyhow::Result<()> {
         queue.contains("Aucune question dans cette file."),
         "{queue}"
     );
-    let done = h
-        .router
-        .handle(get("/admin/questions?status=answered", Some(&cookie)))
-        .await;
-    let done = text(done).await?;
+    let page = |status: &str| {
+        let uri = format!("/admin/questions?status={status}");
+        let (router, cookie) = (&h.router, cookie.clone());
+        async move { text(router.handle(get(&uri, Some(&cookie))).await).await }
+    };
+    let done = page("answered").await?;
     assert!(done.contains("Oui, G-SYNC Compatible."), "{done}");
     assert!(done.contains("Boutique"), "{done}");
+    assert!(page("unanswered").await?.contains("Pied réglable ?"));
+    let refused = page("rejected").await?;
+    assert!(refused.contains("Achetez mes cryptos"), "{refused}");
+    assert!(refused.contains("Publicité"), "{refused}");
+
+    // A customer answers the open question: back in the queue, to moderate.
+    let helpful = reviews
+        .submit_answer(&open, "customer-2", "Oui, sur 13 cm.".into())
+        .await?;
+    let rude = reviews
+        .submit_answer(&open, "customer-3", "Cherche sur Google.".into())
+        .await?;
+    sync().await?;
+    let queue = text(
+        h.router
+            .handle(get("/admin/questions", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(queue.contains("Oui, sur 13 cm."), "{queue}");
+    assert!(queue.contains("Publier la réponse"), "{queue}");
+
+    let published = h
+        .router
+        .handle(post(
+            "/admin/questions/answers/publish",
+            &format!("question_id={open}&answer_id={helpful}"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&published), "/admin/questions");
+    let refused = h
+        .router
+        .handle(post(
+            "/admin/questions/answers/refuse",
+            &format!("question_id={open}&answer_id={rude}&reason=D%C3%A9sobligeant"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&refused), "/admin/questions");
+    sync().await?;
+
+    let queue = text(
+        h.router
+            .handle(get("/admin/questions", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(
+        queue.contains("Aucune question dans cette file."),
+        "{queue}"
+    );
+    let public =
+        timada_review::answers_of_questions(&h.db, std::slice::from_ref(&open), true).await?;
+    assert_eq!(public.len(), 1);
+    assert_eq!(public[0].body, "Oui, sur 13 cm.");
+    let all = page("all").await?;
+    assert!(all.contains("Désobligeant"), "{all}");
     Ok(())
 }
-
 #[tokio::test]
 async fn the_outbox_is_listed_and_failed_emails_can_be_retried() -> anyhow::Result<()> {
     struct Down;
