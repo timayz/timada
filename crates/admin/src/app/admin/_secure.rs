@@ -7,6 +7,7 @@ pub mod invoices;
 pub mod orders;
 pub mod products;
 pub mod promotions;
+pub mod questions;
 pub mod refunds;
 pub mod reviews;
 
