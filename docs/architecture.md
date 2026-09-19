@@ -159,7 +159,7 @@ pool as data unless noted:
 | invoice | `invoice_list_subscription`, `credit_note_list_subscription` | read models | |
 | returns | `return_processing_subscription` | process manager | |
 | returns | `return_list_subscription` | read model | |
-| mailer | `mailer_subscription` | ACL ← six contexts | `timada_mailer::MailerConfig` |
+| mailer | `mailer_subscription` | ACL ← seven contexts | `timada_mailer::MailerConfig`, optionally `MailerTemplates` |
 
 Read-model subscriptions are `.strict()`: they name every event of their
 aggregate (a handler or a `.skip`), so a new event cannot be forgotten
@@ -170,7 +170,7 @@ silently. A handler that keeps failing is retried forever — a missing
 
 ```rust
 tokio::spawn(timada_order::run_payment_timeouts(executor, pool, timeout, every));
-tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // one worker only
+tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any number of these
 ```
 
 **4. Values the host provides** — plain structs, no events behind them:
@@ -180,6 +180,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // one work
 | `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it |
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
+| `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
 | `timada_invoice::InvoiceIssuer` | the seller's identity printed on invoices |
 | `timada_admin::AdminConfig` | mount segment, stylesheet, invoice issuer |
 
