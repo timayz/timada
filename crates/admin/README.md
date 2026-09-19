@@ -65,8 +65,9 @@ credit note shown under its invoice, provided the host runs
 
 Reviews wait in the reviews section until an operator publishes or rejects
 them; only published ones reach the storefront and the product rating. Product
-questions work the other way round: nothing is moderated, but a question only
-shows on the storefront once the questions section gave it an answer.
+questions are moderated too — a question is published, refused, or published
+by answering it as the shop — and so is every answer a customer gives to a
+published question.
 
 An issued invoice has a print view (`…/invoices/{id}/print`): the admin's
 header is hidden on paper, so the browser's print dialog gives the PDF. It

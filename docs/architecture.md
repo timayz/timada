@@ -223,6 +223,5 @@ the SMTP relay.
   product tax categories.
 - Server-side PDF invoices: `InvoiceDocument` is ready for one; today the
   invoice is a print-ready page.
-- Customer answers to product questions: they need answer moderation first.
 - Upcasting of old event shapes: an evento feature, to build when the first
   `V2` event exists.
