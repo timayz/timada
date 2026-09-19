@@ -1,6 +1,6 @@
 //! Socket-free tests through `Router::handle`: auth, mounting under a custom
-//! segment, the orders, promotions, inventory, invoices, refunds and reviews
-//! sections, branded 404s.
+//! segment, the orders, promotions, inventory, invoices, refunds, reviews and
+//! questions sections, branded 404s.
 
 use timada_admin::{AdminConfig, AdminServices, Stylesheet, create_admin, migrations};
 use timada_core::{Address, Money};
@@ -721,5 +721,79 @@ async fn reviews_are_moderated_from_the_queue() -> anyhow::Result<()> {
     .await?;
     assert!(all.contains("Rien à redire."), "{all}");
     assert!(all.contains("Publié"), "{all}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn questions_are_answered_from_the_queue() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let question = timada_review::Command(&h.executor)
+        .ask_question(timada_review::AskQuestion {
+            product_id: "aoc-24g4xe".into(),
+            customer_id: "customer-1".into(),
+            body: "Compatible G-SYNC ?".into(),
+        })
+        .await?;
+    let sync = || async {
+        timada_review::question_list_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await
+    };
+    sync().await?;
+
+    let queue = text(
+        h.router
+            .handle(get("/admin/questions", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(queue.contains("Compatible G-SYNC ?"), "{queue}");
+    assert!(queue.contains("Sans réponse"), "{queue}");
+
+    // An empty answer is refused with a message, nothing is written.
+    let empty = h
+        .router
+        .handle(post(
+            "/admin/questions/answer",
+            &format!("question_id={question}&body=+"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&empty), "/admin/questions?error=empty");
+    let warned = text(h.router.handle(get(&location(&empty), Some(&cookie))).await).await?;
+    assert!(warned.contains("Écrivez une réponse"), "{warned}");
+
+    let answered = h
+        .router
+        .handle(post(
+            "/admin/questions/answer",
+            &format!("question_id={question}&body=Oui%2C+G-SYNC+Compatible."),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(answered.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&answered), "/admin/questions");
+    sync().await?;
+
+    // Answered: out of the default queue, listed with its answer elsewhere.
+    let queue = text(
+        h.router
+            .handle(get("/admin/questions", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(
+        queue.contains("Aucune question dans cette file."),
+        "{queue}"
+    );
+    let done = h
+        .router
+        .handle(get("/admin/questions?status=answered", Some(&cookie)))
+        .await;
+    let done = text(done).await?;
+    assert!(done.contains("Oui, G-SYNC Compatible."), "{done}");
+    assert!(done.contains("Boutique"), "{done}");
     Ok(())
 }

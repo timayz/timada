@@ -1,8 +1,9 @@
 # timada-admin
 
 A [topcoat](https://github.com/tokio-rs/topcoat) admin for the timada contexts
-(orders, products, stock, customers, promotions, invoices, refunds, reviews) that you mount into your own app — a topcoat app
-or any tower/axum app.
+(orders, products, stock, customers, promotions, invoices, refunds, reviews,
+questions) that you mount into your own app — a topcoat app or any tower/axum
+app.
 
 The admin is a self-contained topcoat `Router`: its own layout, session, auth
 layer and app context. It never touches events directly; every read goes
@@ -48,8 +49,9 @@ subscriptions: `timada_order::order_history_subscription`,
 `timada_promotion::code_list_subscription`,
 `timada_invoice::invoice_list_subscription`,
 `timada_invoice::credit_note_list_subscription`,
-`timada_payment::refund_list_subscription` and
-`timada_review::review_list_subscription`, each with `.data(pool)` — and
+`timada_payment::refund_list_subscription`,
+`timada_review::review_list_subscription` and
+`timada_review::question_list_subscription`, each with `.data(pool)` — and
 their migrations (`timada_payment::migrations()` is new with the refunds
 section).
 
@@ -61,7 +63,9 @@ credit note shown under its invoice, provided the host runs
 `timada_invoice::credit_notes_from_refunds_subscription`.
 
 Reviews wait in the reviews section until an operator publishes or rejects
-them; only published ones reach the storefront and the product rating.
+them; only published ones reach the storefront and the product rating. Product
+questions work the other way round: nothing is moderated, but a question only
+shows on the storefront once the questions section gave it an answer.
 
 ## Assets and styling
 

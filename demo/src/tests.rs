@@ -540,3 +540,67 @@ async fn reviews_wait_for_moderation_before_showing_on_the_product_page() -> any
     assert!(page.contains("4,0 / 5 — 1 avis"), "{page}");
     Ok(())
 }
+
+#[tokio::test]
+async fn questions_show_on_the_product_page_once_answered() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    let product = format!("/p/{product_id}");
+
+    let page = text(browser.get(&product).await).await?;
+    assert!(page.contains("Aucune question pour le moment."), "{page}");
+    assert!(page.contains("pour poser une question"), "{page}");
+    let guest = browser
+        .post(
+            &format!("{product}/questions"),
+            "body=Compatible+G-SYNC+%3F",
+        )
+        .await;
+    assert!(
+        location(&guest).starts_with("/login"),
+        "{}",
+        location(&guest)
+    );
+
+    browser.post("/register", REGISTER).await;
+    let empty = browser
+        .post(&format!("{product}/questions"), "body=+")
+        .await;
+    assert_eq!(empty.status(), StatusCode::OK);
+    assert!(text(empty).await?.contains("Écrivez votre question"));
+    let asked = browser
+        .post(
+            &format!("{product}/questions"),
+            "body=Compatible+G-SYNC+%3F",
+        )
+        .await;
+    assert_eq!(location(&asked), format!("{product}#questions"));
+    db::run_subscriptions_once(&store).await?;
+
+    // Unanswered: the asker sees it waiting, other visitors do not see it.
+    let own = text(browser.get(&product).await).await?;
+    assert!(own.contains("en attente de réponse"), "{own}");
+    assert!(own.contains("Compatible G-SYNC ?"), "{own}");
+    let public = text(Browser::new(&router).get(&product).await).await?;
+    assert!(!public.contains("Compatible G-SYNC ?"), "{public}");
+
+    // The shop answers: everyone sees the question and its answer.
+    let rows =
+        timada_review::list_questions(&store.db, &timada_review::ListQuestions::default()).await?;
+    assert_eq!(rows.len(), 1);
+    timada_review::Command(&store.executor)
+        .answer_question(
+            &rows[0].question_id,
+            timada_review::AnswerAuthor::Staff,
+            "Oui, G-SYNC Compatible.".into(),
+        )
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let public = text(Browser::new(&router).get(&product).await).await?;
+    assert!(public.contains("Compatible G-SYNC ?"), "{public}");
+    assert!(public.contains("Réponse de la boutique"), "{public}");
+    assert!(public.contains("Oui, G-SYNC Compatible."), "{public}");
+    let own = text(browser.get(&product).await).await?;
+    assert!(!own.contains("en attente de réponse"), "{own}");
+    Ok(())
+}
