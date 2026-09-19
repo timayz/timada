@@ -33,4 +33,6 @@ pub enum CartStatus {
     Open,
     Saved,
     CheckedOut,
+    /// A saved cart its owner deleted.
+    Discarded,
 }

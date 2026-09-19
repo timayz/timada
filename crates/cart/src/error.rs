@@ -4,6 +4,12 @@ pub enum CartError {
     CartNotFound,
     #[error("cart is already checked out")]
     CartAlreadyCheckedOut,
+    #[error("cart was deleted")]
+    CartDiscarded,
+    #[error("cart belongs to another customer")]
+    NotYourCart,
+    #[error("cart is not saved")]
+    NotSaved,
     #[error("cart is empty")]
     EmptyCart,
     #[error("a customer is required to check out")]

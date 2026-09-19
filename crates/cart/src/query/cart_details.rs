@@ -6,8 +6,9 @@ use timada_core::Money;
 
 use crate::{
     aggregator::{
-        Cart, CartCheckedOut, CartLineAdded, CartLineQuantityChanged, CartLineRemoved, CartOpened,
-        CartSaved, PromoCodeApplied, PromoCodeRemoved,
+        Cart, CartAssignedToCustomer, CartCheckedOut, CartDiscarded, CartLineAdded,
+        CartLineQuantityChanged, CartLineRemoved, CartOpened, CartReopened, CartSaved,
+        PromoCodeApplied, PromoCodeRemoved,
     },
     value_object::{CartLine, CartStatus},
 };
@@ -22,6 +23,8 @@ pub struct CartDetailsView {
     pub subtotal: Money,
     pub status: CartStatus,
     pub saved_name: Option<String>,
+    /// Unix seconds of the latest `CartSaved`.
+    pub saved_at: Option<u64>,
 }
 
 impl CartDetailsView {
@@ -50,6 +53,12 @@ pub fn create_projection<E: Executor>() -> Projection<E, CartDetailsView> {
         .handler(on_promo_code_removed())
         .handler(on_cart_saved())
         .handler(on_cart_checked_out())
+        .handler(on_cart_assigned_to_customer())
+        .handler(on_cart_reopened())
+        .handler(on_cart_discarded())
+        // `CartStatus` gained `Discarded` and the view `saved_at`: snapshots
+        // taken with the previous shape must not be decoded.
+        .revision(1)
         .strict()
 }
 
@@ -127,6 +136,7 @@ async fn on_promo_code_removed(
 #[evento::handler]
 async fn on_cart_saved(event: Event<CartSaved>, row: &mut CartDetailsView) -> anyhow::Result<()> {
     row.status = CartStatus::Saved;
+    row.saved_at = Some(event.timestamp);
     row.saved_name = Some(event.data.name);
     Ok(())
 }
@@ -138,5 +148,32 @@ async fn on_cart_checked_out(
 ) -> anyhow::Result<()> {
     row.status = CartStatus::CheckedOut;
     row.customer_id = Some(event.data.customer_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_cart_assigned_to_customer(
+    event: Event<CartAssignedToCustomer>,
+    row: &mut CartDetailsView,
+) -> anyhow::Result<()> {
+    row.customer_id = Some(event.data.customer_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_cart_reopened(
+    _event: Event<CartReopened>,
+    row: &mut CartDetailsView,
+) -> anyhow::Result<()> {
+    row.status = CartStatus::Open;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_cart_discarded(
+    _event: Event<CartDiscarded>,
+    row: &mut CartDetailsView,
+) -> anyhow::Result<()> {
+    row.status = CartStatus::Discarded;
     Ok(())
 }
