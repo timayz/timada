@@ -1,0 +1,16 @@
+[package]
+name = "timada-event-lock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Keeps the shapes timada persists (events, their value types, snapshotted views) append-only."
+
+[dependencies]
+anyhow.workspace = true
+quote = "1"
+syn = { version = "2", features = ["full", "visit"] }
+
+[lints]
+workspace = true

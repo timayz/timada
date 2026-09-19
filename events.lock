@@ -1,0 +1,132 @@
+# Shapes timada persists. Generated: `cargo run -p timada-event-lock -- update`.
+# `event` and `type` lines are frozen — add a new variant instead of editing
+# one. A `view` line may change when its `.revision(n)` grows.
+# See docs/event-evolution.md.
+
+event timada-cart/Cart::CartCheckedOut { customer_id: String, delivery_address: Address, billing_address: Address, delivery: DeliveryChoice, payment_mode: PaymentMode }
+event timada-cart/Cart::CartLineAdded { product_id: String, name: String, quantity: u32, unit_price: Money, warranty_months: u16 }
+event timada-cart/Cart::CartLineQuantityChanged { product_id: String, quantity: u32 }
+event timada-cart/Cart::CartLineRemoved { product_id: String }
+event timada-cart/Cart::CartOpened { customer_id: Option<String> }
+event timada-cart/Cart::CartSaved { name: String }
+event timada-cart/Cart::PromoCodeApplied { code: String }
+event timada-cart/Cart::PromoCodeRemoved unit
+event timada-catalog/Product::ProductArchived unit
+event timada-catalog/Product::ProductCreated { sku: String, name: String, brand: Brand, category_path: Vec<String>, short_description: String, warranty_months: u16 }
+event timada-catalog/Product::ProductDescribed { long_description: String, key_features: Vec<String> }
+event timada-catalog/Product::ProductEnergyLabelled { class: EnergyClass, info_sheet_url: String }
+event timada-catalog/Product::ProductMediaAdded { media: Media }
+event timada-catalog/Product::ProductSpecified { specs: Vec<Spec> }
+event timada-customer/Customer::BillingAddressSet { address: Address }
+event timada-customer/Customer::CustomerEmailChanged { email: String }
+event timada-customer/Customer::CustomerRegistered { email: String, civility: Civility, first_name: String, last_name: String }
+event timada-customer/Customer::DeliveryAddressAdded { address_id: String, address: Address }
+event timada-customer/Customer::DeliveryAddressChanged { address_id: String, address: Address }
+event timada-customer/Customer::DeliveryAddressRemoved { address_id: String }
+event timada-customer/Customer::PreferredDeliveryAddressChosen { address_id: String }
+event timada-inventory/BackInStockAlert::BackInStockAlertRequested { product_id: String, customer_id: String, email: String }
+event timada-inventory/BackInStockAlert::BackInStockAlertTriggered unit
+event timada-inventory/StockItem::StockItemRegistered { product_id: String, location: StockLocation }
+event timada-inventory/StockItem::StockReceived { quantity: u32 }
+event timada-inventory/StockItem::StockReservationRejected { order_id: String, requested: u32, available: u32 }
+event timada-inventory/StockItem::StockReservationReleased { order_id: String, quantity: u32 }
+event timada-inventory/StockItem::StockReserved { order_id: String, quantity: u32 }
+event timada-inventory/StockItem::StockReturned { return_id: String, quantity: u32 }
+event timada-invoice/CreditNote::CreditNoteIssued { credit_note_number: String, refund_id: String, invoice_id: String, invoice_number: String, order_id: String, amount: Money, reason: String }
+event timada-invoice/Invoice::InvoiceDiscountApplied { label: String, amount: Money }
+event timada-invoice/Invoice::InvoiceDrafted { order_id: String, customer_id: String, billing_address: Address, lines: Vec<InvoiceLine>, shipping_fee: Money, handling_fee: Money }
+event timada-invoice/Invoice::InvoiceIssued { invoice_number: String }
+event timada-invoice/Invoice::InvoiceVoided { reason: String }
+event timada-order/Order::OrderCancelled { reason: String }
+event timada-order/Order::OrderConfirmationResent unit
+event timada-order/Order::OrderDiscountApplied { code: String, kind: PromoKind, amount: Money }
+event timada-order/Order::OrderNumberAssigned { order_number: String }
+event timada-order/Order::OrderPaid { payment_id: String }
+event timada-order/Order::OrderPlaced { cart_id: String, customer_id: String, seller: Seller, lines: Vec<OrderLine>, delivery_address: Address, billing_address: Address, delivery: DeliveryChoice, payment_mode: PaymentMode, shipping_fee: Money, handling_fee: Money, promo_code: Option<String> }
+event timada-order/Order::OrderSettled unit
+event timada-order/Order::OrderShipped { shipment_id: String, carrier: String, tracking_number: String }
+event timada-order/OrderFulfillment::FulfillmentCompensated { reason: String }
+event timada-order/OrderFulfillment::FulfillmentCompleted unit
+event timada-order/OrderFulfillment::FulfillmentStarted { order_id: String, lines: Vec<FulfillmentLine>, pickup_store_id: Option<String>, amount: Money, payment_mode: PaymentMode }
+event timada-order/OrderFulfillment::LineStockReserved { product_id: String }
+event timada-order/OrderFulfillment::PaymentCaptured unit
+event timada-order/OrderFulfillment::PaymentRequested { payment_id: String }
+event timada-order/OrderFulfillment::PaymentWaived unit
+event timada-order/OrderFulfillment::ShipmentRequested { shipment_id: String }
+event timada-payment/Payment::PaymentCaptured { psp_reference: String }
+event timada-payment/Payment::PaymentDeclined { reason: String }
+event timada-payment/Payment::PaymentRefunded { amount: Money, reason: String }
+event timada-payment/Payment::PaymentRequested { order_id: String, amount: Money, method: PaymentMethod }
+event timada-pricing/ProductPrice::EcoParticipationChanged { eco_participation: Money }
+event timada-pricing/ProductPrice::InstallmentOfferAttached { offer: InstallmentOffer }
+event timada-pricing/ProductPrice::ProductPriceChanged { price_incl_tax: Money }
+event timada-pricing/ProductPrice::ProductPriceListed { product_id: String, price_incl_tax: Money, vat_rate_bp: u16, eco_participation: Money }
+event timada-pricing/ProductPrice::ProductPriceWithdrawn unit
+event timada-promotion/Discount::DiscountCreated { code: String, kind: DiscountKind, max_redemptions: Option<u32>, valid_until: Option<u64> }
+event timada-promotion/Discount::DiscountDeactivated unit
+event timada-promotion/Discount::DiscountRedeemed { order_id: String }
+event timada-promotion/Discount::DiscountRedemptionReleased { order_id: String }
+event timada-promotion/Voucher::VoucherCancelled { reason: String }
+event timada-promotion/Voucher::VoucherIssued { code: String, customer_id: Option<String>, value: Money, kind: VoucherKind, expires_at: Option<u64> }
+event timada-promotion/Voucher::VoucherRedeemed { order_id: String, amount: Money }
+event timada-promotion/Voucher::VoucherRedemptionRefunded { order_id: String, amount: Money }
+event timada-returns/Return::ReturnApproved unit
+event timada-returns/Return::ReturnCancelled unit
+event timada-returns/Return::ReturnCompleted { refunded: Money, credited: Money, voucher_code: Option<String> }
+event timada-returns/Return::ReturnReceived { lines: Vec<ReceivedLine>, refund_method: RefundMethod, money: Money, credit: Money }
+event timada-returns/Return::ReturnRefused { reason: String }
+event timada-returns/Return::ReturnRequested { rma_number: String, order_id: String, customer_id: String, lines: Vec<ReturnLine>, reason: String }
+event timada-review/Question::QuestionAnswered { author: AnswerAuthor, body: String }
+event timada-review/Question::QuestionAsked { product_id: String, customer_id: String, body: String }
+event timada-review/Review::ReviewPublished unit
+event timada-review/Review::ReviewRejected { reason: String }
+event timada-review/Review::ReviewSubmitted { product_id: String, customer_id: String, order_id: Option<String>, rating: u8, title: String, body: String }
+event timada-shipping/Shipment::ShipmentCancelled { reason: String }
+event timada-shipping/Shipment::ShipmentCreated { order_id: String, method: DeliveryMethod, destination: Address, lines: Vec<ShipmentLine> }
+event timada-shipping/Shipment::ShipmentDelivered unit
+event timada-shipping/Shipment::ShipmentDispatched { carrier: String, tracking_number: String }
+
+type timada-cart::DeliveryChoice { method_code: String, pickup_store_id: Option<String> }
+type timada-cart::PaymentMode enum { Card, Installments { count: u8 } }
+type timada-catalog::Brand { name: String, slug: String }
+type timada-catalog::EnergyClass enum { A, B, C, D, E, F, G }
+type timada-catalog::Media { url: String, kind: MediaKind, alt: String }
+type timada-catalog::MediaKind enum { Image, Video }
+type timada-catalog::Spec { group: String, label: String, value: String }
+type timada-core::Address { civility: Civility, first_name: String, last_name: String, line1: String, line2: Option<String>, postal_code: String, city: String, country_code: String, phone: Option<String>, mobile: Option<String> }
+type timada-core::Civility enum { Mr, Mrs }
+type timada-core::Money { minor: i64, currency: String }
+type timada-inventory::StockLocation enum { Warehouse, Store { store_id: String } }
+type timada-invoice::InvoiceLine { product_id: String, label: String, quantity: u32, unit_price: Money }
+type timada-order::DeliveryChoice { method_code: String, pickup_store_id: Option<String> }
+type timada-order::FulfillmentLine { product_id: String, quantity: u32 }
+type timada-order::OrderLine { product_id: String, name: String, quantity: u32, unit_price: Money, warranty_months: u16 }
+type timada-order::PaymentMode enum { Card, Installments { count: u8 } }
+type timada-order::PromoKind enum { Discount, Voucher }
+type timada-order::Seller enum { Ldlc, Marketplace { name: String } }
+type timada-payment::PaymentMethod enum { Card, Installments { count: u8, fee: Money } }
+type timada-pricing::InstallmentOffer { count: u8, fee: Money }
+type timada-promotion::DiscountKind enum { Percent { bp: u16 }, FixedAmount { amount: Money } }
+type timada-promotion::VoucherKind enum { GiftVoucher, CreditNote { origin_order_id: String } }
+type timada-returns::ReceivedLine { product_id: String, accepted: u32, restock: bool }
+type timada-returns::RefundMethod enum { OriginalPayment, StoreCredit }
+type timada-returns::ReturnLine { product_id: String, name: String, quantity: u32, unit_price: Money }
+type timada-review::AnswerAuthor enum { Staff, Customer { customer_id: String } }
+type timada-shipping::DeliveryKind enum { HomeDelivery, StorePickup { store_id: String } }
+type timada-shipping::DeliveryMethod { code: String, carrier: String, kind: DeliveryKind }
+type timada-shipping::ShipmentLine { product_id: String, quantity: u32 }
+
+view timada-cart::CartDetailsView rev=0 { id: String, customer_id: Option<String>, lines: Vec<CartLine>, promo_code: Option<String>, subtotal: Money, status: CartStatus, saved_name: Option<String> } with CartLine { product_id: String, name: String, quantity: u32, unit_price: Money, warranty_months: u16 }; CartStatus enum { Open, Saved, CheckedOut }
+view timada-catalog::ProductPageView rev=0 { id: String, sku: String, name: String, brand: Brand, category_path: Vec<String>, short_description: String, long_description: String, key_features: Vec<String>, specs: Vec<Spec>, media: Vec<Media>, energy_class: Option<EnergyClass>, energy_info_sheet_url: Option<String>, warranty_months: u16, archived: bool }
+view timada-customer::AddressBookView rev=0 { customer_id: String, email: String, civility: Civility, first_name: String, last_name: String, billing: Option<Address>, deliveries: Vec<DeliveryAddress> } with DeliveryAddress { id: String, address: Address, preferred: bool }
+view timada-inventory::StockAvailabilityView rev=0 { id: String, product_id: String, location: StockLocation, on_hand: u32, reserved: u32, available: u32, status: Availability } with Availability enum { InStock, OutOfStock }
+view timada-invoice::CreditNoteView rev=0 { id: String, credit_note_number: String, refund_id: String, invoice_id: String, invoice_number: String, order_id: String, amount: Money, reason: String, issued_at: u64 }
+view timada-invoice::InvoiceView rev=0 { id: String, order_id: String, customer_id: String, invoice_number: Option<String>, billing_address: Address, lines: Vec<InvoiceLine>, subtotal: Money, shipping_fee: Money, handling_fee: Money, discount: Option<InvoiceDiscount>, total: Money, status: InvoiceStatus, voided_reason: Option<String> } with InvoiceDiscount { label: String, amount: Money }; InvoiceStatus enum { Draft, Issued, Voided }
+view timada-order::OrderDetailsView rev=1 { id: String, order_number: Option<String>, cart_id: String, customer_id: String, seller: Seller, placed_at: u64, status: OrderStatus, lines: Vec<OrderLine>, delivery_address: Address, billing_address: Address, delivery: DeliveryChoice, payment_mode: PaymentMode, shipping_fee: Money, handling_fee: Money, subtotal: Money, discount: Option<OrderDiscount>, total: Money, promo_code: Option<String>, payment_id: Option<String>, shipment_id: Option<String>, carrier: Option<String>, tracking_number: Option<String>, shipped_at: Option<u64>, cancelled_reason: Option<String>, confirmation_resent_count: u32 } with OrderDiscount { code: String, kind: PromoKind, amount: Money }; OrderStatus enum { Placed, Paid, Shipped, Cancelled }
+view timada-payment::PaymentView rev=0 { id: String, order_id: String, amount: Money, method: PaymentMethod, status: PaymentStatus, psp_reference: Option<String>, declined_reason: Option<String>, refunded: Money } with PaymentStatus enum { Requested, Captured, Declined, Refunded }
+view timada-pricing::ProductPriceView rev=0 { product_id: String, price_incl_tax: Money, price_excl_tax: Money, vat_rate_bp: u16, eco_participation: Money, installment: Option<InstallmentOffer>, installment_amount: Option<Money>, withdrawn: bool }
+view timada-promotion::DiscountView rev=0 { id: String, code: String, kind: DiscountKind, max_redemptions: Option<u32>, redeemed: u32, active: bool, valid_until: Option<u64> }
+view timada-promotion::VoucherView rev=0 { id: String, code: String, customer_id: Option<String>, value: Money, remaining: Money, kind: VoucherKind, expires_at: Option<u64>, cancelled: bool, cancelled_reason: Option<String>, redemptions: Vec<VoucherRedemption> } with VoucherRedemption { order_id: String, amount: Money }
+view timada-returns::ReturnView rev=0 { id: String, rma_number: String, order_id: String, customer_id: String, status: ReturnStatus, lines: Vec<ReturnLine>, reason: String, requested_at: u64, refused_reason: Option<String>, received: Vec<ReceivedLine>, received_at: Option<u64>, refund_method: Option<RefundMethod>, money: Money, credit: Money, voucher_code: Option<String>, completed_at: Option<u64> } with ReturnStatus enum { Requested, Approved, Refused, Cancelled, Received, Completed }
+view timada-review::ReviewView rev=0 { id: String, product_id: String, customer_id: String, order_id: Option<String>, rating: u8, title: String, body: String, status: ReviewStatus, rejection_reason: Option<String> } with ReviewStatus enum { Pending, Published, Rejected }
+view timada-shipping::ShipmentView rev=1 { id: String, order_id: String, method: DeliveryMethod, destination: Address, lines: Vec<ShipmentLine>, status: ShipmentStatus, carrier: Option<String>, tracking_number: Option<String>, cancelled_reason: Option<String> } with ShipmentStatus enum { Created, Dispatched, Delivered, Cancelled }

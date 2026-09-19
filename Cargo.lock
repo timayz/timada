@@ -2653,6 +2653,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-event-lock"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "timada-inventory"
 version = "0.1.0"
 dependencies = [
