@@ -60,7 +60,54 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0003QuestionList;
+
+sqlite_migration!(
+    M0003QuestionList,
+    "review",
+    "m0003_question_list",
+    vec_box![M0002ReviewList],
+    vec_box![
+        (
+            "CREATE TABLE review_question_list (
+                question_id TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL,
+                customer_id TEXT NOT NULL,
+                body TEXT NOT NULL,
+                asked_at INTEGER NOT NULL,
+                answer_count INTEGER NOT NULL DEFAULT 0
+            )",
+            "DROP TABLE review_question_list"
+        ),
+        (
+            "CREATE INDEX review_question_list_product
+             ON review_question_list (product_id, answer_count, asked_at)",
+            "DROP INDEX review_question_list_product"
+        ),
+        (
+            "CREATE INDEX review_question_list_queue
+             ON review_question_list (answer_count, asked_at)",
+            "DROP INDEX review_question_list_queue"
+        ),
+        (
+            "CREATE TABLE review_answer_list (
+                answer_id TEXT PRIMARY KEY,
+                question_id TEXT NOT NULL,
+                author_customer_id TEXT,
+                body TEXT NOT NULL,
+                answered_at INTEGER NOT NULL
+            )",
+            "DROP TABLE review_answer_list"
+        ),
+        (
+            "CREATE INDEX review_answer_list_question
+             ON review_answer_list (question_id, answered_at)",
+            "DROP INDEX review_answer_list_question"
+        )
+    ]
+);
+
 /// Read-model migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001ReviewProductReview, M0002ReviewList]
+    vec_box![M0001ReviewProductReview, M0002ReviewList, M0003QuestionList]
 }
