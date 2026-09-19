@@ -1,5 +1,5 @@
 //! Socket-free tests through `Router::handle`: auth, mounting under a custom
-//! segment, the orders and promotions sections, branded 404s.
+//! segment, the orders, promotions and inventory sections, branded 404s.
 
 use timada_admin::{AdminConfig, AdminServices, Stylesheet, create_admin, migrations};
 use timada_core::{Address, Money};
@@ -26,6 +26,7 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
     all.extend(timada_catalog::migrations());
     all.extend(timada_customer::migrations());
     all.extend(timada_promotion::migrations());
+    all.extend(timada_inventory::migrations());
     let (executor, db) = timada_core::testing::memory_executor(all).await?;
     create_admin(&db, EMAIL, PASSWORD).await?;
 
@@ -394,5 +395,115 @@ async fn promo_codes_and_vouchers_are_created_listed_and_ended() -> anyhow::Resu
         .handle(get("/admin/promotions/nope", Some(&cookie)))
         .await;
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
+async fn stock_is_tracked_received_and_filtered() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    timada_catalog::Command(&h.executor)
+        .create_product(timada_catalog::CreateProduct {
+            sku: "aoc-24g4xe".into(),
+            name: "AOC 23.8\" LED - 24G4XE".into(),
+            brand: timada_catalog::Brand {
+                name: "AOC".into(),
+                slug: "aoc".into(),
+            },
+            category_path: vec!["Ecran PC".into()],
+            short_description: "Ecran PC Full HD".into(),
+            warranty_months: 60,
+        })
+        .await?;
+    timada_catalog::product_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+
+    let unknown = h
+        .router
+        .handle(post(
+            "/admin/inventory/new",
+            "sku=NOPE&store_id=&quantity=3",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(unknown.status(), StatusCode::OK);
+    assert!(text(unknown).await?.contains("Aucun produit"));
+
+    // Tracked in the warehouse with a first receipt of 3 units.
+    let tracked = h
+        .router
+        .handle(post(
+            "/admin/inventory/new",
+            "sku=aoc-24g4xe&store_id=&quantity=3",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(tracked.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&tracked), "/admin/inventory");
+    let again = h
+        .router
+        .handle(post(
+            "/admin/inventory/new",
+            "sku=AOC-24G4XE&store_id=&quantity=1",
+            Some(&cookie),
+        ))
+        .await;
+    assert!(text(again).await?.contains("déjà suivi"));
+
+    timada_inventory::stock_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let rows = timada_inventory::list_stock(&h.db, &timada_inventory::ListStock::default()).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].on_hand, rows[0].available), (3, 3));
+    let list = text(
+        h.router
+            .handle(get("/admin/inventory", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(list.contains("AOC 23.8"));
+    assert!(list.contains("Entrepôt"));
+
+    // A receipt shows at once, before the list table catches up.
+    let received = h
+        .router
+        .handle(post(
+            "/admin/inventory/receive",
+            &format!("stock_item_id={}&quantity=4", rows[0].stock_item_id),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&received), "/admin/inventory");
+    let list = text(
+        h.router
+            .handle(get("/admin/inventory", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(list.contains(">7<"), "3 + 4 units: {list}");
+
+    // The low-stock filter reads the table, so it follows once synced.
+    timada_inventory::stock_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let low = text(
+        h.router
+            .handle(get("/admin/inventory?below=5", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(low.contains("Aucun article"));
+    let low = text(
+        h.router
+            .handle(get("/admin/inventory?below=8", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(low.contains("AOC 23.8"));
     Ok(())
 }

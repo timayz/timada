@@ -6,7 +6,7 @@ use topcoat::{
 };
 
 use crate::{
-    app::admin::_secure::{customers, orders, products, promotions},
+    app::admin::_secure::{customers, inventory, orders, products, promotions},
     auth::signed_in_admin,
     config::{AdminConfig, Stylesheet},
 };
@@ -18,6 +18,7 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
     let admin = signed_in_admin(cx);
     let orders_link = href!(orders::index);
     let products_link = href!(products::index);
+    let inventory_link = href!(inventory::index);
     let customers_link = href!(customers::index);
     let promotions_link = href!(promotions::index);
 
@@ -41,6 +42,7 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
                             <nav aria-label="Sections" class="flex gap-1 text-sm">
                                 nav_link(link: orders_link.resolve(cx), current: orders_link.is_current(cx), "Commandes")
                                 nav_link(link: products_link.resolve(cx), current: products_link.is_current(cx), "Produits")
+                                nav_link(link: inventory_link.resolve(cx), current: inventory_link.is_current(cx), "Stock")
                                 nav_link(link: customers_link.resolve(cx), current: customers_link.is_current(cx), "Clients")
                                 nav_link(link: promotions_link.resolve(cx), current: promotions_link.is_current(cx), "Promotions")
                             </nav>
