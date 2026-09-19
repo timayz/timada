@@ -10,7 +10,8 @@ use sqlx::SqlitePool;
 
 use crate::{
     aggregator::{
-        BackInStockAlertRequested, BackInStockAlertTriggered, StockReceived, StockReturned,
+        BackInStockAlertCancelled, BackInStockAlertRequested, BackInStockAlertTriggered,
+        StockReceived, StockReturned,
     },
     command::{load_stock_item, trigger_alert},
 };
@@ -24,6 +25,7 @@ pub fn back_in_stock_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(BACK_IN_STOCK_SUBSCRIPTION)
         .handler(insert_on_alert_requested())
         .handler(flag_on_alert_triggered())
+        .handler(remove_on_alert_cancelled())
         .handler(trigger_on_stock_received())
         .handler(trigger_on_stock_returned())
 }
@@ -68,6 +70,19 @@ async fn flag_on_alert_triggered<E: Executor>(
     event: Event<BackInStockAlertTriggered>,
 ) -> anyhow::Result<()> {
     sqlx::query("UPDATE inventory_back_in_stock_alert SET triggered = 1 WHERE alert_id = ?")
+        .bind(&event.aggregate_id)
+        .execute(&pool(ctx)?)
+        .await?;
+    Ok(())
+}
+
+/// A cancelled alert is no longer pending; asking again inserts it anew.
+#[evento::subscription]
+async fn remove_on_alert_cancelled<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<BackInStockAlertCancelled>,
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM inventory_back_in_stock_alert WHERE alert_id = ?")
         .bind(&event.aggregate_id)
         .execute(&pool(ctx)?)
         .await?;

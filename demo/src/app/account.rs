@@ -27,7 +27,7 @@ use super::{
 };
 use crate::{
     Store,
-    auth::{self, SignUpError, require_account},
+    auth::{self, ChangeEmailError, SignUpError, require_account},
     cart_session::forget_cart,
 };
 
@@ -180,7 +180,61 @@ pub async fn overview(cx: &Cx) -> Result<impl View> {
                 <li><a href=(href!(orders))>"Historique de mes commandes"</a></li>
                 <li><a href=(href!(addresses))>"Mes adresses"</a></li>
                 <li><a href=(href!(alerts))>"Mes alertes de disponibilité"</a></li>
+                <li><a href=(href!(email))>"Modifier mon adresse email"</a></li>
             </ul>
+        )
+    })
+}
+
+// ------------------------------------------------------------------ email
+
+#[derive(Debug, Deserialize)]
+pub struct EmailForm {
+    email: String,
+    password: String,
+}
+
+#[page("/account/email")]
+pub async fn email(cx: &Cx) -> Result<impl View> {
+    require_account(cx).await?;
+    Ok(view! { email_form(error: None) })
+}
+
+/// Changes the address the shopper signs in with and is written to. The
+/// current password is asked again: a session left open is not enough.
+#[page(POST "/account/email")]
+pub async fn change_email(cx: &Cx, Form(form): Form<EmailForm>) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let store = app_context::<Store>(cx);
+    let changed = auth::change_email(store, &account, &form.email, &form.password).await;
+    let error = match changed {
+        Ok(_) => return Err(see_other(href!(overview).resolve(cx)).into()),
+        Err(ChangeEmailError::Server(err)) => return Err(err.into()),
+        Err(refused) => refused.to_string(),
+    };
+    Ok(view! { email_form(error: Some(error)) })
+}
+
+#[component]
+async fn email_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    Ok(view! {
+        document(
+            title: "Modifier mon adresse email",
+            <h1>"Modifier mon adresse email"</h1>
+            <p>"Adresse actuelle : " <strong>(account.email.clone())</strong></p>
+            if let Some(error) = &error { <p role="alert" class="error">(error.clone())</p> }
+            <form method="post" action=(href!(change_email)) class="stack">
+                <label>"Nouvelle adresse email"
+                    <input name="email" type="email" required=(true) autocomplete="email">
+                </label>
+                <label>"Mot de passe actuel"
+                    <input name="password" type="password" required=(true) autocomplete="current-password">
+                </label>
+                <button type="submit">"Modifier"</button>
+            </form>
+            <p class="muted">"Un message est envoyé à l'ancienne adresse pour signaler le changement."</p>
+            <p><a href=(href!(overview))>"Retour à mon compte"</a></p>
         )
     })
 }
@@ -201,7 +255,7 @@ pub async fn alerts(cx: &Cx) -> Result<impl View> {
             .into_iter()
             .map(|p| (p.id, p.name))
             .collect();
-    let listed: Vec<(String, String, String, Option<String>)> = rows
+    let listed: Vec<(String, String, String, Option<String>, String)> = rows
         .into_iter()
         .map(|row| {
             (
@@ -216,6 +270,7 @@ pub async fn alerts(cx: &Cx) -> Result<impl View> {
                     .unwrap_or_else(|| row.product_id.clone()),
                 date(row.requested_at.max(0) as u64),
                 row.triggered_at.map(|at| date(at.max(0) as u64)),
+                href!(cancel_alert, catalog::ProductId(row.product_id)).resolve(cx),
             )
         })
         .collect();
@@ -237,14 +292,19 @@ pub async fn alerts(cx: &Cx) -> Result<impl View> {
                         </tr>
                     </thead>
                     <tbody>
-                        for (link, name, requested, back) in &listed {
+                        for (link, name, requested, back, cancel_action) in &listed {
                             <tr>
                                 <th scope="row"><a href=(link.clone())>(name.clone())</a></th>
                                 <td>(requested.clone())</td>
                                 <td>
                                     match back {
                                         Some(since) => { <strong>"De nouveau disponible"</strong> " depuis le " (since.clone()) }
-                                        None => { "En attente du retour en stock" }
+                                        None => {
+                                            "En attente du retour en stock"
+                                            <form method="post" action=(cancel_action.clone()) class="inline">
+                                                " " <button type="submit" class="link">"Supprimer l'alerte " <span class="muted">(name.clone())</span></button>
+                                            </form>
+                                        }
                                     }
                                 </td>
                             </tr>
@@ -255,6 +315,26 @@ pub async fn alerts(cx: &Cx) -> Result<impl View> {
             <p><a href=(href!(overview))>"Retour à mon compte"</a></p>
         )
     })
+}
+
+/// The shopper no longer wants to be told about a product.
+#[page(POST "/account/alerts/{product_id}/cancel")]
+pub async fn cancel_alert(cx: &Cx) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let product_id = param::<catalog::ProductId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    let cancelled = timada_inventory::Command(&store.executor)
+        .cancel_back_in_stock_alert(
+            timada_inventory::alert_id(&product_id, &account.customer_id),
+            &account.customer_id,
+        )
+        .await;
+    match cancelled {
+        // No such alert: nothing to cancel, the list says so.
+        Ok(()) | Err(timada_inventory::InventoryError::AlertNotFound) => {}
+        Err(err) => return Err(anyhow::Error::from(err).into()),
+    }
+    Err::<(), _>(see_other(href!(alerts).resolve(cx)).into())
 }
 
 // -------------------------------------------------------------- addresses

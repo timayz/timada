@@ -24,6 +24,7 @@ event timada-customer/Customer::DeliveryAddressAdded { address_id: String, addre
 event timada-customer/Customer::DeliveryAddressChanged { address_id: String, address: Address }
 event timada-customer/Customer::DeliveryAddressRemoved { address_id: String }
 event timada-customer/Customer::PreferredDeliveryAddressChosen { address_id: String }
+event timada-inventory/BackInStockAlert::BackInStockAlertCancelled unit
 event timada-inventory/BackInStockAlert::BackInStockAlertRequested { product_id: String, customer_id: String, email: String }
 event timada-inventory/BackInStockAlert::BackInStockAlertTriggered unit
 event timada-inventory/StockItem::StockItemRegistered { product_id: String, location: StockLocation }
