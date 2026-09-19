@@ -265,7 +265,7 @@ pub async fn confirmation(cx: &Cx) -> Result<impl View> {
                 document(
                     title: "Commande enregistrée",
                     <h1>"Merci, votre commande est enregistrée"</h1>
-                    <p class="notice">"Commande " <strong>(order.id.clone())</strong> " — total " (money(&order.total)) "."</p>
+                    <p class="notice">"Commande " <strong>(order.display_number().to_owned())</strong> " — total " (money(&order.total)) "."</p>
                     <p><a href=(details)>"Suivre cette commande"</a></p>
                 )
             }

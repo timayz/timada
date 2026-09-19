@@ -46,7 +46,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     for row in &orders {
                                         <tr class="border-b border-border last:border-0">
                                             <td class="py-2">(date(row.placed_at as u64))</td>
-                                            <td class="py-2"><a href=(href!(order_show, OrderId(row.order_id.clone())).resolve(cx)) class="font-mono text-xs underline-offset-4 hover:underline">(row.order_id.clone())</a></td>
+                                            <td class="py-2"><a href=(href!(order_show, OrderId(row.order_id.clone())).resolve(cx)) class="font-mono text-xs underline-offset-4 hover:underline">(row.order_number.clone().unwrap_or_else(|| row.order_id.clone()))</a></td>
                                             <td class="py-2">(row.status.clone())</td>
                                             <td class="py-2 text-right tabular-nums">(money(&Money::new(row.total_minor, &row.currency)))</td>
                                         </tr>

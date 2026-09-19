@@ -6,8 +6,8 @@ use timada_core::{Address, Money};
 
 use crate::{
     aggregator::{
-        Order, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderPaid,
-        OrderPlaced, OrderSettled, OrderShipped,
+        Order, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderNumberAssigned,
+        OrderPaid, OrderPlaced, OrderSettled, OrderShipped,
     },
     value_object::{
         DeliveryChoice, OrderDiscount, OrderLine, OrderStatus, PaymentMode, Seller, order_total,
@@ -18,6 +18,8 @@ use crate::{
 #[derive(Debug, PartialEq)]
 pub struct OrderDetailsView {
     pub id: String,
+    /// "C2026-000042"; `None` for an order placed without a number.
+    pub order_number: Option<String>,
     pub cart_id: String,
     pub customer_id: String,
     pub seller: Seller,
@@ -56,6 +58,10 @@ pub fn create_projection<E: Executor>() -> Projection<E, OrderDetailsView> {
         .handler(on_order_shipped())
         .handler(on_order_cancelled())
         .handler(on_order_confirmation_resent())
+        .handler(on_order_number_assigned())
+        // The view gained `order_number`: snapshots taken with the previous
+        // shape must not be decoded.
+        .revision(1)
         .strict()
 }
 
@@ -92,6 +98,23 @@ async fn on_order_placed(
     row.subtotal = totals.subtotal;
     row.total = totals.total;
     row.promo_code = event.data.promo_code;
+    Ok(())
+}
+
+impl OrderDetailsView {
+    /// What to call the order in front of people: its number, or its id when
+    /// it has none.
+    pub fn display_number(&self) -> &str {
+        self.order_number.as_deref().unwrap_or(&self.id)
+    }
+}
+
+#[evento::handler]
+async fn on_order_number_assigned(
+    event: Event<OrderNumberAssigned>,
+    row: &mut OrderDetailsView,
+) -> anyhow::Result<()> {
+    row.order_number = Some(event.data.order_number);
     Ok(())
 }
 

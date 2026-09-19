@@ -3,8 +3,11 @@
 
 pub mod invoice_id;
 
+use std::collections::HashMap;
+
 use timada_core::Money;
 use timada_invoice::{InvoiceListRow, InvoiceStatus, ListInvoices, count_invoices, list_invoices};
+use timada_order::order_numbers_by_ids;
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -66,6 +69,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let rows = list_invoices(db, &filter).await?;
     let total = count_invoices(db, &filter).await?;
+    let order_ids: Vec<String> = rows.iter().map(|r| r.order_id.clone()).collect();
+    let order_numbers = order_numbers_by_ids(db, &order_ids).await?;
 
     Ok(view! {
         page_header(
@@ -93,7 +98,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 ))
                 table_body(
                     for row in &rows {
-                        invoice_row(row: row)
+                        invoice_row(row: row, order_numbers: &order_numbers)
                     }
                 )
             )
@@ -103,7 +108,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 }
 
 #[component]
-async fn invoice_row(cx: &Cx, row: &InvoiceListRow) -> Result<impl View> {
+async fn invoice_row(
+    cx: &Cx,
+    row: &InvoiceListRow,
+    order_numbers: &HashMap<String, String>,
+) -> Result<impl View> {
+    let order_label = order_numbers
+        .get(&row.order_id)
+        .unwrap_or(&row.order_id)
+        .clone();
     let link = href!(
         invoice_id::show,
         invoice_id::InvoiceId(row.invoice_id.clone())
@@ -120,7 +133,7 @@ async fn invoice_row(cx: &Cx, row: &InvoiceListRow) -> Result<impl View> {
         table_row(
             table_cell((date(row.issued_at.unwrap_or(row.drafted_at) as u64)))
             table_cell(<a href=(link) class="font-mono text-xs underline-offset-4 hover:underline">(number)</a>)
-            table_cell(<a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(row.order_id.clone())</a>)
+            table_cell(<a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label)</a>)
             table_cell(<span class="font-mono text-xs">(row.customer_id.clone())</span>)
             table_cell(invoice_status_badge(status: status))
             table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (total))

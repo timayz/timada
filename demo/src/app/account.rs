@@ -528,7 +528,9 @@ pub async fn orders(cx: &Cx) -> Result<impl View> {
     for row in &rows {
         listed.push((
             href!(order_detail, OrderId(row.order_id.clone())).resolve(cx),
-            row.order_id.clone(),
+            row.order_number
+                .clone()
+                .unwrap_or_else(|| row.order_id.clone()),
             date(row.placed_at.max(0) as u64),
             order_status(&row.status),
             money(&timada_core::Money::new(row.total_minor, &row.currency)),
@@ -624,7 +626,7 @@ async fn order_view(
     Ok(view! {
         document(
             title: "Détail de la commande",
-            <h1>"Commande " (order.id.clone())</h1>
+            <h1>"Commande " (order.display_number().to_owned())</h1>
             <p>
                 "Passée le " (date(order.placed_at)) " · "
                 <strong>(order_status(order.status.as_str()))</strong>
