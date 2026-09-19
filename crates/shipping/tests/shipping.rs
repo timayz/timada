@@ -95,6 +95,34 @@ async fn shipment_lifecycle() -> anyhow::Result<()> {
         .await;
     assert!(matches!(again, Err(ShippingError::NotCreated)));
 
+    // The carrier has the parcel: too late to cancel.
+    let too_late = cmd.cancel_shipment(&id, "order cancelled").await;
+    assert!(matches!(too_late, Err(ShippingError::NotCreated)));
+
+    // A shipment still waiting can be cancelled, once, and never leaves.
+    let waiting = cmd
+        .create_shipment(CreateShipment {
+            order_id: "order-2".into(),
+            method: chronopost(),
+            destination: dom_address(),
+            lines: vec![ShipmentLine {
+                product_id: "aoc-24g4xe".into(),
+                quantity: 1,
+            }],
+        })
+        .await?;
+    cmd.cancel_shipment(&waiting, "order cancelled").await?;
+    cmd.cancel_shipment(&waiting, "order cancelled").await?;
+    let view = load_shipment(&executor, &waiting)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("shipment missing"))?;
+    assert_eq!(view.status, ShipmentStatus::Cancelled);
+    assert_eq!(view.cancelled_reason.as_deref(), Some("order cancelled"));
+    let dispatch = cmd
+        .dispatch_shipment(&waiting, "Chronopost".into(), "XY125".into())
+        .await;
+    assert!(matches!(dispatch, Err(ShippingError::NotCreated)));
+
     Ok(())
 }
 

@@ -5,7 +5,9 @@ use evento::{Executor, metadata::Event, projection::Projection};
 use timada_core::Address;
 
 use crate::{
-    aggregator::{Shipment, ShipmentCreated, ShipmentDelivered, ShipmentDispatched},
+    aggregator::{
+        Shipment, ShipmentCancelled, ShipmentCreated, ShipmentDelivered, ShipmentDispatched,
+    },
     value_object::{DeliveryMethod, ShipmentLine, ShipmentStatus},
 };
 
@@ -20,6 +22,7 @@ pub struct ShipmentView {
     pub status: ShipmentStatus,
     pub carrier: Option<String>,
     pub tracking_number: Option<String>,
+    pub cancelled_reason: Option<String>,
 }
 
 pub fn create_projection<E: Executor>() -> Projection<E, ShipmentView> {
@@ -27,6 +30,10 @@ pub fn create_projection<E: Executor>() -> Projection<E, ShipmentView> {
         .handler(on_shipment_created())
         .handler(on_shipment_dispatched())
         .handler(on_shipment_delivered())
+        .handler(on_shipment_cancelled())
+        // The view gained `cancelled_reason` and a status: snapshots taken
+        // with the previous shape must not be decoded.
+        .revision(1)
         .strict()
 }
 
@@ -68,5 +75,15 @@ async fn on_shipment_delivered(
     row: &mut ShipmentView,
 ) -> anyhow::Result<()> {
     row.status = ShipmentStatus::Delivered;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_shipment_cancelled(
+    event: Event<ShipmentCancelled>,
+    row: &mut ShipmentView,
+) -> anyhow::Result<()> {
+    row.status = ShipmentStatus::Cancelled;
+    row.cancelled_reason = Some(event.data.reason);
     Ok(())
 }

@@ -89,4 +89,5 @@ pub enum ShipmentStatus {
     Created,
     Dispatched,
     Delivered,
+    Cancelled,
 }

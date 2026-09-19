@@ -1,3 +1,4 @@
+mod cancel_shipment;
 mod create_shipment;
 mod dispatch_shipment;
 mod mark_delivered;
@@ -9,7 +10,9 @@ pub use create_shipment::CreateShipment;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::{
-    aggregator::{Shipment, ShipmentCreated, ShipmentDelivered, ShipmentDispatched},
+    aggregator::{
+        Shipment, ShipmentCancelled, ShipmentCreated, ShipmentDelivered, ShipmentDispatched,
+    },
     error::ShippingError,
     value_object::ShipmentStatus,
 };
@@ -55,6 +58,7 @@ fn create_projection<E: Executor>() -> Projection<E, ShipmentState> {
         .handler(on_shipment_created())
         .handler(on_shipment_dispatched())
         .handler(on_shipment_delivered())
+        .handler(on_shipment_cancelled())
         .strict()
 }
 
@@ -84,5 +88,14 @@ async fn on_shipment_delivered(
     row: &mut ShipmentState,
 ) -> anyhow::Result<()> {
     row.status = ShipmentStatus::Delivered;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_shipment_cancelled(
+    _event: Event<ShipmentCancelled>,
+    row: &mut ShipmentState,
+) -> anyhow::Result<()> {
+    row.status = ShipmentStatus::Cancelled;
     Ok(())
 }
