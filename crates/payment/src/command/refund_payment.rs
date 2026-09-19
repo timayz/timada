@@ -31,4 +31,24 @@ impl<E: Executor> super::Command<'_, E> {
             .await?;
         Ok(())
     }
+
+    /// [`Self::refund_payment`] for process managers: `reference` (say, a
+    /// return's number) is recorded as the refund's reason and is its
+    /// idempotency key — a payment already refunded for that reference is left
+    /// alone, so a retry after a crash never refunds twice. Returns whether a
+    /// refund was made.
+    pub async fn refund_payment_once(
+        &self,
+        id: impl Into<String>,
+        reference: impl Into<String>,
+        amount: Money,
+    ) -> Result<bool, PaymentError> {
+        let (id, reference) = (id.into(), reference.into());
+        let payment = self.load_existing(&id).await?;
+        if payment.refund_reasons.contains(&reference) {
+            return Ok(false);
+        }
+        self.refund_payment(id, amount, reference).await?;
+        Ok(true)
+    }
 }
