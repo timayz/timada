@@ -1,17 +1,36 @@
-//! `/` and `/p/{product_id}`: the catalogue and the product page.
+//! `/` and `/p/{product_id}`: the catalogue and the product page, with its
+//! customer reviews and the form to leave one.
 
+use std::collections::HashMap;
+
+use serde::Deserialize;
 use timada_catalog::{ListProducts, ProductListRow, list_products, load_product_page};
+use timada_customer::customers_by_ids;
 use timada_inventory::{StockLocation, stock_item_id};
+use timada_order::{OrderStatus, load_order_details, orders_of_customer};
 use timada_pricing::{load_product_price, price_id};
+use timada_review::{
+    ReviewError, ReviewStatus, SubmitReview, load_review_details, product_rating,
+    published_reviews, review_id,
+};
 use topcoat::{
     Result,
     context::{Cx, app_context},
-    router::{error::RouterErrorExt, href, page, path_param, path_param as param},
+    router::{
+        content::Form, error::RouterErrorExt, error::see_other, href, page, path_param,
+        path_param as param,
+    },
     view::{View, component, view},
 };
 
-use super::{cart, document, format::money};
-use crate::Store;
+use super::{
+    account, cart, document,
+    format::{date, money},
+};
+use crate::{
+    Store,
+    auth::{current_account, require_account},
+};
 
 #[page("/")]
 pub async fn home(cx: &Cx) -> Result<impl View> {
@@ -42,8 +61,103 @@ async fn product_item(cx: &Cx, product: &ProductListRow) -> Result<impl View> {
 
 path_param!(pub product_id: String, error = not_found);
 
+/// Reviews shown on a product page; the rest is a follow-up (pagination).
+const REVIEWS_SHOWN: u32 = 20;
+
 #[page("/p/{product_id}")]
-pub async fn product_page(cx: &Cx) -> Result<impl View> {
+pub async fn product_page() -> Result<impl View> {
+    Ok(view! { product_view(review_error: None) })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewForm {
+    rating: u8,
+    title: String,
+    body: String,
+}
+
+/// A signed-in shopper leaves a review; it waits for moderation.
+#[page(POST "/p/{product_id}/reviews")]
+pub async fn submit_review(cx: &Cx, Form(form): Form<ReviewForm>) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let id = param::<ProductId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    load_product_page(&store.executor, &id)
+        .await?
+        .ok_or_not_found()?;
+
+    let order_id = purchase_of(store, &account.customer_id, &id).await?;
+    let submitted = timada_review::Command(&store.executor)
+        .submit_review(SubmitReview {
+            product_id: id.clone(),
+            customer_id: account.customer_id.clone(),
+            order_id,
+            rating: form.rating,
+            title: form.title.trim().to_owned(),
+            body: form.body.trim().to_owned(),
+        })
+        .await;
+    let error = match submitted {
+        Ok(_) => {
+            let back = format!("{}#avis", href!(product_page, ProductId(id)).resolve(cx));
+            return Err(see_other(back).into());
+        }
+        Err(ReviewError::InvalidRating(_)) => "Choisissez une note de 1 à 5.",
+        Err(ReviewError::Required(_)) => "Écrivez votre avis avant de l'envoyer.",
+        Err(ReviewError::AlreadyReviewed) => "Vous avez déjà donné votre avis sur ce produit.",
+        Err(err) => return Err(anyhow::Error::from(err).into()),
+    };
+    Ok(view! { product_view(review_error: Some(error.to_owned())) })
+}
+
+/// The shopper's order that contains the product, if any: it makes the
+/// review a verified purchase.
+async fn purchase_of(
+    store: &Store,
+    customer_id: &str,
+    product_id: &str,
+) -> anyhow::Result<Option<String>> {
+    for row in orders_of_customer(&store.db, customer_id).await? {
+        if row.status == OrderStatus::Cancelled.as_str() {
+            continue;
+        }
+        let bought = load_order_details(&store.executor, &row.order_id)
+            .await?
+            .is_some_and(|o| o.lines.iter().any(|l| l.product_id == product_id));
+        if bought {
+            return Ok(Some(row.order_id));
+        }
+    }
+    Ok(None)
+}
+
+/// One published review, ready to render.
+struct ReviewLine {
+    author: String,
+    stars: String,
+    rating_label: String,
+    title: String,
+    body: String,
+    written: String,
+    verified: bool,
+}
+
+/// What the signed-in shopper may do in the reviews section.
+enum ReviewAccess {
+    SignIn(String),
+    Write,
+    Pending,
+    Published,
+    Rejected(String),
+}
+
+fn stars(rating: i64) -> String {
+    let full = rating.clamp(0, 5) as usize;
+    format!("{}{}", "★".repeat(full), "☆".repeat(5 - full))
+}
+
+#[component]
+async fn product_view(cx: &Cx, review_error: Option<String>) -> Result<impl View> {
     let id = param::<ProductId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     let product = load_product_page(&store.executor, &id)
@@ -59,11 +173,79 @@ pub async fn product_page(cx: &Cx) -> Result<impl View> {
         "Rupture".to_owned()
     };
 
+    let rating = product_rating(&store.db, &id).await?;
+    let rating_summary = rating.average_rating.map(|average| {
+        format!(
+            "{} / 5 — {} avis",
+            format!("{average:.1}").replace('.', ","),
+            rating.review_count
+        )
+    });
+    let rows = published_reviews(&store.db, &id, REVIEWS_SHOWN, 0).await?;
+    let author_ids: Vec<String> = rows.iter().map(|r| r.customer_id.clone()).collect();
+    let authors: HashMap<String, String> = customers_by_ids(&store.db, &author_ids)
+        .await?
+        .into_iter()
+        .map(|c| {
+            let initial = c.last_name.chars().next().map(|i| format!(" {i}."));
+            (
+                c.customer_id,
+                format!("{}{}", c.first_name, initial.unwrap_or_default()),
+            )
+        })
+        .collect();
+    let reviews: Vec<ReviewLine> = rows
+        .into_iter()
+        .map(|row| ReviewLine {
+            author: authors
+                .get(&row.customer_id)
+                .cloned()
+                .unwrap_or_else(|| "Client".to_owned()),
+            stars: stars(row.rating),
+            rating_label: format!("Note : {} sur 5", row.rating),
+            title: row.title,
+            body: row.body,
+            written: date(row.submitted_at as u64),
+            verified: row.verified_purchase,
+        })
+        .collect();
+
+    let account = match current_account(cx).await {
+        Ok(account) => account.clone(),
+        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+    };
+    let access = match account {
+        None => ReviewAccess::SignIn(
+            href!(account::login)
+                .query([(
+                    "next",
+                    href!(product_page, ProductId(id.clone())).resolve(cx),
+                )])
+                .resolve(cx),
+        ),
+        Some(account) => {
+            let own =
+                load_review_details(&store.executor, review_id(&id, &account.customer_id)).await?;
+            match own.map(|r| (r.status, r.rejection_reason)) {
+                None => ReviewAccess::Write,
+                Some((ReviewStatus::Pending, _)) => ReviewAccess::Pending,
+                Some((ReviewStatus::Published, _)) => ReviewAccess::Published,
+                Some((ReviewStatus::Rejected, reason)) => {
+                    ReviewAccess::Rejected(reason.unwrap_or_default())
+                }
+            }
+        }
+    };
+    let review_action = href!(submit_review, ProductId(id.clone())).resolve(cx);
+
     Ok(view! {
         document(
             title: &product.name,
             <p class="muted">(product.category_path.join(" > "))</p>
             <h1>(product.name.clone())</h1>
+            if let Some(summary) = &rating_summary {
+                <p><a href="#avis">(summary.clone())</a></p>
+            }
             <p>(product.short_description.clone())</p>
             match &price {
                 Some(price) => {
@@ -90,6 +272,65 @@ pub async fn product_page(cx: &Cx) -> Result<impl View> {
                 <ul>for feature in &product.key_features { <li>(feature.clone())</li> }</ul>
             }
             if !product.long_description.is_empty() { <p>(product.long_description.clone())</p> }
+
+            <h2 id="avis">"Avis clients"</h2>
+            if reviews.is_empty() {
+                <p class="muted">"Aucun avis pour le moment."</p>
+            }
+            for review in &reviews {
+                <article class="card">
+                    <h3>
+                        <span aria-hidden="true">(review.stars.clone())</span>
+                        <span class="muted">" " (review.rating_label.clone())</span>
+                        if !review.title.is_empty() { " — " (review.title.clone()) }
+                    </h3>
+                    <p>(review.body.clone())</p>
+                    <p class="muted">
+                        (review.author.clone()) ", le " (review.written.clone())
+                        if review.verified { " · Achat vérifié" }
+                    </p>
+                </article>
+            }
+            if let Some(error) = &review_error { <p role="alert" class="error">(error.clone())</p> }
+            match &access {
+                ReviewAccess::SignIn(login) => {
+                    <p><a href=(login.clone())>"Connectez-vous"</a> " pour donner votre avis."</p>
+                }
+                ReviewAccess::Write => {
+                    <h3>"Donner mon avis"</h3>
+                    <form method="post" action=(review_action.clone())>
+                        <p>
+                            <label for="rating">"Note"</label>
+                            " "
+                            <select id="rating" name="rating" required=(true)>
+                                for (value, label) in [("5", "5 — Excellent"), ("4", "4 — Bien"), ("3", "3 — Correct"), ("2", "2 — Décevant"), ("1", "1 — Mauvais")] {
+                                    <option value=(value)>(label)</option>
+                                }
+                            </select>
+                        </p>
+                        <p>
+                            <label for="review-title">"Titre"</label>
+                            " "
+                            <input id="review-title" name="title" maxlength="120" autocomplete="off">
+                        </p>
+                        <p>
+                            <label for="review-body">"Votre avis"</label>
+                            <br>
+                            <textarea id="review-body" name="body" rows="4" cols="60" maxlength="2000" required=(true)></textarea>
+                        </p>
+                        <button type="submit">"Envoyer mon avis"</button>
+                    </form>
+                }
+                ReviewAccess::Pending => {
+                    <p role="status" class="notice">"Merci ! Votre avis sera visible une fois validé par notre équipe."</p>
+                }
+                ReviewAccess::Published => {
+                    <p class="muted">"Vous avez déjà donné votre avis sur ce produit."</p>
+                }
+                ReviewAccess::Rejected(reason) => {
+                    <p role="status" class="notice">"Votre avis n'a pas été retenu : " (reason.clone())</p>
+                }
+            }
         )
     })
 }
