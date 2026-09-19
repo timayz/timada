@@ -68,6 +68,10 @@ them; only published ones reach the storefront and the product rating. Product
 questions work the other way round: nothing is moderated, but a question only
 shows on the storefront once the questions section gave it an answer.
 
+An issued invoice has a print view (`…/invoices/{id}/print`): the admin's
+header is hidden on paper, so the browser's print dialog gives the PDF. It
+prints the seller's identity from `AdminConfig::invoice_issuer`.
+
 The returns section is where a customer's return is reviewed (accept or
 refuse) and, once the parcel is in, received: what is taken back line by line,
 whether it goes into stock again, and whether the customer gets their money or

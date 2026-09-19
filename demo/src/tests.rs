@@ -808,6 +808,12 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
     // Not shipped yet: nothing to return.
     let page = text(browser.get(&order_page).await).await?;
     assert!(!page.contains("Retourner des articles"), "{page}");
+    // Not paid yet: the invoice is a draft, there is nothing to download.
+    assert!(!page.contains("Télécharger la facture"), "{page}");
+    assert_eq!(
+        browser.get(&format!("{order_page}/invoice")).await.status(),
+        StatusCode::NOT_FOUND
+    );
     timada_payment::Command(&store.executor)
         .capture_payment(timada_payment::payment_id(&order_id), "psp-1".into())
         .await?;
@@ -906,10 +912,31 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
         crate::app::catalog::available_stock(&store, &product_id).await?,
         stock_before + 1
     );
+    // The invoice, print-ready: seller, buyer, VAT, and the credit note of
+    // the refund. Nobody else can open it.
+    let invoice_uri = format!("{order_page}/invoice");
+    let invoice = browser.get(&invoice_uri).await;
+    assert_eq!(invoice.status(), StatusCode::OK);
+    let invoice = text(invoice).await?;
+    assert!(invoice.contains("Timada demo SAS"), "{invoice}");
+    assert!(invoice.contains("SIRET"), "{invoice}");
+    assert!(invoice.contains("12 rue des Machines"), "{invoice}");
+    assert!(invoice.contains("TVA par taux"), "{invoice}");
+    assert!(
+        invoice.contains("Avoirs émis sur cette facture"),
+        "{invoice}"
+    );
+    assert!(invoice.contains("@media print"), "{invoice}");
+    assert_eq!(
+        other.get(&invoice_uri).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
     // The order page lists the return, shows the refund and its credit note,
     // and still offers to return the unit that is left.
     let page = text(browser.get(&order_page).await).await?;
     assert!(page.contains("Retours de cette commande"), "{page}");
+    assert!(page.contains("Télécharger la facture"), "{page}");
     assert!(page.contains("Remboursé"), "{page}");
     assert!(page.contains("Avoirs émis"), "{page}");
     assert!(page.contains("Retourner des articles"), "{page}");

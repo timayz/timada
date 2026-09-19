@@ -1,0 +1,245 @@
+//! `/account/orders/{order_id}/invoice`: the shopper's invoice as a print-ready
+//! page. "Télécharger la facture" opens it; the browser's print dialog saves
+//! it as a PDF. It is its own document — no shop header on an invoice.
+
+use timada_invoice::{InvoiceDocument, invoice_id, load_invoice_document};
+use timada_order::load_order_details;
+use topcoat::{
+    Result,
+    context::{Cx, app_context},
+    router::{error::RouterErrorExt, href, page, path_param as param},
+    view::{View, view},
+};
+
+use super::{
+    account,
+    checkout::OrderId,
+    format::{address_lines, date, money, vat_rate},
+};
+use crate::{Store, auth::require_account, db::invoice_issuer};
+
+const STYLES: &str = "\
+body{font-family:system-ui,sans-serif;max-width:50rem;margin:2rem auto;padding:0 1.5rem;line-height:1.45;color:#111}\
+header.doc{display:flex;justify-content:space-between;gap:2rem;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:1rem}\
+h1{font-size:1.6rem;margin:0}.muted{color:#555}address{font-style:normal}\
+.parties{display:grid;grid-template-columns:1fr 1fr;gap:2rem;margin:1.5rem 0}\
+table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid #ccc;vertical-align:top}\
+td.num,th.num{text-align:right;white-space:nowrap}\
+table.totals{margin-left:auto;width:auto;min-width:20rem}table.totals td{border:none;padding:.15rem .5rem}\
+table.totals tr.total td{font-weight:700;border-top:1px solid #111}\
+.actions{margin:1.5rem 0;display:flex;gap:1rem;align-items:center}\
+button{font:inherit;padding:.45rem .8rem;border:1px solid #0b5fa5;border-radius:.3rem;background:#0b5fa5;color:#fff;cursor:pointer}\
+a{color:#0b5fa5}:focus-visible{outline:3px solid #ffbf47;outline-offset:2px}\
+footer{margin-top:2rem;border-top:1px solid #ccc;padding-top:.75rem;font-size:.85rem;color:#555}\
+@page{size:A4;margin:18mm}\
+@media print{body{margin:0;max-width:none;padding:0}.actions{display:none}a{color:inherit;text-decoration:none}}";
+
+/// The invoice of the signed-in shopper's order, once it is issued. Someone
+/// else's order, or an invoice not issued yet, is a 404.
+#[page("/account/orders/{order_id}/invoice")]
+pub async fn show(cx: &Cx) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let order_id = param::<OrderId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    load_order_details(&store.executor, &order_id)
+        .await?
+        .filter(|order| order.customer_id == account.customer_id)
+        .ok_or_not_found()?;
+    let document: InvoiceDocument = load_invoice_document(
+        &store.executor,
+        &store.db,
+        &invoice_issuer(),
+        &invoice_id(&order_id),
+    )
+    .await?
+    .ok_or_not_found()?;
+
+    let title = format!("Facture {}", document.number);
+    let back = href!(account::order_detail, OrderId(order_id)).resolve(cx);
+    let price_heading = if document.amounts_include_vat {
+        "Prix unitaire TTC"
+    } else {
+        "Prix unitaire HT"
+    };
+    let total_heading = if document.amounts_include_vat {
+        "Total TTC"
+    } else {
+        "Total HT"
+    };
+    let lines: Vec<(String, String, String, String)> = document
+        .lines
+        .iter()
+        .map(|l| {
+            (
+                l.label.clone(),
+                l.quantity.to_string(),
+                money(&l.unit_price),
+                money(&l.total),
+            )
+        })
+        .collect();
+    let vat_lines: Vec<(String, String, String, String)> = document
+        .vat_lines
+        .iter()
+        .map(|l| {
+            (
+                vat_rate(l.rate_bp),
+                money(&l.base),
+                money(&l.vat),
+                money(&l.total),
+            )
+        })
+        .collect();
+    let credit_notes: Vec<(String, String, String, String)> = document
+        .credit_notes
+        .iter()
+        .map(|n| {
+            (
+                n.number.clone(),
+                date(n.issued_at),
+                n.reason.clone(),
+                money(&n.amount),
+            )
+        })
+        .collect();
+    let buyer = address_lines(&document.buyer);
+    let discount = document
+        .discount
+        .as_ref()
+        .map(|(label, amount)| (label.clone(), money(amount)));
+    let totals_excl_vat = document
+        .total_excl_vat()
+        .zip(document.vat_total())
+        .filter(|_| document.amounts_include_vat)
+        .map(|(base, vat)| (money(&base), money(&vat)));
+
+    Ok(view! {
+        <!DOCTYPE html>
+        <html lang="fr">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>(title.clone()) " · " (document.issuer.name.clone())</title>
+                <style>(STYLES)</style>
+            </head>
+            <body>
+                <main>
+                    <div class="actions">
+                        <button type="button" onclick="window.print()">"Imprimer ou enregistrer en PDF"</button>
+                        <span class="muted">"ou Ctrl+P / ⌘P"</span>
+                        <a href=(back)>"Retour à la commande"</a>
+                    </div>
+                    <header class="doc">
+                        <div>
+                            <h1>(title.clone())</h1>
+                            <p>"Date : " (date(document.issued_at)) <br> "Commande : " (document.order_label.clone())</p>
+                        </div>
+                        <address>
+                            <strong>(document.issuer.name.clone())</strong> <br>
+                            for line in &document.issuer.address_lines { (line.clone()) <br> }
+                            (document.issuer.registration.clone()) <br>
+                            "TVA " (document.issuer.vat_number.clone())
+                        </address>
+                    </header>
+                    <div class="parties">
+                        <div>
+                            <h2 class="muted">"Facturé à"</h2>
+                            <address>for line in &buyer { (line.clone()) <br> }</address>
+                        </div>
+                    </div>
+                    <table>
+                        <caption class="muted">"Détail de la facture"</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">"Désignation"</th>
+                                <th scope="col" class="num">"Quantité"</th>
+                                <th scope="col" class="num">(price_heading)</th>
+                                <th scope="col" class="num">(total_heading)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            for (label, quantity, unit_price, total) in &lines {
+                                <tr>
+                                    <th scope="row">(label.clone())</th>
+                                    <td class="num">(quantity.clone())</td>
+                                    <td class="num">(unit_price.clone())</td>
+                                    <td class="num">(total.clone())</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <table class="totals">
+                        <tbody>
+                            <tr><td>"Sous-total"</td><td class="num">(money(&document.subtotal))</td></tr>
+                            <tr><td>"Frais de port"</td><td class="num">(money(&document.shipping_fee))</td></tr>
+                            if document.handling_fee.is_positive() {
+                                <tr><td>"Frais de dossier"</td><td class="num">(money(&document.handling_fee))</td></tr>
+                            }
+                            if let Some((label, amount)) = &discount {
+                                <tr><td>(label.clone())</td><td class="num">"− " (amount.clone())</td></tr>
+                            }
+                            if let Some((base, vat)) = &totals_excl_vat {
+                                <tr><td>"Total HT"</td><td class="num">(base.clone())</td></tr>
+                                <tr><td>"TVA"</td><td class="num">(vat.clone())</td></tr>
+                            }
+                            <tr class="total"><td>(total_heading)</td><td class="num">(money(&document.total))</td></tr>
+                        </tbody>
+                    </table>
+                    if !vat_lines.is_empty() && document.amounts_include_vat {
+                        <table>
+                            <caption class="muted">"TVA par taux"</caption>
+                            <thead>
+                                <tr>
+                                    <th scope="col">"Taux"</th>
+                                    <th scope="col" class="num">"Base HT"</th>
+                                    <th scope="col" class="num">"TVA"</th>
+                                    <th scope="col" class="num">"TTC"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                for (rate, base, vat, total) in &vat_lines {
+                                    <tr>
+                                        <th scope="row">(rate.clone())</th>
+                                        <td class="num">(base.clone())</td>
+                                        <td class="num">(vat.clone())</td>
+                                        <td class="num">(total.clone())</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    if let Some(mention) = document.exemption_mention { <p>(mention)</p> }
+                    if !credit_notes.is_empty() {
+                        <table>
+                            <caption class="muted">"Avoirs émis sur cette facture"</caption>
+                            <thead>
+                                <tr>
+                                    <th scope="col">"Avoir"</th>
+                                    <th scope="col">"Date"</th>
+                                    <th scope="col">"Motif"</th>
+                                    <th scope="col" class="num">"Montant"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                for (number, issued, reason, amount) in &credit_notes {
+                                    <tr>
+                                        <th scope="row">(number.clone())</th>
+                                        <td>(issued.clone())</td>
+                                        <td>(reason.clone())</td>
+                                        <td class="num">"− " (amount.clone())</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        <p><strong>"Net après avoirs : " (money(&document.net_after_credit_notes))</strong></p>
+                    }
+                </main>
+                <footer>
+                    (document.issuer.name.clone()) " · " (document.issuer.registration.clone()) " · TVA " (document.issuer.vat_number.clone())
+                    <br>
+                    "Une question sur cette facture ? " (document.issuer.contact.clone())
+                </footer>
+            </body>
+        </html>
+    })
+}

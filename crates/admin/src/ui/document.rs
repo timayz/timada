@@ -44,7 +44,7 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
                 }
             </head>
             <body class="min-h-full flex flex-col">
-                <header class="border-b border-border bg-background">
+                <header class="border-b border-border bg-background print:hidden">
                     <div class="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
                         <a href=(href!(orders::index)) class="font-semibold tracking-tight">"Timada admin"</a>
                         if admin.is_some() {

@@ -3,7 +3,7 @@
 //! it. Read-only: orders drive its lifecycle, refunds its credit notes.
 
 use timada_core::Money;
-use timada_invoice::{credit_notes_of_invoice, load_invoice};
+use timada_invoice::{credit_notes_of_invoice, load_invoice, load_invoice_document};
 use timada_order::order_numbers_by_ids;
 use topcoat::{
     Result,
@@ -19,7 +19,7 @@ use crate::{
         orders::order_id::{self, address_lines},
     },
     components::card::{card, card_content, card_header, card_title},
-    config::AdminServices,
+    config::{AdminConfig, AdminServices},
     ui::{date, money, page_header, vat_rate},
 };
 
@@ -89,6 +89,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         page_header(
             title: &title,
             invoice_status_badge(status: invoice.status)
+            if invoice.invoice_number.is_some() {
+                <a href=(href!(print, InvoiceId(id.clone()))) class="h-9 rounded-lg border border-border px-3 text-sm leading-9">"Version imprimable"</a>
+            }
         )
         <p class="-mt-4 mb-6 font-mono text-xs text-muted-foreground">(id.clone())</p>
 
@@ -209,5 +212,122 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 )
             </div>
         </div>
+    })
+}
+
+/// The invoice as the customer gets it, laid out for paper: the admin's
+/// header is hidden in print, so the browser's print dialog gives the PDF.
+/// Only an issued invoice has one.
+#[page("./print")]
+pub async fn print(cx: &Cx) -> Result<impl View> {
+    let id = param::<InvoiceId>(cx)?.clone();
+    let services = app_context::<AdminServices>(cx);
+    let issuer = &app_context::<AdminConfig>(cx).invoice_issuer;
+    let document = load_invoice_document(&services.executor, &services.db, issuer, &id)
+        .await?
+        .ok_or_not_found()?;
+
+    let title = format!("Facture {}", document.number);
+    let back = href!(show, InvoiceId(id.clone())).resolve(cx);
+    let (price_heading, total_heading) = if document.amounts_include_vat {
+        ("Prix unitaire TTC", "Total TTC")
+    } else {
+        ("Prix unitaire HT", "Total HT")
+    };
+    let lines: Vec<(String, String, String, String)> = document
+        .lines
+        .iter()
+        .map(|l| {
+            (
+                l.label.clone(),
+                l.quantity.to_string(),
+                money(&l.unit_price),
+                money(&l.total),
+            )
+        })
+        .collect();
+    let vat_lines: Vec<(String, String, String)> = document
+        .vat_lines
+        .iter()
+        .filter(|_| document.amounts_include_vat)
+        .map(|l| (vat_rate(l.rate_bp), money(&l.base), money(&l.vat)))
+        .collect();
+    let discount = document
+        .discount
+        .as_ref()
+        .map(|(label, amount)| (label.clone(), money(amount)));
+    let credit_notes: Vec<(String, String, String)> = document
+        .credit_notes
+        .iter()
+        .map(|n| (n.number.clone(), date(n.issued_at), money(&n.amount)))
+        .collect();
+
+    Ok(view! {
+        <div class="mb-6 flex items-center gap-3 text-sm print:hidden">
+            <button type="button" onclick="window.print()" class="h-9 rounded-lg border border-border px-3">"Imprimer ou enregistrer en PDF"</button>
+            <a href=(back) class="text-muted-foreground underline-offset-4 hover:underline">"Retour à la facture"</a>
+        </div>
+        <article class="mx-auto max-w-3xl text-sm">
+            <header class="flex items-start justify-between gap-8 border-b-2 border-foreground pb-4">
+                <div>
+                    <h1 class="text-2xl font-semibold tracking-tight">(title)</h1>
+                    <p class="mt-1 text-muted-foreground">"Date : " (date(document.issued_at)) " · Commande : " (document.order_label.clone())</p>
+                </div>
+                <address class="text-right not-italic">
+                    <strong>(document.issuer.name.clone())</strong>
+                    for line in &document.issuer.address_lines { <span class="block">(line.clone())</span> }
+                    <span class="block">(document.issuer.registration.clone())</span>
+                    <span class="block">"TVA " (document.issuer.vat_number.clone())</span>
+                </address>
+            </header>
+            <section class="my-6">
+                <h2 class="text-muted-foreground">"Facturé à"</h2>
+                address_lines(address: &document.buyer)
+            </section>
+            <table class="w-full">
+                <thead>
+                    <tr class="border-b border-border text-left text-muted-foreground">
+                        <th scope="col" class="py-2 font-normal">"Désignation"</th>
+                        <th scope="col" class="py-2 text-right font-normal">"Qté"</th>
+                        <th scope="col" class="py-2 text-right font-normal">(price_heading)</th>
+                        <th scope="col" class="py-2 text-right font-normal">(total_heading)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    for (label, quantity, unit_price, total) in &lines {
+                        <tr class="border-b border-border">
+                            <td class="py-2">(label.clone())</td>
+                            <td class="py-2 text-right tabular-nums">(quantity.clone())</td>
+                            <td class="py-2 text-right tabular-nums">(unit_price.clone())</td>
+                            <td class="py-2 text-right tabular-nums">(total.clone())</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <dl class="ml-auto mt-4 grid w-72 grid-cols-2 gap-y-1">
+                <dt class="text-muted-foreground">"Sous-total"</dt><dd class="text-right tabular-nums">(money(&document.subtotal))</dd>
+                <dt class="text-muted-foreground">"Frais de port"</dt><dd class="text-right tabular-nums">(money(&document.shipping_fee))</dd>
+                if document.handling_fee.is_positive() {
+                    <dt class="text-muted-foreground">"Frais de dossier"</dt><dd class="text-right tabular-nums">(money(&document.handling_fee))</dd>
+                }
+                if let Some((label, amount)) = &discount {
+                    <dt class="text-muted-foreground">(label.clone())</dt><dd class="text-right tabular-nums">"− " (amount.clone())</dd>
+                }
+                for (rate, base, vat) in &vat_lines {
+                    <dt class="text-muted-foreground">"TVA " (rate.clone()) " sur " (base.clone())</dt><dd class="text-right tabular-nums">(vat.clone())</dd>
+                }
+                <dt class="border-t border-foreground pt-1 font-semibold">(total_heading)</dt><dd class="border-t border-foreground pt-1 text-right font-semibold tabular-nums">(money(&document.total))</dd>
+                for (number, issued, amount) in &credit_notes {
+                    <dt class="text-muted-foreground">"Avoir " (number.clone()) " du " (issued.clone())</dt><dd class="text-right tabular-nums">"− " (amount.clone())</dd>
+                }
+                if !credit_notes.is_empty() {
+                    <dt class="font-semibold">"Net après avoirs"</dt><dd class="text-right font-semibold tabular-nums">(money(&document.net_after_credit_notes))</dd>
+                }
+            </dl>
+            if let Some(mention) = document.exemption_mention { <p class="mt-6">(mention)</p> }
+            <footer class="mt-8 border-t border-border pt-3 text-xs text-muted-foreground">
+                (document.issuer.name.clone()) " · " (document.issuer.registration.clone()) " · TVA " (document.issuer.vat_number.clone()) " · " (document.issuer.contact.clone())
+            </footer>
+        </article>
     })
 }
