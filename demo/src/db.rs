@@ -60,6 +60,21 @@ pub fn tax_zones() -> timada_tax::TaxZones {
     timada_tax::TaxZones::france_with_overseas()
 }
 
+/// Who issues the demo shop's invoices.
+pub fn invoice_issuer() -> timada_invoice::InvoiceIssuer {
+    timada_invoice::InvoiceIssuer {
+        name: "Timada demo SAS".to_owned(),
+        address_lines: vec![
+            "1 rue de l'Entrepôt".to_owned(),
+            "31000 Toulouse".to_owned(),
+            "France".to_owned(),
+        ],
+        registration: "SIRET 000 000 000 00000".to_owned(),
+        vat_number: "FR00 000000000".to_owned(),
+        contact: "facturation@timada.example".to_owned(),
+    }
+}
+
 /// Where shoppers send their returns: on the return slip and in the e-mail.
 pub const RETURNS_ADDRESS: &str =
     "Timada demo — Service retours\n1 rue de l'Entrepôt\n31000 Toulouse\nFrance";

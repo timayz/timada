@@ -15,6 +15,7 @@ async fn admin_routes_are_served_next_to_the_hosts() -> anyhow::Result<()> {
         AdminConfig {
             mount: "admin".into(),
             stylesheet: Stylesheet::Url("/dev.css".into()),
+            ..AdminConfig::default()
         },
         AssetConfig::hosted_at("/assets", AssetCatalog::default()),
         AdminServices::new(executor, db),

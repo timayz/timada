@@ -40,6 +40,13 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
         AdminConfig {
             mount: mount.into(),
             stylesheet: Stylesheet::Url("/dev.css".into()),
+            invoice_issuer: timada_invoice::InvoiceIssuer {
+                name: "Timada SAS".into(),
+                address_lines: vec!["1 rue de l'Entrepôt".into(), "31000 Toulouse".into()],
+                registration: "SIRET 000 000 000 00000".into(),
+                vat_number: "FR00 000000000".into(),
+                contact: "facturation@timada.example".into(),
+            },
         },
         AssetConfig::hosted_at("/assets", AssetCatalog::default()),
         AdminServices::new(executor.clone(), db.clone()),
@@ -586,6 +593,21 @@ async fn invoices_are_listed_and_payments_refunded() -> anyhow::Result<()> {
     assert!(detail.contains("Base HT"), "{detail}");
     assert!(detail.contains("119,92 €"), "{detail}");
     assert!(detail.contains("23,98 €"), "{detail}");
+    assert!(detail.contains("Version imprimable"), "{detail}");
+    let print = h
+        .router
+        .handle(get(
+            &format!("/admin/invoices/{invoice_id}/print"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(print.status(), StatusCode::OK);
+    let print = text(print).await?;
+    assert!(print.contains("Timada SAS"), "{print}");
+    assert!(print.contains("SIRET 000 000 000 00000"), "{print}");
+    assert!(print.contains("Prix unitaire TTC"), "{print}");
+    assert!(print.contains("TVA 20 % sur 119,92 €"), "{print}");
+    assert!(print.contains("print:hidden"), "{print}");
     let missing = h
         .router
         .handle(get("/admin/invoices/nope", Some(&cookie)))

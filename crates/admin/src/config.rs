@@ -9,6 +9,8 @@ pub struct AdminConfig {
     pub mount: String,
     /// Where the admin stylesheet comes from.
     pub stylesheet: Stylesheet,
+    /// Who issues the shop's invoices: printed on an invoice's print view.
+    pub invoice_issuer: timada_invoice::InvoiceIssuer,
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +27,7 @@ impl Default for AdminConfig {
         Self {
             mount: "admin".into(),
             stylesheet: Stylesheet::Bundled,
+            invoice_issuer: timada_invoice::InvoiceIssuer::default(),
         }
     }
 }
