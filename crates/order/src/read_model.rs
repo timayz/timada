@@ -12,7 +12,7 @@ use sqlx::SqlitePool;
 use crate::{
     aggregator::{
         OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderPaid, OrderPlaced,
-        OrderShipped,
+        OrderSettled, OrderShipped,
     },
     query::load_order_details,
     value_object::{OrderStatus, Seller},
@@ -36,6 +36,7 @@ pub fn order_history_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ORDER_HISTORY_SUBSCRIPTION)
         .handler(insert_on_order_placed())
         .handler(status_on_order_paid())
+        .handler(status_on_order_settled())
         .handler(status_on_order_shipped())
         .handler(status_on_order_cancelled())
         .skip::<OrderDiscountApplied>()
@@ -174,6 +175,14 @@ async fn insert_on_order_placed<E: Executor>(
 async fn status_on_order_paid<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderPaid>,
+) -> anyhow::Result<()> {
+    set_status(ctx, &event.aggregate_id, OrderStatus::Paid).await
+}
+
+#[evento::subscription]
+async fn status_on_order_settled<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<OrderSettled>,
 ) -> anyhow::Result<()> {
     set_status(ctx, &event.aggregate_id, OrderStatus::Paid).await
 }

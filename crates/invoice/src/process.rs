@@ -9,7 +9,7 @@ use evento::{
 use sqlx::SqlitePool;
 use timada_order::{
     PromoKind,
-    aggregator::{OrderCancelled, OrderPaid, OrderPlaced},
+    aggregator::{OrderCancelled, OrderPaid, OrderPlaced, OrderSettled},
 };
 
 use crate::{
@@ -24,6 +24,7 @@ pub fn invoice_from_orders_subscription<E: Executor>() -> SubscriptionBuilder<E>
     SubscriptionBuilder::new(INVOICE_FROM_ORDERS_SUBSCRIPTION)
         .handler(draft_on_order_placed())
         .handler(issue_on_order_paid())
+        .handler(issue_on_order_settled())
         .handler(void_on_order_cancelled())
 }
 
@@ -85,6 +86,18 @@ async fn issue_on_order_paid<E: Executor>(
     event: Event<OrderPaid>,
 ) -> anyhow::Result<()> {
     // A missing draft is an ordering glitch: fail so the subscription retries.
+    command(ctx)?
+        .issue_invoice(invoice_id(&event.aggregate_id))
+        .await?;
+    Ok(())
+}
+
+/// An order with nothing left to pay is invoiced like a paid one.
+#[evento::subscription]
+async fn issue_on_order_settled<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<OrderSettled>,
+) -> anyhow::Result<()> {
     command(ctx)?
         .issue_invoice(invoice_id(&event.aggregate_id))
         .await?;

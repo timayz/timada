@@ -27,6 +27,9 @@ pub enum Cart {
     /// A promo code / voucher was typed in (advisory until checkout).
     PromoCodeApplied { code: String },
 
+    /// The code was taken off the cart again.
+    PromoCodeRemoved,
+
     /// The cart was saved under a name ("mes paniers sauvegardés").
     CartSaved { name: String },
 

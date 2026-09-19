@@ -2,7 +2,8 @@
 //! requested/captured → shipment created/dispatched → order shipped, plus
 //! the two compensation branches (out of stock, payment declined) and the
 //! cart's promo code: redeemed before the order is placed, given back when
-//! the order is cancelled.
+//! the order is cancelled — and the payment-less path of an order the code
+//! paid for entirely.
 
 use evento::Executor;
 use timada_cart::{AddLine, Checkout};
@@ -445,5 +446,122 @@ async fn voucher_is_spent_on_the_order_and_a_dead_code_is_ignored() -> anyhow::R
     assert_eq!(order.promo_code.as_deref(), Some("GIFT50"));
     assert_eq!(order.total, Money::eur(12_496 + 2_395));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn order_covered_by_a_voucher_skips_the_payment() -> anyhow::Result<()> {
+    const STORE: &str = "store-toulouse";
+    let (executor, db) = timada_core::testing::memory_executor(migrations_with_promotion()).await?;
+    timada_promotion::Command {
+        executor: &executor,
+        db: db.clone(),
+    }
+    .issue_voucher(timada_promotion::IssueVoucher {
+        code: "gift200".into(),
+        customer_id: None,
+        value: Money::eur(20_000),
+        kind: timada_promotion::VoucherKind::GiftVoucher,
+        expires_at: None,
+    })
+    .await?;
+
+    let inventory = timada_inventory::Command(&executor);
+    let stock = inventory
+        .register_stock_item(RegisterStockItem {
+            product_id: PRODUCT.into(),
+            location: StockLocation::Store {
+                store_id: STORE.into(),
+            },
+        })
+        .await?;
+    inventory.receive_stock(&stock, 2).await?;
+
+    // Collected in store: no shipping fee, so the voucher covers everything.
+    let cart = timada_cart::Command(&executor);
+    let cart_id = cart.open_cart(Some(CUSTOMER.into())).await?;
+    cart.add_line(
+        &cart_id,
+        AddLine {
+            product_id: PRODUCT.into(),
+            name: "AOC 23.8\" LED - 24G4XE".into(),
+            quantity: 1,
+            unit_price: Money::eur(12_496),
+            warranty_months: 60,
+        },
+    )
+    .await?;
+    cart.apply_promo_code(&cart_id, "gift200".into()).await?;
+    cart.checkout(
+        &cart_id,
+        Checkout {
+            customer_id: None,
+            delivery_address: address("121, Avenue Tolosane", "31520", "Ramonville", "FR"),
+            billing_address: address("121, Avenue Tolosane", "31520", "Ramonville", "FR"),
+            delivery: timada_cart::DeliveryChoice {
+                method_code: "store-pickup".into(),
+                pickup_store_id: Some(STORE.into()),
+            },
+            payment_mode: timada_cart::PaymentMode::Card,
+        },
+    )
+    .await?;
+    drain_with_promotion(&executor, &db).await?;
+
+    let order_id = order_id(&cart_id);
+    let order = load_order_details(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
+    assert_eq!(order.total, Money::eur(0));
+    assert_eq!(order.status, OrderStatus::Paid);
+    assert_eq!(order.payment_id, None);
+    assert!(
+        timada_payment::load_payment(&executor, payment_id(&order_id))
+            .await?
+            .is_none()
+    );
+    let saga = load_fulfillment(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("saga missing"))?;
+    assert_eq!(saga.status, FulfillmentStatus::AwaitingShipment);
+    assert_eq!(saga.payment_id, None);
+    assert!(
+        timada_shipping::load_shipment(&executor, shipment_id(&order_id))
+            .await?
+            .is_some()
+    );
+
+    // An order with an amount due cannot be settled by hand.
+    let paying = checkout_cart(&executor, 5, 1, timada_cart::PaymentMode::Card).await?;
+    drain_with_promotion(&executor, &db).await?;
+    let refused = timada_order::Command(&executor)
+        .settle_order(timada_order::order_id(&paying))
+        .await;
+    assert!(matches!(
+        refused,
+        Err(timada_order::OrderError::AmountDue { .. })
+    ));
+
+    // The rest of the saga is unchanged: dispatch → shipped, completed.
+    timada_shipping::Command(&executor)
+        .dispatch_shipment(shipment_id(&order_id), "LDLC".into(), "PICKUP-1".into())
+        .await?;
+    drain_with_promotion(&executor, &db).await?;
+    let saga = load_fulfillment(&executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("saga missing"))?;
+    assert_eq!(saga.status, FulfillmentStatus::Completed);
+
+    order_history_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    let shipped = ListOrders {
+        status: Some(OrderStatus::Shipped),
+        ..ListOrders::default()
+    };
+    let rows = list_orders(&db, &shipped).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].total_minor, 0);
     Ok(())
 }

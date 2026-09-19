@@ -32,6 +32,10 @@ pub enum Order {
     /// The payment was captured.
     OrderPaid { payment_id: String },
 
+    /// Nothing was left to pay: the honoured code covered the whole total, so
+    /// the order counts as paid without any payment.
+    OrderSettled,
+
     /// The parcel left with the carrier ("Expédiée le ...").
     OrderShipped {
         shipment_id: String,
@@ -64,6 +68,8 @@ pub enum OrderFulfillment {
         payment_id: String,
     },
     PaymentCaptured,
+    /// The order's total is zero: no payment is requested.
+    PaymentWaived,
     ShipmentRequested {
         shipment_id: String,
     },

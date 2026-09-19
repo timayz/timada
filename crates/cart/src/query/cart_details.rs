@@ -7,7 +7,7 @@ use timada_core::Money;
 use crate::{
     aggregator::{
         Cart, CartCheckedOut, CartLineAdded, CartLineQuantityChanged, CartLineRemoved, CartOpened,
-        CartSaved, PromoCodeApplied,
+        CartSaved, PromoCodeApplied, PromoCodeRemoved,
     },
     value_object::{CartLine, CartStatus},
 };
@@ -47,6 +47,7 @@ pub fn create_projection<E: Executor>() -> Projection<E, CartDetailsView> {
         .handler(on_cart_line_quantity_changed())
         .handler(on_cart_line_removed())
         .handler(on_promo_code_applied())
+        .handler(on_promo_code_removed())
         .handler(on_cart_saved())
         .handler(on_cart_checked_out())
         .strict()
@@ -111,6 +112,15 @@ async fn on_promo_code_applied(
     row: &mut CartDetailsView,
 ) -> anyhow::Result<()> {
     row.promo_code = Some(event.data.code);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_promo_code_removed(
+    _event: Event<PromoCodeRemoved>,
+    row: &mut CartDetailsView,
+) -> anyhow::Result<()> {
+    row.promo_code = None;
     Ok(())
 }
 

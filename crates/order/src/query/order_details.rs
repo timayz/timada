@@ -7,7 +7,7 @@ use timada_core::{Address, Money};
 use crate::{
     aggregator::{
         Order, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderPaid,
-        OrderPlaced, OrderShipped,
+        OrderPlaced, OrderSettled, OrderShipped,
     },
     value_object::{
         DeliveryChoice, OrderDiscount, OrderLine, OrderStatus, PaymentMode, Seller, order_total,
@@ -52,6 +52,7 @@ pub fn create_projection<E: Executor>() -> Projection<E, OrderDetailsView> {
         .handler(on_order_placed())
         .handler(on_order_discount_applied())
         .handler(on_order_paid())
+        .handler(on_order_settled())
         .handler(on_order_shipped())
         .handler(on_order_cancelled())
         .handler(on_order_confirmation_resent())
@@ -112,6 +113,15 @@ async fn on_order_discount_applied(
 async fn on_order_paid(event: Event<OrderPaid>, row: &mut OrderDetailsView) -> anyhow::Result<()> {
     row.status = OrderStatus::Paid;
     row.payment_id = Some(event.data.payment_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_settled(
+    _event: Event<OrderSettled>,
+    row: &mut OrderDetailsView,
+) -> anyhow::Result<()> {
+    row.status = OrderStatus::Paid;
     Ok(())
 }
 

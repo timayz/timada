@@ -584,6 +584,8 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
 #[component]
 async fn order_view(order: &OrderDetailsView) -> Result<impl View> {
     let payment = match order.payment_mode {
+        // The code covered the whole total: nothing was charged.
+        _ if !order.total.is_positive() => "Aucun paiement requis".to_owned(),
         PaymentMode::Card => "Carte bancaire".to_owned(),
         PaymentMode::Installments { count } => format!("Paiement en {count} fois"),
     };

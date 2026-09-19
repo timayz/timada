@@ -320,6 +320,11 @@ async fn only_honoured_promo_codes_are_recorded() -> anyhow::Result<()> {
             .await?
             .contains("BIENVENUE")
     );
+
+    let removed = browser.post("/cart/promo/remove", "").await;
+    assert_eq!(removed.status(), StatusCode::SEE_OTHER);
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(!cart.contains("BIENVENUE"), "{cart}");
     Ok(())
 }
 

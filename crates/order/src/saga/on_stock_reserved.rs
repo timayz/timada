@@ -4,15 +4,17 @@ use timada_inventory::aggregator::StockReserved;
 use timada_payment::{PaymentMethod, RequestPayment};
 
 use crate::{
-    aggregator::{LineStockReserved, PaymentRequested},
+    aggregator::{LineStockReserved, PaymentRequested, PaymentWaived, ShipmentRequested},
+    command::Command,
     value_object::{FulfillmentStatus, PaymentMode},
 };
 
-use super::load_fulfillment;
+use super::{create_shipment, load_fulfillment};
 
 /// `StockReserved` → tick the line off; once every line is reserved, request
 /// the payment. The payment request is idempotent (id derived from the order),
-/// so a redelivery cannot charge twice.
+/// so a redelivery cannot charge twice. An order with nothing to pay skips
+/// the payment: it is settled and handed to shipping right away.
 #[evento::subscription]
 pub(super) async fn record_line_reserved<E: Executor>(
     ctx: &Context<'_, E>,
@@ -40,7 +42,14 @@ pub(super) async fn record_line_reserved<E: Executor>(
     let last_line = saga.lines.iter().all(|l| {
         l.product_id == line.product_id || saga.reserved_product_ids.contains(&l.product_id)
     });
-    if last_line {
+    if last_line && !saga.amount.is_positive() {
+        let shipment_id = create_shipment(ctx.executor, &saga).await?;
+        Command(ctx.executor).settle_order(&saga.order_id).await?;
+        write
+            .event(&PaymentWaived)
+            .event(&ShipmentRequested { shipment_id });
+        tracing::info!(order_id = %saga.order_id, "nothing to pay, shipment requested");
+    } else if last_line {
         let method = match &saga.payment_mode {
             PaymentMode::Card => PaymentMethod::Card,
             // The instalment fee is already part of `amount` (frais de dossier).

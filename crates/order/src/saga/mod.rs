@@ -6,7 +6,9 @@
 //! subscription handler in its own file. Handlers are idempotent — they load
 //! the saga, check its status and rely on the upstream commands' own
 //! idempotency (deterministic ids, status guards) — so a redelivery after a
-//! partial failure converges. The subscription is deliberately not strict:
+//! partial failure converges. An order whose code covered the whole total
+//! skips the payment leg: it is settled and goes straight to shipping. The
+//! subscription is deliberately not strict:
 //! it listens to a subset of four aggregates' events.
 
 mod on_order_placed;
@@ -21,13 +23,16 @@ use evento::{
 };
 use timada_core::Money;
 use timada_inventory::StockLocation;
+use timada_shipping::{CreateShipment, DeliveryMethod, ShipmentLine};
 
 use crate::{
     aggregator::{
         FulfillmentCompensated, FulfillmentCompleted, FulfillmentStarted, LineStockReserved,
-        OrderFulfillment, PaymentCaptured, PaymentRequested, ShipmentRequested,
+        OrderFulfillment, PaymentCaptured, PaymentRequested, PaymentWaived, ShipmentRequested,
     },
     command::Command,
+    error::OrderError,
+    query::load_order_details,
     value_object::{FulfillmentLine, FulfillmentStatus, PaymentMode},
 };
 
@@ -98,6 +103,7 @@ pub fn create_projection<E: Executor>() -> Projection<E, FulfillmentState> {
         .handler(on_line_stock_reserved())
         .handler(on_payment_requested())
         .skip::<PaymentCaptured>()
+        .skip::<PaymentWaived>()
         .handler(on_shipment_requested())
         .handler(on_fulfillment_completed())
         .handler(on_fulfillment_compensated())
@@ -112,6 +118,38 @@ pub async fn load_fulfillment<E: Executor>(
         .load(fulfillment_id(order_id))
         .execute(executor)
         .await
+}
+
+/// Hands the order's lines to shipping. Shipment creation is idempotent (id
+/// derived from the order), so a retry returns the same shipment.
+async fn create_shipment<E: Executor>(
+    executor: &E,
+    saga: &FulfillmentState,
+) -> anyhow::Result<String> {
+    let Some(order) = load_order_details(executor, &saga.order_id).await? else {
+        anyhow::bail!("order {} missing while fulfilling", saga.order_id);
+    };
+    let method = DeliveryMethod::resolve(
+        &order.delivery.method_code,
+        order.delivery.pickup_store_id.clone(),
+    )
+    .ok_or_else(|| OrderError::UnknownDeliveryMethod(order.delivery.method_code.clone()))?;
+    let shipment_id = timada_shipping::Command(executor)
+        .create_shipment(CreateShipment {
+            order_id: saga.order_id.clone(),
+            method,
+            destination: order.delivery_address,
+            lines: saga
+                .lines
+                .iter()
+                .map(|l| ShipmentLine {
+                    product_id: l.product_id.clone(),
+                    quantity: l.quantity,
+                })
+                .collect(),
+        })
+        .await?;
+    Ok(shipment_id)
 }
 
 /// Releases every reservation this saga holds, cancels the order and closes

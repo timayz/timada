@@ -81,6 +81,14 @@ async fn cart_details_reflect_commands_through_checkout() -> anyhow::Result<()> 
     assert_eq!(view.status, CartStatus::Open);
     assert_eq!(view.customer_id, None);
 
+    cmd.apply_promo_code(&id, " summer5 ".into()).await?;
+    cmd.remove_promo_code(&id).await?;
+    cmd.remove_promo_code(&id).await?;
+    let view = load_cart_details(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("cart missing"))?;
+    assert_eq!(view.promo_code, None);
+
     cmd.apply_promo_code(&id, " welcome10 ".into()).await?;
     cmd.checkout(&id, checkout_in_3x(Some("customer-1")))
         .await?;

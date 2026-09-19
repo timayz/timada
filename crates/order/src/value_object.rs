@@ -45,10 +45,10 @@ pub struct OrderTotals {
 
 impl OrderTotals {
     /// The most a promo code or voucher may take off: the goods, never the
-    /// fees — and always one minor unit short of the total, because the
-    /// fulfillment saga has no path for an order with nothing to pay.
+    /// fees. With free delivery that can be the whole total — the fulfillment
+    /// saga then settles the order without a payment.
     pub fn max_discount(&self) -> Money {
-        let minor = self.subtotal.minor.min(self.total.minor - 1).max(0);
+        let minor = self.subtotal.minor.min(self.total.minor).max(0);
         Money::new(minor, &self.total.currency)
     }
 }
