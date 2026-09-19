@@ -9,6 +9,7 @@ repository.workspace = true
 timada-core.workspace = true
 timada-order.workspace = true
 timada-payment.workspace = true
+timada-tax.workspace = true
 evento.workspace = true
 bitcode.workspace = true
 anyhow.workspace = true

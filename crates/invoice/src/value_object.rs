@@ -1,5 +1,6 @@
 use bitcode::{Decode, Encode};
 use timada_core::{Money, MoneyError};
+use timada_tax::{TaxTreatment, VatLine};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
 pub struct InvoiceLine {
@@ -20,6 +21,26 @@ impl InvoiceLine {
 pub struct InvoiceDiscount {
     pub label: String,
     pub amount: Money,
+}
+
+/// The VAT summary of an invoice.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+pub struct InvoiceTax {
+    pub zone_code: String,
+    pub treatment: TaxTreatment,
+    pub vat_lines: Vec<VatLine>,
+}
+
+impl InvoiceTax {
+    /// The legal mention an invoice without VAT must carry.
+    pub fn exemption_mention(&self) -> Option<&'static str> {
+        match self.treatment {
+            TaxTreatment::Export => Some(
+                "Exonération de TVA — articles 262 I et 294 du CGI (livraison hors du territoire fiscal)",
+            ),
+            TaxTreatment::Domestic | TaxTreatment::DestinationVat => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]

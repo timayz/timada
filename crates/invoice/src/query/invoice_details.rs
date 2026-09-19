@@ -5,8 +5,10 @@ use evento::{Executor, metadata::Event, projection::Projection};
 use timada_core::{Address, Money};
 
 use crate::{
-    aggregator::{Invoice, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceVoided},
-    value_object::{InvoiceDiscount, InvoiceLine, InvoiceStatus, invoice_total},
+    aggregator::{
+        Invoice, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceTaxed, InvoiceVoided,
+    },
+    value_object::{InvoiceDiscount, InvoiceLine, InvoiceStatus, InvoiceTax, invoice_total},
 };
 
 #[evento::projection(bitcode::Encode, bitcode::Decode)]
@@ -24,6 +26,8 @@ pub struct InvoiceView {
     /// The order's code and what it takes off; `total` is already net of it.
     pub discount: Option<InvoiceDiscount>,
     pub total: Money,
+    /// The VAT per rate; `None` for invoices older than tax zones.
+    pub tax: Option<InvoiceTax>,
     pub status: InvoiceStatus,
     pub voided_reason: Option<String>,
 }
@@ -32,8 +36,12 @@ pub fn create_projection<E: Executor>() -> Projection<E, InvoiceView> {
     Projection::new::<Invoice>()
         .handler(on_invoice_drafted())
         .handler(on_invoice_discount_applied())
+        .handler(on_invoice_taxed())
         .handler(on_invoice_issued())
         .handler(on_invoice_voided())
+        // The view gained `tax`: snapshots taken with the previous shape must
+        // not be decoded.
+        .revision(1)
         .strict()
 }
 
@@ -76,6 +84,16 @@ async fn on_invoice_discount_applied(
     row.discount = Some(InvoiceDiscount {
         label: event.data.label,
         amount: event.data.amount,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoice_taxed(event: Event<InvoiceTaxed>, row: &mut InvoiceView) -> anyhow::Result<()> {
+    row.tax = Some(InvoiceTax {
+        zone_code: event.data.zone_code,
+        treatment: event.data.treatment,
+        vat_lines: event.data.vat_lines,
     });
     Ok(())
 }
