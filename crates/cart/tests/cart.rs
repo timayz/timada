@@ -81,6 +81,28 @@ async fn cart_details_reflect_commands_through_checkout() -> anyhow::Result<()> 
     assert_eq!(view.status, CartStatus::Open);
     assert_eq!(view.customer_id, None);
 
+    // The monitor's price moved since it was added: the line follows, once.
+    assert!(
+        cmd.reprice_line(&id, "product-aoc-24g4xe", Money::eur(11_995))
+            .await?
+    );
+    assert!(
+        !cmd.reprice_line(&id, "product-aoc-24g4xe", Money::eur(11_995))
+            .await?
+    );
+    assert!(matches!(
+        cmd.reprice_line(&id, "product-akg-k361", Money::eur(1))
+            .await,
+        Err(CartError::LineNotFound(_))
+    ));
+    let view = load_cart_details(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("cart missing"))?;
+    assert_eq!(view.lines[0].unit_price, Money::eur(11_995));
+    assert_eq!(view.subtotal, Money::eur(23_990));
+    cmd.reprice_line(&id, "product-aoc-24g4xe", Money::eur(12_496))
+        .await?;
+
     cmd.apply_promo_code(&id, " summer5 ".into()).await?;
     cmd.remove_promo_code(&id).await?;
     cmd.remove_promo_code(&id).await?;

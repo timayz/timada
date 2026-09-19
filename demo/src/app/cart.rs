@@ -24,7 +24,7 @@ use super::{
 use crate::{
     Store,
     auth::{current_account, require_account},
-    cart_session::{current_cart, ensure_cart, forget_cart},
+    cart_session::{current_cart, ensure_cart, forget_cart, fresh_cart},
 };
 
 #[page("/cart")]
@@ -315,9 +315,9 @@ fn user_facing(
 
 #[component]
 async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
-    let cart = match current_cart(cx).await {
-        Ok(cart) => cart.clone().filter(|c| !c.lines.is_empty()),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+    let (cart, price_notices) = match fresh_cart(cx).await? {
+        Some((cart, notices)) => (Some(cart).filter(|c| !c.lines.is_empty()), notices),
+        None => (None, Vec::new()),
     };
     let promo = match &cart {
         Some(cart) => promo_line(app_context::<Store>(cx), cart).await?,
@@ -336,6 +336,7 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
             title: "Votre panier",
             <h1>"Votre panier"</h1>
             if let Some(error) = &error { <p role="alert" class="error">(error.clone())</p> }
+            for notice in &price_notices { <p role="status" class="notice">(notice.clone())</p> }
             match &cart {
                 Some(cart) => {
                     <table>

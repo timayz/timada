@@ -5,6 +5,7 @@ mod checkout;
 mod open_cart;
 mod remove_line;
 mod remove_promo_code;
+mod reprice_line;
 mod save_cart;
 mod saved_carts;
 
@@ -18,8 +19,8 @@ use evento::{Executor, Projection, metadata::Event};
 use crate::{
     aggregator::{
         Cart, CartAssignedToCustomer, CartCheckedOut, CartDiscarded, CartLineAdded,
-        CartLineQuantityChanged, CartLineRemoved, CartOpened, CartReopened, CartSaved,
-        PromoCodeApplied, PromoCodeRemoved,
+        CartLineQuantityChanged, CartLineRemoved, CartLineRepriced, CartOpened, CartReopened,
+        CartSaved, PromoCodeApplied, PromoCodeRemoved,
     },
     error::CartError,
     value_object::CartStatus,
@@ -61,6 +62,8 @@ pub struct CartState {
     pub status: CartStatus,
     pub customer_id: Option<String>,
     pub products: Vec<String>,
+    /// The unit price each line currently holds, as `(product_id, price)`.
+    pub prices: Vec<(String, timada_core::Money)>,
     pub currency: Option<String>,
     pub has_promo_code: bool,
 }
@@ -72,6 +75,7 @@ fn create_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_cart_opened())
         .handler(on_cart_line_added())
         .handler(on_cart_line_removed())
+        .handler(on_cart_line_repriced())
         .handler(on_cart_saved())
         .handler(on_cart_assigned_to_customer())
         .handler(on_cart_reopened())
@@ -95,6 +99,8 @@ async fn on_cart_line_added(
     event: Event<CartLineAdded>,
     row: &mut CartState,
 ) -> anyhow::Result<()> {
+    row.prices
+        .push((event.data.product_id.clone(), event.data.unit_price.clone()));
     row.products.push(event.data.product_id);
     row.currency.get_or_insert(event.data.unit_price.currency);
     Ok(())
@@ -106,6 +112,7 @@ async fn on_cart_line_removed(
     row: &mut CartState,
 ) -> anyhow::Result<()> {
     row.products.retain(|p| p != &event.data.product_id);
+    row.prices.retain(|(p, _)| p != &event.data.product_id);
     Ok(())
 }
 
@@ -164,5 +171,20 @@ async fn on_cart_discarded(
     row: &mut CartState,
 ) -> anyhow::Result<()> {
     row.status = CartStatus::Discarded;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_cart_line_repriced(
+    event: Event<CartLineRepriced>,
+    row: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some((_, price)) = row
+        .prices
+        .iter_mut()
+        .find(|(product_id, _)| *product_id == event.data.product_id)
+    {
+        *price = event.data.unit_price;
+    }
     Ok(())
 }

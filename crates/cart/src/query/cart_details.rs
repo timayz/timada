@@ -7,8 +7,8 @@ use timada_core::Money;
 use crate::{
     aggregator::{
         Cart, CartAssignedToCustomer, CartCheckedOut, CartDiscarded, CartLineAdded,
-        CartLineQuantityChanged, CartLineRemoved, CartOpened, CartReopened, CartSaved,
-        PromoCodeApplied, PromoCodeRemoved,
+        CartLineQuantityChanged, CartLineRemoved, CartLineRepriced, CartOpened, CartReopened,
+        CartSaved, PromoCodeApplied, PromoCodeRemoved,
     },
     value_object::{CartLine, CartStatus},
 };
@@ -49,6 +49,7 @@ pub fn create_projection<E: Executor>() -> Projection<E, CartDetailsView> {
         .handler(on_cart_line_added())
         .handler(on_cart_line_quantity_changed())
         .handler(on_cart_line_removed())
+        .handler(on_cart_line_repriced())
         .handler(on_promo_code_applied())
         .handler(on_promo_code_removed())
         .handler(on_cart_saved())
@@ -176,4 +177,19 @@ async fn on_cart_discarded(
 ) -> anyhow::Result<()> {
     row.status = CartStatus::Discarded;
     Ok(())
+}
+
+#[evento::handler]
+async fn on_cart_line_repriced(
+    event: Event<CartLineRepriced>,
+    row: &mut CartDetailsView,
+) -> anyhow::Result<()> {
+    if let Some(line) = row
+        .lines
+        .iter_mut()
+        .find(|l| l.product_id == event.data.product_id)
+    {
+        line.unit_price = event.data.unit_price;
+    }
+    row.recompute_subtotal()
 }

@@ -3,6 +3,8 @@
 //! aggregate; nothing about it is stored here.
 
 use timada_cart::{CartDetailsView, CartStatus, load_cart_details};
+use timada_core::format::money;
+use timada_pricing::{load_product_price, price_id};
 use topcoat::{
     context::{Cx, app_context, memoize},
     cookie::{Cookie, Cookies, SameSite, cookies, time::Duration},
@@ -48,6 +50,65 @@ pub async fn current_cart(cx: &Cx) -> topcoat::Result<Option<CartDetailsView>> {
         }
     }
     Ok(Some(cart))
+}
+
+/// The current cart brought to today's prices, with what changed in words.
+///
+/// A cart line keeps the price of the day it was added, and a cart can wait
+/// a month in its cookie — or much longer among the saved carts. Wherever a
+/// total is shown or confirmed, the lines are compared with the listed prices
+/// first: a line whose price moved is repriced, a line whose product is no
+/// longer sold is removed, and the shopper is told.
+pub async fn fresh_cart(cx: &Cx) -> topcoat::Result<Option<(CartDetailsView, Vec<String>)>> {
+    let cart = match current_cart(cx).await {
+        Ok(Some(cart)) => cart.clone(),
+        Ok(None) => return Ok(None),
+        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+    };
+    let store = app_context::<Store>(cx);
+    let carts = timada_cart::Command(&store.executor);
+    let mut notices = Vec::new();
+    for line in &cart.lines {
+        let listed = load_product_price(&store.executor, price_id(&line.product_id))
+            .await?
+            .filter(|price| !price.withdrawn)
+            .map(|price| price.price_incl_tax);
+        match listed {
+            Some(price) if price != line.unit_price => {
+                let changed = carts
+                    .reprice_line(&cart.id, &line.product_id, price.clone())
+                    .await
+                    .map_err(anyhow::Error::from)?;
+                if changed {
+                    notices.push(format!(
+                        "Le prix de {} est passé de {} à {}.",
+                        line.name,
+                        money(&line.unit_price),
+                        money(&price)
+                    ));
+                }
+            }
+            Some(_) => {}
+            None => {
+                carts
+                    .remove_line(&cart.id, line.product_id.clone())
+                    .await
+                    .map_err(anyhow::Error::from)?;
+                notices.push(format!(
+                    "{} n'est plus en vente et a été retiré de votre panier.",
+                    line.name
+                ));
+            }
+        }
+    }
+    if notices.is_empty() {
+        return Ok(Some((cart, notices)));
+    }
+    // `current_cart` is memoized for the request: read the cart again.
+    let cart = load_cart_details(&store.executor, &cart.id)
+        .await?
+        .unwrap_or(cart);
+    Ok(Some((cart, notices)))
 }
 
 /// The id of the current cart, opening one (and issuing the cookie) if needed.

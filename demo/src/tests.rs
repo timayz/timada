@@ -1363,3 +1363,155 @@ async fn the_checkout_prices_and_delivers_for_the_address_zone() -> anyhow::Resu
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_cart_is_checked_out_at_todays_price() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+    // Parked among the saved carts at 119,95 €.
+    browser.post("/cart/save", "name=Plus+tard").await;
+    db::run_subscriptions_once(&store).await?;
+    let customer = timada_customer::list_customers(
+        &store.db,
+        &timada_customer::ListCustomers {
+            q: Some("ada@example.com".into()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let cart_id = timada_cart::saved_carts_of_customer(&store.db, &customer[0].customer_id).await?
+        [0]
+    .cart_id
+    .clone();
+
+    // The price goes up while it waits; the shopper takes the cart up again.
+    let pricing = timada_pricing::Command(&store.executor);
+    pricing
+        .change_price(
+            timada_pricing::price_id(&product_id),
+            timada_core::Money::eur(12_995),
+        )
+        .await?;
+    browser
+        .post(&format!("/account/carts/{cart_id}/reopen"), "")
+        .await;
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("est passé de 119,95 € à 129,95 €"), "{cart}");
+    assert!(cart.contains("129,95 €"), "{cart}");
+    // Told once: the cart is up to date now.
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(!cart.contains("est passé de"), "{cart}");
+
+    // The price moves again between the checkout page and its submission:
+    // the order is not placed at a total the shopper has not seen.
+    let checkout = text(browser.get("/checkout").await).await?;
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address"))?
+        .to_owned();
+    pricing
+        .change_price(
+            timada_pricing::price_id(&product_id),
+            timada_core::Money::eur(13_995),
+        )
+        .await?;
+    let form =
+        format!("delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card");
+    let held = browser.post("/checkout", &form).await;
+    assert_eq!(held.status(), StatusCode::OK);
+    let held = text(held).await?;
+    assert!(held.contains("Vérifiez le nouveau total"), "{held}");
+    assert!(held.contains("139,95 €"), "{held}");
+
+    // Seen, confirmed, and charged at that price.
+    let placed = browser.post("/checkout", &form).await;
+    assert_eq!(placed.status(), StatusCode::SEE_OTHER);
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    db::run_subscriptions_once(&store).await?;
+    let order = timada_order::load_order_details(&store.executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
+    assert_eq!(order.subtotal, timada_core::Money::eur(13_995));
+
+    // A product no longer sold leaves the cart, with a word about it.
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    pricing
+        .withdraw_price(timada_pricing::price_id(&product_id))
+        .await?;
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("plus en vente"), "{cart}");
+    assert!(cart.contains("Votre panier est vide."), "{cart}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn reviews_and_questions_are_paged_separately() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let reviews = timada_review::Command(&store.executor);
+    for index in 1..=7 {
+        let id = reviews
+            .submit_review(timada_review::SubmitReview {
+                product_id: product_id.clone(),
+                customer_id: format!("customer-{index}"),
+                order_id: None,
+                rating: 4,
+                title: String::new(),
+                body: format!("Avis numéro {index}."),
+            })
+            .await?;
+        reviews.publish_review(&id).await?;
+        // Same-millisecond events have no order: space them.
+        tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
+    }
+    let question = reviews
+        .ask_question(timada_review::AskQuestion {
+            product_id: product_id.clone(),
+            customer_id: "customer-1".into(),
+            body: "Compatible G-SYNC ?".into(),
+        })
+        .await?;
+    reviews
+        .answer_question(&question, timada_review::AnswerAuthor::Staff, "Oui.".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+
+    let mut browser = Browser::new(&router);
+    let product = format!("/p/{product_id}");
+    // Newest first, five a page.
+    let first = text(browser.get(&product).await).await?;
+    assert!(first.contains("Avis numéro 7."), "{first}");
+    assert!(first.contains("Avis numéro 3."), "{first}");
+    assert!(!first.contains("Avis numéro 2."), "{first}");
+    assert!(first.contains("Avis — page 1 sur 2"), "{first}");
+    assert!(first.contains(&format!("{product}?avis=2#avis")), "{first}");
+    // One page of questions: no pager for them.
+    assert!(!first.contains("Questions — page"), "{first}");
+
+    let second = text(browser.get(&format!("{product}?avis=2")).await).await?;
+    assert!(second.contains("Avis numéro 2."), "{second}");
+    assert!(second.contains("Avis numéro 1."), "{second}");
+    assert!(!second.contains("Avis numéro 3."), "{second}");
+    assert!(
+        second.contains(&format!("{product}?avis=1#avis")),
+        "{second}"
+    );
+    // The questions stay where they were.
+    assert!(second.contains("Compatible G-SYNC ?"), "{second}");
+    // A page past the end is the last one.
+    let beyond = text(browser.get(&format!("{product}?avis=9")).await).await?;
+    assert!(beyond.contains("Avis — page 2 sur 2"), "{beyond}");
+    Ok(())
+}

@@ -24,6 +24,14 @@ pub enum Cart {
     /// A line was removed.
     CartLineRemoved { product_id: String },
 
+    /// The product's price moved since the line was added, and the cart was
+    /// brought up to date: a cart is checked out at today's price, not at the
+    /// price of the day it was filled — or saved.
+    CartLineRepriced {
+        product_id: String,
+        unit_price: Money,
+    },
+
     /// A promo code / voucher was typed in (advisory until checkout).
     PromoCodeApplied { code: String },
 
