@@ -266,10 +266,20 @@ pub(super) async fn promo_line(
     store: &Store,
     cart: &CartDetailsView,
 ) -> anyhow::Result<Option<PromoLine>> {
-    let Some(code) = &cart.promo_code else {
+    promo_line_on(store, cart.promo_code.as_ref(), &cart.subtotal).await
+}
+
+/// [`promo_line`] on a subtotal other than the cart's own — the checkout
+/// prices the goods for the delivery zone first.
+pub(super) async fn promo_line_on(
+    store: &Store,
+    code: Option<&String>,
+    subtotal: &timada_core::Money,
+) -> anyhow::Result<Option<PromoLine>> {
+    let Some(code) = code else {
         return Ok(None);
     };
-    let quote = quote_code(&store.executor, code, &cart.subtotal, &cart.subtotal).await?;
+    let quote = quote_code(&store.executor, code, subtotal, subtotal).await?;
     let Some(quote) = quote else {
         return Ok(Some(PromoLine {
             label: code.clone(),
@@ -280,7 +290,7 @@ pub(super) async fn promo_line(
         CodeKind::Discount => format!("Code promo {}", quote.code),
         CodeKind::Voucher => format!("Bon d'achat {}", quote.code),
     };
-    let net = cart.subtotal.checked_sub(&quote.amount)?;
+    let net = subtotal.checked_sub(&quote.amount)?;
     Ok(Some(PromoLine {
         label,
         effect: Some((money(&quote.amount), money(&net))),

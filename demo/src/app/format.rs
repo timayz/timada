@@ -1,6 +1,6 @@
 use timada_core::Address;
 
-pub use timada_core::format::{date, money};
+pub use timada_core::format::{date, money, vat_rate};
 
 /// The lines of a postal address, name first.
 pub fn address_lines(address: &Address) -> Vec<String> {

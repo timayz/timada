@@ -205,6 +205,9 @@ async fn guest_cart_to_placed_order() -> anyhow::Result<()> {
     assert_eq!(detail.status(), StatusCode::OK);
     let detail = text(detail).await?;
     assert!(detail.contains(&format!("Commande {number}")), "{detail}");
+    // 245,80 TTC at 20 %: 204,83 HT, 40,97 of VAT.
+    assert!(detail.contains("dont TVA 20 % sur 204,83 €"), "{detail}");
+    assert!(detail.contains("40,97 €"), "{detail}");
 
     // The confirmation e-mail waits in the outbox for the delivery worker.
     let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
@@ -1208,6 +1211,128 @@ async fn a_shopper_changes_their_password() -> anyhow::Result<()> {
             .iter()
             .any(|m| m.kind == "password-changed" && m.recipient == "ada@example.com"),
         "{outbox:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_checkout_prices_and_delivers_for_the_address_zone() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=2"))
+        .await;
+    browser.post("/register", REGISTER).await;
+    // Toulouse, Le Marin (Martinique) and New York.
+    browser.post("/account/addresses/new", ADDRESS).await;
+    let overseas = ADDRESS
+        .replace("postal_code=31000", "postal_code=97290")
+        .replace("city=Toulouse", "city=Le+Marin")
+        .replace("country_code=fr", "country_code=mq");
+    browser.post("/account/addresses/new", &overseas).await;
+    let abroad = ADDRESS
+        .replace("postal_code=31000", "postal_code=10001")
+        .replace("city=Toulouse", "city=New+York")
+        .replace("country_code=fr", "country_code=us");
+    browser.post("/account/addresses/new", &abroad).await;
+
+    let page = text(browser.get("/checkout").await).await?;
+    let address_of = |city: &str| -> anyhow::Result<String> {
+        page.split("name=\"address\" value=\"")
+            .skip(1)
+            .find(|chunk| chunk.contains(city))
+            .and_then(|chunk| chunk.split('"').next())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("no address radio for {city}"))
+    };
+    let (metro, marin, new_york) = (
+        address_of("Toulouse")?,
+        address_of("Le Marin")?,
+        address_of("New York")?,
+    );
+
+    // Metropolitan France: listed prices, home delivery and pickup.
+    let page = text(browser.get(&format!("/checkout?address={metro}")).await).await?;
+    assert!(page.contains("119,95 €"), "{page}");
+    assert!(page.contains("Colissimo"), "{page}");
+    assert!(!page.contains("Chronopost"), "{page}");
+    assert!(!page.contains("hors TVA"), "{page}");
+
+    // Martinique: an export. Prices without French VAT, its own carrier.
+    let page = text(browser.get(&format!("/checkout?address={marin}")).await).await?;
+    assert!(page.contains("vente hors TVA française"), "{page}");
+    assert!(page.contains("99,96 €"), "{page}");
+    assert!(page.contains("199,92 €"), "{page}");
+    assert!(page.contains("Chronopost (DOM-TOM) — 19,96 €"), "{page}");
+    assert!(!page.contains("Colissimo"), "{page}");
+
+    // The United States are in no zone: nothing to submit.
+    let page = text(browser.get(&format!("/checkout?address={new_york}")).await).await?;
+    assert!(
+        page.contains("Nous ne livrons pas encore ce pays"),
+        "{page}"
+    );
+    assert!(!page.contains("Valider la commande"), "{page}");
+    let forced = browser
+        .post(
+            "/checkout",
+            &format!("delivery_address_id={new_york}&delivery_method=colissimo&payment_mode=card"),
+        )
+        .await;
+    assert_eq!(forced.status(), StatusCode::OK);
+    assert!(
+        text(forced)
+            .await?
+            .contains("Nous ne livrons pas encore ce pays")
+    );
+    // Nor can a method of another zone be forced onto Martinique.
+    let wrong_carrier = browser
+        .post(
+            "/checkout",
+            &format!("delivery_address_id={marin}&delivery_method=colissimo&payment_mode=card"),
+        )
+        .await;
+    let refused = text(wrong_carrier).await?;
+    assert!(
+        refused.contains("ne dessert pas cette adresse"),
+        "{refused}"
+    );
+    assert!(refused.contains("vente hors TVA française"), "{refused}");
+
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={marin}&delivery_method=chronopost-dom&payment_mode=card"
+            ),
+        )
+        .await;
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    db::run_subscriptions_once(&store).await?;
+
+    // Charged what the checkout showed: 199,92 + 19,96, no VAT.
+    let detail = text(browser.get(&format!("/account/orders/{order_id}")).await).await?;
+    assert!(detail.contains("Total HT"), "{detail}");
+    assert!(detail.contains("219,88 €"), "{detail}");
+    assert!(detail.contains("Exonération de TVA"), "{detail}");
+    let payment =
+        timada_payment::load_payment(&store.executor, timada_payment::payment_id(&order_id))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("payment not requested"))?;
+    assert_eq!(payment.amount, timada_core::Money::eur(21_988));
+    let confirmation = timada_mailer::list_outbox(&store.db, None, 50, 0)
+        .await?
+        .into_iter()
+        .find(|m| m.kind == "order-confirmation" && m.recipient == "ada@example.com")
+        .ok_or_else(|| anyhow::anyhow!("no confirmation e-mail"))?;
+    assert!(
+        confirmation.body.contains("Total HT — 219,88 €"),
+        "{}",
+        confirmation.body
     );
     Ok(())
 }
