@@ -30,6 +30,10 @@ pub struct InvoiceView {
     pub tax: Option<InvoiceTax>,
     pub status: InvoiceStatus,
     pub voided_reason: Option<String>,
+    /// Unix seconds of `InvoiceDrafted`.
+    pub drafted_at: u64,
+    /// Unix seconds of `InvoiceIssued`: the invoice's legal date.
+    pub issued_at: Option<u64>,
 }
 
 pub fn create_projection<E: Executor>() -> Projection<E, InvoiceView> {
@@ -39,9 +43,9 @@ pub fn create_projection<E: Executor>() -> Projection<E, InvoiceView> {
         .handler(on_invoice_taxed())
         .handler(on_invoice_issued())
         .handler(on_invoice_voided())
-        // The view gained `tax`: snapshots taken with the previous shape must
-        // not be decoded.
-        .revision(1)
+        // The view gained `tax`, then its dates: snapshots taken with a
+        // previous shape must not be decoded.
+        .revision(2)
         .strict()
 }
 
@@ -63,6 +67,7 @@ async fn on_invoice_drafted(
         &event.data.handling_fee,
     )?;
     row.id = event.aggregate_id.to_owned();
+    row.drafted_at = event.timestamp;
     row.order_id = event.data.order_id;
     row.customer_id = event.data.customer_id;
     row.billing_address = event.data.billing_address;
@@ -103,6 +108,7 @@ async fn on_invoice_issued(
     event: Event<InvoiceIssued>,
     row: &mut InvoiceView,
 ) -> anyhow::Result<()> {
+    row.issued_at = Some(event.timestamp);
     row.invoice_number = Some(event.data.invoice_number);
     row.status = InvoiceStatus::Issued;
     Ok(())

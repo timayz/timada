@@ -50,6 +50,8 @@ fn place_order(cart_id: &str) -> PlaceOrder {
 fn all_migrations() -> Vec<Box<dyn sqlx_migrator::Migration<sqlx::Sqlite>>> {
     let mut all = migrations();
     all.extend(timada_payment::migrations());
+    // The invoice document looks the order's number up.
+    all.extend(timada_order::migrations());
     all
 }
 
@@ -305,6 +307,24 @@ async fn refunds_are_documented_by_credit_notes() -> anyhow::Result<()> {
     assert_eq!(invoice.status, InvoiceStatus::Issued);
     assert_eq!(invoice.total, Money::eur(27_836));
 
+    // The document a rendering gets: numbered, dated, with its credit notes.
+    let issuer = timada_invoice::InvoiceIssuer {
+        name: "Timada SAS".into(),
+        ..Default::default()
+    };
+    let document =
+        timada_invoice::load_invoice_document(&executor, &db, &issuer, &invoice_id(&order))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("an issued invoice has a document"))?;
+    assert_eq!(document.number, format!("F{year}-000001"));
+    assert_eq!(document.issuer.name, "Timada SAS");
+    assert_eq!(document.order_label, order);
+    assert_eq!(document.lines.len(), 1);
+    assert_eq!(document.lines[0].total, Money::eur(24_992));
+    assert_eq!(document.credit_notes.len(), 2);
+    assert_eq!(document.net_after_credit_notes, Money::eur(0));
+    assert!(document.amounts_include_vat);
+
     // Issuing again for the same refund returns the same note; crediting more
     // than the invoice, or a draft, is refused.
     let cmd = Command {
@@ -331,6 +351,12 @@ async fn refunds_are_documented_by_credit_notes() -> anyhow::Result<()> {
     assert!(matches!(too_much, Err(InvoiceError::CreditExceedsInvoice)));
     let draft_order = orders.place_order(place_order("cart-2")).await?;
     sync_invoices(&executor, db.clone()).await?;
+    // A draft is not an invoice yet: no document.
+    assert!(
+        timada_invoice::load_invoice_document(&executor, &db, &issuer, &invoice_id(&draft_order))
+            .await?
+            .is_none()
+    );
     let on_draft = cmd
         .issue_credit_note(IssueCreditNote {
             refund_id: "refund-y".into(),

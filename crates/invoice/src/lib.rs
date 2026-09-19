@@ -6,6 +6,7 @@
 pub mod aggregator;
 mod command;
 mod credit_note_list;
+mod document;
 mod error;
 mod invoice_list;
 mod migration;
@@ -15,6 +16,7 @@ mod value_object;
 
 pub use command::*;
 pub use credit_note_list::*;
+pub use document::*;
 pub use error::*;
 pub use invoice_list::*;
 pub use migration::migrations;
