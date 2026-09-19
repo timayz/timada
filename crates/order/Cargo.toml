@@ -19,10 +19,10 @@ thiserror.workspace = true
 tracing.workspace = true
 sqlx.workspace = true
 sqlx_migrator.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 timada-core = { workspace = true, features = ["test-support"] }
-tokio.workspace = true
 
 [lints]
 workspace = true

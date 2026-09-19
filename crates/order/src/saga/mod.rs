@@ -114,6 +114,17 @@ pub fn create_projection<E: Executor>() -> Projection<E, FulfillmentState> {
         .strict()
 }
 
+/// By the saga's own aggregate id, for handlers of its events.
+pub(crate) async fn load_fulfillment_by_id<E: Executor>(
+    executor: &E,
+    fulfillment_id: &str,
+) -> anyhow::Result<Option<FulfillmentState>> {
+    create_projection()
+        .load(fulfillment_id)
+        .execute(executor)
+        .await
+}
+
 pub async fn load_fulfillment<E: Executor>(
     executor: &E,
     order_id: &str,
