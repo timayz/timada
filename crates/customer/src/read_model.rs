@@ -77,6 +77,28 @@ pub async fn list_customers(
     .await
 }
 
+/// The customers with the given ids, in no particular order; unknown ids are
+/// simply absent.
+pub async fn customers_by_ids(
+    db: &SqlitePool,
+    ids: &[String],
+) -> sqlx::Result<Vec<CustomerListRow>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+        "SELECT customer_id, email, first_name, last_name, registered_at
+         FROM customer_list
+         WHERE customer_id IN (",
+    );
+    let mut bound = query.separated(", ");
+    for id in ids {
+        bound.push_bind(id);
+    }
+    query.push(")");
+    query.build_query_as().fetch_all(db).await
+}
+
 /// Number of customers matching `q` (all customers when `None`).
 pub async fn count_customers(db: &SqlitePool, q: Option<&str>) -> sqlx::Result<i64> {
     sqlx::query_scalar(
