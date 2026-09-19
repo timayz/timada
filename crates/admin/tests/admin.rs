@@ -1,6 +1,6 @@
 //! Socket-free tests through `Router::handle`: auth, mounting under a custom
-//! segment, the orders, promotions, inventory, invoices, refunds, reviews and
-//! questions sections, branded 404s.
+//! segment, the orders, promotions, inventory, invoices, refunds, reviews,
+//! questions and e-mails sections, branded 404s.
 
 use timada_admin::{AdminConfig, AdminServices, Stylesheet, create_admin, migrations};
 use timada_core::{Address, Money};
@@ -31,6 +31,7 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
     all.extend(timada_invoice::migrations());
     all.extend(timada_payment::migrations());
     all.extend(timada_review::migrations());
+    all.extend(timada_mailer::migrations());
     let (executor, db) = timada_core::testing::memory_executor(all).await?;
     create_admin(&db, EMAIL, PASSWORD).await?;
 
@@ -808,5 +809,75 @@ async fn questions_are_answered_from_the_queue() -> anyhow::Result<()> {
     let done = text(done).await?;
     assert!(done.contains("Oui, G-SYNC Compatible."), "{done}");
     assert!(done.contains("Boutique"), "{done}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_outbox_is_listed_and_failed_emails_can_be_retried() -> anyhow::Result<()> {
+    struct Down;
+    impl timada_mailer::Transport for Down {
+        fn send<'a>(&'a self, _email: &'a timada_mailer::Email) -> timada_mailer::SendFuture<'a> {
+            Box::pin(async { Err(timada_mailer::MailError::Transport("relay down".into())) })
+        }
+    }
+
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let email = timada_mailer::Email {
+        from: "Timada <no-reply@timada.example>".into(),
+        to: "ada@example.com".into(),
+        subject: "Confirmation de votre commande C2026-000042".into(),
+        body: "Bonjour Ada,\n\nMerci pour votre commande.".into(),
+    };
+    timada_mailer::enqueue(&h.db, "m-1", "order-confirmation", &email).await?;
+
+    let list = text(h.router.handle(get("/admin/emails", Some(&cookie))).await).await?;
+    assert!(list.contains("ada@example.com"), "{list}");
+    assert!(list.contains("En attente"), "{list}");
+
+    // The relay refuses it until the mailer gives up.
+    for _ in 0..timada_mailer::MAX_ATTEMPTS {
+        timada_mailer::deliver_pending(&h.db, &Down).await?;
+    }
+    let failed = h
+        .router
+        .handle(get("/admin/emails?status=failed", Some(&cookie)))
+        .await;
+    assert!(
+        text(failed)
+            .await?
+            .contains("Confirmation de votre commande")
+    );
+    let detail = text(
+        h.router
+            .handle(get("/admin/emails/m-1", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(detail.contains("Merci pour votre commande."), "{detail}");
+    assert!(detail.contains("relay down"), "{detail}");
+    assert!(detail.contains("Réessayer"), "{detail}");
+
+    // An operator retries it; the next pass delivers.
+    let retried = h
+        .router
+        .handle(post("/admin/emails/m-1/retry", "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&retried), "/admin/emails/m-1");
+    let delivered = timada_mailer::deliver_pending(&h.db, &timada_mailer::LogTransport).await?;
+    assert_eq!(delivered.sent, 1);
+    let detail = text(
+        h.router
+            .handle(get("/admin/emails/m-1", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(detail.contains("Envoyé"), "{detail}");
+    assert!(!detail.contains("Réessayer"), "{detail}");
+    let missing = h
+        .router
+        .handle(get("/admin/emails/nope", Some(&cookie)))
+        .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     Ok(())
 }

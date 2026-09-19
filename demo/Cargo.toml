@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Deliver e-mails over SMTP (`TIMADA_SMTP_URL`) instead of logging them.
+smtp = ["timada-mailer/smtp"]
+
 [dependencies]
 timada-core.workspace = true
 timada-catalog.workspace = true
@@ -18,6 +22,7 @@ timada-order.workspace = true
 timada-shipping.workspace = true
 timada-invoice.workspace = true
 timada-payment.workspace = true
+timada-mailer.workspace = true
 timada-promotion.workspace = true
 timada-admin.workspace = true
 evento.workspace = true

@@ -21,6 +21,7 @@ timada-shipping = { path = "crates/shipping" }
 timada-order = { path = "crates/order" }
 timada-invoice = { path = "crates/invoice" }
 timada-promotion = { path = "crates/promotion" }
+timada-mailer = { path = "crates/mailer" }
 timada-admin = { path = "crates/admin" }
 
 # 2.x is a pre-release: a bare "2" would not resolve, so pin the alpha exactly.

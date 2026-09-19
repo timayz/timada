@@ -187,8 +187,8 @@ pub async fn overview(cx: &Cx) -> Result<impl View> {
 
 // ----------------------------------------------------------------- alerts
 
-/// The shopper's back-in-stock alerts. There is no mailer yet: this page is
-/// where a shopper learns that a product came back.
+/// The shopper's back-in-stock alerts: which products came back, next to the
+/// e-mail the mailer sends when one does.
 #[page("/account/alerts")]
 pub async fn alerts(cx: &Cx) -> Result<impl View> {
     let account = require_account(cx).await?;

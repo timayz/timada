@@ -2,6 +2,7 @@
 //! URL segment; the layer wraps every page below it.
 
 pub mod customers;
+pub mod emails;
 pub mod inventory;
 pub mod invoices;
 pub mod orders;

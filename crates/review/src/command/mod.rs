@@ -111,6 +111,9 @@ async fn on_review_rejected(
 pub struct QuestionState {
     pub id: String,
     pub product_id: String,
+    /// Who asked: the one to tell when an answer comes in.
+    pub customer_id: String,
+    pub body: String,
     pub answer_count: u32,
 }
 
@@ -134,6 +137,8 @@ async fn on_question_asked(
 ) -> anyhow::Result<()> {
     row.id = event.aggregate_id.to_owned();
     row.product_id = event.data.product_id;
+    row.customer_id = event.data.customer_id;
+    row.body = event.data.body;
     Ok(())
 }
 

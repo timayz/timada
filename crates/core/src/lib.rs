@@ -5,6 +5,7 @@
 //! belongs to the context that owns it.
 
 pub mod address;
+pub mod format;
 pub mod id;
 pub mod money;
 #[cfg(feature = "test-support")]

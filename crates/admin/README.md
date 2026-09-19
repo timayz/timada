@@ -2,7 +2,7 @@
 
 A [topcoat](https://github.com/tokio-rs/topcoat) admin for the timada contexts
 (orders, products, stock, customers, promotions, invoices, refunds, reviews,
-questions) that you mount into your own app — a topcoat app or any tower/axum
+questions, e-mails) that you mount into your own app — a topcoat app or any tower/axum
 app.
 
 The admin is a self-contained topcoat `Router`: its own layout, session, auth
@@ -66,6 +66,10 @@ Reviews wait in the reviews section until an operator publishes or rejects
 them; only published ones reach the storefront and the product rating. Product
 questions work the other way round: nothing is moderated, but a question only
 shows on the storefront once the questions section gave it an answer.
+
+The e-mails section reads `timada-mailer`'s outbox (`timada_mailer::migrations()`):
+what was written to customers, what waits for the delivery worker, and what
+the relay refused — with a retry for the ones it gave up on.
 
 ## Assets and styling
 

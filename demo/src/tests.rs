@@ -205,6 +205,24 @@ async fn guest_cart_to_placed_order() -> anyhow::Result<()> {
     assert_eq!(detail.status(), StatusCode::OK);
     let detail = text(detail).await?;
     assert!(detail.contains(&format!("Commande {number}")), "{detail}");
+
+    // The confirmation e-mail waits in the outbox for the delivery worker.
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let confirmation = outbox
+        .iter()
+        .find(|m| m.recipient == "ada@example.com")
+        .ok_or_else(|| anyhow::anyhow!("no e-mail to the shopper: {outbox:?}"))?;
+    assert_eq!(confirmation.kind, "order-confirmation");
+    assert!(
+        confirmation.subject.contains(&number),
+        "{}",
+        confirmation.subject
+    );
+    assert!(
+        confirmation.body.contains("245,80 €"),
+        "{}",
+        confirmation.body
+    );
     assert!(detail.contains("12 rue des Machines"));
     assert!(detail.contains("Carte bancaire"));
 

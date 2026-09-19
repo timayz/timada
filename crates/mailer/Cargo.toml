@@ -1,0 +1,33 @@
+[package]
+name = "timada-mailer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# SMTP delivery through `lettre`; without it the crate only logs or collects.
+smtp = ["dep:lettre"]
+
+[dependencies]
+timada-core.workspace = true
+timada-catalog.workspace = true
+timada-customer.workspace = true
+timada-inventory.workspace = true
+timada-order.workspace = true
+timada-payment.workspace = true
+timada-review.workspace = true
+evento.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+tokio.workspace = true
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"], optional = true }
+
+[dev-dependencies]
+timada-core = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true
