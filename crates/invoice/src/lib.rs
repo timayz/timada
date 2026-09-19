@@ -5,6 +5,7 @@
 pub mod aggregator;
 mod command;
 mod error;
+mod invoice_list;
 mod migration;
 mod process;
 mod query;
@@ -12,6 +13,7 @@ mod value_object;
 
 pub use command::*;
 pub use error::*;
+pub use invoice_list::*;
 pub use migration::migrations;
 pub use process::*;
 pub use query::*;

@@ -30,6 +30,16 @@ pub enum InvoiceStatus {
     Voided,
 }
 
+impl InvoiceStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InvoiceStatus::Draft => "draft",
+            InvoiceStatus::Issued => "issued",
+            InvoiceStatus::Voided => "voided",
+        }
+    }
+}
+
 /// Sums the lines and adds the fees. `Err` on a currency mismatch or overflow.
 pub fn invoice_total(
     lines: &[InvoiceLine],

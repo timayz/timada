@@ -1,6 +1,7 @@
 use timada_core::{Address, Money};
 use timada_invoice::{
-    Command, InvoiceError, InvoiceStatus, invoice_from_orders_subscription, invoice_id,
+    Command, InvoiceError, InvoiceStatus, ListInvoices, count_invoices,
+    invoice_from_orders_subscription, invoice_id, invoice_list_subscription, list_invoices,
     load_invoice, migrations,
 };
 use timada_order::{DeliveryChoice, OrderLine, PaymentMode, PlaceOrder, Seller, order_id};
@@ -149,6 +150,33 @@ async fn orders_drive_drafting_numbering_and_voiding() -> anyhow::Result<()> {
             .as_ref(),
         Some(&issued)
     );
+
+    // The admin listing: both invoices, filterable by status and number.
+    invoice_list_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    let all = list_invoices(&db, &ListInvoices::default()).await?;
+    assert_eq!(all.len(), 2);
+    let issued_only = ListInvoices {
+        status: Some(InvoiceStatus::Issued),
+        ..ListInvoices::default()
+    };
+    let rows = list_invoices(&db, &issued_only).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].invoice_id, invoice_id(&order_1));
+    assert_eq!(rows[0].invoice_number, issued.invoice_number);
+    assert_eq!(rows[0].total_minor, 27_836);
+    assert!(rows[0].issued_at.is_some());
+    assert_eq!(count_invoices(&db, &issued_only).await?, 1);
+    let by_number = ListInvoices {
+        number: Some(format!("F{year}-000002")),
+        ..ListInvoices::default()
+    };
+    let rows = list_invoices(&db, &by_number).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, "voided");
+    assert_eq!(rows[0].total_minor, 27_836 - 2_499);
     Ok(())
 }
 
