@@ -147,6 +147,7 @@ pub async fn change_email(
              changement, contactez-nous sans attendre.\n\nÀ bientôt,\n{}\n",
             config.shop_name, config.shop_name
         ),
+        html_body: None,
     };
     let message_id = timada_core::id::derived(
         &[&account.customer_id, &account.email, &new_email],
@@ -208,6 +209,7 @@ pub async fn change_password(
              contactez-nous sans attendre.\n\nÀ bientôt,\n{}\n",
             config.shop_name, config.shop_name
         ),
+        html_body: None,
     };
     let now = timada_core::time::now_unix_secs()?.to_string();
     let message_id = timada_core::id::derived(&[&account.customer_id, &now], "password-changed");

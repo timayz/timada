@@ -1,5 +1,5 @@
 //! Which facts of the other contexts are worth an e-mail. One subscription,
-//! not strict: it listens to a handful of events across six aggregates.
+//! not strict: it listens to a handful of events across eight aggregates.
 //! Every handler only enqueues (see [`crate::enqueue`]); the message id is
 //! derived from the event id, so a redelivery never writes a second e-mail.
 
@@ -9,6 +9,7 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use sqlx::SqlitePool;
+use timada_customer::aggregator::CustomerRegistered;
 use timada_inventory::aggregator::BackInStockAlertTriggered;
 use timada_order::{
     OrderDetailsView,
@@ -19,20 +20,25 @@ use timada_returns::{
     ReturnView,
     aggregator::{ReturnApproved, ReturnCompleted, ReturnRefused},
 };
-use timada_review::aggregator::{AnswerPublished, QuestionAnswered};
+use timada_review::aggregator::{
+    AnswerPublished, QuestionAnswered, QuestionRejected, ReviewPublished, ReviewRejected,
+};
 
 use crate::{
     config::MailerConfig,
     email::Email,
     outbox::enqueue,
-    template::{self, Content},
+    templates::{Content, MailerTemplates},
 };
 
 pub const MAILER_SUBSCRIPTION: &str = "mailer";
 
-/// Needs the `SqlitePool` and a [`MailerConfig`] as subscription data.
+/// Needs the `SqlitePool` and a [`MailerConfig`] as subscription data, and
+/// takes a [`MailerTemplates`] the same way when the host words its own
+/// e-mails; the built-in French ones are used otherwise.
 pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(MAILER_SUBSCRIPTION)
+        .handler(welcome_on_customer_registered())
         .handler(confirm_on_order_placed())
         .handler(confirm_again_on_confirmation_resent())
         .handler(notify_on_order_shipped())
@@ -41,6 +47,9 @@ pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(notify_on_alert_triggered())
         .handler(notify_on_question_answered())
         .handler(notify_on_answer_published())
+        .handler(notify_on_question_rejected())
+        .handler(notify_on_review_published())
+        .handler(notify_on_review_rejected())
         .handler(notify_on_return_approved())
         .handler(notify_on_return_refused())
         .handler(notify_on_return_completed())
@@ -51,7 +60,7 @@ pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
 fn setup<E: Executor>(
     ctx: &Context<'_, E>,
     event_timestamp: u64,
-) -> anyhow::Result<Option<(SqlitePool, MailerConfig)>> {
+) -> anyhow::Result<Option<(SqlitePool, MailerConfig, MailerTemplates)>> {
     let db = ctx
         .get::<SqlitePool>()
         .ok_or_else(|| anyhow::anyhow!("SqlitePool missing from subscription context"))?;
@@ -62,7 +71,8 @@ fn setup<E: Executor>(
     if age > config.max_event_age_secs {
         return Ok(None);
     }
-    Ok(Some((db, config)))
+    let templates = ctx.get::<MailerTemplates>().unwrap_or_default();
+    Ok(Some((db, config, templates)))
 }
 
 async fn queue(
@@ -71,14 +81,15 @@ async fn queue(
     event_id: &str,
     kind: &str,
     to: &str,
-    (subject, body): Content,
+    content: Content,
 ) -> anyhow::Result<()> {
     let message_id = timada_core::id::derived(&[event_id], kind);
     let email = Email {
         from: config.from.clone(),
         to: to.to_owned(),
-        subject,
-        body,
+        subject: content.subject,
+        body: content.body,
+        html_body: content.html_body,
     };
     if enqueue(db, &message_id, kind, &email).await? {
         tracing::info!(%message_id, %kind, "e-mail queued");
@@ -109,11 +120,11 @@ async fn confirm_on_order_placed<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderPlaced>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let (order, to, first_name) = order_and_customer(ctx.executor, &event.aggregate_id).await?;
-    let content = template::order_confirmation(&config, &first_name, &order);
+    let content = templates.0.order_confirmation(&config, &first_name, &order);
     queue(
         &db,
         &config,
@@ -131,11 +142,11 @@ async fn confirm_again_on_confirmation_resent<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderConfirmationResent>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let (order, to, first_name) = order_and_customer(ctx.executor, &event.aggregate_id).await?;
-    let content = template::order_confirmation(&config, &first_name, &order);
+    let content = templates.0.order_confirmation(&config, &first_name, &order);
     queue(
         &db,
         &config,
@@ -152,11 +163,11 @@ async fn notify_on_order_shipped<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderShipped>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let (order, to, first_name) = order_and_customer(ctx.executor, &event.aggregate_id).await?;
-    let content = template::order_shipped(&config, &first_name, &order);
+    let content = templates.0.order_shipped(&config, &first_name, &order);
     queue(
         &db,
         &config,
@@ -173,11 +184,13 @@ async fn notify_on_order_cancelled<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderCancelled>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let (order, to, first_name) = order_and_customer(ctx.executor, &event.aggregate_id).await?;
-    let content = template::order_cancelled(&config, &first_name, &order, &event.data.reason);
+    let content = templates
+        .0
+        .order_cancelled(&config, &first_name, &order, &event.data.reason);
     queue(
         &db,
         &config,
@@ -194,7 +207,7 @@ async fn notify_on_payment_refunded<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<PaymentRefunded>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let Some(payment) = timada_payment::load_payment(ctx.executor, &event.aggregate_id).await?
@@ -205,7 +218,9 @@ async fn notify_on_payment_refunded<E: Executor>(
         );
     };
     let (order, to, first_name) = order_and_customer(ctx.executor, &payment.order_id).await?;
-    let content = template::refund(&config, &first_name, &order, &event.data.amount);
+    let content = templates
+        .0
+        .refund(&config, &first_name, &order, &event.data.amount);
     queue(&db, &config, &event.id.to_string(), "refund", &to, content).await
 }
 
@@ -215,7 +230,7 @@ async fn notify_on_alert_triggered<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<BackInStockAlertTriggered>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let Some(alert) = timada_inventory::Command(ctx.executor)
@@ -230,7 +245,9 @@ async fn notify_on_alert_triggered<E: Executor>(
     let product_name = timada_catalog::load_product_page(ctx.executor, &alert.product_id)
         .await?
         .map_or_else(|| "Votre produit".to_owned(), |p| p.name);
-    let content = template::back_in_stock(&config, &alert.product_id, &product_name);
+    let content = templates
+        .0
+        .back_in_stock(&config, &alert.product_id, &product_name);
     queue(
         &db,
         &config,
@@ -248,7 +265,7 @@ async fn notify_on_question_answered<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<QuestionAnswered>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let Some(question) = timada_review::Command(ctx.executor)
@@ -273,7 +290,7 @@ async fn notify_on_question_answered<E: Executor>(
     let product_name = timada_catalog::load_product_page(ctx.executor, &question.product_id)
         .await?
         .map_or_else(|| "un produit".to_owned(), |p| p.name);
-    let content = template::question_answered(
+    let content = templates.0.question_answered(
         &config,
         &customer.first_name,
         &question.product_id,
@@ -315,11 +332,11 @@ async fn notify_on_return_approved<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<ReturnApproved>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
-    let content = template::return_approved(&config, &first_name, &request);
+    let content = templates.0.return_approved(&config, &first_name, &request);
     queue(
         &db,
         &config,
@@ -336,11 +353,11 @@ async fn notify_on_return_refused<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<ReturnRefused>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
-    let content = template::return_refused(&config, &first_name, &request);
+    let content = templates.0.return_refused(&config, &first_name, &request);
     queue(
         &db,
         &config,
@@ -357,11 +374,11 @@ async fn notify_on_return_completed<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<ReturnCompleted>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
-    let content = template::return_completed(&config, &first_name, &request);
+    let content = templates.0.return_completed(&config, &first_name, &request);
     queue(
         &db,
         &config,
@@ -380,7 +397,7 @@ async fn notify_on_answer_published<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<AnswerPublished>,
 ) -> anyhow::Result<()> {
-    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let Some(question) = timada_review::Command(ctx.executor)
@@ -411,7 +428,7 @@ async fn notify_on_answer_published<E: Executor>(
     let product_name = timada_catalog::load_product_page(ctx.executor, &question.product_id)
         .await?
         .map_or_else(|| "un produit".to_owned(), |p| p.name);
-    let content = template::question_answered(
+    let content = templates.0.question_answered(
         &config,
         &customer.first_name,
         &question.product_id,
@@ -425,6 +442,146 @@ async fn notify_on_answer_published<E: Executor>(
         &event.id.to_string(),
         "question-answered",
         &customer.email,
+        content,
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn welcome_on_customer_registered<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<CustomerRegistered>,
+) -> anyhow::Result<()> {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let content = templates.0.welcome(&config, &event.data.first_name);
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "welcome",
+        &event.data.email,
+        content,
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn notify_on_question_rejected<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<QuestionRejected>,
+) -> anyhow::Result<()> {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let Some(question) = timada_review::Command(ctx.executor)
+        .load_question(&event.aggregate_id)
+        .await?
+    else {
+        anyhow::bail!("question {} cannot be loaded", event.aggregate_id);
+    };
+    let Some(customer) =
+        timada_customer::load_address_book(ctx.executor, &question.customer_id).await?
+    else {
+        return Ok(());
+    };
+    let product_name = timada_catalog::load_product_page(ctx.executor, &question.product_id)
+        .await?
+        .map_or_else(|| "un produit".to_owned(), |p| p.name);
+    let content = templates.0.question_refused(
+        &config,
+        &customer.first_name,
+        &product_name,
+        &question.body,
+        &event.data.reason,
+    );
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "question-refused",
+        &customer.email,
+        content,
+    )
+    .await
+}
+
+/// The review, its author and the product's name: what both review e-mails need.
+async fn review_and_customer<E: Executor>(
+    executor: &E,
+    review_id: &str,
+) -> anyhow::Result<Option<(timada_review::ReviewView, String, String, String)>> {
+    let Some(review) = timada_review::load_review_details(executor, review_id).await? else {
+        anyhow::bail!("review {review_id} cannot be loaded");
+    };
+    let Some(customer) = timada_customer::load_address_book(executor, &review.customer_id).await?
+    else {
+        // Written by someone who is not a registered customer: nobody to tell.
+        return Ok(None);
+    };
+    let product_name = timada_catalog::load_product_page(executor, &review.product_id)
+        .await?
+        .map_or_else(|| "un produit".to_owned(), |p| p.name);
+    Ok(Some((
+        review,
+        customer.email,
+        customer.first_name,
+        product_name,
+    )))
+}
+
+#[evento::subscription]
+async fn notify_on_review_published<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ReviewPublished>,
+) -> anyhow::Result<()> {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let Some((review, to, first_name, product_name)) =
+        review_and_customer(ctx.executor, &event.aggregate_id).await?
+    else {
+        return Ok(());
+    };
+    let content =
+        templates
+            .0
+            .review_published(&config, &first_name, &review.product_id, &product_name);
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "review-published",
+        &to,
+        content,
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn notify_on_review_rejected<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ReviewRejected>,
+) -> anyhow::Result<()> {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let Some((_, to, first_name, product_name)) =
+        review_and_customer(ctx.executor, &event.aggregate_id).await?
+    else {
+        return Ok(());
+    };
+    let content =
+        templates
+            .0
+            .review_rejected(&config, &first_name, &product_name, &event.data.reason);
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "review-rejected",
+        &to,
         content,
     )
     .await

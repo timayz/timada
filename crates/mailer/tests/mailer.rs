@@ -5,9 +5,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use timada_core::{Address, Civility, Money};
 use timada_mailer::{
-    Email, LogTransport, MAX_ATTEMPTS, MailError, MailerConfig, MemoryTransport, OutboxStatus,
-    SendFuture, Transport, count_outbox, deliver_pending, enqueue, list_outbox,
-    load_outbox_message, mailer_subscription, migrations, retry,
+    Content, DeliveryPolicy, Email, LogTransport, MAX_ATTEMPTS, MailError, MailerConfig,
+    MailerTemplates, MemoryTransport, OutboxStatus, SendFuture, Templates, Transport, count_outbox,
+    deliver_pending, deliver_pending_with, enqueue, list_outbox, load_outbox_message,
+    mailer_subscription, migrations, retry,
 };
 use timada_order::{DeliveryChoice, OrderLine, PaymentMode, PlaceOrder, Seller};
 
@@ -27,6 +28,7 @@ fn email(to: &str) -> Email {
         to: to.into(),
         subject: "Bonjour".into(),
         body: "Un message.".into(),
+        html_body: None,
     }
 }
 
@@ -63,7 +65,8 @@ async fn the_outbox_queues_once_retries_and_gives_up() -> anyhow::Result<()> {
         failures: 1,
         calls: AtomicU32::new(0),
     };
-    let first = deliver_pending(&db, &flaky).await?;
+    let at_once = DeliveryPolicy::without_delays();
+    let first = deliver_pending_with(&db, &flaky, &at_once).await?;
     assert_eq!((first.sent, first.failed), (0, 1));
     let row = load_outbox_message(&db, "m-1")
         .await?
@@ -73,9 +76,9 @@ async fn the_outbox_queues_once_retries_and_gives_up() -> anyhow::Result<()> {
         row.last_error.as_deref(),
         Some("transport failure: relay unavailable")
     );
-    let second = deliver_pending(&db, &flaky).await?;
+    let second = deliver_pending_with(&db, &flaky, &at_once).await?;
     assert_eq!((second.sent, second.failed), (1, 0));
-    let third = deliver_pending(&db, &flaky).await?;
+    let third = deliver_pending_with(&db, &flaky, &at_once).await?;
     assert_eq!((third.sent, third.failed), (0, 0));
     assert_eq!(count_outbox(&db, Some(OutboxStatus::Sent)).await?, 1);
 
@@ -87,7 +90,7 @@ async fn the_outbox_queues_once_retries_and_gives_up() -> anyhow::Result<()> {
         calls: AtomicU32::new(0),
     };
     for _ in 0..MAX_ATTEMPTS + 2 {
-        deliver_pending(&db, &dead).await?;
+        deliver_pending_with(&db, &dead, &at_once).await?;
     }
     assert_eq!(dead.calls.load(Ordering::SeqCst), MAX_ATTEMPTS as u32);
     let failed = list_outbox(&db, Some(OutboxStatus::Failed), 10, 0).await?;
@@ -97,6 +100,177 @@ async fn the_outbox_queues_once_retries_and_gives_up() -> anyhow::Result<()> {
     let sent = deliver_pending(&db, &LogTransport).await?;
     assert_eq!(sent.sent, 1);
     assert_eq!(count_outbox(&db, Some(OutboxStatus::Failed)).await?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_failed_email_waits_for_its_next_attempt() -> anyhow::Result<()> {
+    let (_executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    enqueue(&db, "m-1", "test", &email("ada@example.com")).await?;
+    let dead = Flaky {
+        failures: u32::MAX,
+        calls: AtomicU32::new(0),
+    };
+
+    // The default schedule waits a minute after the first failure: passes in
+    // between leave the e-mail alone instead of burning its attempts.
+    let first = deliver_pending(&db, &dead).await?;
+    assert_eq!(first.failed, 1);
+    for _ in 0..3 {
+        let idle = deliver_pending(&db, &dead).await?;
+        assert_eq!((idle.sent, idle.failed), (0, 0));
+    }
+    assert_eq!(dead.calls.load(Ordering::SeqCst), 1);
+    let row = load_outbox_message(&db, "m-1")
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("message missing"))?;
+    assert_eq!(row.attempts, 1);
+    assert_eq!(row.status(), OutboxStatus::Pending);
+    let now = timada_core::time::now_unix_secs()? as i64;
+    assert!((55..=65).contains(&(row.next_attempt_at - now)), "{row:?}");
+
+    // An operator's retry sends it now.
+    retry(&db, "m-1").await?;
+    assert_eq!(deliver_pending(&db, &LogTransport).await?.sent, 1);
+    Ok(())
+}
+
+/// Takes its time, so that two passes overlap.
+#[derive(Default)]
+struct Slow {
+    sent: std::sync::Mutex<Vec<String>>,
+}
+
+impl Transport for Slow {
+    fn send<'a>(&'a self, email: &'a Email) -> SendFuture<'a> {
+        Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            self.sent
+                .lock()
+                .map_err(|_| MailError::Transport("poisoned".into()))?
+                .push(email.to.clone());
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn workers_side_by_side_never_send_an_email_twice() -> anyhow::Result<()> {
+    let (_executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    for index in 0..12 {
+        enqueue(
+            &db,
+            &format!("m-{index}"),
+            "test",
+            &email(&format!("shopper-{index}@example.com")),
+        )
+        .await?;
+    }
+    // Small batches, so every worker gets some of the queue.
+    let policy = DeliveryPolicy {
+        batch: 3,
+        ..DeliveryPolicy::default()
+    };
+    let transport = Slow::default();
+    let worker = || async {
+        let mut sent = 0;
+        loop {
+            let pass = deliver_pending_with(&db, &transport, &policy).await?;
+            if pass.sent == 0 {
+                return anyhow::Ok(sent);
+            }
+            sent += pass.sent;
+        }
+    };
+    let (a, b, c) = tokio::try_join!(worker(), worker(), worker())?;
+    assert_eq!(a + b + c, 12);
+
+    let mut recipients = transport
+        .sent
+        .lock()
+        .map_err(|_| anyhow::anyhow!("poisoned"))?
+        .clone();
+    recipients.sort();
+    let before = recipients.len();
+    recipients.dedup();
+    assert_eq!(
+        (before, recipients.len()),
+        (12, 12),
+        "an e-mail went out twice"
+    );
+    assert_eq!(count_outbox(&db, Some(OutboxStatus::Sent)).await?, 12);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_crashed_workers_rows_are_taken_over_when_the_lease_expires() -> anyhow::Result<()> {
+    let (_executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    enqueue(&db, "m-1", "test", &email("ada@example.com")).await?;
+    // A worker claimed the row and died before sending it.
+    let now = timada_core::time::now_unix_secs()? as i64;
+    sqlx::query("UPDATE mailer_outbox SET claimed_by = 'dead-worker', claimed_until = ?")
+        .bind(now + 300)
+        .execute(&db)
+        .await?;
+    assert_eq!(deliver_pending(&db, &LogTransport).await?.sent, 0);
+
+    sqlx::query("UPDATE mailer_outbox SET claimed_until = ?")
+        .bind(now - 1)
+        .execute(&db)
+        .await?;
+    assert_eq!(deliver_pending(&db, &LogTransport).await?.sent, 1);
+    Ok(())
+}
+
+/// A host's own words for one e-mail, with an HTML alternative; every other
+/// e-mail keeps the built-in text.
+struct EnglishWelcome;
+
+impl Templates for EnglishWelcome {
+    fn welcome(&self, config: &MailerConfig, first_name: &str) -> Content {
+        Content::text(
+            format!("Welcome to {}", config.shop_name),
+            format!("Hello {first_name}, your account is ready."),
+        )
+        .with_html(format!(
+            "<p>Hello <strong>{first_name}</strong>, your account is ready.</p>"
+        ))
+    }
+}
+
+#[tokio::test]
+async fn a_host_words_its_own_emails() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    timada_customer::Command(&executor)
+        .register_customer(timada_customer::RegisterCustomer {
+            email: "ada@example.com".into(),
+            civility: Civility::Mrs,
+            first_name: "Ada".into(),
+            last_name: "Lovelace".into(),
+        })
+        .await?;
+    mailer_subscription()
+        .data(db.clone())
+        .data(config())
+        .data(MailerTemplates::new(EnglishWelcome))
+        .run_once(&executor)
+        .await?;
+    let outbox = MemoryTransport::default();
+    deliver_pending(&db, &outbox).await?;
+
+    let sent = outbox.sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].subject, "Welcome to Timada");
+    assert_eq!(sent[0].body, "Hello Ada, your account is ready.");
+    assert!(
+        sent[0]
+            .html_body
+            .as_deref()
+            .is_some_and(|html| html.contains("<strong>Ada</strong>"))
+    );
+    let stored = list_outbox(&db, None, 10, 0).await?;
+    assert_eq!(stored[0].kind, "welcome");
+    assert!(stored[0].html_body.is_some());
     Ok(())
 }
 
@@ -182,8 +356,11 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
         })
         .await?;
     sync().await?;
+    // Registering already wrote the welcome; the confirmation is the second.
     let sent = outbox.sent();
-    assert_eq!(sent.len(), 1);
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0].subject, "Bienvenue chez Timada");
+    let sent = &sent[1..];
     assert_eq!(sent[0].to, "ada@example.com");
     assert_eq!(sent[0].from, "Timada <no-reply@timada.example>");
     assert_eq!(
@@ -203,7 +380,7 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
 
     // Redelivering the same events writes nothing more.
     sync().await?;
-    assert_eq!(outbox.sent().len(), 1);
+    assert_eq!(outbox.sent().len(), 2);
 
     // Resent on request, refunded, cancelled: one e-mail each.
     orders.resend_confirmation(&order_id).await?;
@@ -226,7 +403,7 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
         .await?;
     sync().await?;
     let subjects: Vec<String> = outbox.sent().into_iter().map(|e| e.subject).collect();
-    assert_eq!(subjects.len(), 4, "{subjects:?}");
+    assert_eq!(subjects.len(), 5, "{subjects:?}");
     assert_eq!(
         subjects
             .iter()
@@ -280,9 +457,39 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
             "Merci !".into(),
         )
         .await?;
+    // A review through moderation, another refused, a question refused.
+    let kept = reviews
+        .submit_review(timada_review::SubmitReview {
+            product_id: product_id.clone(),
+            customer_id: customer_id.clone(),
+            order_id: None,
+            rating: 5,
+            title: String::new(),
+            body: "Parfait.".into(),
+        })
+        .await?;
+    reviews.publish_review(&kept).await?;
+    let spam = reviews
+        .ask_question(timada_review::AskQuestion {
+            product_id: product_id.clone(),
+            customer_id: customer_id.clone(),
+            body: "Achetez mes cryptos".into(),
+        })
+        .await?;
+    reviews.reject_question(&spam, "Publicité".into()).await?;
     sync().await?;
     let sent = outbox.sent();
-    assert_eq!(sent.len(), 6);
+    assert_eq!(sent.len(), 9);
+    assert!(
+        sent.iter()
+            .any(|e| e.subject == "Votre avis sur AOC 24G4XE est en ligne"),
+        "{sent:?}"
+    );
+    let refused = sent
+        .iter()
+        .find(|e| e.subject == "Votre question sur AOC 24G4XE n'a pas été publiée")
+        .ok_or_else(|| anyhow::anyhow!("no refused-question e-mail"))?;
+    assert!(refused.body.contains("Publicité"), "{}", refused.body);
     let back = sent
         .iter()
         .find(|e| e.subject == "AOC 24G4XE est de nouveau disponible")

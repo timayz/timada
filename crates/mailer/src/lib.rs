@@ -15,6 +15,7 @@ mod migration;
 mod outbox;
 mod process;
 mod template;
+mod templates;
 mod transport;
 
 pub use config::MailerConfig;
@@ -23,4 +24,5 @@ pub use error::MailError;
 pub use migration::migrations;
 pub use outbox::*;
 pub use process::{MAILER_SUBSCRIPTION, mailer_subscription};
+pub use templates::{Content, FrenchTemplates, MailerTemplates, Templates};
 pub use transport::*;
