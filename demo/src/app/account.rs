@@ -179,7 +179,80 @@ pub async fn overview(cx: &Cx) -> Result<impl View> {
             <ul>
                 <li><a href=(href!(orders))>"Historique de mes commandes"</a></li>
                 <li><a href=(href!(addresses))>"Mes adresses"</a></li>
+                <li><a href=(href!(alerts))>"Mes alertes de disponibilité"</a></li>
             </ul>
+        )
+    })
+}
+
+// ----------------------------------------------------------------- alerts
+
+/// The shopper's back-in-stock alerts. There is no mailer yet: this page is
+/// where a shopper learns that a product came back.
+#[page("/account/alerts")]
+pub async fn alerts(cx: &Cx) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let store = app_context::<Store>(cx);
+    let rows = timada_inventory::alerts_of_customer(&store.db, &account.customer_id).await?;
+    let product_ids: Vec<String> = rows.iter().map(|r| r.product_id.clone()).collect();
+    let names: std::collections::HashMap<String, String> =
+        timada_catalog::products_by_ids(&store.db, &product_ids)
+            .await?
+            .into_iter()
+            .map(|p| (p.id, p.name))
+            .collect();
+    let listed: Vec<(String, String, String, Option<String>)> = rows
+        .into_iter()
+        .map(|row| {
+            (
+                href!(
+                    catalog::product_page,
+                    catalog::ProductId(row.product_id.clone())
+                )
+                .resolve(cx),
+                names
+                    .get(&row.product_id)
+                    .cloned()
+                    .unwrap_or_else(|| row.product_id.clone()),
+                date(row.requested_at.max(0) as u64),
+                row.triggered_at.map(|at| date(at.max(0) as u64)),
+            )
+        })
+        .collect();
+
+    Ok(view! {
+        document(
+            title: "Mes alertes de disponibilité",
+            <h1>"Mes alertes de disponibilité"</h1>
+            if listed.is_empty() {
+                <p class="muted">"Aucune alerte. Sur la fiche d'un produit en rupture, demandez à être alerté de son retour en stock."</p>
+            } else {
+                <table>
+                    <caption class="muted">"Les produits de nouveau disponibles en premier"</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">"Produit"</th>
+                            <th scope="col">"Demandée le"</th>
+                            <th scope="col">"État"</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        for (link, name, requested, back) in &listed {
+                            <tr>
+                                <th scope="row"><a href=(link.clone())>(name.clone())</a></th>
+                                <td>(requested.clone())</td>
+                                <td>
+                                    match back {
+                                        Some(since) => { <strong>"De nouveau disponible"</strong> " depuis le " (since.clone()) }
+                                        None => { "En attente du retour en stock" }
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            <p><a href=(href!(overview))>"Retour à mon compte"</a></p>
         )
     })
 }

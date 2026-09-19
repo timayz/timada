@@ -189,6 +189,8 @@ async fn on_alert_requested(
     row.product_id = event.data.product_id;
     row.customer_id = event.data.customer_id;
     row.email = event.data.email;
+    // A request after the alert fired arms it again.
+    row.triggered = false;
     Ok(())
 }
 

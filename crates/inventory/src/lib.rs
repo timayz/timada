@@ -4,6 +4,7 @@
 //! retry safely.
 
 pub mod aggregator;
+mod alert_list;
 mod command;
 mod error;
 mod migration;
@@ -12,6 +13,7 @@ mod read_model;
 mod stock_list;
 mod value_object;
 
+pub use alert_list::*;
 pub use command::*;
 pub use error::*;
 pub use migration::migrations;

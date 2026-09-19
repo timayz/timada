@@ -1,7 +1,7 @@
 use timada_inventory::{
     Availability, Command, InventoryError, RegisterStockItem, RequestBackInStockAlert,
-    ReservationOutcome, StockLocation, alert_id, back_in_stock_subscription,
-    load_stock_availability, migrations, pending_alerts, stock_item_id,
+    ReservationOutcome, StockLocation, alert_id, alert_list_subscription, alerts_of_customer,
+    back_in_stock_subscription, load_stock_availability, migrations, pending_alerts, stock_item_id,
 };
 
 const PRODUCT: &str = "aoc-24g4xe";
@@ -111,6 +111,47 @@ async fn back_in_stock_alert_fires_on_restock() -> anyhow::Result<()> {
 
     // Triggering again is a no-op.
     cmd.trigger_back_in_stock_alert(&alert).await?;
+
+    // The shopper's list shows when the product came back.
+    let sync_list = || async {
+        alert_list_subscription()
+            .data(db.clone())
+            .run_once(&executor)
+            .await
+    };
+    sync_list().await?;
+    let mine = alerts_of_customer(&db, "customer-1").await?;
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].product_id, PRODUCT);
+    assert!(mine[0].triggered_at.is_some());
+    assert!(alerts_of_customer(&db, "customer-2").await?.is_empty());
+
+    // An alert that fired can be asked for again; a pending one cannot.
+    let again = cmd
+        .request_back_in_stock_alert(RequestBackInStockAlert {
+            product_id: PRODUCT.into(),
+            customer_id: "customer-1".into(),
+            email: "jonathan@example.test".into(),
+        })
+        .await?;
+    assert_eq!(again, alert);
+    let twice = cmd
+        .request_back_in_stock_alert(RequestBackInStockAlert {
+            product_id: PRODUCT.into(),
+            customer_id: "customer-1".into(),
+            email: "jonathan@example.test".into(),
+        })
+        .await;
+    assert!(matches!(twice, Err(InventoryError::AlreadyRequested)));
+    back_in_stock_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    sync_list().await?;
+    assert_eq!(pending_alerts(&db, PRODUCT).await?, vec![alert.clone()]);
+    let mine = alerts_of_customer(&db, "customer-1").await?;
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].triggered_at, None);
 
     Ok(())
 }
