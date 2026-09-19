@@ -31,7 +31,36 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0002OutboxDelivery;
+
+// An HTML alternative, a retry schedule, and a lease so that several delivery
+// workers never send the same row.
+sqlite_migration!(
+    M0002OutboxDelivery,
+    "mailer",
+    "m0002_outbox_delivery",
+    vec_box![M0001Outbox],
+    vec_box![
+        (
+            "ALTER TABLE mailer_outbox ADD COLUMN html_body TEXT",
+            "ALTER TABLE mailer_outbox DROP COLUMN html_body"
+        ),
+        (
+            "ALTER TABLE mailer_outbox ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE mailer_outbox DROP COLUMN next_attempt_at"
+        ),
+        (
+            "ALTER TABLE mailer_outbox ADD COLUMN claimed_by TEXT",
+            "ALTER TABLE mailer_outbox DROP COLUMN claimed_by"
+        ),
+        (
+            "ALTER TABLE mailer_outbox ADD COLUMN claimed_until INTEGER",
+            "ALTER TABLE mailer_outbox DROP COLUMN claimed_until"
+        )
+    ]
+);
+
 /// The outbox table, to register alongside evento's migrations.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001Outbox]
+    vec_box![M0001Outbox, M0002OutboxDelivery]
 }

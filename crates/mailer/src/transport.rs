@@ -24,7 +24,7 @@ pub struct LogTransport;
 impl Transport for LogTransport {
     fn send<'a>(&'a self, email: &'a Email) -> SendFuture<'a> {
         Box::pin(async move {
-            tracing::info!(to = %email.to, subject = %email.subject, body = %email.body, "e-mail (not sent: log transport)");
+            tracing::info!(to = %email.to, subject = %email.subject, body = %email.body, html = email.html_body.is_some(), "e-mail (not sent: log transport)");
             Ok(())
         })
     }
@@ -62,7 +62,10 @@ pub use smtp::SmtpTransport;
 
 #[cfg(feature = "smtp")]
 mod smtp {
-    use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+    use lettre::{
+        AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+        message::{MultiPart, header::ContentType},
+    };
 
     use super::{SendFuture, Transport};
     use crate::{email::Email, error::MailError};
@@ -98,9 +101,17 @@ mod smtp {
                         .to
                         .parse()
                         .map_err(|_| MailError::InvalidMailbox(email.to.clone()))?)
-                    .subject(email.subject.clone())
-                    .body(email.body.clone())
-                    .map_err(|err| MailError::Transport(err.to_string()))?;
+                    .subject(email.subject.clone());
+                let message = match &email.html_body {
+                    Some(html) => message.multipart(MultiPart::alternative_plain_html(
+                        email.body.clone(),
+                        html.clone(),
+                    )),
+                    None => message
+                        .header(ContentType::TEXT_PLAIN)
+                        .body(email.body.clone()),
+                }
+                .map_err(|err| MailError::Transport(err.to_string()))?;
                 self.inner
                     .send(message)
                     .await

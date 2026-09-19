@@ -35,6 +35,16 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let sent = message
         .sent_at
         .map_or_else(|| "—".to_owned(), |at| date(at.max(0) as u64));
+    // A failed e-mail waits before its next attempt.
+    let waiting = (status == OutboxStatus::Pending && message.attempts > 0)
+        .then(|| timada_core::time::now_unix_secs().ok())
+        .flatten()
+        .map(|now| (message.next_attempt_at - now as i64).max(0))
+        .map(|secs| match secs {
+            0 => "au prochain passage".to_owned(),
+            s if s < 120 => format!("dans {s} s"),
+            s => format!("dans {} min", s / 60),
+        });
 
     Ok(view! {
         page_header(
@@ -62,6 +72,12 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             <div><dt class="text-muted-foreground">"Créé le"</dt><dd>(date(message.created_at.max(0) as u64))</dd></div>
                             <div><dt class="text-muted-foreground">"Envoyé le"</dt><dd>(sent)</dd></div>
                             <div><dt class="text-muted-foreground">"Essais"</dt><dd class="tabular-nums">(message.attempts.to_string())</dd></div>
+                            if let Some(waiting) = &waiting {
+                                <div><dt class="text-muted-foreground">"Prochain essai"</dt><dd>(waiting.clone())</dd></div>
+                            }
+                            if message.html_body.is_some() {
+                                <div><dt class="text-muted-foreground">"Format"</dt><dd>"Texte et HTML"</dd></div>
+                            }
                             if let Some(error) = &message.last_error {
                                 <div><dt class="text-muted-foreground">"Dernière erreur"</dt><dd class="text-destructive">(error.clone())</dd></div>
                             }

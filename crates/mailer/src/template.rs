@@ -1,4 +1,6 @@
-//! The e-mails themselves: plain text, in French like the storefront.
+//! The built-in e-mails: plain text, in French like the demo storefront. They
+//! are the default methods of [`crate::Templates`]; a host overrides the ones
+//! it wants in its own words, language or HTML.
 
 use timada_core::format::{date, money, vat_rate};
 use timada_order::OrderDetailsView;
@@ -6,7 +8,7 @@ use timada_returns::ReturnView;
 
 use crate::config::MailerConfig;
 
-/// `(subject, body)` of an e-mail.
+/// `(subject, body)` of a built-in e-mail.
 pub(crate) type Content = (String, String);
 
 fn signed(config: &MailerConfig, greeting_name: &str, paragraphs: &[String]) -> String {
@@ -323,5 +325,81 @@ pub(crate) fn return_completed(
     (
         format!("Votre retour {number} est traité"),
         signed(config, first_name, &paragraphs),
+    )
+}
+
+pub(crate) fn welcome(config: &MailerConfig, first_name: &str) -> Content {
+    (
+        format!("Bienvenue chez {}", config.shop_name),
+        signed(
+            config,
+            first_name,
+            &[
+                format!(
+                    "Votre compte {} est créé. Vous y retrouverez vos commandes, vos factures, \
+                     vos retours et vos paniers sauvegardés.",
+                    config.shop_name
+                ),
+                format!("Votre compte : {}", config.url("/account")),
+            ],
+        ),
+    )
+}
+
+pub(crate) fn review_published(
+    config: &MailerConfig,
+    first_name: &str,
+    product_id: &str,
+    product_name: &str,
+) -> Content {
+    (
+        format!("Votre avis sur {product_name} est en ligne"),
+        signed(
+            config,
+            first_name,
+            &[
+                format!("Merci ! Votre avis sur {product_name} est maintenant visible de tous."),
+                format!("Le voir : {}", config.url(&format!("/p/{product_id}#avis"))),
+            ],
+        ),
+    )
+}
+
+pub(crate) fn review_rejected(
+    config: &MailerConfig,
+    first_name: &str,
+    product_name: &str,
+    reason: &str,
+) -> Content {
+    (
+        format!("Votre avis sur {product_name} n'a pas été publié"),
+        signed(
+            config,
+            first_name,
+            &[
+                format!("Nous n'avons pas pu publier votre avis sur {product_name}."),
+                format!("Motif : {reason}"),
+            ],
+        ),
+    )
+}
+
+pub(crate) fn question_refused(
+    config: &MailerConfig,
+    first_name: &str,
+    product_name: &str,
+    question: &str,
+    reason: &str,
+) -> Content {
+    (
+        format!("Votre question sur {product_name} n'a pas été publiée"),
+        signed(
+            config,
+            first_name,
+            &[
+                format!("Vous aviez demandé : « {question} »"),
+                format!("Nous n'avons pas pu la publier. Motif : {reason}"),
+            ],
+        ),
     )
 }

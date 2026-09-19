@@ -947,6 +947,7 @@ async fn the_outbox_is_listed_and_failed_emails_can_be_retried() -> anyhow::Resu
         to: "ada@example.com".into(),
         subject: "Confirmation de votre commande C2026-000042".into(),
         body: "Bonjour Ada,\n\nMerci pour votre commande.".into(),
+        html_body: None,
     };
     timada_mailer::enqueue(&h.db, "m-1", "order-confirmation", &email).await?;
 
@@ -955,8 +956,9 @@ async fn the_outbox_is_listed_and_failed_emails_can_be_retried() -> anyhow::Resu
     assert!(list.contains("En attente"), "{list}");
 
     // The relay refuses it until the mailer gives up.
+    let at_once = timada_mailer::DeliveryPolicy::without_delays();
     for _ in 0..timada_mailer::MAX_ATTEMPTS {
-        timada_mailer::deliver_pending(&h.db, &Down).await?;
+        timada_mailer::deliver_pending_with(&h.db, &Down, &at_once).await?;
     }
     let failed = h
         .router

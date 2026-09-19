@@ -213,9 +213,15 @@ async fn guest_cart_to_placed_order() -> anyhow::Result<()> {
     let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
     let confirmation = outbox
         .iter()
-        .find(|m| m.recipient == "ada@example.com")
-        .ok_or_else(|| anyhow::anyhow!("no e-mail to the shopper: {outbox:?}"))?;
-    assert_eq!(confirmation.kind, "order-confirmation");
+        .find(|m| m.recipient == "ada@example.com" && m.kind == "order-confirmation")
+        .ok_or_else(|| anyhow::anyhow!("no confirmation to the shopper: {outbox:?}"))?;
+    // Signing up had already written the welcome.
+    assert!(
+        outbox
+            .iter()
+            .any(|m| m.recipient == "ada@example.com" && m.kind == "welcome"),
+        "{outbox:?}"
+    );
     assert!(
         confirmation.subject.contains(&number),
         "{}",
