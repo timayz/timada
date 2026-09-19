@@ -50,6 +50,9 @@ pub struct PaymentState {
     pub status: PaymentStatus,
     pub amount: Money,
     pub refunded: Money,
+    /// The reason of every refund so far; [`Command::refund_payment_once`]
+    /// uses it as its idempotency key.
+    pub refund_reasons: Vec<String>,
 }
 
 // Strict and folding every event, so the version `write()` relies on is exact.
@@ -102,5 +105,6 @@ async fn on_payment_refunded(
     if row.refunded == row.amount {
         row.status = PaymentStatus::Refunded;
     }
+    row.refund_reasons.push(event.data.reason);
     Ok(())
 }

@@ -652,6 +652,7 @@ dependencies = [
  "timada-payment",
  "timada-pricing",
  "timada-promotion",
+ "timada-returns",
  "timada-review",
  "timada-shipping",
  "tokio",
@@ -2762,6 +2763,25 @@ dependencies = [
  "sqlx_migrator",
  "thiserror",
  "timada-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "timada-returns"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror",
+ "timada-core",
+ "timada-inventory",
+ "timada-order",
+ "timada-payment",
+ "timada-promotion",
  "tokio",
  "tracing",
 ]

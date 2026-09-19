@@ -6,7 +6,7 @@ use evento::{Executor, metadata::Event, projection::Projection};
 use crate::{
     aggregator::{
         StockItem, StockItemRegistered, StockReceived, StockReservationRejected,
-        StockReservationReleased, StockReserved,
+        StockReservationReleased, StockReserved, StockReturned,
     },
     value_object::{Availability, StockLocation},
 };
@@ -38,6 +38,7 @@ pub fn create_projection<E: Executor>() -> Projection<E, StockAvailabilityView> 
     Projection::new::<StockItem>()
         .handler(on_stock_item_registered())
         .handler(on_stock_received())
+        .handler(on_stock_returned())
         .handler(on_stock_reserved())
         .handler(on_stock_reservation_released())
         .skip::<StockReservationRejected>()
@@ -66,6 +67,16 @@ async fn on_stock_item_registered(
 #[evento::handler]
 async fn on_stock_received(
     event: Event<StockReceived>,
+    row: &mut StockAvailabilityView,
+) -> anyhow::Result<()> {
+    row.on_hand = row.on_hand.saturating_add(event.data.quantity);
+    row.refresh();
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_stock_returned(
+    event: Event<StockReturned>,
     row: &mut StockAvailabilityView,
 ) -> anyhow::Result<()> {
     row.on_hand = row.on_hand.saturating_add(event.data.quantity);

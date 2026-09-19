@@ -9,7 +9,9 @@ use evento::{
 use sqlx::SqlitePool;
 
 use crate::{
-    aggregator::{BackInStockAlertRequested, BackInStockAlertTriggered, StockReceived},
+    aggregator::{
+        BackInStockAlertRequested, BackInStockAlertTriggered, StockReceived, StockReturned,
+    },
     command::{load_stock_item, trigger_alert},
 };
 
@@ -23,6 +25,7 @@ pub fn back_in_stock_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(insert_on_alert_requested())
         .handler(flag_on_alert_triggered())
         .handler(trigger_on_stock_received())
+        .handler(trigger_on_stock_returned())
 }
 
 /// Ids of alerts for `product_id` that have not fired yet.
@@ -71,24 +74,21 @@ async fn flag_on_alert_triggered<E: Executor>(
     Ok(())
 }
 
-/// Fires pending alerts when a warehouse item that was out of stock receives
-/// units. The state is replayed up to now, so subtract this receipt to know
-/// what was available before it.
-#[evento::subscription]
-async fn trigger_on_stock_received<E: Executor>(
+/// Fires pending alerts when a warehouse item that was out of stock gets
+/// `quantity` more units. The state is replayed up to now, so subtract them
+/// to know what was available before.
+async fn trigger_if_back<E: Executor>(
     ctx: &Context<'_, E>,
-    event: Event<StockReceived>,
+    stock_item_id: &str,
+    quantity: u32,
 ) -> anyhow::Result<()> {
-    let Some(item) = load_stock_item(ctx.executor, &event.aggregate_id).await? else {
-        anyhow::bail!(
-            "stock item {} missing for StockReceived",
-            event.aggregate_id
-        );
+    let Some(item) = load_stock_item(ctx.executor, stock_item_id).await? else {
+        anyhow::bail!("stock item {stock_item_id} missing for a stock increase");
     };
     if !item.location.is_warehouse() {
         return Ok(());
     }
-    let available_before = item.available().saturating_sub(event.data.quantity);
+    let available_before = item.available().saturating_sub(quantity);
     if available_before > 0 {
         return Ok(());
     }
@@ -97,4 +97,21 @@ async fn trigger_on_stock_received<E: Executor>(
         trigger_alert(ctx.executor, alert_id).await?;
     }
     Ok(())
+}
+
+#[evento::subscription]
+async fn trigger_on_stock_received<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<StockReceived>,
+) -> anyhow::Result<()> {
+    trigger_if_back(ctx, &event.aggregate_id, event.data.quantity).await
+}
+
+/// A customer's return can bring a product back too.
+#[evento::subscription]
+async fn trigger_on_stock_returned<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<StockReturned>,
+) -> anyhow::Result<()> {
+    trigger_if_back(ctx, &event.aggregate_id, event.data.quantity).await
 }

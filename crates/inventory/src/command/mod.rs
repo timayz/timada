@@ -3,6 +3,7 @@ mod register_stock_item;
 mod release_stock;
 mod request_back_in_stock_alert;
 mod reserve_stock;
+mod restock_return;
 mod trigger_back_in_stock_alert;
 
 use std::ops::Deref;
@@ -17,7 +18,7 @@ use crate::{
     aggregator::{
         BackInStockAlert, BackInStockAlertRequested, BackInStockAlertTriggered, StockItem,
         StockItemRegistered, StockReceived, StockReservationRejected, StockReservationReleased,
-        StockReserved,
+        StockReserved, StockReturned,
     },
     error::InventoryError,
     value_object::StockLocation,
@@ -93,6 +94,8 @@ pub struct StockItemState {
     pub reserved: u32,
     /// Open reservations as `(order_id, quantity)`.
     pub reservations: Vec<(String, u32)>,
+    /// Returns already put back into stock.
+    pub restocked_returns: Vec<String>,
 }
 
 impl StockItemState {
@@ -114,6 +117,7 @@ fn stock_item_projection<E: Executor>() -> Projection<E, StockItemState> {
     Projection::new::<StockItem>()
         .handler(on_stock_item_registered())
         .handler(on_stock_received())
+        .handler(on_stock_returned())
         .handler(on_stock_reserved())
         .handler(on_stock_reservation_released())
         .skip::<StockReservationRejected>()
@@ -137,6 +141,16 @@ async fn on_stock_received(
     row: &mut StockItemState,
 ) -> anyhow::Result<()> {
     row.on_hand = row.on_hand.saturating_add(event.data.quantity);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_stock_returned(
+    event: Event<StockReturned>,
+    row: &mut StockItemState,
+) -> anyhow::Result<()> {
+    row.on_hand = row.on_hand.saturating_add(event.data.quantity);
+    row.restocked_returns.push(event.data.return_id);
     Ok(())
 }
 

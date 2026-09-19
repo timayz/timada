@@ -63,6 +63,16 @@ async fn reservations_are_bounded_and_idempotent() -> anyhow::Result<()> {
     assert_eq!(released.available, 5);
     assert_eq!(released.reserved, 0);
 
+    // A customer's return goes back into stock once, however often it is retried.
+    cmd.restock_return(&id, "return-1", 2).await?;
+    cmd.restock_return(&id, "return-1", 2).await?;
+    cmd.restock_return(&id, "return-2", 1).await?;
+    let restocked = load_stock_availability(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("availability missing"))?;
+    assert_eq!(restocked.on_hand, 8);
+    assert_eq!(restocked.available, 8);
+
     Ok(())
 }
 

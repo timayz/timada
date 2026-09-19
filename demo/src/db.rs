@@ -47,6 +47,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     all.extend(timada_invoice::migrations());
     all.extend(timada_promotion::migrations());
     all.extend(timada_mailer::migrations());
+    all.extend(timada_returns::migrations());
     all.extend(timada_admin::migrations());
     all.extend(crate::auth::migrations());
     all
@@ -144,6 +145,14 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
+        timada_returns::return_processing_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
+        timada_returns::return_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
         timada_mailer::mailer_subscription()
             .data(db)
             .data(mailer_config())
@@ -228,6 +237,14 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .run_once(executor)
             .await?;
         timada_promotion::code_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_returns::return_processing_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_returns::return_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;

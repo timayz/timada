@@ -77,6 +77,34 @@ async fn capture_then_partial_and_full_refund() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn a_keyed_refund_is_only_made_once() -> anyhow::Result<()> {
+    let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
+    let cmd = Command(&executor);
+    let id = cmd.request_payment(installments_request()).await?;
+    cmd.capture_payment(&id, "psp-123".into()).await?;
+
+    assert!(
+        cmd.refund_payment_once(&id, "return R2026-000001", Money::eur(5_000))
+            .await?
+    );
+    // A process manager retrying after a crash refunds nothing more.
+    assert!(
+        !cmd.refund_payment_once(&id, "return R2026-000001", Money::eur(5_000))
+            .await?
+    );
+    // Another reference is another refund.
+    assert!(
+        cmd.refund_payment_once(&id, "return R2026-000002", Money::eur(1_000))
+            .await?
+    );
+    let view = load_payment(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(view.refunded, Money::eur(6_000));
+    Ok(())
+}
+
+#[tokio::test]
 async fn declined_payment_cannot_be_captured() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
     let cmd = Command(&executor);
