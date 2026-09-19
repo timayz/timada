@@ -6,6 +6,7 @@ mod open_cart;
 mod remove_line;
 mod remove_promo_code;
 mod save_cart;
+mod saved_carts;
 
 use std::ops::Deref;
 
@@ -16,8 +17,9 @@ use evento::{Executor, Projection, metadata::Event};
 
 use crate::{
     aggregator::{
-        Cart, CartCheckedOut, CartLineAdded, CartLineQuantityChanged, CartLineRemoved, CartOpened,
-        CartSaved, PromoCodeApplied, PromoCodeRemoved,
+        Cart, CartAssignedToCustomer, CartCheckedOut, CartDiscarded, CartLineAdded,
+        CartLineQuantityChanged, CartLineRemoved, CartOpened, CartReopened, CartSaved,
+        PromoCodeApplied, PromoCodeRemoved,
     },
     error::CartError,
     value_object::CartStatus,
@@ -43,10 +45,11 @@ impl<E: Executor> Command<'_, E> {
         let Some(cart) = self.load(id).await? else {
             return Err(CartError::CartNotFound);
         };
-        if cart.status == CartStatus::CheckedOut {
-            return Err(CartError::CartAlreadyCheckedOut);
+        match cart.status {
+            CartStatus::CheckedOut => Err(CartError::CartAlreadyCheckedOut),
+            CartStatus::Discarded => Err(CartError::CartDiscarded),
+            CartStatus::Open | CartStatus::Saved => Ok(cart),
         }
-        Ok(cart)
     }
 }
 
@@ -70,6 +73,9 @@ fn create_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_cart_line_added())
         .handler(on_cart_line_removed())
         .handler(on_cart_saved())
+        .handler(on_cart_assigned_to_customer())
+        .handler(on_cart_reopened())
+        .handler(on_cart_discarded())
         .handler(on_cart_checked_out())
         .handler(on_promo_code_applied())
         .handler(on_promo_code_removed())
@@ -134,5 +140,29 @@ async fn on_cart_checked_out(
 ) -> anyhow::Result<()> {
     row.status = CartStatus::CheckedOut;
     row.customer_id = Some(event.data.customer_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_cart_assigned_to_customer(
+    event: Event<CartAssignedToCustomer>,
+    row: &mut CartState,
+) -> anyhow::Result<()> {
+    row.customer_id = Some(event.data.customer_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_cart_reopened(_event: Event<CartReopened>, row: &mut CartState) -> anyhow::Result<()> {
+    row.status = CartStatus::Open;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_cart_discarded(
+    _event: Event<CartDiscarded>,
+    row: &mut CartState,
+) -> anyhow::Result<()> {
+    row.status = CartStatus::Discarded;
     Ok(())
 }

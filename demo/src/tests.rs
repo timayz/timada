@@ -1033,3 +1033,181 @@ async fn a_shopper_changes_the_email_they_sign_in_with() -> anyhow::Result<()> {
     assert_eq!(registered.status(), StatusCode::SEE_OTHER);
     Ok(())
 }
+
+#[tokio::test]
+async fn a_cart_is_saved_for_later_reopened_and_deleted() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=2"))
+        .await;
+
+    // Saving is for signed-in shoppers.
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("pour sauvegarder ce panier"), "{cart}");
+    let guest = browser.post("/cart/save", "name=Bureau").await;
+    assert!(
+        location(&guest).starts_with("/login"),
+        "{}",
+        location(&guest)
+    );
+
+    browser.post("/register", REGISTER).await;
+    let saved = browser.post("/cart/save", "name=Bureau").await;
+    assert_eq!(location(&saved), "/account/carts");
+    db::run_subscriptions_once(&store).await?;
+    let list = text(browser.get("/account/carts").await).await?;
+    assert!(list.contains("Bureau"), "{list}");
+    assert!(list.contains("239,90 €"), "{list}");
+    // The browser starts over with an empty cart.
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("Votre panier est vide."), "{cart}");
+
+    // Another shopper sees nothing, and cannot touch it.
+    let cart_id = timada_cart::saved_carts_of_customer(
+        &store.db,
+        &timada_customer::list_customers(
+            &store.db,
+            &timada_customer::ListCustomers {
+                q: Some("ada@example.com".into()),
+                ..Default::default()
+            },
+        )
+        .await?[0]
+            .customer_id,
+    )
+    .await?[0]
+        .cart_id
+        .clone();
+    let mut other = Browser::new(&router);
+    other
+        .post(
+            "/login",
+            &format!(
+                "email={}&password={}",
+                seed::SHOPPER_EMAIL.replace('@', "%40"),
+                seed::SHOPPER_PASSWORD
+            ),
+        )
+        .await;
+    assert!(
+        text(other.get("/account/carts").await)
+            .await?
+            .contains("Aucun panier sauvegardé.")
+    );
+    let stolen = other
+        .post(&format!("/account/carts/{cart_id}/reopen"), "")
+        .await;
+    assert_eq!(stolen.status(), StatusCode::NOT_FOUND);
+
+    // A current cart with articles is not silently abandoned.
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    let busy = browser
+        .post(&format!("/account/carts/{cart_id}/reopen"), "")
+        .await;
+    assert_eq!(busy.status(), StatusCode::OK);
+    assert!(text(busy).await?.contains("contient des articles"));
+    browser
+        .post(&format!("/cart/lines/{product_id}/remove"), "")
+        .await;
+
+    // Reopened: it is the current cart again and leaves the list.
+    let reopened = browser
+        .post(&format!("/account/carts/{cart_id}/reopen"), "")
+        .await;
+    assert_eq!(location(&reopened), "/cart");
+    db::run_subscriptions_once(&store).await?;
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("239,90 €"), "{cart}");
+    let list = text(browser.get("/account/carts").await).await?;
+    assert!(list.contains("Aucun panier sauvegardé."), "{list}");
+
+    // Saved again, then deleted.
+    browser.post("/cart/save", "name=Plus+tard").await;
+    db::run_subscriptions_once(&store).await?;
+    let deleted = browser
+        .post(&format!("/account/carts/{cart_id}/discard"), "")
+        .await;
+    assert_eq!(location(&deleted), "/account/carts");
+    db::run_subscriptions_once(&store).await?;
+    let list = text(browser.get("/account/carts").await).await?;
+    assert!(list.contains("Aucun panier sauvegardé."), "{list}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_shopper_changes_their_password() -> anyhow::Result<()> {
+    let (router, store, _) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser.post("/register", REGISTER).await;
+    // A second device signed in with the same account.
+    let mut phone = Browser::new(&router);
+    phone
+        .post(
+            "/login",
+            "email=ada%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert_eq!(phone.get("/account").await.status(), StatusCode::OK);
+
+    let wrong = browser
+        .post(
+            "/account/password",
+            "current=nope&new=difference-engine&confirm=difference-engine",
+        )
+        .await;
+    assert!(text(wrong).await?.contains("actuel incorrect"));
+    let mismatch = browser
+        .post(
+            "/account/password",
+            "current=analytical-engine&new=difference-engine&confirm=difference-engin",
+        )
+        .await;
+    assert!(text(mismatch).await?.contains("pas identiques"));
+    let weak = browser
+        .post(
+            "/account/password",
+            "current=analytical-engine&new=short&confirm=short",
+        )
+        .await;
+    assert!(text(weak).await?.contains("au moins 8"));
+
+    let changed = browser
+        .post(
+            "/account/password",
+            "current=analytical-engine&new=difference-engine&confirm=difference-engine",
+        )
+        .await;
+    assert_eq!(location(&changed), "/account");
+
+    // This browser stays signed in; the other device is signed out.
+    assert_eq!(browser.get("/account").await.status(), StatusCode::OK);
+    assert_eq!(phone.get("/account").await.status(), StatusCode::SEE_OTHER);
+    // Only the new password signs in.
+    let mut fresh = Browser::new(&router);
+    let old = fresh
+        .post(
+            "/login",
+            "email=ada%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert_eq!(old.status(), StatusCode::OK);
+    let new = fresh
+        .post(
+            "/login",
+            "email=ada%40example.com&password=difference-engine",
+        )
+        .await;
+    assert_eq!(location(&new), "/account");
+    // And the shopper is told.
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    assert!(
+        outbox
+            .iter()
+            .any(|m| m.kind == "password-changed" && m.recipient == "ada@example.com"),
+        "{outbox:?}"
+    );
+    Ok(())
+}

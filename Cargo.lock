@@ -2604,6 +2604,8 @@ dependencies = [
  "anyhow",
  "bitcode",
  "evento",
+ "sqlx",
+ "sqlx_migrator",
  "thiserror",
  "timada-core",
  "tokio",

@@ -146,3 +146,90 @@ async fn checkout_guards() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn saved_carts_belong_to_their_owner_and_can_be_reopened_or_deleted() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(timada_cart::migrations()).await?;
+    let cmd = Command(&executor);
+    let sync = || async {
+        timada_cart::saved_cart_list_subscription()
+            .data(db.clone())
+            .run_once(&executor)
+            .await
+    };
+
+    // A guest's cart: nothing to save while it is empty, nobody's list to be in.
+    let id = cmd.open_cart(None).await?;
+    assert!(matches!(
+        cmd.save_cart(&id, "Setup gaming".into()).await,
+        Err(CartError::EmptyCart)
+    ));
+    cmd.add_line(&id, headset()).await?;
+    cmd.save_cart(&id, "Setup gaming".into()).await?;
+    sync().await?;
+    assert!(
+        timada_cart::saved_carts_of_customer(&db, "customer-1")
+            .await?
+            .is_empty()
+    );
+
+    // Taken by a customer, once: it shows in their list, and nobody else's.
+    cmd.assign_customer(&id, "customer-1").await?;
+    cmd.assign_customer(&id, "customer-1").await?;
+    assert!(matches!(
+        cmd.assign_customer(&id, "customer-2").await,
+        Err(CartError::NotYourCart)
+    ));
+    sync().await?;
+    let mine = timada_cart::saved_carts_of_customer(&db, "customer-1").await?;
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].name, "Setup gaming");
+    assert_eq!((mine[0].units, mine[0].subtotal_minor), (2, 14_832));
+    assert!(matches!(
+        cmd.reopen_cart(&id, "customer-2").await,
+        Err(CartError::CartNotFound)
+    ));
+
+    // Reopened: the current cart again, out of the list.
+    cmd.reopen_cart(&id, "customer-1").await?;
+    cmd.reopen_cart(&id, "customer-1").await?;
+    assert!(matches!(
+        cmd.discard_cart(&id, "customer-1").await,
+        Err(CartError::NotSaved)
+    ));
+    sync().await?;
+    assert!(
+        timada_cart::saved_carts_of_customer(&db, "customer-1")
+            .await?
+            .is_empty()
+    );
+    let view = load_cart_details(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("cart missing"))?;
+    assert_eq!(view.status, CartStatus::Open);
+
+    // Saved again, then deleted for good: no longer editable.
+    cmd.save_cart(&id, "Pour plus tard".into()).await?;
+    sync().await?;
+    assert_eq!(
+        timada_cart::saved_carts_of_customer(&db, "customer-1").await?[0].name,
+        "Pour plus tard"
+    );
+    cmd.discard_cart(&id, "customer-1").await?;
+    cmd.discard_cart(&id, "customer-1").await?;
+    sync().await?;
+    assert!(
+        timada_cart::saved_carts_of_customer(&db, "customer-1")
+            .await?
+            .is_empty()
+    );
+    assert!(matches!(
+        cmd.add_line(&id, headset()).await,
+        Err(CartError::CartDiscarded)
+    ));
+    assert!(matches!(
+        cmd.reopen_cart(&id, "customer-1").await,
+        Err(CartError::CartDiscarded)
+    ));
+    Ok(())
+}

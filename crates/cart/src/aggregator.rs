@@ -33,6 +33,16 @@ pub enum Cart {
     /// The cart was saved under a name ("mes paniers sauvegardés").
     CartSaved { name: String },
 
+    /// A signed-in customer took the cart as theirs — a guest who signed in,
+    /// or a cart about to be saved. Saved carts are listed per owner.
+    CartAssignedToCustomer { customer_id: String },
+
+    /// A saved cart was made the current cart again.
+    CartReopened,
+
+    /// A saved cart was deleted from "mes paniers sauvegardés".
+    CartDiscarded,
+
     /// The customer pressed "passer commande".
     CartCheckedOut {
         customer_id: String,

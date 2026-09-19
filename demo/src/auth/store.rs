@@ -80,6 +80,28 @@ pub async fn move_account(
     }
 }
 
+/// Stores the new hash and closes the customer's sessions, except `keep`.
+pub async fn replace_password(
+    db: &SqlitePool,
+    customer_id: &str,
+    password_hash: &str,
+    keep: Option<&TokenHash>,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE shop_account SET password_hash = ? WHERE customer_id = ?")
+        .bind(password_hash)
+        .bind(customer_id)
+        .execute(db)
+        .await?;
+    sqlx::query(
+        "DELETE FROM shop_session WHERE customer_id = ?1 AND (?2 IS NULL OR token_hash != ?2)",
+    )
+    .bind(customer_id)
+    .bind(keep.map(|hash| hash.as_slice()))
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 pub async fn release_claim(db: &SqlitePool, email: &str) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM shop_account WHERE email = ? AND customer_id IS NULL")
         .bind(email)

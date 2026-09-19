@@ -39,6 +39,7 @@ pub async fn open(path: &str) -> anyhow::Result<(evento::Sqlite, SqlitePool)> {
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     let mut all = Vec::new();
     all.extend(timada_catalog::migrations());
+    all.extend(timada_cart::migrations());
     all.extend(timada_inventory::migrations());
     all.extend(timada_review::migrations());
     all.extend(timada_customer::migrations());
@@ -76,6 +77,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
     let (executor, db) = (&store.executor, store.db.clone());
     Ok(vec![
         timada_catalog::product_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
+        timada_cart::saved_cart_list_subscription()
             .data(db.clone())
             .start(executor)
             .await?,
@@ -171,6 +176,10 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
     let (executor, db) = (&store.executor, store.db.clone());
     for _ in 0..4 {
         timada_catalog::product_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_cart::saved_cart_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;
