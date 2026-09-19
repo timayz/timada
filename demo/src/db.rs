@@ -46,9 +46,23 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     all.extend(timada_payment::migrations());
     all.extend(timada_invoice::migrations());
     all.extend(timada_promotion::migrations());
+    all.extend(timada_mailer::migrations());
     all.extend(timada_admin::migrations());
     all.extend(crate::auth::migrations());
     all
+}
+
+/// What the e-mails say about the shop; `TIMADA_BASE_URL` and
+/// `TIMADA_MAIL_FROM` override the development defaults.
+pub fn mailer_config() -> timada_mailer::MailerConfig {
+    timada_mailer::MailerConfig {
+        from: std::env::var("TIMADA_MAIL_FROM")
+            .unwrap_or_else(|_| "Timada demo <no-reply@timada.example>".to_owned()),
+        shop_name: "Timada demo".to_owned(),
+        base_url: std::env::var("TIMADA_BASE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:3000".to_owned()),
+        max_event_age_secs: timada_mailer::MailerConfig::DEFAULT_MAX_EVENT_AGE_SECS,
+    }
 }
 
 /// Every read-model subscription and process manager, running in the background.
@@ -123,7 +137,12 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .start(executor)
             .await?,
         timada_promotion::code_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
+        timada_mailer::mailer_subscription()
             .data(db)
+            .data(mailer_config())
             .start(executor)
             .await?,
     ])
@@ -202,6 +221,11 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .await?;
         timada_promotion::code_list_subscription()
             .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_mailer::mailer_subscription()
+            .data(db.clone())
+            .data(mailer_config())
             .run_once(executor)
             .await?;
     }

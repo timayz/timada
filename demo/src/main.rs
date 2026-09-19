@@ -5,6 +5,9 @@
 //! cargo run -p demo -- --seed          # sample catalog, customer, order, shopper and admin accounts
 //! topcoat dev -p demo                  # bundle assets, watch, serve on :3000
 //! ```
+//!
+//! E-mails are queued in the mailer's outbox (see `/admin/emails`) and only
+//! logged, unless built with `--features smtp` and given `TIMADA_SMTP_URL`.
 
 mod app;
 mod auth;
@@ -74,6 +77,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let _subscriptions = db::start_subscriptions(&store).await?;
+    tokio::spawn(timada_mailer::run_delivery(
+        pool.clone(),
+        mail_transport()?,
+        std::time::Duration::from_secs(5),
+    ));
 
     // `topcoat asset bundle --bin demo` (or `topcoat dev`) produces the bundle;
     // without it the storefront still serves, and the admin renders unstyled.
@@ -93,6 +101,33 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("storefront on http://127.0.0.1:3000, admin on /admin");
     topcoat::start(router).await?;
     Ok(())
+}
+
+/// Where queued e-mails go: an SMTP relay when `TIMADA_SMTP_URL` is set (and
+/// the `smtp` feature built in), the log otherwise.
+fn mail_transport() -> anyhow::Result<std::sync::Arc<dyn timada_mailer::Transport>> {
+    match env::var("TIMADA_SMTP_URL") {
+        #[cfg(feature = "smtp")]
+        Ok(url) => {
+            tracing::info!("e-mails are sent over SMTP");
+            Ok(std::sync::Arc::new(timada_mailer::SmtpTransport::from_url(
+                &url,
+            )?))
+        }
+        #[cfg(not(feature = "smtp"))]
+        Ok(_) => {
+            tracing::warn!(
+                "TIMADA_SMTP_URL is set but the `smtp` feature is off: e-mails are only logged"
+            );
+            Ok(std::sync::Arc::new(timada_mailer::LogTransport))
+        }
+        Err(_) => {
+            tracing::info!(
+                "e-mails are logged, not sent (set TIMADA_SMTP_URL, build with --features smtp)"
+            );
+            Ok(std::sync::Arc::new(timada_mailer::LogTransport))
+        }
+    }
 }
 
 /// The storefront pages (discovered) with shopper sessions, plus the admin.
