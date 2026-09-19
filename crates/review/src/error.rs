@@ -10,6 +10,16 @@ pub enum ReviewError {
     InvalidRating(u8),
     #[error("review is not pending moderation")]
     NotPending,
+    #[error("question is not pending moderation")]
+    QuestionNotPending,
+    #[error("question is not published")]
+    QuestionNotPublished,
+    #[error("answer not found")]
+    AnswerNotFound,
+    #[error("answer is not pending moderation")]
+    AnswerNotPending,
+    #[error("this customer already answered this question")]
+    AlreadyAnswered,
     #[error("`{0}` is required")]
     Required(&'static str),
     #[error(transparent)]

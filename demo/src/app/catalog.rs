@@ -12,9 +12,9 @@ use timada_inventory::{
 use timada_order::{OrderStatus, load_order_details, orders_of_customer};
 use timada_pricing::{load_product_price, price_id};
 use timada_review::{
-    AskQuestion, ReviewError, ReviewStatus, SubmitReview, answered_questions, answers_of_questions,
-    count_answered_questions, load_review_details, product_rating, published_reviews, review_id,
-    unanswered_questions_of,
+    AskQuestion, ReviewError, ReviewStatus, SubmitReview, answers_of_questions,
+    count_published_questions, load_review_details, own_unpublished_questions, product_rating,
+    published_questions, published_reviews, review_id,
 };
 use topcoat::{
     Result,
@@ -189,7 +189,7 @@ pub struct QuestionForm {
 }
 
 /// A signed-in shopper asks about the product; the question shows to
-/// everyone once it is answered.
+/// everyone once moderation let it through.
 #[page(POST "/p/{product_id}/questions")]
 pub async fn ask_question(cx: &Cx, Form(form): Form<QuestionForm>) -> Result<impl View> {
     let account = require_account(cx).await?;
@@ -252,12 +252,58 @@ struct ReviewLine {
     verified: bool,
 }
 
-/// One answered question with its answers, ready to render.
+path_param!(pub question_id: String, error = not_found);
+
+#[derive(Debug, Deserialize)]
+pub struct AnswerForm {
+    body: String,
+}
+
+/// A signed-in shopper answers a published question; the answer waits for
+/// moderation. What the review context refuses comes back as a message.
+#[page(POST "/p/{product_id}/questions/{question_id}/answers")]
+pub async fn submit_answer(cx: &Cx, Form(form): Form<AnswerForm>) -> Result<impl View> {
+    let account = require_account(cx).await?;
+    let id = param::<ProductId>(cx)?.clone();
+    let question = param::<QuestionId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    let reviews = timada_review::Command(&store.executor);
+    // The question must be one of this product's.
+    reviews
+        .load_question(&question)
+        .await?
+        .filter(|q| q.product_id == id)
+        .ok_or_not_found()?;
+
+    let error = match reviews
+        .submit_answer(&question, &account.customer_id, form.body)
+        .await
+    {
+        Ok(_) => {
+            let back = format!(
+                "{}#questions",
+                href!(product_page, ProductId(id)).resolve(cx)
+            );
+            return Err(see_other(back).into());
+        }
+        Err(ReviewError::Required(_)) => "Écrivez votre réponse avant de l'envoyer.",
+        Err(ReviewError::AlreadyAnswered) => "Vous avez déjà répondu à cette question.",
+        Err(ReviewError::QuestionNotPublished) => "Cette question n'est pas ouverte aux réponses.",
+        Err(err) => return Err(anyhow::Error::from(err).into()),
+    };
+    Ok(view! { product_view(review_error: None, question_error: Some(error.to_owned())) })
+}
+
+/// One published question with its answers, ready to render.
 struct QuestionLine {
     body: String,
     asked: String,
-    /// `(author, text, date)`.
+    /// `(author, text, date)` of the published answers.
     answers: Vec<(String, String, String)>,
+    /// Where the signed-in shopper's own answer stands, if they gave one.
+    own_answer: Option<&'static str>,
+    answer_action: String,
+    answer_field: String,
 }
 
 /// What the signed-in shopper may do in the reviews section.
@@ -322,7 +368,7 @@ async fn product_view(
         "questions",
         ("avis", review_page),
         question_page,
-        count_answered_questions(&store.db, &id).await?,
+        count_published_questions(&store.db, &id).await?,
         QUESTIONS_PER_PAGE,
     );
     let rows = published_reviews(
@@ -365,7 +411,7 @@ async fn product_view(
         Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
     };
 
-    let asked = answered_questions(
+    let asked = published_questions(
         &store.db,
         &id,
         QUESTIONS_PER_PAGE,
@@ -373,8 +419,22 @@ async fn product_view(
     )
     .await?;
     let question_ids: Vec<String> = asked.iter().map(|q| q.question_id.clone()).collect();
+    let me = account.as_ref().map(|a| a.customer_id.clone());
     let mut answers_by_question: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
-    for answer in answers_of_questions(&store.db, &question_ids).await? {
+    // The shopper's own answers, whatever moderation made of them.
+    let mut own_answers: HashMap<String, &'static str> = HashMap::new();
+    for answer in answers_of_questions(&store.db, &question_ids, false).await? {
+        if me.is_some() && answer.author_customer_id == me {
+            let standing = match answer.status.as_str() {
+                "published" => "Vous avez répondu à cette question.",
+                "rejected" => "Votre réponse n'a pas été retenue.",
+                _ => "Merci ! Votre réponse sera visible une fois validée par notre équipe.",
+            };
+            own_answers.insert(answer.question_id.clone(), standing);
+        }
+        if answer.status != "published" {
+            continue;
+        }
         let author = match answer.author_customer_id {
             None => "Réponse de la boutique",
             Some(_) => "Réponse d'un client",
@@ -394,16 +454,30 @@ async fn product_view(
             answers: answers_by_question
                 .remove(&q.question_id)
                 .unwrap_or_default(),
+            own_answer: own_answers.get(&q.question_id).copied(),
+            answer_action: href!(
+                submit_answer,
+                ProductId(id.clone()),
+                QuestionId(q.question_id.clone())
+            )
+            .resolve(cx),
+            answer_field: format!("answer-{}", q.question_id),
             body: q.body,
             asked: date(q.asked_at as u64),
         })
         .collect();
-    // The shopper's own questions still waiting for an answer.
-    let own_questions: Vec<String> = match &account {
-        Some(account) => unanswered_questions_of(&store.db, &id, &account.customer_id)
+    // The shopper's own questions that are not public: `(text, standing)`.
+    let own_questions: Vec<(String, String)> = match &account {
+        Some(account) => own_unpublished_questions(&store.db, &id, &account.customer_id)
             .await?
             .into_iter()
-            .map(|q| q.body)
+            .map(|q| {
+                let standing = match q.rejection_reason {
+                    Some(reason) => format!("non retenue : {reason}"),
+                    None => "en attente de validation".to_owned(),
+                };
+                (q.body, standing)
+            })
             .collect(),
         None => Vec::new(),
     };
@@ -562,15 +636,33 @@ async fn product_view(
                 <article class="card">
                     <h3>(question.body.clone())</h3>
                     <p class="muted">"Posée le " (question.asked.clone())</p>
+                    if question.answers.is_empty() {
+                        <p class="muted">"Pas encore de réponse."</p>
+                    }
                     for (author, text, answered) in &question.answers {
                         <p><strong>(author.clone())</strong> " — " (text.clone()) <span class="muted">" (" (answered.clone()) ")"</span></p>
+                    }
+                    match question.own_answer {
+                        Some(standing) => { <p role="status" class="notice">(standing)</p> }
+                        None => {
+                            if signed_in {
+                                <form method="post" action=(question.answer_action.clone())>
+                                    <p>
+                                        <label for=(question.answer_field.clone())>"Votre réponse"</label>
+                                        <br>
+                                        <textarea id=(question.answer_field.clone()) name="body" rows="2" cols="60" maxlength="1000" required=(true)></textarea>
+                                    </p>
+                                    <button type="submit">"Répondre"</button>
+                                </form>
+                            }
+                        }
                     }
                 </article>
             }
             page_links(pager: &questions_pager, label: "Questions")
             if !own_questions.is_empty() {
-                <p role="status" class="notice">"Vos questions en attente de réponse :"</p>
-                <ul>for body in &own_questions { <li>(body.clone())</li> }</ul>
+                <p role="status" class="notice">"Vos questions qui ne sont pas publiées :"</p>
+                <ul>for (body, standing) in &own_questions { <li>(body.clone()) <span class="muted">" — " (standing.clone())</span></li> }</ul>
             }
             if let Some(error) = &question_error { <p role="alert" class="error">(error.clone())</p> }
             if signed_in {

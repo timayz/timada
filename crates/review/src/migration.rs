@@ -107,7 +107,54 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0004QuestionModeration;
+
+// Questions and customers' answers are moderated. What was public before —
+// a question with an answer, and every answer — stays public.
+sqlite_migration!(
+    M0004QuestionModeration,
+    "review",
+    "m0004_question_moderation",
+    vec_box![M0003QuestionList],
+    vec_box![
+        (
+            "ALTER TABLE review_question_list ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
+            "ALTER TABLE review_question_list DROP COLUMN status"
+        ),
+        (
+            "ALTER TABLE review_question_list ADD COLUMN rejection_reason TEXT",
+            "ALTER TABLE review_question_list DROP COLUMN rejection_reason"
+        ),
+        (
+            "UPDATE review_question_list SET status = 'published' WHERE answer_count > 0",
+            "SELECT 1"
+        ),
+        (
+            "ALTER TABLE review_answer_list ADD COLUMN status TEXT NOT NULL DEFAULT 'published'",
+            "ALTER TABLE review_answer_list DROP COLUMN status"
+        ),
+        (
+            "ALTER TABLE review_answer_list ADD COLUMN rejection_reason TEXT",
+            "ALTER TABLE review_answer_list DROP COLUMN rejection_reason"
+        ),
+        (
+            "CREATE INDEX review_question_list_status
+             ON review_question_list (status, asked_at)",
+            "DROP INDEX review_question_list_status"
+        ),
+        (
+            "CREATE INDEX review_answer_list_status ON review_answer_list (status, answered_at)",
+            "DROP INDEX review_answer_list_status"
+        )
+    ]
+);
+
 /// Read-model migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001ReviewProductReview, M0002ReviewList, M0003QuestionList]
+    vec_box![
+        M0001ReviewProductReview,
+        M0002ReviewList,
+        M0003QuestionList,
+        M0004QuestionModeration
+    ]
 }

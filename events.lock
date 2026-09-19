@@ -83,8 +83,13 @@ event timada-returns/Return::ReturnCompleted { refunded: Money, credited: Money,
 event timada-returns/Return::ReturnReceived { lines: Vec<ReceivedLine>, refund_method: RefundMethod, money: Money, credit: Money }
 event timada-returns/Return::ReturnRefused { reason: String }
 event timada-returns/Return::ReturnRequested { rma_number: String, order_id: String, customer_id: String, lines: Vec<ReturnLine>, reason: String }
+event timada-review/Question::AnswerPublished { answer_id: String }
+event timada-review/Question::AnswerRejected { answer_id: String, reason: String }
+event timada-review/Question::AnswerSubmitted { answer_id: String, customer_id: String, body: String }
 event timada-review/Question::QuestionAnswered { author: AnswerAuthor, body: String }
 event timada-review/Question::QuestionAsked { product_id: String, customer_id: String, body: String }
+event timada-review/Question::QuestionPublished unit
+event timada-review/Question::QuestionRejected { reason: String }
 event timada-review/Review::ReviewPublished unit
 event timada-review/Review::ReviewRejected { reason: String }
 event timada-review/Review::ReviewSubmitted { product_id: String, customer_id: String, order_id: Option<String>, rating: u8, title: String, body: String }

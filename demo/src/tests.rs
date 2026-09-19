@@ -570,7 +570,7 @@ async fn reviews_wait_for_moderation_before_showing_on_the_product_page() -> any
 }
 
 #[tokio::test]
-async fn questions_show_on_the_product_page_once_answered() -> anyhow::Result<()> {
+async fn questions_and_community_answers_go_through_moderation() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);
     let product = format!("/p/{product_id}");
@@ -605,34 +605,85 @@ async fn questions_show_on_the_product_page_once_answered() -> anyhow::Result<()
     assert_eq!(location(&asked), format!("{product}#questions"));
     db::run_subscriptions_once(&store).await?;
 
-    // Unanswered: the asker sees it waiting, other visitors do not see it.
+    // Awaiting moderation: the asker sees it waiting, nobody else sees it.
     let own = text(browser.get(&product).await).await?;
-    assert!(own.contains("en attente de réponse"), "{own}");
+    assert!(own.contains("en attente de validation"), "{own}");
     assert!(own.contains("Compatible G-SYNC ?"), "{own}");
     let public = text(Browser::new(&router).get(&product).await).await?;
     assert!(!public.contains("Compatible G-SYNC ?"), "{public}");
 
-    // The shop answers: everyone sees the question and its answer.
+    // Published by an operator: public, without an answer yet, and open to
+    // the answers of signed-in shoppers.
+    let reviews = timada_review::Command(&store.executor);
     let rows =
-        timada_review::list_questions(&store.db, &timada_review::ListQuestions::default()).await?;
+        timada_review::list_questions(&store.db, timada_review::QuestionFilter::All, 50, 0).await?;
     assert_eq!(rows.len(), 1);
-    timada_review::Command(&store.executor)
+    let question_id = rows[0].question_id.clone();
+    reviews.publish_question(&question_id).await?;
+    db::run_subscriptions_once(&store).await?;
+    let public = text(Browser::new(&router).get(&product).await).await?;
+    assert!(public.contains("Compatible G-SYNC ?"), "{public}");
+    assert!(public.contains("Pas encore de réponse."), "{public}");
+    assert!(!public.contains("Votre réponse"), "{public}");
+
+    // Another shopper answers: told it awaits moderation, not yet public.
+    let mut helper = Browser::new(&router);
+    helper
+        .post(
+            "/login",
+            &format!(
+                "email={}&password={}",
+                seed::SHOPPER_EMAIL.replace('@', "%40"),
+                seed::SHOPPER_PASSWORD
+            ),
+        )
+        .await;
+    let answers_uri = format!("{product}/questions/{question_id}/answers");
+    let blank = helper.post(&answers_uri, "body=+").await;
+    assert!(text(blank).await?.contains("Écrivez votre réponse"));
+    let answered = helper
+        .post(&answers_uri, "body=Oui%2C+valid%C3%A9+sur+RTX+4070.")
+        .await;
+    assert_eq!(location(&answered), format!("{product}#questions"));
+    let twice = helper.post(&answers_uri, "body=Encore").await;
+    assert!(text(twice).await?.contains("déjà répondu"));
+    db::run_subscriptions_once(&store).await?;
+    let theirs = text(helper.get(&product).await).await?;
+    assert!(theirs.contains("sera visible une fois validée"), "{theirs}");
+    let public = text(Browser::new(&router).get(&product).await).await?;
+    assert!(!public.contains("validé sur RTX 4070"), "{public}");
+
+    // Through moderation: everyone reads it, and the asker is written to.
+    let pending =
+        timada_review::answers_of_questions(&store.db, std::slice::from_ref(&question_id), false)
+            .await?;
+    reviews
+        .publish_answer(&question_id, &pending[0].answer_id)
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let public = text(Browser::new(&router).get(&product).await).await?;
+    assert!(public.contains("Oui, validé sur RTX 4070."), "{public}");
+    assert!(public.contains("un client</strong>"), "{public}");
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let told = outbox
+        .iter()
+        .find(|m| m.kind == "question-answered" && m.recipient == "ada@example.com")
+        .ok_or_else(|| anyhow::anyhow!("the asker was not told: {outbox:?}"))?;
+    assert!(told.body.contains("validé sur RTX 4070"), "{}", told.body);
+
+    // The shop's own answer is public as written.
+    reviews
         .answer_question(
-            &rows[0].question_id,
+            &question_id,
             timada_review::AnswerAuthor::Staff,
             "Oui, G-SYNC Compatible.".into(),
         )
         .await?;
     db::run_subscriptions_once(&store).await?;
     let public = text(Browser::new(&router).get(&product).await).await?;
-    assert!(public.contains("Compatible G-SYNC ?"), "{public}");
     assert!(public.contains("Réponse de la boutique"), "{public}");
-    assert!(public.contains("Oui, G-SYNC Compatible."), "{public}");
-    let own = text(browser.get(&product).await).await?;
-    assert!(!own.contains("en attente de réponse"), "{own}");
     Ok(())
 }
-
 #[tokio::test]
 async fn shoppers_are_told_when_a_product_is_back_in_stock() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;

@@ -19,7 +19,7 @@ use timada_returns::{
     ReturnView,
     aggregator::{ReturnApproved, ReturnCompleted, ReturnRefused},
 };
-use timada_review::aggregator::QuestionAnswered;
+use timada_review::aggregator::{AnswerPublished, QuestionAnswered};
 
 use crate::{
     config::MailerConfig,
@@ -40,6 +40,7 @@ pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(notify_on_payment_refunded())
         .handler(notify_on_alert_triggered())
         .handler(notify_on_question_answered())
+        .handler(notify_on_answer_published())
         .handler(notify_on_return_approved())
         .handler(notify_on_return_refused())
         .handler(notify_on_return_completed())
@@ -367,6 +368,63 @@ async fn notify_on_return_completed<E: Executor>(
         &event.id.to_string(),
         "return-completed",
         &to,
+        content,
+    )
+    .await
+}
+
+/// A customer's answer went through moderation: tell whoever asked — unless
+/// they answered their own question.
+#[evento::subscription]
+async fn notify_on_answer_published<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<AnswerPublished>,
+) -> anyhow::Result<()> {
+    let Some((db, config)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let Some(question) = timada_review::Command(ctx.executor)
+        .load_question(&event.aggregate_id)
+        .await?
+    else {
+        anyhow::bail!("question {} cannot be loaded", event.aggregate_id);
+    };
+    let Some(answer) = question
+        .customer_answers
+        .iter()
+        .find(|a| a.answer_id == event.data.answer_id)
+    else {
+        anyhow::bail!(
+            "answer {} published but not on question {}",
+            event.data.answer_id,
+            question.id
+        );
+    };
+    if answer.customer_id == question.customer_id {
+        return Ok(());
+    }
+    let Some(customer) =
+        timada_customer::load_address_book(ctx.executor, &question.customer_id).await?
+    else {
+        return Ok(());
+    };
+    let product_name = timada_catalog::load_product_page(ctx.executor, &question.product_id)
+        .await?
+        .map_or_else(|| "un produit".to_owned(), |p| p.name);
+    let content = template::question_answered(
+        &config,
+        &customer.first_name,
+        &question.product_id,
+        &product_name,
+        &question.body,
+        &answer.body,
+    );
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "question-answered",
+        &customer.email,
         content,
     )
     .await
