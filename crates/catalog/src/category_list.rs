@@ -97,14 +97,23 @@ pub async fn list_categories(
     db: &SqlitePool,
     include_archived: bool,
 ) -> sqlx::Result<Vec<CategoryRow>> {
-    sqlx::query_as(
+    let mut rows: Vec<CategoryRow> = sqlx::query_as(
         "SELECT id, slug, name, description, parent_id, position, archived, facets FROM catalog_category
          WHERE ?1 OR archived = 0
          ORDER BY position, name, id",
     )
     .bind(include_archived)
     .fetch_all(db)
-    .await
+    .await?;
+    // Alphabetical for people among equal positions: `Écrans` with the E's.
+    rows.sort_by_cached_key(|row| {
+        (
+            row.position,
+            timada_core::slug::sort_key(&row.name),
+            row.id.clone(),
+        )
+    });
+    Ok(rows)
 }
 
 pub async fn category_by_id(db: &SqlitePool, id: &str) -> sqlx::Result<Option<CategoryRow>> {

@@ -33,7 +33,7 @@ use super::{
     Crumb, Head, account, breadcrumb, cart, category, document,
     format::{date, money},
     listing::{Listing, Scope, listing_view, load_listing},
-    seo::breadcrumb_json_ld,
+    seo::{ProductOffer, breadcrumb_json_ld, json_ld_graph, product_json_ld},
 };
 use crate::{
     Store,
@@ -460,27 +460,6 @@ async fn product_view(
             None => sheet.push((spec.group.clone(), vec![line])),
         }
     }
-    let here = href!(product_page, ProductId(id.clone())).resolve(cx);
-    let head = Head {
-        description: Some(product.short_description.clone()).filter(|text| !text.is_empty()),
-        // Review and question pages are the same product.
-        canonical: Some(here.clone()),
-        json_ld: (!trail.is_empty()).then(|| {
-            let mut steps: Vec<Crumb> = trail
-                .iter()
-                .map(|crumb| Crumb {
-                    label: crumb.label.clone(),
-                    link: crumb.link.clone(),
-                })
-                .collect();
-            steps.push(Crumb {
-                label: product.name.clone(),
-                link: None,
-            });
-            breadcrumb_json_ld(&steps, &here)
-        }),
-        ..Head::default()
-    };
     let available = available_stock(store, &id).await?;
     let availability = if available > 0 {
         format!("En stock ({available} disponibles)")
@@ -496,6 +475,54 @@ async fn product_view(
             rating.review_count
         )
     });
+    // For search engines: the way down to the product, and what is on offer.
+    let here = href!(product_page, ProductId(id.clone())).resolve(cx);
+    let mut described = Vec::new();
+    if !trail.is_empty() {
+        let mut steps: Vec<Crumb> = trail
+            .iter()
+            .map(|crumb| Crumb {
+                label: crumb.label.clone(),
+                link: crumb.link.clone(),
+            })
+            .collect();
+        steps.push(Crumb {
+            label: product.name.clone(),
+            link: None,
+        });
+        described.push(breadcrumb_json_ld(&steps, &here));
+    }
+    described.push(product_json_ld(
+        &ProductOffer {
+            name: &product.name,
+            sku: &product.sku,
+            brand: &product.brand.name,
+            description: &product.short_description,
+            image: product
+                .media
+                .iter()
+                .find(|media| media.kind == timada_catalog::MediaKind::Image)
+                .map(|media| media.url.as_str()),
+            price: price.as_ref().map(|price| {
+                (
+                    price.price_incl_tax.minor,
+                    price.price_incl_tax.currency.as_str(),
+                )
+            }),
+            in_stock: available > 0,
+            rating: rating
+                .average_rating
+                .map(|average| (average, rating.review_count)),
+        },
+        &here,
+    ));
+    let head = Head {
+        description: Some(product.short_description.clone()).filter(|text| !text.is_empty()),
+        // Review and question pages are the same product.
+        canonical: Some(here.clone()),
+        json_ld: Some(json_ld_graph(&described)),
+        ..Head::default()
+    };
     let query = query::<ProductQuery>(cx)?;
     let (review_page, question_page) = (
         query.avis.unwrap_or(1).max(1),

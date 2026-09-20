@@ -587,3 +587,60 @@ async fn the_technical_sheet_filters_and_counts() -> anyhow::Result<()> {
     assert!(search_listing(&shop.db, &narrowed).await?.rows.is_empty());
     Ok(())
 }
+
+#[tokio::test]
+async fn names_are_sorted_for_people_and_branches_are_counted() -> anyhow::Result<()> {
+    use timada_catalog::{fill_listing_sort_names, listed_counts_by_category};
+
+    let shop = Shop::open().await?;
+    let audio = category(&shop.executor, "Audio", None).await?;
+    let headsets = category(&shop.executor, "Casques", Some(&audio)).await?;
+    let empty = category(&shop.executor, "Platines", Some(&audio)).await?;
+    shop.sell(
+        "E-1",
+        "Écouteurs sans fil",
+        "Éclair",
+        Some(&headsets),
+        5_000,
+        1,
+    )
+    .await?;
+    shop.sell("E-2", "enceinte nomade", "Zalman", Some(&audio), 6_000, 1)
+        .await?;
+    shop.sell("Z-1", "Zoom H1", "Zoom", Some(&audio), 9_000, 1)
+        .await?;
+    shop.sell("C-1", "Casque studio", "AKG", Some(&headsets), 12_000, 0)
+        .await?;
+    shop.sync().await?;
+    let by_name = ListingQuery::default();
+
+    // É with the E's, whatever the case — not after the Z's.
+    assert_eq!(shop.skus(&by_name).await?, ["C-1", "E-1", "E-2", "Z-1"]);
+    let brands: Vec<String> = search_listing(&shop.db, &by_name)
+        .await?
+        .facets
+        .brands
+        .into_iter()
+        .map(|brand| brand.name)
+        .collect();
+    assert_eq!(brands, ["AKG", "Éclair", "Zalman", "Zoom"]);
+
+    // Rows from before the sort key go by their lower-cased name until they
+    // are given one.
+    sqlx::query("UPDATE catalog_listing SET sort_name = ''")
+        .execute(&shop.db)
+        .await?;
+    assert_eq!(shop.skus(&by_name).await?, ["C-1", "E-2", "Z-1", "E-1"]);
+    assert_eq!(fill_listing_sort_names(&shop.db).await?, 4);
+    assert_eq!(fill_listing_sort_names(&shop.db).await?, 0);
+    assert_eq!(shop.skus(&by_name).await?, ["C-1", "E-1", "E-2", "Z-1"]);
+
+    // A branch counts what is under it; an empty one is not counted at all.
+    let counts =
+        listed_counts_by_category(&shop.db, &[audio.clone(), headsets.clone(), empty.clone()])
+            .await?;
+    assert_eq!(counts.get(&audio), Some(&4));
+    assert_eq!(counts.get(&headsets), Some(&2));
+    assert_eq!(counts.get(&empty), None);
+    Ok(())
+}

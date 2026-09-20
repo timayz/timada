@@ -1,4 +1,5 @@
-//! URL slugs: lowercase ASCII words joined by hyphens.
+//! URL slugs — lowercase ASCII words joined by hyphens — and the key names are
+//! sorted by, so that `Écran` sits with the E's rather than after the Z's.
 
 /// Turns a label into a slug: accents are folded (`Écran PC 24"` →
 /// `ecran-pc-24`), everything that is not a letter or a digit separates words.
@@ -20,6 +21,20 @@ pub fn slugify(label: &str) -> String {
         slug.pop();
     }
     slug
+}
+
+/// What a name is sorted by: lower case, accents folded, the rest as is.
+/// Binary order on this key is alphabetical order for people —
+/// `ecouteurs`, `Écran`, `Enceinte` — which SQLite's own collations are not.
+pub fn sort_key(name: &str) -> String {
+    let mut key = String::with_capacity(name.len());
+    for c in name.trim().chars().flat_map(char::to_lowercase) {
+        match fold(c) {
+            Some(folded) => key.push_str(folded),
+            None => key.push(c),
+        }
+    }
+    key
 }
 
 /// Whether `slug` is what [`slugify`] produces: safe to put in a URL as is.
@@ -47,7 +62,7 @@ fn fold(c: char) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_slug, slugify};
+    use super::{is_slug, slugify, sort_key};
 
     #[test]
     fn labels_become_url_words() {
@@ -77,5 +92,32 @@ mod tests {
         ] {
             assert!(!is_slug(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn names_sort_the_way_people_read_them() {
+        let mut names = vec![
+            "Zoom",
+            "Écran",
+            "enceinte",
+            "Casque",
+            "écouteurs",
+            "Œil",
+            "Ordinateur",
+        ];
+        names.sort_by_key(|name| sort_key(name));
+        assert_eq!(
+            names,
+            [
+                "Casque",
+                "écouteurs",
+                "Écran",
+                "enceinte",
+                "Œil",
+                "Ordinateur",
+                "Zoom"
+            ]
+        );
+        assert_eq!(sort_key("  LG 27\" UltraFine "), "lg 27\" ultrafine");
     }
 }

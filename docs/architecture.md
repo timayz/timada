@@ -266,7 +266,9 @@ the SMTP relay.
   same way on every product; they are offered in numeric order. A product is listed while it is not archived and has a
   price; a product under an archived category stays listed under what is
   above it. A new deployment of the subscription builds the table from the
-  whole history.
+  whole history. Names are sorted by `timada_core::slug::sort_key` — lower
+  case, accents folded — because SQLite's collations put `Écran` after `Zoom`;
+  `fill_listing_sort_names` gives older rows their key.
 - **A business is a customer with a company identity.** `CompanyIdentified`
   records its name and VAT number (`timada_tax::VatNumber` reads one as typed
   and checks its country's shape); each answer of the VAT registry is a
@@ -292,7 +294,8 @@ the SMTP relay.
 - **One snapshotted view per aggregate.** evento keys a snapshot by aggregate
   type, revision and id, not by view: a second snapshotted view of the same
   aggregate would overwrite the first one's snapshot. A second view is
-  declared `#[evento::snapshot(none)]` (see `CompanyIdentityView`).
+  declared `#[evento::snapshot(none)]` (see `CompanyIdentityView`, and the
+  proposal at the end of [event evolution](event-evolution.md)).
 - **VAT is read from the documents.** `vat_journal_subscription` keeps a row
   per VAT rate of each *issued* invoice, and a negative one per credit note —
   its amount spread over the invoice's rates in proportion to what each was
