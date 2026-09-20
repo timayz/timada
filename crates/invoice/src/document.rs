@@ -76,6 +76,9 @@ pub struct InvoiceDocument {
     pub vat_lines: Vec<VatLine>,
     /// The legal ground when no VAT is charged.
     pub exemption_mention: Option<&'static str>,
+    /// What to print about the VAT regime: the exemption, or the destination
+    /// VAT of a distance sale inside the EU.
+    pub regime_mention: Option<&'static str>,
     pub credit_notes: Vec<DocumentCreditNote>,
     /// `total` less the credit notes.
     pub net_after_credit_notes: Money,
@@ -143,6 +146,7 @@ pub fn invoice_document(
         net_after_credit_notes: invoice.total.checked_sub(&credited)?,
         amounts_include_vat: exemption_mention.is_none(),
         exemption_mention,
+        regime_mention: invoice.tax.as_ref().and_then(|tax| tax.regime_mention()),
         vat_lines: invoice.tax.map(|tax| tax.vat_lines).unwrap_or_default(),
         discount: invoice.discount.map(|d| (d.label, d.amount)),
         invoice_id: invoice.id,

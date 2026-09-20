@@ -36,6 +36,12 @@ impl InvoiceTax {
     pub fn exemption_mention(&self) -> Option<&'static str> {
         self.treatment.exemption_mention()
     }
+
+    /// The VAT regime to print on the invoice: the exemption above, or whose
+    /// VAT a distance sale inside the EU carries.
+    pub fn regime_mention(&self) -> Option<&'static str> {
+        self.treatment.regime_mention()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]

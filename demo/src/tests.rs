@@ -1422,6 +1422,95 @@ async fn the_checkout_prices_and_delivers_for_the_address_zone() -> anyhow::Resu
 }
 
 #[tokio::test]
+async fn an_eu_delivery_is_priced_with_the_vat_of_its_country() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=2"))
+        .await;
+    browser.post("/register", REGISTER).await;
+    let berlin = ADDRESS
+        .replace("postal_code=31000", "postal_code=10117")
+        .replace("city=Toulouse", "city=Berlin")
+        .replace("country_code=fr", "country_code=de");
+    browser.post("/account/addresses/new", &berlin).await;
+
+    // 119,95 TTC is 99,96 HT; with 19 % of German VAT, 118,95. Its own
+    // carrier, taxed the same way: 12,90 TTC → 10,75 HT → 12,79.
+    let page = text(browser.get("/checkout").await).await?;
+    assert!(page.contains("TVA du pays de livraison"), "{page}");
+    assert!(page.contains("Allemagne"), "{page}");
+    assert!(page.contains("118,95 €"), "{page}");
+    assert!(page.contains("237,90 €"), "{page}");
+    assert!(page.contains("Colissimo Europe — 12,79 €"), "{page}");
+    assert!(!page.contains("Colissimo à domicile"), "{page}");
+    assert!(!page.contains("hors TVA"), "{page}");
+    let address_id = page
+        .split("name=\"address\" value=\"")
+        .nth(1)
+        .and_then(|chunk| chunk.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no address radio"))?
+        .to_owned();
+
+    // The metropolitan carrier does not go there.
+    let wrong_carrier = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    assert!(
+        text(wrong_carrier)
+            .await?
+            .contains("ne dessert pas cette adresse")
+    );
+
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo-europe&payment_mode=card"
+            ),
+        )
+        .await;
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    db::run_subscriptions_once(&store).await?;
+
+    // Charged what the checkout showed, German VAT inside.
+    let order = timada_order::load_order_details(&store.executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
+    assert_eq!(order.total, timada_core::Money::eur(25_069));
+    let tax = order
+        .tax
+        .ok_or_else(|| anyhow::anyhow!("order not taxed"))?;
+    assert_eq!(tax.zone_code, "de");
+    assert_eq!(tax.treatment, timada_tax::TaxTreatment::DestinationVat);
+    assert_eq!(tax.vat_lines.len(), 1);
+    assert_eq!(tax.vat_lines[0].rate_bp, 1_900);
+
+    let detail = text(browser.get(&format!("/account/orders/{order_id}")).await).await?;
+    assert!(detail.contains("Total TTC"), "{detail}");
+    assert!(detail.contains("250,69 €"), "{detail}");
+    assert!(detail.contains("dont TVA 19"), "{detail}");
+    assert!(detail.contains("40,03 €"), "{detail}");
+    assert!(detail.contains("État membre de livraison"), "{detail}");
+    assert!(!detail.contains("Exonération"), "{detail}");
+    let payment =
+        timada_payment::load_payment(&store.executor, timada_payment::payment_id(&order_id))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("payment not requested"))?;
+    assert_eq!(payment.amount, timada_core::Money::eur(25_069));
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_cart_is_checked_out_at_todays_price() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);

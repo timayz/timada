@@ -38,7 +38,7 @@ admin renders unstyled.
 
 Things worth trying: order something to a metropolitan address, then to
 Martinique (the checkout switches to prices without French VAT and another
-carrier); capture the payment and ship the order from the admin; ask for a
+carrier), then to Berlin (`DE`: German VAT replaces the French one); capture the payment and ship the order from the admin; ask for a
 return from the account; open the invoice; look at `/admin/emails` to see what
 the shop would have sent.
 

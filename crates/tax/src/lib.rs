@@ -14,8 +14,11 @@
 //!   (CGI art. 294), like any country outside the EU (art. 262 I); local
 //!   taxes are the customer's business on arrival.
 //! - [`TaxTreatment::DestinationVat`] — pre-tax price plus the VAT of the
-//!   destination (EU one-stop shop). Modelled, not shipped in any built-in
-//!   zone yet.
+//!   destination (EU one-stop shop). One zone per member state, with its
+//!   [`DestinationRates`]: the country's standard rate, and the host's
+//!   mapping from the rates products are listed with to the country's reduced
+//!   ones. Opt-in through [`TaxZones::france_with_eu_oss`]; the default zones
+//!   stay France and its overseas territories.
 
 mod breakdown;
 mod zone;

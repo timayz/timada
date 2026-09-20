@@ -177,7 +177,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 
 | Value | For |
 |---|---|
-| `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it |
+| `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it. `default()` = France + overseas exports; `france_with_eu_oss()` adds the 26 other member states at their own VAT, reduced rates mapped by the host with `with_mapped_rate(zone, listed_bp, destination_bp)` |
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
@@ -208,6 +208,12 @@ the SMTP relay.
 - **Money** is an integer of minor units plus a currency; arithmetic is
   checked. Listed prices include the domestic VAT; a tax zone decides what is
   charged from there.
+- **Destination VAT** (EU one-stop shop) has no product tax category: a
+  product only knows the rate it is listed with, and each country's zone maps
+  that rate to its own (`5,5 % → 7 %` in Germany), falling back to the
+  country's standard rate — too much VAT rather than too little when the host
+  mapped nothing. The built-in standard rates are those of 1 January 2026;
+  keeping them current is the host's job.
 - **Logging** goes through `tracing`; libraries never print.
 - **Errors**: `thiserror` enums per context, with `anyhow` for the
   infrastructure underneath. No `unwrap`/`expect` outside tests.
@@ -220,8 +226,10 @@ the SMTP relay.
 ## What is deliberately not here yet
 
 - A payment provider integration (captures are manual in the demo).
-- EU destination VAT: `TaxTreatment::DestinationVat` exists, without rates or
-  product tax categories.
+- VAT outside the consumer case: B2B reverse charge (no VAT number is
+  collected), the territories of a member state outside the EU VAT area (they
+  share their country's code), multi-currency, the OSS return itself (orders
+  record zone and VAT per rate — the quarterly report is a query to write).
 - Server-side PDF invoices: `InvoiceDocument` is ready for one; today the
   invoice is a print-ready page.
 - Upcasting of old event shapes: an evento feature, to build when the first
