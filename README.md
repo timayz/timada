@@ -65,7 +65,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | Crate | What it owns |
 |---|---|
 | `timada-core` | `Money`, `Address`, derived ids, formatting, the SQLite test helper |
-| `timada-catalog` | products: description, specs, media, archiving; product list |
+| `timada-catalog` | products — description, specs, media, archiving — and the category tree they are filed under; product and category lists |
 | `timada-pricing` | listed price (tax-inclusive) with its VAT rate, eco-participation, instalment offers |
 | `timada-inventory` | stock per product and location, reservations, returned stock, back-in-stock alerts |
 | `timada-customer` | customers, their e-mail, billing and delivery addresses; customer list |

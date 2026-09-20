@@ -70,6 +70,32 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
         }
         Err(err) => return Err(err.into()),
     };
+    // Filed under the tree its breadcrumb names, opened on the way.
+    let mut parent_id = None;
+    for name in [
+        "Informatique",
+        "Périphériques",
+        "Écran ordinateur",
+        "Écran PC",
+    ] {
+        let opened = catalog
+            .create_category(timada_catalog::CreateCategory {
+                name: name.into(),
+                slug: None,
+                parent_id: parent_id.clone(),
+            })
+            .await;
+        parent_id = Some(match opened {
+            Ok(id) => id,
+            Err(timada_catalog::CatalogError::SlugAlreadyExists(slug)) => {
+                timada_catalog::category_id(&slug)
+            }
+            Err(err) => return Err(err.into()),
+        });
+    }
+    if let Some(category_id) = parent_id {
+        catalog.categorise_product(&product_id, category_id).await?;
+    }
     catalog
         .describe_product(
             &product_id,

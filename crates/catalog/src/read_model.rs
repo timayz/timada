@@ -10,8 +10,8 @@ use evento::{
 use sqlx::SqlitePool;
 
 use crate::aggregator::{
-    ProductArchived, ProductCreated, ProductDescribed, ProductEnergyLabelled, ProductMediaAdded,
-    ProductSpecified,
+    ProductArchived, ProductCategorised, ProductCreated, ProductDescribed, ProductEnergyLabelled,
+    ProductMediaAdded, ProductSpecified,
 };
 
 /// Subscription key; the caller attaches the pool with `.data(pool)`.
@@ -25,12 +25,15 @@ pub struct ProductListRow {
     pub brand_slug: String,
     pub category_path: String,
     pub archived: bool,
+    /// The category the product is filed under, once it has been.
+    pub category_id: Option<String>,
 }
 
 pub fn product_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(PRODUCT_LIST_SUBSCRIPTION)
         .handler(insert_on_product_created())
         .handler(flag_on_product_archived())
+        .handler(file_on_product_categorised())
         .skip::<ProductDescribed>()
         .skip::<ProductSpecified>()
         .skip::<ProductMediaAdded>()
@@ -40,7 +43,7 @@ pub fn product_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
 
 pub async fn list_by_brand(db: &SqlitePool, brand_slug: &str) -> sqlx::Result<Vec<ProductListRow>> {
     sqlx::query_as(
-        "SELECT id, sku, name, brand_slug, category_path, archived
+        "SELECT id, sku, name, brand_slug, category_path, archived, category_id
          FROM catalog_product
          WHERE brand_slug = ? AND archived = 0
          ORDER BY name",
@@ -57,7 +60,7 @@ pub async fn products_by_ids(db: &SqlitePool, ids: &[String]) -> sqlx::Result<Ve
         return Ok(Vec::new());
     }
     let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-        "SELECT id, sku, name, brand_slug, category_path, archived
+        "SELECT id, sku, name, brand_slug, category_path, archived, category_id
          FROM catalog_product
          WHERE id IN (",
     );
@@ -101,7 +104,7 @@ pub async fn list_products(
     query: &ListProducts,
 ) -> sqlx::Result<Vec<ProductListRow>> {
     sqlx::query_as(
-        "SELECT id, sku, name, brand_slug, category_path, archived
+        "SELECT id, sku, name, brand_slug, category_path, archived, category_id
          FROM catalog_product
          WHERE (?1 IS NULL OR name LIKE ?1 OR sku LIKE ?1)
            AND (?2 OR archived = 0)
@@ -162,6 +165,20 @@ async fn flag_on_product_archived<E: Executor>(
     event: Event<ProductArchived>,
 ) -> anyhow::Result<()> {
     sqlx::query("UPDATE catalog_product SET archived = 1 WHERE id = ?")
+        .bind(&event.aggregate_id)
+        .execute(&pool(ctx)?)
+        .await?;
+    Ok(())
+}
+
+/// The last filing wins; a redelivery files the product where it already is.
+#[evento::subscription]
+async fn file_on_product_categorised<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ProductCategorised>,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE catalog_product SET category_id = ? WHERE id = ?")
+        .bind(&event.data.category_id)
         .bind(&event.aggregate_id)
         .execute(&pool(ctx)?)
         .await?;

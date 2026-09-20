@@ -5,8 +5,8 @@ use evento::{Executor, metadata::Event, projection::Projection};
 
 use crate::{
     aggregator::{
-        Product, ProductArchived, ProductCreated, ProductDescribed, ProductEnergyLabelled,
-        ProductMediaAdded, ProductSpecified,
+        Product, ProductArchived, ProductCategorised, ProductCreated, ProductDescribed,
+        ProductEnergyLabelled, ProductMediaAdded, ProductSpecified,
     },
     value_object::{Brand, EnergyClass, Media, Spec},
 };
@@ -18,7 +18,10 @@ pub struct ProductPageView {
     pub sku: String,
     pub name: String,
     pub brand: Brand,
+    /// The label the product was created with; see `category_id`.
     pub category_path: Vec<String>,
+    /// The category the product is filed under, once it has been.
+    pub category_id: Option<String>,
     pub short_description: String,
     pub long_description: String,
     pub key_features: Vec<String>,
@@ -38,7 +41,10 @@ pub fn create_projection<E: Executor>() -> Projection<E, ProductPageView> {
         .handler(on_product_media_added())
         .handler(on_product_energy_labelled())
         .handler(on_product_archived())
+        .handler(on_product_categorised())
         .strict()
+        // `category_id` joined the snapshot.
+        .revision(1)
 }
 
 pub async fn load<E: Executor>(
@@ -107,5 +113,14 @@ async fn on_product_archived(
     row: &mut ProductPageView,
 ) -> anyhow::Result<()> {
     row.archived = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_product_categorised(
+    event: Event<ProductCategorised>,
+    row: &mut ProductPageView,
+) -> anyhow::Result<()> {
+    row.category_id = Some(event.data.category_id);
     Ok(())
 }

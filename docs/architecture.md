@@ -176,7 +176,7 @@ pool as data unless noted:
 
 | Context | Subscription | Kind | Extra data |
 |---|---|---|---|
-| catalog | `product_list_subscription` | read model | |
+| catalog | `product_list_subscription`, `category_list_subscription` | read models | |
 | cart | `saved_cart_list_subscription` | read model | |
 | inventory | `stock_list_subscription`, `alert_list_subscription` | read models | |
 | inventory | `back_in_stock_subscription` | process | |
@@ -242,8 +242,16 @@ the SMTP relay.
   `timada_core::id::derived(&[key], kind)` — product (SKU), price / payment /
   shipment / invoice / fulfillment (order id), order (cart id), review
   (product, customer), alert (product, customer), discount / voucher (code),
-  credit note (refund event id), return (RMA number). Creating on a derived id
+  credit note (refund event id), return (RMA number), category (slug). Creating on a derived id
   with `evento::append(&id)` is an atomic create-unless-exists.
+- **Categories are managed, and their address is for ever.** A category's id
+  derives from its slug, so links never break whatever it is renamed to or
+  moved under; archiving one takes its whole branch off the storefront while
+  its products stay on sale. A product is filed under one category
+  (`ProductCategorised`, again to move it); the `category_path` of
+  `ProductCreated` is only the label from before — a shop with such history
+  calls `timada_catalog::adopt_category_paths` once, which opens the
+  categories those labels name and files the products.
 - **Companion events** carry what an event cannot gain: `OrderTaxed`,
   `OrderNumberAssigned`, `OrderDiscountApplied` are committed in the same batch
   as `OrderPlaced`. Consumers that need them load the view, not the payload.
