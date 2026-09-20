@@ -79,8 +79,9 @@ somebody ships it.
 
 The VAT section reads a quarter out of the issued invoices and the credit
 notes: the shop's own VAT by rate, the one-stop-shop (OSS) return by member
-state and rate with the corrections of earlier quarters, exports — and the OSS
-return as a CSV file.
+state and rate with the corrections of earlier quarters, the intra-community
+supplies to businesses of other member states (by buyer VAT number), exports —
+and the OSS return as a CSV file.
 
 The categories section is the shop's tree: opening a category (its address is
 definitive, its name is not), renaming, describing, moving a branch, ranking it

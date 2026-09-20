@@ -163,6 +163,7 @@ async fn place_order(h: &Harness) -> anyhow::Result<String> {
                 line_rates: vec![("aoc-24g4xe".into(), 2_000)],
                 shipping_rate_bp: 2_000,
             }),
+            business: None,
         })
         .await?;
     order_history_subscription()

@@ -6,7 +6,8 @@ use timada_core::{Address, Money};
 
 use crate::{
     aggregator::{
-        Invoice, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceTaxed, InvoiceVoided,
+        Invoice, InvoiceBuyerIdentified, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued,
+        InvoiceReverseCharged, InvoiceTaxed, InvoiceVoided,
     },
     value_object::{InvoiceDiscount, InvoiceLine, InvoiceStatus, InvoiceTax, invoice_total},
 };
@@ -28,6 +29,10 @@ pub struct InvoiceView {
     pub total: Money,
     /// The VAT per rate; `None` for invoices older than tax zones.
     pub tax: Option<InvoiceTax>,
+    /// The business the invoice is for; `None` for a consumer's.
+    pub company: Option<timada_tax::BusinessBuyer>,
+    /// The sale is an intra-community supply, exempt on this proof.
+    pub reverse_charge: Option<timada_tax::ReverseChargeProof>,
     pub status: InvoiceStatus,
     pub voided_reason: Option<String>,
     /// Unix seconds of `InvoiceDrafted`.
@@ -45,7 +50,10 @@ pub fn create_projection<E: Executor>() -> Projection<E, InvoiceView> {
         .handler(on_invoice_voided())
         // The view gained `tax`, then its dates: snapshots taken with a
         // previous shape must not be decoded.
-        .revision(2)
+        .handler(on_invoice_buyer_identified())
+        .handler(on_invoice_reverse_charged())
+        // …then `company` and `reverse_charge`.
+        .revision(3)
         .strict()
 }
 
@@ -104,6 +112,24 @@ async fn on_invoice_taxed(event: Event<InvoiceTaxed>, row: &mut InvoiceView) -> 
 }
 
 #[evento::handler]
+async fn on_invoice_buyer_identified(
+    event: Event<InvoiceBuyerIdentified>,
+    row: &mut InvoiceView,
+) -> anyhow::Result<()> {
+    row.company = Some(event.data.buyer);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoice_reverse_charged(
+    event: Event<InvoiceReverseCharged>,
+    row: &mut InvoiceView,
+) -> anyhow::Result<()> {
+    row.reverse_charge = Some(event.data.proof);
+    Ok(())
+}
+
+#[evento::handler]
 async fn on_invoice_issued(
     event: Event<InvoiceIssued>,
     row: &mut InvoiceView,
@@ -122,4 +148,13 @@ async fn on_invoice_voided(
     row.voided_reason = Some(event.data.reason);
     row.status = InvoiceStatus::Voided;
     Ok(())
+}
+
+impl InvoiceView {
+    /// What a page or a document says about the VAT regime of the invoice.
+    pub fn regime_mention(&self) -> Option<&'static str> {
+        self.tax.as_ref().and_then(|tax| {
+            timada_tax::regime_mention(tax.treatment, self.reverse_charge.is_some())
+        })
+    }
 }

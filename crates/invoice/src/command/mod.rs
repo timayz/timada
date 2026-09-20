@@ -12,7 +12,8 @@ use timada_core::Money;
 
 use crate::{
     aggregator::{
-        Invoice, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceTaxed, InvoiceVoided,
+        Invoice, InvoiceBuyerIdentified, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued,
+        InvoiceReverseCharged, InvoiceTaxed, InvoiceVoided,
     },
     error::InvoiceError,
     value_object::{InvoiceStatus, invoice_total},
@@ -62,6 +63,8 @@ fn create_projection<E: Executor>() -> Projection<E, InvoiceState> {
         .handler(on_invoice_drafted())
         .handler(on_invoice_discount_applied())
         .skip::<InvoiceTaxed>()
+        .skip::<InvoiceBuyerIdentified>()
+        .skip::<InvoiceReverseCharged>()
         .handler(on_invoice_issued())
         .handler(on_invoice_voided())
         .strict()

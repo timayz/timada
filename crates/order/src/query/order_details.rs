@@ -3,12 +3,13 @@
 
 use evento::{Executor, metadata::Event, projection::Projection};
 use timada_core::{Address, Money};
-use timada_tax::{TaxTreatment, VatLine};
+use timada_tax::{BusinessBuyer, ReverseChargeProof, TaxTreatment, VatLine};
 
 use crate::{
     aggregator::{
-        Order, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderNumberAssigned,
-        OrderPaid, OrderPlaced, OrderSettled, OrderShipped, OrderTaxed,
+        Order, OrderBuyerIdentified, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied,
+        OrderNumberAssigned, OrderPaid, OrderPlaced, OrderReverseCharged, OrderSettled,
+        OrderShipped, OrderTaxed,
     },
     value_object::{
         DeliveryChoice, OrderDiscount, OrderLine, OrderStatus, PaymentMode, Seller, order_total,
@@ -39,6 +40,11 @@ pub struct OrderDetailsView {
     pub discount: Option<OrderDiscount>,
     /// How the order was taxed; `None` for orders older than tax zones.
     pub tax: Option<OrderTaxSummary>,
+    /// The business the order is for; `None` for a consumer's.
+    pub buyer: Option<BusinessBuyer>,
+    /// The order is an intra-community supply, exempt on this proof; its
+    /// `tax` then says `Export`, and documents say "autoliquidation".
+    pub reverse_charge: Option<ReverseChargeProof>,
     pub total: Money,
     /// The code typed in the cart, honoured or not.
     pub promo_code: Option<String>,
@@ -63,9 +69,12 @@ pub fn create_projection<E: Executor>() -> Projection<E, OrderDetailsView> {
         .handler(on_order_confirmation_resent())
         .handler(on_order_number_assigned())
         .handler(on_order_taxed())
-        // The view gained `order_number`, then `tax`: snapshots taken with a
-        // previous shape must not be decoded.
-        .revision(2)
+        .handler(on_order_buyer_identified())
+        .handler(on_order_reverse_charged())
+        // The view gained `order_number`, then `tax`, then `buyer` and
+        // `reverse_charge`: snapshots taken with a previous shape must not be
+        // decoded.
+        .revision(3)
         .strict()
 }
 
@@ -141,7 +150,32 @@ async fn on_order_taxed(
     Ok(())
 }
 
+#[evento::handler]
+async fn on_order_buyer_identified(
+    event: Event<OrderBuyerIdentified>,
+    row: &mut OrderDetailsView,
+) -> anyhow::Result<()> {
+    row.buyer = Some(event.data.buyer);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_reverse_charged(
+    event: Event<OrderReverseCharged>,
+    row: &mut OrderDetailsView,
+) -> anyhow::Result<()> {
+    row.reverse_charge = Some(event.data.proof);
+    Ok(())
+}
+
 impl OrderDetailsView {
+    /// What a page or a document says about the VAT regime of the order.
+    pub fn regime_mention(&self) -> Option<&'static str> {
+        self.tax.as_ref().and_then(|tax| {
+            timada_tax::regime_mention(tax.treatment, self.reverse_charge.is_some())
+        })
+    }
+
     /// What to call the order in front of people: its number, or its id when
     /// it has none.
     pub fn display_number(&self) -> &str {

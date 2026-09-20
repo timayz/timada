@@ -60,6 +60,7 @@ fn order(
             line_rates: vec![("sku-1".into(), rate_bp)],
             shipping_rate_bp: rate_bp,
         }),
+        business: None,
     }
 }
 
@@ -242,5 +243,141 @@ async fn a_quarter_is_read_as_three_returns() -> anyhow::Result<()> {
     );
     assert_eq!(csv, expected);
     let _ = it;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reverse_charged_sale_is_neither_an_export_nor_the_one_stop_shops() -> anyhow::Result<()>
+{
+    use timada_invoice::{IntraCommunityLine, load_invoice_document};
+    use timada_tax::{BusinessBuyer, BusinessPurchase, REVERSE_CHARGE_MENTION, ReverseChargeProof};
+
+    let mut all = migrations();
+    all.extend(timada_order::migrations());
+    let (executor, db) = timada_core::testing::memory_executor(all).await?;
+    let orders = timada_order::Command(&executor);
+    let invoices = Command {
+        executor: &executor,
+        db: db.clone(),
+    };
+    let business = BusinessPurchase {
+        buyer: BusinessBuyer {
+            company_name: "Hermann GmbH".into(),
+            vat_number: "DE123456789".into(),
+        },
+        reverse_charge: Some(ReverseChargeProof {
+            consultation_ref: Some("WAPIAAAAY1X2Z3".into()),
+            checked_at: 1_789_000_000,
+        }),
+    };
+    // A reverse charge is a sale without VAT: refused on a taxed order.
+    let taxed = orders
+        .place_order(PlaceOrder {
+            business: Some(business.clone()),
+            ..order(
+                "cart-wrong",
+                "DE",
+                "de",
+                TaxTreatment::DestinationVat,
+                1_900,
+            )
+        })
+        .await;
+    assert!(taxed.is_err());
+
+    // To a German business, without VAT; to a French one, with — and named.
+    let exempt = orders
+        .place_order(PlaceOrder {
+            business: Some(business.clone()),
+            ..order("cart-b2b", "DE", "de", TaxTreatment::Export, 0)
+        })
+        .await?;
+    let domestic = orders
+        .place_order(PlaceOrder {
+            business: Some(BusinessPurchase {
+                buyer: BusinessBuyer {
+                    company_name: "Machines SARL".into(),
+                    vat_number: "FR40303265045".into(),
+                },
+                reverse_charge: None,
+            }),
+            ..order("cart-b2b-fr", "FR", "fr", TaxTreatment::Domestic, 2_000)
+        })
+        .await?;
+    let export = orders
+        .place_order(order(
+            "cart-mq",
+            "MQ",
+            "fr-overseas",
+            TaxTreatment::Export,
+            0,
+        ))
+        .await?;
+    invoice_from_orders_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    for order_id in [&exempt, &domestic, &export] {
+        invoices.issue_invoice(invoice_id(order_id)).await?;
+    }
+    vat_journal_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+
+    // The invoice names the business and says who owes the VAT.
+    let invoice = load_invoice(&executor, invoice_id(&exempt))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invoice missing"))?;
+    assert_eq!(invoice.company, Some(business.buyer.clone()));
+    assert_eq!(invoice.reverse_charge, business.reverse_charge);
+    assert_eq!(invoice.regime_mention(), Some(REVERSE_CHARGE_MENTION));
+    let issuer = timada_invoice::InvoiceIssuer::default();
+    let document = load_invoice_document(&executor, &db, &issuer, &invoice_id(&exempt))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no document"))?;
+    assert_eq!(
+        document.company_lines(),
+        ["Hermann GmbH", "N° TVA : DE123456789"]
+    );
+    assert_eq!(document.regime_mention, Some(REVERSE_CHARGE_MENTION));
+    assert!(!document.amounts_include_vat);
+    // A domestic business is named too; its VAT is the ordinary one.
+    let document = load_invoice_document(&executor, &db, &issuer, &invoice_id(&domestic))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no document"))?;
+    assert_eq!(document.company_lines()[1], "N° TVA : FR40303265045");
+    assert_eq!(document.regime_mention, None);
+
+    let now = VatPeriod::of(timada_core::time::now_unix_secs()?);
+    let report = vat_report(&db, now).await?;
+    assert_eq!(
+        report.intra_community,
+        [IntraCommunityLine {
+            country_code: "DE".into(),
+            buyer_vat_number: "DE123456789".into(),
+            base_minor: 12_000,
+        }]
+    );
+    assert!(report.oss.is_empty());
+    assert_eq!(report.exports_base_minor, 12_000, "the export alone");
+    assert_eq!(report.domestic, [line("FR", 2_000, 10_000, 2_000)]);
+
+    // A credit note on the exempt sale comes off the same line.
+    invoices
+        .issue_credit_note(IssueCreditNote {
+            refund_id: "refund-b2b".into(),
+            invoice_id: invoice_id(&exempt),
+            amount: Money::eur(2_000),
+            reason: "retour".into(),
+        })
+        .await?;
+    vat_journal_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    let report = vat_report(&db, now).await?;
+    assert_eq!(report.intra_community[0].base_minor, 10_000);
+    assert_eq!(report.exports_base_minor, 12_000);
     Ok(())
 }

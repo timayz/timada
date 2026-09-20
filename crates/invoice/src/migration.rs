@@ -140,6 +140,21 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0006VatJournalBuyer;
+
+sqlite_migration!(
+    M0006VatJournalBuyer,
+    "invoice",
+    "m0006_vat_journal_buyer",
+    vec_box![M0005VatJournal],
+    vec_box![(
+        // Who a reverse-charged sale was made to: what the recapitulative
+        // statement of customers lists.
+        "ALTER TABLE invoice_vat_journal ADD COLUMN buyer_vat_number TEXT",
+        "ALTER TABLE invoice_vat_journal DROP COLUMN buyer_vat_number"
+    )]
+);
+
 /// Write-side and read-model migrations for this context, to register
 /// alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
@@ -148,6 +163,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
         M0002InvoiceList,
         M0003CreditNoteNumber,
         M0004CreditNoteList,
-        M0005VatJournal
+        M0005VatJournal,
+        M0006VatJournalBuyer
     ]
 }

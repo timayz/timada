@@ -13,8 +13,9 @@ use evento::{Executor, Projection, metadata::Event};
 
 use crate::{
     aggregator::{
-        Order, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied, OrderNumberAssigned,
-        OrderPaid, OrderPlaced, OrderSettled, OrderShipped, OrderTaxed,
+        Order, OrderBuyerIdentified, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied,
+        OrderNumberAssigned, OrderPaid, OrderPlaced, OrderReverseCharged, OrderSettled,
+        OrderShipped, OrderTaxed,
     },
     error::OrderError,
     value_object::OrderStatus,
@@ -81,6 +82,8 @@ fn create_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_order_cancelled())
         .skip::<OrderNumberAssigned>()
         .skip::<OrderTaxed>()
+        .skip::<OrderBuyerIdentified>()
+        .skip::<OrderReverseCharged>()
         .skip::<OrderDiscountApplied>()
         .skip::<OrderConfirmationResent>()
         .strict()

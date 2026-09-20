@@ -43,6 +43,13 @@ fn order_lines(order: &OrderDetailsView) -> String {
         ));
     }
     match &order.tax {
+        Some(_) if order.reverse_charge.is_some() => {
+            lines.push(format!("  Total HT — {}", money(&order.total)));
+            lines.push(
+                "  Vente hors TVA : livraison intracommunautaire, TVA autoliquidée par votre entreprise."
+                    .to_owned(),
+            );
+        }
         Some(tax) if tax.treatment.exemption_mention().is_some() => {
             lines.push(format!("  Total HT — {}", money(&order.total)));
             lines.push(

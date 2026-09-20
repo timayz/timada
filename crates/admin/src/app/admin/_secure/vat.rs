@@ -90,6 +90,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let oss_sales_total = amount(report.oss.iter().map(|line| line.vat_minor).sum());
     let oss_total = amount(report.oss_vat_minor());
     let exports = amount(report.exports_base_minor);
+    let intra_community: Vec<(String, String, String)> = report
+        .intra_community
+        .iter()
+        .map(|line| {
+            (
+                line.country_code.clone(),
+                line.buyer_vat_number.clone(),
+                amount(line.base_minor),
+            )
+        })
+        .collect();
+    let intra_community_total = amount(
+        report
+            .intra_community
+            .iter()
+            .map(|line| line.base_minor)
+            .sum(),
+    );
 
     Ok(view! {
         page_header(
@@ -134,6 +152,32 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                         <p class="mt-4 text-sm">"TVA à déclarer au guichet unique : " <strong class="tabular-nums">(oss_total)</strong></p>
                         <p class="mt-4"><a href=(csv) class=(button_variants(ButtonVariant::Secondary, Default::default()))>"Télécharger la déclaration OSS (CSV)"</a></p>
+                    )
+                )
+                card(
+                    card_header(card_title("Livraisons intracommunautaires — entreprises d'autres États membres"))
+                    card_content(
+                        if intra_community.is_empty() {
+                            <p class="text-sm text-muted-foreground">"Rien à déclarer."</p>
+                        } else {
+                            table(
+                                table_header(table_row(
+                                    table_head("État membre") table_head("N° TVA de l'acquéreur")
+                                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Base HT")
+                                ))
+                                table_body(
+                                    for (country, buyer, base) in &intra_community {
+                                        table_row(
+                                            table_cell((country.clone()))
+                                            table_cell(<span class="font-mono text-xs">(buyer.clone())</span>)
+                                            table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (base.clone()))
+                                        )
+                                    }
+                                )
+                            )
+                            <p class="mt-2 text-right text-sm">"Total HT : " <strong class="tabular-nums">(intra_community_total)</strong></p>
+                            <p class="mt-2 text-sm text-muted-foreground">"Ventes exonérées, TVA autoliquidée par l'acquéreur : à reporter sur la déclaration de TVA et l'état récapitulatif des clients."</p>
+                        }
                     )
                 )
                 card(

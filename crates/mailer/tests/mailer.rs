@@ -409,6 +409,7 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
             discount: None,
             order_number: Some("C2026-000042".into()),
             tax: None,
+            business: None,
         })
         .await?;
     sync().await?;
@@ -658,6 +659,7 @@ async fn an_issued_invoice_is_emailed_as_a_pdf() -> anyhow::Result<()> {
         discount: None,
         order_number: Some(format!("C2026-{cart}")),
         tax: None,
+        business: None,
     };
     let invoices = || async {
         timada_invoice::invoice_from_orders_subscription()

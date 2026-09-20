@@ -458,7 +458,11 @@ fn lay_out(faces: &Faces, document: &InvoiceDocument) -> Vec<Vec<Mark>> {
 
     page.line(MARGIN, Weight::Regular, SMALL, Ink::Muted, "Facturé à");
     page.y += 2.0;
-    for entry in address_lines(&document.buyer) {
+    let bill_to = document
+        .company_lines()
+        .into_iter()
+        .chain(address_lines(&document.buyer));
+    for entry in bill_to {
         for line in faces.wrap(Weight::Regular, BODY, &entry, 280.0) {
             page.line(MARGIN, Weight::Regular, BODY, Ink::Text, &line);
         }
@@ -760,6 +764,7 @@ mod tests {
             order_id: "order-1".into(),
             order_label: "C2026-000042".into(),
             customer_id: "customer-1".into(),
+            company: None,
             buyer: Address {
                 first_name: "Ada".into(),
                 last_name: "Lovelace".into(),

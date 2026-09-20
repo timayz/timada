@@ -74,7 +74,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             )
         })
         .collect();
-    let vat_mention = invoice.tax.as_ref().and_then(|tax| tax.regime_mention());
+    let vat_mention = invoice.regime_mention();
     let mut lines = Vec::with_capacity(invoice.lines.len());
     for line in &invoice.lines {
         lines.push((
@@ -204,7 +204,13 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 card(
                     card_header(card_title("Facturé à"))
                     card_content(
-                        <div class="text-sm">address_lines(address: &invoice.billing_address)</div>
+                        <div class="text-sm">
+                            if let Some(company) = &invoice.company {
+                                <span class="block font-medium">(company.company_name.clone())</span>
+                                <span class="block font-mono text-xs">(company.vat_number.clone())</span>
+                            }
+                            address_lines(address: &invoice.billing_address)
+                        </div>
                     )
                 )
                 card(
@@ -237,6 +243,7 @@ pub async fn print(cx: &Cx) -> Result<impl View> {
         .ok_or_not_found()?;
 
     let title = format!("Facture {}", document.number);
+    let company_lines = document.company_lines();
     let back = href!(show, InvoiceId(id.clone())).resolve(cx);
     let (price_heading, total_heading) = if document.amounts_include_vat {
         ("Prix unitaire TTC", "Total TTC")
@@ -291,6 +298,7 @@ pub async fn print(cx: &Cx) -> Result<impl View> {
             </header>
             <section class="my-6">
                 <h2 class="text-muted-foreground">"Facturé à"</h2>
+                for line in &company_lines { <span class="block">(line.clone())</span> }
                 address_lines(address: &document.buyer)
             </section>
             <table class="w-full">

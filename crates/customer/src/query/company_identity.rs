@@ -10,7 +10,7 @@ use crate::aggregator::{
 };
 
 /// One answer of the VAT registry.
-#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VatCheckRecord {
     pub valid: bool,
     /// Unix seconds.
@@ -19,7 +19,13 @@ pub struct VatCheckRecord {
     pub registered_name: Option<String>,
 }
 
-#[evento::projection(bitcode::Encode, bitcode::Decode)]
+// Not snapshotted, on purpose: evento keys a snapshot by aggregate type,
+// revision and id — not by view — so a second snapshotted view of `Customer`
+// would overwrite the address book's snapshot, and each would fail to decode
+// the other's ("invalid packing"). A customer's stream is short; folding it
+// on every load costs nothing.
+#[evento::projection(id = customer_id)]
+#[evento::snapshot(none)]
 #[derive(Debug, PartialEq)]
 pub struct CompanyIdentityView {
     pub customer_id: String,

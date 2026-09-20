@@ -10,15 +10,16 @@ use serde::Deserialize;
 use timada_cart::{CartError, Checkout, DeliveryChoice, PaymentMode};
 use timada_customer::{AddressBookView, load_address_book};
 use timada_order::{
-    INSTALLMENT_HANDLING_FEE_MINOR, OrderDetailsView, OrderStatus, cancellation_reason_label,
-    lines_charged_in_zone, load_order_details, order_id,
+    INSTALLMENT_HANDLING_FEE_MINOR, OrderDetailsView, OrderStatus, ReverseChargePolicy,
+    business_purchase, cancellation_reason_label, lines_charged_in_zone, load_order_details,
+    order_id, refresh_vat_standing,
 };
 use timada_payment::{
     PaymentError, PaymentMethod, PaymentStart, PaymentStatus, ReturnUrls, load_payment, payment_id,
     start_payment,
 };
 use timada_shipping::delivery_offers;
-use timada_tax::TaxTreatment;
+use timada_tax::{TaxTreatment, reverse_charged};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -67,7 +68,14 @@ pub struct CheckoutForm {
     delivery_address_id: String,
     delivery_method: String,
     payment_mode: String,
+    /// `autoliquidation` when the page priced the order without VAT for a
+    /// business of another member state.
+    #[serde(default)]
+    regime: String,
 }
+
+/// What the form's `regime` field says of a reverse-charged order.
+const REVERSE_CHARGE_REGIME: &str = "autoliquidation";
 
 #[page(POST "/checkout")]
 pub async fn submit(cx: &Cx, Form(form): Form<CheckoutForm>) -> Result<impl View> {
@@ -134,6 +142,29 @@ async fn check_out(
     };
     if !zone.offers(offer.code) {
         return refuse("Ce mode de livraison ne dessert pas cette adresse.");
+    }
+    // A business buying without VAT: its number is asked about once more,
+    // and the order goes ahead only at the total the page showed — a number
+    // the registry no longer confirms (or confirms at last) changes it.
+    let policy = ReverseChargePolicy::default();
+    refresh_vat_standing(
+        &store.executor,
+        store.vat_validator.as_ref(),
+        &zones,
+        zone,
+        &account.customer_id,
+        &policy,
+    )
+    .await?;
+    let exempt = business_purchase(&store.executor, &zones, zone, &account.customer_id, &policy)
+        .await?
+        .is_some_and(|business| business.reverse_charge.is_some());
+    if exempt != (form.regime == REVERSE_CHARGE_REGIME) {
+        return refuse(if exempt {
+            "Le numéro de TVA de votre entreprise vient d'être confirmé : la commande est hors TVA. Vérifiez le nouveau total avant de valider."
+        } else {
+            "Le registre européen ne confirme plus le numéro de TVA de votre entreprise : la commande est soumise à la TVA. Vérifiez le nouveau total avant de valider."
+        });
     }
     let payment_mode = match form.payment_mode.as_str() {
         "card" => PaymentMode::Card,
@@ -225,6 +256,28 @@ async fn checkout_view(
         .and_then(|d| zones.zone_of(&d.address.country_code));
     // Without a deliverable address the cart is shown as listed.
     let pricing_zone = zone.unwrap_or_else(|| zones.default_zone());
+    // A business of another member state with a valid VAT number is priced
+    // without VAT — what the order will be placed at.
+    let business = business_purchase(
+        &store.executor,
+        &zones,
+        pricing_zone,
+        &account.customer_id,
+        &ReverseChargePolicy::default(),
+    )
+    .await?;
+    let reverse_charge = business
+        .as_ref()
+        .filter(|business| business.reverse_charge.is_some())
+        .map(|business| business.buyer.clone());
+    let exempt_zone;
+    let pricing_zone = match &reverse_charge {
+        Some(_) => {
+            exempt_zone = reverse_charged(pricing_zone);
+            &exempt_zone
+        }
+        None => pricing_zone,
+    };
 
     let charged =
         lines_charged_in_zone(&store.executor, &zones, pricing_zone, cart.lines.clone()).await?;
@@ -240,6 +293,13 @@ async fn checkout_view(
     }
     let promo = cart::promo_line_on(store, cart.promo_code.as_ref(), &subtotal).await?;
     let zone_notice = match pricing_zone.treatment {
+        TaxTreatment::Export if reverse_charge.is_some() => reverse_charge.as_ref().map(|buyer| {
+            format!(
+                "{} ({}) — livraison intracommunautaire : les prix ci-dessous sont hors taxes, \
+                     la TVA est autoliquidée par votre entreprise dans son pays.",
+                buyer.company_name, buyer.vat_number
+            )
+        }),
         TaxTreatment::Export => Some(format!(
             "Livraison {} : vente hors TVA française. Les prix ci-dessous sont hors taxes ; \
              d'éventuelles taxes locales sont à régler à la réception.",
@@ -272,6 +332,11 @@ async fn checkout_view(
     let handling_fee =
         timada_core::Money::new(INSTALLMENT_HANDLING_FEE_MINOR, &cart.subtotal.currency);
     let deliverable = zone.is_some();
+    let regime = if reverse_charge.is_some() {
+        REVERSE_CHARGE_REGIME
+    } else {
+        ""
+    };
 
     Ok(view! {
         document(
@@ -322,6 +387,7 @@ async fn checkout_view(
             if deliverable {
                 <form method="post" action=(href!(submit))>
                     <input type="hidden" name="delivery_address_id" value=(chosen_id.clone())>
+                    <input type="hidden" name="regime" value=(regime)>
                     <fieldset>
                         <legend>"Mode de livraison"</legend>
                         for (index, offer) in offers.iter().enumerate() {

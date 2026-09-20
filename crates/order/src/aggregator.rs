@@ -1,5 +1,5 @@
 use timada_core::{Address, Money};
-use timada_tax::{TaxTreatment, VatLine};
+use timada_tax::{BusinessBuyer, ReverseChargeProof, TaxTreatment, VatLine};
 
 use crate::value_object::{
     DeliveryChoice, FulfillmentLine, OrderLine, PaymentMode, PromoKind, Seller,
@@ -35,6 +35,17 @@ pub enum Order {
         treatment: TaxTreatment,
         vat_lines: Vec<VatLine>,
     },
+
+    /// The order is a business's: its name and VAT number, as its invoice
+    /// must show them. Committed together with `OrderPlaced`.
+    OrderBuyerIdentified { buyer: BusinessBuyer },
+
+    /// The order is an intra-community supply: exempt from the shop's VAT,
+    /// which the buyer accounts for at home. It is taxed like an export
+    /// (`OrderTaxed` says `Export`); this is what makes it a reverse charge —
+    /// the check of the buyer's VAT number it rests on. Committed together
+    /// with `OrderPlaced` and `OrderBuyerIdentified`.
+    OrderReverseCharged { proof: ReverseChargeProof },
 
     /// The cart's code was honoured: `amount` comes off the total. Committed
     /// together with `OrderPlaced`, never on its own.

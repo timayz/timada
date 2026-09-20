@@ -25,12 +25,14 @@
 //! [`VatNumberValidator`] asks the registry.
 
 mod breakdown;
+mod business;
 mod vat_number;
 #[cfg(feature = "vies")]
 mod vies;
 mod zone;
 
 pub use breakdown::*;
+pub use business::*;
 pub use vat_number::*;
 #[cfg(feature = "vies")]
 pub use vies::*;

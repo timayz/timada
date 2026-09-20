@@ -1023,7 +1023,7 @@ async fn order_view(
         .collect();
     let treatment = order.tax.as_ref().map(|tax| tax.treatment);
     let without_vat = treatment.is_some_and(|t| t.exemption_mention().is_some());
-    let vat_mention = treatment.and_then(|t| t.regime_mention());
+    let vat_mention = order.regime_mention();
     let mut line_totals = Vec::with_capacity(order.lines.len());
     for line in &order.lines {
         line_totals.push((line, money(&line.total()?)));
