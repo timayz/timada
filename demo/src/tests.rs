@@ -532,6 +532,65 @@ async fn cancelling_a_paid_order_refunds_it_with_a_credit_note() -> anyhow::Resu
     assert!(detail.contains("Remboursé"), "{detail}");
     assert!(detail.contains(&notes[0].credit_note_number), "{detail}");
     assert!(detail.contains("rupture fournisseur"), "{detail}");
+
+    // The credit note is a document of its own: the page links its PDF, which
+    // is the file the archive filed when the note was issued.
+    let note_uri = format!(
+        "/account/orders/{order_id}/credit-notes/{}",
+        notes[0].credit_note_id
+    );
+    assert!(detail.contains(&note_uri), "{detail}");
+    let pdf = browser.get(&note_uri).await;
+    assert_eq!(pdf.status(), StatusCode::OK);
+    let disposition = pdf
+        .headers()
+        .get("content-disposition")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(
+        disposition,
+        format!(
+            "attachment; filename=\"avoir-{}.pdf\"",
+            notes[0].credit_note_number
+        )
+    );
+    let downloaded = to_bytes(pdf.into_body(), usize::MAX)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    assert!(downloaded.starts_with(b"%PDF-"));
+    let (entry, archived) = timada_invoice::read_archived(
+        &store.db,
+        store.archive.0.as_ref(),
+        &notes[0].credit_note_id,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("credit note not archived"))?;
+    assert_eq!(entry.kind, "credit_note");
+    assert_eq!(downloaded.as_ref(), archived.as_slice());
+
+    // Nobody else's, and not under another order.
+    let mut other = Browser::new(&router);
+    other
+        .post(
+            "/login",
+            &format!(
+                "email={}&password={}",
+                seed::SHOPPER_EMAIL.replace('@', "%40"),
+                seed::SHOPPER_PASSWORD
+            ),
+        )
+        .await;
+    assert_eq!(other.get(&note_uri).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        browser
+            .get(&format!(
+                "/account/orders/{order_id}/credit-notes/{invoice_id}"
+            ))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     Ok(())
 }
 

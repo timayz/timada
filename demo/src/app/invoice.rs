@@ -1,10 +1,12 @@
 //! `/account/orders/{order_id}/invoice`: the shopper's invoice as a print-ready
 //! page — its own document, no shop header on an invoice — and
 //! `/account/orders/{order_id}/invoice.pdf`, the same document as a file the
-//! server renders ("Télécharger la facture").
+//! server renders ("Télécharger la facture"). Each credit note of the order
+//! is a file too: `/account/orders/{order_id}/credit-notes/{credit_note_id}`.
 
 use timada_invoice::{
-    ArchivePolicy, InvoiceDocument, archive_invoice, invoice_id, invoice_pdf_file_name,
+    ArchivePolicy, InvoiceDocument, archive_credit_note, archive_invoice,
+    credit_note_pdf_file_name, invoice_id, invoice_pdf_file_name, load_credit_note_document,
     load_invoice_document,
 };
 use timada_order::load_order_details;
@@ -14,7 +16,7 @@ use topcoat::{
     router::{
         Body,
         error::RouterErrorExt,
-        href, page, path_param as param,
+        href, page, path_param, path_param as param,
         response::{IntoResponse, Response},
         route,
     },
@@ -104,6 +106,41 @@ pub async fn pdf(cx: &Cx) -> Result<PdfDownload> {
     .ok_or_not_found()?;
     Ok(PdfDownload {
         file_name: invoice_pdf_file_name(&document),
+        bytes,
+    })
+}
+
+path_param!(pub credit_note_id: String, error = not_found);
+
+/// A credit note ("avoir") of the signed-in shopper's order, as the archived
+/// file. Someone else's order, or a credit note of another order, is a 404.
+#[route(GET "/account/orders/{order_id}/credit-notes/{credit_note_id}")]
+pub async fn credit_note_pdf(cx: &Cx) -> Result<PdfDownload> {
+    let account = require_account(cx).await?;
+    let order_id = param::<OrderId>(cx)?.clone();
+    let note_id = param::<CreditNoteId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    load_order_details(&store.executor, &order_id)
+        .await?
+        .filter(|order| order.customer_id == account.customer_id)
+        .ok_or_not_found()?;
+    let document = load_credit_note_document(&store.executor, &invoice_issuer(), &note_id)
+        .await?
+        .filter(|document| document.order_id == order_id)
+        .ok_or_not_found()?;
+    let (_, bytes) = archive_credit_note(
+        &store.executor,
+        &store.db,
+        store.archive.0.as_ref(),
+        &invoice_issuer(),
+        &note_id,
+        &ArchivePolicy::default(),
+    )
+    .await
+    .map_err(anyhow::Error::from)?
+    .ok_or_not_found()?;
+    Ok(PdfDownload {
+        file_name: credit_note_pdf_file_name(&document),
         bytes,
     })
 }

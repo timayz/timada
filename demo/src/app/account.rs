@@ -936,6 +936,12 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
             .await?
             .into_iter()
             .map(|note| CreditNoteLine {
+                file: href!(
+                    invoice::credit_note_pdf,
+                    OrderId(id.clone()),
+                    invoice::CreditNoteId(note.credit_note_id)
+                )
+                .resolve(cx),
                 number: note.credit_note_number,
                 issued: date(note.issued_at as u64),
                 amount: money(&timada_core::Money::new(note.amount_minor, note.currency)),
@@ -987,6 +993,8 @@ struct ReturnLink {
 
 /// One credit note ("avoir") as the order page shows it.
 struct CreditNoteLine {
+    /// Where its PDF is downloaded.
+    file: String,
     number: String,
     issued: String,
     amount: String,
@@ -1105,6 +1113,7 @@ async fn order_view(
                             <th scope="col">"Avoir"</th>
                             <th scope="col">"Date"</th>
                             <th scope="col" class="num">"Montant"</th>
+                            <th scope="col">"Document"</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1113,6 +1122,7 @@ async fn order_view(
                                 <th scope="row">(note.number.clone())</th>
                                 <td>(note.issued.clone())</td>
                                 <td class="num">(note.amount.clone())</td>
+                                <td><a href=(note.file.clone()) aria-label=(format!("Télécharger l'avoir {} (PDF)", note.number))>"Télécharger le PDF"</a></td>
                             </tr>
                         }
                     </tbody>

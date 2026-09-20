@@ -1,13 +1,15 @@
-//! The archive: an invoice's PDF filed once when it is issued, served
-//! unchanged afterwards, and checked against the hash it had then.
+//! The archive: the PDF of an invoice — and of each credit note — filed once
+//! when it is issued, served unchanged afterwards, and checked against the
+//! hash it had then.
 #![cfg(feature = "pdf")]
 
 use timada_core::{Address, Money};
 use timada_invoice::{
     ArchiveCheck, ArchiveError, ArchivePolicy, ArchiveStore, Command, DirectoryArchiveStore,
-    InvoiceArchive, InvoiceIssuer, IssueCreditNote, SqliteArchiveStore, archive_invoice,
-    archived_document, invoice_archive_subscription, invoice_from_orders_subscription, invoice_id,
-    migrations, read_archived, sha256_hex, verify_archived,
+    InvoiceArchive, InvoiceIssuer, IssueCreditNote, SqliteArchiveStore, archive_credit_note,
+    archive_invoice, archived_document, credit_note_archive_subscription, credit_note_id,
+    invoice_archive_subscription, invoice_from_orders_subscription, invoice_id,
+    load_credit_note_document, migrations, read_archived, sha256_hex, verify_archived,
 };
 use timada_order::{DeliveryChoice, OrderLine, PaymentMode, PlaceOrder, Seller};
 
@@ -188,6 +190,121 @@ async fn an_issued_invoice_is_filed_once_and_stays_what_it_was() -> anyhow::Resu
     );
     assert_eq!(verify_archived(&db, &store, "unknown").await?, None);
     assert!(archived_document(&db, "unknown").await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_credit_note_is_a_document_of_its_own_filed_like_its_invoice() -> anyhow::Result<()> {
+    let mut all = migrations();
+    all.extend(timada_order::migrations());
+    let (executor, db) = timada_core::testing::memory_executor(all).await?;
+    let store = SqliteArchiveStore::new(db.clone());
+
+    // 100,00 of goods and 5,90 of delivery, all at 20 %.
+    let mut taxed = order("cart-taxed");
+    taxed.tax = Some(timada_order::OrderTax {
+        zone_code: "fr".into(),
+        treatment: timada_tax::TaxTreatment::Domestic,
+        line_rates: vec![("sku-1".into(), 2_000)],
+        shipping_rate_bp: 2_000,
+    });
+    let order_id = timada_order::Command(&executor).place_order(taxed).await?;
+    invoice_from_orders_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    let invoice = invoice_id(&order_id);
+    let command = Command {
+        executor: &executor,
+        db: db.clone(),
+    };
+    command.issue_invoice(&invoice).await?;
+    let number = command
+        .issue_credit_note(IssueCreditNote {
+            refund_id: "refund-1".into(),
+            invoice_id: invoice.clone(),
+            amount: Money::eur(6_000),
+            reason: "return R2026-000003".into(),
+        })
+        .await?;
+    let note = credit_note_id("refund-1");
+
+    let document = load_credit_note_document(&executor, &issuer("Timada SAS"), &note)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no document"))?;
+    assert_eq!(document.number, number);
+    assert!(
+        document.invoice_number.starts_with('F'),
+        "{}",
+        document.invoice_number
+    );
+    assert!(document.invoice_issued_at.is_some());
+    assert_eq!(document.order_label, "C2026-000001");
+    assert_eq!(document.reason, "Retour R2026-000003");
+    assert_eq!(document.buyer, address());
+    assert_eq!(document.amount, Money::eur(6_000));
+    assert!(document.amounts_include_vat);
+    assert_eq!(document.total_excl_vat(), Some(Money::eur(5_000)));
+    assert_eq!(document.vat_total(), Some(Money::eur(1_000)));
+    assert!(
+        load_credit_note_document(&executor, &issuer("x"), "unknown")
+            .await?
+            .is_none()
+    );
+
+    credit_note_archive_subscription()
+        .data(db.clone())
+        .data(InvoiceArchive::new(store.clone()))
+        .data(issuer("Timada SAS"))
+        .run_once(&executor)
+        .await?;
+    let (entry, bytes) = read_archived(&db, &store, &note)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("not archived"))?;
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert_eq!(entry.kind, "credit_note");
+    assert_eq!(entry.number, document.number);
+    assert_eq!(
+        entry.storage_key,
+        format!(
+            "credit-note/{}/{}.pdf",
+            timada_core::time::year_of(document.issued_at),
+            document.number
+        )
+    );
+    assert_eq!(entry.sha256, sha256_hex(&bytes));
+    assert!(!entry.reconstituted);
+    assert_eq!(
+        verify_archived(&db, &store, &note).await?,
+        Some(ArchiveCheck::Intact)
+    );
+    // The invoice's own archive is another subscription's business.
+    assert!(archived_document(&db, &invoice).await?.is_none());
+
+    // Asked for again by an issuer who moved since: the file of the day.
+    let again = archive_credit_note(
+        &executor,
+        &db,
+        &store,
+        &issuer("Quelqu'un d'autre"),
+        &note,
+        &ArchivePolicy::default(),
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("not archived"))?;
+    assert_eq!(again, (entry, bytes));
+    assert!(
+        archive_credit_note(
+            &executor,
+            &db,
+            &store,
+            &issuer("x"),
+            "unknown",
+            &ArchivePolicy::default()
+        )
+        .await?
+        .is_none()
+    );
     Ok(())
 }
 

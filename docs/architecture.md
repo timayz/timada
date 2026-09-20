@@ -201,6 +201,7 @@ pool as data unless noted:
 | invoice | `invoice_list_subscription`, `credit_note_list_subscription` | read models | |
 | invoice | `vat_journal_subscription` | read model: the VAT of issued invoices and credit notes, per rate | |
 | invoice | `invoice_archive_subscription` (feature `pdf`) | files each issued invoice's PDF in the archive | `timada_invoice::InvoiceArchive`, `timada_invoice::InvoiceIssuer`; optionally an `ArchivePolicy` |
+| invoice | `credit_note_archive_subscription` (feature `pdf`) | files each credit note's PDF in the archive | same as `invoice_archive_subscription` |
 | returns | `return_processing_subscription` | process manager | |
 | returns | `return_list_subscription` | read model | |
 | mailer | `mailer_subscription` | ACL ← seven contexts (eight with `invoice-pdf`) | `timada_mailer::MailerConfig`, optionally `MailerTemplates`; with feature `invoice-pdf`, a `timada_invoice::InvoiceIssuer` turns on the invoice e-mail |
@@ -225,7 +226,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it. `default()` = France + overseas exports; `france_with_eu_oss()` adds the 26 other member states at their own VAT, reduced rates mapped by the host with `with_mapped_rate(zone, listed_bp, destination_bp)` |
 | `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `StripeProvider` (feature `stripe`), `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
 | `Arc<dyn timada_tax::VatNumberValidator>` | who says whether a business's VAT number is valid: `ViesValidator` (feature `vies`, the EU's registry — name the shop's own number and each check comes with its consultation number), `FormatValidator` (no registry: what reads well passes), `FakeValidator` in tests |
-| `timada_invoice::InvoiceArchive` | where issued invoices are kept unaltered: `SqliteArchiveStore` (in the database, replicated with it), `DirectoryArchiveStore` (files, the host's to back up), or the host's own `ArchiveStore`. Handed to the archive subscription, to the mailer (the e-mailed file is the archived one) and to `AdminServices::with_archive` |
+| `timada_invoice::InvoiceArchive` | where issued invoices and credit notes are kept unaltered: `SqliteArchiveStore` (in the database, replicated with it), `DirectoryArchiveStore` (files, the host's to back up), or the host's own `ArchiveStore`. Handed to both archive subscriptions, to the mailer (the e-mailed file is the archived one) and to `AdminServices::with_archive` |
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
@@ -309,6 +310,15 @@ the SMTP relay.
   Started on a shop with history, the subscription files every past invoice,
   flagged `reconstituted`: rendered with today's issuer and layout, honest
   about it, frozen from then on. Operational data, not events.
+- **A credit note is a document too.** `CreditNoteDocument` names the invoice
+  it corrects, both parties, the reason worded for the customer
+  (`credit_reason_label`) and the VAT that goes back — the amount spread over
+  the invoice's rates by the same `apportion_credit` the VAT journal uses, so
+  the paper and the return agree to the cent. `credit_note_archive_subscription`
+  files it under `credit-note/{year}/{number}.pdf` (index kind `credit_note`)
+  and `archive_credit_note` serves it, exactly like the invoice. It is its own
+  subscription so that a shop whose invoice archive already ran still gets
+  every past credit note filed.
 - **VAT is read from the documents.** `vat_journal_subscription` keeps a row
   per VAT rate of each *issued* invoice, and a negative one per credit note —
   its amount spread over the invoice's rates in proportion to what each was
@@ -370,8 +380,9 @@ the SMTP relay.
   (`timada_invoice::vat_report`, the admin's TVA section) adds up what was
   invoiced; filing it — and the rule that a quarter starts at midnight UTC,
   not Paris time — stays with the accountant.
-- An archive of **credit notes**: invoices are archived when they are issued;
-  a credit note has no document of its own yet (it shows as a line on its
-  invoice's page), so it has nothing to file.
+- The credit note **by e-mail**: the refund e-mail goes out on
+  `PaymentRefunded`, which is also what the credit note is issued from, so
+  attaching the file means a new e-mail on `CreditNoteIssued` — one more
+  message per refund, a choice left to the shop.
 - Upcasting of old event shapes: an evento feature, to build when the first
   `V2` event exists.
