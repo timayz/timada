@@ -7,6 +7,9 @@ repository.workspace = true
 
 [dependencies]
 timada-core.workspace = true
+timada-pricing.workspace = true
+timada-inventory.workspace = true
+timada-review.workspace = true
 evento.workspace = true
 bitcode.workspace = true
 anyhow.workspace = true
@@ -18,6 +21,7 @@ sqlx_migrator.workspace = true
 [dev-dependencies]
 timada-core = { workspace = true, features = ["test-support"] }
 tokio.workspace = true
+sqlx.workspace = true
 
 [lints]
 workspace = true

@@ -8,7 +8,10 @@ pub mod category;
 pub mod checkout;
 mod format;
 pub mod invoice;
+pub mod listing;
+pub mod media;
 pub mod returns;
+pub mod seo;
 #[cfg(feature = "stripe")]
 pub mod webhooks;
 
@@ -16,10 +19,30 @@ use topcoat::{
     Result,
     context::Cx,
     router::href,
-    view::{Child, View, component, view},
+    view::{Child, Unescaped, View, component, view},
 };
 
-use crate::{auth::current_account, cart_session::current_cart};
+use crate::{auth::current_account, cart_session::current_cart, db::mailer_config};
+
+/// What a page tells search engines about itself, beyond its title.
+#[derive(Debug, Clone, Default)]
+pub struct Head {
+    pub description: Option<String>,
+    /// The one address to keep for this content, as a path of the shop.
+    pub canonical: Option<String>,
+    /// `noindex,follow` for the endless variations of a listing.
+    pub robots: Option<&'static str>,
+    /// The pages before and after, in a paged series.
+    pub previous: Option<String>,
+    pub next: Option<String>,
+    /// A schema.org description, as JSON (see [`seo`]).
+    pub json_ld: Option<String>,
+}
+
+/// A path of the shop as the full address others must use.
+pub fn absolute(path: &str) -> String {
+    format!("{}{path}", mailer_config().base_url.trim_end_matches('/'))
+}
 
 const STYLES: &str = "\
 body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a1a}\
@@ -40,6 +63,17 @@ fieldset{border:1px solid #ddd;border-radius:.3rem;margin:0 0 1rem;padding:.75re
 nav.crumbs ol{display:flex;flex-wrap:wrap;gap:.25rem .5rem;list-style:none;padding:0;margin:0 0 1rem;color:#595959}\
 nav.crumbs li+li::before{content:'\\203A';margin-right:.5rem}\
 ul.tags{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;padding:0}ul.tags a{display:inline-block;border:1px solid #767676;border-radius:1rem;padding:.2rem .75rem;text-decoration:none}\
+.listing{display:grid;gap:1.5rem;grid-template-columns:minmax(0,1fr)}\
+@media(min-width:48rem){.listing{grid-template-columns:15rem minmax(0,1fr)}}\
+form.filters{display:grid;gap:.75rem;align-content:start}form.filters fieldset{display:grid;gap:.35rem;border:1px solid #ddd;border-radius:.3rem}\
+form.filters input[type=number],form.filters input[type=search],form.filters select{width:100%;box-sizing:border-box}\
+ul.products{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(12rem,1fr));list-style:none;padding:0;margin:0}\
+li.product{border:1px solid #ddd;border-radius:.3rem;padding:.75rem;display:grid;gap:.25rem;align-content:start}\
+li.product h2{font-size:1rem;margin:0}li.product p{margin:0}li.product .price{font-size:1.15rem}\
+li.product .thumb{display:block;aspect-ratio:1;background:#f4f4f4;border-radius:.2rem;overflow:hidden}\
+li.product img{width:100%;height:100%;object-fit:contain;display:block}\
+li.product .no-image{display:grid;place-items:center;height:100%;color:#595959;font-size:.85rem}\
+.in-stock{color:#176b2c;font-weight:500}\
 nav.pager{display:flex;gap:1rem;align-items:baseline;margin-top:1rem}\
 .cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}\
 .card{border:1px solid #ddd;border-radius:.3rem;padding:.75rem 1rem}.card address{font-style:normal}\
@@ -53,8 +87,15 @@ pub async fn document(
     cx: &Cx,
     title: &str,
     #[default] refresh: Option<u32>,
+    #[default] head: Option<&Head>,
     child: Child<'_>,
 ) -> Result<impl View> {
+    let head = head.cloned().unwrap_or_default();
+    let canonical = head.canonical.as_deref().map(absolute);
+    let previous = head.previous.as_deref().map(absolute);
+    let next = head.next.as_deref().map(absolute);
+    // Trusted: built by `seo`, which escapes everything it is given.
+    let json_ld = head.json_ld.map(Unescaped::new_unchecked);
     let account = match current_account(cx).await {
         Ok(account) => account.clone(),
         Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
@@ -76,11 +117,25 @@ pub async fn document(
                     <meta http-equiv="refresh" content=(seconds.to_string())>
                 }
                 <title>(title) " · Timada demo"</title>
+                if let Some(description) = &head.description {
+                    <meta name="description" content=(description.clone())>
+                }
+                if let Some(robots) = head.robots { <meta name="robots" content=(robots)> }
+                if let Some(canonical) = &canonical { <link rel="canonical" href=(canonical.clone())> }
+                if let Some(previous) = &previous { <link rel="prev" href=(previous.clone())> }
+                if let Some(next) = &next { <link rel="next" href=(next.clone())> }
+                if let Some(json_ld) = json_ld {
+                    <script type="application/ld+json">(json_ld)</script>
+                }
                 <style>(STYLES)</style>
             </head>
             <body>
                 <header>
                     <a href=(href!(catalog::home))><strong>"Timada demo"</strong></a>
+                    <form method="get" action=(href!(catalog::search)) role="search" class="inline">
+                        <input type="search" name="q" aria-label="Rechercher un produit" placeholder="Rechercher…" size="18">
+                        <button type="submit">"Chercher"</button>
+                    </form>
                     <nav aria-label="Principal">
                         <a href=(href!(cart::show))>"Panier (" (cart_count.to_string()) ")"</a>
                         match &account {

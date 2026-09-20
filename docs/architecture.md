@@ -32,6 +32,7 @@ Most contexts are leaves over `timada-core`. The ones that coordinate others:
 
 ```mermaid
 graph TD
+    catalog --> pricing & inventory & review
     order --> cart & inventory & payment & pricing & promotion & shipping & tax
     invoice --> order & payment & tax
     returns --> order & payment & inventory & promotion
@@ -40,8 +41,11 @@ graph TD
     admin --> everything[every context]
 ```
 
-`catalog`, `pricing`, `inventory`, `customer`, `cart`, `promotion`, `payment`,
-`shipping`, `review` and `tax` depend on `core` only. A leaf never learns about
+`pricing`, `inventory`, `customer`, `cart`, `promotion`, `payment`,
+`shipping`, `review` and `tax` depend on `core` only. `catalog` reads three of
+them for one thing: the **listing** the storefront browses
+(`catalog_listing`) carries each product's price, deliverable stock and
+rating, so that filtering, sorting and paging are a single query. A leaf never learns about
 the context that consumes it: `payment` knows nothing of orders beyond an
 opaque `order_id`.
 
@@ -177,6 +181,7 @@ pool as data unless noted:
 | Context | Subscription | Kind | Extra data |
 |---|---|---|---|
 | catalog | `product_list_subscription`, `category_list_subscription` | read models | |
+| catalog | `listing_subscription` | read model ← catalog, pricing, inventory, review | |
 | cart | `saved_cart_list_subscription` | read model | |
 | inventory | `stock_list_subscription`, `alert_list_subscription` | read models | |
 | inventory | `back_in_stock_subscription` | process | |
@@ -244,6 +249,16 @@ the SMTP relay.
   (product, customer), alert (product, customer), discount / voucher (code),
   credit note (refund event id), return (RMA number), category (slug). Creating on a derived id
   with `evento::append(&id)` is an atomic create-unless-exists.
+- **What the storefront lists is one table.** `listing_subscription` rewrites
+  a product's row — and its full-text entry (SQLite FTS5, accents folded,
+  prefixes matched) — with absolute values whenever the catalog, its price,
+  the warehouse's stock, a published review or its category's place changes.
+  `search_listing` answers a page, the total and the facets in one go; each
+  facet is counted with every *other* filter applied, so a second brand can
+  always be picked. A product is listed while it is not archived and has a
+  price; a product under an archived category stays listed under what is
+  above it. A new deployment of the subscription builds the table from the
+  whole history.
 - **Categories are managed, and their address is for ever.** A category's id
   derives from its slug, so links never break whatever it is renamed to or
   moved under; archiving one takes its whole branch off the storefront while
