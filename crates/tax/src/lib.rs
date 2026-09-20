@@ -19,9 +19,19 @@
 //!   mapping from the rates products are listed with to the country's reduced
 //!   ones. Opt-in through [`TaxZones::france_with_eu_oss`]; the default zones
 //!   stay France and its overseas territories.
+//!
+//! A business of another member state buys without the seller's VAT when its
+//! VAT number is valid there: [`VatNumber`] reads one, a
+//! [`VatNumberValidator`] asks the registry.
 
 mod breakdown;
+mod vat_number;
+#[cfg(feature = "vies")]
+mod vies;
 mod zone;
 
 pub use breakdown::*;
+pub use vat_number::*;
+#[cfg(feature = "vies")]
+pub use vies::*;
 pub use zone::*;

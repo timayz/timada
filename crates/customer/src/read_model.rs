@@ -10,8 +10,9 @@ use evento::{
 use sqlx::SqlitePool;
 
 use crate::aggregator::{
-    BillingAddressSet, CustomerEmailChanged, CustomerRegistered, DeliveryAddressAdded,
-    DeliveryAddressChanged, DeliveryAddressRemoved, PreferredDeliveryAddressChosen,
+    BillingAddressSet, CompanyIdentified, CompanyIdentityRemoved, CustomerEmailChanged,
+    CustomerRegistered, DeliveryAddressAdded, DeliveryAddressChanged, DeliveryAddressRemoved,
+    PreferredDeliveryAddressChosen, VatNumberChecked,
 };
 
 /// Subscription key; the caller attaches the pool with `.data(pool)`.
@@ -54,6 +55,9 @@ pub fn customer_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .skip::<DeliveryAddressChanged>()
         .skip::<DeliveryAddressRemoved>()
         .skip::<PreferredDeliveryAddressChosen>()
+        .skip::<CompanyIdentified>()
+        .skip::<CompanyIdentityRemoved>()
+        .skip::<VatNumberChecked>()
         .strict()
 }
 

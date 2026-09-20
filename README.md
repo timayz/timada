@@ -50,6 +50,7 @@ Environment of the demo:
 | `TIMADA_MAIL_FROM` | `Timada demo <no-reply@timada.example>` | |
 | `TIMADA_SMTP_URL` | — | with `--features smtp`, e-mails are sent instead of logged |
 | `TIMADA_PAYMENT_TIMEOUT_SECS` | `1800` | an unpaid order is cancelled and its stock released |
+| `TIMADA_VIES`, `TIMADA_VAT_NUMBER` | — | with `--features vies` and `TIMADA_VIES=1`, business customers' VAT numbers are checked against the EU's VIES registry; the shop's own number gets each check its consultation number |
 | `TIMADA_STRIPE_SECRET_KEY`, `TIMADA_STRIPE_PUBLISHABLE_KEY`, `TIMADA_STRIPE_WEBHOOK_SECRET` | — | with `--features stripe`, shoppers pay by card on the payment step and refunds go back through Stripe |
 
 To pay for real (in Stripe's test mode): build with `--features stripe`, set the
@@ -68,12 +69,12 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-catalog` | products — description, specs, media, archiving — the category tree they are filed under, and what the storefront lists: search, filters, facets, sorting |
 | `timada-pricing` | listed price (tax-inclusive) with its VAT rate, eco-participation, instalment offers |
 | `timada-inventory` | stock per product and location, reservations, returned stock, back-in-stock alerts |
-| `timada-customer` | customers, their e-mail, billing and delivery addresses; customer list |
+| `timada-customer` | customers, their e-mail, billing and delivery addresses, the company they buy as and its VAT number; customer list |
 | `timada-cart` | carts: lines with a price snapshot, promo code, saved carts, the checkout fact |
 | `timada-promotion` | promo codes (capped redemptions) and vouchers (balances) |
 | `timada-payment` | the payment of an order: requested, captured, declined, refunded — and the `PaymentProvider` port the money moves through, with a Stripe adapter behind the `stripe` feature |
 | `timada-shipping` | delivery methods and the shipment of an order |
-| `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate |
+| `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate; VAT numbers and the registry (VIES) that checks them |
 | `timada-order` | the order, the checkout ACL that places it, the fulfillment saga, payment timeouts |
 | `timada-invoice` | one invoice per order, legal numbering, credit notes, the invoice as a document — and, with the `pdf` feature, as a PDF file |
 | `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock and refund |

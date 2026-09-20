@@ -42,6 +42,29 @@ pub struct Store {
     /// webhook's signature is Stripe's own business, not the port's.
     #[cfg(feature = "stripe")]
     pub stripe: Option<std::sync::Arc<timada_payment::StripeProvider>>,
+    /// Who says whether a business's VAT number is valid.
+    pub vat_validator: std::sync::Arc<dyn timada_tax::VatNumberValidator>,
+}
+
+/// VIES when the demo is built with `--features vies` and `TIMADA_VIES=1`;
+/// `TIMADA_VAT_NUMBER`, the shop's own number, gets each check its
+/// consultation number. Otherwise any number that reads well passes.
+fn vat_validator() -> anyhow::Result<std::sync::Arc<dyn timada_tax::VatNumberValidator>> {
+    #[cfg(feature = "vies")]
+    if env::var("TIMADA_VIES").is_ok_and(|on| on == "1") {
+        let requester = match env::var("TIMADA_VAT_NUMBER") {
+            Ok(number) => Some(timada_tax::VatNumber::parse(&number)?),
+            Err(_) => None,
+        };
+        tracing::info!(
+            named = requester.is_some(),
+            "VAT numbers are checked against VIES"
+        );
+        return Ok(std::sync::Arc::new(timada_tax::ViesValidator::new(
+            requester,
+        )?));
+    }
+    Ok(std::sync::Arc::new(timada_tax::FormatValidator))
 }
 
 /// Stripe when `TIMADA_STRIPE_SECRET_KEY` is set (feature `stripe`), with
@@ -80,6 +103,7 @@ fn open_store(executor: evento::Sqlite, db: sqlx::SqlitePool) -> anyhow::Result<
             db,
             provider,
             stripe,
+            vat_validator: vat_validator()?,
         })
     }
     #[cfg(not(feature = "stripe"))]
@@ -93,6 +117,7 @@ fn open_store(executor: evento::Sqlite, db: sqlx::SqlitePool) -> anyhow::Result<
             executor,
             db,
             provider: std::sync::Arc::new(timada_payment::ManualProvider),
+            vat_validator: vat_validator()?,
         })
     }
 }

@@ -5,10 +5,23 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Check VAT numbers against VIES, the EU's registry.
+vies = ["dep:reqwest", "dep:serde", "dep:serde_json"]
+
 [dependencies]
 timada-core.workspace = true
 bitcode.workspace = true
 thiserror.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+axum = "0.8"
+anyhow.workspace = true
+serde_json = "1"
 
 [lints]
 workspace = true

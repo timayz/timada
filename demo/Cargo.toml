@@ -12,6 +12,8 @@ smtp = ["timada-mailer/smtp"]
 # Take payments through Stripe (`TIMADA_STRIPE_*`) instead of capturing them
 # by hand from the admin.
 stripe = ["timada-payment/stripe"]
+# Check business customers' VAT numbers against VIES (`TIMADA_VIES=1`).
+vies = ["timada-tax/vies"]
 
 [dependencies]
 timada-core.workspace = true
