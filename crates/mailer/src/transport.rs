@@ -24,7 +24,7 @@ pub struct LogTransport;
 impl Transport for LogTransport {
     fn send<'a>(&'a self, email: &'a Email) -> SendFuture<'a> {
         Box::pin(async move {
-            tracing::info!(to = %email.to, subject = %email.subject, body = %email.body, html = email.html_body.is_some(), "e-mail (not sent: log transport)");
+            tracing::info!(to = %email.to, subject = %email.subject, body = %email.body, html = email.html_body.is_some(), attachments = ?email.attachments, "e-mail (not sent: log transport)");
             Ok(())
         })
     }
@@ -64,7 +64,7 @@ pub use smtp::SmtpTransport;
 mod smtp {
     use lettre::{
         AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
-        message::{MultiPart, header::ContentType},
+        message::{Attachment, MultiPart, SinglePart, header::ContentType},
     };
 
     use super::{SendFuture, Transport};
@@ -102,14 +102,31 @@ mod smtp {
                         .parse()
                         .map_err(|_| MailError::InvalidMailbox(email.to.clone()))?)
                     .subject(email.subject.clone());
-                let message = match &email.html_body {
-                    Some(html) => message.multipart(MultiPart::alternative_plain_html(
-                        email.body.clone(),
-                        html.clone(),
-                    )),
-                    None => message
-                        .header(ContentType::TEXT_PLAIN)
-                        .body(email.body.clone()),
+                let text = || match &email.html_body {
+                    Some(html) => {
+                        MultiPart::alternative_plain_html(email.body.clone(), html.clone())
+                    }
+                    None => MultiPart::mixed().singlepart(SinglePart::plain(email.body.clone())),
+                };
+                let message = if email.attachments.is_empty() {
+                    match &email.html_body {
+                        Some(_) => message.multipart(text()),
+                        None => message
+                            .header(ContentType::TEXT_PLAIN)
+                            .body(email.body.clone()),
+                    }
+                } else {
+                    // multipart/mixed: what is read first, then the files.
+                    let mut mixed = MultiPart::mixed().multipart(text());
+                    for attachment in &email.attachments {
+                        let content_type = ContentType::parse(&attachment.content_type)
+                            .map_err(|err| MailError::Transport(err.to_string()))?;
+                        mixed = mixed.singlepart(
+                            Attachment::new(attachment.file_name.clone())
+                                .body(attachment.content.clone(), content_type),
+                        );
+                    }
+                    message.multipart(mixed)
                 }
                 .map_err(|err| MailError::Transport(err.to_string()))?;
                 self.inner

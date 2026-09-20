@@ -1030,9 +1030,28 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
         .filter(|m| m.recipient == "ada@example.com")
         .map(|m| m.kind.as_str())
         .collect();
-    for kind in ["return-approved", "return-completed", "refund"] {
+    for kind in [
+        "return-approved",
+        "return-completed",
+        "refund",
+        "invoice-issued",
+    ] {
         assert!(kinds.contains(&kind), "{kind} missing from {kinds:?}");
     }
+    // The invoice went out as a file, once the order was paid.
+    let invoice_mail = outbox
+        .iter()
+        .find(|m| m.kind == "invoice-issued")
+        .ok_or_else(|| anyhow::anyhow!("no invoice e-mail"))?;
+    assert!(
+        invoice_mail.subject.starts_with("Votre facture F"),
+        "{}",
+        invoice_mail.subject
+    );
+    let files = timada_mailer::outbox_attachments(&store.db, &invoice_mail.message_id).await?;
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].file_name.starts_with("facture-F"), "{files:?}");
+    assert!(files[0].size > 5_000, "{files:?}");
     let approved = outbox
         .iter()
         .find(|m| m.kind == "return-approved")

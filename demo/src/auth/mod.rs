@@ -148,6 +148,7 @@ pub async fn change_email(
             config.shop_name, config.shop_name
         ),
         html_body: None,
+        attachments: Vec::new(),
     };
     let message_id = timada_core::id::derived(
         &[&account.customer_id, &account.email, &new_email],
@@ -210,6 +211,7 @@ pub async fn change_password(
             config.shop_name, config.shop_name
         ),
         html_body: None,
+        attachments: Vec::new(),
     };
     let now = timada_core::time::now_unix_secs()?.to_string();
     let message_id = timada_core::id::derived(&[&account.customer_id, &now], "password-changed");

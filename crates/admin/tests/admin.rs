@@ -980,6 +980,10 @@ async fn the_outbox_is_listed_and_failed_emails_can_be_retried() -> anyhow::Resu
         subject: "Confirmation de votre commande C2026-000042".into(),
         body: "Bonjour Ada,\n\nMerci pour votre commande.".into(),
         html_body: None,
+        attachments: vec![timada_mailer::Attachment::pdf(
+            "facture-F2026-000042.pdf",
+            vec![0; 2_500],
+        )],
     };
     timada_mailer::enqueue(&h.db, "m-1", "order-confirmation", &email).await?;
 
@@ -1010,6 +1014,11 @@ async fn the_outbox_is_listed_and_failed_emails_can_be_retried() -> anyhow::Resu
     assert!(detail.contains("Merci pour votre commande."), "{detail}");
     assert!(detail.contains("relay down"), "{detail}");
     assert!(detail.contains("Réessayer"), "{detail}");
+    assert!(detail.contains("Pièces jointes"), "{detail}");
+    assert!(
+        detail.contains("facture-F2026-000042.pdf (3 Ko)"),
+        "{detail}"
+    );
 
     // An operator retries it; the next pass delivers.
     let retried = h
@@ -1027,6 +1036,11 @@ async fn the_outbox_is_listed_and_failed_emails_can_be_retried() -> anyhow::Resu
     .await?;
     assert!(detail.contains("Envoyé"), "{detail}");
     assert!(!detail.contains("Réessayer"), "{detail}");
+    // Sent: the file's bytes are gone, what it was is still shown.
+    assert!(
+        detail.contains("facture-F2026-000042.pdf (3 Ko)"),
+        "{detail}"
+    );
     let missing = h
         .router
         .handle(get("/admin/emails/nope", Some(&cookie)))

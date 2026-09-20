@@ -1,7 +1,7 @@
 //! `/{mount}/emails/{message_id}`: one e-mail as it was written, its delivery
 //! state, and a retry for the ones the relay refused too many times.
 
-use timada_mailer::{OutboxStatus, load_outbox_message, retry};
+use timada_mailer::{OutboxStatus, load_outbox_message, outbox_attachments, retry};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -32,6 +32,12 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .map_err(anyhow::Error::from)?
         .ok_or_not_found()?;
     let status = message.status();
+    let attachments: Vec<String> = outbox_attachments(&services.db, &id)
+        .await
+        .map_err(anyhow::Error::from)?
+        .into_iter()
+        .map(|file| format!("{} ({} Ko)", file.file_name, (file.size + 1_023) / 1_024))
+        .collect();
     let sent = message
         .sent_at
         .map_or_else(|| "—".to_owned(), |at| date(at.max(0) as u64));
@@ -77,6 +83,12 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             }
                             if message.html_body.is_some() {
                                 <div><dt class="text-muted-foreground">"Format"</dt><dd>"Texte et HTML"</dd></div>
+                            }
+                            if !attachments.is_empty() {
+                                <div>
+                                    <dt class="text-muted-foreground">"Pièces jointes"</dt>
+                                    for file in &attachments { <dd>(file.clone())</dd> }
+                                </div>
                             }
                             if let Some(error) = &message.last_error {
                                 <div><dt class="text-muted-foreground">"Dernière erreur"</dt><dd class="text-destructive">(error.clone())</dd></div>

@@ -12,7 +12,11 @@ use std::{
 
 use sqlx::SqlitePool;
 
-use crate::{email::Email, error::MailError, transport::Transport};
+use crate::{
+    email::{Attachment, Email},
+    error::MailError,
+    transport::Transport,
+};
 
 /// An e-mail that keeps failing is given up on after this many attempts.
 pub const MAX_ATTEMPTS: i64 = 5;
@@ -62,15 +66,26 @@ pub struct Delivery {
     pub failed: u32,
 }
 
-/// Queues an e-mail under `message_id`. Queuing the same id again is a
-/// no-op, which is what makes handlers safe to redeliver. Returns whether it
-/// was new.
+/// A file of a queued e-mail, without its bytes.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct AttachmentInfo {
+    pub file_name: String,
+    pub content_type: String,
+    /// Bytes, as queued.
+    pub size: i64,
+}
+
+/// Queues an e-mail under `message_id`, its attachments with it. Queuing the
+/// same id again is a no-op, which is what makes handlers safe to redeliver.
+/// Returns whether it was new.
 pub async fn enqueue(
     db: &SqlitePool,
     message_id: &str,
     kind: &str,
     email: &Email,
 ) -> Result<bool, MailError> {
+    // One transaction: an e-mail is never deliverable without its files.
+    let mut tx = db.begin().await?;
     let done = sqlx::query(
         "INSERT OR IGNORE INTO mailer_outbox
             (message_id, kind, sender, recipient, subject, body, html_body, created_at)
@@ -84,9 +99,60 @@ pub async fn enqueue(
     .bind(&email.body)
     .bind(&email.html_body)
     .bind(timada_core::time::now_unix_secs()? as i64)
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
-    Ok(done.rows_affected() > 0)
+    let new = done.rows_affected() > 0;
+    if new {
+        for (position, attachment) in email.attachments.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO mailer_attachment
+                    (message_id, position, file_name, content_type, size, content)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(message_id)
+            .bind(position as i64)
+            .bind(&attachment.file_name)
+            .bind(&attachment.content_type)
+            .bind(attachment.content.len() as i64)
+            .bind(&attachment.content)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(new)
+}
+
+/// What is attached to a queued e-mail, in order.
+pub async fn outbox_attachments(
+    db: &SqlitePool,
+    message_id: &str,
+) -> Result<Vec<AttachmentInfo>, MailError> {
+    Ok(sqlx::query_as(
+        "SELECT file_name, content_type, size FROM mailer_attachment
+         WHERE message_id = ? ORDER BY position",
+    )
+    .bind(message_id)
+    .fetch_all(db)
+    .await?)
+}
+
+async fn load_attachments(db: &SqlitePool, message_id: &str) -> Result<Vec<Attachment>, MailError> {
+    let rows: Vec<(String, String, Vec<u8>)> = sqlx::query_as(
+        "SELECT file_name, content_type, content FROM mailer_attachment
+         WHERE message_id = ? ORDER BY position",
+    )
+    .bind(message_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(file_name, content_type, content)| Attachment {
+            file_name,
+            content_type,
+            content,
+        })
+        .collect())
 }
 
 /// How the outbox is delivered.
@@ -193,6 +259,7 @@ pub async fn deliver_pending_with(
             subject: row.subject,
             body: row.body,
             html_body: row.html_body,
+            attachments: load_attachments(db, &row.message_id).await?,
         };
         let now = timada_core::time::now_unix_secs()? as i64;
         match transport.send(&email).await {
@@ -208,6 +275,11 @@ pub async fn deliver_pending_with(
                 .bind(&worker)
                 .execute(db)
                 .await?;
+                // Sent: the files' bytes have done their job.
+                sqlx::query("UPDATE mailer_attachment SET content = x'' WHERE message_id = ?")
+                    .bind(&row.message_id)
+                    .execute(db)
+                    .await?;
                 delivery.sent += 1;
             }
             Err(err) => {

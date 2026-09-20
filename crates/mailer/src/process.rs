@@ -35,9 +35,11 @@ pub const MAILER_SUBSCRIPTION: &str = "mailer";
 
 /// Needs the `SqlitePool` and a [`MailerConfig`] as subscription data, and
 /// takes a [`MailerTemplates`] the same way when the host words its own
-/// e-mails; the built-in French ones are used otherwise.
+/// e-mails; the built-in French ones are used otherwise. With the
+/// `invoice-pdf` feature, a `timada_invoice::InvoiceIssuer` handed as data
+/// turns on the e-mail that carries each issued invoice as a PDF.
 pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
-    SubscriptionBuilder::new(MAILER_SUBSCRIPTION)
+    let builder = SubscriptionBuilder::new(MAILER_SUBSCRIPTION)
         .handler(welcome_on_customer_registered())
         .handler(confirm_on_order_placed())
         .handler(confirm_again_on_confirmation_resent())
@@ -52,7 +54,10 @@ pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(notify_on_review_rejected())
         .handler(notify_on_return_approved())
         .handler(notify_on_return_refused())
-        .handler(notify_on_return_completed())
+        .handler(notify_on_return_completed());
+    #[cfg(feature = "invoice-pdf")]
+    let builder = builder.handler(invoice::send_on_invoice_issued());
+    builder
 }
 
 /// The subscription data and whether the event is recent enough to be worth
@@ -83,6 +88,18 @@ async fn queue(
     to: &str,
     content: Content,
 ) -> anyhow::Result<()> {
+    queue_with(db, config, event_id, kind, to, content, Vec::new()).await
+}
+
+async fn queue_with(
+    db: &SqlitePool,
+    config: &MailerConfig,
+    event_id: &str,
+    kind: &str,
+    to: &str,
+    content: Content,
+    attachments: Vec<crate::email::Attachment>,
+) -> anyhow::Result<()> {
     let message_id = timada_core::id::derived(&[event_id], kind);
     let email = Email {
         from: config.from.clone(),
@@ -90,6 +107,7 @@ async fn queue(
         subject: content.subject,
         body: content.body,
         html_body: content.html_body,
+        attachments,
     };
     if enqueue(db, &message_id, kind, &email).await? {
         tracing::info!(%message_id, %kind, "e-mail queued");
@@ -585,4 +603,61 @@ async fn notify_on_review_rejected<E: Executor>(
         content,
     )
     .await
+}
+
+#[cfg(feature = "invoice-pdf")]
+mod invoice {
+    use evento::{Executor, metadata::Event, subscription::Context};
+    use timada_invoice::{
+        InvoiceIssuer, aggregator::InvoiceIssued, invoice_document, invoice_pdf_file_name,
+        load_invoice, render_invoice_pdf,
+    };
+
+    use super::{order_and_customer, queue_with, setup};
+    use crate::email::Attachment;
+
+    /// `InvoiceIssued` → the invoice, as issued, in the customer's mailbox.
+    /// Opt-in: without an [`InvoiceIssuer`] in the subscription data there is
+    /// nobody to put at the top of the document, and nothing is sent.
+    #[evento::subscription]
+    pub(super) async fn send_on_invoice_issued<E: Executor>(
+        ctx: &Context<'_, E>,
+        event: Event<InvoiceIssued>,
+    ) -> anyhow::Result<()> {
+        let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+            return Ok(());
+        };
+        let Some(issuer) = ctx.get::<InvoiceIssuer>() else {
+            tracing::warn!(
+                invoice_id = %event.aggregate_id,
+                "no InvoiceIssuer in the mailer's data: invoice not e-mailed"
+            );
+            return Ok(());
+        };
+        let Some(invoice) = load_invoice(ctx.executor, &event.aggregate_id).await? else {
+            anyhow::bail!("invoice {} cannot be loaded", event.aggregate_id);
+        };
+        // The order itself gives its number: no read model to wait for.
+        let (order, to, first_name) = order_and_customer(ctx.executor, &invoice.order_id).await?;
+        let number = order.order_number.clone();
+        // As issued: credit notes come later and have their own e-mail.
+        let Some(document) = invoice_document(&issuer, invoice, number, Vec::new())? else {
+            // Voided since: there is no invoice to send any more.
+            return Ok(());
+        };
+
+        let content = templates.0.invoice_issued(&config, &first_name, &document);
+        let file_name = invoice_pdf_file_name(&document);
+        let pdf = tokio::task::spawn_blocking(move || render_invoice_pdf(&document)).await??;
+        queue_with(
+            &db,
+            &config,
+            &event.id.to_string(),
+            "invoice-issued",
+            &to,
+            content,
+            vec![Attachment::pdf(file_name, pdf)],
+        )
+        .await
+    }
 }

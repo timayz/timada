@@ -403,3 +403,34 @@ pub(crate) fn question_refused(
         ),
     )
 }
+
+#[cfg(feature = "invoice-pdf")]
+pub(crate) fn invoice_issued(
+    config: &MailerConfig,
+    first_name: &str,
+    invoice: &timada_invoice::InvoiceDocument,
+) -> Content {
+    let heading = if invoice.amounts_include_vat {
+        "Total TTC"
+    } else {
+        "Total HT"
+    };
+    (
+        format!("Votre facture {}", invoice.number),
+        signed(
+            config,
+            first_name,
+            &[
+                format!(
+                    "Votre commande {} est réglée : vous trouverez sa facture {} en pièce jointe (PDF).",
+                    invoice.order_label, invoice.number
+                ),
+                format!("  {heading} — {}", money(&invoice.total)),
+                format!(
+                    "Elle reste disponible dans votre compte : {}",
+                    config.url(&format!("/account/orders/{}", invoice.order_id))
+                ),
+            ],
+        ),
+    )
+}

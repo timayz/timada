@@ -60,7 +60,31 @@ sqlite_migration!(
     ]
 );
 
-/// The outbox table, to register alongside evento's migrations.
+pub struct M0003Attachments;
+
+// The files of an e-mail, queued with it. `size` outlives `content`, which is
+// emptied once the e-mail is sent: what was attached can be produced again,
+// the outbox is not an archive.
+sqlite_migration!(
+    M0003Attachments,
+    "mailer",
+    "m0003_attachments",
+    vec_box![M0002OutboxDelivery],
+    vec_box![(
+        "CREATE TABLE mailer_attachment (
+            message_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            file_name TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            content BLOB NOT NULL,
+            PRIMARY KEY (message_id, position)
+        )",
+        "DROP TABLE mailer_attachment"
+    )]
+);
+
+/// The outbox tables, to register alongside evento's migrations.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001Outbox, M0002OutboxDelivery]
+    vec_box![M0001Outbox, M0002OutboxDelivery, M0003Attachments]
 }

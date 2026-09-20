@@ -71,7 +71,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-invoice` | one invoice per order, legal numbering, credit notes, the invoice as a document — and, with the `pdf` feature, as a PDF file |
 | `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock and refund |
 | `timada-review` | product reviews (moderated) and questions & answers |
-| `timada-mailer` | transactional e-mails through a SQL outbox and pluggable transports |
+| `timada-mailer` | transactional e-mails (with attachments) through a SQL outbox and pluggable transports; feature `invoice-pdf` e-mails each issued invoice as a PDF |
 | `timada-admin` | the mountable back-office over all of the above |
 
 `tools/event-lock` keeps the persisted shapes append-only, and `demo/` is the
