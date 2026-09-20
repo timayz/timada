@@ -1046,6 +1046,77 @@ async fn stripe_webhooks_are_verified_then_capture_the_payment() -> anyhow::Resu
 }
 
 #[tokio::test]
+async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+
+    // The top of the tree is the way in.
+    let home = text(browser.get("/").await).await?;
+    assert!(home.contains("href=\"/c/informatique\""), "{home}");
+    assert!(!home.contains("href=\"/c/ecran-pc\""), "{home}");
+
+    // A category shows what is under it, products of its subcategories included.
+    let department = text(browser.get("/c/informatique").await).await?;
+    assert!(
+        department.contains("href=\"/c/peripheriques\""),
+        "{department}"
+    );
+    assert!(
+        department.contains(&format!("/p/{product_id}")),
+        "{department}"
+    );
+    assert!(department.contains("1 produit(s)"), "{department}");
+
+    // The trail links every step but the page itself.
+    let leaf = text(browser.get("/c/ecran-pc?page=9").await).await?;
+    assert!(
+        leaf.contains("aria-label=\"Fil d&#x27;Ariane\"")
+            || leaf.contains("aria-label=\"Fil d'Ariane\""),
+        "{leaf}"
+    );
+    assert!(leaf.contains("<a href=\"/c/ecran-ordinateur\">"), "{leaf}");
+    assert!(
+        leaf.contains("<li aria-current=\"page\">Écran PC</li>"),
+        "{leaf}"
+    );
+    assert!(leaf.contains(&format!("/p/{product_id}")), "{leaf}");
+
+    // From a product, the way back up — its own category linked too.
+    let product = text(browser.get(&format!("/p/{product_id}")).await).await?;
+    assert!(
+        product.contains("<a href=\"/c/ecran-pc\">Écran PC</a>"),
+        "{product}"
+    );
+
+    // An archived branch leaves the shop with what is under it; the product
+    // stays on sale, under the label it was created with.
+    timada_catalog::Command(&store.executor)
+        .archive_category(timada_catalog::category_id("peripheriques"))
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    for gone in ["/c/peripheriques", "/c/ecran-pc", "/c/nowhere"] {
+        assert_eq!(
+            browser.get(gone).await.status(),
+            StatusCode::NOT_FOUND,
+            "{gone}"
+        );
+    }
+    let department = text(browser.get("/c/informatique").await).await?;
+    assert!(!department.contains("/c/peripheriques"), "{department}");
+    assert!(department.contains("Aucun produit"), "{department}");
+    let product = browser.get(&format!("/p/{product_id}")).await;
+    assert_eq!(product.status(), StatusCode::OK);
+    let product = text(product).await?;
+    assert!(!product.contains("/c/ecran-pc"), "{product}");
+    assert!(
+        product.contains("Informatique &gt; Périphériques")
+            || product.contains("Informatique > Périphériques"),
+        "{product}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn an_order_left_unpaid_is_cancelled_and_the_shopper_told() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);

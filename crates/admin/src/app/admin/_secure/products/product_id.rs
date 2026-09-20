@@ -1,7 +1,9 @@
 //! `/{mount}/products/{product_id}`: content, price, stock and the editing actions.
 
 use serde::Deserialize;
-use timada_catalog::{DescribeProduct, ProductPageView, load_product_page};
+use timada_catalog::{
+    CatalogError, DescribeProduct, ProductPageView, category_lineage, load_product_page,
+};
 use timada_core::Money;
 use timada_inventory::{StockLocation, stock_item_id};
 use timada_pricing::{InstallmentOffer, load_product_price, price_id};
@@ -16,6 +18,7 @@ use topcoat::{
 };
 
 use crate::{
+    app::admin::_secure::categories::{category_options, category_select},
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -53,6 +56,17 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     )
     .await?;
     let rating = timada_review::product_rating(&services.db, &id).await?;
+    // Where the product is filed; the label it was created with until then.
+    let filed_under = match &product.category_id {
+        Some(category_id) => category_lineage(&services.db, category_id)
+            .await?
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>()
+            .join(" > "),
+        None => product.category_path.join(" > "),
+    };
+    let categories = category_options(cx, None).await?;
 
     Ok(view! {
         page_header(
@@ -60,7 +74,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             if product.archived { <span class="text-sm text-muted-foreground">"Archivé"</span> }
         )
         <p class="-mt-4 mb-6 text-sm text-muted-foreground">
-            (product.brand.name.clone()) " · " (product.sku.clone()) " · " (product.category_path.join(" > "))
+            (product.brand.name.clone()) " · " (product.sku.clone()) " · " (filed_under)
             " · garantie " (product.warranty_months.to_string()) " mois"
         </p>
 
@@ -136,6 +150,20 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     )
                 )
                 if !product.archived {
+                    card(
+                        card_header(card_title("Catégorie"))
+                        card_content(
+                            if categories.is_empty() {
+                                <p class="text-sm text-muted-foreground">"Aucune catégorie ouverte : créez-en une dans la section Catégories."</p>
+                            } else {
+                                <form method="post" action=(href!(categorise, ProductId(id.clone()))) class="flex flex-col gap-3">
+                                    label(attrs: topcoat::view::attributes! { for="category_id" }, "Rangé sous")
+                                    category_select(name: "category_id", options: &categories, selected: product.category_id.as_deref(), none_label: product.category_id.is_none().then_some("— non rangé —"))
+                                    <div>button(variant: ButtonVariant::Secondary, attrs: topcoat::view::attributes! { type="submit" }, "Ranger")</div>
+                                </form>
+                            }
+                        )
+                    )
                     <form method="post" action=(href!(archive, ProductId(id.clone())))>
                         button(variant: ButtonVariant::Destructive, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Archiver le produit")
                     </form>
@@ -216,5 +244,28 @@ pub async fn archive(cx: &Cx) -> Result<impl View> {
     timada_catalog::Command(&services.executor)
         .archive_product(&id)
         .await?;
+    Err::<(), _>(see_other(back(cx, &id)).into())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CategoriseForm {
+    category_id: String,
+}
+
+/// Files the product under a category; a category archived in the meantime
+/// leaves it where it was.
+#[page(POST "./categorise")]
+pub async fn categorise(cx: &Cx, Form(form): Form<CategoriseForm>) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    if !form.category_id.is_empty() {
+        let filed = timada_catalog::Command(&services.executor)
+            .categorise_product(&id, form.category_id)
+            .await;
+        match filed {
+            Ok(_) | Err(CatalogError::CategoryArchived | CatalogError::CategoryNotFound) => {}
+            Err(err) => return Err(anyhow::Error::from(err).into()),
+        }
+    }
     Err::<(), _>(see_other(back(cx, &id)).into())
 }

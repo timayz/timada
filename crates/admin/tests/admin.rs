@@ -1251,3 +1251,188 @@ async fn returns_are_reviewed_and_received_from_the_queue() -> anyhow::Result<()
     assert!(text(order_page).await?.contains(&rma));
     Ok(())
 }
+
+#[tokio::test]
+async fn categories_are_managed_and_products_filed_under_them() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let sync = || async {
+        timada_catalog::category_list_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await?;
+        timada_catalog::product_list_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await
+    };
+
+    let empty = text(
+        h.router
+            .handle(get("/admin/categories", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(empty.contains("Aucune catégorie."), "{empty}");
+
+    // Opened from the form; the address comes from the name when left empty.
+    let created = h
+        .router
+        .handle(post(
+            "/admin/categories/new",
+            "name=Informatique&slug=&parent_id=",
+            Some(&cookie),
+        ))
+        .await;
+    let computing = timada_catalog::category_id("informatique");
+    assert_eq!(location(&created), format!("/admin/categories/{computing}"));
+    sync().await?;
+    let created = h
+        .router
+        .handle(post(
+            "/admin/categories/new",
+            &format!("name=%C3%89crans+PC&slug=ecrans&parent_id={computing}"),
+            Some(&cookie),
+        ))
+        .await;
+    let screens = timada_catalog::category_id("ecrans");
+    assert_eq!(location(&created), format!("/admin/categories/{screens}"));
+    sync().await?;
+
+    // A taken address is a message on the form, not an error page.
+    let taken = h
+        .router
+        .handle(post(
+            "/admin/categories/new",
+            "name=Informatique+bis&slug=informatique&parent_id=",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(taken.status(), StatusCode::OK);
+    let taken = text(taken).await?;
+    assert!(taken.contains("déjà celle d"), "{taken}");
+
+    let tree = text(
+        h.router
+            .handle(get("/admin/categories", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(tree.contains("Informatique"), "{tree}");
+    assert!(tree.contains("Écrans PC"), "{tree}");
+    assert!(tree.contains("padding-left:1.25rem"), "{tree}");
+
+    // Renamed and described in one go; under itself is refused with a message.
+    let uri = format!("/admin/categories/{screens}");
+    let updated = h
+        .router
+        .handle(post(
+            &format!("{uri}/update"),
+            &format!(
+                "name=Moniteurs&description=Du+bureau+au+jeu.&parent_id={computing}&position=2"
+            ),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&updated), uri);
+    sync().await?;
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(
+        page.contains("Informatique &gt; Moniteurs") || page.contains("Informatique > Moniteurs"),
+        "{page}"
+    );
+    assert!(page.contains("/c/") && page.contains("ecrans"), "{page}");
+    assert!(page.contains("Du bureau au jeu."), "{page}");
+    let knot = h
+        .router
+        .handle(post(
+            &format!("/admin/categories/{computing}/update"),
+            &format!("name=Informatique&description=&parent_id={screens}&position=0"),
+            Some(&cookie),
+        ))
+        .await;
+    let back = location(&knot);
+    assert!(back.contains("?error="), "{back}");
+    let refused = text(h.router.handle(get(&back, Some(&cookie))).await).await?;
+    assert!(refused.contains("sous elle-même"), "{refused}");
+
+    // A product is created in a category, then filed elsewhere from its page.
+    let new_form = text(
+        h.router
+            .handle(get("/admin/products/new", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(new_form.contains("— Moniteurs"), "{new_form}");
+    let created = h
+        .router
+        .handle(post(
+            "/admin/products/new",
+            &format!(
+                "sku=aoc-24&name=AOC+24&brand=AOC&category_id={screens}&short_description=&warranty_months=24&price_cents=11995&vat_rate_bp=2000&eco_participation_cents=0"
+            ),
+            Some(&cookie),
+        ))
+        .await;
+    let product_uri = location(&created);
+    let product_id = timada_catalog::product_id("AOC-24");
+    assert_eq!(product_uri, format!("/admin/products/{product_id}"));
+    sync().await?;
+    let product = timada_catalog::load_product_page(&h.executor, &product_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("product missing"))?;
+    assert_eq!(product.category_id.as_deref(), Some(screens.as_str()));
+    assert_eq!(product.category_path, ["Informatique", "Moniteurs"]);
+    let product_page = text(h.router.handle(get(&product_uri, Some(&cookie))).await).await?;
+    assert!(product_page.contains("Rangé sous"), "{product_page}");
+
+    let moved = h
+        .router
+        .handle(post(
+            &format!("{product_uri}/categorise"),
+            &format!("category_id={computing}"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&moved), product_uri);
+    sync().await?;
+    let tree = text(
+        h.router
+            .handle(get("/admin/categories", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(tree.contains("Moniteurs"), "{tree}");
+
+    // Archived: marked in the tree, gone from the pickers, nothing left to edit.
+    let archived = h
+        .router
+        .handle(post(&format!("{uri}/archive"), "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&archived), uri);
+    sync().await?;
+    let tree = text(
+        h.router
+            .handle(get("/admin/categories", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(tree.contains("archivée"), "{tree}");
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("Archivée"), "{page}");
+    assert!(!page.contains("Archiver la catégorie"), "{page}");
+    let new_form = text(
+        h.router
+            .handle(get("/admin/products/new", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(!new_form.contains("Moniteurs"), "{new_form}");
+
+    let missing = h
+        .router
+        .handle(get("/admin/categories/nope", Some(&cookie)))
+        .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}

@@ -1,7 +1,7 @@
 # timada-admin
 
 A [topcoat](https://github.com/tokio-rs/topcoat) admin for the timada contexts
-(orders, products, stock, customers, promotions, invoices, refunds, returns,
+(orders, products, categories, stock, customers, promotions, invoices, refunds, returns,
 reviews, questions, e-mails) that you mount into your own app — a topcoat app or any tower/axum
 app.
 
@@ -44,6 +44,7 @@ at `/admin/login`. Sessions use a dedicated `__Host-timada_admin` cookie.
 The listings read the contexts' SQL read models, so the host must run their
 subscriptions: `timada_order::order_history_subscription`,
 `timada_catalog::product_list_subscription`,
+`timada_catalog::category_list_subscription`,
 `timada_inventory::stock_list_subscription`,
 `timada_customer::customer_list_subscription`,
 `timada_promotion::code_list_subscription`,
@@ -68,6 +69,11 @@ replaced it. The refunds section is the journal of the refunds made. Invoices ar
 read-only: orders drive their lifecycle, and every refund is documented by a
 credit note shown under its invoice, provided the host runs
 `timada_invoice::credit_notes_from_refunds_subscription`.
+
+The categories section is the shop's tree: opening a category (its address is
+definitive, its name is not), renaming, describing, moving a branch, ranking it
+among its siblings, archiving it. Products are filed from their own page, or
+when they are created.
 
 Reviews wait in the reviews section until an operator publishes or rejects
 them; only published ones reach the storefront and the product rating. Product

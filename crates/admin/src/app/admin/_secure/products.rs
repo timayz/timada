@@ -4,7 +4,8 @@ pub mod product_id;
 
 use serde::Deserialize;
 use timada_catalog::{
-    Brand, CreateProduct, ListProducts, ProductListRow, count_products, list_products,
+    Brand, CreateProduct, ListProducts, ProductListRow, category_lineage, count_products,
+    list_products,
 };
 use timada_core::Money;
 use timada_pricing::ListPrice;
@@ -16,6 +17,7 @@ use topcoat::{
 };
 
 use crate::{
+    app::admin::_secure::categories::{category_options, category_select},
     components::{
         button::{ButtonVariant, button, button_variants},
         card::{card, card_content},
@@ -101,7 +103,7 @@ pub struct NewProductForm {
     sku: String,
     name: String,
     brand: String,
-    category_path: String,
+    category_id: String,
     short_description: String,
     warranty_months: u16,
     price_cents: i64,
@@ -117,8 +119,19 @@ pub async fn new() -> Result<impl View> {
 #[page(POST "./new")]
 pub async fn create(cx: &Cx, Form(form): Form<NewProductForm>) -> Result<impl View> {
     let services = app_context::<AdminServices>(cx);
-    let slug = form.brand.trim().to_lowercase().replace(' ', "-");
-    let created = timada_catalog::Command(&services.executor)
+    let slug = timada_core::slug::slugify(&form.brand);
+    // The label a product is created with is its category's breadcrumb.
+    let category_id = Some(form.category_id).filter(|id| !id.is_empty());
+    let category_path = match &category_id {
+        Some(id) => category_lineage(&services.db, id)
+            .await?
+            .into_iter()
+            .map(|category| category.name)
+            .collect(),
+        None => Vec::new(),
+    };
+    let catalog = timada_catalog::Command(&services.executor);
+    let created = catalog
         .create_product(CreateProduct {
             sku: form.sku,
             name: form.name,
@@ -126,18 +139,19 @@ pub async fn create(cx: &Cx, Form(form): Form<NewProductForm>) -> Result<impl Vi
                 name: form.brand.trim().to_owned(),
                 slug,
             },
-            category_path: form
-                .category_path
-                .split('>')
-                .map(|s| s.trim().to_owned())
-                .filter(|s| !s.is_empty())
-                .collect(),
+            category_path,
             short_description: form.short_description,
             warranty_months: form.warranty_months,
         })
         .await;
     let error = match created {
         Ok(id) => {
+            if let Some(category_id) = category_id
+                && let Err(err) = catalog.categorise_product(&id, category_id).await
+            {
+                // Archived in between: the product exists, to be filed later.
+                tracing::warn!(product_id = %id, %err, "new product not filed");
+            }
             let priced = timada_pricing::Command(&services.executor)
                 .list_price(ListPrice {
                     product_id: id.clone(),
@@ -161,6 +175,7 @@ pub async fn create(cx: &Cx, Form(form): Form<NewProductForm>) -> Result<impl Vi
 
 #[topcoat::view::component]
 async fn new_product_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
+    let categories = category_options(cx, None).await?;
     Ok(view! {
         page_header(title: "Nouveau produit")
         <div class="max-w-2xl">
@@ -169,7 +184,10 @@ async fn new_product_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
                     field(name: "sku", label_text: "Référence (SKU)", attrs: topcoat::view::attributes! { required=(true) })
                     field(name: "name", label_text: "Nom", attrs: topcoat::view::attributes! { required=(true) })
                     field(name: "brand", label_text: "Marque", attrs: topcoat::view::attributes! { required=(true) })
-                    field(name: "category_path", label_text: "Catégorie (A > B > C)", attrs: topcoat::view::attributes! {})
+                    <div class="flex flex-col gap-1.5">
+                        label(attrs: topcoat::view::attributes! { for="category_id" }, "Catégorie")
+                        category_select(name: "category_id", options: &categories, selected: None, none_label: Some("— à ranger plus tard —"))
+                    </div>
                     <div class="sm:col-span-2">
                         field(name: "short_description", label_text: "Description courte", attrs: topcoat::view::attributes! {})
                     </div>

@@ -4,6 +4,7 @@
 pub mod account;
 pub mod cart;
 pub mod catalog;
+pub mod category;
 pub mod checkout;
 mod format;
 pub mod invoice;
@@ -36,6 +37,10 @@ button.link{background:none;border:none;color:#0b5fa5;padding:0;text-decoration:
 :focus-visible{outline:3px solid #ffbf47;outline-offset:2px}\
 fieldset{border:1px solid #ddd;border-radius:.3rem;margin:0 0 1rem;padding:.75rem 1rem}legend{font-weight:600;padding:0 .25rem}\
 .error{color:#b00020;font-weight:500}.notice{background:#eef6ee;border:1px solid #b7d8b7;padding:.5rem .75rem;border-radius:.3rem}\
+nav.crumbs ol{display:flex;flex-wrap:wrap;gap:.25rem .5rem;list-style:none;padding:0;margin:0 0 1rem;color:#595959}\
+nav.crumbs li+li::before{content:'\\203A';margin-right:.5rem}\
+ul.tags{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;padding:0}ul.tags a{display:inline-block;border:1px solid #767676;border-radius:1rem;padding:.2rem .75rem;text-decoration:none}\
+nav.pager{display:flex;gap:1rem;align-items:baseline;margin-top:1rem}\
 .cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}\
 .card{border:1px solid #ddd;border-radius:.3rem;padding:.75rem 1rem}.card address{font-style:normal}\
 .totals{margin-left:auto;max-width:22rem}.totals td{border:none;padding:.2rem .5rem}.totals tr.total td{font-weight:700;border-top:1px solid #ccc}";
@@ -96,6 +101,29 @@ pub async fn document(
                 <main>(child)</main>
             </body>
         </html>
+    })
+}
+
+/// One step of a breadcrumb; the page itself has no link.
+pub struct Crumb {
+    pub label: String,
+    pub link: Option<String>,
+}
+
+/// Where the page sits in the shop, as an ordered trail.
+#[component]
+pub async fn breadcrumb(trail: &[Crumb]) -> Result<impl View> {
+    Ok(view! {
+        <nav aria-label="Fil d'Ariane" class="crumbs">
+            <ol>
+                for crumb in trail {
+                    match &crumb.link {
+                        Some(link) => { <li><a href=(link.clone())>(crumb.label.clone())</a></li> }
+                        None => { <li aria-current="page">(crumb.label.clone())</li> }
+                    }
+                }
+            </ol>
+        </nav>
     })
 }
 

@@ -104,6 +104,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
+        timada_catalog::category_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
         timada_cart::saved_cart_list_subscription()
             .data(db.clone())
             .start(executor)
@@ -207,6 +211,10 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
     let (executor, db) = (&store.executor, store.db.clone());
     for _ in 0..4 {
         timada_catalog::product_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_catalog::category_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;

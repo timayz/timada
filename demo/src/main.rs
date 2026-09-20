@@ -134,6 +134,15 @@ async fn main() -> anyhow::Result<()> {
         None => {}
     }
 
+    // A shop from before categories were managed: its products are filed
+    // under the categories their breadcrumbs name. Nothing to do otherwise.
+    let adopted = timada_catalog::adopt_category_paths(&store.executor, &store.db).await?;
+    if adopted > 0 {
+        tracing::info!(
+            adopted,
+            "products filed under the categories of their paths"
+        );
+    }
     let _subscriptions = db::start_subscriptions(&store).await?;
     // An order whose payment is never completed gives its stock back.
     let payment_timeout = env::var("TIMADA_PAYMENT_TIMEOUT_SECS")

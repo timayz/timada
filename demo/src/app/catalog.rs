@@ -4,7 +4,10 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
-use timada_catalog::{ListProducts, ProductListRow, list_products, load_product_page};
+use timada_catalog::{
+    ListProducts, category_lineage, category_tree, is_on_storefront, list_categories,
+    list_products, load_product_page,
+};
 use timada_customer::customers_by_ids;
 use timada_inventory::{
     InventoryError, RequestBackInStockAlert, StockLocation, alert_id, stock_item_id,
@@ -27,7 +30,9 @@ use topcoat::{
 };
 
 use super::{
-    account, cart, document,
+    Crumb, account, breadcrumb, cart,
+    category::{self, product_list},
+    document,
     format::{date, money},
 };
 use crate::{
@@ -39,26 +44,35 @@ use crate::{
 pub async fn home(cx: &Cx) -> Result<impl View> {
     let store = app_context::<Store>(cx);
     let products = list_products(&store.db, &ListProducts::default()).await?;
+    // The top of the tree: the ways into the shop.
+    let departments: Vec<(String, String)> =
+        category_tree(list_categories(&store.db, false).await?, false)
+            .into_iter()
+            .map(|node| {
+                let link =
+                    href!(category::show, category::CategorySlug(node.category.slug)).resolve(cx);
+                (link, node.category.name)
+            })
+            .collect();
     Ok(view! {
         document(
             title: "Catalogue",
             <h1>"Catalogue"</h1>
+            if !departments.is_empty() {
+                <nav aria-label="Catégories">
+                    <ul class="tags">
+                        for (link, name) in &departments {
+                            <li><a href=(link.clone())>(name.clone())</a></li>
+                        }
+                    </ul>
+                </nav>
+            }
             if products.is_empty() {
                 <p class="muted">"Aucun produit. Lancez " <code>"cargo run -p demo -- --seed"</code> "."</p>
             } else {
-                <ul>
-                    for product in &products { product_item(product: product) }
-                </ul>
+                product_list(products: &products)
             }
         )
-    })
-}
-
-#[component]
-async fn product_item(cx: &Cx, product: &ProductListRow) -> Result<impl View> {
-    let link = href!(product_page, ProductId(product.id.clone())).resolve(cx);
-    Ok(view! {
-        <li><a href=(link)>(product.name.clone())</a> " " <span class="muted">(product.sku.clone())</span></li>
     })
 }
 
@@ -334,6 +348,17 @@ async fn product_view(
     let price = load_product_price(&store.executor, price_id(&id))
         .await?
         .filter(|p| !p.withdrawn);
+    // The way back up: the product's category, while the shop shows it; the
+    // label the product was created with otherwise.
+    let lineage = match &product.category_id {
+        Some(category_id) => category_lineage(&store.db, category_id).await?,
+        None => Vec::new(),
+    };
+    let trail: Vec<Crumb> = if is_on_storefront(&lineage) {
+        category::crumbs(cx, &lineage, true)
+    } else {
+        Vec::new()
+    };
     let available = available_stock(store, &id).await?;
     let availability = if available > 0 {
         format!("En stock ({available} disponibles)")
@@ -525,7 +550,11 @@ async fn product_view(
     Ok(view! {
         document(
             title: &product.name,
-            <p class="muted">(product.category_path.join(" > "))</p>
+            if trail.is_empty() {
+                <p class="muted">(product.category_path.join(" > "))</p>
+            } else {
+                breadcrumb(trail: &trail)
+            }
             <h1>(product.name.clone())</h1>
             if let Some(summary) = &rating_summary {
                 <p><a href="#avis">(summary.clone())</a></p>

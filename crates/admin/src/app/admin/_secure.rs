@@ -1,6 +1,7 @@
 //! Everything under this group requires a signed-in admin. The group adds no
 //! URL segment; the layer wraps every page below it.
 
+pub mod categories;
 pub mod customers;
 pub mod emails;
 pub mod inventory;
