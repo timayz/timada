@@ -71,6 +71,12 @@ read-only: orders drive their lifecycle, and every refund is documented by a
 credit note shown under its invoice, provided the host runs
 `timada_invoice::credit_notes_from_refunds_subscription`.
 
+The orders section has a queue of its own, *À expédier*: the paid orders
+waiting for their parcel, the one waiting longest first, with where each goes;
+those waiting longer than `AdminConfig::ship_within` are flagged, and counted
+on the orders page. The fulfillment saga never times a paid order out —
+somebody ships it.
+
 The VAT section reads a quarter out of the issued invoices and the credit
 notes: the shop's own VAT by rate, the one-stop-shop (OSS) return by member
 state and rate with the corrections of earlier quarters, the intra-community

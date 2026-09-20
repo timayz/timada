@@ -1242,3 +1242,53 @@ async fn a_business_of_another_member_state_buys_without_vat() -> anyhow::Result
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_paid_order_waits_in_the_queue_until_it_ships() -> anyhow::Result<()> {
+    use timada_order::{count_orders_to_ship, orders_to_ship};
+
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cart_id = checkout_cart(&executor, 5, 1, timada_cart::PaymentMode::Card).await?;
+    let order_id = order_id(&cart_id);
+    let history = || async {
+        drain(&executor, &db).await?;
+        order_history_subscription()
+            .data(db.clone())
+            .run_once(&executor)
+            .await
+    };
+    history().await?;
+    let now = timada_core::time::now_unix_secs()?;
+
+    // Placed, not paid: nothing to prepare yet.
+    assert!(orders_to_ship(&db, 10, 0).await?.is_empty());
+    assert_eq!(count_orders_to_ship(&db, now).await?, (0, 0));
+
+    timada_payment::Command(&executor)
+        .capture_payment(payment_id(&order_id), "psp-1".into())
+        .await?;
+    history().await?;
+    let queue = orders_to_ship(&db, 10, 0).await?;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].order_id, order_id);
+    assert!(queue[0].waiting_since >= queue[0].placed_at);
+    assert!(queue[0].waiting_since as u64 <= now + 5);
+    // Late is whatever has waited since before the moment given.
+    assert_eq!(
+        count_orders_to_ship(&db, now.saturating_sub(3_600)).await?,
+        (1, 0)
+    );
+    assert_eq!(count_orders_to_ship(&db, now + 3_600).await?, (1, 1));
+    // Redelivered: the first date stays.
+    let since = queue[0].waiting_since;
+    history().await?;
+    assert_eq!(orders_to_ship(&db, 10, 0).await?[0].waiting_since, since);
+
+    timada_shipping::Command(&executor)
+        .dispatch_shipment(shipment_id(&order_id), "Chronopost".into(), "XY123".into())
+        .await?;
+    history().await?;
+    assert!(orders_to_ship(&db, 10, 0).await?.is_empty());
+    assert_eq!(count_orders_to_ship(&db, now + 3_600).await?, (0, 0));
+    Ok(())
+}
