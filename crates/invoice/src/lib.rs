@@ -10,6 +10,8 @@ mod document;
 mod error;
 mod invoice_list;
 mod migration;
+#[cfg(feature = "pdf")]
+mod pdf;
 mod process;
 mod query;
 mod value_object;
@@ -20,6 +22,8 @@ pub use document::*;
 pub use error::*;
 pub use invoice_list::*;
 pub use migration::migrations;
+#[cfg(feature = "pdf")]
+pub use pdf::*;
 pub use process::*;
 pub use query::*;
 pub use value_object::*;

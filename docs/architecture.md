@@ -214,6 +214,11 @@ the SMTP relay.
   country's standard rate — too much VAT rather than too little when the host
   mapped nothing. The built-in standard rates are those of 1 January 2026;
   keeping them current is the host's job.
+- **One document, several renderings**: `timada_invoice::InvoiceDocument` is
+  what an issued invoice says; the storefront and admin print pages and
+  `render_invoice_pdf` (feature `pdf`: krilla, bundled Noto Sans under the
+  OFL, laid out as data before it is drawn) only present it. The admin offers
+  the file with its own `pdf` feature.
 - **Logging** goes through `tracing`; libraries never print.
 - **Errors**: `thiserror` enums per context, with `anyhow` for the
   infrastructure underneath. No `unwrap`/`expect` outside tests.
@@ -230,7 +235,9 @@ the SMTP relay.
   collected), the territories of a member state outside the EU VAT area (they
   share their country's code), multi-currency, the OSS return itself (orders
   record zone and VAT per rate — the quarterly report is a query to write).
-- Server-side PDF invoices: `InvoiceDocument` is ready for one; today the
-  invoice is a print-ready page.
+- An archive of invoice files: the PDF is rendered from the events each time
+  it is asked for (same invoice, same bytes — but a change of issuer address
+  or of layout shows on past invoices too). Storing the bytes at issue, with
+  a hash, is what a 10-year retention policy would add.
 - Upcasting of old event shapes: an evento feature, to build when the first
   `V2` event exists.
