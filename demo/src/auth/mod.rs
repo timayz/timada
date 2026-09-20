@@ -24,6 +24,11 @@ pub const SESSION_COOKIE: &str = "timada_shop";
 
 const MIN_PASSWORD_LEN: usize = 8;
 
+/// How long the link of a « mot de passe oublié » e-mail works.
+pub const RESET_LINK_TTL_SECS: i64 = 3600;
+/// An account is sent one such e-mail a minute at most, whoever asks.
+const RESET_REQUEST_INTERVAL_SECS: i64 = 60;
+
 #[derive(Debug, thiserror::Error)]
 pub enum SignUpError {
     #[error("Un compte existe déjà avec cette adresse email.")]
@@ -135,6 +140,11 @@ pub async fn change_email(
         });
     }
 
+    // A reset link sent to the address being left opens nothing any more.
+    store::forget_resets(&store.db, &account.customer_id)
+        .await
+        .map_err(anyhow::Error::from)?;
+
     // Straight into the outbox: only the host knows the address being left.
     let config = crate::db::mailer_config();
     let notice = timada_mailer::Email {
@@ -199,15 +209,27 @@ pub async fn change_password(
         .map_err(|err| anyhow::anyhow!("{err:#}"))?;
     store::replace_password(&store.db, &account.customer_id, &hash, keep.as_ref()).await?;
 
+    password_changed_notice(store, account, "vos autres appareils ont été déconnectés").await?;
+    tracing::info!(customer_id = %account.customer_id, "shopper changed their password");
+    Ok(())
+}
+
+/// Tells the shopper their password changed — `signed_out` says which of
+/// their devices were signed out — in case it was not them.
+async fn password_changed_notice(
+    store: &Store,
+    account: &Account,
+    signed_out: &str,
+) -> anyhow::Result<()> {
     let config = crate::db::mailer_config();
     let notice = timada_mailer::Email {
         from: config.from.clone(),
         to: account.email.clone(),
         subject: format!("Votre mot de passe {} a été modifié", config.shop_name),
         body: format!(
-            "Bonjour,\n\nLe mot de passe de votre compte {} vient d'être modifié, et vos autres \
-             appareils ont été déconnectés.\n\nSi vous n'êtes pas à l'origine de ce changement, \
-             contactez-nous sans attendre.\n\nÀ bientôt,\n{}\n",
+            "Bonjour,\n\nLe mot de passe de votre compte {} vient d'être modifié, et {signed_out}.\n\n\
+             Si vous n'êtes pas à l'origine de ce changement, contactez-nous sans attendre.\n\n\
+             À bientôt,\n{}\n",
             config.shop_name, config.shop_name
         ),
         html_body: None,
@@ -215,10 +237,112 @@ pub async fn change_password(
     };
     let now = timada_core::time::now_unix_secs()?.to_string();
     let message_id = timada_core::id::derived(&[&account.customer_id, &now], "password-changed");
-    timada_mailer::enqueue(&store.db, &message_id, "password-changed", &notice)
-        .await
-        .map_err(anyhow::Error::from)?;
-    tracing::info!(customer_id = %account.customer_id, "shopper changed their password");
+    timada_mailer::enqueue(&store.db, &message_id, "password-changed", &notice).await?;
+    Ok(())
+}
+
+/// What is kept of a reset link's token: its SHA-256. The token itself only
+/// exists in the e-mail.
+fn reset_token_hash(token: &str) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token.trim().as_bytes()).to_vec()
+}
+
+/// E-mails the account of `email` a link to choose a new password. Says
+/// nothing about whether there is such an account: the caller answers the
+/// same either way, and so does this.
+pub async fn request_password_reset(store: &Store, email: &str) -> anyhow::Result<()> {
+    use argon2::password_hash::rand_core::{OsRng, RngCore};
+
+    let Some((account, _)) = store::find_credentials(&store.db, email).await? else {
+        tracing::info!("password reset asked for an address without an account");
+        return Ok(());
+    };
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let token = hex::encode(bytes);
+    let token_hash = reset_token_hash(&token);
+    let recorded = store::insert_reset(
+        &store.db,
+        &token_hash,
+        &account.customer_id,
+        RESET_LINK_TTL_SECS,
+        RESET_REQUEST_INTERVAL_SECS,
+    )
+    .await?;
+    if !recorded {
+        tracing::info!(customer_id = %account.customer_id, "password reset asked again too soon");
+        return Ok(());
+    }
+
+    let config = crate::db::mailer_config();
+    let link = format!(
+        "{}/password/reset?token={token}",
+        config.base_url.trim_end_matches('/')
+    );
+    let message = timada_mailer::Email {
+        from: config.from.clone(),
+        to: account.email.clone(),
+        subject: format!("Choisissez un nouveau mot de passe {}", config.shop_name),
+        body: format!(
+            "Bonjour,\n\nVous avez demandé à choisir un nouveau mot de passe pour votre compte {}. \
+             Ce lien est valable une heure et ne sert qu'une fois :\n\n{link}\n\n\
+             Si vous n'êtes pas à l'origine de cette demande, ignorez ce message : votre mot de \
+             passe reste inchangé.\n\nÀ bientôt,\n{}\n",
+            config.shop_name, config.shop_name
+        ),
+        html_body: None,
+        attachments: Vec::new(),
+    };
+    let message_id = timada_core::id::derived(
+        &[&account.customer_id, &hex::encode(&token_hash)],
+        "password-reset",
+    );
+    timada_mailer::enqueue(&store.db, &message_id, "password-reset", &message).await?;
+    tracing::info!(customer_id = %account.customer_id, "password reset link sent");
+    Ok(())
+}
+
+/// Whether a reset link still opens an account (unused, not run out).
+pub async fn reset_link_is_valid(store: &Store, token: &str) -> anyhow::Result<bool> {
+    Ok(store::find_reset(&store.db, &reset_token_hash(token))
+        .await?
+        .is_some())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ResetPasswordError {
+    #[error("Ce lien n'est plus valable.")]
+    InvalidLink,
+    #[error("Le mot de passe doit contenir au moins {MIN_PASSWORD_LEN} caractères.")]
+    WeakPassword,
+    #[error(transparent)]
+    Server(#[from] anyhow::Error),
+}
+
+/// Gives the account behind a reset link a new password. The link is used up,
+/// every browser signed in to the account is signed out — whoever had the old
+/// password is out too — and the shopper is told by e-mail. Nobody is signed
+/// in: the new password is what proves who is there.
+pub async fn reset_password(
+    store: &Store,
+    token: &str,
+    new: &str,
+) -> Result<(), ResetPasswordError> {
+    let token_hash = reset_token_hash(token);
+    let Some(account) = store::find_reset(&store.db, &token_hash).await? else {
+        return Err(ResetPasswordError::InvalidLink);
+    };
+    if new.chars().count() < MIN_PASSWORD_LEN {
+        return Err(ResetPasswordError::WeakPassword);
+    }
+    let hash = password::hash(new).ok_or_else(|| anyhow::anyhow!("password hashing failed"))?;
+    if !store::consume_reset(&store.db, &token_hash).await? {
+        return Err(ResetPasswordError::InvalidLink);
+    }
+    store::replace_password(&store.db, &account.customer_id, &hash, None).await?;
+    password_changed_notice(store, &account, "tous vos appareils ont été déconnectés").await?;
+    tracing::info!(customer_id = %account.customer_id, "shopper reset their password");
     Ok(())
 }
 

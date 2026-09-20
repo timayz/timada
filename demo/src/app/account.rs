@@ -153,6 +153,7 @@ async fn login_view(cx: &Cx, next: Option<String>, error: Option<&str>) -> Resul
                 <label for="password">"Mot de passe" <input id="password" name="password" type="password" required=(true) autocomplete="current-password"></label>
                 <button type="submit">"Se connecter"</button>
             </form>
+            <p><a href=(href!(super::forgot::forgot))>"Mot de passe oublié ?"</a></p>
             <p>"Nouveau client ? " <a href=(register_link)>"Créer un compte"</a></p>
         )
     })

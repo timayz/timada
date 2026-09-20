@@ -2411,6 +2411,226 @@ async fn a_shopper_changes_their_password() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The link of the latest « mot de passe oublié » e-mail to `recipient`.
+async fn reset_link(store: &Store, recipient: &str) -> anyhow::Result<String> {
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let mail = outbox
+        .iter()
+        .find(|m| m.kind == "password-reset" && m.recipient == recipient)
+        .ok_or_else(|| anyhow::anyhow!("no reset e-mail: {outbox:?}"))?;
+    let link = mail
+        .body
+        .lines()
+        .find_map(|line| line.trim().split_once("/password/reset?token="))
+        .map(|(_, token)| format!("/password/reset?token={token}"))
+        .ok_or_else(|| anyhow::anyhow!("no link in: {}", mail.body))?;
+    Ok(link)
+}
+
+#[tokio::test]
+async fn a_forgotten_password_is_replaced_from_an_emailed_link() -> anyhow::Result<()> {
+    let (router, store, _) = shop().await?;
+    Browser::new(&router).post("/register", REGISTER).await;
+    let mut phone = Browser::new(&router);
+    phone
+        .post(
+            "/login",
+            "email=ada%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert_eq!(phone.get("/account").await.status(), StatusCode::OK);
+
+    let mut browser = Browser::new(&router);
+    let login = text(browser.get("/login").await).await?;
+    assert!(login.contains("/password/forgot"), "{login}");
+
+    // An address nobody has: the same answer, and no e-mail.
+    let nobody = browser
+        .post("/password/forgot", "email=nobody%40example.com")
+        .await;
+    let nobody = text(nobody).await?;
+    assert!(nobody.contains("Si un compte existe"), "{nobody}");
+    let asked = browser
+        .post("/password/forgot", "email=Ada%40Example.com")
+        .await;
+    assert!(text(asked).await?.contains("Si un compte existe"));
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let resets: Vec<_> = outbox
+        .iter()
+        .filter(|m| m.kind == "password-reset")
+        .collect();
+    assert_eq!(resets.len(), 1, "{outbox:?}");
+    assert_eq!(resets[0].recipient, "ada@example.com");
+
+    // Asking again straight away sends nothing more.
+    browser
+        .post("/password/forgot", "email=ada%40example.com")
+        .await;
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    assert_eq!(
+        outbox.iter().filter(|m| m.kind == "password-reset").count(),
+        1
+    );
+
+    // The link opens the form, and is kept from other sites; a made-up one does not.
+    let link = reset_link(&store, "ada@example.com").await?;
+    let form = browser.get(&link).await;
+    assert_eq!(
+        form.headers()
+            .get("referrer-policy")
+            .and_then(|v| v.to_str().ok()),
+        Some("no-referrer")
+    );
+    let form = text(form).await?;
+    assert!(form.contains("name=\"token\""), "{form}");
+    assert!(form.contains("noindex"), "{form}");
+    let made_up = browser.get("/password/reset?token=abcdef").await;
+    assert!(text(made_up).await?.contains("plus valable"));
+    assert!(
+        text(browser.get("/password/reset").await)
+            .await?
+            .contains("plus valable")
+    );
+
+    // What the form refuses leaves the link usable.
+    let token = link.rsplit('=').next().unwrap_or_default().to_owned();
+    let mismatch = browser
+        .post(
+            "/password/reset",
+            &format!("token={token}&new=difference-engine&confirm=difference-engin"),
+        )
+        .await;
+    assert!(text(mismatch).await?.contains("pas identiques"));
+    let weak = browser
+        .post(
+            "/password/reset",
+            &format!("token={token}&new=short&confirm=short"),
+        )
+        .await;
+    assert!(text(weak).await?.contains("au moins 8"));
+
+    let done = browser
+        .post(
+            "/password/reset",
+            &format!("token={token}&new=difference-engine&confirm=difference-engine"),
+        )
+        .await;
+    assert!(text(done).await?.contains("Votre mot de passe est modifié"));
+
+    // Nobody was signed in, and every device is signed out.
+    assert_eq!(
+        browser.get("/account").await.status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(phone.get("/account").await.status(), StatusCode::SEE_OTHER);
+    // The link served once.
+    let again = browser
+        .post(
+            "/password/reset",
+            &format!("token={token}&new=another-engine&confirm=another-engine"),
+        )
+        .await;
+    assert!(text(again).await?.contains("plus valable"));
+    assert!(
+        text(browser.get(&link).await)
+            .await?
+            .contains("plus valable")
+    );
+    // Only the new password signs in.
+    let old = browser
+        .post(
+            "/login",
+            "email=ada%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert_eq!(old.status(), StatusCode::OK);
+    let new = browser
+        .post(
+            "/login",
+            "email=ada%40example.com&password=difference-engine",
+        )
+        .await;
+    assert_eq!(location(&new), "/account");
+    // And the shopper is told.
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    assert!(
+        outbox
+            .iter()
+            .any(|m| m.kind == "password-changed" && m.body.contains("tous vos appareils")),
+        "{outbox:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reset_link_dies_with_a_later_one_a_new_address_or_its_hour() -> anyhow::Result<()> {
+    let (router, store, _) = shop().await?;
+    Browser::new(&router).post("/register", REGISTER).await;
+    let mut browser = Browser::new(&router);
+
+    // A later link replaces the first (asked more than a minute apart).
+    crate::auth::request_password_reset(&store, "ada@example.com").await?;
+    let first = reset_link(&store, "ada@example.com").await?;
+    sqlx::query("UPDATE shop_password_reset SET requested_at = requested_at - 120")
+        .execute(&store.db)
+        .await?;
+    sqlx::query("DELETE FROM mailer_outbox WHERE kind = 'password-reset'")
+        .execute(&store.db)
+        .await?;
+    crate::auth::request_password_reset(&store, "ada@example.com").await?;
+    let second = reset_link(&store, "ada@example.com").await?;
+    assert_ne!(first, second);
+    assert!(
+        text(browser.get(&first).await)
+            .await?
+            .contains("plus valable")
+    );
+    assert!(
+        text(browser.get(&second).await)
+            .await?
+            .contains("name=\"token\"")
+    );
+
+    // Past its hour, a link opens nothing.
+    sqlx::query("UPDATE shop_password_reset SET expires_at = 1")
+        .execute(&store.db)
+        .await?;
+    assert!(
+        text(browser.get(&second).await)
+            .await?
+            .contains("plus valable")
+    );
+
+    // A link sent to an address the account has left opens nothing either.
+    sqlx::query("DELETE FROM shop_password_reset")
+        .execute(&store.db)
+        .await?;
+    sqlx::query("DELETE FROM mailer_outbox WHERE kind = 'password-reset'")
+        .execute(&store.db)
+        .await?;
+    crate::auth::request_password_reset(&store, "ada@example.com").await?;
+    let stale = reset_link(&store, "ada@example.com").await?;
+    browser
+        .post(
+            "/login",
+            "email=ada%40example.com&password=analytical-engine",
+        )
+        .await;
+    let moved = browser
+        .post(
+            "/account/email",
+            "email=countess%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert_eq!(location(&moved), "/account");
+    assert!(
+        text(browser.get(&stale).await)
+            .await?
+            .contains("plus valable")
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn the_checkout_prices_and_delivers_for_the_address_zone() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;

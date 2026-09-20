@@ -293,7 +293,11 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 under its real prefix (never a prefix-stripping mount), and a topcoat host must
 use explicit page paths rather than `module_router!()`.
 
-**6. What stays the host's** — shopper accounts and sessions, the storefront,
+**6. What stays the host's** — shopper accounts and sessions (the demo's
+`demo/src/auth` shows them whole, in SQL: sign-up, sign-in, a change of
+address or password, and « mot de passe oublié » — a link by e-mail whose
+token is kept hashed, works one hour and once, dies with a later link or a
+change of address, and signs every device out), the storefront,
 the payment provider's webhook route — raw body and signature header to
 `StripeProvider::parse_webhook`, the event to `apply_provider_event`, 2xx
 unless applying failed — and the page of the embedded card form with its
@@ -486,7 +490,7 @@ the SMTP relay.
   provider's payouts, and a second provider.
 - VAT beyond goods sold to consumers and to businesses of the Union:
   services, prices shown without VAT to business accounts, the territories of a member state outside the EU VAT area (they
-  share their country's code), multi-currency. The quarterly report
+  share their country's code). The quarterly report
   (`timada_invoice::vat_report`, the admin's TVA section) adds up what was
   invoiced; filing it — and the rule that a quarter starts at midnight UTC,
   not Paris time — stays with the accountant.

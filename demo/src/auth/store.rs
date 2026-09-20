@@ -99,6 +99,84 @@ pub async fn replace_password(
     .bind(keep.map(|hash| hash.as_slice()))
     .execute(db)
     .await?;
+    forget_resets(db, customer_id).await?;
+    Ok(())
+}
+
+/// Records a reset link for the account, replacing the ones it had: only the
+/// latest e-mail works. `Ok(false)` — and nothing recorded — when one was
+/// asked for less than `min_interval` seconds ago.
+pub async fn insert_reset(
+    db: &SqlitePool,
+    token_hash: &[u8],
+    customer_id: &str,
+    ttl: i64,
+    min_interval: i64,
+) -> anyhow::Result<bool> {
+    let now = now_secs()?;
+    let mut tx = db.begin_with("BEGIN IMMEDIATE").await?;
+    let recent: Option<(i64,)> = sqlx::query_as(
+        "SELECT requested_at FROM shop_password_reset WHERE customer_id = ? AND requested_at > ?",
+    )
+    .bind(customer_id)
+    .bind(now - min_interval)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if recent.is_some() {
+        return Ok(false);
+    }
+    sqlx::query("DELETE FROM shop_password_reset WHERE customer_id = ? OR expires_at <= ?")
+        .bind(customer_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO shop_password_reset (token_hash, customer_id, requested_at, expires_at)
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(token_hash)
+    .bind(customer_id)
+    .bind(now)
+    .bind(now + ttl)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// The account a reset link still opens, if any.
+pub async fn find_reset(db: &SqlitePool, token_hash: &[u8]) -> anyhow::Result<Option<Account>> {
+    let account = sqlx::query_as(
+        "SELECT a.customer_id, a.email FROM shop_password_reset r
+         JOIN shop_account a ON a.customer_id = r.customer_id
+         WHERE r.token_hash = ? AND r.expires_at > ?",
+    )
+    .bind(token_hash)
+    .bind(now_secs()?)
+    .fetch_optional(db)
+    .await?;
+    Ok(account)
+}
+
+/// Uses a reset link up. `Ok(false)` when it was used or ran out meanwhile —
+/// of two browsers posting the same link, one gets through.
+pub async fn consume_reset(db: &SqlitePool, token_hash: &[u8]) -> anyhow::Result<bool> {
+    let used =
+        sqlx::query("DELETE FROM shop_password_reset WHERE token_hash = ? AND expires_at > ?")
+            .bind(token_hash)
+            .bind(now_secs()?)
+            .execute(db)
+            .await?;
+    Ok(used.rows_affected() > 0)
+}
+
+/// Reset links e-mailed to the account stop working: its password or its
+/// address just changed.
+pub async fn forget_resets(db: &SqlitePool, customer_id: &str) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM shop_password_reset WHERE customer_id = ?")
+        .bind(customer_id)
+        .execute(db)
+        .await?;
     Ok(())
 }
 
