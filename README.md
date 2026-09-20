@@ -38,7 +38,7 @@ admin renders unstyled.
 
 Things worth trying: order something to a metropolitan address, then to
 Martinique (the checkout switches to prices without French VAT and another
-carrier), then to Berlin (`DE`: German VAT replaces the French one); capture the payment and ship the order from the admin; ask for a
+carrier), then to Berlin (`DE`: German VAT replaces the French one); capture the payment from the admin (the demo has no payment provider: the payment step of the checkout waits for it) and ship the order; refund part of it from the order page; ask for a
 return from the account; open the invoice and download its PDF; look at `/admin/emails` to see what
 the shop would have sent.
 
@@ -64,7 +64,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-customer` | customers, their e-mail, billing and delivery addresses; customer list |
 | `timada-cart` | carts: lines with a price snapshot, promo code, saved carts, the checkout fact |
 | `timada-promotion` | promo codes (capped redemptions) and vouchers (balances) |
-| `timada-payment` | the payment of an order: requested, captured, declined, refunded |
+| `timada-payment` | the payment of an order: requested, captured, declined, refunded — and the `PaymentProvider` port the money moves through |
 | `timada-shipping` | delivery methods and the shipment of an order |
 | `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate |
 | `timada-order` | the order, the checkout ACL that places it, the fulfillment saga, payment timeouts |

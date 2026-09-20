@@ -71,11 +71,15 @@ impl<E: Executor> super::Command<'_, E> {
             .collect();
         let mut split = refund_split(&order, &accepted, cmd.refund_method)?;
 
-        // The payment can only give back what it still holds.
-        let refundable = load_payment(self.executor, payment_id(&request.order_id))
+        // The payment can only give back what it still holds — refunds on
+        // their way to the provider are as good as gone.
+        let refundable = match load_payment(self.executor, payment_id(&request.order_id))
             .await?
             .filter(|p| matches!(p.status, PaymentStatus::Captured))
-            .map_or(0, |p| (p.amount.minor - p.refunded.minor).max(0));
+        {
+            Some(payment) => payment.refundable()?.minor.max(0),
+            None => 0,
+        };
         if split.money.minor > refundable {
             let overflow = Money::new(split.money.minor - refundable, &split.money.currency);
             split.money = Money::new(refundable, &split.money.currency);

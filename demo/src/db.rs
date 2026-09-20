@@ -172,6 +172,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
+        timada_payment::refund_execution_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
         timada_order::order_promo_release_subscription()
             .data(db.clone())
             .start(executor)
@@ -270,6 +274,19 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .data(db.clone())
             .run_once(executor)
             .await?;
+        // Refunds asked for are handed to the provider right away here; the
+        // running shop has `run_provider_refunds` for that.
+        timada_payment::refund_execution_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_payment::execute_pending_refunds(
+            executor,
+            &db,
+            store.provider.as_ref(),
+            &timada_payment::RefundPolicy::without_delays(),
+        )
+        .await?;
         timada_payment::refund_list_subscription()
             .data(db.clone())
             .run_once(executor)

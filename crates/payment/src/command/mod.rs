@@ -11,7 +11,10 @@ use evento::{Executor, Projection, metadata::Event};
 use timada_core::Money;
 
 use crate::{
-    aggregator::{Payment, PaymentCaptured, PaymentDeclined, PaymentRefunded, PaymentRequested},
+    aggregator::{
+        Payment, PaymentCaptured, PaymentDeclined, PaymentRefunded, PaymentRequested, RefundFailed,
+        RefundRequested, RefundSettled,
+    },
     error::PaymentError,
     value_object::PaymentStatus,
 };
@@ -49,10 +52,48 @@ pub struct PaymentState {
     pub order_id: String,
     pub status: PaymentStatus,
     pub amount: Money,
+    /// What the provider confirmed it gave back.
     pub refunded: Money,
-    /// The reason of every refund so far; [`Command::refund_payment_once`]
-    /// uses it as its idempotency key.
+    /// The reason of every refund so far — asked for, settled or failed;
+    /// [`Command::refund_payment_once`] uses it as its idempotency key.
     pub refund_reasons: Vec<String>,
+    /// Refunds asked for and not settled yet: their amounts are held.
+    pub pending_refunds: Vec<OpenRefund>,
+    /// Refunds the provider refused: nothing is held for them any more.
+    pub failed_refunds: Vec<OpenRefund>,
+    pub settled_refund_ids: Vec<String>,
+    /// How many distinct refunds were ever asked for; the next refund's id
+    /// derives from it.
+    pub refund_requests: u32,
+}
+
+/// A refund that was asked for and is not settled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenRefund {
+    pub refund_id: String,
+    pub amount: Money,
+    pub reason: String,
+}
+
+impl PaymentState {
+    /// What pending refunds hold.
+    pub fn pending(&self) -> Result<Money, timada_core::MoneyError> {
+        self.pending_refunds
+            .iter()
+            .try_fold(Money::zero(&self.amount.currency), |sum, refund| {
+                sum.checked_add(&refund.amount)
+            })
+    }
+
+    /// Whether `amount` more can still be given back, counting what is
+    /// already refunded and what pending refunds hold.
+    pub(crate) fn can_refund(&self, amount: &Money) -> Result<bool, timada_core::MoneyError> {
+        let total = self
+            .refunded
+            .checked_add(&self.pending()?)?
+            .checked_add(amount)?;
+        Ok(total.minor <= self.amount.minor)
+    }
 }
 
 // Strict and folding every event, so the version `write()` relies on is exact.
@@ -62,6 +103,9 @@ fn create_projection<E: Executor>() -> Projection<E, PaymentState> {
         .handler(on_payment_captured())
         .handler(on_payment_declined())
         .handler(on_payment_refunded())
+        .handler(on_refund_requested())
+        .handler(on_refund_settled())
+        .handler(on_refund_failed())
         .strict()
 }
 
@@ -105,6 +149,62 @@ async fn on_payment_refunded(
     if row.refunded == row.amount {
         row.status = PaymentStatus::Refunded;
     }
-    row.refund_reasons.push(event.data.reason);
+    // A refund that was asked for first already recorded its reason.
+    if !row.refund_reasons.contains(&event.data.reason) {
+        row.refund_reasons.push(event.data.reason);
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_refund_requested(
+    event: Event<RefundRequested>,
+    row: &mut PaymentState,
+) -> anyhow::Result<()> {
+    // A failed refund asked for again goes back to pending.
+    if let Some(at) = row
+        .failed_refunds
+        .iter()
+        .position(|r| r.refund_id == event.data.refund_id)
+    {
+        row.failed_refunds.remove(at);
+    } else {
+        row.refund_requests += 1;
+        row.refund_reasons.push(event.data.reason.clone());
+    }
+    row.pending_refunds.push(OpenRefund {
+        refund_id: event.data.refund_id,
+        amount: event.data.amount,
+        reason: event.data.reason,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_refund_settled(
+    event: Event<RefundSettled>,
+    row: &mut PaymentState,
+) -> anyhow::Result<()> {
+    row.pending_refunds
+        .retain(|r| r.refund_id != event.data.refund_id);
+    row.failed_refunds
+        .retain(|r| r.refund_id != event.data.refund_id);
+    row.settled_refund_ids.push(event.data.refund_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_refund_failed(
+    event: Event<RefundFailed>,
+    row: &mut PaymentState,
+) -> anyhow::Result<()> {
+    if let Some(at) = row
+        .pending_refunds
+        .iter()
+        .position(|r| r.refund_id == event.data.refund_id)
+    {
+        let refund = row.pending_refunds.remove(at);
+        row.failed_refunds.push(refund);
+    }
     Ok(())
 }

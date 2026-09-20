@@ -917,10 +917,19 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
         .ok_or_not_found()?;
 
     // What went back to the shopper, and the credit notes documenting it.
-    let refunded = timada_payment::load_payment(&store.executor, timada_payment::payment_id(&id))
-        .await?
+    let payment =
+        timada_payment::load_payment(&store.executor, timada_payment::payment_id(&id)).await?;
+    let refunded = payment
+        .as_ref()
         .filter(|p| p.refunded.is_positive())
         .map(|p| money(&p.refunded));
+    // Asked of the payment provider, not confirmed yet.
+    let refund_pending = match &payment {
+        Some(p) => Some(p.pending_refunds().map_err(anyhow::Error::from)?)
+            .filter(|pending| pending.is_positive())
+            .map(|pending| money(&pending)),
+        None => None,
+    };
     let credit_notes: Vec<CreditNoteLine> =
         timada_invoice::credit_notes_of_invoice(&store.db, &timada_invoice::invoice_id(&id))
             .await?
@@ -958,7 +967,7 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         order_view(
             order: &order,
-            refunded: refunded,
+            refunds: RefundNotice { made: refunded, pending: refund_pending },
             credit_notes: &credit_notes,
             order_returns: &order_returns,
             new_return: new_return,
@@ -982,10 +991,16 @@ struct CreditNoteLine {
     amount: String,
 }
 
+/// What went back to the shopper, and what is on its way.
+struct RefundNotice {
+    made: Option<String>,
+    pending: Option<String>,
+}
+
 #[component]
 async fn order_view(
     order: &OrderDetailsView,
-    refunded: Option<String>,
+    refunds: RefundNotice,
     credit_notes: &Vec<CreditNoteLine>,
     order_returns: &Vec<ReturnLink>,
     new_return: Option<String>,
@@ -1075,8 +1090,11 @@ async fn order_view(
                     <a href=(printable.clone())>"Version imprimable"</a>
                 </p>
             }
-            if let Some(refunded) = &refunded {
+            if let Some(refunded) = &refunds.made {
                 <p role="status" class="notice">"Remboursé : " <strong>(refunded.clone())</strong></p>
+            }
+            if let Some(pending) = &refunds.pending {
+                <p role="status" class="notice">"Remboursement en cours : " <strong>(pending.clone())</strong></p>
             }
             if !credit_notes.is_empty() {
                 <table>

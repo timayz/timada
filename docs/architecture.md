@@ -85,8 +85,8 @@ sequenceDiagram
     else declined, timed out, out of stock, or cancelled
         O->>I: release stock
         O->>H: cancel pending shipment
-        O->>P: refund what was captured
-        P-->>V: credit note
+        O->>P: ask for the refund of what was captured
+        P-->>V: credit note, once the provider gave it back
         O->>O: OrderCancelled
     end
 ```
@@ -97,6 +97,29 @@ back is a **return**: request → approve/refuse → receive (what is taken back
 what goes into stock again, money or store credit) → the process manager
 restocks, refunds and completes; the refund gets its credit note and its
 e-mail through the same subscriptions as any other refund.
+
+**Money moves at the payment provider**, which the payment context sees as a
+`PaymentProvider` the host picks (`ManualProvider` when there is none: an
+operator captures from the admin, and refunds settle at once).
+
+- *Paying*: the storefront calls `start_payment` once the payment is
+  requested and shows what comes back — the provider's page, its embedded
+  form, or nothing. The provider's own word is the only source of a capture:
+  the host checks its webhook's signature, turns it into a `ProviderEvent` and
+  hands it to `apply_provider_event`. A payment that *fails* is no event — the
+  shopper tries again on the same session — and only the timeout declines,
+  after calling the session off (a shopper who paid in that very moment is
+  captured, not timed out). Money that still arrives for a declined payment,
+  or in the wrong amount, is sent straight back.
+- *Refunding* is two-phase: `refund_payment` records `RefundRequested` (the
+  shop's decision; its amount is held against the captured amount), the
+  refund worker hands it to the provider, and only the provider's answer
+  writes `PaymentRefunded` — with its companion `RefundSettled` — or
+  `RefundFailed`. So `PaymentRefunded` means *the money went back*: credit
+  notes, the refund e-mail and the refunds journal all wait for it. Trouble
+  reaching the provider stays in SQL and is retried; a refund the provider
+  refuses for good waits for the operator, who asks again or settles it by
+  hand. A return completes as soon as its refund is asked for.
 
 Every handler is idempotent — derived ids, status guards, idempotency keys —
 so a redelivery after a crash converges instead of duplicating.
@@ -110,7 +133,7 @@ so a redelivery after a crash converges instead of duplicating.
 | Views | folded from one stream, snapshotted | `OrderDetailsView`, `InvoiceView` | with a `.revision(n)` bump |
 | SQL read models | the context's tables | `order_history`, `invoice_list`, `return_list` | with a migration |
 | Contended counters | write-side SQL under `BEGIN IMMEDIATE` | invoice / order / RMA numbers, promo redemptions, returnable units | with a migration |
-| Operational data | SQL, never events | credentials and sessions, the mailer outbox | with a migration |
+| Operational data | SQL, never events | credentials and sessions, the mailer outbox, the provider's payment sessions and the refunds on their way to it | with a migration |
 
 Rules of thumb that fall out of it:
 
@@ -150,7 +173,8 @@ pool as data unless noted:
 | review | `product_summary_subscription`, `review_list_subscription`, `question_list_subscription` | read models | |
 | customer | `customer_list_subscription` | read model | |
 | promotion | `code_list_subscription` | read model | |
-| payment | `refund_list_subscription` | read model | |
+| payment | `refund_list_subscription` | read models (refunds made, refunds asked for) | |
+| payment | `refund_execution_subscription` | process: enqueues refunds for the provider | |
 | order | `order_history_subscription`, `payment_deadline_subscription` | read models | |
 | order | `order_checkout_subscription` | ACL ← cart | `timada_tax::TaxZones` |
 | order | `order_fulfillment_subscription` | saga | *(no pool)* |
@@ -167,10 +191,11 @@ aggregate (a handler or a `.skip`), so a new event cannot be forgotten
 silently. A handler that keeps failing is retried forever — a missing
 `.data(..)` shows up as a test that hangs, not one that fails.
 
-**3. Background workers** — two loops to spawn:
+**3. Background workers** — three loops to spawn:
 
 ```rust
-tokio::spawn(timada_order::run_payment_timeouts(executor, pool, timeout, every));
+tokio::spawn(timada_order::run_payment_timeouts(executor, pool, provider, timeout, every));
+tokio::spawn(timada_payment::run_provider_refunds(executor, pool, provider, every)); // any number of these
 tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any number of these
 ```
 
@@ -179,6 +204,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | Value | For |
 |---|---|
 | `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it. `default()` = France + overseas exports; `france_with_eu_oss()` adds the 26 other member states at their own VAT, reduced rates mapped by the host with `with_mapped_rate(zone, listed_bp, destination_bp)` |
+| `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
@@ -190,7 +216,8 @@ under its real prefix (never a prefix-stripping mount), and a topcoat host must
 use explicit page paths rather than `module_router!()`.
 
 **6. What stays the host's** — shopper accounts and sessions, the storefront,
-the payment provider (the demo captures payments by hand from the admin), and
+the payment provider's webhook route (the demo has no provider: payments are
+captured by hand from the admin), and
 the SMTP relay.
 
 ## Conventions
@@ -235,7 +262,10 @@ the SMTP relay.
 
 ## What is deliberately not here yet
 
-- A payment provider integration (captures are manual in the demo).
+- A real payment provider: the `PaymentProvider` port, the payment step and
+  the two-phase refunds are there, the Stripe adapter (embedded card form,
+  webhook) is the next step. Disputes and chargebacks, saved cards and
+  reconciliation are further out.
 - VAT outside the consumer case: B2B reverse charge (no VAT number is
   collected), the territories of a member state outside the EU VAT area (they
   share their country's code), multi-currency, the OSS return itself (orders

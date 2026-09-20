@@ -92,8 +92,19 @@ fn location(response: &Response) -> String {
 
 /// A seeded shop: one product (5 in stock, 119,95 €), one shopper, one order.
 async fn shop() -> anyhow::Result<(Router, Store, String)> {
+    shop_with(std::sync::Arc::new(timada_payment::ManualProvider)).await
+}
+
+/// [`shop`], taking its payments through `provider`.
+async fn shop_with(
+    provider: std::sync::Arc<dyn timada_payment::PaymentProvider>,
+) -> anyhow::Result<(Router, Store, String)> {
     let (executor, pool) = timada_core::testing::memory_executor(db::migrations()).await?;
-    let store = Store { executor, db: pool };
+    let store = Store {
+        executor,
+        db: pool,
+        provider,
+    };
     seed::run(&store).await?;
     db::run_subscriptions_once(&store).await?;
     let product = list_products(&store.db, &ListProducts::default())
@@ -176,7 +187,7 @@ async fn guest_cart_to_placed_order() -> anyhow::Result<()> {
         .await;
     assert_eq!(placed.status(), StatusCode::SEE_OTHER);
     let confirmation = location(&placed);
-    assert!(confirmation.starts_with("/checkout/confirmation/"));
+    assert!(confirmation.starts_with("/checkout/pay/"));
     assert!(!browser.cookies.contains_key("__Host-timada_cart"));
 
     // The order appears once the process managers have run.
@@ -769,6 +780,97 @@ async fn shoppers_are_told_when_a_product_is_back_in_stock() -> anyhow::Result<(
 }
 
 #[tokio::test]
+async fn a_shopper_pays_at_the_shops_payment_provider() -> anyhow::Result<()> {
+    let provider = timada_payment::FakeProvider::card_only();
+    let (router, store, product_id) = shop_with(std::sync::Arc::new(provider.clone())).await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+
+    // Only what the provider takes is offered — and accepted.
+    let checkout = text(browser.get("/checkout").await).await?;
+    assert!(checkout.contains("value=\"card\""), "{checkout}");
+    assert!(!checkout.contains("value=\"installments\""), "{checkout}");
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address radio"))?
+        .to_owned();
+    let form = |mode: &str| {
+        format!("delivery_address_id={address_id}&delivery_method=colissimo&payment_mode={mode}")
+    };
+    let refused = browser.post("/checkout", &form("installments")).await;
+    assert_eq!(refused.status(), StatusCode::OK);
+    let refused = text(refused).await?;
+    assert!(
+        refused.contains("n&#x27;est pas proposé") || refused.contains("n'est pas proposé"),
+        "{refused}"
+    );
+
+    let placed = browser.post("/checkout", &form("card")).await;
+    let pay = location(&placed);
+    assert!(pay.starts_with("/checkout/pay/"), "{pay}");
+    let order_id = pay.rsplit('/').next().unwrap_or_default().to_owned();
+    let confirmation = format!("/checkout/confirmation/{order_id}");
+
+    // Stock first, then the payment is requested: the page waits for it.
+    let waiting = text(browser.get(&pay).await).await?;
+    assert!(waiting.contains("http-equiv=\"refresh\""), "{waiting}");
+    db::run_subscriptions_once(&store).await?;
+    let page = text(browser.get(&pay).await).await?;
+    assert!(page.contains("Payer ma commande"), "{page}");
+    assert!(page.contains("125,85 €"), "119,95 + 5,90: {page}");
+    assert!(!page.contains("http-equiv=\"refresh\""), "{page}");
+    let payment_id = timada_payment::payment_id(&order_id);
+    let session = timada_payment::FakeProvider::session_of(&payment_id);
+    assert!(page.contains(&session), "{page}");
+    // Coming back reopens the same session; nothing is confirmed unpaid.
+    assert!(text(browser.get(&pay).await).await?.contains(&session));
+    let early = browser.get(&confirmation).await;
+    assert_eq!(location(&early), pay);
+
+    // The provider reports the payment: the order is paid and confirmed.
+    let paid = timada_payment::ProviderEvent::Paid {
+        payment_id: payment_id.clone(),
+        reference: "pi_demo".into(),
+        amount: timada_core::Money::eur(12_585),
+    };
+    let applied =
+        timada_payment::apply_provider_event(&store.executor, &store.db, &provider, paid).await?;
+    assert_eq!(applied, timada_payment::Applied::Done);
+    db::run_subscriptions_once(&store).await?;
+    let back = browser.get(&pay).await;
+    assert_eq!(location(&back), confirmation);
+    let done = text(browser.get(&confirmation).await).await?;
+    assert!(done.contains("votre commande est confirmée"), "{done}");
+
+    // Someone else's order is nobody's business.
+    let mut stranger = Browser::new(&router);
+    stranger
+        .post(
+            "/register",
+            &REGISTER.replace("ada%40example.com", "eve%40example.com"),
+        )
+        .await;
+    assert_eq!(stranger.get(&pay).await.status(), StatusCode::NOT_FOUND);
+
+    // A cancelled order's money goes back through the provider.
+    timada_order::Command(&store.executor)
+        .cancel_order(&order_id, "customer changed mind")
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let sent_back = provider.refunds();
+    assert_eq!(sent_back.len(), 1, "{sent_back:?}");
+    assert_eq!(sent_back[0].psp_reference, "pi_demo");
+    assert_eq!(sent_back[0].amount, timada_core::Money::eur(12_585));
+    Ok(())
+}
+
+#[tokio::test]
 async fn an_order_left_unpaid_is_cancelled_and_the_shopper_told() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);
@@ -803,12 +905,25 @@ async fn an_order_left_unpaid_is_cancelled_and_the_shopper_told() -> anyhow::Res
     // Nobody completes the payment: the sweep expires it.
     let now = timada_core::time::now_unix_secs()?;
     // Two orders expire: this one and the seeded order, which nobody paid either.
-    let expired = timada_order::expire_unpaid_orders(&store.executor, &store.db, now + 1).await?;
+    let expired = timada_order::expire_unpaid_orders(
+        &store.executor,
+        &store.db,
+        store.provider.as_ref(),
+        now + 1,
+    )
+    .await?;
     assert_eq!(expired, 2);
     db::run_subscriptions_once(&store).await?;
 
     let after = crate::app::catalog::available_stock(&store, &product_id).await?;
     assert!(after >= before + 2, "{before} → {after}");
+    // The payment step, left open in a tab, says so too.
+    let pay = text(browser.get(&format!("/checkout/pay/{order_id}")).await).await?;
+    assert!(pay.contains("Votre commande a été annulée"), "{pay}");
+    assert!(
+        pay.contains("paiement non finalisé dans les délais"),
+        "{pay}"
+    );
     let detail = text(browser.get(&format!("/account/orders/{order_id}")).await).await?;
     assert!(detail.contains("Annulée"), "{detail}");
     assert!(

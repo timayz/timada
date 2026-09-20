@@ -272,8 +272,14 @@ async fn refunds_are_documented_by_credit_notes() -> anyhow::Result<()> {
     };
 
     // Two partial refunds, two credit notes numbered in their own sequence.
-    payments
+    // A refund that was only asked for documents nothing: the credit note
+    // comes once the provider gave the money back.
+    let goodwill = payments
         .refund_payment(&payment, Money::eur(1_000), "goodwill".into())
+        .await?;
+    assert!(credit().await?.is_empty());
+    payments
+        .settle_refund(&payment, &goodwill, "re_1".into())
         .await?;
     let notes = credit().await?;
     let year = timada_core::time::year_of(timada_core::time::now_unix_secs()?);
@@ -284,8 +290,11 @@ async fn refunds_are_documented_by_credit_notes() -> anyhow::Result<()> {
         (1_000, "goodwill")
     );
 
-    payments
+    let returned = payments
         .refund_payment(&payment, Money::eur(26_836), "returned".into())
+        .await?;
+    payments
+        .settle_refund(&payment, &returned, "re_2".into())
         .await?;
     let notes = credit().await?;
     assert_eq!(notes.len(), 2);

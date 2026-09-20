@@ -1,14 +1,21 @@
 //! `/checkout`: delivery address first — it decides the tax zone, hence the
 //! prices and the delivery methods on offer — then delivery method and payment
 //! mode, and the cart is checked out. The order itself is placed by the order context's
-//! process manager; its id derives from the cart id, so the confirmation
-//! page knows where to look before the order exists.
+//! process manager; its id derives from the cart id, so the payment step
+//! knows where to look before the order exists. `/checkout/pay/{order_id}`
+//! waits for the payment to be requested, hands the shopper to the shop's
+//! payment provider, and leads to the confirmation once the order is paid.
 
 use serde::Deserialize;
 use timada_cart::{CartError, Checkout, DeliveryChoice, PaymentMode};
 use timada_customer::{AddressBookView, load_address_book};
 use timada_order::{
-    INSTALLMENT_HANDLING_FEE_MINOR, lines_charged_in_zone, load_order_details, order_id,
+    INSTALLMENT_HANDLING_FEE_MINOR, OrderDetailsView, OrderStatus, cancellation_reason_label,
+    lines_charged_in_zone, load_order_details, order_id,
+};
+use timada_payment::{
+    PaymentError, PaymentMethod, PaymentStart, PaymentStatus, ReturnUrls, load_payment, payment_id,
+    start_payment,
 };
 use timada_shipping::delivery_offers;
 use timada_tax::TaxTreatment;
@@ -31,7 +38,7 @@ use crate::{
     Store,
     auth::require_account,
     cart_session::{current_cart, forget_cart, fresh_cart},
-    db::tax_zones,
+    db::{mailer_config, tax_zones},
 };
 
 /// The demo shop's only pickup point for "retrait en boutique".
@@ -64,7 +71,7 @@ pub async fn submit(cx: &Cx, Form(form): Form<CheckoutForm>) -> Result<impl View
     match check_out(cx, form).await? {
         Ok(order_id) => {
             forget_cart(cx);
-            Err(see_other(href!(confirmation, OrderId(order_id)).resolve(cx)).into())
+            Err(see_other(href!(pay, OrderId(order_id)).resolve(cx)).into())
         }
         Err((message, address_id)) => {
             Ok(view! { checkout_view(error: Some(message), address_id: Some(address_id)) })
@@ -132,6 +139,9 @@ async fn check_out(
         },
         _ => return refuse("Choisissez un mode de paiement."),
     };
+    if payment_mode != PaymentMode::Card && !offers_installments(store) {
+        return refuse("Ce mode de paiement n'est pas proposé. Choisissez la carte bancaire.");
+    }
 
     let checked_out = timada_cart::Command(&store.executor)
         .checkout(
@@ -185,6 +195,7 @@ async fn checkout_view(
 ) -> Result<impl View> {
     let account = require_account(cx).await?;
     let store = app_context::<Store>(cx);
+    let installments = offers_installments(store);
     let (cart, price_notices) = match fresh_cart(cx).await? {
         Some((cart, notices)) if !cart.lines.is_empty() => (cart, notices),
         _ => return Err(see_other(href!(cart::show).resolve(cx)).into()),
@@ -323,10 +334,12 @@ async fn checkout_view(
                             <input type="radio" name="payment_mode" value="card" checked=(true) required=(true)>
                             <span>"Carte bancaire"</span>
                         </label>
-                        <label class="choice">
-                            <input type="radio" name="payment_mode" value="installments">
-                            <span>"Paiement en " (INSTALLMENT_COUNT.to_string()) " fois (frais de dossier " (money(&handling_fee)) ")"</span>
-                        </label>
+                        if installments {
+                            <label class="choice">
+                                <input type="radio" name="payment_mode" value="installments">
+                                <span>"Paiement en " (INSTALLMENT_COUNT.to_string()) " fois (frais de dossier " (money(&handling_fee)) ")"</span>
+                            </label>
+                        }
                     </fieldset>
                     <button type="submit">"Valider la commande"</button>
                 </form>
@@ -369,37 +382,171 @@ path_param!(pub order_id: String, error = not_found);
 
 /// Shown right after checkout. Until the process manager has placed the
 /// order the page says so and reloads itself.
-#[page("/checkout/confirmation/{order_id}")]
-pub async fn confirmation(cx: &Cx) -> Result<impl View> {
+/// Only what the shop's payment provider can take is offered.
+fn offers_installments(store: &Store) -> bool {
+    store.provider.supports(&PaymentMethod::Installments {
+        count: INSTALLMENT_COUNT,
+        fee: timada_core::Money::eur(0),
+    })
+}
+
+/// Where a shopper stands between checking out and having paid.
+enum PayStep {
+    /// The order is not placed yet.
+    Registering,
+    /// Placed; stock is being reserved, or the payment is being recorded.
+    Processing,
+    /// No provider: the shop validates the payment itself.
+    Manual,
+    /// The provider's own page.
+    Redirect(String),
+    /// The provider's embedded form.
+    Embedded,
+    Cancelled(String),
+}
+
+/// The shopper's own order, if it exists yet.
+async fn own_order(cx: &Cx, id: &str) -> Result<Option<OrderDetailsView>> {
     let account = require_account(cx).await?;
-    let id = param::<OrderId>(cx)?.clone();
     let store = app_context::<Store>(cx);
-    let order = load_order_details(&store.executor, &id).await?;
+    let order = load_order_details(&store.executor, id).await?;
     if let Some(order) = &order {
         (order.customer_id == account.customer_id)
             .then_some(())
             .ok_or_not_found()?;
     }
+    Ok(order)
+}
+
+/// A paid order has nothing left to do here: it goes to its confirmation.
+async fn pay_step(cx: &Cx, id: &str, order: Option<&OrderDetailsView>) -> Result<PayStep> {
+    let Some(order) = order else {
+        return Ok(PayStep::Registering);
+    };
+    match order.status {
+        OrderStatus::Placed => {}
+        OrderStatus::Cancelled => {
+            let reason = order.cancelled_reason.as_deref().unwrap_or_default();
+            return Ok(PayStep::Cancelled(
+                cancellation_reason_label(reason).to_owned(),
+            ));
+        }
+        OrderStatus::Paid | OrderStatus::Shipped => {
+            let done = href!(confirmation, OrderId(id.to_owned())).resolve(cx);
+            return Err(see_other(done).into());
+        }
+    }
+
+    let store = app_context::<Store>(cx);
+    let payment_id = payment_id(id);
+    let requested = load_payment(&store.executor, &payment_id)
+        .await?
+        .is_some_and(|p| p.status == PaymentStatus::Requested);
+    if !requested {
+        return Ok(PayStep::Processing);
+    }
+    let urls = ReturnUrls {
+        paid: format!(
+            "{}{}",
+            mailer_config().base_url.trim_end_matches('/'),
+            href!(pay, OrderId(id.to_owned())).resolve(cx)
+        ),
+    };
+    let started = start_payment(
+        &store.executor,
+        &store.db,
+        store.provider.as_ref(),
+        &payment_id,
+        &urls,
+    )
+    .await;
+    match started {
+        Ok(PaymentStart::Manual) => Ok(PayStep::Manual),
+        Ok(PaymentStart::Redirect(url)) => Ok(PayStep::Redirect(url)),
+        Ok(PaymentStart::ClientSecret { .. }) => Ok(PayStep::Embedded),
+        // Captured or declined while the page was loading: look again.
+        Err(PaymentError::NotRequested) => Ok(PayStep::Processing),
+        Err(err) => Err(anyhow::Error::from(err).into()),
+    }
+}
+
+#[page("/checkout/pay/{order_id}")]
+pub async fn pay(cx: &Cx) -> Result<impl View> {
+    let id = param::<OrderId>(cx)?.clone();
+    let order = own_order(cx, &id).await?;
+    let step = pay_step(cx, &id, order.as_ref()).await?;
+    let summary = order
+        .as_ref()
+        .map(|o| (o.display_number().to_owned(), money(&o.total)));
+    let details = href!(account::order_detail, OrderId(id.clone())).resolve(cx);
+    let (title, refresh) = match &step {
+        PayStep::Registering => ("Commande en cours d'enregistrement", Some(2)),
+        PayStep::Processing => ("Commande en cours de traitement", Some(2)),
+        PayStep::Manual => ("Commande enregistrée", Some(10)),
+        PayStep::Redirect(_) | PayStep::Embedded => ("Paiement de votre commande", None),
+        PayStep::Cancelled(_) => ("Commande annulée", None),
+    };
+
+    Ok(view! {
+        document(
+            title: title,
+            refresh: refresh,
+            match &step {
+                PayStep::Registering => {
+                    <h1>"Votre commande est en cours d'enregistrement"</h1>
+                    <p role="status">"Cette page se recharge automatiquement."</p>
+                }
+                PayStep::Processing => {
+                    <h1>"Nous préparons votre commande"</h1>
+                    <p role="status">"Nous vérifions le stock et votre paiement. Cette page se recharge automatiquement."</p>
+                }
+                PayStep::Manual => {
+                    <h1>"Merci, votre commande est enregistrée"</h1>
+                    <p role="status">"Votre paiement est en attente de validation par la boutique."</p>
+                }
+                PayStep::Redirect(url) => {
+                    <h1>"Il ne reste qu'à payer"</h1>
+                    <p><a class="button" href=(url.clone())>"Payer ma commande"</a></p>
+                }
+                PayStep::Embedded => {
+                    <h1>"Il ne reste qu'à payer"</h1>
+                    <p role="alert">"Le paiement par carte sur cette page n'est pas encore disponible dans cette boutique."</p>
+                }
+                PayStep::Cancelled(reason) => {
+                    <h1>"Votre commande a été annulée"</h1>
+                    <p role="status">(reason.clone())</p>
+                }
+            }
+            if let Some((number, total)) = &summary {
+                <p class="notice">"Commande " <strong>(number.clone())</strong> " — total " (total.clone()) "."</p>
+                <p><a href=(details)>"Suivre cette commande"</a></p>
+            }
+        )
+    })
+}
+
+/// An order that is not paid yet belongs to the payment step.
+async fn paid_order(cx: &Cx, id: &str) -> Result<OrderDetailsView> {
+    match own_order(cx, id).await? {
+        Some(order) if matches!(order.status, OrderStatus::Paid | OrderStatus::Shipped) => {
+            Ok(order)
+        }
+        _ => Err(see_other(href!(pay, OrderId(id.to_owned())).resolve(cx)).into()),
+    }
+}
+
+#[page("/checkout/confirmation/{order_id}")]
+pub async fn confirmation(cx: &Cx) -> Result<impl View> {
+    let id = param::<OrderId>(cx)?.clone();
+    let order = paid_order(cx, &id).await?;
     let details = href!(account::order_detail, OrderId(id.clone())).resolve(cx);
 
     Ok(view! {
-        match &order {
-            Some(order) => {
-                document(
-                    title: "Commande enregistrée",
-                    <h1>"Merci, votre commande est enregistrée"</h1>
-                    <p class="notice">"Commande " <strong>(order.display_number().to_owned())</strong> " — total " (money(&order.total)) "."</p>
-                    <p><a href=(details)>"Suivre cette commande"</a></p>
-                )
-            }
-            None => {
-                document(
-                    title: "Commande en cours d'enregistrement",
-                    refresh: Some(2),
-                    <h1>"Votre commande est en cours d'enregistrement"</h1>
-                    <p role="status">"Cette page se recharge automatiquement."</p>
-                )
-            }
-        }
+        document(
+            title: "Commande confirmée",
+            <h1>"Merci, votre commande est confirmée"</h1>
+            <p class="notice">"Commande " <strong>(order.display_number().to_owned())</strong> " — total " (money(&order.total)) "."</p>
+            <p><a href=(details)>"Suivre cette commande"</a></p>
+        )
     })
 }

@@ -7,7 +7,7 @@ use timada_invoice::{invoice_id as invoice_id_of, load_invoice};
 use timada_order::{
     FulfillmentStatus, OrderDetailsView, OrderStatus, load_fulfillment, load_order_details,
 };
-use timada_payment::{PaymentError, PaymentStatus, payment_id};
+use timada_payment::{PaymentError, PaymentStatus, RefundStatus, payment_id};
 use timada_shipping::{ShipmentStatus, shipment_id};
 use topcoat::{
     Result,
@@ -44,6 +44,7 @@ fn refund_error_message(code: Option<&str>) -> Option<&'static str> {
         "exceeds" => Some("Le remboursement dépasse le montant encaissé restant."),
         "amount" => Some("Le montant à rembourser doit être positif."),
         "state" => Some("Seul un paiement encaissé peut être remboursé."),
+        "stale" => Some("Ce remboursement n'attend plus cette action."),
         _ => None,
     }
 }
@@ -99,11 +100,33 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let refund_error = refund_error_message(query::<ShowQuery>(cx)?.refund_error.as_deref());
 
     // What is still refundable, in cents, once the payment is captured.
-    let refundable = payment
+    // Refunds on their way to the provider already hold their amount.
+    let refundable = match payment
         .as_ref()
         .filter(|p| p.status == PaymentStatus::Captured)
-        .map(|p| p.amount.minor - p.refunded.minor)
-        .filter(|left| *left > 0);
+    {
+        Some(p) => {
+            Some(p.refundable().map_err(anyhow::Error::from)?.minor).filter(|left| *left > 0)
+        }
+        None => None,
+    };
+    // Refunds asked for that did not go back yet: `(id, amount, reason,
+    // failure)` — a failure is what the operator can act on.
+    let open_refunds: Vec<(String, String, String, Option<String>)> = payment
+        .iter()
+        .flat_map(|p| &p.refunds)
+        .filter(|r| r.status != RefundStatus::Settled)
+        .map(|r| {
+            let failure = (r.status == RefundStatus::Failed)
+                .then(|| r.failure.clone().unwrap_or_else(|| "refusé".to_owned()));
+            (
+                r.refund_id.clone(),
+                money(&r.amount),
+                r.reason.clone(),
+                failure,
+            )
+        })
+        .collect();
     let refunded = payment
         .as_ref()
         .filter(|p| p.refunded.is_positive())
@@ -233,6 +256,37 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Renvoyer la confirmation")
                                 </form>
                             }
+                            if !open_refunds.is_empty() {
+                                separator()
+                                <h3 class="text-sm font-medium">"Remboursements en cours"</h3>
+                                <ul class="flex flex-col gap-3 text-sm">
+                                    for (refund_id, amount, reason, failure) in &open_refunds {
+                                        <li class="flex flex-col gap-2">
+                                            <span><span class="tabular-nums">(amount.clone())</span> " — " (reason.clone())</span>
+                                            match failure {
+                                                None => { <span class="text-muted-foreground">"Transmis au prestataire de paiement, en attente de confirmation."</span> }
+                                                Some(failure) => {
+                                                    <span role="alert" class="text-destructive">"Refusé par le prestataire : " (failure.clone())</span>
+                                                    <form method="post" action=(href!(retry_refund, OrderId(id.clone())))>
+                                                        <input type="hidden" name="refund_id" value=(refund_id.clone())>
+                                                        button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Relancer le remboursement")
+                                                    </form>
+                                                    <form method="post" action=(href!(settle_refund, OrderId(id.clone()))) class="flex flex-col gap-2">
+                                                        <input type="hidden" name="refund_id" value=(refund_id.clone())>
+                                                        input(attrs: topcoat::view::attributes! { name="reference" placeholder="Référence du virement" aria-label="Référence du remboursement fait à la main" required=(true) })
+                                                        button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Remboursé par un autre moyen")
+                                                    </form>
+                                                }
+                                            }
+                                        </li>
+                                    }
+                                </ul>
+                                if refundable.is_none() {
+                                    if let Some(error) = refund_error {
+                                        <p role="alert" class="text-sm text-destructive">(error)</p>
+                                    }
+                                }
+                            }
                             if let Some(left) = refundable {
                                 separator()
                                 <form method="post" action=(href!(refund, OrderId(id.clone()))) class="flex flex-col gap-2">
@@ -312,7 +366,8 @@ pub async fn resend_confirmation(cx: &Cx) -> Result<impl View> {
     Err::<(), _>(see_other(back(cx, &id)).into())
 }
 
-/// Stands in for the payment provider's capture callback until one is wired.
+/// Records a payment the shop received by its own means (no provider, a bank
+/// transfer…); with a provider, captures come from its events instead.
 #[page(POST "./capture-payment")]
 pub async fn capture_payment(cx: &Cx) -> Result<impl View> {
     let (id, _) = load(cx).await?;
@@ -329,8 +384,9 @@ pub struct RefundForm {
     reason: String,
 }
 
-/// Returns part or all of the captured payment. What the payment context
-/// refuses comes back as a message on the order page.
+/// Asks for part or all of the captured payment to be given back; the refund
+/// worker hands it to the provider. What the payment context refuses comes
+/// back as a message on the order page.
 #[page(POST "./refund")]
 pub async fn refund(cx: &Cx, Form(form): Form<RefundForm>) -> Result<impl View> {
     let (id, order) = load(cx).await?;
@@ -343,7 +399,7 @@ pub async fn refund(cx: &Cx, Form(form): Form<RefundForm>) -> Result<impl View> 
         )
         .await;
     let refused = match refunded {
-        Ok(()) => None,
+        Ok(_) => None,
         Err(PaymentError::RefundExceedsCapture) => Some("exceeds"),
         Err(PaymentError::InvalidAmount) => Some("amount"),
         Err(PaymentError::NotCaptured | PaymentError::PaymentNotFound) => Some("state"),
@@ -354,4 +410,61 @@ pub async fn refund(cx: &Cx, Form(form): Form<RefundForm>) -> Result<impl View> 
         None => back(cx, &id),
     };
     Err::<(), _>(see_other(target).into())
+}
+
+fn refund_outcome(cx: &Cx, id: &str, outcome: Result<(), PaymentError>) -> Result<()> {
+    let refused = match outcome {
+        Ok(()) => None,
+        Err(PaymentError::RefundExceedsCapture) => Some("exceeds"),
+        Err(
+            PaymentError::RefundNotFound
+            | PaymentError::RefundNotFailed
+            | PaymentError::RefundAlreadySettled,
+        ) => Some("stale"),
+        Err(err) => return Err(anyhow::Error::from(err).into()),
+    };
+    let target = match refused {
+        Some(code) => format!("{}?refund_error={code}", back(cx, id)),
+        None => back(cx, id),
+    };
+    Err(see_other(target).into())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RetryRefundForm {
+    refund_id: String,
+}
+
+/// Asks the provider again for a refund it refused.
+#[page(POST "./refunds/retry")]
+pub async fn retry_refund(cx: &Cx, Form(form): Form<RetryRefundForm>) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let outcome = timada_payment::Command(&services.executor)
+        .retry_refund(payment_id(&id), &form.refund_id)
+        .await;
+    refund_outcome(cx, &id, outcome)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SettleRefundForm {
+    refund_id: String,
+    reference: String,
+}
+
+/// The money of a refused refund went back some other way (a bank transfer):
+/// the refund is settled with the operator's reference.
+#[page(POST "./refunds/settle")]
+pub async fn settle_refund(cx: &Cx, Form(form): Form<SettleRefundForm>) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let outcome = timada_payment::Command(&services.executor)
+        .settle_refund(
+            payment_id(&id),
+            &form.refund_id,
+            format!("manual-{}", form.reference.trim()),
+        )
+        .await
+        .map(|_| ());
+    refund_outcome(cx, &id, outcome)
 }

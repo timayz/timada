@@ -21,3 +21,25 @@ pub enum PaymentStatus {
     Declined,
     Refunded,
 }
+
+/// Where a refund stands between the shop's decision and the provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
+pub enum RefundStatus {
+    /// Asked for; the provider has not confirmed yet.
+    #[default]
+    Pending,
+    /// The money went back.
+    Settled,
+    /// The provider refused for good.
+    Failed,
+}
+
+impl RefundStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Settled => "settled",
+            Self::Failed => "failed",
+        }
+    }
+}
