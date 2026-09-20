@@ -20,13 +20,13 @@ timada-customer.workspace = true
 timada-cart.workspace = true
 timada-order.workspace = true
 timada-shipping.workspace = true
-timada-invoice.workspace = true
+timada-invoice = { workspace = true, features = ["pdf"] }
 timada-payment.workspace = true
 timada-mailer.workspace = true
 timada-returns.workspace = true
 timada-tax.workspace = true
 timada-promotion.workspace = true
-timada-admin.workspace = true
+timada-admin = { workspace = true, features = ["pdf"] }
 evento.workspace = true
 topcoat = { workspace = true, features = ["router", "view", "cookie", "session", "asset", "serve", "discover", "tower"] }
 sqlx.workspace = true

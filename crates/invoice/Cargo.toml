@@ -17,6 +17,12 @@ thiserror.workspace = true
 tracing.workspace = true
 sqlx.workspace = true
 sqlx_migrator.workspace = true
+krilla = { workspace = true, optional = true }
+rustybuzz = { workspace = true, optional = true }
+
+[features]
+# Server-side PDF rendering of an `InvoiceDocument` (bundles Noto Sans).
+pdf = ["dep:krilla", "dep:rustybuzz"]
 
 [dev-dependencies]
 timada-core = { workspace = true, features = ["test-support"] }

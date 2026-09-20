@@ -39,7 +39,7 @@ admin renders unstyled.
 Things worth trying: order something to a metropolitan address, then to
 Martinique (the checkout switches to prices without French VAT and another
 carrier), then to Berlin (`DE`: German VAT replaces the French one); capture the payment and ship the order from the admin; ask for a
-return from the account; open the invoice; look at `/admin/emails` to see what
+return from the account; open the invoice and download its PDF; look at `/admin/emails` to see what
 the shop would have sent.
 
 Environment of the demo:
@@ -68,7 +68,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-shipping` | delivery methods and the shipment of an order |
 | `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate |
 | `timada-order` | the order, the checkout ACL that places it, the fulfillment saga, payment timeouts |
-| `timada-invoice` | one invoice per order, legal numbering, credit notes, the invoice as a document |
+| `timada-invoice` | one invoice per order, legal numbering, credit notes, the invoice as a document — and, with the `pdf` feature, as a PDF file |
 | `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock and refund |
 | `timada-review` | product reviews (moderated) and questions & answers |
 | `timada-mailer` | transactional e-mails through a SQL outbox and pluggable transports |

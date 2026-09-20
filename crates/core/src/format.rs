@@ -36,6 +36,12 @@ pub fn vat_rate(rate_bp: u16) -> String {
 
 /// `21/11/2024` from Unix seconds (UTC).
 pub fn date(unix_secs: u64) -> String {
+    let (year, month, day) = civil_date(unix_secs);
+    format!("{day:02}/{month:02}/{year}")
+}
+
+/// `(year, month, day)` of Unix seconds (UTC).
+pub fn civil_date(unix_secs: u64) -> (i64, u8, u8) {
     let days = (unix_secs / 86_400) as i64;
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -47,7 +53,7 @@ pub fn date(unix_secs: u64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if month <= 2 { year + 1 } else { year };
-    format!("{day:02}/{month:02}/{year}")
+    (year, month as u8, day as u8)
 }
 
 #[cfg(test)]

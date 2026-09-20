@@ -867,10 +867,12 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
     assert!(!page.contains("Retourner des articles"), "{page}");
     // Not paid yet: the invoice is a draft, there is nothing to download.
     assert!(!page.contains("Télécharger la facture"), "{page}");
-    assert_eq!(
-        browser.get(&format!("{order_page}/invoice")).await.status(),
-        StatusCode::NOT_FOUND
-    );
+    for uri in [
+        format!("{order_page}/invoice"),
+        format!("{order_page}/invoice.pdf"),
+    ] {
+        assert_eq!(browser.get(&uri).await.status(), StatusCode::NOT_FOUND);
+    }
     timada_payment::Command(&store.executor)
         .capture_payment(timada_payment::payment_id(&order_id), "psp-1".into())
         .await?;
@@ -984,16 +986,39 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
         "{invoice}"
     );
     assert!(invoice.contains("@media print"), "{invoice}");
+    assert!(invoice.contains("Télécharger le PDF"), "{invoice}");
     assert_eq!(
         other.get(&invoice_uri).await.status(),
         StatusCode::NOT_FOUND
     );
+    // The same document as a file, for its owner only.
+    let pdf_uri = format!("{order_page}/invoice.pdf");
+    let pdf = browser.get(&pdf_uri).await;
+    assert_eq!(pdf.status(), StatusCode::OK);
+    let header = |name: &str| {
+        pdf.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert_eq!(header("content-type"), "application/pdf");
+    assert!(
+        header("content-disposition").starts_with("attachment; filename=\"facture-F"),
+        "{}",
+        header("content-disposition")
+    );
+    assert_eq!(header("cache-control"), "private, no-store");
+    assert!(text(pdf).await?.starts_with("%PDF-"));
+    assert_eq!(other.get(&pdf_uri).await.status(), StatusCode::NOT_FOUND);
 
     // The order page lists the return, shows the refund and its credit note,
     // and still offers to return the unit that is left.
     let page = text(browser.get(&order_page).await).await?;
     assert!(page.contains("Retours de cette commande"), "{page}");
-    assert!(page.contains("Télécharger la facture"), "{page}");
+    assert!(page.contains("Télécharger la facture (PDF)"), "{page}");
+    assert!(page.contains(&pdf_uri), "{page}");
+    assert!(page.contains("Version imprimable"), "{page}");
     assert!(page.contains("Remboursé"), "{page}");
     assert!(page.contains("Avoirs émis"), "{page}");
     assert!(page.contains("Retourner des articles"), "{page}");

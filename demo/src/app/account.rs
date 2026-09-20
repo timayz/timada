@@ -946,7 +946,12 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
         timada_invoice::load_invoice(&store.executor, timada_invoice::invoice_id(&id))
             .await?
             .filter(|invoice| invoice.status == timada_invoice::InvoiceStatus::Issued)
-            .map(|_| href!(invoice::show, OrderId(id.clone())).resolve(cx));
+            .map(|_| {
+                (
+                    href!(invoice::pdf, OrderId(id.clone())).resolve(cx),
+                    href!(invoice::show, OrderId(id.clone())).resolve(cx),
+                )
+            });
     let new_return = returns::can_request_return(store, &order)
         .await?
         .then(|| href!(returns::new_return, OrderId(id.clone())).resolve(cx));
@@ -984,7 +989,7 @@ async fn order_view(
     credit_notes: &Vec<CreditNoteLine>,
     order_returns: &Vec<ReturnLink>,
     new_return: Option<String>,
-    invoice_link: Option<String>,
+    invoice_link: Option<(String, String)>,
 ) -> Result<impl View> {
     let payment = match order.payment_mode {
         // The code covered the whole total: nothing was charged.
@@ -1063,8 +1068,12 @@ async fn order_view(
             </table>
             if let Some(mention) = vat_mention { <p class="muted">(mention)</p> }
             <p>"Paiement : " (payment)</p>
-            if let Some(link) = &invoice_link {
-                <p><a href=(link.clone())>"Télécharger la facture"</a></p>
+            if let Some((pdf, printable)) = &invoice_link {
+                <p>
+                    <a href=(pdf.clone())>"Télécharger la facture (PDF)"</a>
+                    " · "
+                    <a href=(printable.clone())>"Version imprimable"</a>
+                </p>
             }
             if let Some(refunded) = &refunded {
                 <p role="status" class="notice">"Remboursé : " <strong>(refunded.clone())</strong></p>

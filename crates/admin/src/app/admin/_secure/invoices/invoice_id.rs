@@ -85,12 +85,21 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         ));
     }
 
+    // The file itself needs the `pdf` feature; the printable page never does.
+    #[cfg(feature = "pdf")]
+    let pdf_link = Some(href!(download, InvoiceId(id.clone())).resolve(cx));
+    #[cfg(not(feature = "pdf"))]
+    let pdf_link: Option<String> = None;
+
     Ok(view! {
         page_header(
             title: &title,
             invoice_status_badge(status: invoice.status)
             if invoice.invoice_number.is_some() {
                 <a href=(href!(print, InvoiceId(id.clone()))) class="h-9 rounded-lg border border-border px-3 text-sm leading-9">"Version imprimable"</a>
+                if let Some(link) = &pdf_link {
+                    <a href=(link.clone()) class="h-9 rounded-lg border border-border px-3 text-sm leading-9">"Télécharger le PDF"</a>
+                }
             }
         )
         <p class="-mt-4 mb-6 font-mono text-xs text-muted-foreground">(id.clone())</p>
@@ -329,5 +338,43 @@ pub async fn print(cx: &Cx) -> Result<impl View> {
                 (document.issuer.name.clone()) " · " (document.issuer.registration.clone()) " · TVA " (document.issuer.vat_number.clone()) " · " (document.issuer.contact.clone())
             </footer>
         </article>
+    })
+}
+
+/// A PDF handed to the browser as a file to keep.
+#[cfg(feature = "pdf")]
+pub struct PdfDownload {
+    file_name: String,
+    bytes: Vec<u8>,
+}
+
+#[cfg(feature = "pdf")]
+impl topcoat::router::response::IntoResponse for PdfDownload {
+    fn into_response(self, _cx: &Cx) -> Result<topcoat::router::response::Response> {
+        Ok(topcoat::router::response::Response::builder()
+            .header("Content-Type", "application/pdf")
+            .header(
+                "Content-Disposition",
+                format!("attachment; filename=\"{}\"", self.file_name),
+            )
+            .header("Cache-Control", "private, no-store")
+            .body(topcoat::router::Body::from(self.bytes))?)
+    }
+}
+
+/// `./pdf`: the same document as a file, rendered by the server — what the
+/// customer downloads from their account.
+#[cfg(feature = "pdf")]
+#[topcoat::router::route(GET "./pdf")]
+pub async fn download(cx: &Cx) -> Result<PdfDownload> {
+    let id = param::<InvoiceId>(cx)?.clone();
+    let services = app_context::<AdminServices>(cx);
+    let issuer = &app_context::<AdminConfig>(cx).invoice_issuer;
+    let document = load_invoice_document(&services.executor, &services.db, issuer, &id)
+        .await?
+        .ok_or_not_found()?;
+    Ok(PdfDownload {
+        file_name: timada_invoice::invoice_pdf_file_name(&document),
+        bytes: timada_invoice::render_invoice_pdf(&document).map_err(anyhow::Error::from)?,
     })
 }

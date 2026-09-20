@@ -608,6 +608,38 @@ async fn invoices_are_listed_and_payments_refunded() -> anyhow::Result<()> {
     assert!(print.contains("Prix unitaire TTC"), "{print}");
     assert!(print.contains("TVA 20 % sur 119,92 €"), "{print}");
     assert!(print.contains("print:hidden"), "{print}");
+    // The same document as a file, behind the session like the rest.
+    #[cfg(feature = "pdf")]
+    {
+        assert!(detail.contains("Télécharger le PDF"), "{detail}");
+        let uri = format!("/admin/invoices/{invoice_id}/pdf");
+        let pdf = h.router.handle(get(&uri, Some(&cookie))).await;
+        assert_eq!(pdf.status(), StatusCode::OK);
+        let header = |name: &str| {
+            pdf.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        assert_eq!(header("content-type"), "application/pdf");
+        assert!(
+            header("content-disposition").contains("facture-F"),
+            "{pdf:?}"
+        );
+        assert_eq!(header("cache-control"), "private, no-store");
+        let bytes = to_bytes(pdf.into_body(), usize::MAX)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+        assert!(bytes.starts_with(b"%PDF-"));
+        let anonymous = h.router.handle(get(&uri, None)).await;
+        assert_eq!(anonymous.status(), StatusCode::SEE_OTHER);
+        let missing = h
+            .router
+            .handle(get("/admin/invoices/nope/pdf", Some(&cookie)))
+            .await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
     let missing = h
         .router
         .handle(get("/admin/invoices/nope", Some(&cookie)))

@@ -1,13 +1,22 @@
 //! `/account/orders/{order_id}/invoice`: the shopper's invoice as a print-ready
-//! page. "Télécharger la facture" opens it; the browser's print dialog saves
-//! it as a PDF. It is its own document — no shop header on an invoice.
+//! page — its own document, no shop header on an invoice — and
+//! `/account/orders/{order_id}/invoice.pdf`, the same document as a file the
+//! server renders ("Télécharger la facture").
 
-use timada_invoice::{InvoiceDocument, invoice_id, load_invoice_document};
+use timada_invoice::{
+    InvoiceDocument, invoice_id, invoice_pdf_file_name, load_invoice_document, render_invoice_pdf,
+};
 use timada_order::load_order_details;
 use topcoat::{
     Result,
     context::{Cx, app_context},
-    router::{error::RouterErrorExt, href, page, path_param as param},
+    router::{
+        Body,
+        error::RouterErrorExt,
+        href, page, path_param as param,
+        response::{IntoResponse, Response},
+        route,
+    },
     view::{View, view},
 };
 
@@ -36,8 +45,7 @@ footer{margin-top:2rem;border-top:1px solid #ccc;padding-top:.75rem;font-size:.8
 
 /// The invoice of the signed-in shopper's order, once it is issued. Someone
 /// else's order, or an invoice not issued yet, is a 404.
-#[page("/account/orders/{order_id}/invoice")]
-pub async fn show(cx: &Cx) -> Result<impl View> {
+async fn own_invoice(cx: &Cx) -> Result<(String, InvoiceDocument)> {
     let account = require_account(cx).await?;
     let order_id = param::<OrderId>(cx)?.clone();
     let store = app_context::<Store>(cx);
@@ -45,7 +53,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .await?
         .filter(|order| order.customer_id == account.customer_id)
         .ok_or_not_found()?;
-    let document: InvoiceDocument = load_invoice_document(
+    let document = load_invoice_document(
         &store.executor,
         &store.db,
         &invoice_issuer(),
@@ -53,8 +61,44 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     )
     .await?
     .ok_or_not_found()?;
+    Ok((order_id, document))
+}
+
+/// A PDF handed to the browser as a file to keep.
+pub struct PdfDownload {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+}
+
+impl IntoResponse for PdfDownload {
+    fn into_response(self, _cx: &Cx) -> Result<Response> {
+        Ok(Response::builder()
+            .header("Content-Type", "application/pdf")
+            .header(
+                "Content-Disposition",
+                format!("attachment; filename=\"{}\"", self.file_name),
+            )
+            // Personal data: neither shared caches nor the back button keep it.
+            .header("Cache-Control", "private, no-store")
+            .body(Body::from(self.bytes))?)
+    }
+}
+
+#[route(GET "/account/orders/{order_id}/invoice.pdf")]
+pub async fn pdf(cx: &Cx) -> Result<PdfDownload> {
+    let (_, document) = own_invoice(cx).await?;
+    Ok(PdfDownload {
+        file_name: invoice_pdf_file_name(&document),
+        bytes: render_invoice_pdf(&document).map_err(anyhow::Error::from)?,
+    })
+}
+
+#[page("/account/orders/{order_id}/invoice")]
+pub async fn show(cx: &Cx) -> Result<impl View> {
+    let (order_id, document) = own_invoice(cx).await?;
 
     let title = format!("Facture {}", document.number);
+    let download = href!(pdf, OrderId(order_id.clone())).resolve(cx);
     let back = href!(account::order_detail, OrderId(order_id)).resolve(cx);
     let price_heading = if document.amounts_include_vat {
         "Prix unitaire TTC"
@@ -127,6 +171,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     <div class="actions">
                         <button type="button" onclick="window.print()">"Imprimer ou enregistrer en PDF"</button>
                         <span class="muted">"ou Ctrl+P / ⌘P"</span>
+                        <a href=(download)>"Télécharger le PDF"</a>
                         <a href=(back)>"Retour à la commande"</a>
                     </div>
                     <header class="doc">

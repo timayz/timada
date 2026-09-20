@@ -9,6 +9,8 @@ readme = "README.md"
 
 [features]
 axum = ["dep:axum"]
+# "Télécharger le PDF" on an issued invoice (pulls the PDF writer and fonts).
+pdf = ["timada-invoice/pdf"]
 
 [dependencies]
 timada-core.workspace = true

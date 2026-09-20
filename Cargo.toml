@@ -38,6 +38,9 @@ thiserror = "2"
 topcoat = { version = "=0.8.1", default-features = false }
 serde = { version = "1", features = ["derive"] }
 argon2 = "0.5"
+krilla = { version = "0.8", default-features = false, features = ["simple-text"] }
+# Same major as krilla shapes with: measured widths are the drawn widths.
+rustybuzz = "0.20"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
