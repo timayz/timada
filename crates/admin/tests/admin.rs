@@ -1436,3 +1436,131 @@ async fn categories_are_managed_and_products_filed_under_them() -> anyhow::Resul
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     Ok(())
 }
+
+#[tokio::test]
+async fn technical_sheets_are_edited_and_categories_pick_their_filters() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let sync = || async {
+        timada_catalog::category_list_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await?;
+        timada_catalog::listing_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await
+    };
+    let catalog = timada_catalog::Command(&h.executor);
+    let screens = catalog
+        .create_category(timada_catalog::CreateCategory {
+            name: "Écrans PC".into(),
+            slug: None,
+            parent_id: None,
+        })
+        .await?;
+    let gaming = catalog
+        .create_category(timada_catalog::CreateCategory {
+            name: "Écrans gamer".into(),
+            slug: None,
+            parent_id: Some(screens.clone()),
+        })
+        .await?;
+    let created = h
+        .router
+        .handle(post(
+            "/admin/products/new",
+            &format!(
+                "sku=aoc-27&name=AOC+27&brand=AOC&category_id={gaming}&short_description=&warranty_months=24&price_cents=22990&vat_rate_bp=2000&eco_participation_cents=0"
+            ),
+            Some(&cookie),
+        ))
+        .await;
+    let product_uri = location(&created);
+    let product_id = timada_catalog::product_id("AOC-27");
+
+    // The sheet, a line per spec; the group may be left out, junk is dropped.
+    let saved = h
+        .router
+        .handle(post(
+            &format!("{product_uri}/specify"),
+            "specs=Dalle+%7C+Taille+%7C+27+pouces%0D%0ADalle+%7C+Type+%7C+IPS%0D%0AGarantie+%7C+3+ans%0D%0Ajuste+du+texte%0D%0ADalle+%7C+Vide+%7C+",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&saved), product_uri);
+    let product = timada_catalog::load_product_page(&h.executor, &product_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("product missing"))?;
+    let sheet: Vec<(&str, &str, &str)> = product
+        .specs
+        .iter()
+        .map(|s| (s.group.as_str(), s.label.as_str(), s.value.as_str()))
+        .collect();
+    assert_eq!(
+        sheet,
+        [
+            ("Dalle", "Taille", "27 pouces"),
+            ("Dalle", "Type", "IPS"),
+            ("", "Garantie", "3 ans")
+        ]
+    );
+    let page = text(h.router.handle(get(&product_uri, Some(&cookie))).await).await?;
+    assert!(page.contains("Dalle | Taille | 27 pouces"), "{page}");
+    sync().await?;
+
+    // The category page offers what its products have; the list is saved in
+    // the order typed, and inherited below.
+    let uri = format!("/admin/categories/{screens}");
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(
+        page.contains("Dalle &gt; Type") || page.contains("Dalle > Type"),
+        "{page}"
+    );
+    assert!(page.contains("1 produit(s)"), "{page}");
+    let saved = h
+        .router
+        .handle(post(
+            &format!("{uri}/facets"),
+            "facets=Dalle+%3E+Type%0D%0ADalle+%3E+Taille%0D%0A%0D%0A",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&saved), uri);
+    sync().await?;
+    let row = timada_catalog::category_by_id(&h.db, &screens)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("category missing"))?;
+    assert_eq!(
+        row.facet_keys(),
+        [
+            timada_catalog::SpecKey::new("Dalle", "Type"),
+            timada_catalog::SpecKey::new("Dalle", "Taille")
+        ]
+    );
+    let below = text(
+        h.router
+            .handle(get(&format!("/admin/categories/{gaming}"), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(below.contains("hérite de"), "{below}");
+
+    let too_many: String = (0..13)
+        .map(|n| format!("Dalle+%3E+Spec+{n}%0D%0A"))
+        .collect();
+    let refused = h
+        .router
+        .handle(post(
+            &format!("{uri}/facets"),
+            &format!("facets={too_many}"),
+            Some(&cookie),
+        ))
+        .await;
+    assert!(
+        location(&refused).contains("?error="),
+        "{}",
+        location(&refused)
+    );
+    Ok(())
+}

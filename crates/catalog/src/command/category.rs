@@ -2,16 +2,20 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::{
     aggregator::{
-        CategoryArchived, CategoryCreated, CategoryDescribed, CategoryMoved, CategoryPositioned,
-        CategoryRenamed,
+        CategoryArchived, CategoryCreated, CategoryDescribed, CategoryFacetsDefined, CategoryMoved,
+        CategoryPositioned, CategoryRenamed,
     },
     error::CatalogError,
+    value_object::SpecKey,
 };
 
 use super::category_id;
 
 /// How deep the tree goes, root categories being level 1.
 pub const MAX_CATEGORY_DEPTH: usize = 6;
+
+/// How many specs a category can be filtered by.
+pub const MAX_CATEGORY_FACETS: usize = 12;
 
 #[derive(Debug, Clone)]
 pub struct CreateCategory {
@@ -189,6 +193,36 @@ impl<E: Executor> super::Command<'_, E> {
         category
             .write()?
             .event(&CategoryArchived)
+            .commit(self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Sets the specs shoppers filter the category by, in the order shown —
+    /// the whole list; an empty one hands the category back to its parent's.
+    /// Blank and repeated entries are dropped; the same list records nothing.
+    pub async fn define_category_facets(
+        &self,
+        id: impl Into<String>,
+        facets: Vec<SpecKey>,
+    ) -> Result<(), CatalogError> {
+        let category = self.load_open_category(id).await?;
+        let mut kept: Vec<SpecKey> = Vec::new();
+        for facet in facets {
+            let facet = SpecKey::new(facet.group.trim(), facet.label.trim());
+            if !facet.label.is_empty() && !kept.contains(&facet) {
+                kept.push(facet);
+            }
+        }
+        if kept.len() > MAX_CATEGORY_FACETS {
+            return Err(CatalogError::TooManyFacets(MAX_CATEGORY_FACETS));
+        }
+        if category.facets == kept {
+            return Ok(());
+        }
+        category
+            .write()?
+            .event(&CategoryFacetsDefined { facets: kept })
             .commit(self.0)
             .await?;
         Ok(())

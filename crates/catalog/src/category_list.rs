@@ -13,11 +13,12 @@ use sqlx::SqlitePool;
 
 use crate::{
     aggregator::{
-        CategoryArchived, CategoryCreated, CategoryDescribed, CategoryMoved, CategoryPositioned,
-        CategoryRenamed,
+        CategoryArchived, CategoryCreated, CategoryDescribed, CategoryFacetsDefined, CategoryMoved,
+        CategoryPositioned, CategoryRenamed,
     },
     command::{Command, MAX_CATEGORY_DEPTH},
     read_model::ProductListRow,
+    value_object::SpecKey,
 };
 
 /// Subscription key; the caller attaches the pool with `.data(pool)`.
@@ -32,6 +33,44 @@ pub struct CategoryRow {
     pub parent_id: Option<String>,
     pub position: i64,
     pub archived: bool,
+    /// The category's own spec filters, encoded; see [`Self::facet_keys`].
+    pub facets: String,
+}
+
+/// Between two facets, and between a facet's group and its label: characters
+/// no operator types.
+const FACET_SEPARATOR: char = '\u{1e}';
+const KEY_SEPARATOR: char = '\u{1f}';
+
+fn encode_facets(facets: &[SpecKey]) -> String {
+    facets
+        .iter()
+        .map(|facet| format!("{}{KEY_SEPARATOR}{}", facet.group, facet.label))
+        .collect::<Vec<_>>()
+        .join(&FACET_SEPARATOR.to_string())
+}
+
+impl CategoryRow {
+    /// The specs this category itself is filtered by, in order; empty when it
+    /// goes by its parent's.
+    pub fn facet_keys(&self) -> Vec<SpecKey> {
+        self.facets
+            .split(FACET_SEPARATOR)
+            .filter_map(|facet| facet.split_once(KEY_SEPARATOR))
+            .map(|(group, label)| SpecKey::new(group, label))
+            .collect()
+    }
+}
+
+/// The specs a category is filtered by, given the way down to it
+/// ([`category_lineage`]): its own list, else the nearest one above.
+pub fn effective_facets(lineage: &[CategoryRow]) -> Vec<SpecKey> {
+    lineage
+        .iter()
+        .rev()
+        .map(CategoryRow::facet_keys)
+        .find(|facets| !facets.is_empty())
+        .unwrap_or_default()
 }
 
 /// A category with the categories under it, siblings in display order.
@@ -49,6 +88,7 @@ pub fn category_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(refresh_on_category_moved())
         .handler(refresh_on_category_positioned())
         .handler(refresh_on_category_archived())
+        .handler(refresh_on_category_facets_defined())
         .strict()
 }
 
@@ -58,7 +98,7 @@ pub async fn list_categories(
     include_archived: bool,
 ) -> sqlx::Result<Vec<CategoryRow>> {
     sqlx::query_as(
-        "SELECT id, slug, name, description, parent_id, position, archived FROM catalog_category
+        "SELECT id, slug, name, description, parent_id, position, archived, facets FROM catalog_category
          WHERE ?1 OR archived = 0
          ORDER BY position, name, id",
     )
@@ -68,14 +108,14 @@ pub async fn list_categories(
 }
 
 pub async fn category_by_id(db: &SqlitePool, id: &str) -> sqlx::Result<Option<CategoryRow>> {
-    sqlx::query_as("SELECT id, slug, name, description, parent_id, position, archived FROM catalog_category WHERE id = ?")
+    sqlx::query_as("SELECT id, slug, name, description, parent_id, position, archived, facets FROM catalog_category WHERE id = ?")
     .bind(id)
     .fetch_optional(db)
     .await
 }
 
 pub async fn category_by_slug(db: &SqlitePool, slug: &str) -> sqlx::Result<Option<CategoryRow>> {
-    sqlx::query_as("SELECT id, slug, name, description, parent_id, position, archived FROM catalog_category WHERE slug = ?")
+    sqlx::query_as("SELECT id, slug, name, description, parent_id, position, archived, facets FROM catalog_category WHERE slug = ?")
     .bind(slug)
     .fetch_optional(db)
     .await
@@ -94,7 +134,7 @@ pub async fn category_lineage(db: &SqlitePool, id: &str) -> sqlx::Result<Vec<Cat
             FROM up JOIN catalog_category c ON c.id = up.id
             WHERE c.parent_id IS NOT NULL AND up.depth < ?2
          )
-         SELECT id, slug, name, description, parent_id, position, archived FROM catalog_category
+         SELECT id, slug, name, description, parent_id, position, archived, facets FROM catalog_category
          JOIN up USING (id)
          ORDER BY up.depth DESC",
     )
@@ -247,12 +287,13 @@ async fn refresh<E: Executor>(ctx: &Context<'_, E>, id: &str) -> anyhow::Result<
         anyhow::bail!("category {id} has events but cannot be loaded");
     };
     sqlx::query(
-        "INSERT INTO catalog_category (id, slug, name, description, parent_id, position, archived)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO catalog_category
+            (id, slug, name, description, parent_id, position, archived, facets)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (id) DO UPDATE
          SET name = excluded.name, description = excluded.description,
              parent_id = excluded.parent_id, position = excluded.position,
-             archived = excluded.archived",
+             archived = excluded.archived, facets = excluded.facets",
     )
     .bind(&category.id)
     .bind(&category.slug)
@@ -261,6 +302,7 @@ async fn refresh<E: Executor>(ctx: &Context<'_, E>, id: &str) -> anyhow::Result<
     .bind(&category.parent_id)
     .bind(category.position)
     .bind(category.archived)
+    .bind(encode_facets(&category.facets))
     .execute(&db)
     .await?;
     Ok(())
@@ -310,6 +352,14 @@ async fn refresh_on_category_positioned<E: Executor>(
 async fn refresh_on_category_archived<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<CategoryArchived>,
+) -> anyhow::Result<()> {
+    refresh(ctx, &event.aggregate_id).await
+}
+
+#[evento::subscription]
+async fn refresh_on_category_facets_defined<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<CategoryFacetsDefined>,
 ) -> anyhow::Result<()> {
     refresh(ctx, &event.aggregate_id).await
 }

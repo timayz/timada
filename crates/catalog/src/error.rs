@@ -18,6 +18,8 @@ pub enum CatalogError {
     CategoryCycle,
     #[error("categories nest {0} levels deep at most")]
     CategoryTooDeep(usize),
+    #[error("a category is filtered by {0} specs at most")]
+    TooManyFacets(usize),
     #[error("`{0}` is required")]
     Required(&'static str),
     #[error(transparent)]

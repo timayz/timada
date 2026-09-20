@@ -255,7 +255,11 @@ the SMTP relay.
   the warehouse's stock, a published review or its category's place changes.
   `search_listing` answers a page, the total and the facets in one go; each
   facet is counted with every *other* filter applied, so a second brand can
-  always be picked. A product is listed while it is not archived and has a
+  always be picked. Beyond the fixed facets — brand, price, stock, rating —
+  a category is filtered by the lines of the **technical sheet** its operator
+  picked (`CategoryFacetsDefined`, inherited by the categories below until
+  one has a list of its own): values match exactly, so a value is spelled the
+  same way on every product; they are offered in numeric order. A product is listed while it is not archived and has a
   price; a product under an archived category stays listed under what is
   above it. A new deployment of the subscription builds the table from the
   whole history.

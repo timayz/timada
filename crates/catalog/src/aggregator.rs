@@ -1,4 +1,4 @@
-use crate::value_object::{Brand, EnergyClass, Media, Spec};
+use crate::value_object::{Brand, EnergyClass, Media, Spec, SpecKey};
 
 // The explicit name pins the on-disk identity: renaming the crate or the enum
 // must never orphan stored events.
@@ -73,4 +73,11 @@ pub enum Category {
 
     /// The category left the storefront, with everything under it.
     CategoryArchived,
+
+    /// Which lines of the technical sheet shoppers filter this category by,
+    /// in the order shown — the whole list, replacing the one before. A
+    /// category without a list of its own goes by its parent's.
+    CategoryFacetsDefined {
+        facets: Vec<SpecKey>,
+    },
 }

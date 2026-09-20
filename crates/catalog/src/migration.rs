@@ -130,7 +130,44 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0004SpecFacets;
+
+sqlite_migration!(
+    M0004SpecFacets,
+    "catalog",
+    "m0004_spec_facets",
+    vec_box![M0003Listing],
+    vec_box![
+        (
+            "ALTER TABLE catalog_category ADD COLUMN facets TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE catalog_category DROP COLUMN facets"
+        ),
+        // The technical sheet of the listed products, a line per row: what
+        // spec filters match and count.
+        (
+            "CREATE TABLE catalog_listing_spec (
+                product_id TEXT NOT NULL,
+                spec_group TEXT NOT NULL,
+                label TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (product_id, spec_group, label)
+            )",
+            "DROP TABLE catalog_listing_spec"
+        ),
+        (
+            "CREATE INDEX catalog_listing_spec_value
+             ON catalog_listing_spec (spec_group, label, value)",
+            "DROP INDEX catalog_listing_spec_value"
+        )
+    ]
+);
+
 /// Read-model migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001CatalogProduct, M0002Categories, M0003Listing]
+    vec_box![
+        M0001CatalogProduct,
+        M0002Categories,
+        M0003Listing,
+        M0004SpecFacets
+    ]
 }

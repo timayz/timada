@@ -36,7 +36,7 @@ topcoat dev -p demo             # bundles assets, watches, serves on http://127.
 Without an asset bundle (`cargo run -p demo`) the storefront works and the
 admin renders unstyled.
 
-Things worth trying: browse the seeded catalogue — categories, brands, search (`ecran incurve`), filters and sorting; order something to a metropolitan address, then to
+Things worth trying: browse the seeded catalogue — categories, brands, search (`ecran incurve`), filters (panel type and refresh rate under *Écran PC*) and sorting; order something to a metropolitan address, then to
 Martinique (the checkout switches to prices without French VAT and another
 carrier), then to Berlin (`DE`: German VAT replaces the French one); capture the payment from the admin (the demo has no payment provider: the payment step of the checkout waits for it) and ship the order; refund part of it from the order page; ask for a
 return from the account; open the invoice and download its PDF; look at `/admin/emails` to see what

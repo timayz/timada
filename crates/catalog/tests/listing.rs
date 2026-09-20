@@ -440,3 +440,150 @@ async fn sorting_and_paging() -> anyhow::Result<()> {
     assert_eq!(page.rows[0].sku, "LG-27U");
     Ok(())
 }
+
+fn spec(group: &str, label: &str, value: &str) -> timada_catalog::Spec {
+    timada_catalog::Spec {
+        group: group.into(),
+        label: label.into(),
+        value: value.into(),
+    }
+}
+
+#[tokio::test]
+async fn the_technical_sheet_filters_and_counts() -> anyhow::Result<()> {
+    use timada_catalog::{SpecFacet, SpecFilter, SpecKey, specs_in_category};
+
+    let (shop, [gamer, office, keyboard, _], [computing, screens, _]) = stocked_shop().await?;
+    let catalog = Command(&shop.executor);
+    catalog
+        .specify_product(
+            &gamer,
+            vec![
+                spec("Dalle", "Taille", "24 pouces"),
+                spec("Dalle", "Type", "IPS"),
+                spec("Dalle", "Fréquence", "180 Hz"),
+            ],
+        )
+        .await?;
+    catalog
+        .specify_product(
+            &office,
+            vec![
+                spec("Dalle", "Taille", "27 pouces"),
+                spec("Dalle", "Type", "IPS"),
+                spec("Dalle", "Fréquence", "60 Hz"),
+                spec("Dalle", "Note", "  "),
+            ],
+        )
+        .await?;
+    catalog
+        .specify_product(&keyboard, vec![spec("Touches", "Type", "Mécanique")])
+        .await?;
+    // A third monitor, another panel.
+    let curved = shop
+        .sell(
+            "SAM-32C",
+            "Samsung 32\" incurvé",
+            "Samsung",
+            Some(&screens),
+            27_900,
+            4,
+        )
+        .await?;
+    catalog
+        .specify_product(
+            &curved,
+            vec![
+                spec("Dalle", "Taille", "32 pouces"),
+                spec("Dalle", "Type", "VA"),
+                spec("Dalle", "Fréquence", "144 Hz"),
+            ],
+        )
+        .await?;
+    shop.sync().await?;
+
+    let size = SpecKey::new("Dalle", "Taille");
+    let panel = SpecKey::new("Dalle", "Type");
+    let refresh = SpecKey::new("Dalle", "Fréquence");
+    let in_screens = ListingQuery {
+        category_id: Some(screens.clone()),
+        facet_specs: vec![
+            panel.clone(),
+            refresh.clone(),
+            SpecKey::new("Dalle", "Poids"),
+        ],
+        ..ListingQuery::default()
+    };
+    let page = search_listing(&shop.db, &in_screens).await?;
+    assert_eq!(
+        page.facets.specs,
+        [
+            SpecFacet {
+                key: panel.clone(),
+                values: vec![("IPS".into(), 2), ("VA".into(), 1)],
+            },
+            // By their number, not the alphabet — and no facet for a spec
+            // nobody has.
+            SpecFacet {
+                key: refresh.clone(),
+                values: vec![
+                    ("60 Hz".into(), 1),
+                    ("144 Hz".into(), 1),
+                    ("180 Hz".into(), 1)
+                ],
+            },
+        ]
+    );
+
+    // Any of a spec's values, every spec: IPS *and* (144 or 180 Hz).
+    let narrowed = ListingQuery {
+        specs: vec![
+            SpecFilter {
+                key: panel.clone(),
+                values: vec!["IPS".into()],
+            },
+            SpecFilter {
+                key: refresh.clone(),
+                values: vec!["144 Hz".into(), "180 Hz".into()],
+            },
+        ],
+        ..in_screens.clone()
+    };
+    let page = search_listing(&shop.db, &narrowed).await?;
+    let skus: Vec<&str> = page.rows.iter().map(|row| row.sku.as_str()).collect();
+    assert_eq!(skus, ["AOC-24G"]);
+    // Each facet counts inside the *other* picks: VA stays on offer among the
+    // fast screens, 60 Hz among the IPS ones.
+    assert_eq!(
+        page.facets.specs[0].values,
+        [("IPS".to_owned(), 1), ("VA".to_owned(), 1)]
+    );
+    assert_eq!(
+        page.facets.specs[1].values,
+        [("60 Hz".to_owned(), 1), ("180 Hz".to_owned(), 1)]
+    );
+    // The same label in another group is another spec.
+    let keys = ListingQuery {
+        specs: vec![SpecFilter {
+            key: SpecKey::new("Touches", "Type"),
+            values: vec!["Mécanique".into()],
+        }],
+        ..ListingQuery::default()
+    };
+    assert_eq!(shop.skus(&keys).await?, ["LG-KB1"]);
+
+    // What an operator picks from: the specs of the branch, most common first.
+    let offered = specs_in_category(&shop.db, &computing).await?;
+    assert_eq!(offered[0].1, 3);
+    assert!(offered.contains(&(size, 3)));
+    assert!(offered.contains(&(SpecKey::new("Touches", "Type"), 1)));
+    assert_eq!(offered.len(), 4, "a blank value is no spec: {offered:?}");
+
+    // A sheet is replaced whole: what left it no longer matches.
+    catalog
+        .specify_product(&gamer, vec![spec("Dalle", "Type", "OLED")])
+        .await?;
+    shop.sync().await?;
+    assert!(search_listing(&shop.db, &narrowed).await?.rows.is_empty());
+    Ok(())
+}

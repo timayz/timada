@@ -14,6 +14,29 @@ pub struct Spec {
     pub value: String,
 }
 
+/// Which line of the technical sheet: `Dalle` › `Taille`. The same label may
+/// live in two groups.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Encode, Decode)]
+pub struct SpecKey {
+    pub group: String,
+    pub label: String,
+}
+
+impl SpecKey {
+    pub fn new(group: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            group: group.into(),
+            label: label.into(),
+        }
+    }
+}
+
+impl Spec {
+    pub fn key(&self) -> SpecKey {
+        SpecKey::new(&self.group, &self.label)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
 pub enum MediaKind {
     #[default]

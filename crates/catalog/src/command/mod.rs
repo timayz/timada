@@ -9,7 +9,7 @@ mod specify_product;
 
 use std::ops::Deref;
 
-pub use category::{CreateCategory, MAX_CATEGORY_DEPTH};
+pub use category::{CreateCategory, MAX_CATEGORY_DEPTH, MAX_CATEGORY_FACETS};
 pub use create_product::CreateProduct;
 pub use describe_product::DescribeProduct;
 
@@ -17,12 +17,13 @@ use evento::{Executor, Projection, metadata::Event};
 
 use crate::{
     aggregator::{
-        Category, CategoryArchived, CategoryCreated, CategoryDescribed, CategoryMoved,
-        CategoryPositioned, CategoryRenamed, Product, ProductArchived, ProductCategorised,
-        ProductCreated, ProductDescribed, ProductEnergyLabelled, ProductMediaAdded,
-        ProductSpecified,
+        Category, CategoryArchived, CategoryCreated, CategoryDescribed, CategoryFacetsDefined,
+        CategoryMoved, CategoryPositioned, CategoryRenamed, Product, ProductArchived,
+        ProductCategorised, ProductCreated, ProductDescribed, ProductEnergyLabelled,
+        ProductMediaAdded, ProductSpecified,
     },
     error::CatalogError,
+    value_object::SpecKey,
 };
 
 /// Deterministic product id: one product per SKU.
@@ -125,6 +126,8 @@ pub struct CategoryState {
     pub parent_id: Option<String>,
     pub position: u32,
     pub archived: bool,
+    /// The specs shoppers filter the category by; empty: its parent's.
+    pub facets: Vec<SpecKey>,
 }
 
 // Every event is folded, so the version `write()` relies on is exact.
@@ -136,6 +139,7 @@ fn create_category_projection<E: Executor>() -> Projection<E, CategoryState> {
         .handler(on_category_moved())
         .handler(on_category_positioned())
         .handler(on_category_archived())
+        .handler(on_category_facets_defined())
         .strict()
 }
 
@@ -216,5 +220,14 @@ async fn on_category_archived(
     row: &mut CategoryState,
 ) -> anyhow::Result<()> {
     row.archived = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_facets_defined(
+    event: Event<CategoryFacetsDefined>,
+    row: &mut CategoryState,
+) -> anyhow::Result<()> {
+    row.facets = event.data.facets;
     Ok(())
 }

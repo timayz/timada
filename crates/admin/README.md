@@ -72,8 +72,12 @@ credit note shown under its invoice, provided the host runs
 
 The categories section is the shop's tree: opening a category (its address is
 definitive, its name is not), renaming, describing, moving a branch, ranking it
-among its siblings, archiving it. Products are filed from their own page, or
-when they are created.
+among its siblings, archiving it — and the filters of its listing: which lines
+of the technical sheet shoppers filter it by (`Groupe > Libellé`, a line
+each), picked from the specs its products actually have; a category without a
+list of its own goes by its parent's. Products are filed from their own page,
+or when they are created; the same page edits their technical sheet
+(`Groupe | Libellé | Valeur`, a line each).
 
 Reviews wait in the reviews section until an operator publishes or rejects
 them; only published ones reach the storefront and the product rating. Product
