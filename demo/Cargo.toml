@@ -31,10 +31,11 @@ timada-tax.workspace = true
 timada-promotion.workspace = true
 timada-admin = { workspace = true, features = ["pdf"] }
 evento.workspace = true
-topcoat = { workspace = true, features = ["router", "view", "cookie", "session", "asset", "serve", "discover", "tower"] }
+topcoat = { workspace = true, features = ["router", "view", "cookie", "session", "asset", "serve", "discover", "tower", "sitemap"] }
 sqlx.workspace = true
 sqlx_migrator.workspace = true
 serde.workspace = true
+form_urlencoded = "1"
 argon2.workspace = true
 tokio.workspace = true
 anyhow.workspace = true

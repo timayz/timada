@@ -36,7 +36,7 @@ topcoat dev -p demo             # bundles assets, watches, serves on http://127.
 Without an asset bundle (`cargo run -p demo`) the storefront works and the
 admin renders unstyled.
 
-Things worth trying: order something to a metropolitan address, then to
+Things worth trying: browse the seeded catalogue — categories, brands, search (`ecran incurve`), filters and sorting; order something to a metropolitan address, then to
 Martinique (the checkout switches to prices without French VAT and another
 carrier), then to Berlin (`DE`: German VAT replaces the French one); capture the payment from the admin (the demo has no payment provider: the payment step of the checkout waits for it) and ship the order; refund part of it from the order page; ask for a
 return from the account; open the invoice and download its PDF; look at `/admin/emails` to see what
@@ -65,7 +65,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | Crate | What it owns |
 |---|---|
 | `timada-core` | `Money`, `Address`, derived ids, formatting, the SQLite test helper |
-| `timada-catalog` | products — description, specs, media, archiving — and the category tree they are filed under; product and category lists |
+| `timada-catalog` | products — description, specs, media, archiving — the category tree they are filed under, and what the storefront lists: search, filters, facets, sorting |
 | `timada-pricing` | listed price (tax-inclusive) with its VAT rate, eco-participation, instalment offers |
 | `timada-inventory` | stock per product and location, reservations, returned stock, back-in-stock alerts |
 | `timada-customer` | customers, their e-mail, billing and delivery addresses; customer list |

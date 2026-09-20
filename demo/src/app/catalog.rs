@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 use timada_catalog::{
-    ListProducts, category_lineage, category_tree, is_on_storefront, list_categories,
-    list_products, load_product_page,
+    brand_by_slug, category_lineage, category_tree, is_on_storefront, list_categories,
+    load_product_page,
 };
 use timada_customer::customers_by_ids;
 use timada_inventory::{
@@ -30,22 +30,20 @@ use topcoat::{
 };
 
 use super::{
-    Crumb, account, breadcrumb, cart,
-    category::{self, product_list},
-    document,
+    Crumb, Head, account, breadcrumb, cart, category, document,
     format::{date, money},
+    listing::{Listing, Scope, listing_view, load_listing},
+    seo::breadcrumb_json_ld,
 };
 use crate::{
     Store,
     auth::{current_account, require_account},
 };
 
-#[page("/")]
-pub async fn home(cx: &Cx) -> Result<impl View> {
+/// The top of the tree: the ways into the shop.
+async fn departments(cx: &Cx) -> Result<Vec<(String, String)>> {
     let store = app_context::<Store>(cx);
-    let products = list_products(&store.db, &ListProducts::default()).await?;
-    // The top of the tree: the ways into the shop.
-    let departments: Vec<(String, String)> =
+    Ok(
         category_tree(list_categories(&store.db, false).await?, false)
             .into_iter()
             .map(|node| {
@@ -53,10 +51,34 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
                     href!(category::show, category::CategorySlug(node.category.slug)).resolve(cx);
                 (link, node.category.name)
             })
-            .collect();
+            .collect(),
+    )
+}
+
+fn listing_head(listing: &Listing, description: Option<String>) -> Head {
+    Head {
+        description,
+        canonical: listing.canonical(),
+        robots: listing.robots(),
+        previous: listing.previous(),
+        next: listing.next(),
+        json_ld: None,
+    }
+}
+
+#[page("/")]
+pub async fn home(cx: &Cx) -> Result<impl View> {
+    let departments = departments(cx).await?;
+    let listing = load_listing(cx, href!(home).resolve(cx), Scope::default()).await?;
+    let head = listing_head(
+        &listing,
+        Some("Le catalogue de la boutique de démonstration Timada.".to_owned()),
+    );
+    let seeded = listing.found.total > 0 || listing.filters.is_narrowed();
     Ok(view! {
         document(
             title: "Catalogue",
+            head: Some(&head),
             <h1>"Catalogue"</h1>
             if !departments.is_empty() {
                 <nav aria-label="Catégories">
@@ -67,11 +89,81 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
                     </ul>
                 </nav>
             }
-            if products.is_empty() {
-                <p class="muted">"Aucun produit. Lancez " <code>"cargo run -p demo -- --seed"</code> "."</p>
+            if seeded {
+                listing_view(listing: &listing)
             } else {
-                product_list(products: &products)
+                <p class="muted">"Aucun produit. Lancez " <code>"cargo run -p demo -- --seed"</code> "."</p>
             }
+        )
+    })
+}
+
+/// `/recherche?q=…`: the whole shop, searched. Never indexed: a search
+/// always narrows.
+#[page("/recherche")]
+pub async fn search(cx: &Cx) -> Result<impl View> {
+    let listing = load_listing(cx, href!(search).resolve(cx), Scope::default()).await?;
+    let head = Head {
+        robots: Some("noindex,follow"),
+        ..listing_head(&listing, None)
+    };
+    let title = match &listing.filters.q {
+        Some(q) => format!("Recherche : {q}"),
+        None => "Recherche".to_owned(),
+    };
+    Ok(view! {
+        document(
+            title: &title,
+            head: Some(&head),
+            <h1>(title.clone())</h1>
+            listing_view(listing: &listing)
+        )
+    })
+}
+
+path_param!(pub brand_slug: String, error = not_found);
+
+/// `/marque/{brand_slug}`: what a brand sells here. A brand with nothing on
+/// sale has no page.
+#[page("/marque/{brand_slug}")]
+pub async fn brand(cx: &Cx) -> Result<impl View> {
+    let slug = param::<BrandSlug>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    let name = brand_by_slug(&store.db, &slug).await?.ok_or_not_found()?;
+    let here = href!(brand, BrandSlug(slug.clone())).resolve(cx);
+    let listing = load_listing(
+        cx,
+        here.clone(),
+        Scope {
+            category_id: None,
+            brand_slug: Some(slug),
+        },
+    )
+    .await?;
+    let trail = vec![
+        Crumb {
+            label: "Catalogue".to_owned(),
+            link: Some(href!(home).resolve(cx)),
+        },
+        Crumb {
+            label: name.clone(),
+            link: None,
+        },
+    ];
+    let head = Head {
+        json_ld: Some(breadcrumb_json_ld(&trail, &here)),
+        ..listing_head(
+            &listing,
+            Some(format!("Les produits {name} de la boutique.")),
+        )
+    };
+    Ok(view! {
+        document(
+            title: &name,
+            head: Some(&head),
+            breadcrumb(trail: &trail)
+            <h1>(name.clone())</h1>
+            listing_view(listing: &listing)
         )
     })
 }
@@ -359,6 +451,27 @@ async fn product_view(
     } else {
         Vec::new()
     };
+    let here = href!(product_page, ProductId(id.clone())).resolve(cx);
+    let head = Head {
+        description: Some(product.short_description.clone()).filter(|text| !text.is_empty()),
+        // Review and question pages are the same product.
+        canonical: Some(here.clone()),
+        json_ld: (!trail.is_empty()).then(|| {
+            let mut steps: Vec<Crumb> = trail
+                .iter()
+                .map(|crumb| Crumb {
+                    label: crumb.label.clone(),
+                    link: crumb.link.clone(),
+                })
+                .collect();
+            steps.push(Crumb {
+                label: product.name.clone(),
+                link: None,
+            });
+            breadcrumb_json_ld(&steps, &here)
+        }),
+        ..Head::default()
+    };
     let available = available_stock(store, &id).await?;
     let availability = if available > 0 {
         format!("En stock ({available} disponibles)")
@@ -550,6 +663,7 @@ async fn product_view(
     Ok(view! {
         document(
             title: &product.name,
+            head: Some(&head),
             if trail.is_empty() {
                 <p class="muted">(product.category_path.join(" > "))</p>
             } else {

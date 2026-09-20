@@ -15,6 +15,7 @@ mod auth;
 mod cart_session;
 mod db;
 mod seed;
+mod seed_catalogue;
 #[cfg(test)]
 mod tests;
 
@@ -112,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("--seed") => {
             seed::run(&store).await?;
+            seed_catalogue::run(&store).await?;
             db::run_subscriptions_once(&store).await?;
             tracing::info!("seeded; admin login is admin@timada.example / admin");
             tracing::info!(

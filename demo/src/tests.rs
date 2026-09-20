@@ -1045,6 +1045,184 @@ async fn stripe_webhooks_are_verified_then_capture_the_payment() -> anyhow::Resu
     Ok(())
 }
 
+/// The order of the product links of a listing page.
+fn listed(page: &str) -> Vec<String> {
+    page.split("<h2><a href=\"/p/")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("\">"))
+        .filter_map(|(_, rest)| rest.split_once("</a>"))
+        .map(|(name, _)| name.replace("&quot;", "\""))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Result<()> {
+    let (router, store, _) = shop().await?;
+    crate::seed_catalogue::run(&store).await?;
+    // Seeding twice adds nothing.
+    crate::seed_catalogue::run(&store).await?;
+    db::run_subscriptions_once(&store).await?;
+    let mut browser = Browser::new(&router);
+
+    // The plain listing: paged, each page with an address of its own to index.
+    let home = text(browser.get("/").await).await?;
+    assert!(home.contains(">25 produits<"), "{home}");
+    assert_eq!(listed(&home).len(), 24);
+    assert!(
+        home.contains("<link rel=\"canonical\" href=\"http://127.0.0.1:3000/\">"),
+        "{home}"
+    );
+    assert!(
+        home.contains("<link rel=\"next\" href=\"http://127.0.0.1:3000/?page=2\">"),
+        "{home}"
+    );
+    assert!(!home.contains("name=\"robots\""), "{home}");
+    assert!(home.contains("<img src=\"/media/demo/jbl-flip6.svg\" alt=\"JBL Flip 6\" width=\"240\" height=\"240\" loading=\"lazy\""), "{home}");
+    let last = text(browser.get("/?page=7").await).await?;
+    assert_eq!(listed(&last).len(), 1, "a page past the end is the last");
+    assert!(
+        last.contains("href=\"http://127.0.0.1:3000/?page=2\""),
+        "{last}"
+    );
+    assert!(last.contains("rel=\"prev\""), "{last}");
+
+    // Filters and sort come from the query string; such a page is a
+    // variation, not something to index.
+    let logitech = text(
+        browser
+            .get("/?marque=logitech&stock=1&tri=prix-croissant")
+            .await,
+    )
+    .await?;
+    assert_eq!(
+        listed(&logitech),
+        [
+            "Logitech G502 X",
+            "Logitech MX Master 3S",
+            "Logitech MX Keys S",
+            "Logitech G915 TKL"
+        ]
+    );
+    assert!(
+        logitech.contains("content=\"noindex,follow\""),
+        "{logitech}"
+    );
+    assert!(!logitech.contains("rel=\"canonical\""), "{logitech}");
+    assert!(
+        logitech.contains("value=\"logitech\" checked"),
+        "{logitech}"
+    );
+    // The other brands still say what they would add.
+    assert!(logitech.contains("Corsair (3)"), "{logitech}");
+    assert!(logitech.contains("Tout afficher"), "{logitech}");
+    let two_brands = text(browser.get("/?marque=jbl&marque=sony&note=4").await).await?;
+    assert_eq!(listed(&two_brands).len(), 3, "{two_brands}");
+    let cheap = text(
+        browser
+            .get("/?prix_max=80&tri=prix-decroissant&page=zzz")
+            .await,
+    )
+    .await?;
+    assert_eq!(
+        listed(&cheap),
+        [
+            "Logitech G502 X",
+            "Philips Hue Go",
+            "Crucial P3 Plus 1 To",
+            "Corsair M65 RGB Ultra",
+            "Corsair K55 Core"
+        ]
+    );
+
+    // Search: accents folded, unfinished words, the category's name counts.
+    let search = text(browser.get("/recherche?q=ecran+incurve").await).await?;
+    let mut found = listed(&search);
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "LG 34\" UltraWide incurvé 34WP65C",
+            "Samsung 32\" Odyssey G5"
+        ]
+    );
+    assert!(search.contains("Recherche : ecran incurve"), "{search}");
+    assert!(search.contains("content=\"noindex,follow\""), "{search}");
+    let nothing = text(browser.get("/recherche?q=trottinette").await).await?;
+    assert!(
+        nothing.contains("Aucun produit ne correspond."),
+        "{nothing}"
+    );
+    // Nothing a shopper types is markup or a query operator.
+    let odd = browser.get("/recherche?q=%22%3Cscript%3E+OR+*").await;
+    assert_eq!(odd.status(), StatusCode::OK);
+    let odd = text(odd).await?;
+    // As text it is escaped; inside the quoted attribute only the quote
+    // could do harm, and it is escaped too.
+    assert!(
+        odd.contains("<h1>Recherche : \"&lt;script&gt; OR *</h1>"),
+        "{odd}"
+    );
+    assert!(odd.contains("value=\"&quot;<script> OR *\""), "{odd}");
+    assert!(odd.contains("Aucun produit ne correspond."), "{odd}");
+
+    // A branch of the tree, a brand.
+    let components = text(browser.get("/c/composants").await).await?;
+    assert!(components.contains(">6 produits<"), "{components}");
+    assert!(components.contains("href=\"/c/ssd\""), "{components}");
+    assert!(components.contains("placeholder=\"74\""), "{components}");
+    assert!(components.contains("placeholder=\"660\""), "{components}");
+    let jbl = text(browser.get("/marque/jbl").await).await?;
+    assert_eq!(listed(&jbl), ["JBL Charge 5", "JBL Flip 6"]);
+    assert!(!jbl.contains("<legend>Marque</legend>"), "{jbl}");
+    assert!(jbl.contains("Rupture"), "{jbl}");
+    assert!(jbl.contains("5,0 / 5 (1 avis)"), "{jbl}");
+    assert!(jbl.contains("\"@type\":\"BreadcrumbList\""), "{jbl}");
+    assert_eq!(
+        browser.get("/marque/nokia").await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // What search engines are handed.
+    let sitemap = browser.get("/sitemap.xml").await;
+    assert_eq!(sitemap.status(), StatusCode::OK);
+    let sitemap = text(sitemap).await?;
+    assert!(
+        sitemap.contains("<loc>http://127.0.0.1:3000/c/carte-graphique</loc>"),
+        "{sitemap}"
+    );
+    assert_eq!(sitemap.matches("/p/").count(), 25, "{sitemap}");
+    assert!(sitemap.contains("<lastmod>"), "{sitemap}");
+    let robots = text(browser.get("/robots.txt").await).await?;
+    assert!(robots.contains("Disallow: /checkout"), "{robots}");
+    assert!(
+        robots.contains("Sitemap: http://127.0.0.1:3000/sitemap.xml"),
+        "{robots}"
+    );
+
+    // The demo's drawn product pictures.
+    let picture = browser.get("/media/demo/jbl-flip6.svg").await;
+    assert_eq!(
+        picture
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("image/svg+xml; charset=utf-8")
+    );
+    assert!(text(picture).await?.contains(">JBL-FLIP6</text>"));
+    for bad in [
+        "/media/demo/JBL.svg",
+        "/media/demo/x%3Cy.svg",
+        "/media/demo/jbl-flip6.png",
+    ] {
+        assert_eq!(
+            browser.get(bad).await.status(),
+            StatusCode::NOT_FOUND,
+            "{bad}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
@@ -1065,7 +1243,7 @@ async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
         department.contains(&format!("/p/{product_id}")),
         "{department}"
     );
-    assert!(department.contains("1 produit(s)"), "{department}");
+    assert!(department.contains(">1 produit<"), "{department}");
 
     // The trail links every step but the page itself.
     let leaf = text(browser.get("/c/ecran-pc?page=9").await).await?;
@@ -1081,8 +1259,16 @@ async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
     );
     assert!(leaf.contains(&format!("/p/{product_id}")), "{leaf}");
 
-    // From a product, the way back up — its own category linked too.
-    let product = text(browser.get(&format!("/p/{product_id}")).await).await?;
+    // From a product, the way back up — its own category linked too — and
+    // one address for the product, whatever page of its reviews is shown.
+    let product = text(browser.get(&format!("/p/{product_id}?avis=2")).await).await?;
+    assert!(
+        product.contains(&format!(
+            "<link rel=\"canonical\" href=\"http://127.0.0.1:3000/p/{product_id}\">"
+        )),
+        "{product}"
+    );
+    assert!(product.contains("\"position\":6"), "{product}");
     assert!(
         product.contains("<a href=\"/c/ecran-pc\">Écran PC</a>"),
         "{product}"
@@ -1103,7 +1289,11 @@ async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
     }
     let department = text(browser.get("/c/informatique").await).await?;
     assert!(!department.contains("/c/peripheriques"), "{department}");
-    assert!(department.contains("Aucun produit"), "{department}");
+    // Still on sale: listed under what is left of its branch.
+    assert!(
+        department.contains(&format!("/p/{product_id}")),
+        "{department}"
+    );
     let product = browser.get(&format!("/p/{product_id}")).await;
     assert_eq!(product.status(), StatusCode::OK);
     let product = text(product).await?;
