@@ -15,6 +15,7 @@ mod pdf;
 mod process;
 mod query;
 mod value_object;
+mod vat_journal;
 
 pub use command::*;
 pub use credit_note_list::*;
@@ -27,3 +28,4 @@ pub use pdf::*;
 pub use process::*;
 pub use query::*;
 pub use value_object::*;
+pub use vat_journal::*;

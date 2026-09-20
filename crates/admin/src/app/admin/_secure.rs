@@ -13,6 +13,7 @@ pub mod questions;
 pub mod refunds;
 pub mod returns;
 pub mod reviews;
+pub mod vat;
 
 use topcoat::{
     Result,

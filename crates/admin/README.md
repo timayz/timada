@@ -1,7 +1,7 @@
 # timada-admin
 
 A [topcoat](https://github.com/tokio-rs/topcoat) admin for the timada contexts
-(orders, products, categories, stock, customers, promotions, invoices, refunds, returns,
+(orders, products, categories, stock, customers, promotions, invoices, VAT, refunds, returns,
 reviews, questions, e-mails) that you mount into your own app — a topcoat app or any tower/axum
 app.
 
@@ -50,6 +50,7 @@ subscriptions: `timada_order::order_history_subscription`,
 `timada_promotion::code_list_subscription`,
 `timada_invoice::invoice_list_subscription`,
 `timada_invoice::credit_note_list_subscription`,
+`timada_invoice::vat_journal_subscription`,
 `timada_payment::refund_list_subscription`,
 `timada_returns::return_list_subscription`,
 `timada_review::review_list_subscription` and
@@ -69,6 +70,11 @@ replaced it. The refunds section is the journal of the refunds made. Invoices ar
 read-only: orders drive their lifecycle, and every refund is documented by a
 credit note shown under its invoice, provided the host runs
 `timada_invoice::credit_notes_from_refunds_subscription`.
+
+The VAT section reads a quarter out of the issued invoices and the credit
+notes: the shop's own VAT by rate, the one-stop-shop (OSS) return by member
+state and rate with the corrections of earlier quarters, exports — and the OSS
+return as a CSV file.
 
 The categories section is the shop's tree: opening a category (its address is
 definitive, its name is not), renaming, describing, moving a branch, ranking it
