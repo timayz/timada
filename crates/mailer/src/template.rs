@@ -310,30 +310,84 @@ fn return_lines(request: &ReturnView) -> String {
         .join("\n")
 }
 
+/// What an e-mail says of a return's prepaid label: where it is, how the
+/// parcel is followed, and who pays for it.
+fn label_paragraph(config: &MailerConfig, request: &ReturnView) -> Option<String> {
+    let label = request.label.as_ref()?;
+    let place = match (&label.file_name, &label.url) {
+        (Some(_), _) => "Votre étiquette de retour prépayée est en pièce jointe".to_owned(),
+        (None, Some(url)) => format!("Votre étiquette de retour prépayée : {url}"),
+        (None, None) => format!(
+            "Votre étiquette de retour prépayée est sur votre bon de retour : {}",
+            return_link(config, request)
+        ),
+    };
+    let cost = if label.fee.is_positive() {
+        format!(
+            "Son coût, {}, sera déduit de votre remboursement.",
+            money(&label.fee)
+        )
+    } else {
+        "Elle vous est offerte.".to_owned()
+    };
+    Some(format!(
+        "{place} ({}, suivi {}). Collez-la sur le colis. {cost}",
+        label.carrier, label.tracking_number
+    ))
+}
+
 pub(crate) fn return_approved(
     config: &MailerConfig,
     first_name: &str,
     request: &ReturnView,
 ) -> Content {
     let number = &request.rma_number;
+    let mut paragraphs = vec![
+        format!("Votre demande de retour {number} est acceptée pour :"),
+        return_lines(request),
+        format!(
+            "Inscrivez le numéro {number} sur le colis et envoyez-le à :\n{}",
+            config.returns_address
+        ),
+    ];
+    // A label given later is announced by its own e-mail.
+    if request
+        .label
+        .as_ref()
+        .is_some_and(|label| label.with_approval)
+    {
+        paragraphs.extend(label_paragraph(config, request));
+    }
+    paragraphs.push(format!(
+        "Le bon de retour et le suivi de votre demande : {}",
+        return_link(config, request)
+    ));
     (
         format!("Votre retour {number} est accepté"),
-        signed(
-            config,
-            first_name,
-            &[
-                format!("Votre demande de retour {number} est acceptée pour :"),
-                return_lines(request),
-                format!(
-                    "Inscrivez le numéro {number} sur le colis et envoyez-le à :\n{}",
-                    config.returns_address
-                ),
-                format!(
-                    "Le bon de retour et le suivi de votre demande : {}",
-                    return_link(config, request)
-                ),
-            ],
-        ),
+        signed(config, first_name, &paragraphs),
+    )
+}
+
+/// The label given after the approval was announced.
+pub(crate) fn return_label(
+    config: &MailerConfig,
+    first_name: &str,
+    request: &ReturnView,
+) -> Content {
+    let number = &request.rma_number;
+    let mut paragraphs = Vec::new();
+    paragraphs.extend(label_paragraph(config, request));
+    paragraphs.push(format!(
+        "Inscrivez aussi le numéro {number} sur le colis et envoyez-le à :\n{}",
+        config.returns_address
+    ));
+    paragraphs.push(format!(
+        "Le bon de retour et le suivi de votre demande : {}",
+        return_link(config, request)
+    ));
+    (
+        format!("L'étiquette de votre retour {number}"),
+        signed(config, first_name, &paragraphs),
     )
 }
 
@@ -391,6 +445,12 @@ pub(crate) fn return_completed(
             "{} vous sont crédités sous forme d'avoir : saisissez le code {code} dans votre \
              panier lors d'une prochaine commande.",
             money(&request.credit)
+        ));
+    }
+    if let Some(fee) = &request.label_fee_deducted {
+        paragraphs.push(format!(
+            "L'étiquette de retour prépayée, {}, a été déduite de ce montant.",
+            money(fee)
         ));
     }
     let replaced = request.replacement.as_ref().map(|replacement| {

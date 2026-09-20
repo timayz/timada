@@ -1,19 +1,25 @@
 //! Returns ("retours"): asking to send lines of a shipped order back, and the
-//! return slip that follows a request from review to refund.
+//! return slip that follows a request from review to refund — with the
+//! prepaid label for the way back, when the shop gave one.
 
 use std::collections::HashMap;
 
 use timada_order::{OrderDetailsView, OrderStatus, load_order_details};
 use timada_returns::{
-    RequestReturn, RequestedLine, ReturnError, ReturnPolicy, ReturnStatus, claimed_quantities,
-    load_return,
+    RequestReturn, RequestedLine, ReturnError, ReturnGround, ReturnStatus, claimed_quantities,
+    load_return, load_return_label_file,
 };
 use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{
-        content::Form, error::RouterErrorExt, error::see_other, href, page, path_param,
-        path_param as param,
+        Body,
+        content::Form,
+        error::RouterErrorExt,
+        error::see_other,
+        href, page, path_param, path_param as param,
+        response::{IntoResponse, Response},
+        route,
     },
     view::{View, component, view},
 };
@@ -24,23 +30,19 @@ use super::{
     document,
     format::{date, money},
 };
-use crate::{Store, auth::require_account, db::RETURNS_ADDRESS};
+use crate::{
+    Store,
+    auth::require_account,
+    db::{RETURNS_ADDRESS, return_policy},
+};
 
 path_param!(pub return_id: String, error = not_found);
-
-/// The reasons offered in the form; free text goes in the details.
-const REASONS: [&str; 4] = [
-    "Ne convient pas",
-    "Produit défectueux",
-    "Erreur de commande",
-    "Autre",
-];
 
 fn returns(store: &Store) -> timada_returns::Command<'_, evento::Sqlite> {
     timada_returns::Command {
         executor: &store.executor,
         db: store.db.clone(),
-        policy: ReturnPolicy::default(),
+        policy: return_policy(),
     }
 }
 
@@ -72,7 +74,7 @@ pub fn return_deadline(order: &OrderDetailsView) -> anyhow::Result<Option<u64>> 
     else {
         return Ok(None);
     };
-    let deadline = ReturnPolicy::default().deadline(shipped_at);
+    let deadline = return_policy().deadline(shipped_at);
     Ok((timada_core::time::now_unix_secs()? <= deadline).then_some(deadline))
 }
 
@@ -154,12 +156,16 @@ pub async fn request_return(
             });
         }
     }
-    let reason = form.get("reason").map_or("", |r| r.trim());
+    // The ground decides who pays for the way back; the customer's own words
+    // go next to it.
+    let ground = form
+        .get("ground")
+        .and_then(|ground| ReturnGround::parse(ground))
+        .unwrap_or(ReturnGround::Other);
     let details = form.get("details").map_or("", |d| d.trim());
-    let reason = match (reason, details) {
-        ("", details) => details.to_owned(),
-        (reason, "") => reason.to_owned(),
-        (reason, details) => format!("{reason} — {details}"),
+    let reason = match details {
+        "" => ground.label().to_owned(),
+        details => format!("{} — {details}", ground.label()),
     };
 
     let requested = returns(store)
@@ -167,6 +173,7 @@ pub async fn request_return(
             order_id: order.id.clone(),
             customer_id: order.customer_id.clone(),
             lines,
+            ground,
             reason,
         })
         .await;
@@ -198,6 +205,20 @@ async fn return_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
     // Owned: a view cannot borrow from a local.
     let numbered: Vec<(usize, ReturnableLine)> = lines.into_iter().enumerate().collect();
     let action = href!(request_return, OrderId(order.id.clone())).resolve(cx);
+    // What the way back costs, said before the customer confirms.
+    let fee = return_policy().label_fee(
+        Some(ReturnGround::ChangedMind),
+        false,
+        &order.total.currency,
+    );
+    let label_cost = if fee.is_positive() {
+        format!(
+            "Étiquette de retour prépayée : offerte si le produit est défectueux, abîmé ou ne correspond pas à votre commande ; sinon {} sont déduits de votre remboursement.",
+            money(&fee)
+        )
+    } else {
+        "L'étiquette de retour prépayée vous est offerte.".to_owned()
+    };
     let back = href!(account::order_detail, OrderId(order.id.clone())).resolve(cx);
 
     Ok(view! {
@@ -235,11 +256,12 @@ async fn return_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
                             </tbody>
                         </table>
                         <p>
-                            <label for="reason">"Motif du retour"</label>
-                            <select id="reason" name="reason" required=(true)>
-                                for reason in REASONS { <option value=(reason)>(reason)</option> }
+                            <label for="ground">"Motif du retour"</label>
+                            <select id="ground" name="ground" required=(true) aria-describedby="label-cost">
+                                for ground in ReturnGround::ALL { <option value=(ground.as_str())>(ground.label())</option> }
                             </select>
                         </p>
+                        <p id="label-cost" class="muted">(label_cost.clone())</p>
                         <p>
                             <label for="details">"Précisions (facultatif)"</label>
                             <textarea id="details" name="details" rows="3" cols="60" maxlength="1000"></textarea>
@@ -257,6 +279,49 @@ async fn return_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
             <p><a href=(back)>"Retour à la commande"</a></p>
         )
     })
+}
+
+/// The prepaid label as the slip shows it.
+struct SlipLabel {
+    download: Option<String>,
+    link: Option<String>,
+    tracking: String,
+    cost: String,
+}
+
+/// A label's file, handed to the browser under its own type.
+pub struct LabelDownload(timada_returns::LabelFile);
+
+impl IntoResponse for LabelDownload {
+    fn into_response(self, _cx: &Cx) -> Result<Response> {
+        Ok(Response::builder()
+            .header("Content-Type", self.0.content_type)
+            .header(
+                "Content-Disposition",
+                format!("attachment; filename=\"{}\"", self.0.file_name),
+            )
+            // Whatever the file says it is, the browser takes our word.
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Cache-Control", "private, no-store")
+            .body(Body::from(self.0.bytes))?)
+    }
+}
+
+/// The prepaid label of the signed-in shopper's return; someone else's
+/// return, or one without a label file, is a 404.
+#[route(GET "/account/returns/{return_id}/label")]
+pub async fn label_file(cx: &Cx) -> Result<LabelDownload> {
+    let account = require_account(cx).await?;
+    let id = param::<ReturnId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    load_return(&store.executor, &id)
+        .await?
+        .filter(|request| request.customer_id == account.customer_id)
+        .ok_or_not_found()?;
+    let file = load_return_label_file(&store.db, &id)
+        .await?
+        .ok_or_not_found()?;
+    Ok(LabelDownload(file))
 }
 
 /// The return slip: what is coming back, where to send it, and where the
@@ -320,6 +385,24 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             })
         }
     };
+    // The prepaid label: where to get it, what it costs, how to follow it.
+    let label = request.label.as_ref().map(|issued| SlipLabel {
+        download: issued
+            .file_name
+            .as_ref()
+            .map(|_| href!(label_file, ReturnId(id.clone())).resolve(cx)),
+        link: issued.url.clone(),
+        tracking: format!("{}, suivi {}", issued.carrier, issued.tracking_number),
+        cost: if issued.fee.is_positive() {
+            format!(
+                "Son coût, {}, est déduit de votre remboursement.",
+                money(&issued.fee)
+            )
+        } else {
+            "Elle vous est offerte.".to_owned()
+        },
+    });
+    let fee_deducted = request.label_fee_deducted.as_ref().map(money);
     let refunded = request.money.is_positive().then(|| money(&request.money));
     let credited = request
         .voucher_code
@@ -363,7 +446,22 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     <h2>"Envoyer votre colis"</h2>
                     <p>"Inscrivez le numéro " <strong>(request.rma_number.clone())</strong> " sur le colis et envoyez-le à :"</p>
                     <address>for line in &address { (*line) <br> }</address>
+                    if let Some(label) = &label {
+                        <h3>"Votre étiquette prépayée"</h3>
+                        <p>
+                            if let Some(download) = &label.download {
+                                <a href=(download.clone())>"Télécharger l'étiquette"</a> " "
+                            }
+                            if let Some(link) = &label.link {
+                                <a href=(link.clone()) rel="noopener noreferrer">"Ouvrir l'étiquette chez le transporteur"</a>
+                            }
+                        </p>
+                        <p>"Collez-la sur le colis : " (label.tracking.clone()) ". " (label.cost.clone())</p>
+                    }
                 </div>
+            }
+            if let Some(fee) = &fee_deducted {
+                <p class="muted">"Étiquette de retour prépayée : " (fee.clone()) " déduits du remboursement."</p>
             }
             if let Some(replacement) = &replacement {
                 <p role="status" class="notice">(replacement.clone())</p>

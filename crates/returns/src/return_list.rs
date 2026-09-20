@@ -12,7 +12,8 @@ use sqlx::SqlitePool;
 use crate::{
     aggregator::{
         ReplacementAbandoned, ReplacementArranged, ReplacementPlanned, ReturnApproved,
-        ReturnCancelled, ReturnCompleted, ReturnReceived, ReturnRefused, ReturnRequested,
+        ReturnCancelled, ReturnCompleted, ReturnGroundStated, ReturnLabelFeeDeducted,
+        ReturnLabelIssued, ReturnReceived, ReturnRefused, ReturnRequested,
     },
     query::load_return,
     value_object::ReturnStatus,
@@ -69,6 +70,10 @@ pub fn return_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .skip::<ReplacementPlanned>()
         .skip::<ReplacementAbandoned>()
         .skip::<ReplacementArranged>()
+        // Neither do the ground and the label.
+        .skip::<ReturnGroundStated>()
+        .skip::<ReturnLabelIssued>()
+        .skip::<ReturnLabelFeeDeducted>()
         .strict()
 }
 

@@ -47,14 +47,21 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
                 vat_number: "FR00 000000000".into(),
                 contact: "facturation@timada.example".into(),
             },
+            // A prepaid return label costs a change of mind 6,90 €.
+            return_policy: timada_returns::ReturnPolicy {
+                label_fee_minor: 690,
+                ..timada_returns::ReturnPolicy::default()
+            },
             ..AdminConfig::default()
         },
         AssetConfig::hosted_at("/assets", AssetCatalog::default()),
-        AdminServices::new(executor.clone(), db.clone()).with_archive(
-            timada_invoice::InvoiceArchive::new(timada_invoice::SqliteArchiveStore::new(
-                db.clone(),
+        AdminServices::new(executor.clone(), db.clone())
+            .with_archive(timada_invoice::InvoiceArchive::new(
+                timada_invoice::SqliteArchiveStore::new(db.clone()),
+            ))
+            .with_return_labels(timada_returns::ReturnLabels::new(
+                timada_returns::FakeLabelProvider::default(),
             )),
-        ),
     );
     Ok(Harness {
         router,
@@ -82,6 +89,44 @@ fn post(uri: &str, form: &str, cookie: Option<&str>) -> Request {
     }
     builder
         .body(Body::from(form.to_owned()))
+        .unwrap_or_default()
+}
+
+/// One part of a multipart form: its name, the file name and type when it is
+/// a file, its content.
+type Part<'a> = (&'a str, Option<(&'a str, &'a str)>, &'a [u8]);
+
+/// A `multipart/form-data` POST.
+fn post_multipart(uri: &str, parts: &[Part<'_>], cookie: &str) -> Request {
+    const BOUNDARY: &str = "----timada-test-boundary";
+    let mut body = Vec::new();
+    for (name, file, content) in parts {
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        match file {
+            Some((file_name, content_type)) => body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{name}\"; filename=\"{file_name}\"\r\nContent-Type: {content_type}\r\n\r\n"
+                )
+                .as_bytes(),
+            ),
+            None => body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            ),
+        }
+        body.extend_from_slice(content);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+    http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
+        .header("sec-fetch-site", "same-origin")
+        .header("cookie", cookie)
+        .body(Body::from(body))
         .unwrap_or_default()
 }
 
@@ -1163,6 +1208,7 @@ async fn returns_are_reviewed_and_received_from_the_queue() -> anyhow::Result<()
                 product_id: "aoc-24g4xe".into(),
                 quantity: 1,
             }],
+            ground: timada_returns::ReturnGround::Defective,
             reason: "Pixel mort".into(),
         })
         .await?;
@@ -1292,6 +1338,7 @@ async fn a_return_is_settled_by_sending_the_same_product_again() -> anyhow::Resu
                 product_id: "aoc-24g4xe".into(),
                 quantity: 1,
             }],
+            ground: timada_returns::ReturnGround::Defective,
             reason: "Pixel mort".into(),
         })
         .await?;
@@ -1377,6 +1424,145 @@ async fn a_return_is_settled_by_sending_the_same_product_again() -> anyhow::Resu
         .await?
         .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
     assert!(payment.refunds.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_prepaid_label_is_joined_by_hand_or_asked_of_the_carrier() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let order_id = place_order(&h).await?;
+    let orders = timada_order::Command(&h.executor);
+    orders.mark_paid(&order_id, "payment-1").await?;
+    orders
+        .mark_shipped(&order_id, "shipment-1", "Chronopost".into(), "XY123".into())
+        .await?;
+    let returns = timada_returns::Command {
+        executor: &h.executor,
+        db: h.db.clone(),
+        policy: timada_returns::ReturnPolicy::default(),
+    };
+    let request = |ground| timada_returns::RequestReturn {
+        order_id: order_id.clone(),
+        customer_id: "customer-1".into(),
+        lines: vec![timada_returns::RequestedLine {
+            product_id: "aoc-24g4xe".into(),
+            quantity: 1,
+        }],
+        ground,
+        reason: "Ne me plaît pas".into(),
+    };
+
+    // A change of mind, accepted with a label bought on the carrier's site.
+    let changed = returns
+        .request_return(request(timada_returns::ReturnGround::ChangedMind))
+        .await?;
+    let uri = format!("/admin/returns/{changed}");
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("Ne convient pas"), "{page}");
+    assert!(page.contains("6,90 € seront déduits"), "{page}");
+    // A page is not a label.
+    let html = h
+        .router
+        .handle(post_multipart(
+            &format!("{uri}/approve"),
+            &[
+                ("label_carrier", None, b"Colissimo"),
+                ("label_tracking", None, b"8R0001"),
+                ("label_file", Some(("label.html", "text/html")), b"<script>"),
+            ],
+            &cookie,
+        ))
+        .await;
+    assert_eq!(location(&html), format!("{uri}?error=label-file"));
+    let approved = h
+        .router
+        .handle(post_multipart(
+            &format!("{uri}/approve"),
+            &[
+                ("label_carrier", None, b"Colissimo"),
+                ("label_tracking", None, b"8R0001"),
+                ("label_url", None, b""),
+                (
+                    "label_file",
+                    Some(("etiquette.pdf", "application/pdf")),
+                    b"%PDF-1.4 etiquette",
+                ),
+            ],
+            &cookie,
+        ))
+        .await;
+    assert_eq!(location(&approved), uri);
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("Colissimo — 8R0001"), "{page}");
+    assert!(page.contains("6,90 € à la charge du client"), "{page}");
+    assert!(page.contains("Télécharger etiquette.pdf"), "{page}");
+    let file = h
+        .router
+        .handle(get(&format!("{uri}/label"), Some(&cookie)))
+        .await;
+    assert_eq!(file.status(), StatusCode::OK);
+    assert_eq!(
+        file.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("application/pdf")
+    );
+    let bytes = to_bytes(file.into_body(), usize::MAX)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    assert_eq!(bytes.as_ref(), b"%PDF-1.4 etiquette");
+    let view = timada_returns::load_return(&h.executor, &changed)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    assert!(view.label.is_some_and(|label| label.with_approval));
+    // The order held one unit: free it for the next return.
+    returns.cancel_return(&changed, "customer-1").await?;
+
+    // Accepted without a word about a label: nothing is joined.
+    let plain = returns
+        .request_return(request(timada_returns::ReturnGround::ChangedMind))
+        .await?;
+    let uri = format!("/admin/returns/{plain}");
+    let approved = h
+        .router
+        .handle(post(&format!("{uri}/approve"), "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&approved), uri);
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("Joindre l'étiquette"), "{page}");
+    assert!(
+        page.contains("Demander l'étiquette au transporteur"),
+        "{page}"
+    );
+    let empty = h
+        .router
+        .handle(post_multipart(
+            &format!("{uri}/label"),
+            &[("label_carrier", None, b"Colissimo")],
+            &cookie,
+        ))
+        .await;
+    assert_eq!(location(&empty), format!("{uri}?error=label"));
+    // The carrier plugged into the admin makes it; the operator offers it.
+    let provided = h
+        .router
+        .handle(post(
+            &format!("{uri}/label/provide"),
+            "waive_fee=on",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&provided), uri);
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("Offerte au client"), "{page}");
+    assert!(page.contains("Colissimo — 8R"), "{page}");
+    assert!(!page.contains("Joindre l'étiquette"), "{page}");
+    let again = h
+        .router
+        .handle(post(&format!("{uri}/label/provide"), "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&again), format!("{uri}?error=label-exists"));
     Ok(())
 }
 

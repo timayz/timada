@@ -743,6 +743,152 @@ async fn the_shop_is_told_about_a_dispute_and_about_its_outcome() -> anyhow::Res
     Ok(())
 }
 
+/// A prepaid return label reaches the customer once: with the approval when
+/// it was handed over with it, on its own when it came later.
+#[tokio::test]
+async fn a_return_label_travels_with_the_approval_or_on_its_own() -> anyhow::Result<()> {
+    let mut all = migrations();
+    all.extend(timada_order::migrations());
+    all.extend(timada_returns::migrations());
+    let (executor, db) = timada_core::testing::memory_executor(all).await?;
+    let customer_id = timada_customer::Command(&executor)
+        .register_customer(timada_customer::RegisterCustomer {
+            email: "ada@example.com".into(),
+            civility: Civility::Mrs,
+            first_name: "Ada".into(),
+            last_name: "Lovelace".into(),
+        })
+        .await?;
+    let orders = timada_order::Command(&executor);
+    let order_id = orders
+        .place_order(PlaceOrder {
+            cart_id: "cart-label".into(),
+            customer_id: customer_id.clone(),
+            seller: Seller::Ldlc,
+            lines: vec![OrderLine {
+                product_id: "aoc-24g4xe".into(),
+                name: "AOC 24G4XE".into(),
+                quantity: 2,
+                unit_price: Money::eur(11_995),
+                warranty_months: 36,
+            }],
+            delivery_address: address(),
+            billing_address: address(),
+            delivery: DeliveryChoice {
+                method_code: "colissimo".into(),
+                pickup_store_id: None,
+            },
+            payment_mode: PaymentMode::Card,
+            shipping_fee: Money::eur(590),
+            handling_fee: Money::eur(0),
+            promo_code: None,
+            discount: None,
+            order_number: Some("C2026-000009".into()),
+            tax: None,
+            business: None,
+        })
+        .await?;
+    orders.mark_paid(&order_id, "payment-1").await?;
+    orders
+        .mark_shipped(&order_id, "shipment-1", "Colissimo".into(), "XY123".into())
+        .await?;
+    let returns = timada_returns::Command {
+        executor: &executor,
+        db: db.clone(),
+        policy: timada_returns::ReturnPolicy {
+            label_fee_minor: 690,
+            ..timada_returns::ReturnPolicy::default()
+        },
+    };
+    let request = |ground| timada_returns::RequestReturn {
+        order_id: order_id.clone(),
+        customer_id: customer_id.clone(),
+        lines: vec![timada_returns::RequestedLine {
+            product_id: "aoc-24g4xe".into(),
+            quantity: 1,
+        }],
+        ground,
+        reason: "Retour".into(),
+    };
+    let label = |file: bool| timada_returns::IssueLabel {
+        carrier: "Colissimo".into(),
+        tracking_number: "8R0001".into(),
+        url: (!file).then(|| "https://carrier.example/l/42".to_owned()),
+        file: file.then(|| timada_returns::LabelFile {
+            file_name: "etiquette.pdf".into(),
+            content_type: "application/pdf".into(),
+            bytes: b"%PDF-1.4 etiquette".to_vec(),
+        }),
+        waive_fee: false,
+    };
+
+    // With the approval, as a file, for a change of mind.
+    let changed = returns
+        .request_return(request(timada_returns::ReturnGround::ChangedMind))
+        .await?;
+    returns
+        .approve_return_with_label(&changed, label(true))
+        .await?;
+    // After the approval, as a link, for a defective unit.
+    let broken = returns
+        .request_return(request(timada_returns::ReturnGround::Defective))
+        .await?;
+    returns.approve_return(&broken).await?;
+    returns.issue_return_label(&broken, label(false)).await?;
+    for _ in 0..2 {
+        mailer_subscription()
+            .data(db.clone())
+            .data(config())
+            .run_once(&executor)
+            .await?;
+    }
+
+    let outbox = MemoryTransport::default();
+    deliver_pending(&db, &outbox).await?;
+    let sent = outbox.sent();
+    let about = |subject: &str| -> Vec<&Email> {
+        sent.iter()
+            .filter(|m| m.subject.starts_with(subject))
+            .collect()
+    };
+    let approvals = about("Votre retour");
+    assert_eq!(approvals.len(), 2, "{sent:?}");
+    let with_label: Vec<_> = approvals
+        .iter()
+        .filter(|m| !m.attachments.is_empty())
+        .collect();
+    assert_eq!(with_label.len(), 1, "{approvals:?}");
+    let carried = with_label[0];
+    assert_eq!(carried.attachments[0].file_name, "etiquette.pdf");
+    assert_eq!(carried.attachments[0].content, b"%PDF-1.4 etiquette");
+    for expected in ["en pièce jointe", "Colissimo, suivi 8R0001", "6,90 €"] {
+        assert!(
+            carried.body.contains(expected),
+            "{expected}: {}",
+            carried.body
+        );
+    }
+    // The other approval says nothing of a label: it had none yet.
+    let plain = approvals
+        .iter()
+        .find(|m| m.attachments.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("no plain approval"))?;
+    assert!(!plain.body.contains("étiquette"), "{}", plain.body);
+
+    // One e-mail for the label that came later — and only that one.
+    let labels = about("L'étiquette de votre retour");
+    assert_eq!(labels.len(), 1, "{sent:?}");
+    for expected in ["https://carrier.example/l/42", "Elle vous est offerte."] {
+        assert!(
+            labels[0].body.contains(expected),
+            "{expected}: {}",
+            labels[0].body
+        );
+    }
+    assert!(labels[0].attachments.is_empty());
+    Ok(())
+}
+
 /// An order that gets paid: its invoice is issued, and — once the host says
 /// who issues it — lands in the customer's mailbox as a PDF.
 #[cfg(feature = "invoice-pdf")]

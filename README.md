@@ -81,7 +81,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate; VAT numbers and the registry (VIES) that checks them |
 | `timada-order` | the order, the checkout ACL that places it, the fulfillment saga, payment timeouts |
 | `timada-invoice` | one invoice per order, legal numbering, credit notes, both as documents — and, with the `pdf` feature, as PDF files, archived unaltered when they are issued; the VAT of a quarter |
-| `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock, then a refund — or the same product sent again |
+| `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock, then a refund — or the same product sent again; prepaid return labels, by hand or through a carrier port |
 | `timada-review` | product reviews (moderated) and questions & answers |
 | `timada-mailer` | transactional e-mails (with attachments) through a SQL outbox and pluggable transports; feature `invoice-pdf` e-mails each issued invoice, and each credit note, as a PDF |
 | `timada-admin` | the mountable back-office over all of the above |

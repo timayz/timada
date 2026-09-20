@@ -9,16 +9,18 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use timada_order::order_numbers_by_ids;
 use timada_returns::{
-    ReceiveReturn, ReceivedLine, RefundMethod, ReplacementStatus, ReturnError, ReturnPolicy,
-    ReturnStatus, ReturnView, load_return,
+    IssueLabel, LabelFile, ReceiveReturn, ReceivedLine, RefundMethod, ReplacementStatus,
+    ReturnError, ReturnGround, ReturnStatus, ReturnView, load_return, load_return_label_file,
 };
 use timada_shipping::ShipmentStatus;
 use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{
-        content::Form, error::RouterErrorExt, error::see_other, href, page, path_param,
-        path_param as param, query_params, query_params as query,
+        content::{Form, multipart::Multipart},
+        error::RouterErrorExt,
+        error::see_other,
+        href, page, path_param, path_param as param, query_params, query_params as query,
     },
     view::{View, view},
 };
@@ -32,7 +34,7 @@ use crate::{
         input::input,
         separator::separator,
     },
-    config::AdminServices,
+    config::{AdminConfig, AdminServices},
     ui::{date, money, page_header},
 };
 
@@ -54,15 +56,26 @@ fn error_message(code: Option<&str>) -> Option<&'static str> {
         ),
         "nothing" => Some("Aucun article repris : il n'y a rien à remplacer."),
         "parcel" => Some("Le colis de remplacement n'attend plus d'être expédié."),
+        "label" => Some("Une étiquette, c'est un lien, un fichier, ou les deux."),
+        "label-url" => Some("Le lien de l'étiquette doit commencer par https:// ou http://."),
+        "label-file" => {
+            Some("Le fichier de l'étiquette doit être un PDF, un PNG ou un JPEG de 5 Mo au plus.")
+        }
+        "label-exists" => Some("Ce retour a déjà son étiquette."),
+        "label-field" => Some("Indiquez le transporteur et le numéro de suivi de l'étiquette."),
+        "carrier" => Some(
+            "Le transporteur n'a pas pu fournir l'étiquette. Réessayez, ou joignez-la à la main.",
+        ),
         _ => None,
     }
 }
 
-fn returns(services: &AdminServices) -> timada_returns::Command<'_, evento::Evento> {
+fn returns(cx: &Cx) -> timada_returns::Command<'_, evento::Evento> {
+    let services = app_context::<AdminServices>(cx);
     timada_returns::Command {
         executor: &services.executor,
         db: services.db.clone(),
-        policy: ReturnPolicy::default(),
+        policy: app_context::<AdminConfig>(cx).return_policy,
     }
 }
 
@@ -85,9 +98,18 @@ fn settled(cx: &Cx, id: &str, outcome: std::result::Result<(), ReturnError>) -> 
         Ok(()) => return Ok(back(cx, id)),
         Err(ReturnError::AcceptedExceedsRequested(_)) => "accepted",
         Err(ReturnError::WrongStatus { .. }) => "status",
+        Err(ReturnError::Required("carrier" | "tracking_number")) => "label-field",
         Err(ReturnError::Required(_)) => "reason",
         Err(ReturnError::ReplacementOutOfStock(_)) => "stock",
         Err(ReturnError::NothingToReplace) => "nothing",
+        Err(ReturnError::LabelMissing) => "label",
+        Err(ReturnError::InvalidLabelUrl) => "label-url",
+        Err(ReturnError::InvalidLabelFile) => "label-file",
+        Err(ReturnError::LabelAlreadyIssued) => "label-exists",
+        Err(ReturnError::LabelProvider(error)) => {
+            tracing::warn!(return_id = %id, %error, "return label provider failed");
+            "carrier"
+        }
         Err(err) => return Err(anyhow::Error::from(err).into()),
     };
     Ok(format!("{}?error={code}", back(cx, id)))
@@ -104,6 +126,15 @@ struct Line {
     unit_price: String,
     /// `(accepted, restocked)` once received.
     outcome: Option<(String, &'static str)>,
+}
+
+/// The prepaid label of a return, worded.
+struct IssuedLabel {
+    tracking: String,
+    link: Option<String>,
+    /// `(where, file name)`.
+    download: Option<(String, String)>,
+    cost: String,
 }
 
 /// The replacement of a return, worded.
@@ -162,6 +193,44 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         RefundMethod::StoreCredit => "Avoir",
     });
     let voucher = request.voucher_code.clone();
+    // The prepaid label: what the customer was given, and what it costs them.
+    let ground = request.ground.map(ReturnGround::label);
+    let label = request.label.as_ref().map(|issued| IssuedLabel {
+        tracking: format!("{} — {}", issued.carrier, issued.tracking_number),
+        link: issued.url.clone(),
+        download: issued.file_name.as_ref().map(|name| {
+            (
+                href!(label_file, ReturnId(id.clone())).resolve(cx),
+                name.clone(),
+            )
+        }),
+        cost: if issued.fee.is_positive() {
+            format!(
+                "{} à la charge du client, déduits du remboursement",
+                money(&issued.fee)
+            )
+        } else {
+            "Offerte au client".to_owned()
+        },
+    });
+    // What a label would cost this customer, said before it is given.
+    let currency = request.money.currency.clone();
+    let policy_fee =
+        app_context::<AdminConfig>(cx)
+            .return_policy
+            .label_fee(request.ground, false, &currency);
+    let fee_notice = if policy_fee.is_positive() {
+        format!(
+            "Selon la politique de retour, {} seront déduits du remboursement.",
+            money(&policy_fee)
+        )
+    } else {
+        "Selon la politique de retour, l'étiquette est offerte (boutique en cause, ou étiquettes gratuites).".to_owned()
+    };
+    let can_label = request.status == ReturnStatus::Approved && request.label.is_none();
+    let has_carrier = services.return_labels.is_some();
+    let fee_deducted = request.label_fee_deducted.as_ref().map(money);
+
     // The replacement, and its parcel once there is one: `(what, state,
     // tracking, can be dispatched)`.
     let replacement = match &request.replacement {
@@ -312,12 +381,53 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         )
                     )
                 }
+                if let Some(label) = &label {
+                    card(
+                        card_header(card_title("Étiquette de retour"))
+                        card_content(
+                            <div class="flex flex-col gap-2 text-sm">
+                                <p class="font-mono text-xs">(label.tracking.clone())</p>
+                                <p>(label.cost.clone())</p>
+                                if let Some((link, name)) = &label.download {
+                                    <a href=(link.clone()) class="underline underline-offset-4">"Télécharger " (name.clone())</a>
+                                }
+                                if let Some(link) = &label.link {
+                                    <a href=(link.clone()) rel="noopener noreferrer" class="break-all underline underline-offset-4">(link.clone())</a>
+                                }
+                            </div>
+                        )
+                    )
+                }
+                if can_label {
+                    card(
+                        card_header(card_title("Étiquette de retour"))
+                        card_content(
+                            <div class="flex flex-col gap-3 text-sm">
+                                <p class="text-muted-foreground">(fee_notice.clone())</p>
+                                if has_carrier {
+                                    <form method="post" action=(href!(provide_label, ReturnId(id.clone()))) class="flex flex-col gap-2">
+                                        <label class="flex items-center gap-2"><input type="checkbox" name="waive_fee" value="on"> "Offrir l'étiquette au client"</label>
+                                        button(attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Demander l'étiquette au transporteur")
+                                    </form>
+                                    separator()
+                                }
+                                <form method="post" enctype="multipart/form-data" action=(href!(attach_label, ReturnId(id.clone()))) class="flex flex-col gap-2">
+                                    label_fields()
+                                    button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Joindre l'étiquette")
+                                </form>
+                            </div>
+                        )
+                    )
+                }
                 card(
                     card_header(card_title("Demande"))
                     card_content(
                         <dl class="flex flex-col gap-2 text-sm">
                             <div><dt class="text-muted-foreground">"Commande"</dt><dd><a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label)</a></dd></div>
                             <div><dt class="text-muted-foreground">"Client"</dt><dd><a href=(customer_link) class="font-mono text-xs underline-offset-4 hover:underline">(request.customer_id.clone())</a></dd></div>
+                            if let Some(ground) = ground {
+                                <div><dt class="text-muted-foreground">"Nature du retour"</dt><dd>(ground)</dd></div>
+                            }
                             <div><dt class="text-muted-foreground">"Motif"</dt><dd>(request.reason.clone())</dd></div>
                             if let Some(reason) = &request.refused_reason {
                                 <div><dt class="text-muted-foreground">"Motif du refus"</dt><dd>(reason.clone())</dd></div>
@@ -326,6 +436,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                 <div><dt class="text-muted-foreground">"Remboursement"</dt><dd>(method)</dd></div>
                                 <div><dt class="text-muted-foreground">"Sur le paiement"</dt><dd class="tabular-nums">(money(&request.money))</dd></div>
                                 <div><dt class="text-muted-foreground">"En avoir"</dt><dd class="tabular-nums">(money(&request.credit))</dd></div>
+                            }
+                            if let Some(fee) = &fee_deducted {
+                                <div><dt class="text-muted-foreground">"Étiquette déduite"</dt><dd class="tabular-nums">(fee.clone())</dd></div>
                             }
                             if let Some(code) = &voucher {
                                 <div><dt class="text-muted-foreground">"Code de l'avoir"</dt><dd class="font-mono text-xs">(code.clone())</dd></div>
@@ -338,7 +451,14 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         card_header(card_title("Décision"))
                         card_content(
                             <div class="flex flex-col gap-3">
-                                <form method="post" action=(href!(approve, ReturnId(id.clone())))>
+                                <form method="post" enctype="multipart/form-data" action=(href!(approve, ReturnId(id.clone()))) class="flex flex-col gap-2 text-sm">
+                                    <details>
+                                        <summary class="cursor-pointer text-muted-foreground">"Joindre une étiquette de retour prépayée"</summary>
+                                        <div class="mt-2 flex flex-col gap-2">
+                                            <p class="text-muted-foreground">(fee_notice.clone())</p>
+                                            label_fields()
+                                        </div>
+                                    </details>
                                     button(attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Accepter le retour")
                                 </form>
                                 separator()
@@ -355,12 +475,131 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     })
 }
 
+/// The fields of a label, shared by the approval and the later attachment.
+#[topcoat::view::component]
+async fn label_fields() -> Result<impl View> {
+    Ok(view! {
+        input(attrs: topcoat::view::attributes! { name="label_carrier" placeholder="Transporteur" aria-label="Transporteur de l'étiquette" value="Colissimo" })
+        input(attrs: topcoat::view::attributes! { name="label_tracking" placeholder="N° de suivi du retour" aria-label="Numéro de suivi de l'étiquette" })
+        input(attrs: topcoat::view::attributes! { name="label_url" type="url" placeholder="Lien vers l'étiquette (https://…)" aria-label="Lien vers l'étiquette" })
+        <label class="flex flex-col gap-1 text-muted-foreground">
+            "Ou le fichier de l'étiquette (PDF, PNG, JPEG — 5 Mo)"
+            <input type="file" name="label_file" accept="application/pdf,image/png,image/jpeg">
+        </label>
+        <label class="flex items-center gap-2"><input type="checkbox" name="waive_fee" value="on"> "Offrir l'étiquette au client"</label>
+    })
+}
+
+/// The label an operator filled in, if they did: a tracking number, a link
+/// or a file says they meant to.
+async fn posted_label(multipart: Option<Multipart>) -> Result<Option<IssueLabel>> {
+    let Some(mut multipart) = multipart else {
+        return Ok(None);
+    };
+    let mut fields: HashMap<String, String> = HashMap::new();
+    let mut file = None;
+    while let Some(field) = multipart.next_field().await? {
+        let name = field.name().unwrap_or_default().to_owned();
+        if name == "label_file" {
+            let file_name = field.file_name().unwrap_or_default().to_owned();
+            let content_type = field.content_type().unwrap_or_default().to_owned();
+            let bytes = field.bytes().await?;
+            // A file input left empty still posts a nameless, empty part.
+            if !bytes.is_empty() {
+                file = Some(LabelFile {
+                    file_name,
+                    content_type,
+                    bytes: bytes.to_vec(),
+                });
+            }
+        } else {
+            fields.insert(name, field.text().await?);
+        }
+    }
+    let text = |name: &str| fields.get(name).map_or("", |v| v.trim()).to_owned();
+    let (tracking_number, url) = (text("label_tracking"), text("label_url"));
+    if tracking_number.is_empty() && url.is_empty() && file.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(IssueLabel {
+        carrier: text("label_carrier"),
+        tracking_number,
+        url: Some(url).filter(|url| !url.is_empty()),
+        file,
+        waive_fee: fields.contains_key("waive_fee"),
+    }))
+}
+
+/// Accepts the return — with its prepaid label when the operator joined one,
+/// so the e-mail announcing the approval carries it.
 #[page(POST "./approve")]
-pub async fn approve(cx: &Cx) -> Result<impl View> {
+pub async fn approve(cx: &Cx, multipart: Option<Multipart>) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let outcome = match posted_label(multipart).await? {
+        Some(label) => returns(cx).approve_return_with_label(&id, label).await,
+        None => returns(cx).approve_return(&id).await,
+    };
+    Err::<(), _>(see_other(settled(cx, &id, outcome)?).into())
+}
+
+/// Joins the label to a return already approved.
+#[page(POST "./label")]
+pub async fn attach_label(cx: &Cx, multipart: Option<Multipart>) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let outcome = match posted_label(multipart).await? {
+        Some(label) => returns(cx).issue_return_label(&id, label).await,
+        None => Err(ReturnError::LabelMissing),
+    };
+    Err::<(), _>(see_other(settled(cx, &id, outcome)?).into())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProvideLabelForm {
+    waive_fee: Option<String>,
+}
+
+/// Asks the carrier plugged into the admin for the label.
+#[page(POST "./label/provide")]
+pub async fn provide_label(cx: &Cx, Form(form): Form<ProvideLabelForm>) -> Result<impl View> {
     let (id, _) = load(cx).await?;
     let services = app_context::<AdminServices>(cx);
-    let outcome = returns(services).approve_return(&id).await;
+    let outcome = match &services.return_labels {
+        Some(labels) => {
+            returns(cx)
+                .provide_return_label(&id, labels.0.as_ref(), form.waive_fee.is_some())
+                .await
+        }
+        None => Err(ReturnError::LabelMissing),
+    };
     Err::<(), _>(see_other(settled(cx, &id, outcome)?).into())
+}
+
+/// A label's file, handed to the browser under its own type.
+pub struct LabelDownload(LabelFile);
+
+impl topcoat::router::response::IntoResponse for LabelDownload {
+    fn into_response(self, _cx: &Cx) -> Result<topcoat::router::response::Response> {
+        Ok(topcoat::router::response::Response::builder()
+            .header("Content-Type", self.0.content_type)
+            .header(
+                "Content-Disposition",
+                format!("attachment; filename=\"{}\"", self.0.file_name),
+            )
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Cache-Control", "private, no-store")
+            .body(topcoat::router::Body::from(self.0.bytes))?)
+    }
+}
+
+/// `./label`: the label's file, as the customer gets it.
+#[topcoat::router::route(GET "./label")]
+pub async fn label_file(cx: &Cx) -> Result<LabelDownload> {
+    let (id, _) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let file = load_return_label_file(&services.db, &id)
+        .await?
+        .ok_or_not_found()?;
+    Ok(LabelDownload(file))
 }
 
 #[derive(Debug, Deserialize)]
@@ -371,8 +610,7 @@ pub struct RefuseForm {
 #[page(POST "./refuse")]
 pub async fn refuse(cx: &Cx, Form(form): Form<RefuseForm>) -> Result<impl View> {
     let (id, _) = load(cx).await?;
-    let services = app_context::<AdminServices>(cx);
-    let outcome = returns(services).refuse_return(&id, form.reason).await;
+    let outcome = returns(cx).refuse_return(&id, form.reason).await;
     Err::<(), _>(see_other(settled(cx, &id, outcome)?).into())
 }
 
@@ -384,7 +622,6 @@ pub async fn receive_parcel(
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<impl View> {
     let (id, request) = load(cx).await?;
-    let services = app_context::<AdminServices>(cx);
     let mut lines = Vec::with_capacity(request.lines.len());
     for index in 0..request.lines.len() {
         let Some(product_id) = form.get(&format!("product_{index}")) else {
@@ -403,7 +640,7 @@ pub async fn receive_parcel(
         Some("credit") => RefundMethod::StoreCredit,
         _ => RefundMethod::OriginalPayment,
     };
-    let outcome = returns(services)
+    let outcome = returns(cx)
         .receive_return(
             &id,
             ReceiveReturn {

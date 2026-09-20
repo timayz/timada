@@ -71,6 +71,28 @@ sqlite_migration!(
 
 /// Write-side and read-model migrations for this context, to register
 /// alongside evento's.
+pub struct M0003ReturnLabel;
+
+sqlite_migration!(
+    M0003ReturnLabel,
+    "returns",
+    "m0003_return_label",
+    vec_box![M0002ReturnList],
+    vec_box![
+        // The prepaid label's file, when the label is one: too big for an
+        // event, and nothing a replay needs.
+        (
+            "CREATE TABLE return_label_file (
+                return_id TEXT PRIMARY KEY,
+                file_name TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                content BLOB NOT NULL
+            )",
+            "DROP TABLE return_label_file"
+        )
+    ]
+);
+
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001ReturnClaim, M0002ReturnList]
+    vec_box![M0001ReturnClaim, M0002ReturnList, M0003ReturnLabel]
 }

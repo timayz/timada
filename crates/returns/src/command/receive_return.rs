@@ -6,7 +6,7 @@ use timada_payment::{PaymentStatus, load_payment, payment_id};
 use timada_inventory::{StockLocation, load_stock_availability, stock_item_id};
 
 use crate::{
-    aggregator::{ReplacementPlanned, ReturnReceived},
+    aggregator::{ReplacementPlanned, ReturnLabelFeeDeducted, ReturnReceived},
     error::ReturnError,
     value_object::{ReceivedLine, RefundMethod, ReplacementLine, ReturnStatus, refund_split},
 };
@@ -29,7 +29,8 @@ impl<E: Executor> super::Command<'_, E> {
     /// how the customer is refunded. The amounts are settled here, once —
     /// what the original payment cannot take any more (it was partly refunded
     /// already, or the order was paid with a voucher) becomes store credit —
-    /// so the process manager only has to execute them.
+    /// so the process manager only has to execute them. A prepaid label the
+    /// customer pays for is taken off them (`ReturnLabelFeeDeducted`).
     ///
     /// With `replace`, nothing goes back: the accepted units are sent again.
     /// The warehouse must hold them (counting what this very return puts back
@@ -100,6 +101,23 @@ impl<E: Executor> super::Command<'_, E> {
             split.credit = split.credit.checked_add(&overflow)?;
         }
 
+        // The prepaid label, when the customer pays for it, comes off what
+        // goes back — money first. A replacement refunds nothing, so it takes
+        // nothing off either: replacing is what a shop at fault does, and its
+        // labels are free.
+        let mut fee_deducted = None;
+        if !cmd.replace
+            && let Some(fee) = request.label_fee.as_ref().filter(|fee| fee.is_positive())
+        {
+            let from_money = fee.minor.min(split.money.minor);
+            let from_credit = (fee.minor - from_money).min(split.credit.minor);
+            split.money = Money::new(split.money.minor - from_money, &split.money.currency);
+            split.credit = Money::new(split.credit.minor - from_credit, &split.credit.currency);
+            if from_money + from_credit > 0 {
+                fee_deducted = Some(Money::new(from_money + from_credit, &fee.currency));
+            }
+        }
+
         let mut write = request.write()?;
         if cmd.replace {
             let mut replacement = Vec::new();
@@ -150,6 +168,9 @@ impl<E: Executor> super::Command<'_, E> {
                 money: split.money,
                 credit: split.credit,
             });
+            if let Some(amount) = fee_deducted {
+                write.event(&ReturnLabelFeeDeducted { amount });
+            }
         }
         write.commit(self.executor).await?;
 

@@ -63,6 +63,15 @@ pub fn tax_zones() -> timada_tax::TaxZones {
     timada_tax::TaxZones::france_with_eu_oss()
 }
 
+/// How the demo shop takes articles back: 14 days, and a prepaid label at
+/// 6,90 € — free when the shop is at fault.
+pub fn return_policy() -> timada_returns::ReturnPolicy {
+    timada_returns::ReturnPolicy {
+        label_fee_minor: 690,
+        ..timada_returns::ReturnPolicy::default()
+    }
+}
+
 /// Who issues the demo shop's invoices.
 pub fn invoice_issuer() -> timada_invoice::InvoiceIssuer {
     timada_invoice::InvoiceIssuer {

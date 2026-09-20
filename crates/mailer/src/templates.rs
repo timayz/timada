@@ -186,6 +186,18 @@ pub trait Templates: Send + Sync {
         template::return_completed(config, first_name, request).into()
     }
 
+    /// The prepaid label given *after* the approval e-mail went out; one
+    /// given with the approval is announced by [`Self::return_approved`].
+    /// Goes out with the label attached when the shop holds its file.
+    fn return_label(
+        &self,
+        config: &MailerConfig,
+        first_name: &str,
+        request: &ReturnView,
+    ) -> Content {
+        template::return_label(config, first_name, request).into()
+    }
+
     /// The parcel replacing a return's articles left the warehouse.
     fn replacement_shipped(
         &self,

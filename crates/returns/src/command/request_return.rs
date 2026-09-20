@@ -1,7 +1,11 @@
 use evento::Executor;
 use timada_order::{OrderStatus, load_order_details};
 
-use crate::{aggregator::ReturnRequested, error::ReturnError, value_object::ReturnLine};
+use crate::{
+    aggregator::{ReturnGroundStated, ReturnRequested},
+    error::ReturnError,
+    value_object::{ReturnGround, ReturnLine},
+};
 
 use super::return_id;
 
@@ -17,6 +21,10 @@ pub struct RequestReturn {
     /// Who asks: someone else's order is reported as not found.
     pub customer_id: String,
     pub lines: Vec<RequestedLine>,
+    /// Why, as a ground the policy can reason about (who pays for the way
+    /// back)...
+    pub ground: ReturnGround,
+    /// ...and in the customer's words.
     pub reason: String,
 }
 
@@ -90,6 +98,7 @@ impl<E: Executor> super::Command<'_, E> {
                 lines,
                 reason: cmd.reason.trim().to_owned(),
             })
+            .event(&ReturnGroundStated { ground: cmd.ground })
             .commit(self.executor)
             .await;
         if let Err(err) = committed {
