@@ -413,6 +413,40 @@ pub(crate) fn question_refused(
 }
 
 #[cfg(feature = "invoice-pdf")]
+pub(crate) fn credit_note_issued(
+    config: &MailerConfig,
+    first_name: &str,
+    credit_note: &timada_invoice::CreditNoteDocument,
+) -> Content {
+    let heading = if credit_note.amounts_include_vat {
+        "Montant TTC"
+    } else {
+        "Montant HT"
+    };
+    (
+        format!("Votre avoir {}", credit_note.number),
+        signed(
+            config,
+            first_name,
+            &[
+                format!(
+                    "Vous trouverez en pièce jointe (PDF) l'avoir {} : il documente le \
+                     remboursement fait sur votre commande {} et vient en déduction de la \
+                     facture {}.",
+                    credit_note.number, credit_note.order_label, credit_note.invoice_number
+                ),
+                format!("  Motif — {}", credit_note.reason),
+                format!("  {heading} — {}", money(&credit_note.amount)),
+                format!(
+                    "Il reste disponible dans votre compte : {}",
+                    config.url(&format!("/account/orders/{}", credit_note.order_id))
+                ),
+            ],
+        ),
+    )
+}
+
+#[cfg(feature = "invoice-pdf")]
 pub(crate) fn invoice_issued(
     config: &MailerConfig,
     first_name: &str,

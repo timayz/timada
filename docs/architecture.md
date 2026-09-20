@@ -204,7 +204,7 @@ pool as data unless noted:
 | invoice | `credit_note_archive_subscription` (feature `pdf`) | files each credit note's PDF in the archive | same as `invoice_archive_subscription` |
 | returns | `return_processing_subscription` | process manager | |
 | returns | `return_list_subscription` | read model | |
-| mailer | `mailer_subscription` | ACL ← seven contexts (eight with `invoice-pdf`) | `timada_mailer::MailerConfig`, optionally `MailerTemplates`; with feature `invoice-pdf`, a `timada_invoice::InvoiceIssuer` turns on the invoice e-mail |
+| mailer | `mailer_subscription` | ACL ← seven contexts (eight with `invoice-pdf`) | `timada_mailer::MailerConfig`, optionally `MailerTemplates`; with feature `invoice-pdf`, a `timada_invoice::InvoiceIssuer` turns on the invoice and credit note e-mails, and a `timada_invoice::InvoiceArchive` makes them carry the archived files |
 
 Read-model subscriptions are `.strict()`: they name every event of their
 aggregate (a handler or a `.skip`), so a new event cannot be forgotten
@@ -359,6 +359,11 @@ the SMTP relay.
   (`mailer_attachment`), survive failed attempts, and lose their bytes once
   the e-mail is sent — name and size stay for the admin. The outbox is not an
   archive: what was attached can be rendered again.
+- **A refund is two e-mails**, like a purchase (confirmation, then invoice):
+  `refund` when the money goes back (`PaymentRefunded`), `credit-note-issued`
+  with the document once the credit note exists (`CreditNoteIssued`). The
+  second cannot ride on the first — the credit note is issued *from* the
+  refund, by another subscription — and only goes out with an `InvoiceIssuer`.
 - **Logging** goes through `tracing`; libraries never print.
 - **Errors**: `thiserror` enums per context, with `anyhow` for the
   infrastructure underneath. No `unwrap`/`expect` outside tests.
@@ -380,9 +385,5 @@ the SMTP relay.
   (`timada_invoice::vat_report`, the admin's TVA section) adds up what was
   invoiced; filing it — and the rule that a quarter starts at midnight UTC,
   not Paris time — stays with the accountant.
-- The credit note **by e-mail**: the refund e-mail goes out on
-  `PaymentRefunded`, which is also what the credit note is issued from, so
-  attaching the file means a new e-mail on `CreditNoteIssued` — one more
-  message per refund, a choice left to the shop.
 - Upcasting of old event shapes: an evento feature, to build when the first
   `V2` event exists.

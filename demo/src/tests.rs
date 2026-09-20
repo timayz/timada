@@ -569,6 +569,19 @@ async fn cancelling_a_paid_order_refunds_it_with_a_credit_note() -> anyhow::Resu
     assert_eq!(entry.kind, "credit_note");
     assert_eq!(downloaded.as_ref(), archived.as_slice());
 
+    // It went to the shopper's mailbox as well, next to the refund e-mail.
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let kinds: Vec<&str> = outbox.iter().map(|m| m.kind.as_str()).collect();
+    assert!(kinds.contains(&"refund"), "{kinds:?}");
+    let mailed = outbox
+        .iter()
+        .find(|m| m.kind == "credit-note-issued")
+        .ok_or_else(|| anyhow::anyhow!("credit note not e-mailed: {kinds:?}"))?;
+    assert_eq!(
+        mailed.subject,
+        format!("Votre avoir {}", notes[0].credit_note_number)
+    );
+
     // Nobody else's, and not under another order.
     let mut other = Browser::new(&router);
     other
