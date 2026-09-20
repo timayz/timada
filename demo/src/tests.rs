@@ -2829,8 +2829,8 @@ async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::
     let page = text(browser.get(&product_uri).await).await?;
     assert!(page.contains("109,00 £"), "{page}");
 
-    // Checked out in pounds: delivery at its pound fee, no paying in
-    // several times (its fee is a euro amount), a pound order and payment.
+    // Checked out in pounds: delivery and instalments at their pound fees,
+    // a pound order and payment.
     browser.post("/register", REGISTER).await;
     browser.post("/account/addresses/new", ADDRESS).await;
     let checkout = text(browser.get("/checkout").await).await?;
@@ -2838,22 +2838,15 @@ async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::
     // Not a euro on the page itself (the header's switcher names them).
     let body = checkout.split("<main>").nth(1).unwrap_or_default();
     assert!(!body.contains('€'), "{body}");
-    assert!(!checkout.contains("value=\"installments\""), "{checkout}");
+    // Paying in several times has its pound fee too.
+    assert!(checkout.contains("value=\"installments\""), "{checkout}");
+    assert!(checkout.contains("3,99 £"), "{checkout}");
     let address_id = checkout
         .split("name=\"delivery_address_id\" value=\"")
         .nth(1)
         .and_then(|rest| rest.split('"').next())
         .ok_or_else(|| anyhow::anyhow!("no delivery address"))?
         .to_owned();
-    let sneaky = browser
-        .post(
-            "/checkout",
-            &format!(
-                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=installments"
-            ),
-        )
-        .await;
-    assert!(text(sneaky).await?.contains("n'est pas proposé"));
     let placed = browser
         .post(
             "/checkout",
@@ -2915,5 +2908,28 @@ async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::
         .await;
     let cart = text(browser.get("/cart").await).await?;
     assert!(cart.contains("109,00 £"), "{cart}");
+    browser
+        .post(&format!("/cart/lines/{product_id}/remove"), "")
+        .await;
+
+    // Francs: the shop said nothing of what instalments cost there, so they
+    // are not offered — and not taken if asked for anyway.
+    browser.post("/currency", "currency=CHF&next=%2F").await;
+    let added = browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    assert_eq!(location(&added), "/cart", "{:?}", text(added).await);
+    let checkout = text(browser.get("/checkout").await).await?;
+    assert!(checkout.contains("129,00 CHF"), "{checkout}");
+    assert!(!checkout.contains("value=\"installments\""), "{checkout}");
+    let sneaky = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=installments"
+            ),
+        )
+        .await;
+    assert!(text(sneaky).await?.contains("n'est pas proposé"));
     Ok(())
 }

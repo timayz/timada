@@ -70,12 +70,33 @@ pub fn shop_currencies() -> timada_core::ShopCurrencies {
 }
 
 /// How the demo shop takes articles back: 14 days, and a prepaid label at
-/// 6,90 € — free when the shop is at fault.
+/// 6,90 € — 5,90 £, 6,90 CHF — free when the shop is at fault.
 pub fn return_policy() -> timada_returns::ReturnPolicy {
+    use timada_core::Money;
     timada_returns::ReturnPolicy {
-        label_fee_minor: 690,
+        label_fees: [
+            Money::eur(690),
+            Money::new(590, "GBP"),
+            Money::new(690, "CHF"),
+        ]
+        .into_iter()
+        .collect(),
         ..timada_returns::ReturnPolicy::default()
     }
+}
+
+/// What paying in several times costs. No fee in francs: instalments are not
+/// offered to a franc cart.
+pub fn installment_fees() -> timada_order::InstallmentHandlingFees {
+    use timada_core::Money;
+    timada_order::InstallmentHandlingFees(
+        [
+            Money::eur(timada_order::INSTALLMENT_HANDLING_FEE_MINOR),
+            Money::new(399, "GBP"),
+        ]
+        .into_iter()
+        .collect(),
+    )
 }
 
 /// What delivery costs: the built-in euro fees, and the demo shop's own for
@@ -187,6 +208,7 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             // placed without VAT.
             .data(timada_tax::VatRegistry(store.vat_validator.clone()))
             .data(delivery_fees())
+            .data(installment_fees())
             .start(executor)
             .await?,
         timada_order::order_fulfillment_subscription()
@@ -331,6 +353,7 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             // placed without VAT.
             .data(timada_tax::VatRegistry(store.vat_validator.clone()))
             .data(delivery_fees())
+            .data(installment_fees())
             .run_once(executor)
             .await?;
         timada_order::order_fulfillment_subscription()

@@ -16,5 +16,5 @@ pub mod testing;
 pub mod time;
 
 pub use address::{Address, AddressError, Civility};
-pub use currency::{CurrencyError, ShopCurrencies};
+pub use currency::{CurrencyError, PerCurrency, ShopCurrencies};
 pub use money::{Money, MoneyError};

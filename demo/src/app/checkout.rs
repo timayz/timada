@@ -10,9 +10,9 @@ use serde::Deserialize;
 use timada_cart::{CartError, Checkout, DeliveryChoice, PaymentMode};
 use timada_customer::{AddressBookView, load_address_book};
 use timada_order::{
-    INSTALLMENT_HANDLING_FEE_MINOR, OrderDetailsView, OrderStatus, ReverseChargePolicy,
-    business_purchase, cancellation_reason_label, lines_charged_in_zone, load_order_details,
-    order_id, refresh_vat_standing,
+    OrderDetailsView, OrderStatus, ReverseChargePolicy, business_purchase,
+    cancellation_reason_label, lines_charged_in_zone, load_order_details, order_id,
+    refresh_vat_standing,
 };
 use timada_payment::{
     PaymentError, PaymentMethod, PaymentStart, PaymentStatus, ReturnUrls, load_payment, payment_id,
@@ -175,7 +175,7 @@ async fn check_out(
         },
         _ => return refuse("Choisissez un mode de paiement."),
     };
-    if payment_mode != PaymentMode::Card && !offers_installments(store, &cart_currency) {
+    if payment_mode != PaymentMode::Card && installment_fee(store, &cart_currency).is_none() {
         return refuse("Ce mode de paiement n'est pas proposé. Choisissez la carte bancaire.");
     }
 
@@ -235,7 +235,8 @@ async fn checkout_view(
         Some((cart, notices)) if !cart.lines.is_empty() => (cart, notices),
         _ => return Err(see_other(href!(cart::show).resolve(cx)).into()),
     };
-    let installments = offers_installments(store, &cart.subtotal.currency);
+    let handling_fee = installment_fee(store, &cart.subtotal.currency);
+    let installments = handling_fee.is_some();
     let book = load_address_book(&store.executor, &account.customer_id)
         .await?
         .ok_or_not_found()?;
@@ -333,7 +334,7 @@ async fn checkout_view(
         })
         .collect();
     let handling_fee =
-        timada_core::Money::new(INSTALLMENT_HANDLING_FEE_MINOR, &cart.subtotal.currency);
+        handling_fee.unwrap_or_else(|| timada_core::Money::zero(&cart.subtotal.currency));
     let deliverable = zone.is_some();
     let regime = if reverse_charge.is_some() {
         REVERSE_CHARGE_REGIME
@@ -455,14 +456,17 @@ path_param!(pub order_id: String, error = not_found);
 /// Shown right after checkout. Until the process manager has placed the
 /// order the page says so and reloads itself.
 /// Only what the shop's payment provider can take is offered — and paying
-/// in several times only in the shop's base currency: its handling fee is an
-/// amount of that currency, and nothing is ever converted.
-fn offers_installments(store: &Store, currency: &str) -> bool {
-    currency == crate::db::shop_currencies().base()
-        && store.provider.supports(&PaymentMethod::Installments {
+/// in several times only in the currencies the shop priced its handling fee
+/// in: nothing is ever converted. The fee, when it is offered.
+fn installment_fee(store: &Store, currency: &str) -> Option<timada_core::Money> {
+    let fee = crate::db::installment_fees().fee(currency)?;
+    store
+        .provider
+        .supports(&PaymentMethod::Installments {
             count: INSTALLMENT_COUNT,
-            fee: timada_core::Money::zero(currency),
+            fee: fee.clone(),
         })
+        .then_some(fee)
 }
 
 /// Where a shopper stands between checking out and having paid.

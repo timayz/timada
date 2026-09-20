@@ -244,7 +244,7 @@ pool as data unless noted:
 | payment | `dispute_list_subscription` | read models (disputes, and whose payment a provider's reference is) | |
 | order | `payment_hold_subscription` | ACL ← payment: the orders held while their payment is disputed | |
 | order | `order_history_subscription`, `payment_deadline_subscription` | read models | |
-| order | `order_checkout_subscription` | ACL ← cart | `timada_tax::TaxZones`; optionally a `timada_tax::VatRegistry` (a business's VAT number is asked about again before its order is placed without VAT) and a `timada_order::ReverseChargePolicy`; optionally `timada_shipping::DeliveryFees` (delivery charged in the cart's currency) |
+| order | `order_checkout_subscription` | ACL ← cart | `timada_tax::TaxZones`; optionally a `timada_tax::VatRegistry` (a business's VAT number is asked about again before its order is placed without VAT) and a `timada_order::ReverseChargePolicy`; optionally `timada_shipping::DeliveryFees` (delivery charged in the cart's currency), `timada_order::InstallmentHandlingFees` |
 | order | `order_fulfillment_subscription` | saga | *(no pool)* |
 | order | `order_promo_release_subscription` | ACL → promotion | |
 | invoice | `invoice_from_orders_subscription` | ACL ← order | |
@@ -276,11 +276,12 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 |---|---|
 | `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it. `default()` = France + overseas exports; `france_with_eu_oss()` adds the 26 other member states at their own VAT, reduced rates mapped by the host with `with_mapped_rate(zone, listed_bp, destination_bp)` |
 | `timada_shipping::DeliveryFees` | what each delivery method costs **per currency** (the built-in euro fees by default; a method without a fee in a currency is not offered to a cart in it) — to the checkout subscription, and to whatever page offers delivery methods |
+| `timada_order::InstallmentHandlingFees` | what paying in several times costs **per currency** (4,49 € by default; no fee in a currency = not offered in it) — to the checkout subscription, and to whatever page offers the payment modes |
 | `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `StripeProvider` (feature `stripe`), `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
 | `Arc<dyn timada_tax::VatNumberValidator>` | who says whether a business's VAT number is valid: `ViesValidator` (feature `vies`, the EU's registry — name the shop's own number and each check comes with its consultation number), `FormatValidator` (no registry: what reads well passes), `FakeValidator` in tests |
 | `timada_invoice::InvoiceArchive` | where issued invoices and credit notes are kept unaltered: `SqliteArchiveStore` (in the database, replicated with it), `DirectoryArchiveStore` (files, the host's to back up), or the host's own `ArchiveStore`. Handed to both archive subscriptions, to the mailer (the e-mailed file is the archived one) and to `AdminServices::with_archive` |
 | `timada_core::ShopCurrencies` | the currencies the shop sells in, the base one first (euros only by default; currencies that do not count in hundredths are refused) — to `AdminConfig::currencies` |
-| `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for, and what a prepaid return label costs a customer when the shop is not at fault — to the returns commands and `AdminConfig::return_policy` |
+| `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for, and what a prepaid return label costs a customer, per currency, when the shop is not at fault — to the returns commands and `AdminConfig::return_policy` |
 | `timada_returns::ReturnLabels` | optional: the carrier adapter (`ReturnLabelProvider`) that makes prepaid return labels, to `AdminServices::with_return_labels`; without it labels are attached by hand |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, where the shop itself is alerted (`alerts_to`), maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
@@ -416,9 +417,13 @@ the SMTP relay.
   the cart's currency — a saved cart reopened brings its own back. Switching
   with a cart in hand is asked on the cart page and empties it. Product
   pages, listings, add-to-cart and repricing all go through `price_in`;
-  checkout offers `DeliveryFees::offers(currency)`. Paying in several times is
-  only offered in the base currency: its handling fee is an amount of that
-  currency.
+  checkout offers `DeliveryFees::offers(currency)`.
+- **Every configured amount is said per currency** (`timada_core::PerCurrency`):
+  delivery fees, the instalment handling fee
+  (`timada_order::InstallmentHandlingFees`, 4,49 € by default — instalments
+  are offered only in the currencies that have one) and the return-label fee
+  (`ReturnPolicy::label_fees` — a currency without one gets its labels free).
+  What a currency has no amount for is never derived from another.
 - **Destination VAT** (EU one-stop shop) has no product tax category: a
   product only knows the rate it is listed with, and each country's zone maps
   that rate to its own (`5,5 % → 7 %` in Germany), falling back to the

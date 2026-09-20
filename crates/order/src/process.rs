@@ -34,8 +34,28 @@ use crate::{
 pub const ORDER_CHECKOUT_SUBSCRIPTION: &str = "order-checkout";
 pub const ORDER_PROMO_RELEASE_SUBSCRIPTION: &str = "order-promo-release";
 
-/// "Frais de dossier" charged on instalment plans, in minor units.
+/// "Frais de dossier" charged on instalment plans by default: 4,49 €.
 pub const INSTALLMENT_HANDLING_FEE_MINOR: i64 = 449;
+
+/// What paying in several times costs, **per currency** — a host value, taken
+/// by the checkout subscription. Euros at
+/// [`INSTALLMENT_HANDLING_FEE_MINOR`] by default. A storefront offers
+/// instalments only in the currencies that have a fee: nothing is converted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallmentHandlingFees(pub timada_core::PerCurrency);
+
+impl Default for InstallmentHandlingFees {
+    fn default() -> Self {
+        Self(timada_core::PerCurrency::none().with(Money::eur(INSTALLMENT_HANDLING_FEE_MINOR)))
+    }
+}
+
+impl InstallmentHandlingFees {
+    /// The fee in `currency`; `None`: instalments are not offered in it.
+    pub fn fee(&self, currency: &str) -> Option<Money> {
+        self.0.get(currency).cloned()
+    }
+}
 
 /// When a business's VAT number lets it buy without the shop's VAT.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +171,7 @@ pub async fn business_purchase<E: Executor>(
 /// a `timada_tax::VatRegistry`, asked again about a business's VAT number
 /// before its order is placed without VAT, and a [`ReverseChargePolicy`];
 /// `timada_shipping::DeliveryFees`, what each delivery method costs per
-/// currency (the built-in euro fees otherwise).
+/// currency (the built-in euro fees otherwise); [`InstallmentHandlingFees`].
 pub fn order_checkout_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ORDER_CHECKOUT_SUBSCRIPTION).handler(place_order_on_cart_checked_out())
 }
@@ -241,9 +261,16 @@ async fn place_order_on_cart_checked_out<E: Executor>(
     let shipping_fee = zone.charged(&listed_fee, zones.fee_vat_rate_bp);
     let handling_fee = match event.data.payment_mode {
         timada_cart::PaymentMode::Card => Money::zero(&currency),
-        timada_cart::PaymentMode::Installments { .. } => {
-            Money::new(INSTALLMENT_HANDLING_FEE_MINOR, &currency)
-        }
+        timada_cart::PaymentMode::Installments { .. } => ctx
+            .get::<InstallmentHandlingFees>()
+            .unwrap_or_default()
+            .fee(&currency)
+            .unwrap_or_else(|| {
+                // Not offered in this currency; should one slip by, the order
+                // is kept, without the fee.
+                tracing::error!(%cart_id, %currency, "instalments without a handling fee in the cart's currency: charged nothing");
+                Money::zero(&currency)
+            }),
     };
 
     let charged = lines_charged_in_zone(ctx.executor, &zones, zone, cart.lines).await?;

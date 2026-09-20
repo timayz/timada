@@ -75,7 +75,7 @@ fn returns(cx: &Cx) -> timada_returns::Command<'_, evento::Evento> {
     timada_returns::Command {
         executor: &services.executor,
         db: services.db.clone(),
-        policy: app_context::<AdminConfig>(cx).return_policy,
+        policy: app_context::<AdminConfig>(cx).return_policy.clone(),
     }
 }
 
