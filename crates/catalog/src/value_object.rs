@@ -37,6 +37,39 @@ impl Spec {
     }
 }
 
+/// What tells the variants of a family apart — `Couleur` — and the values it
+/// takes, in the order shoppers are offered them: `S`, `M`, `L`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+pub struct FamilyOption {
+    pub name: String,
+    pub values: Vec<String>,
+}
+
+impl FamilyOption {
+    pub fn new(name: impl Into<String>, values: &[&str]) -> Self {
+        Self {
+            name: name.into(),
+            values: values.iter().map(|value| (*value).to_owned()).collect(),
+        }
+    }
+}
+
+/// Where a variant stands on one option: `Couleur` = `Noir`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Encode, Decode)]
+pub struct OptionValue {
+    pub option: String,
+    pub value: String,
+}
+
+impl OptionValue {
+    pub fn new(option: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            option: option.into(),
+            value: value.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
 pub enum MediaKind {
     #[default]

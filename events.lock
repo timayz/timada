@@ -27,8 +27,16 @@ event timada-catalog/Product::ProductCategorised { category_id: String }
 event timada-catalog/Product::ProductCreated { sku: String, name: String, brand: Brand, category_path: Vec<String>, short_description: String, warranty_months: u16 }
 event timada-catalog/Product::ProductDescribed { long_description: String, key_features: Vec<String> }
 event timada-catalog/Product::ProductEnergyLabelled { class: EnergyClass, info_sheet_url: String }
+event timada-catalog/Product::ProductJoinedFamily { family_id: String }
+event timada-catalog/Product::ProductLeftFamily unit
 event timada-catalog/Product::ProductMediaAdded { media: Media }
 event timada-catalog/Product::ProductSpecified { specs: Vec<Spec> }
+event timada-catalog/ProductFamily::FamilyCreated { slug: String, name: String }
+event timada-catalog/ProductFamily::FamilyDissolved unit
+event timada-catalog/ProductFamily::FamilyOptionsDefined { options: Vec<FamilyOption> }
+event timada-catalog/ProductFamily::FamilyRenamed { name: String }
+event timada-catalog/ProductFamily::FamilyVariantPlaced { product_id: String, values: Vec<OptionValue> }
+event timada-catalog/ProductFamily::FamilyVariantRemoved { product_id: String }
 event timada-customer/Customer::BillingAddressSet { address: Address }
 event timada-customer/Customer::CompanyIdentified { company_name: String, vat_number: String }
 event timada-customer/Customer::CompanyIdentityRemoved unit
@@ -133,8 +141,10 @@ type timada-cart::DeliveryChoice { method_code: String, pickup_store_id: Option<
 type timada-cart::PaymentMode enum { Card, Installments { count: u8 } }
 type timada-catalog::Brand { name: String, slug: String }
 type timada-catalog::EnergyClass enum { A, B, C, D, E, F, G }
+type timada-catalog::FamilyOption { name: String, values: Vec<String> }
 type timada-catalog::Media { url: String, kind: MediaKind, alt: String }
 type timada-catalog::MediaKind enum { Image, Video }
+type timada-catalog::OptionValue { option: String, value: String }
 type timada-catalog::Spec { group: String, label: String, value: String }
 type timada-catalog::SpecKey { group: String, label: String }
 type timada-core::Address { civility: Civility, first_name: String, last_name: String, line1: String, line2: Option<String>, postal_code: String, city: String, country_code: String, phone: Option<String>, mobile: Option<String> }
@@ -168,7 +178,7 @@ type timada-tax::TaxTreatment enum { Domestic, Export, DestinationVat }
 type timada-tax::VatLine { rate_bp: u16, base: Money, vat: Money, total: Money }
 
 view timada-cart::CartDetailsView rev=1 { id: String, customer_id: Option<String>, lines: Vec<CartLine>, promo_code: Option<String>, subtotal: Money, status: CartStatus, saved_name: Option<String>, saved_at: Option<u64> } with CartLine { product_id: String, name: String, quantity: u32, unit_price: Money, warranty_months: u16 }; CartStatus enum { Open, Saved, CheckedOut, Discarded }
-view timada-catalog::ProductPageView rev=1 { id: String, sku: String, name: String, brand: Brand, category_path: Vec<String>, category_id: Option<String>, short_description: String, long_description: String, key_features: Vec<String>, specs: Vec<Spec>, media: Vec<Media>, energy_class: Option<EnergyClass>, energy_info_sheet_url: Option<String>, warranty_months: u16, archived: bool }
+view timada-catalog::ProductPageView rev=2 { id: String, sku: String, name: String, brand: Brand, category_path: Vec<String>, category_id: Option<String>, family_id: Option<String>, short_description: String, long_description: String, key_features: Vec<String>, specs: Vec<Spec>, media: Vec<Media>, energy_class: Option<EnergyClass>, energy_info_sheet_url: Option<String>, warranty_months: u16, archived: bool }
 view timada-customer::AddressBookView rev=1 { customer_id: String, email: String, civility: Civility, first_name: String, last_name: String, billing: Option<Address>, deliveries: Vec<DeliveryAddress> } with DeliveryAddress { id: String, address: Address, preferred: bool }
 view timada-inventory::StockAvailabilityView rev=0 { id: String, product_id: String, location: StockLocation, on_hand: u32, reserved: u32, available: u32, status: Availability } with Availability enum { InStock, OutOfStock }
 view timada-invoice::CreditNoteView rev=0 { id: String, credit_note_number: String, refund_id: String, invoice_id: String, invoice_number: String, order_id: String, amount: Money, reason: String, issued_at: u64 }

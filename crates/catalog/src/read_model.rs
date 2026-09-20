@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 
 use crate::aggregator::{
     ProductArchived, ProductCategorised, ProductCreated, ProductDescribed, ProductEnergyLabelled,
-    ProductMediaAdded, ProductSpecified,
+    ProductJoinedFamily, ProductLeftFamily, ProductMediaAdded, ProductSpecified,
 };
 
 /// Subscription key; the caller attaches the pool with `.data(pool)`.
@@ -38,6 +38,8 @@ pub fn product_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .skip::<ProductSpecified>()
         .skip::<ProductMediaAdded>()
         .skip::<ProductEnergyLabelled>()
+        .skip::<ProductJoinedFamily>()
+        .skip::<ProductLeftFamily>()
         .strict()
 }
 

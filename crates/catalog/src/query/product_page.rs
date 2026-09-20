@@ -6,7 +6,8 @@ use evento::{Executor, metadata::Event, projection::Projection};
 use crate::{
     aggregator::{
         Product, ProductArchived, ProductCategorised, ProductCreated, ProductDescribed,
-        ProductEnergyLabelled, ProductMediaAdded, ProductSpecified,
+        ProductEnergyLabelled, ProductJoinedFamily, ProductLeftFamily, ProductMediaAdded,
+        ProductSpecified,
     },
     value_object::{Brand, EnergyClass, Media, Spec},
 };
@@ -22,6 +23,9 @@ pub struct ProductPageView {
     pub category_path: Vec<String>,
     /// The category the product is filed under, once it has been.
     pub category_id: Option<String>,
+    /// The family the product is a variant of, if any; see
+    /// [`crate::Command::load_family`] for its siblings.
+    pub family_id: Option<String>,
     pub short_description: String,
     pub long_description: String,
     pub key_features: Vec<String>,
@@ -42,9 +46,11 @@ pub fn create_projection<E: Executor>() -> Projection<E, ProductPageView> {
         .handler(on_product_energy_labelled())
         .handler(on_product_archived())
         .handler(on_product_categorised())
+        .handler(on_product_joined_family())
+        .handler(on_product_left_family())
         .strict()
-        // `category_id` joined the snapshot.
-        .revision(1)
+        // `category_id`, then `family_id`, joined the snapshot.
+        .revision(2)
 }
 
 pub async fn load<E: Executor>(
@@ -122,5 +128,23 @@ async fn on_product_categorised(
     row: &mut ProductPageView,
 ) -> anyhow::Result<()> {
     row.category_id = Some(event.data.category_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_product_joined_family(
+    event: Event<ProductJoinedFamily>,
+    row: &mut ProductPageView,
+) -> anyhow::Result<()> {
+    row.family_id = Some(event.data.family_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_product_left_family(
+    _event: Event<ProductLeftFamily>,
+    row: &mut ProductPageView,
+) -> anyhow::Result<()> {
+    row.family_id = None;
     Ok(())
 }
