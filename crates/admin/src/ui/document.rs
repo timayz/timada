@@ -7,7 +7,7 @@ use topcoat::{
 
 use crate::{
     app::admin::_secure::{
-        categories, customers, emails, inventory, invoices, orders, products, promotions,
+        categories, customers, disputes, emails, inventory, invoices, orders, products, promotions,
         questions, refunds, returns, reviews, vat,
     },
     auth::signed_in_admin,
@@ -27,6 +27,7 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
     let promotions_link = href!(promotions::index);
     let invoices_link = href!(invoices::index);
     let refunds_link = href!(refunds::index);
+    let disputes_link = href!(disputes::index);
     let vat_link = href!(vat::index);
     let returns_link = href!(returns::index);
     let reviews_link = href!(reviews::index);
@@ -60,6 +61,7 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
                                 nav_link(link: invoices_link.resolve(cx), current: invoices_link.is_current(cx), "Factures")
                                 nav_link(link: returns_link.resolve(cx), current: returns_link.is_current(cx), "Retours")
                                 nav_link(link: refunds_link.resolve(cx), current: refunds_link.is_current(cx), "Remboursements")
+                                nav_link(link: disputes_link.resolve(cx), current: disputes_link.is_current(cx), "Litiges")
                                 nav_link(link: vat_link.resolve(cx), current: vat_link.is_current(cx), "TVA")
                                 nav_link(link: reviews_link.resolve(cx), current: reviews_link.is_current(cx), "Avis")
                                 nav_link(link: questions_link.resolve(cx), current: questions_link.is_current(cx), "Questions")

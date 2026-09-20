@@ -1949,3 +1949,197 @@ async fn a_credit_note_is_downloaded_and_checked_from_its_invoice() -> anyhow::R
     assert_eq!(elsewhere.status(), StatusCode::NOT_FOUND);
     Ok(())
 }
+
+#[tokio::test]
+async fn a_disputed_payment_holds_its_order_until_the_bank_decides() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let order_id = place_order(&h).await?;
+    let payments = timada_payment::Command(&h.executor);
+    let payment_id = payments
+        .request_payment(timada_payment::RequestPayment {
+            order_id: order_id.clone(),
+            amount: Money::eur(14_390),
+            method: timada_payment::PaymentMethod::Card,
+        })
+        .await?;
+    payments
+        .capture_payment(&payment_id, "psp-1".into())
+        .await?;
+    timada_order::Command(&h.executor)
+        .mark_paid(&order_id, &payment_id)
+        .await?;
+    // A parcel waits for the carrier.
+    timada_shipping::Command(&h.executor)
+        .create_shipment(timada_shipping::CreateShipment {
+            order_id: order_id.clone(),
+            method: timada_shipping::DeliveryMethod::resolve("chronopost-dom", None)
+                .ok_or_else(|| anyhow::anyhow!("unknown delivery method"))?,
+            destination: address(),
+            lines: vec![timada_shipping::ShipmentLine {
+                product_id: "aoc-24g4xe".into(),
+                quantity: 1,
+            }],
+        })
+        .await?;
+    let lists = || async {
+        timada_invoice::invoice_from_orders_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await?;
+        timada_order::order_history_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await?;
+        timada_order::payment_hold_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await?;
+        timada_payment::dispute_list_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await?;
+        timada_invoice::credit_note_list_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await
+    };
+    lists().await?;
+    let order_uri = format!("/admin/orders/{order_id}");
+    let page = |uri: String| {
+        let (h, cookie) = (&h, &cookie);
+        async move { text(h.router.handle(get(&uri, Some(cookie))).await).await }
+    };
+
+    let before = page(order_uri.clone()).await?;
+    assert!(before.contains("Expédier"), "{before}");
+    assert!(!before.contains("Litige bancaire"), "{before}");
+    assert!(
+        page("/admin/orders/to-ship".into())
+            .await?
+            .contains("C2026-000042")
+    );
+    assert!(
+        page("/admin/disputes".into())
+            .await?
+            .contains("Aucun litige en cours.")
+    );
+
+    // The cardholder contests the charge.
+    payments
+        .open_dispute(
+            &payment_id,
+            timada_payment::OpenDispute {
+                dispute_id: "dp_1".into(),
+                amount: Money::eur(14_390),
+                reason: "product_not_received".into(),
+                // 15/01/2027.
+                respond_by: Some(1_800_000_000),
+            },
+        )
+        .await?;
+    lists().await?;
+    let queue = page("/admin/disputes".into()).await?;
+    for expected in [
+        "C2026-000042",
+        "dp_1",
+        "produit non reçu",
+        "15/01/2027",
+        "143,90",
+    ] {
+        assert!(queue.contains(expected), "{expected}: {queue}");
+    }
+    assert!(
+        page("/admin/disputes?status=lost".into())
+            .await?
+            .contains("Aucun litige.")
+    );
+
+    let held = page(order_uri.clone()).await?;
+    assert!(held.contains("Paiement contesté"), "{held}");
+    assert!(held.contains("avant le <strong>15/01/2027"), "{held}");
+    assert!(!held.contains("Expédier"), "{held}");
+    assert!(!held.contains("Montant à rembourser"), "{held}");
+    let to_ship = page("/admin/orders/to-ship".into()).await?;
+    assert!(!to_ship.contains("C2026-000042"), "{to_ship}");
+    assert!(
+        to_ship.contains("1 commande payée est retenue"),
+        "{to_ship}"
+    );
+    // The forms are gone; a request sent anyway is refused the same.
+    for (action, body) in [
+        ("ship", "carrier=Chronopost&tracking_number=XY1"),
+        ("refund", "amount_cents=1000&reason=Geste"),
+    ] {
+        let refused = h
+            .router
+            .handle(post(&format!("{order_uri}/{action}"), body, Some(&cookie)))
+            .await;
+        assert_eq!(
+            location(&refused),
+            format!("{order_uri}?refund_error=disputed"),
+            "{action}"
+        );
+    }
+    let shipment =
+        timada_shipping::load_shipment(&h.executor, timada_shipping::shipment_id(&order_id))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("shipment missing"))?;
+    assert_eq!(shipment.status, timada_shipping::ShipmentStatus::Created);
+    // No credit note for a dispute the bank has not decided.
+    let early = h
+        .router
+        .handle(post(
+            &format!("{order_uri}/disputes/credit-note"),
+            "dispute_id=dp_1",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&early), format!("{order_uri}?refund_error=stale"));
+
+    // Lost: the hold ends, the operator decides what the books say.
+    payments.lose_dispute(&payment_id, "dp_1").await?;
+    lists().await?;
+    let lost = page(order_uri.clone()).await?;
+    assert!(lost.contains("Perdu"), "{lost}");
+    assert!(lost.contains("Émettre un avoir"), "{lost}");
+    assert!(!lost.contains("Paiement contesté"), "{lost}");
+    // Nothing is left to refund: the bank gave it all back.
+    assert!(!lost.contains("Montant à rembourser"), "{lost}");
+    assert!(
+        page("/admin/disputes?status=lost".into())
+            .await?
+            .contains("dp_1")
+    );
+
+    for _ in 0..2 {
+        let credited = h
+            .router
+            .handle(post(
+                &format!("{order_uri}/disputes/credit-note"),
+                "dispute_id=dp_1",
+                Some(&cookie),
+            ))
+            .await;
+        assert_eq!(location(&credited), order_uri);
+    }
+    lists().await?;
+    let notes =
+        timada_invoice::credit_notes_of_invoice(&h.db, &timada_invoice::invoice_id(&order_id))
+            .await?;
+    assert_eq!(notes.len(), 1, "one credit note per dispute");
+    assert_eq!(notes[0].amount_minor, 14_390);
+    let documented = page(order_uri).await?;
+    assert!(
+        documented.contains(&notes[0].credit_note_number),
+        "{documented}"
+    );
+    assert!(!documented.contains("Émettre un avoir"), "{documented}");
+    let invoice = page(format!(
+        "/admin/invoices/{}",
+        timada_invoice::invoice_id(&order_id)
+    ))
+    .await?;
+    assert!(invoice.contains("Litige bancaire dp_1"), "{invoice}");
+    Ok(())
+}

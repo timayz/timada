@@ -101,6 +101,27 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0005PaymentHold;
+
+sqlite_migration!(
+    M0005PaymentHold,
+    "order",
+    "m0005_payment_hold",
+    vec_box![M0004PaidAt],
+    vec_box![
+        // The orders whose payment is disputed: not to be shipped until the
+        // bank decides. A table of its own rather than a column of
+        // `order_history`, which another subscription writes.
+        (
+            "CREATE TABLE order_payment_hold (
+                order_id TEXT PRIMARY KEY,
+                since INTEGER NOT NULL
+            )",
+            "DROP TABLE order_payment_hold"
+        )
+    ]
+);
+
 /// Write-side and read-model migrations for this context, to register
 /// alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
@@ -108,6 +129,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
         M0001OrderHistory,
         M0002OrderNumber,
         M0003AwaitingPayment,
-        M0004PaidAt
+        M0004PaidAt,
+        M0005PaymentHold
     ]
 }

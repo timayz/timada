@@ -1284,6 +1284,38 @@ async fn a_paid_order_waits_in_the_queue_until_it_ships() -> anyhow::Result<()> 
     history().await?;
     assert_eq!(orders_to_ship(&db, 10, 0).await?[0].waiting_since, since);
 
+    // The cardholder disputes the charge: the parcel waits for the bank.
+    let hold = || async {
+        timada_order::payment_hold_subscription()
+            .data(db.clone())
+            .run_once(&executor)
+            .await
+    };
+    let payments = timada_payment::Command(&executor);
+    payments
+        .open_dispute(
+            payment_id(&order_id),
+            timada_payment::OpenDispute {
+                dispute_id: "dp_1".into(),
+                amount: queue[0].total(),
+                reason: "fraudulent".into(),
+                respond_by: None,
+            },
+        )
+        .await?;
+    hold().await?;
+    hold().await?;
+    assert!(timada_order::is_order_on_hold(&db, &order_id).await?);
+    assert_eq!(timada_order::count_orders_on_hold(&db).await?, 1);
+    assert!(orders_to_ship(&db, 10, 0).await?.is_empty());
+    assert_eq!(count_orders_to_ship(&db, now + 3_600).await?, (0, 0));
+    // Won: back in the queue, where it was.
+    payments.win_dispute(payment_id(&order_id), "dp_1").await?;
+    hold().await?;
+    assert!(!timada_order::is_order_on_hold(&db, &order_id).await?);
+    assert_eq!(timada_order::count_orders_on_hold(&db).await?, 0);
+    assert_eq!(orders_to_ship(&db, 10, 0).await?[0].waiting_since, since);
+
     timada_shipping::Command(&executor)
         .dispatch_shipment(shipment_id(&order_id), "Chronopost".into(), "XY123".into())
         .await?;

@@ -147,7 +147,17 @@ the provider: refunds can be decided, they wait. Won, they go through. Lost,
 the disputed amount is gone — out of `refundable()`, and the waiting refunds
 that no longer fit fail with it. A chargeback is not a refund: no
 `PaymentRefunded`, hence no credit note and no e-mail to the customer; what
-the books say of it is the operator's decision.
+the books say of it is the operator's decision — the admin's order page
+offers « Émettre un avoir » on a lost dispute (keyed by
+`dispute_credit_reference`, so once per dispute): a cancelled sale gets one, a
+bad debt does not.
+
+The order is **held** meanwhile: `order_payment_hold` (fed by the order
+context's `payment_hold_subscription`) keeps it out of the queue of orders to
+ship, the admin hides « Expédier » and refuses an operator's refund, and the
+shop is written to (`MailerConfig::alerts_to`) when the dispute opens — with
+the deadline for the evidence, which goes through the provider's dashboard —
+and when the bank decided.
 
 Every handler is idempotent — derived ids, status guards, idempotency keys —
 so a redelivery after a crash converges instead of duplicating.
@@ -205,6 +215,7 @@ pool as data unless noted:
 | payment | `refund_list_subscription` | read models (refunds made, refunds asked for) | |
 | payment | `refund_execution_subscription` | process: enqueues refunds for the provider | |
 | payment | `dispute_list_subscription` | read models (disputes, and whose payment a provider's reference is) | |
+| order | `payment_hold_subscription` | ACL ← payment: the orders held while their payment is disputed | |
 | order | `order_history_subscription`, `payment_deadline_subscription` | read models | |
 | order | `order_checkout_subscription` | ACL ← cart | `timada_tax::TaxZones`; optionally a `timada_tax::VatRegistry` (a business's VAT number is asked about again before its order is placed without VAT) and a `timada_order::ReverseChargePolicy` |
 | order | `order_fulfillment_subscription` | saga | *(no pool)* |
@@ -241,7 +252,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | `Arc<dyn timada_tax::VatNumberValidator>` | who says whether a business's VAT number is valid: `ViesValidator` (feature `vies`, the EU's registry — name the shop's own number and each check comes with its consultation number), `FormatValidator` (no registry: what reads well passes), `FakeValidator` in tests |
 | `timada_invoice::InvoiceArchive` | where issued invoices and credit notes are kept unaltered: `SqliteArchiveStore` (in the database, replicated with it), `DirectoryArchiveStore` (files, the host's to back up), or the host's own `ArchiveStore`. Handed to both archive subscriptions, to the mailer (the e-mailed file is the archived one) and to `AdminServices::with_archive` |
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
-| `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
+| `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, where the shop itself is alerted (`alerts_to`), maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
 | `timada_invoice::InvoiceIssuer` | the seller's identity printed on invoices — also handed to the mailer subscription when invoices are e-mailed |
 | `timada_admin::AdminConfig` | mount segment, stylesheet, invoice issuer, how long a paid order may wait for its parcel before the admin flags it (`ship_within`, two days by default) |

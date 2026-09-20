@@ -207,6 +207,15 @@ pub async fn to_ship(cx: &Cx) -> Result<impl View> {
             total: money(&Money::new(row.total_minor, &row.currency)),
         });
     }
+    // Paid, but their payment is disputed: they wait for the bank, not for
+    // a parcel.
+    let held = match timada_order::count_orders_on_hold(&services.db).await? {
+        0 => None,
+        1 => Some("1 commande payée est retenue : son paiement est contesté.".to_owned()),
+        held => Some(format!(
+            "{held} commandes payées sont retenues : leur paiement est contesté."
+        )),
+    };
     let summary = match (waiting, late) {
         (0, _) => "Aucune commande n'attend son colis.".to_owned(),
         (1, 0) => "1 commande attend son colis.".to_owned(),
@@ -222,6 +231,9 @@ pub async fn to_ship(cx: &Cx) -> Result<impl View> {
             <a href=(href!(index)) class=(button_variants(ButtonVariant::Outline, Default::default()))>"Toutes les commandes"</a>
         )
         <p role="status" class="-mt-4 mb-6 text-sm text-muted-foreground">(summary) " La plus ancienne d'abord."</p>
+        if let Some(held) = &held {
+            <p class="-mt-4 mb-6 text-sm">(held.clone()) " " <a href=(href!(super::disputes::index)) class="underline underline-offset-4">"Voir les litiges"</a></p>
+        }
         if !lines.is_empty() {
             table(
                 table_header(table_row(

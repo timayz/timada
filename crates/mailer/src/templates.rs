@@ -87,6 +87,17 @@ pub trait Templates: Send + Sync {
         template::refund(config, first_name, order, amount).into()
     }
 
+    /// Sent to the shop ([`MailerConfig::alerts_to`]), when a dispute opens
+    /// and again when the bank decided: `dispute.status` says which.
+    fn payment_disputed(
+        &self,
+        config: &MailerConfig,
+        order: &OrderDetailsView,
+        dispute: &timada_payment::DisputeView,
+    ) -> Content {
+        template::payment_disputed(config, order, dispute).into()
+    }
+
     /// Sent to the address left with the alert: there is no name to greet.
     fn back_in_stock(
         &self,
