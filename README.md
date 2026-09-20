@@ -76,11 +76,11 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-cart` | carts: lines with a price snapshot, promo code, saved carts, the checkout fact |
 | `timada-promotion` | promo codes (capped redemptions) and vouchers (balances) |
 | `timada-payment` | the payment of an order: requested, captured, declined, refunded, disputed — and the `PaymentProvider` port the money moves through, with a Stripe adapter behind the `stripe` feature |
-| `timada-shipping` | delivery methods and the shipment of an order |
+| `timada-shipping` | delivery methods, the shipment of an order and the parcels replacing what a return brought back |
 | `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate; VAT numbers and the registry (VIES) that checks them |
 | `timada-order` | the order, the checkout ACL that places it, the fulfillment saga, payment timeouts |
 | `timada-invoice` | one invoice per order, legal numbering, credit notes, both as documents — and, with the `pdf` feature, as PDF files, archived unaltered when they are issued; the VAT of a quarter |
-| `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock and refund |
+| `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock, then a refund — or the same product sent again |
 | `timada-review` | product reviews (moderated) and questions & answers |
 | `timada-mailer` | transactional e-mails (with attachments) through a SQL outbox and pluggable transports; feature `invoice-pdf` e-mails each issued invoice, and each credit note, as a PDF |
 | `timada-admin` | the mountable back-office over all of the above |

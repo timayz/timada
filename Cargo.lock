@@ -3056,6 +3056,7 @@ dependencies = [
  "timada-payment",
  "timada-returns",
  "timada-review",
+ "timada-shipping",
  "tokio",
  "tracing",
 ]
@@ -3148,6 +3149,7 @@ dependencies = [
  "timada-order",
  "timada-payment",
  "timada-promotion",
+ "timada-shipping",
  "tokio",
  "tracing",
 ]

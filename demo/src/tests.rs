@@ -1897,6 +1897,7 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
                     restock: true,
                 }],
                 refund_method: timada_returns::RefundMethod::OriginalPayment,
+                replace: false,
             },
         )
         .await?;
@@ -2017,6 +2018,77 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
         approved.body.contains("Service retours"),
         "{}",
         approved.body
+    );
+
+    // The other unit arrives broken: the shop sends the same product again
+    // rather than refunding it.
+    let asked = browser
+        .post(
+            &form_uri,
+            &format!("product_0={product_id}&quantity_0=1&reason=D%C3%A9fectueux"),
+        )
+        .await;
+    let broken_uri = location(&asked);
+    let broken_id = broken_uri.rsplit('/').next().unwrap_or_default().to_owned();
+    returns.approve_return(&broken_id).await?;
+    returns
+        .receive_return(
+            &broken_id,
+            timada_returns::ReceiveReturn {
+                lines: vec![timada_returns::ReceivedLine {
+                    product_id: product_id.clone(),
+                    accepted: 1,
+                    restock: false,
+                }],
+                refund_method: timada_returns::RefundMethod::OriginalPayment,
+                replace: true,
+            },
+        )
+        .await?;
+    let stock_before = crate::app::catalog::available_stock(&store, &product_id).await?;
+    db::run_subscriptions_once(&store).await?;
+    let slip = text(browser.get(&broken_uri).await).await?;
+    assert!(slip.contains("Traité"), "{slip}");
+    assert!(slip.contains("remplacement est en préparation"), "{slip}");
+    assert!(!slip.contains("Remboursement sur votre moyen"), "{slip}");
+    assert_eq!(
+        crate::app::catalog::available_stock(&store, &product_id).await?,
+        stock_before - 1
+    );
+    timada_shipping::Command(&store.executor)
+        .dispatch_shipment(
+            timada_shipping::replacement_shipment_id(&broken_id),
+            "Colissimo".into(),
+            "XY999".into(),
+        )
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let slip = text(browser.get(&broken_uri).await).await?;
+    assert!(slip.contains("remplacement est expédié"), "{slip}");
+    assert!(slip.contains("suivi XY999"), "{slip}");
+    // The order itself is not "shipped" a second time, and nothing more was
+    // refunded.
+    let payment =
+        timada_payment::load_payment(&store.executor, timada_payment::payment_id(&order_id))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.refunded, timada_core::Money::eur(11_995));
+    let outbox = timada_mailer::list_outbox(&store.db, None, 100, 0).await?;
+    let shipped: Vec<_> = outbox
+        .iter()
+        .filter(|m| m.kind == "replacement-shipped")
+        .collect();
+    assert_eq!(shipped.len(), 1, "{shipped:?}");
+    assert!(shipped[0].body.contains("XY999"), "{}", shipped[0].body);
+    let completed = outbox
+        .iter()
+        .filter(|m| m.kind == "return-completed")
+        .find(|m| m.body.contains("même produit"))
+        .ok_or_else(|| anyhow::anyhow!("no e-mail announcing the replacement"))?;
+    assert!(
+        !completed.body.contains("remboursement"),
+        "{}",
+        completed.body
     );
     Ok(())
 }

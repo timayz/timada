@@ -1,7 +1,8 @@
 use timada_core::{Address, Money};
 use timada_shipping::{
     Command, CreateShipment, DeliveryKind, DeliveryMethod, ShipmentLine, ShipmentStatus,
-    ShippingError, delivery_offers, load_shipment, shipment_id, shipping_fee,
+    ShippingError, delivery_offers, load_shipment, replacement_shipment_id, shipment_id,
+    shipping_fee,
 };
 
 fn dom_address() -> Address {
@@ -160,5 +161,57 @@ async fn rejects_invalid_shipments() -> anyhow::Result<()> {
     let missing = cmd.mark_delivered(shipment_id("order-2")).await;
     assert!(matches!(missing, Err(ShippingError::ShipmentNotFound)));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_return_gets_a_replacement_parcel_next_to_the_orders_own() -> anyhow::Result<()> {
+    let executor = timada_core::testing::memory_executor(Vec::new()).await?.0;
+    let cmd = Command(&executor);
+    let parcel = |quantity| CreateShipment {
+        order_id: "order-1".into(),
+        method: chronopost(),
+        destination: dom_address(),
+        lines: vec![ShipmentLine {
+            product_id: "aoc-24g4xe".into(),
+            quantity,
+        }],
+    };
+    let first = cmd.create_shipment(parcel(2)).await?;
+    let replacement = cmd
+        .create_replacement_shipment(parcel(1), "return-1")
+        .await?;
+    assert_eq!(replacement, replacement_shipment_id("return-1"));
+    assert_ne!(replacement, first);
+    // Asked again after a crash: the same parcel.
+    assert_eq!(
+        cmd.create_replacement_shipment(parcel(1), "return-1")
+            .await?,
+        replacement
+    );
+    // Another return of the same order gets its own.
+    assert_ne!(
+        cmd.create_replacement_shipment(parcel(1), "return-2")
+            .await?,
+        replacement
+    );
+
+    let own = load_shipment(&executor, &first)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("shipment missing"))?;
+    assert_eq!(own.replaces_return, None);
+    let view = load_shipment(&executor, &replacement)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("replacement missing"))?;
+    assert_eq!(view.order_id, "order-1");
+    assert_eq!(view.replaces_return.as_deref(), Some("return-1"));
+    assert_eq!(view.lines[0].quantity, 1);
+    assert_eq!(view.status, ShipmentStatus::Created);
+    cmd.dispatch_shipment(&replacement, "Chronopost".into(), "XY456".into())
+        .await?;
+    assert!(matches!(
+        cmd.create_replacement_shipment(parcel(1), " ").await,
+        Err(ShippingError::Required("reference"))
+    ));
     Ok(())
 }

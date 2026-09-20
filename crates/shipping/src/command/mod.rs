@@ -12,6 +12,7 @@ use evento::{Executor, Projection, metadata::Event};
 use crate::{
     aggregator::{
         Shipment, ShipmentCancelled, ShipmentCreated, ShipmentDelivered, ShipmentDispatched,
+        ShipmentReplacesReturn,
     },
     error::ShippingError,
     value_object::ShipmentStatus,
@@ -20,6 +21,12 @@ use crate::{
 /// Deterministic shipment id: one shipment per order.
 pub fn shipment_id(order_id: &str) -> String {
     timada_core::id::derived(&[order_id], "shipment")
+}
+
+/// The id of the replacement parcel sent for a return (`reference` is the
+/// return's id): an order may get several parcels, one per return.
+pub fn replacement_shipment_id(reference: &str) -> String {
+    timada_core::id::derived(&[reference], "replacement-shipment")
 }
 
 pub struct Command<'a, E: Executor>(pub &'a E);
@@ -59,7 +66,16 @@ fn create_projection<E: Executor>() -> Projection<E, ShipmentState> {
         .handler(on_shipment_dispatched())
         .handler(on_shipment_delivered())
         .handler(on_shipment_cancelled())
+        .handler(on_shipment_replaces_return())
         .strict()
+}
+
+#[evento::handler]
+async fn on_shipment_replaces_return(
+    _event: Event<ShipmentReplacesReturn>,
+    _row: &mut ShipmentState,
+) -> anyhow::Result<()> {
+    Ok(())
 }
 
 #[evento::handler]

@@ -13,11 +13,11 @@ use sqlx::SqlitePool;
 
 use crate::{
     aggregator::{
-        Return, ReturnApproved, ReturnCancelled, ReturnCompleted, ReturnReceived, ReturnRefused,
-        ReturnRequested,
+        ReplacementAbandoned, ReplacementArranged, ReplacementPlanned, Return, ReturnApproved,
+        ReturnCancelled, ReturnCompleted, ReturnReceived, ReturnRefused, ReturnRequested,
     },
     error::ReturnError,
-    value_object::{ReturnLine, ReturnPolicy, ReturnStatus},
+    value_object::{ReplacementStatus, ReturnLine, ReturnPolicy, ReturnStatus},
 };
 
 /// Deterministic return id, from the RMA number the request was given.
@@ -62,6 +62,8 @@ pub struct ReturnState {
     pub customer_id: String,
     pub status: ReturnStatus,
     pub lines: Vec<ReturnLine>,
+    /// Where the replacement stands, when the operator chose one.
+    pub replacement: Option<ReplacementStatus>,
 }
 
 impl ReturnState {
@@ -86,7 +88,37 @@ fn create_projection<E: Executor>() -> Projection<E, ReturnState> {
         .handler(on_return_cancelled())
         .handler(on_return_received())
         .handler(on_return_completed())
+        .handler(on_replacement_planned())
+        .handler(on_replacement_abandoned())
+        .handler(on_replacement_arranged())
         .strict()
+}
+
+#[evento::handler]
+async fn on_replacement_planned(
+    _event: Event<ReplacementPlanned>,
+    row: &mut ReturnState,
+) -> anyhow::Result<()> {
+    row.replacement = Some(ReplacementStatus::Planned);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_replacement_abandoned(
+    _event: Event<ReplacementAbandoned>,
+    row: &mut ReturnState,
+) -> anyhow::Result<()> {
+    row.replacement = Some(ReplacementStatus::Abandoned);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_replacement_arranged(
+    _event: Event<ReplacementArranged>,
+    row: &mut ReturnState,
+) -> anyhow::Result<()> {
+    row.replacement = Some(ReplacementStatus::Arranged);
+    Ok(())
 }
 
 #[evento::handler]

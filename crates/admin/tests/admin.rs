@@ -1259,6 +1259,128 @@ async fn returns_are_reviewed_and_received_from_the_queue() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn a_return_is_settled_by_sending_the_same_product_again() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let order_id = place_order(&h).await?;
+    let payments = timada_payment::Command(&h.executor);
+    let payment_id = payments
+        .request_payment(timada_payment::RequestPayment {
+            order_id: order_id.clone(),
+            amount: Money::eur(14_390),
+            method: timada_payment::PaymentMethod::Card,
+        })
+        .await?;
+    payments
+        .capture_payment(&payment_id, "psp-1".into())
+        .await?;
+    let orders = timada_order::Command(&h.executor);
+    orders.mark_paid(&order_id, &payment_id).await?;
+    orders
+        .mark_shipped(&order_id, "shipment-1", "Chronopost".into(), "XY123".into())
+        .await?;
+    let returns = timada_returns::Command {
+        executor: &h.executor,
+        db: h.db.clone(),
+        policy: timada_returns::ReturnPolicy::default(),
+    };
+    let return_id = returns
+        .request_return(timada_returns::RequestReturn {
+            order_id: order_id.clone(),
+            customer_id: "customer-1".into(),
+            lines: vec![timada_returns::RequestedLine {
+                product_id: "aoc-24g4xe".into(),
+                quantity: 1,
+            }],
+            reason: "Pixel mort".into(),
+        })
+        .await?;
+    returns.approve_return(&return_id).await?;
+    let detail_uri = format!("/admin/returns/{return_id}");
+    let form = text(h.router.handle(get(&detail_uri, Some(&cookie))).await).await?;
+    assert!(form.contains("Remplacer par le même produit"), "{form}");
+
+    // A dead pixel is not sold again — and there is none left to send.
+    let receive = "product_0=aoc-24g4xe&accepted_0=1&settlement=replace&refund_method=original";
+    let short = h
+        .router
+        .handle(post(
+            &format!("{detail_uri}/receive"),
+            receive,
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&short), format!("{detail_uri}?error=stock"));
+    let told = text(h.router.handle(get(&location(&short), Some(&cookie))).await).await?;
+    assert!(told.contains("ne peut pas être remplacé"), "{told}");
+
+    let inventory = timada_inventory::Command(&h.executor);
+    let item = inventory
+        .register_stock_item(timada_inventory::RegisterStockItem {
+            product_id: "aoc-24g4xe".into(),
+            location: timada_inventory::StockLocation::Warehouse,
+        })
+        .await?;
+    inventory.receive_stock(&item, 2).await?;
+    let received = h
+        .router
+        .handle(post(
+            &format!("{detail_uri}/receive"),
+            receive,
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&received), detail_uri);
+    for _ in 0..2 {
+        timada_returns::return_processing_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await?;
+    }
+
+    let ready = text(h.router.handle(get(&detail_uri, Some(&cookie))).await).await?;
+    assert!(ready.contains("Traité"), "{ready}");
+    assert!(ready.contains("1 × AOC 23.8"), "{ready}");
+    assert!(ready.contains("Colis prêt"), "{ready}");
+    assert!(ready.contains("Expédier le remplacement"), "{ready}");
+    let stock = timada_inventory::load_stock_availability(&h.executor, &item)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("stock missing"))?;
+    assert_eq!((stock.on_hand, stock.available), (2, 1));
+
+    let dispatch = "carrier=Colissimo&tracking_number=XY999";
+    let sent = h
+        .router
+        .handle(post(
+            &format!("{detail_uri}/replacement/dispatch"),
+            dispatch,
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&sent), detail_uri);
+    let gone = text(h.router.handle(get(&detail_uri, Some(&cookie))).await).await?;
+    assert!(gone.contains("Colis expédié"), "{gone}");
+    assert!(gone.contains("Colissimo — XY999"), "{gone}");
+    assert!(!gone.contains("Expédier le remplacement"), "{gone}");
+    // A parcel leaves once.
+    let again = h
+        .router
+        .handle(post(
+            &format!("{detail_uri}/replacement/dispatch"),
+            dispatch,
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&again), format!("{detail_uri}?error=parcel"));
+    // Replaced, not refunded.
+    let payment = timada_payment::load_payment(&h.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert!(payment.refunds.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn categories_are_managed_and_products_filed_under_them() -> anyhow::Result<()> {
     let h = harness("admin").await?;
     let cookie = sign_in(&h, "admin").await?;

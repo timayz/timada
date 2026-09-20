@@ -10,6 +10,7 @@ timada-core.workspace = true
 timada-order.workspace = true
 timada-payment.workspace = true
 timada-inventory.workspace = true
+timada-shipping.workspace = true
 timada-promotion.workspace = true
 evento.workspace = true
 bitcode.workspace = true

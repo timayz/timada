@@ -25,4 +25,9 @@ pub enum Shipment {
 
     /// The order was cancelled before the parcel left: nothing will ship.
     ShipmentCancelled { reason: String },
+
+    /// The shipment is not the order's own parcel but a replacement sent for
+    /// a return: `reference` is the return's id. Committed together with
+    /// `ShipmentCreated`, never on its own.
+    ShipmentReplacesReturn { reference: String },
 }

@@ -55,7 +55,8 @@ pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(notify_on_review_rejected())
         .handler(notify_on_return_approved())
         .handler(notify_on_return_refused())
-        .handler(notify_on_return_completed());
+        .handler(notify_on_return_completed())
+        .handler(notify_on_replacement_dispatched());
     #[cfg(feature = "invoice-pdf")]
     let builder = builder
         .handler(invoice::send_on_invoice_issued())
@@ -405,6 +406,45 @@ async fn notify_on_return_completed<E: Executor>(
         &config,
         &event.id.to_string(),
         "return-completed",
+        &to,
+        content,
+    )
+    .await
+}
+
+/// A parcel left — the order's own is told about by `OrderShipped`; this one
+/// only speaks for the parcels that replace a return.
+#[evento::subscription]
+async fn notify_on_replacement_dispatched<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<timada_shipping::aggregator::ShipmentDispatched>,
+) -> anyhow::Result<()> {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let Some(shipment) = timada_shipping::load_shipment(ctx.executor, &event.aggregate_id).await?
+    else {
+        anyhow::bail!(
+            "shipment {} dispatched but cannot be loaded",
+            event.aggregate_id
+        );
+    };
+    let Some(return_id) = shipment.replaces_return else {
+        return Ok(());
+    };
+    let (request, to, first_name) = return_and_customer(ctx.executor, &return_id).await?;
+    let content = templates.0.replacement_shipped(
+        &config,
+        &first_name,
+        &request,
+        &event.data.carrier,
+        &event.data.tracking_number,
+    );
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "replacement-shipped",
         &to,
         content,
     )

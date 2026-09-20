@@ -22,6 +22,26 @@ pub struct ReceivedLine {
     pub restock: bool,
 }
 
+/// Units sent again for the ones a return brought back.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Encode, Decode)]
+pub struct ReplacementLine {
+    pub product_id: String,
+    pub name: String,
+    pub quantity: u32,
+}
+
+/// Where the replacement of a return stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
+pub enum ReplacementStatus {
+    /// Decided when the parcel was received; stock not reserved yet.
+    #[default]
+    Planned,
+    /// A parcel was created for it.
+    Arranged,
+    /// Impossible after all: the return was refunded.
+    Abandoned,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
 pub enum RefundMethod {
     /// Back to the means of payment, as the legal withdrawal right requires.

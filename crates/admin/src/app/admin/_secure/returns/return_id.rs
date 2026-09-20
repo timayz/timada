@@ -1,15 +1,18 @@
 //! `/{mount}/returns/{return_id}`: one return — review the request, then
 //! record the parcel: what is taken back, what goes into stock again, and how
-//! the customer is refunded. The rest is the returns process manager's job.
+//! the customer is refunded — or that the same products are sent again
+//! instead. The rest is the returns process manager's job, up to the
+//! replacement parcel, which is handed to the carrier from here.
 
 use std::collections::HashMap;
 
 use serde::Deserialize;
 use timada_order::order_numbers_by_ids;
 use timada_returns::{
-    ReceiveReturn, ReceivedLine, RefundMethod, ReturnError, ReturnPolicy, ReturnStatus, ReturnView,
-    load_return,
+    ReceiveReturn, ReceivedLine, RefundMethod, ReplacementStatus, ReturnError, ReturnPolicy,
+    ReturnStatus, ReturnView, load_return,
 };
+use timada_shipping::ShipmentStatus;
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -46,6 +49,11 @@ fn error_message(code: Option<&str>) -> Option<&'static str> {
         "accepted" => Some("On ne peut pas reprendre plus d'articles que demandé."),
         "status" => Some("Ce retour n'est plus dans l'état attendu : la page a été rechargée."),
         "reason" => Some("Indiquez le motif du refus."),
+        "stock" => Some(
+            "Le produit n'est plus en stock à l'entrepôt : il ne peut pas être remplacé. Remboursez ce retour.",
+        ),
+        "nothing" => Some("Aucun article repris : il n'y a rien à remplacer."),
+        "parcel" => Some("Le colis de remplacement n'attend plus d'être expédié."),
         _ => None,
     }
 }
@@ -78,6 +86,8 @@ fn settled(cx: &Cx, id: &str, outcome: std::result::Result<(), ReturnError>) -> 
         Err(ReturnError::AcceptedExceedsRequested(_)) => "accepted",
         Err(ReturnError::WrongStatus { .. }) => "status",
         Err(ReturnError::Required(_)) => "reason",
+        Err(ReturnError::ReplacementOutOfStock(_)) => "stock",
+        Err(ReturnError::NothingToReplace) => "nothing",
         Err(err) => return Err(anyhow::Error::from(err).into()),
     };
     Ok(format!("{}?error={code}", back(cx, id)))
@@ -94,6 +104,14 @@ struct Line {
     unit_price: String,
     /// `(accepted, restocked)` once received.
     outcome: Option<(String, &'static str)>,
+}
+
+/// The replacement of a return, worded.
+struct Replacement {
+    what: Vec<String>,
+    state: String,
+    tracking: Option<String>,
+    can_dispatch: bool,
 }
 
 #[page]
@@ -144,6 +162,51 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         RefundMethod::StoreCredit => "Avoir",
     });
     let voucher = request.voucher_code.clone();
+    // The replacement, and its parcel once there is one: `(what, state,
+    // tracking, can be dispatched)`.
+    let replacement = match &request.replacement {
+        None => None,
+        Some(replacement) => {
+            let parcel = match &replacement.shipment_id {
+                Some(shipment_id) => {
+                    timada_shipping::load_shipment(&services.executor, shipment_id).await?
+                }
+                None => None,
+            };
+            let state = match (replacement.status, parcel.as_ref().map(|p| p.status)) {
+                (ReplacementStatus::Planned, _) => "Décidé : le stock va être réservé.".to_owned(),
+                (ReplacementStatus::Abandoned, _) => format!(
+                    "Impossible ({}) : le retour a été remboursé.",
+                    replacement
+                        .abandoned_reason
+                        .clone()
+                        .unwrap_or_else(|| "motif inconnu".to_owned())
+                ),
+                (ReplacementStatus::Arranged, Some(ShipmentStatus::Created)) => {
+                    "Colis prêt : à remettre au transporteur.".to_owned()
+                }
+                (ReplacementStatus::Arranged, Some(ShipmentStatus::Cancelled)) => {
+                    "Colis annulé.".to_owned()
+                }
+                (ReplacementStatus::Arranged, _) => "Colis expédié.".to_owned(),
+            };
+            Some(Replacement {
+                what: replacement
+                    .lines
+                    .iter()
+                    .map(|line| format!("{} × {}", line.quantity, line.name))
+                    .collect(),
+                state,
+                tracking: parcel.as_ref().and_then(|p| {
+                    p.carrier
+                        .clone()
+                        .zip(p.tracking_number.clone())
+                        .map(|(carrier, number)| format!("{carrier} — {number}"))
+                }),
+                can_dispatch: parcel.is_some_and(|p| p.status == ShipmentStatus::Created),
+            })
+        }
+    };
 
     Ok(view! {
         page_header(
@@ -204,8 +267,13 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                         </label>
                                     </fieldset>
                                 }
+                                <fieldset class="flex flex-col gap-1">
+                                    <legend class="text-muted-foreground">"Suite donnée"</legend>
+                                    <label class="flex items-center gap-2"><input type="radio" name="settlement" value="refund" checked=(true)> "Rembourser"</label>
+                                    <label class="flex items-center gap-2"><input type="radio" name="settlement" value="replace"> "Remplacer par le même produit (défectueux, abîmé, erreur d'envoi)"</label>
+                                </fieldset>
                                 <div class="flex flex-col gap-1">
-                                    <label for="refund_method" class="text-muted-foreground">"Remboursement"</label>
+                                    <label for="refund_method" class="text-muted-foreground">"Remboursement — ou à défaut de stock pour le remplacement"</label>
                                     <select id="refund_method" name="refund_method" class="h-9 rounded-lg border border-border bg-background px-3">
                                         <option value="original" selected=(true)>"Moyen de paiement d'origine"</option>
                                         <option value="credit">"Avoir"</option>
@@ -221,6 +289,29 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             </div>
 
             <div class="flex flex-col gap-6">
+                if let Some(replacement) = &replacement {
+                    card(
+                        card_header(card_title("Remplacement"))
+                        card_content(
+                            <div class="flex flex-col gap-2 text-sm">
+                                <ul>
+                                    for item in &replacement.what { <li>(item.clone())</li> }
+                                </ul>
+                                <p role="status">(replacement.state.clone())</p>
+                                if let Some(tracking) = &replacement.tracking {
+                                    <p class="font-mono text-xs">(tracking.clone())</p>
+                                }
+                                if replacement.can_dispatch {
+                                    <form method="post" action=(href!(dispatch_replacement, ReturnId(id.clone()))) class="mt-2 flex flex-col gap-2">
+                                        input(attrs: topcoat::view::attributes! { name="carrier" placeholder="Transporteur" aria-label="Transporteur" required=(true) value="Colissimo" })
+                                        input(attrs: topcoat::view::attributes! { name="tracking_number" placeholder="N° de suivi" aria-label="N° de suivi" required=(true) })
+                                        button(attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Expédier le remplacement")
+                                    </form>
+                                }
+                            </div>
+                        )
+                    )
+                }
                 card(
                     card_header(card_title("Demande"))
                     card_content(
@@ -318,8 +409,44 @@ pub async fn receive_parcel(
             ReceiveReturn {
                 lines,
                 refund_method,
+                replace: form
+                    .get("settlement")
+                    .is_some_and(|chosen| chosen == "replace"),
             },
         )
         .await;
     Err::<(), _>(see_other(settled(cx, &id, outcome)?).into())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DispatchForm {
+    carrier: String,
+    tracking_number: String,
+}
+
+/// Hands the replacement parcel to the carrier.
+#[page(POST "./replacement/dispatch")]
+pub async fn dispatch_replacement(cx: &Cx, Form(form): Form<DispatchForm>) -> Result<impl View> {
+    let (id, request) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let shipment_id = request.replacement.and_then(|r| r.shipment_id);
+    let dispatched = match shipment_id {
+        Some(shipment_id) => timada_shipping::Command(&services.executor)
+            .dispatch_shipment(
+                shipment_id,
+                form.carrier.trim().to_owned(),
+                form.tracking_number.trim().to_owned(),
+            )
+            .await
+            .map_err(Some),
+        None => Err(None),
+    };
+    let target = match dispatched {
+        Ok(()) => back(cx, &id),
+        Err(None | Some(timada_shipping::ShippingError::NotCreated)) => {
+            format!("{}?error=parcel", back(cx, &id))
+        }
+        Err(Some(err)) => return Err(anyhow::Error::from(err).into()),
+    };
+    Err::<(), _>(see_other(target).into())
 }

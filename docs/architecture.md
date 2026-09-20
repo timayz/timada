@@ -36,8 +36,8 @@ graph TD
     customer --> tax
     order --> cart & customer & inventory & payment & pricing & promotion & shipping & tax
     invoice --> order & payment & tax
-    returns --> order & payment & inventory & promotion
-    mailer --> order & payment & inventory & returns & review & customer & catalog
+    returns --> order & payment & inventory & promotion & shipping
+    mailer --> order & payment & inventory & returns & review & customer & catalog & shipping
     mailer -. feature invoice-pdf .-> invoice
     admin --> everything[every context]
 ```
@@ -103,6 +103,20 @@ back is a **return**: request → approve/refuse → receive (what is taken back
 what goes into stock again, money or store credit) → the process manager
 restocks, refunds and completes; the refund gets its credit note and its
 e-mail through the same subscriptions as any other refund.
+
+At reception the operator may instead **replace**: the same products are
+sent again, nothing is refunded — the answer to a defective, damaged or wrong
+item. The warehouse must hold the units (counting what the return itself puts
+back on the shelf) or the operator is told at once. `ReplacementPlanned` is
+committed with `ReturnReceived`, carrying the refund that *would* have been,
+settled like any other: the process manager reserves the units under the
+return's id, creates a second parcel for the order
+(`create_replacement_shipment`, id derived from the return, flagged
+`ShipmentReplacesReturn`) and completes the return with
+`ReplacementArranged`; if the stock went in between, `ReplacementAbandoned`
+and the return is refunded its fallback. The parcel is dispatched from the
+return's page; the fulfillment saga ignores it (it is not the order's own
+shipment), and the customer gets its tracking by e-mail.
 
 **Money moves at the payment provider**, which the payment context sees as a
 `PaymentProvider` the host picks (`ManualProvider` when there is none: an

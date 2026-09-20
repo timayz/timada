@@ -10,10 +10,10 @@ use timada_order::{
 use timada_payment::{PaymentMethod, RequestPayment, load_payment, payment_id};
 use timada_promotion::{VoucherKind, load_voucher_balance, voucher_id};
 use timada_returns::{
-    Command, ListReturns, ReceiveReturn, ReceivedLine, RefundMethod, RequestReturn, RequestedLine,
-    ReturnError, ReturnPolicy, ReturnStatus, claimed_quantities, count_returns, list_returns,
-    load_return, migrations, return_list_subscription, return_processing_subscription,
-    returns_of_order, voucher_code,
+    Command, ListReturns, ReceiveReturn, ReceivedLine, RefundMethod, ReplacementStatus,
+    RequestReturn, RequestedLine, ReturnError, ReturnPolicy, ReturnStatus, claimed_quantities,
+    count_returns, list_returns, load_return, migrations, return_list_subscription,
+    return_processing_subscription, returns_of_order, voucher_code,
 };
 
 const PRODUCT: &str = "aoc-24g4xe";
@@ -206,6 +206,7 @@ async fn a_return_is_restocked_and_refunded_to_the_original_payment() -> anyhow:
             ReceiveReturn {
                 lines: received(1, true),
                 refund_method: RefundMethod::OriginalPayment,
+                replace: false,
             },
         )
         .await;
@@ -219,6 +220,7 @@ async fn a_return_is_restocked_and_refunded_to_the_original_payment() -> anyhow:
             ReceiveReturn {
                 lines: received(2, true),
                 refund_method: RefundMethod::OriginalPayment,
+                replace: false,
             },
         )
         .await;
@@ -232,6 +234,7 @@ async fn a_return_is_restocked_and_refunded_to_the_original_payment() -> anyhow:
             ReceiveReturn {
                 lines: received(1, true),
                 refund_method: RefundMethod::OriginalPayment,
+                replace: false,
             },
         )
         .await?;
@@ -286,6 +289,7 @@ async fn a_voucher_comes_back_as_credit_and_a_promo_code_does_not_come_back() ->
     let receive_all = |method| ReceiveReturn {
         lines: received(2, false),
         refund_method: method,
+        replace: false,
     };
 
     // 50 € of a gift voucher on 239,90 € of goods: that part was not money.
@@ -371,6 +375,7 @@ async fn what_the_payment_cannot_give_back_becomes_store_credit() -> anyhow::Res
             ReceiveReturn {
                 lines: received(2, true),
                 refund_method: RefundMethod::OriginalPayment,
+                replace: false,
             },
         )
         .await?;
@@ -466,5 +471,186 @@ async fn who_may_ask_until_when_and_what_frees_the_units() -> anyhow::Result<()>
         })
         .await;
     assert!(matches!(closed, Err(ReturnError::WindowClosed)));
+    Ok(())
+}
+
+/// What the warehouse can still promise.
+async fn available(shop: &Shop) -> anyhow::Result<u32> {
+    let item = stock_item_id(PRODUCT, &StockLocation::Warehouse);
+    Ok(
+        timada_inventory::load_stock_availability(&shop.executor, item)
+            .await?
+            .map_or(0, |s| s.available),
+    )
+}
+
+#[tokio::test]
+async fn a_defective_unit_is_replaced_instead_of_refunded() -> anyhow::Result<()> {
+    let shop = Shop::open().await?;
+    let order_id = shop.order("cart-replace", None, true).await?;
+    let returns = shop.returns();
+    let id = shop.request(&order_id, 1).await?;
+    returns.approve_return(&id).await?;
+
+    // Nothing came back in a state to be taken: nothing to replace.
+    assert!(matches!(
+        returns
+            .receive_return(
+                &id,
+                ReceiveReturn {
+                    lines: received(0, false),
+                    refund_method: RefundMethod::OriginalPayment,
+                    replace: true,
+                },
+            )
+            .await,
+        Err(ReturnError::NothingToReplace)
+    ));
+    // The broken unit is not sold again; a good one leaves in its place.
+    returns
+        .receive_return(
+            &id,
+            ReceiveReturn {
+                lines: received(1, false),
+                refund_method: RefundMethod::OriginalPayment,
+                replace: true,
+            },
+        )
+        .await?;
+    let planned = load_return(&shop.executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    assert_eq!(planned.money, Money::eur(0));
+    let replacement = planned
+        .replacement
+        .ok_or_else(|| anyhow::anyhow!("no replacement planned"))?;
+    assert_eq!(replacement.status, ReplacementStatus::Planned);
+    assert_eq!(replacement.lines[0].quantity, 1);
+    assert_eq!(replacement.lines[0].name, "AOC 24G4XE");
+    // What the refund would have been, kept in case the stock is gone.
+    assert_eq!(replacement.fallback_money, Money::eur(11_995));
+
+    shop.process().await?;
+    let done = load_return(&shop.executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    assert_eq!(done.status, ReturnStatus::Completed);
+    assert_eq!((done.money, done.credit), (Money::eur(0), Money::eur(0)));
+    assert_eq!(done.voucher_code, None);
+    let replacement = done
+        .replacement
+        .ok_or_else(|| anyhow::anyhow!("replacement lost"))?;
+    assert_eq!(replacement.status, ReplacementStatus::Arranged);
+    let shipment_id = replacement
+        .shipment_id
+        .ok_or_else(|| anyhow::anyhow!("no parcel"))?;
+    assert_eq!(shipment_id, timada_shipping::replacement_shipment_id(&id));
+    let parcel = timada_shipping::load_shipment(&shop.executor, &shipment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("parcel missing"))?;
+    assert_eq!(parcel.order_id, order_id);
+    assert_eq!(parcel.replaces_return.as_deref(), Some(id.as_str()));
+    assert_eq!(parcel.destination, address());
+    assert_eq!(parcel.method.code, "colissimo");
+    assert_eq!(
+        (
+            parcel.lines[0].product_id.as_str(),
+            parcel.lines[0].quantity
+        ),
+        (PRODUCT, 1)
+    );
+    assert_eq!(parcel.status, timada_shipping::ShipmentStatus::Created);
+
+    // One unit put aside, once, and not a cent given back.
+    assert_eq!(shop.on_hand().await?, 10);
+    assert_eq!(available(&shop).await?, 9);
+    let payment = load_payment(&shop.executor, payment_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.refunded, Money::eur(0));
+    assert!(payment.refunds.is_empty());
+    let rows = list_returns(&shop.db, &ListReturns::default()).await?;
+    assert_eq!(rows[0].status, "completed");
+    assert_eq!((rows[0].refunded_minor, rows[0].credited_minor), (0, 0));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_replacement_the_warehouse_cannot_honour_becomes_a_refund() -> anyhow::Result<()> {
+    let shop = Shop::open().await?;
+    let order_id = shop.order("cart-short", None, true).await?;
+    let returns = shop.returns();
+    let inventory = timada_inventory::Command(&shop.executor);
+    let item = stock_item_id(PRODUCT, &StockLocation::Warehouse);
+    let replace = |restock| ReceiveReturn {
+        lines: received(1, restock),
+        refund_method: RefundMethod::OriginalPayment,
+        replace: true,
+    };
+
+    // The shelf is empty when the parcel is opened: the operator is told at
+    // once, and refunds instead...
+    inventory.reserve_stock(&item, "somebody-else", 10).await?;
+    let id = shop.request(&order_id, 1).await?;
+    returns.approve_return(&id).await?;
+    assert!(matches!(
+        returns.receive_return(&id, replace(false)).await,
+        Err(ReturnError::ReplacementOutOfStock(product)) if product == PRODUCT
+    ));
+    let still = load_return(&shop.executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    assert_eq!(still.status, ReturnStatus::Approved);
+    // ...unless the unit that came back is fit to leave again.
+    returns.receive_return(&id, replace(true)).await?;
+    shop.process().await?;
+    let swapped = load_return(&shop.executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    assert_eq!(
+        swapped.replacement.map(|r| r.status),
+        Some(ReplacementStatus::Arranged)
+    );
+    assert_eq!(available(&shop).await?, 0);
+
+    // The stock goes between the decision and the reservation: the return
+    // falls back to the refund that was settled with it.
+    inventory.release_stock(&item, "somebody-else").await?;
+    let late = shop.request(&order_id, 1).await?;
+    returns.approve_return(&late).await?;
+    returns.receive_return(&late, replace(false)).await?;
+    inventory.reserve_stock(&item, "somebody-else", 10).await?;
+    shop.process().await?;
+
+    let refunded = load_return(&shop.executor, &late)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    assert_eq!(refunded.status, ReturnStatus::Completed);
+    assert_eq!(refunded.money, Money::eur(11_995));
+    let replacement = refunded
+        .replacement
+        .ok_or_else(|| anyhow::anyhow!("replacement lost"))?;
+    assert_eq!(replacement.status, ReplacementStatus::Abandoned);
+    assert_eq!(replacement.shipment_id, None);
+    assert!(
+        replacement
+            .abandoned_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(PRODUCT)),
+        "{:?}",
+        replacement.abandoned_reason
+    );
+    assert!(
+        timada_shipping::load_shipment(
+            &shop.executor,
+            timada_shipping::replacement_shipment_id(&late)
+        )
+        .await?
+        .is_none()
+    );
+    let payment = load_payment(&shop.executor, payment_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.refunded, Money::eur(11_995));
     Ok(())
 }

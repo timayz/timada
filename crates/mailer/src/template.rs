@@ -322,7 +322,30 @@ pub(crate) fn return_completed(
             money(&request.credit)
         ));
     }
-    if !request.money.is_positive() && !request.credit.is_positive() {
+    let replaced = request.replacement.as_ref().map(|replacement| {
+        let what = replacement
+            .lines
+            .iter()
+            .map(|line| format!("{} × {}", line.quantity, line.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        (replacement.status, what)
+    });
+    match &replaced {
+        Some((timada_returns::ReplacementStatus::Abandoned, what)) => paragraphs.insert(
+            1,
+            format!(
+                "Nous devions vous renvoyer {what}, mais ce produit n'est plus en stock : votre \
+                 retour est remboursé à la place."
+            ),
+        ),
+        Some((_, what)) => paragraphs.push(format!(
+            "Nous vous renvoyons le même produit à la place : {what}. Le colis part à \
+             l'adresse de livraison de votre commande ; un e-mail vous donnera son suivi."
+        )),
+        None => {}
+    }
+    if replaced.is_none() && !request.money.is_positive() && !request.credit.is_positive() {
         paragraphs
             .push("Aucun article n'ayant pu être repris, aucun remboursement n'est dû.".to_owned());
     }
@@ -333,6 +356,39 @@ pub(crate) fn return_completed(
     (
         format!("Votre retour {number} est traité"),
         signed(config, first_name, &paragraphs),
+    )
+}
+
+pub(crate) fn replacement_shipped(
+    config: &MailerConfig,
+    first_name: &str,
+    request: &ReturnView,
+    carrier: &str,
+    tracking_number: &str,
+) -> Content {
+    let number = &request.rma_number;
+    let what = request
+        .replacement
+        .iter()
+        .flat_map(|replacement| &replacement.lines)
+        .map(|line| format!("  {} × {}", line.quantity, line.name))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (
+        format!("Votre remplacement est expédié (retour {number})"),
+        signed(
+            config,
+            first_name,
+            &[
+                format!("Le colis qui remplace les articles de votre retour {number} est parti :"),
+                what,
+                format!("Transporteur : {carrier} — suivi : {tracking_number}"),
+                format!(
+                    "Le détail de votre retour : {}",
+                    return_link(config, request)
+                ),
+            ],
+        ),
     )
 }
 

@@ -7,6 +7,7 @@ use timada_core::Address;
 use crate::{
     aggregator::{
         Shipment, ShipmentCancelled, ShipmentCreated, ShipmentDelivered, ShipmentDispatched,
+        ShipmentReplacesReturn,
     },
     value_object::{DeliveryMethod, ShipmentLine, ShipmentStatus},
 };
@@ -23,6 +24,9 @@ pub struct ShipmentView {
     pub carrier: Option<String>,
     pub tracking_number: Option<String>,
     pub cancelled_reason: Option<String>,
+    /// The return this parcel is the replacement for; `None` for the order's
+    /// own parcel.
+    pub replaces_return: Option<String>,
 }
 
 pub fn create_projection<E: Executor>() -> Projection<E, ShipmentView> {
@@ -31,9 +35,11 @@ pub fn create_projection<E: Executor>() -> Projection<E, ShipmentView> {
         .handler(on_shipment_dispatched())
         .handler(on_shipment_delivered())
         .handler(on_shipment_cancelled())
-        // The view gained `cancelled_reason` and a status: snapshots taken
-        // with the previous shape must not be decoded.
-        .revision(1)
+        .handler(on_shipment_replaces_return())
+        // The view gained `cancelled_reason` and a status, then
+        // `replaces_return`: snapshots taken with a previous shape must not
+        // be decoded.
+        .revision(2)
         .strict()
 }
 
@@ -85,5 +91,14 @@ async fn on_shipment_cancelled(
 ) -> anyhow::Result<()> {
     row.status = ShipmentStatus::Cancelled;
     row.cancelled_reason = Some(event.data.reason);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_shipment_replaces_return(
+    event: Event<ShipmentReplacesReturn>,
+    row: &mut ShipmentView,
+) -> anyhow::Result<()> {
+    row.replaces_return = Some(event.data.reference);
     Ok(())
 }

@@ -21,6 +21,10 @@ pub enum ReturnError {
     },
     #[error("cannot accept more units of `{0}` than were requested")]
     AcceptedExceedsRequested(String),
+    #[error("no unit was accepted: there is nothing to replace")]
+    NothingToReplace,
+    #[error("`{0}` is out of stock: it cannot be replaced")]
+    ReplacementOutOfStock(String),
     #[error("`{0}` is required")]
     Required(&'static str),
     #[error(transparent)]

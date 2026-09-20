@@ -1,6 +1,6 @@
 use timada_core::Money;
 
-use crate::value_object::{ReceivedLine, RefundMethod, ReturnLine};
+use crate::value_object::{ReceivedLine, RefundMethod, ReplacementLine, ReturnLine};
 
 // The explicit name pins the on-disk identity: renaming the crate or the enum
 // must never orphan stored events.
@@ -42,4 +42,23 @@ pub enum Return {
         credited: Money,
         voucher_code: Option<String>,
     },
+
+    /// The operator chose to send the same products again rather than to
+    /// refund: `ReturnReceived`, committed together with this one, then says
+    /// that no money and no credit go back. The fallback amounts are what the
+    /// refund would have been — settled now, like a refund's, and used only
+    /// if the replacement turns out impossible.
+    ReplacementPlanned {
+        lines: Vec<ReplacementLine>,
+        fallback_money: Money,
+        fallback_credit: Money,
+    },
+
+    /// The replacement could not be sent (no stock left by the time it was
+    /// reserved): the customer is refunded the fallback amounts instead.
+    ReplacementAbandoned { reason: String },
+
+    /// The replacement parcel waits for the carrier in the shipping context.
+    /// Committed together with `ReturnCompleted`.
+    ReplacementArranged { shipment_id: String },
 }
