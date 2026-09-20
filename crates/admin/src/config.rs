@@ -11,6 +11,9 @@ pub struct AdminConfig {
     pub stylesheet: Stylesheet,
     /// Who issues the shop's invoices: printed on an invoice's print view.
     pub invoice_issuer: timada_invoice::InvoiceIssuer,
+    /// How long a paid order may wait for its parcel before the queue of
+    /// orders to ship flags it as late. Two days by default.
+    pub ship_within: std::time::Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +31,7 @@ impl Default for AdminConfig {
             mount: "admin".into(),
             stylesheet: Stylesheet::Bundled,
             invoice_issuer: timada_invoice::InvoiceIssuer::default(),
+            ship_within: std::time::Duration::from_secs(2 * 86_400),
         }
     }
 }

@@ -86,6 +86,53 @@ pub async fn orders_of_customer(
     .await
 }
 
+/// An order that is paid and waits for its parcel.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct OrderToShipRow {
+    pub order_id: String,
+    pub order_number: Option<String>,
+    pub customer_id: String,
+    pub placed_at: i64,
+    /// When it was paid; its placing for an order paid before that was kept.
+    pub waiting_since: i64,
+    pub total_minor: i64,
+    pub currency: String,
+}
+
+/// The orders paid and not shipped yet, the one waiting longest first: what
+/// an operator prepares next. The fulfillment saga never times these out —
+/// somebody has to ship them.
+pub async fn orders_to_ship(
+    db: &SqlitePool,
+    limit: u32,
+    offset: u32,
+) -> sqlx::Result<Vec<OrderToShipRow>> {
+    sqlx::query_as(
+        "SELECT order_id, order_number, customer_id, placed_at,
+                COALESCE(paid_at, placed_at) AS waiting_since, total_minor, currency
+         FROM order_history
+         WHERE status = 'paid'
+         ORDER BY waiting_since, order_id
+         LIMIT ? OFFSET ?",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(db)
+    .await
+}
+
+/// How many orders wait for their parcel, and how many of them have been
+/// waiting since before `late_before` (Unix seconds).
+pub async fn count_orders_to_ship(db: &SqlitePool, late_before: u64) -> sqlx::Result<(i64, i64)> {
+    sqlx::query_as(
+        "SELECT COUNT(*), COALESCE(SUM(COALESCE(paid_at, placed_at) < ?), 0)
+         FROM order_history WHERE status = 'paid'",
+    )
+    .bind(late_before as i64)
+    .fetch_one(db)
+    .await
+}
+
 /// Admin listing across all customers, newest first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListOrders {
@@ -185,6 +232,24 @@ async fn set_status<E: Executor>(
     Ok(())
 }
 
+/// Paid, or settled with nothing to pay: from then on the order waits for its
+/// parcel. The first date is kept, whatever is redelivered.
+async fn set_paid<E: Executor>(
+    ctx: &Context<'_, E>,
+    order_id: &str,
+    at: u64,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE order_history SET status = ?, paid_at = COALESCE(paid_at, ?) WHERE order_id = ?",
+    )
+    .bind(OrderStatus::Paid.as_str())
+    .bind(at as i64)
+    .bind(order_id)
+    .execute(&pool(ctx)?)
+    .await?;
+    Ok(())
+}
+
 #[evento::subscription]
 async fn insert_on_order_placed<E: Executor>(
     ctx: &Context<'_, E>,
@@ -225,7 +290,7 @@ async fn status_on_order_paid<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderPaid>,
 ) -> anyhow::Result<()> {
-    set_status(ctx, &event.aggregate_id, OrderStatus::Paid).await
+    set_paid(ctx, &event.aggregate_id, event.timestamp).await
 }
 
 #[evento::subscription]
@@ -233,7 +298,7 @@ async fn status_on_order_settled<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderSettled>,
 ) -> anyhow::Result<()> {
-    set_status(ctx, &event.aggregate_id, OrderStatus::Paid).await
+    set_paid(ctx, &event.aggregate_id, event.timestamp).await
 }
 
 #[evento::subscription]
