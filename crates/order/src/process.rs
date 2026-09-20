@@ -149,7 +149,9 @@ pub async fn business_purchase<E: Executor>(
 /// `timada_tax::TaxZones` the same way; without one it uses
 /// `TaxZones::default()` (metropolitan France, overseas as exports). Optional:
 /// a `timada_tax::VatRegistry`, asked again about a business's VAT number
-/// before its order is placed without VAT, and a [`ReverseChargePolicy`].
+/// before its order is placed without VAT, and a [`ReverseChargePolicy`];
+/// `timada_shipping::DeliveryFees`, what each delivery method costs per
+/// currency (the built-in euro fees otherwise).
 pub fn order_checkout_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ORDER_CHECKOUT_SUBSCRIPTION).handler(place_order_on_cart_checked_out())
 }
@@ -220,11 +222,22 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         _ => zone,
     };
 
+    // Delivery is charged in the cart's currency, from the host's fees.
     let currency = cart.subtotal.currency.clone();
-    let listed_fee =
-        timada_shipping::shipping_fee(&event.data.delivery.method_code).ok_or_else(|| {
-            OrderError::UnknownDeliveryMethod(event.data.delivery.method_code.clone())
-        })?;
+    let method_code = &event.data.delivery.method_code;
+    if !timada_shipping::DeliveryMethod::is_known(method_code) {
+        return Err(OrderError::UnknownDeliveryMethod(method_code.clone()).into());
+    }
+    let fees = ctx
+        .get::<timada_shipping::DeliveryFees>()
+        .unwrap_or_default();
+    let listed_fee = fees.fee(method_code, &currency).unwrap_or_else(|| {
+        // The storefront only offers the methods priced in the cart's
+        // currency; should one slip by, the order is kept — delivered free —
+        // rather than lost.
+        tracing::error!(%cart_id, %method_code, %currency, "delivery method without a fee in the cart's currency: charged nothing");
+        Money::zero(&currency)
+    });
     let shipping_fee = zone.charged(&listed_fee, zones.fee_vat_rate_bp);
     let handling_fee = match event.data.payment_mode {
         timada_cart::PaymentMode::Card => Money::zero(&currency),

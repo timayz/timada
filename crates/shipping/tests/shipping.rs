@@ -1,8 +1,8 @@
 use timada_core::{Address, Money};
 use timada_shipping::{
-    Command, CreateShipment, DeliveryKind, DeliveryMethod, ShipmentLine, ShipmentStatus,
-    ShippingError, delivery_offers, load_shipment, replacement_shipment_id, shipment_id,
-    shipping_fee,
+    Command, CreateShipment, DeliveryFees, DeliveryKind, DeliveryMethod, ShipmentLine,
+    ShipmentStatus, ShippingError, delivery_offers, load_shipment, replacement_shipment_id,
+    shipment_id, shipping_fee,
 };
 
 fn dom_address() -> Address {
@@ -214,4 +214,38 @@ async fn a_return_gets_a_replacement_parcel_next_to_the_orders_own() -> anyhow::
         Err(ShippingError::Required("reference"))
     ));
     Ok(())
+}
+
+#[test]
+fn delivery_fees_are_set_per_currency_and_never_converted() {
+    // Out of the box: the euro fees, and nothing in any other currency.
+    let euros = DeliveryFees::default();
+    assert_eq!(euros.fee("colissimo", "EUR"), Some(Money::eur(590)));
+    assert_eq!(euros.fee("colissimo", "GBP"), None);
+    assert_eq!(euros.offers("EUR").len(), delivery_offers().len());
+    assert!(euros.offers("GBP").is_empty());
+
+    // A shop that also sells in pounds says what delivery costs there; what
+    // it does not price is not offered.
+    let fees = DeliveryFees::default()
+        .with_fee("colissimo-europe", Money::new(1_100, "GBP"))
+        .with_fee("store-pickup", Money::new(0, "GBP"))
+        // Said twice: the last word counts.
+        .with_fee("colissimo-europe", Money::new(1_190, "GBP"))
+        // Neither a method nor an amount: ignored.
+        .with_fee("pigeon", Money::new(100, "GBP"))
+        .with_fee("colissimo", Money::new(-1, "GBP"));
+    assert_eq!(
+        fees.offers("GBP")
+            .iter()
+            .map(|offer| (offer.code, offer.fee.minor))
+            .collect::<Vec<_>>(),
+        [("colissimo-europe", 1_190), ("store-pickup", 0)]
+    );
+    assert_eq!(fees.fee("colissimo", "GBP"), None);
+    assert_eq!(fees.fee("colissimo-europe", "EUR"), Some(Money::eur(1_290)));
+    // A euro fee can be the host's own too.
+    let dearer = DeliveryFees::default().with_fee("colissimo", Money::eur(690));
+    assert_eq!(dearer.fee("colissimo", "EUR"), Some(Money::eur(690)));
+    assert!(DeliveryFees::none().offers("EUR").is_empty());
 }

@@ -78,6 +78,19 @@ pub fn return_policy() -> timada_returns::ReturnPolicy {
     }
 }
 
+/// What delivery costs: the built-in euro fees, and the demo shop's own for
+/// the other currencies it sells in. Overseas Chronopost is a euro matter.
+pub fn delivery_fees() -> timada_shipping::DeliveryFees {
+    use timada_core::Money;
+    timada_shipping::DeliveryFees::default()
+        .with_fee("colissimo", Money::new(490, "GBP"))
+        .with_fee("colissimo-europe", Money::new(1_090, "GBP"))
+        .with_fee("store-pickup", Money::new(0, "GBP"))
+        .with_fee("colissimo", Money::new(590, "CHF"))
+        .with_fee("colissimo-europe", Money::new(1_290, "CHF"))
+        .with_fee("store-pickup", Money::new(0, "CHF"))
+}
+
 /// Who issues the demo shop's invoices.
 pub fn invoice_issuer() -> timada_invoice::InvoiceIssuer {
     timada_invoice::InvoiceIssuer {
@@ -173,6 +186,7 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             // Asked again about a business's VAT number before its order is
             // placed without VAT.
             .data(timada_tax::VatRegistry(store.vat_validator.clone()))
+            .data(delivery_fees())
             .start(executor)
             .await?,
         timada_order::order_fulfillment_subscription()
@@ -316,6 +330,7 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             // Asked again about a business's VAT number before its order is
             // placed without VAT.
             .data(timada_tax::VatRegistry(store.vat_validator.clone()))
+            .data(delivery_fees())
             .run_once(executor)
             .await?;
         timada_order::order_fulfillment_subscription()
