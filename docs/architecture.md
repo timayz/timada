@@ -118,6 +118,19 @@ and the return is refunded its fallback. The parcel is dispatched from the
 return's page; the fulfillment saga ignores it (it is not the order's own
 shipment), and the customer gets its tracking by e-mail.
 
+The way back may come with a **prepaid label**. A return states its *ground*
+(`ReturnGroundStated`, next to the customer's own words): defective, damaged
+or wrong item puts the label on the shop; otherwise `ReturnPolicy`'s flat fee
+applies, said on the request form before the customer confirms, settled when
+the label is issued (`ReturnLabelIssued.fee`; an operator may waive it) and
+taken off the refund at reception (`ReturnLabelFeeDeducted` — money first;
+a replacement deducts nothing). Where labels come from is a port,
+`ReturnLabelProvider`: a carrier's API behind a host adapter, or nobody — then
+the operator attaches a link or a file (PDF, PNG, JPEG, 5 MB; kept in
+`return_label_file`, served as an attachment with `nosniff`) bought on the
+carrier's site. One label per return. Handed over *with* the approval, it
+travels in the approval e-mail; given later, it gets its own.
+
 **Money moves at the payment provider**, which the payment context sees as a
 `PaymentProvider` the host picks (`ManualProvider` when there is none: an
 operator captures from the admin, and refunds settle at once).
@@ -265,7 +278,8 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `StripeProvider` (feature `stripe`), `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
 | `Arc<dyn timada_tax::VatNumberValidator>` | who says whether a business's VAT number is valid: `ViesValidator` (feature `vies`, the EU's registry — name the shop's own number and each check comes with its consultation number), `FormatValidator` (no registry: what reads well passes), `FakeValidator` in tests |
 | `timada_invoice::InvoiceArchive` | where issued invoices and credit notes are kept unaltered: `SqliteArchiveStore` (in the database, replicated with it), `DirectoryArchiveStore` (files, the host's to back up), or the host's own `ArchiveStore`. Handed to both archive subscriptions, to the mailer (the e-mailed file is the archived one) and to `AdminServices::with_archive` |
-| `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
+| `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for, and what a prepaid return label costs a customer when the shop is not at fault — to the returns commands and `AdminConfig::return_policy` |
+| `timada_returns::ReturnLabels` | optional: the carrier adapter (`ReturnLabelProvider`) that makes prepaid return labels, to `AdminServices::with_return_labels`; without it labels are attached by hand |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, where the shop itself is alerted (`alerts_to`), maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
 | `timada_invoice::InvoiceIssuer` | the seller's identity printed on invoices — also handed to the mailer subscription when invoices are e-mailed |

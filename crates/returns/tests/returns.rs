@@ -10,9 +10,10 @@ use timada_order::{
 use timada_payment::{PaymentMethod, RequestPayment, load_payment, payment_id};
 use timada_promotion::{VoucherKind, load_voucher_balance, voucher_id};
 use timada_returns::{
-    Command, ListReturns, ReceiveReturn, ReceivedLine, RefundMethod, ReplacementStatus,
-    RequestReturn, RequestedLine, ReturnError, ReturnPolicy, ReturnStatus, claimed_quantities,
-    count_returns, list_returns, load_return, migrations, return_list_subscription,
+    Command, FakeLabelProvider, IssueLabel, LabelError, LabelFile, ListReturns, ReceiveReturn,
+    ReceivedLine, RefundMethod, ReplacementStatus, RequestReturn, RequestedLine, ReturnError,
+    ReturnGround, ReturnPolicy, ReturnStatus, claimed_quantities, count_returns, list_returns,
+    load_return, load_return_label_file, migrations, return_list_subscription,
     return_processing_subscription, returns_of_order, voucher_code,
 };
 
@@ -123,6 +124,16 @@ impl Shop {
     }
 
     async fn request(&self, order_id: &str, quantity: u32) -> Result<String, ReturnError> {
+        self.request_on(order_id, quantity, ReturnGround::ChangedMind)
+            .await
+    }
+
+    async fn request_on(
+        &self,
+        order_id: &str,
+        quantity: u32,
+        ground: ReturnGround,
+    ) -> Result<String, ReturnError> {
         self.returns()
             .request_return(RequestReturn {
                 order_id: order_id.into(),
@@ -131,6 +142,7 @@ impl Shop {
                     product_id: PRODUCT.into(),
                     quantity,
                 }],
+                ground,
                 reason: "Ne convient pas".into(),
             })
             .await
@@ -413,6 +425,7 @@ async fn who_may_ask_until_when_and_what_frees_the_units() -> anyhow::Result<()>
                 product_id: PRODUCT.into(),
                 quantity: 1,
             }],
+            ground: ReturnGround::ChangedMind,
             reason: "Ne convient pas".into(),
         })
         .await;
@@ -425,6 +438,7 @@ async fn who_may_ask_until_when_and_what_frees_the_units() -> anyhow::Result<()>
                 product_id: "not-in-the-order".into(),
                 quantity: 1,
             }],
+            ground: ReturnGround::ChangedMind,
             reason: "Ne convient pas".into(),
         })
         .await;
@@ -459,7 +473,10 @@ async fn who_may_ask_until_when_and_what_frees_the_units() -> anyhow::Result<()>
     // Past the window nothing can be asked for any more.
     tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
     let closed = shop
-        .returns_with(ReturnPolicy { window_days: 0 })
+        .returns_with(ReturnPolicy {
+            window_days: 0,
+            ..ReturnPolicy::default()
+        })
         .request_return(RequestReturn {
             order_id: order_id.clone(),
             customer_id: CUSTOMER.into(),
@@ -467,6 +484,7 @@ async fn who_may_ask_until_when_and_what_frees_the_units() -> anyhow::Result<()>
                 product_id: PRODUCT.into(),
                 quantity: 1,
             }],
+            ground: ReturnGround::ChangedMind,
             reason: "Trop tard".into(),
         })
         .await;
@@ -652,5 +670,191 @@ async fn a_replacement_the_warehouse_cannot_honour_becomes_a_refund() -> anyhow:
         .await?
         .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
     assert_eq!(payment.refunded, Money::eur(11_995));
+    Ok(())
+}
+
+fn label_file() -> LabelFile {
+    LabelFile {
+        file_name: "Étiquette retour.pdf".into(),
+        content_type: "application/pdf".into(),
+        bytes: b"%PDF-1.4 label".to_vec(),
+    }
+}
+
+#[tokio::test]
+async fn a_prepaid_label_is_on_the_customer_unless_the_shop_is_at_fault() -> anyhow::Result<()> {
+    let shop = Shop::open().await?;
+    let order_id = shop.order("cart-label", None, true).await?;
+    let returns = shop.returns_with(ReturnPolicy {
+        label_fee_minor: 690,
+        ..ReturnPolicy::default()
+    });
+    let label = |url: Option<&str>, file: Option<LabelFile>| IssueLabel {
+        carrier: " Colissimo ".into(),
+        tracking_number: "8R000001".into(),
+        url: url.map(str::to_owned),
+        file,
+        waive_fee: false,
+    };
+
+    // A change of mind: accepted with its label in one go, 6,90 € for it.
+    let changed = shop.request(&order_id, 1).await?;
+    assert!(matches!(
+        returns
+            .issue_return_label(&changed, label(None, Some(label_file())))
+            .await,
+        Err(ReturnError::WrongStatus { .. })
+    ));
+    for (bad, expected) in [
+        (label(None, None), "missing"),
+        (label(Some("ftp://carrier.example/l.pdf"), None), "url"),
+        (
+            label(
+                None,
+                Some(LabelFile {
+                    content_type: "text/html".into(),
+                    ..label_file()
+                }),
+            ),
+            "file",
+        ),
+    ] {
+        let refused = returns.approve_return_with_label(&changed, bad).await;
+        assert!(
+            matches!(
+                (&refused, expected),
+                (Err(ReturnError::LabelMissing), "missing")
+                    | (Err(ReturnError::InvalidLabelUrl), "url")
+                    | (Err(ReturnError::InvalidLabelFile), "file")
+            ),
+            "{expected}: {refused:?}"
+        );
+    }
+    returns
+        .approve_return_with_label(&changed, label(None, Some(label_file())))
+        .await?;
+    let view = load_return(&shop.executor, &changed)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    assert_eq!(view.status, ReturnStatus::Approved);
+    assert_eq!(view.ground, Some(ReturnGround::ChangedMind));
+    let issued = view.label.ok_or_else(|| anyhow::anyhow!("no label"))?;
+    assert_eq!(issued.carrier, "Colissimo");
+    assert_eq!(issued.fee, Money::eur(690));
+    assert!(issued.with_approval);
+    assert!(view.approved_at.is_some());
+    // The name is made safe for a header; the bytes are kept as they came.
+    assert_eq!(issued.file_name.as_deref(), Some("_tiquette_retour.pdf"));
+    let file = load_return_label_file(&shop.db, &changed)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no label file"))?;
+    assert_eq!(file.bytes, b"%PDF-1.4 label");
+    assert_eq!(file.content_type, "application/pdf");
+    assert!(matches!(
+        returns
+            .issue_return_label(&changed, label(Some("https://carrier.example/l"), None))
+            .await,
+        Err(ReturnError::LabelAlreadyIssued)
+    ));
+
+    // The fee comes off the refund, and the return says so.
+    returns
+        .receive_return(
+            &changed,
+            ReceiveReturn {
+                lines: received(1, true),
+                refund_method: RefundMethod::OriginalPayment,
+                replace: false,
+            },
+        )
+        .await?;
+    shop.process().await?;
+    let done = load_return(&shop.executor, &changed)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    assert_eq!(done.money, Money::eur(11_995 - 690));
+    assert_eq!(done.label_fee_deducted, Some(Money::eur(690)));
+    let payment = load_payment(&shop.executor, payment_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.refunded, Money::eur(11_995 - 690));
+
+    // A defective unit: the label — a link this time, given after the
+    // approval — is on the shop, and the refund is whole.
+    let broken = shop
+        .request_on(&order_id, 1, ReturnGround::Defective)
+        .await?;
+    returns.approve_return(&broken).await?;
+    returns
+        .issue_return_label(&broken, label(Some("https://carrier.example/l/42"), None))
+        .await?;
+    let view = load_return(&shop.executor, &broken)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    let issued = view.label.ok_or_else(|| anyhow::anyhow!("no label"))?;
+    assert_eq!(issued.fee, Money::eur(0));
+    assert!(!issued.with_approval);
+    assert_eq!(issued.file_name, None);
+    assert!(load_return_label_file(&shop.db, &broken).await?.is_none());
+    returns
+        .receive_return(
+            &broken,
+            ReceiveReturn {
+                lines: received(1, false),
+                refund_method: RefundMethod::OriginalPayment,
+                replace: false,
+            },
+        )
+        .await?;
+    let done = load_return(&shop.executor, &broken)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    assert_eq!(done.money, Money::eur(11_995));
+    assert_eq!(done.label_fee_deducted, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_carrier_adapter_provides_the_label_and_an_operator_may_waive_its_fee()
+-> anyhow::Result<()> {
+    let shop = Shop::open().await?;
+    let order_id = shop.order("cart-carrier", None, true).await?;
+    let returns = shop.returns_with(ReturnPolicy {
+        label_fee_minor: 690,
+        ..ReturnPolicy::default()
+    });
+    let carrier = FakeLabelProvider::default();
+    let id = shop.request(&order_id, 2).await?;
+    returns.approve_return(&id).await?;
+
+    // The carrier says no: nothing is recorded, the operator may ask again.
+    carrier.answer(Err(LabelError::Refused("address not served".into())));
+    assert!(matches!(
+        returns.provide_return_label(&id, &carrier, true).await,
+        Err(ReturnError::LabelProvider(LabelError::Refused(_)))
+    ));
+    returns.provide_return_label(&id, &carrier, true).await?;
+    let asked = carrier.asked();
+    assert_eq!(asked.len(), 2);
+    assert_eq!(asked[1].sender, address());
+    assert_eq!(asked[1].units, 2);
+
+    let view = load_return(&shop.executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("return missing"))?;
+    let issued = view.label.ok_or_else(|| anyhow::anyhow!("no label"))?;
+    assert!(issued.tracking_number.starts_with("8R"), "{issued:?}");
+    // A change of mind, but the operator made a gesture.
+    assert_eq!(issued.fee, Money::eur(0));
+    let file = load_return_label_file(&shop.db, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no label file"))?;
+    assert!(file.bytes.starts_with(b"%PDF-"));
+    // One label per return: the carrier is not asked again.
+    assert!(matches!(
+        returns.provide_return_label(&id, &carrier, false).await,
+        Err(ReturnError::LabelAlreadyIssued)
+    ));
+    assert_eq!(carrier.asked().len(), 2);
     Ok(())
 }

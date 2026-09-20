@@ -57,6 +57,7 @@ pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(notify_on_review_published())
         .handler(notify_on_review_rejected())
         .handler(notify_on_return_approved())
+        .handler(notify_on_return_label_issued())
         .handler(notify_on_return_refused())
         .handler(notify_on_return_completed())
         .handler(notify_on_replacement_dispatched());
@@ -441,13 +442,76 @@ async fn notify_on_return_approved<E: Executor>(
     };
     let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
     let content = templates.0.return_approved(&config, &first_name, &request);
-    queue(
+    // A label handed over with the approval travels with its announcement;
+    // one given later has its own e-mail.
+    let attachments = match &request.label {
+        Some(label) if label.with_approval => label_attachment(&db, &request).await?,
+        _ => Vec::new(),
+    };
+    queue_with(
         &db,
         &config,
         &event.id.to_string(),
         "return-approved",
         &to,
         content,
+        attachments,
+    )
+    .await
+}
+
+/// The file of a return's label, when the shop holds it.
+async fn label_attachment(
+    db: &SqlitePool,
+    request: &timada_returns::ReturnView,
+) -> anyhow::Result<Vec<crate::email::Attachment>> {
+    if request
+        .label
+        .as_ref()
+        .and_then(|l| l.file_name.as_ref())
+        .is_none()
+    {
+        return Ok(Vec::new());
+    }
+    Ok(timada_returns::load_return_label_file(db, &request.id)
+        .await?
+        .map(|file| crate::email::Attachment {
+            file_name: file.file_name,
+            content_type: file.content_type,
+            content: file.bytes,
+        })
+        .into_iter()
+        .collect())
+}
+
+/// A label given once the approval was already announced gets its own
+/// e-mail; one that came with the approval is in that e-mail.
+#[evento::subscription]
+async fn notify_on_return_label_issued<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<timada_returns::aggregator::ReturnLabelIssued>,
+) -> anyhow::Result<()> {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
+    if request
+        .label
+        .as_ref()
+        .is_none_or(|label| label.with_approval)
+    {
+        return Ok(());
+    }
+    let content = templates.0.return_label(&config, &first_name, &request);
+    let attachments = label_attachment(&db, &request).await?;
+    queue_with(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "return-label",
+        &to,
+        content,
+        attachments,
     )
     .await
 }

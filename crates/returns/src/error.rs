@@ -25,6 +25,16 @@ pub enum ReturnError {
     NothingToReplace,
     #[error("`{0}` is out of stock: it cannot be replaced")]
     ReplacementOutOfStock(String),
+    #[error("this return already has its label")]
+    LabelAlreadyIssued,
+    #[error("a label is a link, a file, or both")]
+    LabelMissing,
+    #[error("a label's link must start with https:// or http://")]
+    InvalidLabelUrl,
+    #[error("a label file is a PDF, a PNG or a JPEG of at most 5 MB")]
+    InvalidLabelFile,
+    #[error("return label provider: {0}")]
+    LabelProvider(#[from] crate::label::LabelError),
     #[error("`{0}` is required")]
     Required(&'static str),
     #[error(transparent)]

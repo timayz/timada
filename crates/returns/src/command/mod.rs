@@ -1,10 +1,12 @@
 mod approve_return;
 mod cancel_return;
 mod complete_return;
+mod issue_label;
 mod receive_return;
 mod refuse_return;
 mod request_return;
 
+pub use issue_label::IssueLabel;
 pub use receive_return::ReceiveReturn;
 pub use request_return::{RequestReturn, RequestedLine};
 
@@ -14,10 +16,11 @@ use sqlx::SqlitePool;
 use crate::{
     aggregator::{
         ReplacementAbandoned, ReplacementArranged, ReplacementPlanned, Return, ReturnApproved,
-        ReturnCancelled, ReturnCompleted, ReturnReceived, ReturnRefused, ReturnRequested,
+        ReturnCancelled, ReturnCompleted, ReturnGroundStated, ReturnLabelFeeDeducted,
+        ReturnLabelIssued, ReturnReceived, ReturnRefused, ReturnRequested,
     },
     error::ReturnError,
-    value_object::{ReplacementStatus, ReturnLine, ReturnPolicy, ReturnStatus},
+    value_object::{ReplacementStatus, ReturnGround, ReturnLine, ReturnPolicy, ReturnStatus},
 };
 
 /// Deterministic return id, from the RMA number the request was given.
@@ -64,6 +67,9 @@ pub struct ReturnState {
     pub lines: Vec<ReturnLine>,
     /// Where the replacement stands, when the operator chose one.
     pub replacement: Option<ReplacementStatus>,
+    pub ground: Option<ReturnGround>,
+    /// What the prepaid label costs the customer, once a label was issued.
+    pub label_fee: Option<timada_core::Money>,
 }
 
 impl ReturnState {
@@ -91,7 +97,36 @@ fn create_projection<E: Executor>() -> Projection<E, ReturnState> {
         .handler(on_replacement_planned())
         .handler(on_replacement_abandoned())
         .handler(on_replacement_arranged())
+        .handler(on_return_ground_stated())
+        .handler(on_return_label_issued())
+        .handler(on_return_label_fee_deducted())
         .strict()
+}
+
+#[evento::handler]
+async fn on_return_ground_stated(
+    event: Event<ReturnGroundStated>,
+    row: &mut ReturnState,
+) -> anyhow::Result<()> {
+    row.ground = Some(event.data.ground);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_return_label_issued(
+    event: Event<ReturnLabelIssued>,
+    row: &mut ReturnState,
+) -> anyhow::Result<()> {
+    row.label_fee = Some(event.data.fee);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_return_label_fee_deducted(
+    _event: Event<ReturnLabelFeeDeducted>,
+    _row: &mut ReturnState,
+) -> anyhow::Result<()> {
+    Ok(())
 }
 
 #[evento::handler]

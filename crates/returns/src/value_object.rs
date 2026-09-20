@@ -81,20 +81,103 @@ impl ReturnStatus {
     }
 }
 
-/// How long after shipping a return may be asked for.
+/// Why the customer sends the articles back — what decides who pays for the
+/// way back. The free-text reason stays next to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
+pub enum ReturnGround {
+    /// The legal withdrawal: the customer simply does not want it.
+    #[default]
+    ChangedMind,
+    Defective,
+    /// Arrived damaged.
+    Damaged,
+    /// Not what was ordered.
+    WrongItem,
+    Other,
+}
+
+impl ReturnGround {
+    pub const ALL: [ReturnGround; 5] = [
+        ReturnGround::ChangedMind,
+        ReturnGround::Defective,
+        ReturnGround::Damaged,
+        ReturnGround::WrongItem,
+        ReturnGround::Other,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReturnGround::ChangedMind => "changed-mind",
+            ReturnGround::Defective => "defective",
+            ReturnGround::Damaged => "damaged",
+            ReturnGround::WrongItem => "wrong-item",
+            ReturnGround::Other => "other",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|ground| ground.as_str() == value)
+    }
+
+    /// As the shop words it, to customers and operators alike.
+    pub fn label(self) -> &'static str {
+        match self {
+            ReturnGround::ChangedMind => "Ne convient pas / changement d'avis",
+            ReturnGround::Defective => "Produit défectueux",
+            ReturnGround::Damaged => "Produit arrivé abîmé",
+            ReturnGround::WrongItem => "Erreur de produit",
+            ReturnGround::Other => "Autre",
+        }
+    }
+
+    /// The shop sent something it should not have: the way back is on the
+    /// shop.
+    pub fn shop_at_fault(self) -> bool {
+        matches!(
+            self,
+            ReturnGround::Defective | ReturnGround::Damaged | ReturnGround::WrongItem
+        )
+    }
+}
+
+/// How long after shipping a return may be asked for, and what a prepaid
+/// return label costs the customer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReturnPolicy {
     pub window_days: u32,
+    /// The flat price of a prepaid label, in minor units of the order's
+    /// currency, deducted from the refund when the shop is not at fault
+    /// ([`ReturnGround::shop_at_fault`]). `0`: labels are always free.
+    pub label_fee_minor: i64,
 }
 
 impl Default for ReturnPolicy {
-    /// The French legal withdrawal period ("droit de rétractation").
+    /// The French legal withdrawal period ("droit de rétractation"); labels
+    /// free of charge.
     fn default() -> Self {
-        Self { window_days: 14 }
+        Self {
+            window_days: 14,
+            label_fee_minor: 0,
+        }
     }
 }
 
 impl ReturnPolicy {
+    /// What a prepaid label costs the customer for a return on this ground.
+    /// A return from before grounds existed counts as a change of mind; an
+    /// operator may waive the fee.
+    pub fn label_fee(&self, ground: Option<ReturnGround>, waived: bool, currency: &str) -> Money {
+        let at_fault = ground.is_some_and(ReturnGround::shop_at_fault);
+        let minor = if waived || at_fault {
+            0
+        } else {
+            self.label_fee_minor.max(0)
+        };
+        Money::new(minor, currency)
+    }
+
     /// The last second (Unix) a return of an order shipped at `shipped_at`
     /// may be requested.
     pub fn deadline(&self, shipped_at: u64) -> u64 {

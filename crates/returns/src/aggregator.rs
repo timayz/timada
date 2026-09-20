@@ -1,6 +1,6 @@
 use timada_core::Money;
 
-use crate::value_object::{ReceivedLine, RefundMethod, ReplacementLine, ReturnLine};
+use crate::value_object::{ReceivedLine, RefundMethod, ReplacementLine, ReturnGround, ReturnLine};
 
 // The explicit name pins the on-disk identity: renaming the crate or the enum
 // must never orphan stored events.
@@ -61,4 +61,28 @@ pub enum Return {
     /// The replacement parcel waits for the carrier in the shipping context.
     /// Committed together with `ReturnCompleted`.
     ReplacementArranged { shipment_id: String },
+
+    /// Why the articles come back, as a ground the policy can reason about.
+    /// Committed together with `ReturnRequested`; returns older than grounds
+    /// have none.
+    ReturnGroundStated { ground: ReturnGround },
+
+    /// The shop gave the customer a prepaid label for the way back: a link,
+    /// a file (kept in `return_label_file`, named here), or both. `fee` is
+    /// what it costs the customer — zero when the shop is at fault or the
+    /// operator waived it — and comes off the refund. `with_approval` says
+    /// the label was handed over in the same go as `ReturnApproved`: whatever
+    /// announces the approval then carries the label too.
+    ReturnLabelIssued {
+        carrier: String,
+        tracking_number: String,
+        url: Option<String>,
+        file_name: Option<String>,
+        fee: Money,
+        with_approval: bool,
+    },
+
+    /// The label's fee was taken off what goes back: `ReturnReceived`,
+    /// committed together with this one, holds the net amounts.
+    ReturnLabelFeeDeducted { amount: Money },
 }

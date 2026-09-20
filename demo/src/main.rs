@@ -284,6 +284,7 @@ fn router(store: Store, assets: AssetConfig, stylesheet: Stylesheet) -> Router {
             mount: "admin".into(),
             stylesheet,
             invoice_issuer: db::invoice_issuer(),
+            return_policy: db::return_policy(),
             ..AdminConfig::default()
         },
         assets,

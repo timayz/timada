@@ -7,10 +7,12 @@ use timada_core::Money;
 use crate::{
     aggregator::{
         ReplacementAbandoned, ReplacementArranged, ReplacementPlanned, Return, ReturnApproved,
-        ReturnCancelled, ReturnCompleted, ReturnReceived, ReturnRefused, ReturnRequested,
+        ReturnCancelled, ReturnCompleted, ReturnGroundStated, ReturnLabelFeeDeducted,
+        ReturnLabelIssued, ReturnReceived, ReturnRefused, ReturnRequested,
     },
     value_object::{
-        ReceivedLine, RefundMethod, ReplacementLine, ReplacementStatus, ReturnLine, ReturnStatus,
+        ReceivedLine, RefundMethod, ReplacementLine, ReplacementStatus, ReturnGround, ReturnLine,
+        ReturnStatus,
     },
 };
 
@@ -40,6 +42,32 @@ pub struct ReturnView {
     /// The products sent again instead of a refund, when the operator chose
     /// so.
     pub replacement: Option<ReplacementView>,
+    /// Why the articles come back; `None` for returns older than grounds.
+    pub ground: Option<ReturnGround>,
+    pub approved_at: Option<u64>,
+    /// The prepaid label for the way back, when the shop gave one.
+    pub label: Option<ReturnLabelView>,
+    /// What the label cost the customer in the end: taken off `money` and
+    /// `credit` when the parcel was received.
+    pub label_fee_deducted: Option<Money>,
+}
+
+/// The prepaid label of a return.
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct ReturnLabelView {
+    pub carrier: String,
+    pub tracking_number: String,
+    /// Where it is downloaded, when it lives at the carrier's.
+    pub url: Option<String>,
+    /// Its file's name, when the shop holds the file
+    /// ([`crate::load_return_label_file`]).
+    pub file_name: Option<String>,
+    /// What it costs the customer; zero when it is on the shop.
+    pub fee: Money,
+    pub issued_at: u64,
+    /// Handed over with the approval itself, in one go: what announces the
+    /// approval then carries the label, and nothing else needs to.
+    pub with_approval: bool,
 }
 
 /// The replacement of a return: what is sent again, and how far it got.
@@ -73,8 +101,11 @@ pub fn create_projection<E: Executor>() -> Projection<E, ReturnView> {
         .handler(on_replacement_planned())
         .handler(on_replacement_abandoned())
         .handler(on_replacement_arranged())
-        // `replacement` joined the snapshot.
-        .revision(1)
+        .handler(on_return_ground_stated())
+        .handler(on_return_label_issued())
+        .handler(on_return_label_fee_deducted())
+        // `replacement`, then the ground and the label, joined the snapshot.
+        .revision(2)
         .strict()
 }
 
@@ -110,9 +141,10 @@ async fn on_return_requested(
 
 #[evento::handler]
 async fn on_return_approved(
-    _event: Event<ReturnApproved>,
+    event: Event<ReturnApproved>,
     row: &mut ReturnView,
 ) -> anyhow::Result<()> {
+    row.approved_at = Some(event.timestamp);
     row.status = ReturnStatus::Approved;
     Ok(())
 }
@@ -203,5 +235,41 @@ async fn on_replacement_arranged(
         replacement.status = ReplacementStatus::Arranged;
         replacement.shipment_id = Some(event.data.shipment_id);
     }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_return_ground_stated(
+    event: Event<ReturnGroundStated>,
+    row: &mut ReturnView,
+) -> anyhow::Result<()> {
+    row.ground = Some(event.data.ground);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_return_label_issued(
+    event: Event<ReturnLabelIssued>,
+    row: &mut ReturnView,
+) -> anyhow::Result<()> {
+    let issued_at = event.timestamp;
+    row.label = Some(ReturnLabelView {
+        carrier: event.data.carrier,
+        tracking_number: event.data.tracking_number,
+        url: event.data.url,
+        file_name: event.data.file_name,
+        fee: event.data.fee,
+        issued_at,
+        with_approval: event.data.with_approval,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_return_label_fee_deducted(
+    event: Event<ReturnLabelFeeDeducted>,
+    row: &mut ReturnView,
+) -> anyhow::Result<()> {
+    row.label_fee_deducted = Some(event.data.amount);
     Ok(())
 }

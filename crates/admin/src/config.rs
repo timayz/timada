@@ -14,6 +14,9 @@ pub struct AdminConfig {
     /// How long a paid order may wait for its parcel before the queue of
     /// orders to ship flags it as late. Two days by default.
     pub ship_within: std::time::Duration,
+    /// How the shop takes articles back: what a prepaid return label costs
+    /// the customer is settled from the return's page.
+    pub return_policy: timada_returns::ReturnPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +35,7 @@ impl Default for AdminConfig {
             stylesheet: Stylesheet::Bundled,
             invoice_issuer: timada_invoice::InvoiceIssuer::default(),
             ship_within: std::time::Duration::from_secs(2 * 86_400),
+            return_policy: timada_returns::ReturnPolicy::default(),
         }
     }
 }
@@ -52,6 +56,9 @@ pub struct AdminServices {
     /// Where issued invoices are archived, when the shop has an archive: the
     /// invoice page then shows what was filed, checks it, and serves it.
     pub archive: Option<timada_invoice::InvoiceArchive>,
+    /// Who makes prepaid return labels, when a carrier is plugged in; without
+    /// one the operator attaches the label by hand.
+    pub return_labels: Option<timada_returns::ReturnLabels>,
 }
 
 impl AdminServices {
@@ -60,11 +67,17 @@ impl AdminServices {
             executor: Evento::new(executor),
             db,
             archive: None,
+            return_labels: None,
         }
     }
 
     pub fn with_archive(mut self, archive: timada_invoice::InvoiceArchive) -> Self {
         self.archive = Some(archive);
+        self
+    }
+
+    pub fn with_return_labels(mut self, labels: timada_returns::ReturnLabels) -> Self {
+        self.return_labels = Some(labels);
         self
     }
 }

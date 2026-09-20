@@ -1834,14 +1834,14 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
     let nothing = browser
         .post(
             &form_uri,
-            &format!("product_0={product_id}&quantity_0=0&reason=Autre"),
+            &format!("product_0={product_id}&quantity_0=0&ground=other"),
         )
         .await;
     assert!(text(nothing).await?.contains("au moins un article"));
     let greedy = browser
         .post(
             &form_uri,
-            &format!("product_0={product_id}&quantity_0=3&reason=Autre"),
+            &format!("product_0={product_id}&quantity_0=3&ground=other"),
         )
         .await;
     assert!(text(greedy).await?.contains("plus retourner que 2"));
@@ -1849,9 +1849,7 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
     let asked = browser
         .post(
             &form_uri,
-            &format!(
-                "product_0={product_id}&quantity_0=1&reason=Ne+convient+pas&details=Trop+grand"
-            ),
+            &format!("product_0={product_id}&quantity_0=1&ground=changed-mind&details=Trop+grand"),
         )
         .await;
     let slip_uri = location(&asked);
@@ -1860,7 +1858,10 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
     db::run_subscriptions_once(&store).await?;
     let slip = text(browser.get(&slip_uri).await).await?;
     assert!(slip.contains("Demande en cours d"), "{slip}");
-    assert!(slip.contains("Ne convient pas — Trop grand"), "{slip}");
+    assert!(
+        slip.contains("Ne convient pas / changement d'avis — Trop grand"),
+        "{slip}"
+    );
     // Someone else cannot read it.
     let mut other = Browser::new(&router);
     other
@@ -1879,13 +1880,49 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
     let returns = timada_returns::Command {
         executor: &store.executor,
         db: store.db.clone(),
-        policy: timada_returns::ReturnPolicy::default(),
+        policy: db::return_policy(),
     };
-    returns.approve_return(&return_id).await?;
+    // The form said what the way back costs before the request was made.
+    assert!(form.contains("6,90 € sont déduits"), "{form}");
+    returns
+        .approve_return_with_label(
+            &return_id,
+            timada_returns::IssueLabel {
+                carrier: "Colissimo".into(),
+                tracking_number: "8R0001".into(),
+                url: None,
+                file: Some(timada_returns::LabelFile {
+                    file_name: "etiquette.pdf".into(),
+                    content_type: "application/pdf".into(),
+                    bytes: b"%PDF-1.4 etiquette".to_vec(),
+                }),
+                waive_fee: false,
+            },
+        )
+        .await?;
     db::run_subscriptions_once(&store).await?;
     let slip = text(browser.get(&slip_uri).await).await?;
     assert!(slip.contains("Envoyer votre colis"), "{slip}");
     assert!(slip.contains("Service retours"), "{slip}");
+    // A change of mind: the prepaid label is the customer's to pay.
+    assert!(slip.contains("Colissimo, suivi 8R0001"), "{slip}");
+    assert!(slip.contains("6,90 €, est déduit"), "{slip}");
+    let label_uri = format!("{slip_uri}/label");
+    assert!(slip.contains(&label_uri), "{slip}");
+    let label = browser.get(&label_uri).await;
+    assert_eq!(label.status(), StatusCode::OK);
+    assert_eq!(
+        label
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("application/pdf")
+    );
+    let label = to_bytes(label.into_body(), usize::MAX)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    assert_eq!(label.as_ref(), b"%PDF-1.4 etiquette");
+    assert_eq!(other.get(&label_uri).await.status(), StatusCode::NOT_FOUND);
     let stock_before = crate::app::catalog::available_stock(&store, &product_id).await?;
     returns
         .receive_return(
@@ -1905,7 +1942,9 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
 
     let slip = text(browser.get(&slip_uri).await).await?;
     assert!(slip.contains("Traité"), "{slip}");
-    assert!(slip.contains("119,95 €"), "{slip}");
+    // 119,95 € less the label.
+    assert!(slip.contains("113,05 €"), "{slip}");
+    assert!(slip.contains("6,90 € déduits du remboursement"), "{slip}");
     assert_eq!(
         crate::app::catalog::available_stock(&store, &product_id).await?,
         stock_before + 1
@@ -2025,7 +2064,7 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
     let asked = browser
         .post(
             &form_uri,
-            &format!("product_0={product_id}&quantity_0=1&reason=D%C3%A9fectueux"),
+            &format!("product_0={product_id}&quantity_0=1&ground=defective"),
         )
         .await;
     let broken_uri = location(&asked);
@@ -2072,7 +2111,7 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
         timada_payment::load_payment(&store.executor, timada_payment::payment_id(&order_id))
             .await?
             .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
-    assert_eq!(payment.refunded, timada_core::Money::eur(11_995));
+    assert_eq!(payment.refunded, timada_core::Money::eur(11_305));
     let outbox = timada_mailer::list_outbox(&store.db, None, 100, 0).await?;
     let shipped: Vec<_> = outbox
         .iter()
