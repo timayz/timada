@@ -1127,6 +1127,32 @@ async fn stripe_webhooks_are_verified_then_capture_the_payment() -> anyhow::Resu
         location(&back),
         format!("/checkout/confirmation/{order_id}")
     );
+
+    // Weeks later the cardholder contests the charge, and the bank sides
+    // with the shop: Stripe says
+    // so against its own reference, which the shop learnt at the capture.
+    let report = |status: &str| {
+        format!(
+            r#"{{"type":"charge.dispute.closed","data":{{"object":{{"id":"dp_demo","amount":12585,"currency":"eur","status":"{status}","reason":"fraudulent","payment_intent":"pi_demo","evidence_details":{{"due_by":1800000000}}}}}}}}"#
+        )
+    };
+    let opened = report("needs_response");
+    let signature = timada_payment::sign_webhook("whsec_demo", now, opened.as_bytes());
+    assert_eq!(deliver(signature, opened).await?, StatusCode::OK);
+    let payment = timada_payment::load_payment(&store.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(
+        payment.open_dispute().map(|d| d.dispute_id.as_str()),
+        Some("dp_demo")
+    );
+    let won = report("won");
+    let signature = timada_payment::sign_webhook("whsec_demo", now, won.as_bytes());
+    assert_eq!(deliver(signature, won).await?, StatusCode::OK);
+    db::run_subscriptions_once(&store).await?;
+    let disputes = timada_payment::disputes_of_order(&store.db, &order_id).await?;
+    assert_eq!(disputes.len(), 1);
+    assert_eq!(disputes[0].status, "won");
     Ok(())
 }
 

@@ -43,3 +43,40 @@ impl RefundStatus {
         }
     }
 }
+
+/// Where a dispute stands with the cardholder's bank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
+pub enum DisputeStatus {
+    /// Waiting for the shop's evidence, or for the bank's decision.
+    #[default]
+    Open,
+    Won,
+    Lost,
+}
+
+impl DisputeStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Won => "won",
+            Self::Lost => "lost",
+        }
+    }
+}
+
+/// A provider's dispute reason in the shop's language. Card networks share a
+/// small vocabulary (these are Stripe's codes); anything else is shown as the
+/// provider said it.
+pub fn dispute_reason_label(reason: &str) -> &str {
+    match reason {
+        "fraudulent" => "paiement non reconnu par le titulaire de la carte",
+        "product_not_received" => "produit non reçu",
+        "product_unacceptable" => "produit non conforme",
+        "duplicate" => "paiement en double",
+        "credit_not_processed" => "remboursement attendu et non reçu",
+        "subscription_canceled" => "abonnement résilié",
+        "unrecognized" => "paiement non reconnu",
+        "general" | "" => "motif non précisé",
+        other => other,
+    }
+}

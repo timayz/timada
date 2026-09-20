@@ -2,12 +2,15 @@ use evento::Executor;
 use sqlx::SqlitePool;
 use timada_core::Money;
 use timada_payment::{
-    Applied, CancelOutcome, Command, FakeProvider, ManualProvider, PaymentError, PaymentMethod,
-    PaymentProvider, PaymentStart, PaymentStatus, PaymentView, ProviderError, ProviderEvent,
-    RefundOutcome, RefundPass, RefundPolicy, RefundStatus, RequestPayment, ReturnUrls,
-    apply_provider_event, cancel_payment_session, count_refund_requests, count_refunds,
-    execute_pending_refunds, list_refund_requests, list_refunds, load_payment, migrations,
-    payment_id, refund_execution_subscription, refund_list_subscription, start_payment,
+    Applied, CancelOutcome, Command, DisputeStanding, DisputeStatus, FakeProvider, ManualProvider,
+    OpenDispute, PaymentError, PaymentMethod, PaymentProvider, PaymentStart, PaymentStatus,
+    PaymentView, ProviderDispute, ProviderError, ProviderEvent, RefundOutcome, RefundPass,
+    RefundPolicy, RefundStatus, RequestPayment, ReturnUrls, apply_provider_event,
+    cancel_payment_session, count_disputes, count_refund_requests, count_refunds,
+    dispute_list_subscription, disputes_of_order, execute_pending_refunds, list_disputes,
+    list_refund_requests, list_refunds, load_payment, migrations, orders_with_open_dispute,
+    payment_by_reference, payment_id, refund_execution_subscription, refund_list_subscription,
+    start_payment,
 };
 
 async fn view<E: Executor>(executor: &E, id: &str) -> anyhow::Result<PaymentView> {
@@ -593,5 +596,233 @@ async fn a_payment_session_is_reused_and_can_be_called_off() -> anyhow::Result<(
         start_payment(&executor, &db, &provider, &other, &urls).await,
         Err(PaymentError::NotRequested)
     ));
+    Ok(())
+}
+
+/// What the provider says of a dispute on the payment captured as `psp-123`.
+fn dispute(reference: &str, amount: i64, standing: DisputeStanding) -> ProviderEvent {
+    ProviderEvent::Dispute(ProviderDispute {
+        payment_reference: "psp-123".into(),
+        reference: reference.into(),
+        amount: Money::eur(amount),
+        reason: "product_not_received".into(),
+        respond_by: Some(1_800_000_000),
+        standing,
+    })
+}
+
+async fn learn_disputes<E: Executor>(executor: &E, db: &SqlitePool) -> anyhow::Result<()> {
+    dispute_list_subscription()
+        .data(db.clone())
+        .run_once(executor)
+        .await?;
+    // The refunds list is strict: it must know the dispute events too.
+    refund_list_subscription()
+        .data(db.clone())
+        .run_once(executor)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_dispute_holds_refunds_until_the_bank_sides_with_the_shop() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let provider = FakeProvider::default();
+
+    // A provider talks about its own reference: unknown until the capture
+    // was seen, and never for somebody else's payment.
+    let early = dispute("dp_1", 10_000, DisputeStanding::Open);
+    assert_eq!(
+        apply_provider_event(&executor, &db, &provider, early.clone()).await?,
+        Applied::Ignored
+    );
+    let id = captured_card_payment(&executor, "order-disputed").await?;
+    learn_disputes(&executor, &db).await?;
+    assert_eq!(
+        payment_by_reference(&db, "psp-123").await?.as_deref(),
+        Some(id.as_str())
+    );
+
+    assert_eq!(
+        apply_provider_event(&executor, &db, &provider, early.clone()).await?,
+        Applied::Done
+    );
+    // Reported again — evidence updated, funds withdrawn: nothing new.
+    assert_eq!(
+        apply_provider_event(&executor, &db, &provider, early).await?,
+        Applied::Ignored
+    );
+    let payment = view(&executor, &id).await?;
+    let open = payment
+        .open_dispute()
+        .ok_or_else(|| anyhow::anyhow!("no open dispute"))?;
+    assert_eq!(open.dispute_id, "dp_1");
+    assert_eq!(open.amount, Money::eur(10_000));
+    assert_eq!(open.respond_by, Some(1_800_000_000));
+    assert_eq!(
+        timada_payment::dispute_reason_label(&open.reason),
+        "produit non reçu"
+    );
+    // Still the shop's money until the bank says otherwise.
+    assert_eq!(payment.refundable()?, Money::eur(10_000));
+
+    learn_disputes(&executor, &db).await?;
+    assert_eq!(count_disputes(&db, Some(DisputeStatus::Open)).await?, 1);
+    assert_eq!(
+        orders_with_open_dispute(&db, &["order-disputed".into(), "order-other".into()]).await?,
+        ["order-disputed"]
+    );
+
+    // A refund can be decided, but nothing reaches the provider meanwhile.
+    Command(&executor)
+        .refund_payment(&id, Money::eur(4_000), "return R2026-000001".into())
+        .await?;
+    let pass = run_refunds(&executor, &db, &provider).await?;
+    assert_eq!((pass.held, pass.settled), (1, 0));
+    assert!(provider.refunds().is_empty());
+    assert_eq!(view(&executor, &id).await?.refunded, Money::eur(0));
+
+    // Won: the refund that waited goes through.
+    assert_eq!(
+        apply_provider_event(
+            &executor,
+            &db,
+            &provider,
+            dispute("dp_1", 10_000, DisputeStanding::Won)
+        )
+        .await?,
+        Applied::Done
+    );
+    let pass = run_refunds(&executor, &db, &provider).await?;
+    assert_eq!((pass.held, pass.settled), (0, 1));
+    let payment = view(&executor, &id).await?;
+    assert!(payment.open_dispute().is_none());
+    assert_eq!(payment.disputes[0].status, DisputeStatus::Won);
+    assert!(payment.disputes[0].closed_at.is_some());
+    assert_eq!(payment.refunded, Money::eur(4_000));
+    assert_eq!(payment.charged_back()?, Money::eur(0));
+
+    learn_disputes(&executor, &db).await?;
+    let rows = list_disputes(&db, None, 10, 0).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, "won");
+    assert!(rows[0].closed_at.is_some());
+    assert!(
+        orders_with_open_dispute(&db, &["order-disputed".into()])
+            .await?
+            .is_empty()
+    );
+    // A bank does not change its mind; a provider that says so is refused.
+    assert!(matches!(
+        Command(&executor).lose_dispute(&id, "dp_1").await,
+        Err(PaymentError::DisputeAlreadyClosed)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_lost_dispute_takes_its_amount_out_of_what_can_be_refunded() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let provider = FakeProvider::default();
+    let cmd = Command(&executor);
+
+    // Only captured money can be disputed.
+    let requested = cmd
+        .request_payment(RequestPayment {
+            order_id: "order-unpaid".into(),
+            amount: Money::eur(5_000),
+            method: PaymentMethod::Card,
+        })
+        .await?;
+    let claim = |reference: &str, amount: i64| OpenDispute {
+        dispute_id: reference.into(),
+        amount: Money::eur(amount),
+        reason: "fraudulent".into(),
+        respond_by: None,
+    };
+    assert!(matches!(
+        cmd.open_dispute(&requested, claim("dp_0", 5_000)).await,
+        Err(PaymentError::NotCaptured)
+    ));
+
+    let id = captured_card_payment(&executor, "order-lost").await?;
+    learn_disputes(&executor, &db).await?;
+    assert!(matches!(
+        cmd.open_dispute(&id, claim("dp_big", 10_001)).await,
+        Err(PaymentError::DisputeExceedsCapture)
+    ));
+    assert!(matches!(
+        cmd.open_dispute(&id, claim(" ", 100)).await,
+        Err(PaymentError::DisputeReferenceRequired)
+    ));
+    assert!(matches!(
+        cmd.win_dispute(&id, "dp_unknown").await,
+        Err(PaymentError::DisputeNotFound)
+    ));
+
+    // Two refunds were decided while 60,00 of the 100,00 were disputed.
+    assert!(cmd.open_dispute(&id, claim("dp_2", 6_000)).await?);
+    let kept = cmd
+        .refund_payment(&id, Money::eur(3_000), "return R2026-000001".into())
+        .await?;
+    let dropped = cmd
+        .refund_payment(&id, Money::eur(5_000), "return R2026-000002".into())
+        .await?;
+    assert_eq!(run_refunds(&executor, &db, &provider).await?.held, 2);
+
+    // The first report this shop gets may be the last one: it says it all.
+    let lost = dispute("dp_2", 6_000, DisputeStanding::Lost);
+    assert_eq!(
+        apply_provider_event(&executor, &db, &provider, lost.clone()).await?,
+        Applied::Done
+    );
+    assert_eq!(
+        apply_provider_event(&executor, &db, &provider, lost).await?,
+        Applied::Ignored
+    );
+    let payment = view(&executor, &id).await?;
+    assert_eq!(payment.charged_back()?, Money::eur(6_000));
+    // 40,00 are left: the older refund still fits, the other failed with the
+    // dispute.
+    let status = |refund_id: &str| {
+        payment
+            .refunds
+            .iter()
+            .find(|r| r.refund_id == refund_id)
+            .map(|r| (r.status, r.failure.clone()))
+    };
+    assert_eq!(status(&kept), Some((RefundStatus::Pending, None)));
+    assert_eq!(
+        status(&dropped),
+        Some((RefundStatus::Failed, Some("dispute lost".into())))
+    );
+    assert_eq!(payment.refundable()?, Money::eur(1_000));
+    // Still captured: a chargeback is not a refund, no credit note follows.
+    assert_eq!(payment.status, PaymentStatus::Captured);
+    assert_eq!(payment.refunded, Money::eur(0));
+
+    let pass = run_refunds(&executor, &db, &provider).await?;
+    assert_eq!((pass.held, pass.settled), (0, 1));
+    assert_eq!(view(&executor, &id).await?.refunded, Money::eur(3_000));
+    assert!(matches!(
+        cmd.refund_payment(&id, Money::eur(1_001), "geste".into())
+            .await,
+        Err(PaymentError::RefundExceedsCapture)
+    ));
+    assert!(matches!(
+        cmd.retry_refund(&id, &dropped).await,
+        Err(PaymentError::RefundExceedsCapture)
+    ));
+
+    // A dispute opened and lost in one report, on another order.
+    learn_disputes(&executor, &db).await?;
+    let rows = disputes_of_order(&db, "order-lost").await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].status.as_str(), rows[0].amount_minor),
+        ("lost", 6_000)
+    );
+    assert_eq!(count_disputes(&db, Some(DisputeStatus::Open)).await?, 0);
+    assert_eq!(count_disputes(&db, None).await?, 1);
     Ok(())
 }

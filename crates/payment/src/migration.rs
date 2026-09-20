@@ -101,7 +101,53 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0003Disputes;
+
+sqlite_migration!(
+    M0003Disputes,
+    "payment",
+    "m0003_disputes",
+    vec_box![M0002Provider],
+    vec_box![
+        // Read model: every dispute, and what became of it.
+        (
+            "CREATE TABLE payment_dispute_list (
+                dispute_id TEXT PRIMARY KEY,
+                payment_id TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                amount_minor INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                status TEXT NOT NULL,
+                respond_by INTEGER,
+                opened_at INTEGER NOT NULL,
+                closed_at INTEGER
+            )",
+            "DROP TABLE payment_dispute_list"
+        ),
+        (
+            "CREATE INDEX payment_dispute_list_status
+             ON payment_dispute_list (status, respond_by)",
+            "DROP INDEX payment_dispute_list_status"
+        ),
+        (
+            "CREATE INDEX payment_dispute_list_order
+             ON payment_dispute_list (order_id)",
+            "DROP INDEX payment_dispute_list_order"
+        ),
+        // Which payment a provider's reference was captured for: a provider
+        // reports a dispute against its own reference, not the shop's id.
+        (
+            "CREATE TABLE payment_capture_reference (
+                psp_reference TEXT PRIMARY KEY,
+                payment_id TEXT NOT NULL
+            )",
+            "DROP TABLE payment_capture_reference"
+        )
+    ]
+);
+
 /// Read-model and write-side migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001RefundList, M0002Provider]
+    vec_box![M0001RefundList, M0002Provider, M0003Disputes]
 }

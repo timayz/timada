@@ -1,10 +1,12 @@
 mod capture_payment;
 mod decline_payment;
+mod dispute;
 mod refund_payment;
 mod request_payment;
 
 use std::ops::Deref;
 
+pub use dispute::OpenDispute;
 pub use request_payment::RequestPayment;
 
 use evento::{Executor, Projection, metadata::Event};
@@ -12,11 +14,11 @@ use timada_core::Money;
 
 use crate::{
     aggregator::{
-        Payment, PaymentCaptured, PaymentDeclined, PaymentRefunded, PaymentRequested, RefundFailed,
-        RefundRequested, RefundSettled,
+        DisputeLost, DisputeOpened, DisputeWon, Payment, PaymentCaptured, PaymentDeclined,
+        PaymentRefunded, PaymentRequested, RefundFailed, RefundRequested, RefundSettled,
     },
     error::PaymentError,
-    value_object::PaymentStatus,
+    value_object::{DisputeStatus, PaymentStatus},
 };
 
 /// Deterministic payment id: one payment per order.
@@ -65,6 +67,16 @@ pub struct PaymentState {
     /// How many distinct refunds were ever asked for; the next refund's id
     /// derives from it.
     pub refund_requests: u32,
+    /// Every dispute the provider reported, oldest first.
+    pub disputes: Vec<DisputeState>,
+}
+
+/// A dispute as the commands need it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisputeState {
+    pub dispute_id: String,
+    pub amount: Money,
+    pub status: DisputeStatus,
 }
 
 /// A refund that was asked for and is not settled.
@@ -85,11 +97,23 @@ impl PaymentState {
             })
     }
 
+    /// What lost disputes took back: money the shop no longer holds.
+    pub fn charged_back(&self) -> Result<Money, timada_core::MoneyError> {
+        self.disputes
+            .iter()
+            .filter(|d| d.status == DisputeStatus::Lost)
+            .try_fold(Money::zero(&self.amount.currency), |sum, dispute| {
+                sum.checked_add(&dispute.amount)
+            })
+    }
+
     /// Whether `amount` more can still be given back, counting what is
-    /// already refunded and what pending refunds hold.
+    /// already refunded, what lost disputes took and what pending refunds
+    /// hold.
     pub(crate) fn can_refund(&self, amount: &Money) -> Result<bool, timada_core::MoneyError> {
         let total = self
             .refunded
+            .checked_add(&self.charged_back()?)?
             .checked_add(&self.pending()?)?
             .checked_add(amount)?;
         Ok(total.minor <= self.amount.minor)
@@ -106,6 +130,9 @@ fn create_projection<E: Executor>() -> Projection<E, PaymentState> {
         .handler(on_refund_requested())
         .handler(on_refund_settled())
         .handler(on_refund_failed())
+        .handler(on_dispute_opened())
+        .handler(on_dispute_won())
+        .handler(on_dispute_lost())
         .strict()
 }
 
@@ -206,5 +233,36 @@ async fn on_refund_failed(
         let refund = row.pending_refunds.remove(at);
         row.failed_refunds.push(refund);
     }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_dispute_opened(
+    event: Event<DisputeOpened>,
+    row: &mut PaymentState,
+) -> anyhow::Result<()> {
+    row.disputes.push(DisputeState {
+        dispute_id: event.data.dispute_id,
+        amount: event.data.amount,
+        status: DisputeStatus::Open,
+    });
+    Ok(())
+}
+
+fn close_dispute(row: &mut PaymentState, dispute_id: &str, status: DisputeStatus) {
+    if let Some(dispute) = row.disputes.iter_mut().find(|d| d.dispute_id == dispute_id) {
+        dispute.status = status;
+    }
+}
+
+#[evento::handler]
+async fn on_dispute_won(event: Event<DisputeWon>, row: &mut PaymentState) -> anyhow::Result<()> {
+    close_dispute(row, &event.data.dispute_id, DisputeStatus::Won);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_dispute_lost(event: Event<DisputeLost>, row: &mut PaymentState) -> anyhow::Result<()> {
+    close_dispute(row, &event.data.dispute_id, DisputeStatus::Lost);
     Ok(())
 }

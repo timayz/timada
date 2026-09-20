@@ -41,4 +41,23 @@ pub enum Payment {
 
     /// The provider refused the refund for good; its amount is no longer held.
     RefundFailed { refund_id: String, reason: String },
+
+    /// The cardholder contested the charge with their bank (a chargeback, or
+    /// the inquiry that comes before one). `dispute_id` is the provider's own
+    /// reference; `respond_by` is when the shop's evidence is due, when the
+    /// provider says. While it is open no refund is handed to the provider.
+    DisputeOpened {
+        dispute_id: String,
+        amount: Money,
+        reason: String,
+        respond_by: Option<u64>,
+    },
+
+    /// The bank sided with the shop (or the inquiry was closed): the money
+    /// stays.
+    DisputeWon { dispute_id: String },
+
+    /// The bank sided with the cardholder: the disputed amount went back to
+    /// them, and can no longer be refunded.
+    DisputeLost { dispute_id: String },
 }

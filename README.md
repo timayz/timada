@@ -58,7 +58,9 @@ To pay for real (in Stripe's test mode): build with `--features stripe`, set the
 three keys, and let Stripe reach the webhook —
 `stripe listen --forward-to 127.0.0.1:3000/webhooks/stripe` prints the
 `whsec_…` to use. The card `4242 4242 4242 4242` pays, `4000 0027 6000 3184`
-asks for 3-D Secure.
+asks for 3-D Secure, `4000 0000 0000 0259` pays and is disputed at once. A
+live endpoint listens to `payment_intent.succeeded`, `refund.updated`,
+`refund.failed` and the `charge.dispute.*` events.
 
 ## The crates
 
@@ -73,7 +75,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-customer` | customers, their e-mail, billing and delivery addresses, the company they buy as and its VAT number; customer list |
 | `timada-cart` | carts: lines with a price snapshot, promo code, saved carts, the checkout fact |
 | `timada-promotion` | promo codes (capped redemptions) and vouchers (balances) |
-| `timada-payment` | the payment of an order: requested, captured, declined, refunded — and the `PaymentProvider` port the money moves through, with a Stripe adapter behind the `stripe` feature |
+| `timada-payment` | the payment of an order: requested, captured, declined, refunded, disputed — and the `PaymentProvider` port the money moves through, with a Stripe adapter behind the `stripe` feature |
 | `timada-shipping` | delivery methods and the shipment of an order |
 | `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate; VAT numbers and the registry (VIES) that checks them |
 | `timada-order` | the order, the checkout ACL that places it, the fulfillment saga, payment timeouts |
