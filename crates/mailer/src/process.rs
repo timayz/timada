@@ -37,7 +37,8 @@ pub const MAILER_SUBSCRIPTION: &str = "mailer";
 /// takes a [`MailerTemplates`] the same way when the host words its own
 /// e-mails; the built-in French ones are used otherwise. With the
 /// `invoice-pdf` feature, a `timada_invoice::InvoiceIssuer` handed as data
-/// turns on the e-mail that carries each issued invoice as a PDF.
+/// turns on the e-mails that carry each issued invoice, and each credit
+/// note, as a PDF.
 pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     let builder = SubscriptionBuilder::new(MAILER_SUBSCRIPTION)
         .handler(welcome_on_customer_registered())
@@ -56,7 +57,9 @@ pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(notify_on_return_refused())
         .handler(notify_on_return_completed());
     #[cfg(feature = "invoice-pdf")]
-    let builder = builder.handler(invoice::send_on_invoice_issued());
+    let builder = builder
+        .handler(invoice::send_on_invoice_issued())
+        .handler(invoice::send_on_credit_note_issued());
     builder
 }
 
@@ -609,8 +612,11 @@ async fn notify_on_review_rejected<E: Executor>(
 mod invoice {
     use evento::{Executor, metadata::Event, subscription::Context};
     use timada_invoice::{
-        ArchivePolicy, InvoiceArchive, InvoiceIssuer, aggregator::InvoiceIssued, archive_invoice,
-        invoice_document, invoice_pdf_file_name, load_invoice, render_invoice_pdf,
+        ArchivePolicy, InvoiceArchive, InvoiceIssuer,
+        aggregator::{CreditNoteIssued, InvoiceIssued},
+        archive_credit_note, archive_invoice, credit_note_pdf_file_name, invoice_document,
+        invoice_pdf_file_name, load_credit_note_document, load_invoice, render_credit_note_pdf,
+        render_invoice_pdf,
     };
 
     use super::{order_and_customer, queue_with, setup};
@@ -676,6 +682,70 @@ mod invoice {
             &config,
             &event.id.to_string(),
             "invoice-issued",
+            &to,
+            content,
+            vec![Attachment::pdf(file_name, pdf)],
+        )
+        .await
+    }
+
+    /// `CreditNoteIssued` → the credit note in the customer's mailbox, the
+    /// archived file when there is an archive. The refund e-mail says the
+    /// money is on its way back; this one carries the document of it. Opt-in
+    /// like the invoice's: nothing is sent without an [`InvoiceIssuer`].
+    #[evento::subscription]
+    pub(super) async fn send_on_credit_note_issued<E: Executor>(
+        ctx: &Context<'_, E>,
+        event: Event<CreditNoteIssued>,
+    ) -> anyhow::Result<()> {
+        let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+            return Ok(());
+        };
+        let Some(issuer) = ctx.get::<InvoiceIssuer>() else {
+            tracing::warn!(
+                credit_note_id = %event.aggregate_id,
+                "no InvoiceIssuer in the mailer's data: credit note not e-mailed"
+            );
+            return Ok(());
+        };
+        let Some(document) =
+            load_credit_note_document(ctx.executor, &issuer, &event.aggregate_id).await?
+        else {
+            anyhow::bail!("credit note {} cannot be loaded", event.aggregate_id);
+        };
+        let (_, to, first_name) = order_and_customer(ctx.executor, &document.order_id).await?;
+
+        let content = templates
+            .0
+            .credit_note_issued(&config, &first_name, &document);
+        let file_name = credit_note_pdf_file_name(&document);
+        let archived = match ctx.get::<InvoiceArchive>() {
+            Some(archive) => {
+                let policy = ctx.get::<ArchivePolicy>().unwrap_or_default();
+                archive_credit_note(
+                    ctx.executor,
+                    &db,
+                    archive.0.as_ref(),
+                    &issuer,
+                    &event.aggregate_id,
+                    &policy,
+                )
+                .await?
+                .map(|(_, bytes)| bytes)
+            }
+            None => None,
+        };
+        let pdf = match archived {
+            Some(bytes) => bytes,
+            None => {
+                tokio::task::spawn_blocking(move || render_credit_note_pdf(&document)).await??
+            }
+        };
+        queue_with(
+            &db,
+            &config,
+            &event.id.to_string(),
+            "credit-note-issued",
             &to,
             content,
             vec![Attachment::pdf(file_name, pdf)],

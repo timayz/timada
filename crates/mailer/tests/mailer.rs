@@ -613,7 +613,7 @@ async fn old_events_are_not_emailed_about() -> anyhow::Result<()> {
 /// who issues it — lands in the customer's mailbox as a PDF.
 #[cfg(feature = "invoice-pdf")]
 #[tokio::test]
-async fn an_issued_invoice_is_emailed_as_a_pdf() -> anyhow::Result<()> {
+async fn an_issued_invoice_and_its_credit_notes_are_emailed_as_pdfs() -> anyhow::Result<()> {
     let mut all = migrations();
     all.extend(timada_order::migrations());
     all.extend(timada_invoice::migrations());
@@ -729,5 +729,78 @@ async fn an_issued_invoice_is_emailed_as_a_pdf() -> anyhow::Result<()> {
     assert_eq!(file.file_name, format!("facture-{invoice}.pdf"));
     assert_eq!(file.content_type, "application/pdf");
     assert!(file.content.starts_with(b"%PDF-"));
+
+    // Part of it is refunded: the credit note follows, as a file too — the
+    // one the archive keeps, when the mailer is handed the archive.
+    let credit = |refund: &str, order: &str| {
+        let (executor, db) = (&executor, db.clone());
+        let (refund, invoice_id) = (refund.to_owned(), timada_invoice::invoice_id(order));
+        async move {
+            timada_invoice::Command { executor, db }
+                .issue_credit_note(timada_invoice::IssueCreditNote {
+                    refund_id: refund,
+                    invoice_id,
+                    amount: Money::eur(5_000),
+                    reason: "return R2026-000003".into(),
+                })
+                .await
+        }
+    };
+    credit("refund-silent", &silent).await?;
+    mailer_subscription()
+        .data(db.clone())
+        .data(config())
+        .run_once(&executor)
+        .await?;
+    let queued = kinds(list_outbox(&db, None, 50, 0).await?);
+    assert!(
+        !queued.contains(&"credit-note-issued".to_owned()),
+        "{queued:?}"
+    );
+
+    let number = credit("refund-1", &order_id).await?;
+    let store = timada_invoice::SqliteArchiveStore::new(db.clone());
+    for _ in 0..2 {
+        mailer_subscription()
+            .data(db.clone())
+            .data(config())
+            .data(issuer.clone())
+            .data(timada_invoice::InvoiceArchive::new(store.clone()))
+            .run_once(&executor)
+            .await?;
+    }
+    let outbox = MemoryTransport::default();
+    deliver_pending(&db, &outbox).await?;
+    let sent: Vec<Email> = outbox
+        .sent()
+        .into_iter()
+        .filter(|m| m.subject.starts_with("Votre avoir"))
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].to, "ada@example.com");
+    assert_eq!(sent[0].subject, format!("Votre avoir {number}"));
+    for expected in [
+        "C2026-000002".to_owned(),
+        format!("facture {invoice}"),
+        "Motif — Retour R2026-000003".to_owned(),
+        "Montant TTC — 50,00 €".to_owned(),
+        format!("https://shop.example/account/orders/{order_id}"),
+    ] {
+        assert!(
+            sent[0].body.contains(&expected),
+            "{expected}: {}",
+            sent[0].body
+        );
+    }
+    assert_eq!(sent[0].attachments.len(), 1);
+    let file = &sent[0].attachments[0];
+    assert_eq!(file.file_name, format!("avoir-{number}.pdf"));
+    assert_eq!(file.content_type, "application/pdf");
+    let (entry, archived) =
+        timada_invoice::read_archived(&db, &store, &timada_invoice::credit_note_id("refund-1"))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("credit note not archived"))?;
+    assert_eq!(entry.kind, "credit_note");
+    assert_eq!(file.content, archived);
     Ok(())
 }

@@ -185,6 +185,18 @@ pub trait Templates: Send + Sync {
     ) -> Content {
         template::invoice_issued(config, first_name, invoice).into()
     }
+
+    /// Goes out with the credit note attached as a PDF, next to the refund
+    /// e-mail.
+    #[cfg(feature = "invoice-pdf")]
+    fn credit_note_issued(
+        &self,
+        config: &MailerConfig,
+        first_name: &str,
+        credit_note: &timada_invoice::CreditNoteDocument,
+    ) -> Content {
+        template::credit_note_issued(config, first_name, credit_note).into()
+    }
 }
 
 /// The built-in French e-mails, unchanged.
