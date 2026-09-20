@@ -2,6 +2,7 @@ mod add_delivery_address;
 mod change_delivery_address;
 mod change_email;
 mod choose_preferred_delivery_address;
+mod company;
 mod register_customer;
 mod remove_delivery_address;
 mod set_billing_address;
@@ -14,9 +15,9 @@ use evento::{Executor, Projection, metadata::Event};
 
 use crate::{
     aggregator::{
-        BillingAddressSet, Customer, CustomerEmailChanged, CustomerRegistered,
-        DeliveryAddressAdded, DeliveryAddressChanged, DeliveryAddressRemoved,
-        PreferredDeliveryAddressChosen,
+        BillingAddressSet, CompanyIdentified, CompanyIdentityRemoved, Customer,
+        CustomerEmailChanged, CustomerRegistered, DeliveryAddressAdded, DeliveryAddressChanged,
+        DeliveryAddressRemoved, PreferredDeliveryAddressChosen, VatNumberChecked,
     },
     error::CustomerError,
 };
@@ -55,6 +56,8 @@ pub struct CustomerState {
     pub next_address_seq: u32,
     pub delivery_ids: Vec<String>,
     pub preferred: Option<String>,
+    /// `(company name, VAT number)` while the customer buys as a business.
+    pub company: Option<(String, String)>,
 }
 
 impl CustomerState {
@@ -71,6 +74,9 @@ fn create_projection<E: Executor>() -> Projection<E, CustomerState> {
         .handler(on_delivery_address_added())
         .handler(on_delivery_address_removed())
         .handler(on_preferred_delivery_address_chosen())
+        .handler(on_company_identified())
+        .handler(on_company_identity_removed())
+        .skip::<VatNumberChecked>()
         .skip::<CustomerEmailChanged>()
         .skip::<BillingAddressSet>()
         .skip::<DeliveryAddressChanged>()
@@ -115,5 +121,23 @@ async fn on_preferred_delivery_address_chosen(
     row: &mut CustomerState,
 ) -> anyhow::Result<()> {
     row.preferred = Some(event.data.address_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_company_identified(
+    event: Event<CompanyIdentified>,
+    row: &mut CustomerState,
+) -> anyhow::Result<()> {
+    row.company = Some((event.data.company_name, event.data.vat_number));
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_company_identity_removed(
+    _event: Event<CompanyIdentityRemoved>,
+    row: &mut CustomerState,
+) -> anyhow::Result<()> {
+    row.company = None;
     Ok(())
 }

@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 timada-core.workspace = true
+timada-tax.workspace = true
 evento.workspace = true
 bitcode.workspace = true
 anyhow.workspace = true

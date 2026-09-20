@@ -6,9 +6,9 @@ use timada_core::{Address, Civility};
 
 use crate::{
     aggregator::{
-        BillingAddressSet, Customer, CustomerEmailChanged, CustomerRegistered,
-        DeliveryAddressAdded, DeliveryAddressChanged, DeliveryAddressRemoved,
-        PreferredDeliveryAddressChosen,
+        BillingAddressSet, CompanyIdentified, CompanyIdentityRemoved, Customer,
+        CustomerEmailChanged, CustomerRegistered, DeliveryAddressAdded, DeliveryAddressChanged,
+        DeliveryAddressRemoved, PreferredDeliveryAddressChosen, VatNumberChecked,
     },
     value_object::DeliveryAddress,
 };
@@ -40,6 +40,9 @@ pub fn create_projection<E: Executor>() -> Projection<E, AddressBookView> {
         .handler(on_delivery_address_changed())
         .handler(on_delivery_address_removed())
         .handler(on_preferred_delivery_address_chosen())
+        .skip::<CompanyIdentified>()
+        .skip::<CompanyIdentityRemoved>()
+        .skip::<VatNumberChecked>()
         .strict()
 }
 

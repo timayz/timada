@@ -99,6 +99,15 @@ async fn shop() -> anyhow::Result<(Router, Store, String)> {
 async fn shop_with(
     provider: std::sync::Arc<dyn timada_payment::PaymentProvider>,
 ) -> anyhow::Result<(Router, Store, String)> {
+    shop_checking(provider, timada_tax::FakeValidator::default()).await
+}
+
+/// [`shop_with`], checking VAT numbers against `registry` — a handle the test
+/// keeps to script its answers.
+async fn shop_checking(
+    provider: std::sync::Arc<dyn timada_payment::PaymentProvider>,
+    registry: timada_tax::FakeValidator,
+) -> anyhow::Result<(Router, Store, String)> {
     let (executor, pool) = timada_core::testing::memory_executor(db::migrations()).await?;
     let store = Store {
         executor,
@@ -106,6 +115,7 @@ async fn shop_with(
         provider,
         #[cfg(feature = "stripe")]
         stripe: None,
+        vat_validator: std::sync::Arc::new(registry),
     };
     seed::run(&store).await?;
     db::run_subscriptions_once(&store).await?;
@@ -1273,6 +1283,105 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
             "{bad}"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_business_gives_its_vat_number_and_sees_what_the_registry_said() -> anyhow::Result<()> {
+    let registry = timada_tax::FakeValidator::default();
+    let (router, store, _) = shop_checking(
+        std::sync::Arc::new(timada_payment::ManualProvider),
+        registry.clone(),
+    )
+    .await?;
+    let mut browser = Browser::new(&router);
+    // Signed-in shoppers only.
+    assert_eq!(
+        browser.get("/account/company").await.status(),
+        StatusCode::SEE_OTHER
+    );
+    browser.post("/register", REGISTER).await;
+    let account = text(browser.get("/account").await).await?;
+    assert!(account.contains("href=\"/account/company\""), "{account}");
+
+    // A number that does not read like one is told why; nothing is kept.
+    let typo = browser
+        .post(
+            "/account/company",
+            "company_name=Analytical+Engines+GmbH&vat_number=DE12345",
+        )
+        .await;
+    assert_eq!(typo.status(), StatusCode::OK);
+    let typo = text(typo).await?;
+    assert!(
+        typo.contains("n&#x27;a pas la forme") || typo.contains("n'a pas la forme"),
+        "{typo}"
+    );
+    assert!(
+        typo.contains("value=\"DE12345\""),
+        "what was typed stays: {typo}"
+    );
+    let british = text(
+        browser
+            .post(
+                "/account/company",
+                "company_name=Engines+Ltd&vat_number=GB123456789",
+            )
+            .await,
+    )
+    .await?;
+    assert!(british.contains("« GB »"), "{british}");
+
+    // Read as typed, checked at once, the proof shown.
+    let saved = browser
+        .post(
+            "/account/company",
+            "company_name=Analytical+Engines+GmbH&vat_number=de+123+456+789",
+        )
+        .await;
+    assert_eq!(location(&saved), "/account/company");
+    let page = text(browser.get("/account/company").await).await?;
+    assert!(page.contains("value=\"DE123456789\""), "{page}");
+    assert!(page.contains("Numéro valide"), "{page}");
+    assert!(
+        page.contains("consultation n° FAKE-DE123456789-1"),
+        "{page}"
+    );
+    assert_eq!(registry.checks(), 1);
+
+    // The registry is down: the last answer stands.
+    registry.set_down(true);
+    browser.post("/account/company/check", "").await;
+    let page = text(browser.get("/account/company").await).await?;
+    assert!(page.contains("FAKE-DE123456789-1"), "{page}");
+    registry.set_down(false);
+
+    // Struck off: said plainly.
+    let number = timada_tax::VatNumber::parse("DE123456789")?;
+    registry.reject(&number);
+    browser.post("/account/company/check", "").await;
+    let page = text(browser.get("/account/company").await).await?;
+    assert!(page.contains("ne connaît pas ce numéro"), "{page}");
+
+    // The operator sees the same.
+    db::run_subscriptions_once(&store).await?;
+    let ada =
+        timada_customer::list_customers(&store.db, &timada_customer::ListCustomers::default())
+            .await?
+            .into_iter()
+            .find(|customer| customer.email == "ada@example.com")
+            .ok_or_else(|| anyhow::anyhow!("customer not listed"))?;
+    let company = timada_customer::load_company_identity(&store.executor, &ada.customer_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("customer missing"))?;
+    assert_eq!(company.company_name, "Analytical Engines GmbH");
+    assert!(company.last_check.is_some_and(|check| !check.valid));
+
+    // A consumer again.
+    browser.post("/account/company/remove", "").await;
+    let page = text(browser.get("/account/company").await).await?;
+    assert!(!page.contains("DE123456789"), "{page}");
+    assert!(!page.contains("Vérifier à nouveau"), "{page}");
     Ok(())
 }
 

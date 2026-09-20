@@ -181,6 +181,7 @@ pub async fn overview(cx: &Cx) -> Result<impl View> {
                 <li><a href=(href!(addresses))>"Mes adresses"</a></li>
                 <li><a href=(href!(saved_carts))>"Mes paniers sauvegardés"</a></li>
                 <li><a href=(href!(alerts))>"Mes alertes de disponibilité"</a></li>
+                <li><a href=(href!(super::company::show))>"Compte professionnel (entreprise, numéro de TVA)"</a></li>
                 <li><a href=(href!(email))>"Modifier mon adresse email"</a></li>
                 <li><a href=(href!(password))>"Modifier mon mot de passe"</a></li>
             </ul>

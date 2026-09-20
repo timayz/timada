@@ -39,4 +39,25 @@ pub enum Customer {
     PreferredDeliveryAddressChosen {
         address_id: String,
     },
+
+    /// The customer buys as a business: its name and VAT number, as its
+    /// invoices must show them. Said again to change either.
+    CompanyIdentified {
+        company_name: String,
+        /// Compact, with its country prefix: `DE123456789`.
+        vat_number: String,
+    },
+
+    /// The customer buys as a consumer again.
+    CompanyIdentityRemoved,
+
+    /// The VAT registry answered about the company's number. The consultation
+    /// number, when the registry gave one, is the proof of the check. A
+    /// registry that could not answer leaves no event.
+    VatNumberChecked {
+        vat_number: String,
+        valid: bool,
+        consultation_ref: Option<String>,
+        registered_name: Option<String>,
+    },
 }

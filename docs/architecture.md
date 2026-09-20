@@ -33,6 +33,7 @@ Most contexts are leaves over `timada-core`. The ones that coordinate others:
 ```mermaid
 graph TD
     catalog --> pricing & inventory & review
+    customer --> tax
     order --> cart & inventory & payment & pricing & promotion & shipping & tax
     invoice --> order & payment & tax
     returns --> order & payment & inventory & promotion
@@ -41,8 +42,9 @@ graph TD
     admin --> everything[every context]
 ```
 
-`pricing`, `inventory`, `customer`, `cart`, `promotion`, `payment`,
-`shipping`, `review` and `tax` depend on `core` only. `catalog` reads three of
+`pricing`, `inventory`, `cart`, `promotion`, `payment`, `shipping`, `review`
+and `tax` depend on `core` only; `customer` also reads `tax`, a library
+without events, for VAT numbers. `catalog` reads three of
 them for one thing: the **listing** the storefront browses
 (`catalog_listing`) carries each product's price, deliverable stock and
 rating, so that filtering, sorting and paging are a single query. A leaf never learns about
@@ -221,6 +223,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 |---|---|
 | `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it. `default()` = France + overseas exports; `france_with_eu_oss()` adds the 26 other member states at their own VAT, reduced rates mapped by the host with `with_mapped_rate(zone, listed_bp, destination_bp)` |
 | `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `StripeProvider` (feature `stripe`), `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
+| `Arc<dyn timada_tax::VatNumberValidator>` | who says whether a business's VAT number is valid: `ViesValidator` (feature `vies`, the EU's registry — name the shop's own number and each check comes with its consultation number), `FormatValidator` (no registry: what reads well passes), `FakeValidator` in tests |
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
@@ -264,6 +267,13 @@ the SMTP relay.
   price; a product under an archived category stays listed under what is
   above it. A new deployment of the subscription builds the table from the
   whole history.
+- **A business is a customer with a company identity.** `CompanyIdentified`
+  records its name and VAT number (`timada_tax::VatNumber` reads one as typed
+  and checks its country's shape); each answer of the VAT registry is a
+  `VatNumberChecked`, with the consultation number that proves the check — a
+  registry that cannot answer leaves no event, so the answers before stand.
+  `CompanyIdentityView::standing_check(now, max_age)` is the check a sale
+  without the seller's VAT can rest on: the latest answer, valid, and recent.
 - **VAT is read from the documents.** `vat_journal_subscription` keeps a row
   per VAT rate of each *issued* invoice, and a negative one per credit note —
   its amount spread over the invoice's rates in proportion to what each was

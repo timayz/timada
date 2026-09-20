@@ -2986,6 +2986,7 @@ dependencies = [
  "sqlx_migrator",
  "thiserror",
  "timada-core",
+ "timada-tax",
  "tokio",
  "tracing",
 ]
@@ -3180,9 +3181,15 @@ dependencies = [
 name = "timada-tax"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "axum",
  "bitcode",
+ "reqwest",
+ "serde",
+ "serde_json",
  "thiserror",
  "timada-core",
+ "tokio",
 ]
 
 [[package]]

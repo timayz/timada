@@ -6,6 +6,7 @@ pub mod cart;
 pub mod catalog;
 pub mod category;
 pub mod checkout;
+pub mod company;
 mod format;
 pub mod invoice;
 pub mod listing;

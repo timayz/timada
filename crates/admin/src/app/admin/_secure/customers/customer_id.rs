@@ -1,7 +1,8 @@
-//! `/{mount}/customers/{customer_id}`: profile, address book and order history.
+//! `/{mount}/customers/{customer_id}`: profile, company identity, address book
+//! and order history.
 
 use timada_core::{Address, Money};
-use timada_customer::load_address_book;
+use timada_customer::{load_address_book, load_company_identity};
 use timada_order::orders_of_customer;
 use topcoat::{
     Result,
@@ -28,6 +29,26 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .ok_or_not_found()?;
     let orders = orders_of_customer(&services.db, &id).await?;
     let title = format!("{} {}", book.first_name, book.last_name);
+    // The business the customer buys as, and what the VAT registry last said.
+    let company = load_company_identity(&services.executor, &id)
+        .await?
+        .filter(|company| company.is_company())
+        .map(|company| {
+            let standing = match &company.last_check {
+                None => "numéro jamais vérifié".to_owned(),
+                Some(answer) if answer.valid => format!(
+                    "valide le {}{}",
+                    date(answer.checked_at),
+                    answer
+                        .consultation_ref
+                        .as_ref()
+                        .map(|proof| format!(" — consultation {proof}"))
+                        .unwrap_or_default()
+                ),
+                Some(answer) => format!("inconnu du registre le {}", date(answer.checked_at)),
+            };
+            (company.company_name, company.vat_number, standing)
+        });
 
     Ok(view! {
         page_header(title: &title)
@@ -58,6 +79,18 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 )
             </div>
             <div class="flex flex-col gap-6">
+                if let Some((company_name, vat_number, standing)) = &company {
+                    card(
+                        card_header(card_title("Entreprise"))
+                        card_content(
+                            <dl class="flex flex-col gap-2 text-sm">
+                                <div><dt class="text-muted-foreground">"Raison sociale"</dt><dd>(company_name.clone())</dd></div>
+                                <div><dt class="text-muted-foreground">"Numéro de TVA"</dt><dd class="font-mono text-xs">(vat_number.clone())</dd></div>
+                                <div><dt class="text-muted-foreground">"Registre européen (VIES)"</dt><dd>(standing.clone())</dd></div>
+                            </dl>
+                        )
+                    )
+                }
                 card(
                     card_header(card_title("Adresse de facturation"))
                     card_content(

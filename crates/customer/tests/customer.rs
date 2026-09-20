@@ -178,3 +178,131 @@ async fn customer_list_follows_registrations_and_email_changes() -> anyhow::Resu
 
     Ok(())
 }
+
+#[tokio::test]
+async fn a_business_is_identified_and_its_vat_number_checked() -> anyhow::Result<()> {
+    use timada_customer::{CustomerError, load_company_identity};
+    use timada_tax::{FakeValidator, VatNumber};
+
+    let (executor, _db) = timada_core::testing::memory_executor(vec![]).await?;
+    let cmd = Command(&executor);
+    let id = cmd
+        .register_customer(RegisterCustomer {
+            email: "achats@example.de".into(),
+            civility: Civility::Mrs,
+            first_name: "Grete".into(),
+            last_name: "Hermann".into(),
+        })
+        .await?;
+    let registry = FakeValidator::default();
+    let number = VatNumber::parse("DE 123 456 789")?;
+    let view = || async {
+        load_company_identity(&executor, &id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("customer missing"))
+    };
+
+    // A consumer: nothing to check.
+    assert!(!view().await?.is_company());
+    assert!(
+        cmd.check_company_vat_number(&id, &registry)
+            .await?
+            .is_none()
+    );
+    assert!(matches!(
+        cmd.record_vat_check(
+            &id,
+            &number,
+            &timada_tax::VatCheck {
+                valid: true,
+                consultation_ref: None,
+                registered_name: None
+            }
+        )
+        .await,
+        Err(CustomerError::NoCompanyIdentity)
+    ));
+
+    assert!(matches!(
+        cmd.identify_company(&id, "  ", &number).await,
+        Err(CustomerError::Required("company_name"))
+    ));
+    cmd.identify_company(&id, " Hermann GmbH ", &number).await?;
+    // Said again: nothing recorded.
+    cmd.identify_company(&id, "Hermann GmbH", &number).await?;
+    let company = view().await?;
+    assert_eq!(
+        (company.company_name.as_str(), company.vat_number.as_str()),
+        ("Hermann GmbH", "DE123456789")
+    );
+    let now = timada_core::time::now_unix_secs()?;
+    assert!(
+        company.standing_check(now, 3_600).is_none(),
+        "not checked yet"
+    );
+
+    // Valid: the proof is kept, and stands while it is recent.
+    let answer = cmd.check_company_vat_number(&id, &registry).await?;
+    assert!(answer.is_some_and(|a| a.is_ok_and(|check| check.valid)));
+    let company = view().await?;
+    let standing = company
+        .standing_check(now + 60, 3_600)
+        .ok_or_else(|| anyhow::anyhow!("no standing check"))?;
+    assert!(
+        standing
+            .consultation_ref
+            .as_deref()
+            .is_some_and(|reference| reference.starts_with("FAKE-DE123456789"))
+    );
+    assert!(
+        company.standing_check(now + 7_200, 3_600).is_none(),
+        "too old"
+    );
+
+    // The registry is down: nothing is recorded, the last answer stands.
+    registry.set_down(true);
+    let answer = cmd.check_company_vat_number(&id, &registry).await?;
+    assert!(answer.is_some_and(|a| a.is_err()));
+    assert_eq!(view().await?, company);
+    registry.set_down(false);
+
+    // Struck off the registry: no exemption any more, however recent the
+    // valid answer before.
+    registry.reject(&number);
+    cmd.check_company_vat_number(&id, &registry).await?;
+    let company = view().await?;
+    assert!(
+        company
+            .last_check
+            .as_ref()
+            .is_some_and(|check| !check.valid)
+    );
+    assert!(company.standing_check(now + 60, 3_600).is_none());
+
+    // Another number starts unchecked; an answer about the old one is refused.
+    let other = VatNumber::parse("ATU12345678")?;
+    cmd.identify_company(&id, "Hermann GmbH", &other).await?;
+    let company = view().await?;
+    assert_eq!(company.vat_number, "ATU12345678");
+    assert_eq!(company.last_check, None);
+    let stale = timada_tax::VatCheck {
+        valid: true,
+        consultation_ref: None,
+        registered_name: None,
+    };
+    assert!(matches!(
+        cmd.record_vat_check(&id, &number, &stale).await,
+        Err(CustomerError::VatNumberMismatch)
+    ));
+
+    // A consumer again; twice is harmless, and the address book never noticed.
+    cmd.remove_company_identity(&id).await?;
+    cmd.remove_company_identity(&id).await?;
+    assert!(!view().await?.is_company());
+    assert!(
+        timada_customer::load_address_book(&executor, &id)
+            .await?
+            .is_some()
+    );
+    Ok(())
+}

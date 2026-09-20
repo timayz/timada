@@ -8,6 +8,10 @@ pub enum CustomerError {
     CannotRemovePreferred,
     #[error("`{0}` is not a valid email address")]
     InvalidEmail(String),
+    #[error("the customer has no company identity")]
+    NoCompanyIdentity,
+    #[error("the check is about another VAT number than the company's")]
+    VatNumberMismatch,
     #[error("`{0}` is required")]
     Required(&'static str),
     #[error(transparent)]
