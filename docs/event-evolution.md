@@ -128,6 +128,22 @@ Then run `update`. The lock fails a changed view whose revision did not move,
 and a revision that went backwards. Keep one snapshotted view per file: that is
 how the tool knows which `.revision(..)` belongs to which view.
 
+**And one snapshotted view per aggregate.** evento stores a snapshot under
+`(aggregate type, revision, id)` — the view is not part of the key. Two
+snapshotted views of the same aggregate at the same revision overwrite each
+other, and the next load of either fails to decode the other's bytes
+(`invalid packing`); inside a subscription that is a handler retried for ever.
+A second view of an aggregate is declared without a snapshot:
+
+```rust
+#[evento::projection(id = customer_id)]
+#[evento::snapshot(none)]
+pub struct CompanyIdentityView { /* … */ }
+```
+
+(`Customer` had two for a few hours; the address book's revision was bumped
+afterwards so that whatever was stored under its key is ignored.)
+
 ## Retiring an event
 
 An event that is no longer written still has to be read, for as long as a
@@ -162,3 +178,27 @@ old variant, plus a `From` impl). Timada has no `V2` event yet, so nothing is
 blocked on it; the day one appears is the day to build this.
 
 [evento]: https://github.com/timayz/evento
+
+## What is missing: a snapshot key per view, in evento
+
+The rule "one snapshotted view per aggregate" above is a workaround. In
+`evento-core`'s `projection.rs`, `get_snapshot` and `take_snapshot` key the
+stored bytes by `(aggregate_type, revision, id)`. Nothing in that key says
+*which* projection the bytes belong to, so two projections of one aggregate
+share a slot. The fix belongs in evento: make the projection's identity part
+of the key — for instance the type name the `#[evento::projection]` macro
+already knows —
+
+```rust
+// today
+executor.get_snapshot(aggregate_type, revision, id)
+// proposed
+executor.get_snapshot(aggregate_type, projection_name, revision, id)
+```
+
+with the existing rows read under an empty `projection_name` once (or simply
+dropped: a snapshot is a cache). Until then a collision is silent at compile
+time and only shows when both views are loaded for the same id with a snapshot
+taken in between — a test that hangs, not one that fails. A cheaper guard in
+the meantime would be for evento to store the projection's name *inside* the
+snapshot row and treat a mismatch as "no snapshot" instead of decoding it.

@@ -162,12 +162,27 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0005ListingSortName;
+
+sqlite_migration!(
+    M0005ListingSortName,
+    "catalog",
+    "m0005_listing_sort_name",
+    vec_box![M0004SpecFacets],
+    vec_box![(
+        // The name as it is sorted: lower case, accents folded.
+        "ALTER TABLE catalog_listing ADD COLUMN sort_name TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE catalog_listing DROP COLUMN sort_name"
+    )]
+);
+
 /// Read-model migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     vec_box![
         M0001CatalogProduct,
         M0002Categories,
         M0003Listing,
-        M0004SpecFacets
+        M0004SpecFacets,
+        M0005ListingSortName
     ]
 }

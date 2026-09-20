@@ -5,7 +5,7 @@
 
 use timada_catalog::{
     CategoryRow, category_by_slug, category_lineage, effective_facets, is_on_storefront,
-    list_categories,
+    list_categories, listed_counts_by_category,
 };
 use topcoat::{
     Result,
@@ -51,11 +51,23 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let lineage = category_lineage(&store.db, &category.id).await?;
     is_on_storefront(&lineage).then_some(()).ok_or_not_found()?;
 
-    let children: Vec<(String, String)> = list_categories(&store.db, false)
+    // The categories right under this one, each with how much it holds.
+    let below: Vec<CategoryRow> = list_categories(&store.db, false)
         .await?
         .into_iter()
         .filter(|c| c.parent_id.as_deref() == Some(category.id.as_str()))
-        .map(|c| (href!(show, CategorySlug(c.slug)).resolve(cx), c.name))
+        .collect();
+    let below_ids: Vec<String> = below.iter().map(|c| c.id.clone()).collect();
+    let counts = listed_counts_by_category(&store.db, &below_ids).await?;
+    let children: Vec<(String, String)> = below
+        .into_iter()
+        .map(|c| {
+            let label = match counts.get(&c.id) {
+                Some(count) => format!("{} ({count})", c.name),
+                None => c.name,
+            };
+            (href!(show, CategorySlug(c.slug)).resolve(cx), label)
+        })
         .collect();
 
     let here = href!(show, CategorySlug(slug.clone())).resolve(cx);

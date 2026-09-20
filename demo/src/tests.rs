@@ -1519,6 +1519,11 @@ async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
         "{department}"
     );
     assert!(department.contains(">1 produit<"), "{department}");
+    // Each way further down says how much it holds.
+    assert!(
+        department.contains(">Périphériques (1)</a>"),
+        "{department}"
+    );
 
     // The trail links every step but the page itself.
     let leaf = text(browser.get("/c/ecran-pc?page=9").await).await?;
@@ -1544,6 +1549,12 @@ async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
         "{product}"
     );
     assert!(product.contains("\"position\":6"), "{product}");
+    // …and what is on offer: the product, its price, that it can be had.
+    assert!(product.contains("\"@type\":\"Product\""), "{product}");
+    assert!(
+        product.contains("\"price\":\"119.95\",\"priceCurrency\":\"EUR\",\"availability\":\"https://schema.org/InStock\""),
+        "{product}"
+    );
     assert!(
         product.contains("<a href=\"/c/ecran-pc\">Écran PC</a>"),
         "{product}"

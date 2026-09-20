@@ -295,13 +295,13 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
     page.push(match (query.sort, fts.is_some()) {
         // Name and brand weigh most, then the SKU, the category, the features.
         (ListingSort::Relevance, true) => {
-            " ORDER BY bm25(catalog_listing_fts, 10.0, 6.0, 2.0, 8.0, 1.0), l.name COLLATE NOCASE, l.product_id"
+            " ORDER BY bm25(catalog_listing_fts, 10.0, 6.0, 2.0, 8.0, 1.0), COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id"
         }
-        (ListingSort::Relevance, false) => " ORDER BY l.name COLLATE NOCASE, l.product_id",
-        (ListingSort::PriceAsc, _) => " ORDER BY l.price_minor, l.name COLLATE NOCASE, l.product_id",
-        (ListingSort::PriceDesc, _) => " ORDER BY l.price_minor DESC, l.name COLLATE NOCASE, l.product_id",
+        (ListingSort::Relevance, false) => " ORDER BY COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
+        (ListingSort::PriceAsc, _) => " ORDER BY l.price_minor, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
+        (ListingSort::PriceDesc, _) => " ORDER BY l.price_minor DESC, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
         (ListingSort::Rating, _) => {
-            " ORDER BY l.rating_avg DESC NULLS LAST, l.review_count DESC, l.name COLLATE NOCASE, l.product_id"
+            " ORDER BY l.rating_avg DESC NULLS LAST, l.review_count DESC, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id"
         }
         (ListingSort::Newest, _) => " ORDER BY l.created_at DESC, l.rowid DESC",
     });
@@ -319,7 +319,9 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
         QueryBuilder::<Sqlite>::new("SELECT l.brand_slug, MIN(l.brand_name), COUNT(*)");
     push_matching(&mut brands, query, fts, Some(Filter::Brand));
     brands.push(" GROUP BY l.brand_slug ORDER BY MIN(l.brand_name) COLLATE NOCASE, l.brand_slug");
-    let brands: Vec<(String, String, i64)> = brands.build_query_as().fetch_all(db).await?;
+    let mut brands: Vec<(String, String, i64)> = brands.build_query_as().fetch_all(db).await?;
+    // Alphabetical for people: SQLite would put `Éclair` after `Zalman`.
+    brands.sort_by_cached_key(|(slug, name, _)| (timada_core::slug::sort_key(name), slug.clone()));
 
     let mut prices = QueryBuilder::<Sqlite>::new("SELECT MIN(l.price_minor), MAX(l.price_minor)");
     push_matching(&mut prices, query, fts, Some(Filter::Price));
@@ -368,6 +370,49 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
             specs,
         },
     })
+}
+
+/// Gives the rows written before names had a sort key theirs, and returns how
+/// many. Until then such a row is sorted by its lower-cased name; every row
+/// gets its key anyway the next time anything about its product changes.
+/// Cheap, safe to run at every start.
+pub async fn fill_listing_sort_names(db: &SqlitePool) -> sqlx::Result<u64> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT product_id, name FROM catalog_listing WHERE sort_name = ''")
+            .fetch_all(db)
+            .await?;
+    let mut filled = 0;
+    for (product_id, name) in rows {
+        filled += sqlx::query("UPDATE catalog_listing SET sort_name = ? WHERE product_id = ?")
+            .bind(timada_core::slug::sort_key(&name))
+            .bind(product_id)
+            .execute(db)
+            .await?
+            .rows_affected();
+    }
+    Ok(filled)
+}
+
+/// How many products on sale each of `category_ids` spans — its own and those
+/// of the categories under it. Categories without any are left out.
+pub async fn listed_counts_by_category(
+    db: &SqlitePool,
+    category_ids: &[String],
+) -> sqlx::Result<std::collections::HashMap<String, i64>> {
+    let mut counts = std::collections::HashMap::new();
+    for category_id in category_ids {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM catalog_listing
+             WHERE archived = 0 AND price_minor IS NOT NULL AND instr(category_trail, ?) > 0",
+        )
+        .bind(format!("/{category_id}/"))
+        .fetch_one(db)
+        .await?;
+        if count > 0 {
+            counts.insert(category_id.clone(), count);
+        }
+    }
+    Ok(counts)
 }
 
 /// A brand on sale, by its slug: its name as the products spell it.
@@ -462,12 +507,13 @@ async fn refresh_product<E: Executor>(
 
     let rowid: i64 = sqlx::query_scalar(
         "INSERT INTO catalog_listing
-            (product_id, sku, name, brand_name, brand_slug, category_id, category_trail,
+            (product_id, sku, name, sort_name, brand_name, brand_slug, category_id, category_trail,
              short_description, thumbnail_url, thumbnail_alt, price_minor, currency, available,
              rating_avg, review_count, archived, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)
+         VALUES (?1, ?2, ?3, ?18, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)
          ON CONFLICT (product_id) DO UPDATE
-         SET name = excluded.name, brand_name = excluded.brand_name,
+         SET name = excluded.name, sort_name = excluded.sort_name,
+             brand_name = excluded.brand_name,
              brand_slug = excluded.brand_slug, category_id = excluded.category_id,
              category_trail = excluded.category_trail,
              short_description = excluded.short_description,
@@ -495,6 +541,7 @@ async fn refresh_product<E: Executor>(
     .bind(review_count)
     .bind(product.archived)
     .bind(at as i64)
+    .bind(timada_core::slug::sort_key(&product.name))
     .fetch_one(db)
     .await?;
 
