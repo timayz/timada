@@ -406,6 +406,9 @@ the SMTP relay.
   the product's whatever the currency; the éco-participation and the
   instalment offer belong to the currency they were given in. Amounts are
   hundredths everywhere, so `ShopCurrencies` refuses yen and dinars.
+  The storefront listing keeps every price (`catalog_listing_currency_price`):
+  asked for in one currency (`ListingQuery::currency`), it holds what is sold
+  in it, and its prices, price filter, price sort and facets are all in it.
 - **Destination VAT** (EU one-stop shop) has no product tax category: a
   product only knows the rate it is listed with, and each country's zone maps
   that rate to its own (`5,5 % → 7 %` in Germany), falling back to the

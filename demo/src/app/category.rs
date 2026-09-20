@@ -58,7 +58,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .filter(|c| c.parent_id.as_deref() == Some(category.id.as_str()))
         .collect();
     let below_ids: Vec<String> = below.iter().map(|c| c.id.clone()).collect();
-    let counts = listed_counts_by_category(&store.db, &below_ids).await?;
+    let counts = listed_counts_by_category(&store.db, &below_ids, None).await?;
     let children: Vec<(String, String)> = below
         .into_iter()
         .map(|c| {

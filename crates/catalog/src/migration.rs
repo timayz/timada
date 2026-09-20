@@ -176,6 +176,41 @@ sqlite_migration!(
     )]
 );
 
+pub struct M0006ListingPrices;
+
+sqlite_migration!(
+    M0006ListingPrices,
+    "catalog",
+    "m0006_listing_prices",
+    vec_box![M0005ListingSortName],
+    vec_box![
+        // What each product costs in each currency it is sold in — the listed
+        // one included — so a listing can be asked for in one currency.
+        (
+            "CREATE TABLE catalog_listing_currency_price (
+                product_id TEXT NOT NULL,
+                currency TEXT NOT NULL,
+                price_minor INTEGER NOT NULL,
+                PRIMARY KEY (product_id, currency)
+            )",
+            "DROP TABLE catalog_listing_currency_price"
+        ),
+        (
+            "CREATE INDEX catalog_listing_currency_price_amount
+             ON catalog_listing_currency_price (currency, price_minor)",
+            "DROP INDEX catalog_listing_currency_price_amount"
+        ),
+        // The listed prices known so far; the others come with the next
+        // refresh of each product.
+        (
+            "INSERT INTO catalog_listing_currency_price (product_id, currency, price_minor)
+             SELECT product_id, currency, price_minor FROM catalog_listing
+             WHERE price_minor IS NOT NULL AND currency IS NOT NULL",
+            "DELETE FROM catalog_listing_currency_price"
+        )
+    ]
+);
+
 /// Read-model migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     vec_box![
@@ -183,6 +218,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
         M0002Categories,
         M0003Listing,
         M0004SpecFacets,
-        M0005ListingSortName
+        M0005ListingSortName,
+        M0006ListingPrices
     ]
 }

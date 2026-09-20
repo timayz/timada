@@ -636,11 +636,112 @@ async fn names_are_sorted_for_people_and_branches_are_counted() -> anyhow::Resul
     assert_eq!(shop.skus(&by_name).await?, ["C-1", "E-1", "E-2", "Z-1"]);
 
     // A branch counts what is under it; an empty one is not counted at all.
-    let counts =
-        listed_counts_by_category(&shop.db, &[audio.clone(), headsets.clone(), empty.clone()])
-            .await?;
+    let counts = listed_counts_by_category(
+        &shop.db,
+        &[audio.clone(), headsets.clone(), empty.clone()],
+        None,
+    )
+    .await?;
     assert_eq!(counts.get(&audio), Some(&4));
     assert_eq!(counts.get(&headsets), Some(&2));
     assert_eq!(counts.get(&empty), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_listing_in_one_currency_holds_what_is_sold_in_it_at_its_price_there()
+-> anyhow::Result<()> {
+    let shop = Shop::open().await?;
+    let screens = category(&shop.executor, "Écrans", None).await?;
+    let cheap = shop
+        .sell("SCREEN-A", "Écran A", "AOC", Some(&screens), 10_000, 5)
+        .await?;
+    let dear = shop
+        .sell("SCREEN-B", "Écran B", "AOC", Some(&screens), 30_000, 5)
+        .await?;
+    shop.sell("SCREEN-C", "Écran C", "Iiyama", Some(&screens), 20_000, 5)
+        .await?;
+    let pricing = timada_pricing::Command(&shop.executor);
+    // In pounds the dear one is the bargain — a decision, not a conversion —
+    // and C is not sold at all.
+    pricing
+        .set_currency_price(timada_pricing::price_id(&cheap), Money::new(9_500, "GBP"))
+        .await?;
+    pricing
+        .set_currency_price(timada_pricing::price_id(&dear), Money::new(8_000, "GBP"))
+        .await?;
+    shop.sync().await?;
+
+    let in_pounds = ListingQuery {
+        currency: Some("GBP".into()),
+        sort: ListingSort::PriceAsc,
+        ..ListingQuery::default()
+    };
+    let page = search_listing(&shop.db, &in_pounds).await?;
+    assert_eq!(page.total, 2);
+    assert_eq!(
+        page.rows
+            .iter()
+            .map(|row| (row.sku.as_str(), row.price_minor, row.currency.as_str()))
+            .collect::<Vec<_>>(),
+        [("SCREEN-B", 8_000, "GBP"), ("SCREEN-A", 9_500, "GBP")]
+    );
+    // The facets speak pounds too: the price range, and the brands left.
+    assert_eq!(page.facets.price_range, Some((8_000, 9_500)));
+    assert_eq!(
+        page.facets
+            .brands
+            .iter()
+            .map(|brand| brand.slug.as_str())
+            .collect::<Vec<_>>(),
+        ["aoc"]
+    );
+    assert_eq!(
+        shop.skus(&ListingQuery {
+            price_max_minor: Some(9_000),
+            ..in_pounds.clone()
+        })
+        .await?,
+        ["SCREEN-B"]
+    );
+    assert_eq!(
+        timada_catalog::listed_counts_by_category(
+            &shop.db,
+            std::slice::from_ref(&screens),
+            Some("GBP")
+        )
+        .await?
+        .get(&screens),
+        Some(&2)
+    );
+
+    // Euros — or no currency at all — list all three at their listed price.
+    for currency in [None, Some("EUR".to_owned())] {
+        let euros = ListingQuery {
+            currency,
+            sort: ListingSort::PriceAsc,
+            ..ListingQuery::default()
+        };
+        assert_eq!(
+            shop.skus(&euros).await?,
+            ["SCREEN-A", "SCREEN-C", "SCREEN-B"]
+        );
+    }
+    // Nothing is sold in francs.
+    let in_francs = ListingQuery {
+        currency: Some("CHF".into()),
+        ..ListingQuery::default()
+    };
+    assert_eq!(search_listing(&shop.db, &in_francs).await?.total, 0);
+
+    // A price taken back, a price withdrawn: the listing follows.
+    pricing
+        .remove_currency_price(timada_pricing::price_id(&cheap), "GBP")
+        .await?;
+    pricing
+        .withdraw_price(timada_pricing::price_id(&dear))
+        .await?;
+    shop.sync().await?;
+    assert_eq!(search_listing(&shop.db, &in_pounds).await?.total, 0);
     Ok(())
 }
