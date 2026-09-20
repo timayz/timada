@@ -232,6 +232,9 @@ pub async fn load_listing(cx: &Cx, base: String, scope: Scope) -> Result<Listing
         },
         price_min_minor: filters.price_min.map(|p| p.saturating_mul(100)),
         price_max_minor: filters.price_max.map(|p| p.saturating_mul(100)),
+        // The listed prices, until the storefront lets a shopper pick a
+        // currency.
+        currency: None,
         in_stock: filters.in_stock,
         min_rating: filters.min_rating,
         specs: filters.specs.clone(),

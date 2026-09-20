@@ -21,7 +21,10 @@ use timada_inventory::{
     load_stock_availability, stock_item_id,
 };
 use timada_pricing::{
-    aggregator::{ProductPriceChanged, ProductPriceListed, ProductPriceWithdrawn},
+    aggregator::{
+        CurrencyPriceRemoved, CurrencyPriceSet, ProductPriceChanged, ProductPriceListed,
+        ProductPriceWithdrawn,
+    },
     load_product_price, price_id,
 };
 use timada_review::{aggregator::ReviewPublished, load_review_details};
@@ -52,6 +55,8 @@ pub fn listing_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(on_price_listed())
         .handler(on_price_changed())
         .handler(on_price_withdrawn())
+        .handler(on_currency_price_set())
+        .handler(on_currency_price_removed())
         .handler(on_stock_received())
         .handler(on_stock_returned())
         .handler(on_stock_reserved())
@@ -73,7 +78,8 @@ pub struct ListingRow {
     pub short_description: String,
     pub thumbnail_url: Option<String>,
     pub thumbnail_alt: Option<String>,
-    /// The listed price, all taxes included, in minor units.
+    /// The price, all taxes included, in minor units — in the currency the
+    /// listing was asked for, or the one the product was listed in.
     pub price_minor: i64,
     pub currency: String,
     /// What the warehouse can deliver.
@@ -107,6 +113,10 @@ pub struct ListingQuery {
     pub brand_slugs: Vec<String>,
     pub price_min_minor: Option<i64>,
     pub price_max_minor: Option<i64>,
+    /// List what is sold in this currency, at its price there: prices,
+    /// the price filter and the price sort are all in it. `None`: every
+    /// product on sale, at the price it was listed with.
+    pub currency: Option<String>,
     pub in_stock: bool,
     /// At least that many stars on average.
     pub min_rating: Option<u8>,
@@ -129,6 +139,7 @@ impl Default for ListingQuery {
             brand_slugs: Vec::new(),
             price_min_minor: None,
             price_max_minor: None,
+            currency: None,
             in_stock: false,
             min_rating: None,
             specs: Vec::new(),
@@ -225,6 +236,11 @@ fn push_matching(
     if fts.is_some() {
         sql.push(" JOIN catalog_listing_fts ON catalog_listing_fts.rowid = l.rowid");
     }
+    // In one currency, a product is on sale when it has a price there.
+    if let Some(currency) = &query.currency {
+        sql.push(" JOIN catalog_listing_currency_price p ON p.product_id = l.product_id AND p.currency = ")
+            .push_bind(currency.clone());
+    }
     sql.push(" WHERE l.archived = 0 AND l.price_minor IS NOT NULL");
     if let Some(fts) = fts {
         sql.push(" AND catalog_listing_fts MATCH ").push_bind(fts);
@@ -243,11 +259,22 @@ fn push_matching(
         sql.push(")");
     }
     if without != Some(Filter::Price) {
+        let in_currency = query.currency.is_some();
         if let Some(min) = query.price_min_minor {
-            sql.push(" AND l.price_minor >= ").push_bind(min);
+            sql.push(if in_currency {
+                " AND p.price_minor >= "
+            } else {
+                " AND l.price_minor >= "
+            })
+            .push_bind(min);
         }
         if let Some(max) = query.price_max_minor {
-            sql.push(" AND l.price_minor <= ").push_bind(max);
+            sql.push(if in_currency {
+                " AND p.price_minor <= "
+            } else {
+                " AND l.price_minor <= "
+            })
+            .push_bind(max);
         }
     }
     if without != Some(Filter::Stock) && query.in_stock {
@@ -286,11 +313,17 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
     let fts = query.q.as_deref().and_then(fts_expression);
     let fts = fts.as_deref();
 
-    let mut page = QueryBuilder::<Sqlite>::new(
+    let in_currency = query.currency.is_some();
+    let mut page = QueryBuilder::<Sqlite>::new(if in_currency {
+        "SELECT l.product_id, l.sku, l.name, l.brand_name, l.brand_slug, l.category_id,
+                l.short_description, l.thumbnail_url, l.thumbnail_alt,
+                p.price_minor AS price_minor, p.currency AS currency,
+                l.available, l.rating_avg, l.review_count"
+    } else {
         "SELECT l.product_id, l.sku, l.name, l.brand_name, l.brand_slug, l.category_id,
                 l.short_description, l.thumbnail_url, l.thumbnail_alt, l.price_minor, l.currency,
-                l.available, l.rating_avg, l.review_count",
-    );
+                l.available, l.rating_avg, l.review_count"
+    });
     push_matching(&mut page, query, fts, None);
     page.push(match (query.sort, fts.is_some()) {
         // Name and brand weigh most, then the SKU, the category, the features.
@@ -298,6 +331,8 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
             " ORDER BY bm25(catalog_listing_fts, 10.0, 6.0, 2.0, 8.0, 1.0), COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id"
         }
         (ListingSort::Relevance, false) => " ORDER BY COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
+        (ListingSort::PriceAsc, _) if in_currency => " ORDER BY p.price_minor, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
+        (ListingSort::PriceDesc, _) if in_currency => " ORDER BY p.price_minor DESC, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
         (ListingSort::PriceAsc, _) => " ORDER BY l.price_minor, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
         (ListingSort::PriceDesc, _) => " ORDER BY l.price_minor DESC, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
         (ListingSort::Rating, _) => {
@@ -323,7 +358,11 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
     // Alphabetical for people: SQLite would put `Éclair` after `Zalman`.
     brands.sort_by_cached_key(|(slug, name, _)| (timada_core::slug::sort_key(name), slug.clone()));
 
-    let mut prices = QueryBuilder::<Sqlite>::new("SELECT MIN(l.price_minor), MAX(l.price_minor)");
+    let mut prices = QueryBuilder::<Sqlite>::new(if in_currency {
+        "SELECT MIN(p.price_minor), MAX(p.price_minor)"
+    } else {
+        "SELECT MIN(l.price_minor), MAX(l.price_minor)"
+    });
     push_matching(&mut prices, query, fts, Some(Filter::Price));
     let (cheapest, dearest): (Option<i64>, Option<i64>) =
         prices.build_query_as().fetch_one(db).await?;
@@ -395,17 +434,25 @@ pub async fn fill_listing_sort_names(db: &SqlitePool) -> sqlx::Result<u64> {
 
 /// How many products on sale each of `category_ids` spans — its own and those
 /// of the categories under it. Categories without any are left out.
+///
+/// With a `currency`, only what is sold in it counts.
 pub async fn listed_counts_by_category(
     db: &SqlitePool,
     category_ids: &[String],
+    currency: Option<&str>,
 ) -> sqlx::Result<std::collections::HashMap<String, i64>> {
     let mut counts = std::collections::HashMap::new();
     for category_id in category_ids {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM catalog_listing
-             WHERE archived = 0 AND price_minor IS NOT NULL AND instr(category_trail, ?) > 0",
+            "SELECT COUNT(*) FROM catalog_listing l
+             WHERE l.archived = 0 AND l.price_minor IS NOT NULL
+               AND instr(l.category_trail, ?1) > 0
+               AND (?2 IS NULL OR EXISTS (
+                    SELECT 1 FROM catalog_listing_currency_price p
+                    WHERE p.product_id = l.product_id AND p.currency = ?2))",
         )
         .bind(format!("/{category_id}/"))
+        .bind(currency)
         .fetch_one(db)
         .await?;
         if count > 0 {
@@ -483,10 +530,17 @@ async fn refresh_product<E: Executor>(
         // A price or a stock item for something the catalog does not know.
         return Ok(());
     };
-    let price = load_product_price(executor, price_id(product_id))
+    let priced = load_product_price(executor, price_id(product_id))
         .await?
-        .filter(|price| !price.withdrawn)
-        .map(|price| price.price_incl_tax);
+        .filter(|price| !price.withdrawn);
+    // Every currency the product is sold in, the listed one first.
+    let prices: Vec<timada_core::Money> = priced
+        .iter()
+        .flat_map(|price| {
+            std::iter::once(price.price_incl_tax.clone()).chain(price.currency_prices.clone())
+        })
+        .collect();
+    let price = priced.map(|price| price.price_incl_tax);
     let available = load_stock_availability(
         executor,
         stock_item_id(product_id, &StockLocation::Warehouse),
@@ -544,6 +598,23 @@ async fn refresh_product<E: Executor>(
     .bind(timada_core::slug::sort_key(&product.name))
     .fetch_one(db)
     .await?;
+
+    // The prices, rewritten whole: a currency the product left is gone.
+    sqlx::query("DELETE FROM catalog_listing_currency_price WHERE product_id = ?")
+        .bind(&product.id)
+        .execute(db)
+        .await?;
+    for price in &prices {
+        sqlx::query(
+            "INSERT OR REPLACE INTO catalog_listing_currency_price (product_id, currency, price_minor)
+             VALUES (?, ?, ?)",
+        )
+        .bind(&product.id)
+        .bind(&price.currency)
+        .bind(price.minor)
+        .execute(db)
+        .await?;
+    }
 
     sqlx::query("DELETE FROM catalog_listing_fts WHERE rowid = ?")
         .bind(rowid)
@@ -728,6 +799,22 @@ async fn on_price_listed<E: Executor>(
 async fn on_price_changed<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<ProductPriceChanged>,
+) -> anyhow::Result<()> {
+    refresh_priced(ctx, &event.aggregate_id, event.timestamp).await
+}
+
+#[evento::subscription]
+async fn on_currency_price_set<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<CurrencyPriceSet>,
+) -> anyhow::Result<()> {
+    refresh_priced(ctx, &event.aggregate_id, event.timestamp).await
+}
+
+#[evento::subscription]
+async fn on_currency_price_removed<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<CurrencyPriceRemoved>,
 ) -> anyhow::Result<()> {
     refresh_priced(ctx, &event.aggregate_id, event.timestamp).await
 }
