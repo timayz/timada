@@ -686,7 +686,7 @@ async fn a_prepaid_label_is_on_the_customer_unless_the_shop_is_at_fault() -> any
     let shop = Shop::open().await?;
     let order_id = shop.order("cart-label", None, true).await?;
     let returns = shop.returns_with(ReturnPolicy {
-        label_fee_minor: 690,
+        label_fees: timada_core::PerCurrency::none().with(timada_core::Money::eur(690)),
         ..ReturnPolicy::default()
     });
     let label = |url: Option<&str>, file: Option<LabelFile>| IssueLabel {
@@ -820,7 +820,7 @@ async fn a_carrier_adapter_provides_the_label_and_an_operator_may_waive_its_fee(
     let shop = Shop::open().await?;
     let order_id = shop.order("cart-carrier", None, true).await?;
     let returns = shop.returns_with(ReturnPolicy {
-        label_fee_minor: 690,
+        label_fees: timada_core::PerCurrency::none().with(timada_core::Money::eur(690)),
         ..ReturnPolicy::default()
     });
     let carrier = FakeLabelProvider::default();
@@ -857,4 +857,36 @@ async fn a_carrier_adapter_provides_the_label_and_an_operator_may_waive_its_fee(
     ));
     assert_eq!(carrier.asked().len(), 2);
     Ok(())
+}
+
+#[test]
+fn a_label_fee_is_said_per_currency_and_free_where_nothing_is_said() {
+    let policy = ReturnPolicy {
+        label_fees: [Money::eur(690), Money::new(590, "GBP")]
+            .into_iter()
+            .collect(),
+        ..ReturnPolicy::default()
+    };
+    let changed = Some(ReturnGround::ChangedMind);
+    assert_eq!(policy.label_fee(changed, false, "EUR"), Money::eur(690));
+    assert_eq!(
+        policy.label_fee(changed, false, "GBP"),
+        Money::new(590, "GBP")
+    );
+    // Never 6,90 of whatever the order was paid in.
+    assert_eq!(
+        policy.label_fee(changed, false, "CHF"),
+        Money::new(0, "CHF")
+    );
+    assert_eq!(
+        policy.label_fee(Some(ReturnGround::Damaged), false, "GBP"),
+        Money::new(0, "GBP")
+    );
+    assert_eq!(policy.label_fee(changed, true, "EUR"), Money::eur(0));
+    // A return older than grounds counts as a change of mind.
+    assert_eq!(policy.label_fee(None, false, "EUR"), Money::eur(690));
+    assert_eq!(
+        ReturnPolicy::default().label_fee(changed, false, "EUR"),
+        Money::eur(0)
+    );
 }

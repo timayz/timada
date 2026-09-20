@@ -796,7 +796,7 @@ async fn a_return_label_travels_with_the_approval_or_on_its_own() -> anyhow::Res
         executor: &executor,
         db: db.clone(),
         policy: timada_returns::ReturnPolicy {
-            label_fee_minor: 690,
+            label_fees: timada_core::PerCurrency::none().with(timada_core::Money::eur(690)),
             ..timada_returns::ReturnPolicy::default()
         },
     };

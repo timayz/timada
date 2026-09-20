@@ -92,6 +92,41 @@ impl ShopCurrencies {
     }
 }
 
+/// An amount a host configures, **per currency**: a fee, a threshold. One
+/// amount per currency at most, and none is ever derived from another — what
+/// a currency has no amount for is the caller's to decide (free, or not
+/// offered), never a conversion.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PerCurrency(Vec<Money>);
+
+impl PerCurrency {
+    /// No amount in any currency.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// The amount in `amount`'s currency, replacing what was there.
+    pub fn with(mut self, amount: Money) -> Self {
+        self.0.retain(|known| known.currency != amount.currency);
+        self.0.push(amount);
+        self
+    }
+
+    pub fn get(&self, currency: &str) -> Option<&Money> {
+        self.0.iter().find(|amount| amount.currency == currency)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl FromIterator<Money> for PerCurrency {
+    fn from_iter<I: IntoIterator<Item = Money>>(amounts: I) -> Self {
+        amounts.into_iter().fold(Self::none(), Self::with)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +156,18 @@ mod tests {
             Err(CurrencyError::MinorUnit("JPY".into()))
         );
         Ok(())
+    }
+
+    #[test]
+    fn an_amount_per_currency_is_said_not_derived() {
+        let fees: PerCurrency = [Money::eur(690), Money::new(590, "GBP"), Money::eur(790)]
+            .into_iter()
+            .collect();
+        // Said twice: the last word counts.
+        assert_eq!(fees.get("EUR"), Some(&Money::eur(790)));
+        assert_eq!(fees.get("GBP"), Some(&Money::new(590, "GBP")));
+        // Nothing said, nothing made up.
+        assert_eq!(fees.get("CHF"), None);
+        assert!(PerCurrency::none().is_empty());
     }
 }

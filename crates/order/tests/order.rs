@@ -1326,10 +1326,16 @@ async fn a_paid_order_waits_in_the_queue_until_it_ships() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn delivery_is_charged_in_the_carts_currency() -> anyhow::Result<()> {
+async fn delivery_and_instalment_fees_are_charged_in_the_carts_currency() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let fees = timada_shipping::DeliveryFees::default()
         .with_fee("colissimo-europe", Money::new(1_190, "GBP"));
+    // Paying in several times costs 3,99 £; the host said nothing of francs.
+    let handling = timada_order::InstallmentHandlingFees(
+        timada_core::PerCurrency::none()
+            .with(Money::eur(449))
+            .with(Money::new(399, "GBP")),
+    );
     let inventory = timada_inventory::Command(&executor);
     let stock = inventory
         .register_stock_item(RegisterStockItem {
@@ -1364,7 +1370,7 @@ async fn delivery_is_charged_in_the_carts_currency() -> anyhow::Result<()> {
                     method_code: "colissimo-europe".into(),
                     pickup_store_id: None,
                 },
-                payment_mode: timada_cart::PaymentMode::Card,
+                payment_mode: timada_cart::PaymentMode::Installments { count: 3 },
             },
         )
         .await?;
@@ -1373,6 +1379,7 @@ async fn delivery_is_charged_in_the_carts_currency() -> anyhow::Result<()> {
     order_checkout_subscription()
         .data(db.clone())
         .data(fees)
+        .data(handling)
         .run_once(&executor)
         .await?;
 
@@ -1382,13 +1389,15 @@ async fn delivery_is_charged_in_the_carts_currency() -> anyhow::Result<()> {
         .await?
         .ok_or_else(|| anyhow::anyhow!("pound order missing"))?;
     assert_eq!(pounds.shipping_fee, Money::new(1_190, "GBP"));
-    assert_eq!(pounds.total, Money::new(11_190, "GBP"));
+    assert_eq!(pounds.handling_fee, Money::new(399, "GBP"));
+    assert_eq!(pounds.total, Money::new(11_589, "GBP"));
     // Francs: the host priced no delivery there. The storefront would not
     // have offered the method; should it slip by, the order is kept.
     let francs = timada_order::load_order_details(&executor, order_id(&carts[1]))
         .await?
         .ok_or_else(|| anyhow::anyhow!("franc order missing"))?;
     assert_eq!(francs.shipping_fee, Money::new(0, "CHF"));
+    assert_eq!(francs.handling_fee, Money::new(0, "CHF"));
     assert_eq!(francs.total, Money::new(10_000, "CHF"));
     Ok(())
 }

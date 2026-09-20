@@ -144,13 +144,14 @@ impl ReturnGround {
 
 /// How long after shipping a return may be asked for, and what a prepaid
 /// return label costs the customer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReturnPolicy {
     pub window_days: u32,
-    /// The flat price of a prepaid label, in minor units of the order's
-    /// currency, deducted from the refund when the shop is not at fault
-    /// ([`ReturnGround::shop_at_fault`]). `0`: labels are always free.
-    pub label_fee_minor: i64,
+    /// The flat price of a prepaid label **per currency**, deducted from the
+    /// refund when the shop is not at fault
+    /// ([`ReturnGround::shop_at_fault`]). A currency without a fee — all of
+    /// them, by default — gets its labels free: nothing is converted.
+    pub label_fees: timada_core::PerCurrency,
 }
 
 impl Default for ReturnPolicy {
@@ -159,7 +160,7 @@ impl Default for ReturnPolicy {
     fn default() -> Self {
         Self {
             window_days: 14,
-            label_fee_minor: 0,
+            label_fees: timada_core::PerCurrency::none(),
         }
     }
 }
@@ -170,12 +171,10 @@ impl ReturnPolicy {
     /// operator may waive the fee.
     pub fn label_fee(&self, ground: Option<ReturnGround>, waived: bool, currency: &str) -> Money {
         let at_fault = ground.is_some_and(ReturnGround::shop_at_fault);
-        let minor = if waived || at_fault {
-            0
-        } else {
-            self.label_fee_minor.max(0)
-        };
-        Money::new(minor, currency)
+        match self.label_fees.get(currency) {
+            Some(fee) if !waived && !at_fault && fee.is_positive() => fee.clone(),
+            _ => Money::zero(currency),
+        }
     }
 
     /// The last second (Unix) a return of an order shipped at `shipped_at`

@@ -51,7 +51,7 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
             currencies: timada_core::ShopCurrencies::new("EUR", &["GBP", "CHF"])?,
             // A prepaid return label costs a change of mind 6,90 €.
             return_policy: timada_returns::ReturnPolicy {
-                label_fee_minor: 690,
+                label_fees: timada_core::PerCurrency::none().with(timada_core::Money::eur(690)),
                 ..timada_returns::ReturnPolicy::default()
             },
             ..AdminConfig::default()
