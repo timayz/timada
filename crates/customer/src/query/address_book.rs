@@ -44,6 +44,11 @@ pub fn create_projection<E: Executor>() -> Projection<E, AddressBookView> {
         .skip::<CompanyIdentityRemoved>()
         .skip::<VatNumberChecked>()
         .strict()
+        // Same shape as before, new revision: for a few hours another view of
+        // `Customer` was snapshotted under the same key (evento keys a
+        // snapshot by aggregate, revision and id, not by view), so what is
+        // stored at revision 0 may not be an address book.
+        .revision(1)
 }
 
 pub async fn load<E: Executor>(

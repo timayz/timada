@@ -1386,6 +1386,119 @@ async fn a_business_gives_its_vat_number_and_sees_what_the_registry_said() -> an
 }
 
 #[tokio::test]
+async fn a_business_of_another_member_state_checks_out_without_vat() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    browser.post("/register", REGISTER).await;
+    browser
+        .post(
+            "/account/addresses/new",
+            &ADDRESS.replace("country_code=fr", "country_code=de"),
+        )
+        .await;
+    let company = "company_name=Analytical+Engines+GmbH&vat_number=DE123456789";
+
+    // A consumer delivered in Germany pays German VAT: 99,96 + 19 %.
+    let checkout = text(browser.get("/checkout").await).await?;
+    assert!(checkout.contains("118,95 €"), "{checkout}");
+    assert!(
+        checkout.contains("name=\"regime\" value=\"\""),
+        "{checkout}"
+    );
+
+    // As a business with a valid number: the pre-tax price, and why.
+    browser.post("/account/company", company).await;
+    let checkout = text(browser.get("/checkout").await).await?;
+    assert!(checkout.contains("99,96 €"), "{checkout}");
+    assert!(
+        checkout.contains("Analytical Engines GmbH (DE123456789)"),
+        "{checkout}"
+    );
+    assert!(checkout.contains("autoliquidée"), "{checkout}");
+    assert!(
+        checkout.contains("name=\"regime\" value=\"autoliquidation\""),
+        "{checkout}"
+    );
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address"))?
+        .to_owned();
+    let form = format!(
+        "delivery_address_id={address_id}&delivery_method=colissimo-europe&payment_mode=card&regime=autoliquidation"
+    );
+
+    // The standing changes between the page and the click: never an order at
+    // a total nobody saw.
+    browser.post("/account/company/remove", "").await;
+    let refused = browser.post("/checkout", &form).await;
+    assert_eq!(refused.status(), StatusCode::OK);
+    let refused = text(refused).await?;
+    assert!(refused.contains("Vérifiez le nouveau total"), "{refused}");
+    assert!(refused.contains("118,95 €"), "{refused}");
+
+    browser.post("/account/company", company).await;
+    let placed = browser.post("/checkout", &form).await;
+    assert_eq!(placed.status(), StatusCode::SEE_OTHER);
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    db::run_subscriptions_once(&store).await?;
+
+    // 99,96 + 10,75 of delivery, no VAT — and the order says who owes it.
+    let order = timada_order::load_order_details(&store.executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
+    assert_eq!(order.total, timada_core::Money::eur(11_071));
+    assert!(order.reverse_charge.is_some());
+    let detail = text(browser.get(&format!("/account/orders/{order_id}")).await).await?;
+    assert!(
+        detail.contains("Autoliquidation de la TVA par le preneur"),
+        "{detail}"
+    );
+    assert!(detail.contains("110,71 €"), "{detail}");
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let confirmation = outbox
+        .iter()
+        .find(|m| m.kind == "order-confirmation" && m.recipient == "ada@example.com")
+        .ok_or_else(|| anyhow::anyhow!("no confirmation: {outbox:?}"))?;
+    assert!(
+        confirmation.body.contains("TVA autoliquidée"),
+        "{}",
+        confirmation.body
+    );
+
+    // Paid: the invoice names the business, and the quarter's VAT report
+    // lists the sale apart from exports and from the one-stop shop.
+    timada_payment::Command(&store.executor)
+        .capture_payment(timada_payment::payment_id(&order_id), "psp-b2b".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let invoice = text(
+        browser
+            .get(&format!("/account/orders/{order_id}/invoice"))
+            .await,
+    )
+    .await?;
+    assert!(invoice.contains("Analytical Engines GmbH"), "{invoice}");
+    assert!(invoice.contains("N° TVA : DE123456789"), "{invoice}");
+    assert!(invoice.contains("article 262 ter I du CGI"), "{invoice}");
+    let now = timada_invoice::VatPeriod::of(timada_core::time::now_unix_secs()?);
+    let report = timada_invoice::vat_report(&store.db, now).await?;
+    assert_eq!(report.intra_community.len(), 1);
+    assert_eq!(report.intra_community[0].buyer_vat_number, "DE123456789");
+    assert_eq!(report.intra_community[0].base_minor, 11_071);
+    assert!(report.oss.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);

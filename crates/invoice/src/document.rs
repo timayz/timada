@@ -62,6 +62,9 @@ pub struct InvoiceDocument {
     pub order_label: String,
     pub customer_id: String,
     pub buyer: Address,
+    /// The business the invoice is for: its name and VAT number, to print
+    /// with the address.
+    pub company: Option<timada_tax::BusinessBuyer>,
     pub lines: Vec<DocumentLine>,
     pub subtotal: Money,
     pub shipping_fee: Money,
@@ -146,7 +149,10 @@ pub fn invoice_document(
         net_after_credit_notes: invoice.total.checked_sub(&credited)?,
         amounts_include_vat: exemption_mention.is_none(),
         exemption_mention,
-        regime_mention: invoice.tax.as_ref().and_then(|tax| tax.regime_mention()),
+        regime_mention: invoice.tax.as_ref().and_then(|tax| {
+            timada_tax::regime_mention(tax.treatment, invoice.reverse_charge.is_some())
+        }),
+        company: invoice.company,
         vat_lines: invoice.tax.map(|tax| tax.vat_lines).unwrap_or_default(),
         discount: invoice.discount.map(|d| (d.label, d.amount)),
         invoice_id: invoice.id,
@@ -179,4 +185,20 @@ pub async fn load_invoice_document<E: evento::Executor>(
             .remove(&invoice.order_id);
     let credit_notes = credit_notes_of_invoice(db, invoice_id).await?;
     invoice_document(issuer, invoice, order_number, credit_notes)
+}
+
+impl InvoiceDocument {
+    /// What goes above the address when the invoice is a business's: its
+    /// name, then its VAT number — which such an invoice must show.
+    pub fn company_lines(&self) -> Vec<String> {
+        self.company
+            .iter()
+            .flat_map(|company| {
+                [
+                    company.company_name.clone(),
+                    format!("N° TVA : {}", company.vat_number),
+                ]
+            })
+            .collect()
+    }
 }

@@ -11,7 +11,8 @@ use sqlx::SqlitePool;
 
 use crate::{
     aggregator::{
-        InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued, InvoiceTaxed, InvoiceVoided,
+        InvoiceBuyerIdentified, InvoiceDiscountApplied, InvoiceDrafted, InvoiceIssued,
+        InvoiceReverseCharged, InvoiceTaxed, InvoiceVoided,
     },
     query::load_invoice,
     value_object::InvoiceStatus,
@@ -64,6 +65,8 @@ pub fn invoice_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         // total net of it.
         .skip::<InvoiceDiscountApplied>()
         .skip::<InvoiceTaxed>()
+        .skip::<InvoiceBuyerIdentified>()
+        .skip::<InvoiceReverseCharged>()
         .strict()
 }
 

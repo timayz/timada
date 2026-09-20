@@ -14,7 +14,10 @@ use timada_cart::aggregator::CartCheckedOut;
 use timada_core::Money;
 use timada_pricing::price_id;
 use timada_promotion::{CodeKind, PromotionError};
-use timada_tax::{TaxZone, TaxZones};
+use timada_tax::{
+    BusinessBuyer, BusinessPurchase, ReverseChargeProof, TaxZone, TaxZones, VatNumber,
+    VatNumberValidator, VatRegistry, qualifies_for_reverse_charge, reverse_charged,
+};
 
 use crate::{
     aggregator::OrderCancelled,
@@ -34,10 +37,119 @@ pub const ORDER_PROMO_RELEASE_SUBSCRIPTION: &str = "order-promo-release";
 /// "Frais de dossier" charged on instalment plans, in minor units.
 pub const INSTALLMENT_HANDLING_FEE_MINOR: i64 = 449;
 
+/// When a business's VAT number lets it buy without the shop's VAT.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReverseChargePolicy {
+    /// How old the registry's last "valid" may be. A registry that is down at
+    /// checkout leaves the last answer standing; past this age it no longer
+    /// does, and the order is taxed as a consumer's. Thirty days by default.
+    pub max_check_age: std::time::Duration,
+    /// A check younger than this is not made again at checkout — the
+    /// storefront usually just made it. Ten minutes by default.
+    pub recheck_after: std::time::Duration,
+}
+
+impl Default for ReverseChargePolicy {
+    fn default() -> Self {
+        Self {
+            max_check_age: std::time::Duration::from_secs(30 * 86_400),
+            recheck_after: std::time::Duration::from_secs(600),
+        }
+    }
+}
+
+/// The company `customer_id` buys as, with its VAT number when that number
+/// could make a delivery in `zone` an intra-community supply.
+async fn qualifying_company<E: Executor>(
+    executor: &E,
+    zones: &TaxZones,
+    zone: &TaxZone,
+    customer_id: &str,
+) -> anyhow::Result<Option<(timada_customer::CompanyIdentityView, Option<VatNumber>)>> {
+    let Some(company) = timada_customer::load_company_identity(executor, customer_id)
+        .await?
+        .filter(|company| company.is_company())
+    else {
+        return Ok(None);
+    };
+    let number = VatNumber::parse(&company.vat_number).ok().filter(|number| {
+        qualifies_for_reverse_charge(zone, number, &zones.default_zone().countries)
+    });
+    Ok(Some((company, number)))
+}
+
+/// Asks the VAT registry again about the number of a business that is about
+/// to buy without VAT, unless it was asked less than
+/// [`ReverseChargePolicy::recheck_after`] ago. A registry that cannot answer
+/// changes nothing: the answers before stand. To call before an order is
+/// placed — the checkout ACL does, and a storefront does before it shows the
+/// last total.
+pub async fn refresh_vat_standing<E: Executor>(
+    executor: &E,
+    registry: &dyn VatNumberValidator,
+    zones: &TaxZones,
+    zone: &TaxZone,
+    customer_id: &str,
+    policy: &ReverseChargePolicy,
+) -> anyhow::Result<()> {
+    let Some((company, Some(_))) = qualifying_company(executor, zones, zone, customer_id).await?
+    else {
+        return Ok(());
+    };
+    let now = timada_core::time::now_unix_secs()?;
+    let fresh = company
+        .last_check
+        .as_ref()
+        .is_some_and(|check| now.saturating_sub(check.checked_at) < policy.recheck_after.as_secs());
+    if fresh {
+        return Ok(());
+    }
+    let answer = timada_customer::Command(executor)
+        .check_company_vat_number(customer_id, registry)
+        .await?;
+    if let Some(Err(unavailable)) = answer {
+        tracing::warn!(%customer_id, %unavailable, "VAT number not re-checked: the last answer stands");
+    }
+    Ok(())
+}
+
+/// The business `customer_id` buys as — `None` for a consumer — and, when a
+/// delivery in `zone` is an intra-community supply to it, the check of its
+/// VAT number that says so. Reads what is known; [`refresh_vat_standing`] is
+/// what asks the registry.
+pub async fn business_purchase<E: Executor>(
+    executor: &E,
+    zones: &TaxZones,
+    zone: &TaxZone,
+    customer_id: &str,
+    policy: &ReverseChargePolicy,
+) -> anyhow::Result<Option<BusinessPurchase>> {
+    let Some((company, number)) = qualifying_company(executor, zones, zone, customer_id).await?
+    else {
+        return Ok(None);
+    };
+    let now = timada_core::time::now_unix_secs()?;
+    let reverse_charge = number
+        .and_then(|_| company.standing_check(now, policy.max_check_age.as_secs()))
+        .map(|check| ReverseChargeProof {
+            consultation_ref: check.consultation_ref.clone(),
+            checked_at: check.checked_at,
+        });
+    Ok(Some(BusinessPurchase {
+        buyer: BusinessBuyer {
+            company_name: company.company_name,
+            vat_number: company.vat_number,
+        },
+        reverse_charge,
+    }))
+}
+
 /// Needs the `SqlitePool` as subscription data: order numbers are allocated
 /// and promo-code redemption caps counted in SQL. Takes the host's
 /// `timada_tax::TaxZones` the same way; without one it uses
-/// `TaxZones::default()` (metropolitan France, overseas as exports).
+/// `TaxZones::default()` (metropolitan France, overseas as exports). Optional:
+/// a `timada_tax::VatRegistry`, asked again about a business's VAT number
+/// before its order is placed without VAT, and a [`ReverseChargePolicy`].
 pub fn order_checkout_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ORDER_CHECKOUT_SUBSCRIPTION).handler(place_order_on_cart_checked_out())
 }
@@ -79,6 +191,34 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         tracing::warn!(%cart_id, %country, "delivery country outside every tax zone");
         zones.default_zone()
     });
+
+    // A business of another member state with a valid VAT number buys
+    // without VAT: the zone is then priced like an export.
+    let policy = ctx.get::<ReverseChargePolicy>().unwrap_or_default();
+    if let Some(registry) = ctx.get::<VatRegistry>() {
+        refresh_vat_standing(
+            ctx.executor,
+            registry.0.as_ref(),
+            &zones,
+            zone,
+            &event.data.customer_id,
+            &policy,
+        )
+        .await?;
+    }
+    let business =
+        business_purchase(ctx.executor, &zones, zone, &event.data.customer_id, &policy).await?;
+    let exempt_zone;
+    let zone = match &business {
+        Some(BusinessPurchase {
+            reverse_charge: Some(_),
+            ..
+        }) => {
+            exempt_zone = reverse_charged(zone);
+            &exempt_zone
+        }
+        _ => zone,
+    };
 
     let currency = cart.subtotal.currency.clone();
     let listed_fee =
@@ -138,6 +278,7 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         discount,
         order_number: Some(order_number),
         tax: Some(tax),
+        business,
     };
 
     match Command(ctx.executor).place_order(cmd).await {

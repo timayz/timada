@@ -146,7 +146,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             )
         })
         .collect();
-    let buyer = address_lines(&document.buyer);
+    let buyer: Vec<String> = document
+        .company_lines()
+        .into_iter()
+        .chain(address_lines(&document.buyer))
+        .collect();
     let discount = document
         .discount
         .as_ref()

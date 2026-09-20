@@ -44,6 +44,7 @@ fn place_order(cart_id: &str) -> PlaceOrder {
         discount: None,
         order_number: None,
         tax: None,
+        business: None,
     }
 }
 
@@ -482,6 +483,7 @@ async fn drafting_twice_returns_the_same_invoice() -> anyhow::Result<()> {
         handling_fee: Money::eur(0),
         discount: None,
         tax: None,
+        business: None,
     };
     let first = cmd.draft_invoice(draft.clone()).await?;
     let second = cmd.draft_invoice(draft.clone()).await?;

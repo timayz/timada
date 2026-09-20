@@ -3070,6 +3070,7 @@ dependencies = [
  "thiserror",
  "timada-cart",
  "timada-core",
+ "timada-customer",
  "timada-inventory",
  "timada-payment",
  "timada-pricing",

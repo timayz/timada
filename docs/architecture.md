@@ -34,7 +34,7 @@ Most contexts are leaves over `timada-core`. The ones that coordinate others:
 graph TD
     catalog --> pricing & inventory & review
     customer --> tax
-    order --> cart & inventory & payment & pricing & promotion & shipping & tax
+    order --> cart & customer & inventory & payment & pricing & promotion & shipping & tax
     invoice --> order & payment & tax
     returns --> order & payment & inventory & promotion
     mailer --> order & payment & inventory & returns & review & customer & catalog
@@ -193,7 +193,7 @@ pool as data unless noted:
 | payment | `refund_list_subscription` | read models (refunds made, refunds asked for) | |
 | payment | `refund_execution_subscription` | process: enqueues refunds for the provider | |
 | order | `order_history_subscription`, `payment_deadline_subscription` | read models | |
-| order | `order_checkout_subscription` | ACL ← cart | `timada_tax::TaxZones` |
+| order | `order_checkout_subscription` | ACL ← cart | `timada_tax::TaxZones`; optionally a `timada_tax::VatRegistry` (a business's VAT number is asked about again before its order is placed without VAT) and a `timada_order::ReverseChargePolicy` |
 | order | `order_fulfillment_subscription` | saga | *(no pool)* |
 | order | `order_promo_release_subscription` | ACL → promotion | |
 | invoice | `invoice_from_orders_subscription` | ACL ← order | |
@@ -274,12 +274,32 @@ the SMTP relay.
   registry that cannot answer leaves no event, so the answers before stand.
   `CompanyIdentityView::standing_check(now, max_age)` is the check a sale
   without the seller's VAT can rest on: the latest answer, valid, and recent.
+- **A reverse charge is an export with a proof.** A business of another
+  member state whose VAT number is valid, delivered in another member state
+  than the shop's, buys without VAT and accounts for it at home. Money-wise
+  that is an export, and `TaxTreatment` is frozen: the order is taxed
+  `Export` in its real zone, and what makes it a reverse charge are two
+  companion events committed with `OrderPlaced` — `OrderBuyerIdentified`
+  (every business order has it) and `OrderReverseCharged`, the check of the
+  number the exemption rests on, consultation number included. The invoice
+  mirrors both. Read `regime_mention()` on the order or invoice view, never
+  the treatment alone: an `Export` may be an "autoliquidation". The checkout
+  ACL decides: it asks the registry again unless it was asked within
+  `recheck_after` (ten minutes), and a registry that is down leaves the last
+  valid answer standing for `max_check_age` (thirty days); otherwise the
+  order is a consumer's. `business_purchase` and `refresh_vat_standing` are
+  public so a storefront shows — and re-checks — exactly what will be placed.
+- **One snapshotted view per aggregate.** evento keys a snapshot by aggregate
+  type, revision and id, not by view: a second snapshotted view of the same
+  aggregate would overwrite the first one's snapshot. A second view is
+  declared `#[evento::snapshot(none)]` (see `CompanyIdentityView`).
 - **VAT is read from the documents.** `vat_journal_subscription` keeps a row
   per VAT rate of each *issued* invoice, and a negative one per credit note —
   its amount spread over the invoice's rates in proportion to what each was
-  charged. `vat_report(db, VatPeriod)` reads a calendar quarter as three
+  charged. `vat_report(db, VatPeriod)` reads a calendar quarter as four
   returns: the shop's own VAT, the one-stop-shop return by member state of
-  delivery and rate, and exports. A credit note nets the sale when both fall
+  delivery and rate, intra-community supplies by member state and buyer VAT
+  number, and exports. A credit note nets the sale when both fall
   in the same quarter; on an invoice of an earlier quarter it is a
   *correction of that quarter* in the one-stop-shop return, while the
   domestic return simply deducts it. Invoices from before tax zones carry no
@@ -328,8 +348,8 @@ the SMTP relay.
   takes the money back without any refund of ours), saved cards, instalments
   through a provider (Stripe takes cards only here), reconciliation with the
   provider's payouts, and a second provider.
-- VAT outside the consumer case: B2B reverse charge (no VAT number is
-  collected), the territories of a member state outside the EU VAT area (they
+- VAT beyond goods sold to consumers and to businesses of the Union:
+  services, prices shown without VAT to business accounts, the territories of a member state outside the EU VAT area (they
   share their country's code), multi-currency. The quarterly report
   (`timada_invoice::vat_report`, the admin's TVA section) adds up what was
   invoiced; filing it — and the rule that a quarter starts at midnight UTC,

@@ -197,6 +197,8 @@ struct Document<'a> {
     treatment: &'a str,
     country_code: &'a str,
     currency: &'a str,
+    /// The VAT number of the business the sale was reverse-charged to.
+    buyer_vat_number: Option<&'a str>,
 }
 
 /// `(rate, base, VAT)`; no rate: an invoice that carries no VAT breakdown.
@@ -218,8 +220,8 @@ async fn write_rows(
             "INSERT INTO invoice_vat_journal
                 (document_kind, document_id, document_number, invoice_id, order_id, issued_at,
                  invoice_issued_at, zone_code, treatment, country_code, rate_bp, base_minor,
-                 vat_minor, currency)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 vat_minor, currency, buyer_vat_number)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(document.kind)
         .bind(document.id)
@@ -235,6 +237,7 @@ async fn write_rows(
         .bind(base_minor)
         .bind(vat_minor)
         .bind(document.currency)
+        .bind(document.buyer_vat_number)
         .execute(&mut *tx)
         .await?;
     }
@@ -274,7 +277,7 @@ async fn journal_on_invoice_issued<E: Executor>(
     let (zone_code, treatment, rows): (&str, &str, Vec<JournalRow>) = match &invoice.tax {
         Some(tax) => (
             &tax.zone_code,
-            tax.treatment.as_str(),
+            regime(&invoice).map_or(tax.treatment.as_str(), |(_, regime)| regime),
             tax.vat_lines
                 .iter()
                 .map(|line| (Some(line.rate_bp), line.base.minor, line.vat.minor))
@@ -297,6 +300,11 @@ async fn journal_on_invoice_issued<E: Executor>(
             treatment,
             country_code: &country,
             currency: &invoice.total.currency,
+            buyer_vat_number: invoice
+                .reverse_charge
+                .as_ref()
+                .and(invoice.company.as_ref())
+                .map(|company| company.vat_number.as_str()),
         },
         &rows,
     )
@@ -337,7 +345,7 @@ async fn journal_on_credit_note_issued<E: Executor>(
     let (zone_code, treatment, rows): (&str, &str, Vec<JournalRow>) = match &invoice.tax {
         Some(tax) => (
             &tax.zone_code,
-            tax.treatment.as_str(),
+            regime(&invoice).map_or(tax.treatment.as_str(), |(_, regime)| regime),
             apportion_credit(&tax.vat_lines, note.amount.minor)
                 .into_iter()
                 .map(|share| (Some(share.rate_bp), -share.base_minor, -share.vat_minor))
@@ -359,10 +367,32 @@ async fn journal_on_credit_note_issued<E: Executor>(
             treatment,
             country_code: &country,
             currency: &note.amount.currency,
+            buyer_vat_number: invoice
+                .reverse_charge
+                .as_ref()
+                .and(invoice.company.as_ref())
+                .map(|company| company.vat_number.as_str()),
         },
         &rows,
     )
     .await
+}
+
+/// How the journal names the regime of an intra-community supply: taxed like
+/// an export, reported apart.
+const REVERSE_CHARGE: &str = "reverse_charge";
+
+/// The journal's regime for an invoice: its treatment, unless the sale was
+/// reverse-charged.
+fn regime(invoice: &crate::query::InvoiceView) -> Option<(&str, &'static str)> {
+    invoice.tax.as_ref().map(|tax| {
+        let regime = if invoice.reverse_charge.is_some() {
+            REVERSE_CHARGE
+        } else {
+            tax.treatment.as_str()
+        };
+        (tax.zone_code.as_str(), regime)
+    })
 }
 
 /// Base and VAT at one rate, for one country.
@@ -373,6 +403,14 @@ pub struct VatReportLine {
     pub rate_bp: u16,
     pub base_minor: i64,
     pub vat_minor: i64,
+}
+
+/// What one business of another member state bought without VAT.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntraCommunityLine {
+    pub country_code: String,
+    pub buyer_vat_number: String,
+    pub base_minor: i64,
 }
 
 /// VAT given back in this quarter on sales declared in an earlier one: the
@@ -397,6 +435,11 @@ pub struct VatReport {
     pub oss: Vec<VatReportLine>,
     /// Credit notes of the quarter on one-stop-shop invoices of earlier ones.
     pub oss_corrections: Vec<VatCorrection>,
+    /// Intra-community supplies — sold without VAT to businesses of other
+    /// member states, which account for it at home: the pre-tax total per
+    /// member state and buyer, credit notes deducted. What the recapitulative
+    /// statement of customers is filled from.
+    pub intra_community: Vec<IntraCommunityLine>,
     /// Sold without VAT outside the Union's VAT area: the pre-tax total.
     pub exports_base_minor: i64,
     /// Invoices from before tax zones, which carry no breakdown: how many,
@@ -476,6 +519,20 @@ pub async fn vat_report(db: &SqlitePool, period: VatPeriod) -> sqlx::Result<VatR
         .map(|line| line.base_minor)
         .sum();
 
+    let intra_community: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT country_code, COALESCE(buyer_vat_number, ''), SUM(base_minor)
+         FROM invoice_vat_journal
+         WHERE issued_at >= ?1 AND issued_at < ?2 AND treatment = ?3 AND currency = ?4
+         GROUP BY country_code, buyer_vat_number
+         ORDER BY country_code, buyer_vat_number",
+    )
+    .bind(start)
+    .bind(end)
+    .bind(REVERSE_CHARGE)
+    .bind(&currency)
+    .fetch_all(db)
+    .await?;
+
     // SQLite's date functions are UTC, like `VatPeriod::of`.
     let corrections: Vec<(i32, i64, String, i64)> = sqlx::query_as(
         "SELECT CAST(strftime('%Y', invoice_issued_at, 'unixepoch') AS INTEGER) AS year,
@@ -520,6 +577,16 @@ pub async fn vat_report(db: &SqlitePool, period: VatPeriod) -> sqlx::Result<VatR
                 country_code,
                 vat_minor,
             })
+            .collect(),
+        intra_community: intra_community
+            .into_iter()
+            .map(
+                |(country_code, buyer_vat_number, base_minor)| IntraCommunityLine {
+                    country_code,
+                    buyer_vat_number,
+                    base_minor,
+                },
+            )
             .collect(),
         exports_base_minor,
         unbroken: (unbroken.0, unbroken.1.unwrap_or(0)),

@@ -60,6 +60,10 @@ async fn draft_on_order_placed<E: Executor>(
     else {
         anyhow::bail!("order {} placed but cannot be loaded", event.aggregate_id);
     };
+    let business = order.buyer.map(|buyer| timada_tax::BusinessPurchase {
+        buyer,
+        reverse_charge: order.reverse_charge,
+    });
     let discount = order.discount.map(|d| InvoiceDiscount {
         label: match d.kind {
             PromoKind::Discount => format!("Code promo {}", d.code),
@@ -92,6 +96,7 @@ async fn draft_on_order_placed<E: Executor>(
                 treatment: tax.treatment,
                 vat_lines: tax.vat_lines,
             }),
+            business,
         })
         .await?;
     Ok(())

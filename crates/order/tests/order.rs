@@ -1026,3 +1026,219 @@ async fn a_saga_interrupted_while_reserving_is_resumed() -> anyhow::Result<()> {
     assert_eq!((stock.reserved, stock.available), (2, 3));
     Ok(())
 }
+
+/// Registers a business, checks its VAT number, and checks a cart of one
+/// monitor (120,00 listed, 20 % inside) out to `country`.
+async fn business_checkout(
+    executor: &evento::Sqlite,
+    registry: &timada_tax::FakeValidator,
+    email: &str,
+    vat_number: &str,
+    country: (&str, &str),
+) -> anyhow::Result<String> {
+    let customers = timada_customer::Command(executor);
+    let customer_id = customers
+        .register_customer(timada_customer::RegisterCustomer {
+            email: email.into(),
+            civility: timada_core::Civility::Mrs,
+            first_name: "Grete".into(),
+            last_name: "Hermann".into(),
+        })
+        .await?;
+    customers
+        .identify_company(
+            &customer_id,
+            "Hermann GmbH",
+            &timada_tax::VatNumber::parse(vat_number)?,
+        )
+        .await?;
+    customers
+        .check_company_vat_number(&customer_id, registry)
+        .await?;
+
+    let cart = timada_cart::Command(executor);
+    let cart_id = cart.open_cart(Some(customer_id)).await?;
+    cart.add_line(
+        &cart_id,
+        AddLine {
+            product_id: PRODUCT.into(),
+            name: "AOC 23.8\" LED - 24G4XE".into(),
+            quantity: 1,
+            unit_price: Money::eur(12_000),
+            warranty_months: 0,
+        },
+    )
+    .await?;
+    let (code, method) = country;
+    cart.checkout(
+        &cart_id,
+        Checkout {
+            customer_id: None,
+            delivery_address: address("Unter den Linden 1", "10117", "Berlin", code),
+            billing_address: address("Unter den Linden 1", "10117", "Berlin", code),
+            delivery: timada_cart::DeliveryChoice {
+                method_code: method.into(),
+                pickup_store_id: None,
+            },
+            payment_mode: timada_cart::PaymentMode::Card,
+        },
+    )
+    .await?;
+    Ok(cart_id)
+}
+
+#[tokio::test]
+async fn a_business_of_another_member_state_buys_without_vat() -> anyhow::Result<()> {
+    use timada_tax::{EU_DELIVERY_METHOD, FakeValidator, TaxTreatment, VatNumber, VatRegistry};
+
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    timada_pricing::Command(&executor)
+        .list_price(timada_pricing::ListPrice {
+            product_id: PRODUCT.into(),
+            price_incl_tax: Money::eur(12_000),
+            vat_rate_bp: 2_000,
+            eco_participation: Money::eur(0),
+        })
+        .await?;
+    let registry = FakeValidator::default();
+    let place = |policy: timada_order::ReverseChargePolicy| {
+        let (executor, db, registry) = (&executor, db.clone(), registry.clone());
+        async move {
+            order_checkout_subscription()
+                .data(db)
+                .data(timada_tax::TaxZones::france_with_eu_oss())
+                .data(VatRegistry::new(registry))
+                .data(policy)
+                .run_once(executor)
+                .await
+        }
+    };
+    let order_of = |cart_id: String| {
+        let executor = &executor;
+        async move {
+            load_order_details(executor, order_id(&cart_id))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("order not placed"))
+        }
+    };
+    let europe = ("DE", EU_DELIVERY_METHOD);
+
+    // A valid German number, delivered in Germany: the pre-tax price, no VAT,
+    // and the proof of the check kept on the order.
+    let cart =
+        business_checkout(&executor, &registry, "a@example.de", "DE123456789", europe).await?;
+    place(timada_order::ReverseChargePolicy::default()).await?;
+    let order = order_of(cart).await?;
+    assert_eq!(order.lines[0].unit_price, Money::eur(10_000));
+    // Delivery follows: 12,90 listed = 10,75 without VAT.
+    assert_eq!(order.shipping_fee, Money::eur(1_075));
+    assert_eq!(order.total, Money::eur(11_075));
+    let tax = order
+        .tax
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("order not taxed"))?;
+    assert_eq!(
+        (tax.zone_code.as_str(), tax.treatment),
+        ("de", TaxTreatment::Export)
+    );
+    assert_eq!(tax.vat_total()?, Money::eur(0));
+    let buyer = order
+        .buyer
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("no buyer on the order"))?;
+    assert_eq!(
+        (buyer.company_name.as_str(), buyer.vat_number.as_str()),
+        ("Hermann GmbH", "DE123456789")
+    );
+    let proof = order
+        .reverse_charge
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("no reverse charge"))?;
+    assert!(
+        proof
+            .consultation_ref
+            .is_some_and(|r| r.starts_with("FAKE-DE123456789"))
+    );
+    assert_eq!(
+        order.regime_mention(),
+        Some(timada_tax::REVERSE_CHARGE_MENTION)
+    );
+    // Checked a moment ago at sign-up: not asked again at checkout.
+    assert_eq!(registry.checks(), 1);
+
+    // A policy that always asks again; the registry now refuses the number:
+    // the order is a consumer's — German VAT — though still a business's.
+    let always = timada_order::ReverseChargePolicy {
+        recheck_after: std::time::Duration::ZERO,
+        ..Default::default()
+    };
+    let cart =
+        business_checkout(&executor, &registry, "b@example.de", "DE999999999", europe).await?;
+    registry.reject(&VatNumber::parse("DE999999999")?);
+    place(always.clone()).await?;
+    let order = order_of(cart).await?;
+    assert_eq!(order.lines[0].unit_price, Money::eur(11_900));
+    assert!(order.reverse_charge.is_none());
+    assert!(order.buyer.is_some());
+    assert_eq!(
+        order.tax.map(|tax| tax.treatment),
+        Some(TaxTreatment::DestinationVat)
+    );
+
+    // The registry is down at checkout: the valid answer of a moment ago
+    // stands — until it is older than the policy allows.
+    let cart =
+        business_checkout(&executor, &registry, "c@example.at", "ATU12345678", europe).await?;
+    registry.set_down(true);
+    place(always.clone()).await?;
+    assert!(order_of(cart).await?.reverse_charge.is_some());
+    let cart =
+        business_checkout(&executor, &registry, "d@example.at", "ATU87654321", europe).await?;
+    // (the sign-up check itself found the registry down: never validated)
+    place(always.clone()).await?;
+    assert!(order_of(cart).await?.reverse_charge.is_none());
+    registry.set_down(false);
+    let strict = timada_order::ReverseChargePolicy {
+        max_check_age: std::time::Duration::ZERO,
+        recheck_after: std::time::Duration::from_secs(3_600),
+    };
+    let cart =
+        business_checkout(&executor, &registry, "e@example.at", "ATU11111111", europe).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    place(strict).await?;
+    assert!(
+        order_of(cart).await?.reverse_charge.is_none(),
+        "too old a check"
+    );
+
+    // A business of the shop's own state, or one delivered at home or
+    // outside the Union: nothing intra-community about it.
+    let cart = business_checkout(
+        &executor,
+        &registry,
+        "f@example.fr",
+        "FR40303265045",
+        europe,
+    )
+    .await?;
+    place(always.clone()).await?;
+    let order = order_of(cart).await?;
+    assert!(order.reverse_charge.is_none() && order.buyer.is_some());
+    let cart = business_checkout(
+        &executor,
+        &registry,
+        "g@example.de",
+        "DE111111111",
+        ("FR", "colissimo"),
+    )
+    .await?;
+    place(always).await?;
+    let order = order_of(cart).await?;
+    assert!(order.reverse_charge.is_none());
+    assert_eq!(order.lines[0].unit_price, Money::eur(12_000));
+    assert_eq!(
+        order.tax.map(|tax| tax.treatment),
+        Some(TaxTreatment::Domestic)
+    );
+    Ok(())
+}

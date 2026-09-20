@@ -151,6 +151,9 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
         timada_order::order_checkout_subscription()
             .data(db.clone())
             .data(tax_zones())
+            // Asked again about a business's VAT number before its order is
+            // placed without VAT.
+            .data(timada_tax::VatRegistry(store.vat_validator.clone()))
             .start(executor)
             .await?,
         timada_order::order_fulfillment_subscription()
@@ -269,6 +272,9 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
         timada_order::order_checkout_subscription()
             .data(db.clone())
             .data(tax_zones())
+            // Asked again about a business's VAT number before its order is
+            // placed without VAT.
+            .data(timada_tax::VatRegistry(store.vat_validator.clone()))
             .run_once(executor)
             .await?;
         timada_order::order_fulfillment_subscription()

@@ -101,6 +101,7 @@ impl Shop {
                 discount,
                 order_number: None,
                 tax: None,
+                business: None,
             })
             .await?;
         let payments = timada_payment::Command(&self.executor);

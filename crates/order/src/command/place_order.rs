@@ -1,9 +1,12 @@
 use evento::Executor;
 use timada_core::{Address, Money};
-use timada_tax::{Charged, TaxTreatment, vat_breakdown};
+use timada_tax::{BusinessPurchase, Charged, TaxTreatment, vat_breakdown};
 
 use crate::{
-    aggregator::{OrderDiscountApplied, OrderNumberAssigned, OrderPlaced, OrderTaxed},
+    aggregator::{
+        OrderBuyerIdentified, OrderDiscountApplied, OrderNumberAssigned, OrderPlaced,
+        OrderReverseCharged, OrderTaxed,
+    },
     error::OrderError,
     value_object::{
         DeliveryChoice, OrderDiscount, OrderLine, PaymentMode, PromoKind, Seller, order_total,
@@ -45,6 +48,9 @@ pub struct PlaceOrder {
     pub order_number: Option<String>,
     /// From the tax zones of the host; without it the order records no VAT.
     pub tax: Option<OrderTax>,
+    /// The business the order is for, and the proof of its reverse charge
+    /// when it is exempt; `None` for a consumer's order.
+    pub business: Option<BusinessPurchase>,
 }
 
 #[evento::command]
@@ -80,6 +86,24 @@ impl<E: Executor> super::Command<'_, E> {
             discount.amount.same_currency(&max)?;
             if !discount.amount.is_positive() || discount.amount.minor > max.minor {
                 return Err(OrderError::InvalidDiscount { max });
+            }
+        }
+
+        // A reverse charge is a sale without VAT: it must be taxed as one.
+        if let Some(business) = &cmd.business {
+            if business.buyer.company_name.trim().is_empty()
+                || business.buyer.vat_number.trim().is_empty()
+            {
+                return Err(OrderError::Required("business.buyer"));
+            }
+            let untaxed = cmd
+                .tax
+                .as_ref()
+                .is_some_and(|tax| tax.treatment == TaxTreatment::Export);
+            if business.reverse_charge.is_some() && !untaxed {
+                return Err(OrderError::Required(
+                    "an untaxed order for a reverse charge",
+                ));
             }
         }
 
@@ -144,6 +168,14 @@ impl<E: Executor> super::Command<'_, E> {
         }
         if let Some(taxed) = &taxed {
             write.event(taxed);
+        }
+        if let Some(business) = cmd.business {
+            write.event(&OrderBuyerIdentified {
+                buyer: business.buyer,
+            });
+            if let Some(proof) = business.reverse_charge {
+                write.event(&OrderReverseCharged { proof });
+            }
         }
         if let Some(discount) = cmd.discount {
             write.event(&OrderDiscountApplied {

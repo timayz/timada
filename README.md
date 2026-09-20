@@ -39,7 +39,7 @@ admin renders unstyled.
 Things worth trying: browse the seeded catalogue — categories, brands, search (`ecran incurve`), filters (panel type and refresh rate under *Écran PC*) and sorting; order something to a metropolitan address, then to
 Martinique (the checkout switches to prices without French VAT and another
 carrier), then to Berlin (`DE`: German VAT replaces the French one); capture the payment from the admin (the demo has no payment provider: the payment step of the checkout waits for it) and ship the order; refund part of it from the order page; ask for a
-return from the account; open the invoice and download its PDF; read the quarter's VAT at `/admin/vat` (a delivery to Berlin shows under the one-stop shop); look at `/admin/emails` to see what
+return from the account; open the invoice and download its PDF; buy as a business of another member state (`/account/company`, a number such as `DE123456789`, a delivery address in Germany: the checkout is priced without VAT and the invoice says "autoliquidation"); read the quarter's VAT at `/admin/vat` (a delivery to Berlin shows under the one-stop shop); look at `/admin/emails` to see what
 the shop would have sent.
 
 Environment of the demo:

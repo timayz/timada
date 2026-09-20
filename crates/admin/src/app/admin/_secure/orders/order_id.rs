@@ -85,10 +85,12 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .flat_map(|tax| &tax.vat_lines)
         .map(|line| (vat_rate(line.rate_bp), money(&line.base), money(&line.vat)))
         .collect();
-    let vat_mention = order
-        .tax
+    let vat_mention = order.regime_mention();
+    // The business the order is for, as its invoice will name it.
+    let business = order
+        .buyer
         .as_ref()
-        .and_then(|tax| tax.treatment.regime_mention());
+        .map(|buyer| format!("{} — {}", buyer.company_name, buyer.vat_number));
     let order_returns: Vec<(String, String)> = timada_returns::returns_of_order(&services.db, &id)
         .await?
         .into_iter()
@@ -209,6 +211,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             <div><dt class="text-muted-foreground">"Client"</dt><dd class="font-mono text-xs">(order.customer_id.clone())</dd></div>
                             if let Some(zone) = &tax_zone {
                                 <div><dt class="text-muted-foreground">"Zone fiscale"</dt><dd class="font-mono text-xs">(zone.clone())</dd></div>
+                            }
+                            if let Some(business) = &business {
+                                <div><dt class="text-muted-foreground">"Entreprise"</dt><dd>(business.clone())</dd></div>
                             }
                             <div><dt class="text-muted-foreground">"Paiement"</dt><dd>(payment_label)</dd></div>
                             if let Some(refunded) = &refunded {

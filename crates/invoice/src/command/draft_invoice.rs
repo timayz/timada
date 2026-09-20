@@ -2,7 +2,10 @@ use evento::Executor;
 use timada_core::{Address, Money};
 
 use crate::{
-    aggregator::{InvoiceDiscountApplied, InvoiceDrafted, InvoiceTaxed},
+    aggregator::{
+        InvoiceBuyerIdentified, InvoiceDiscountApplied, InvoiceDrafted, InvoiceReverseCharged,
+        InvoiceTaxed,
+    },
     error::InvoiceError,
     value_object::{InvoiceDiscount, InvoiceLine, InvoiceTax, invoice_total},
 };
@@ -20,6 +23,9 @@ pub struct DraftInvoice {
     pub discount: Option<InvoiceDiscount>,
     /// The order's VAT summary, as its `OrderTaxed` recorded it.
     pub tax: Option<InvoiceTax>,
+    /// The business the invoice is for, and the proof of its reverse charge
+    /// when the sale is exempt; `None` for a consumer's invoice.
+    pub business: Option<timada_tax::BusinessPurchase>,
 }
 
 #[evento::command]
@@ -62,6 +68,14 @@ impl<E: Executor> super::Command<'_, E> {
                 treatment: tax.treatment,
                 vat_lines: tax.vat_lines,
             });
+        }
+        if let Some(business) = cmd.business {
+            write.event(&InvoiceBuyerIdentified {
+                buyer: business.buyer,
+            });
+            if let Some(proof) = business.reverse_charge {
+                write.event(&InvoiceReverseCharged { proof });
+            }
         }
         if let Some(discount) = cmd.discount {
             write.event(&InvoiceDiscountApplied {
