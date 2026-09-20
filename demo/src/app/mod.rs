@@ -8,6 +8,8 @@ pub mod checkout;
 mod format;
 pub mod invoice;
 pub mod returns;
+#[cfg(feature = "stripe")]
+pub mod webhooks;
 
 use topcoat::{
     Result,

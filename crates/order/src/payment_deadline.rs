@@ -115,9 +115,19 @@ pub async fn expire_unpaid_orders<E: Executor>(
         // The provider's session goes first, so nobody pays an order that is
         // being cancelled. Paid in the meantime: that is a capture, not a
         // timeout.
-        if let CancelOutcome::AlreadyPaid { reference } =
-            timada_payment::cancel_payment_session(db, provider, &row.payment_id).await?
+        let called_off = match timada_payment::cancel_payment_session(db, provider, &row.payment_id)
+            .await
         {
+            Ok(outcome) => outcome,
+            // The provider cannot say (down, or the bank has not answered):
+            // this order waits for the next sweep, the others do not.
+            Err(PaymentError::Provider(err)) => {
+                tracing::warn!(order_id = %row.order_id, %err, "payment session not called off yet");
+                continue;
+            }
+            Err(err) => return Err(err.into()),
+        };
+        if let CancelOutcome::AlreadyPaid { reference } = called_off {
             match timada_payment::Command(executor)
                 .capture_payment(&row.payment_id, reference)
                 .await

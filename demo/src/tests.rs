@@ -104,6 +104,8 @@ async fn shop_with(
         executor,
         db: pool,
         provider,
+        #[cfg(feature = "stripe")]
+        stripe: None,
     };
     seed::run(&store).await?;
     db::run_subscriptions_once(&store).await?;
@@ -867,6 +869,179 @@ async fn a_shopper_pays_at_the_shops_payment_provider() -> anyhow::Result<()> {
     assert_eq!(sent_back.len(), 1, "{sent_back:?}");
     assert_eq!(sent_back[0].psp_reference, "pi_demo");
     assert_eq!(sent_back[0].amount, timada_core::Money::eur(12_585));
+    Ok(())
+}
+
+/// Checks out one unit with the seeded shopper; the path of the payment step.
+async fn place_card_order(
+    browser: &mut Browser<'_>,
+    store: &Store,
+    product_id: &str,
+) -> anyhow::Result<String> {
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+    let checkout = text(browser.get("/checkout").await).await?;
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address radio"))?
+        .to_owned();
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    db::run_subscriptions_once(store).await?;
+    Ok(location(&placed))
+}
+
+#[tokio::test]
+async fn the_card_form_is_embedded_under_a_policy_naming_the_provider() -> anyhow::Result<()> {
+    let provider = timada_payment::FakeProvider::embedded();
+    let (router, store, product_id) = shop_with(std::sync::Arc::new(provider)).await?;
+    let mut browser = Browser::new(&router);
+    let pay = place_card_order(&mut browser, &store, &product_id).await?;
+    let order_id = pay.rsplit('/').next().unwrap_or_default().to_owned();
+    let session = timada_payment::FakeProvider::session_of(&timada_payment::payment_id(&order_id));
+
+    let response = browser.get(&pay).await;
+    let policy = response
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        policy.contains("script-src 'self' https://js.stripe.com;"),
+        "{policy}"
+    );
+    assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
+    assert!(!policy.contains("unsafe-eval"), "{policy}");
+    let page = text(response).await?;
+    assert!(
+        page.contains(&format!("data-client-secret=\"{session}_secret\"")),
+        "{page}"
+    );
+    assert!(page.contains("data-publishable-key=\"pk_fake\""), "{page}");
+    assert!(
+        page.contains(&format!("data-return-url=\"http://127.0.0.1:3000{pay}\"")),
+        "{page}"
+    );
+    assert!(page.contains("Payer 125,85 €"), "{page}");
+    assert!(page.contains("src=\"https://js.stripe.com/v3/\""), "{page}");
+    assert!(page.contains("src=\"/checkout/pay.js\""), "{page}");
+    // Nothing inline to allow: the page's own script is a file of the shop.
+    assert!(!page.contains("<script>"), "{page}");
+    // The form does its own waiting; a reload would wipe a card being typed.
+    assert!(!page.contains("http-equiv=\"refresh\""), "{page}");
+
+    let script = browser.get("/checkout/pay.js").await;
+    assert_eq!(
+        script
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("text/javascript; charset=utf-8")
+    );
+    assert!(text(script).await?.contains("confirmPayment"));
+
+    // The other pages carry no such policy (and load nothing from outside).
+    let home = browser.get("/").await;
+    assert!(home.headers().get("content-security-policy").is_none());
+    Ok(())
+}
+
+#[cfg(feature = "stripe")]
+#[tokio::test]
+async fn stripe_webhooks_are_verified_then_capture_the_payment() -> anyhow::Result<()> {
+    use http::Request;
+    use topcoat::router::Body;
+
+    let (_, mut store, product_id) =
+        shop_with(std::sync::Arc::new(timada_payment::FakeProvider::embedded())).await?;
+    // Only the webhook's signature is Stripe's here: nothing calls its API.
+    let mut config = timada_payment::StripeConfig::new("sk_test_x", "pk_test_x", "whsec_demo");
+    config.api_base = "http://127.0.0.1:9".into();
+    store.stripe = Some(std::sync::Arc::new(timada_payment::StripeProvider::new(
+        config,
+    )?));
+    let router = crate::router(
+        store.clone(),
+        AssetConfig::hosted_at("/assets", AssetCatalog::default()),
+        Stylesheet::Url("/dev.css".into()),
+    );
+    let mut browser = Browser::new(&router);
+    let pay = place_card_order(&mut browser, &store, &product_id).await?;
+    let order_id = pay.rsplit('/').next().unwrap_or_default().to_owned();
+    let payment_id = timada_payment::payment_id(&order_id);
+
+    let payload = format!(
+        r#"{{"type":"payment_intent.succeeded","data":{{"object":{{"id":"pi_demo","amount_received":12585,"currency":"eur","metadata":{{"payment_id":"{payment_id}"}}}}}}}}"#
+    );
+    let now = timada_core::time::now_unix_secs()?;
+    let deliver = |signature: String, body: String| {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/webhooks/stripe")
+            .header("content-type", "application/json")
+            .header("stripe-signature", signature)
+            .body(Body::from(body.into_bytes()));
+        let router = &router;
+        async move { Ok::<_, anyhow::Error>(router.handle(request?).await.status()) }
+    };
+
+    // Anyone can post to a webhook: only Stripe's signature is believed.
+    let forged = timada_payment::sign_webhook("whsec_guess", now, payload.as_bytes());
+    assert_eq!(
+        deliver(forged, payload.clone()).await?,
+        StatusCode::BAD_REQUEST
+    );
+    let replayed = timada_payment::sign_webhook("whsec_demo", now - 3_600, payload.as_bytes());
+    assert_eq!(
+        deliver(replayed, payload.clone()).await?,
+        StatusCode::BAD_REQUEST
+    );
+    let signed = timada_payment::sign_webhook("whsec_demo", now, payload.as_bytes());
+    let tampered = payload.replace("12585", "1");
+    assert_eq!(
+        deliver(signed.clone(), tampered).await?,
+        StatusCode::BAD_REQUEST
+    );
+    let untouched = timada_payment::load_payment(&store.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(untouched.status, timada_payment::PaymentStatus::Requested);
+
+    // Stripe's own word captures — once, however often it is delivered.
+    for _ in 0..2 {
+        assert_eq!(
+            deliver(signed.clone(), payload.clone()).await?,
+            StatusCode::OK
+        );
+    }
+    let payment = timada_payment::load_payment(&store.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.status, timada_payment::PaymentStatus::Captured);
+    assert_eq!(payment.psp_reference.as_deref(), Some("pi_demo"));
+    // Events the shop has no use for are acknowledged, or Stripe insists.
+    let other = r#"{"type":"customer.created","data":{"object":{}}}"#.to_owned();
+    let signature = timada_payment::sign_webhook("whsec_demo", now, other.as_bytes());
+    assert_eq!(deliver(signature, other).await?, StatusCode::OK);
+
+    db::run_subscriptions_once(&store).await?;
+    let back = browser.get(&pay).await;
+    assert_eq!(
+        location(&back),
+        format!("/checkout/confirmation/{order_id}")
+    );
     Ok(())
 }
 

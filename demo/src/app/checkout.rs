@@ -23,9 +23,12 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{
-        content::Form,
+        content::{Form, Js},
         error::{RouterErrorExt, see_other},
+        header::CONTENT_SECURITY_POLICY,
         href, page, path_param, path_param as param, query_params, query_params as query,
+        response::response_headers,
+        route,
     },
     view::{View, component, view},
 };
@@ -400,8 +403,12 @@ enum PayStep {
     Manual,
     /// The provider's own page.
     Redirect(String),
-    /// The provider's embedded form.
-    Embedded,
+    /// The provider's embedded form, and where it sends the shopper back.
+    Embedded {
+        client_secret: String,
+        publishable_key: String,
+        return_url: String,
+    },
     Cancelled(String),
 }
 
@@ -463,11 +470,36 @@ async fn pay_step(cx: &Cx, id: &str, order: Option<&OrderDetailsView>) -> Result
     match started {
         Ok(PaymentStart::Manual) => Ok(PayStep::Manual),
         Ok(PaymentStart::Redirect(url)) => Ok(PayStep::Redirect(url)),
-        Ok(PaymentStart::ClientSecret { .. }) => Ok(PayStep::Embedded),
+        Ok(PaymentStart::ClientSecret {
+            client_secret,
+            publishable_key,
+        }) => Ok(PayStep::Embedded {
+            client_secret,
+            publishable_key,
+            return_url: urls.paid,
+        }),
         // Captured or declined while the page was loading: look again.
         Err(PaymentError::NotRequested) => Ok(PayStep::Processing),
         Err(err) => Err(anyhow::Error::from(err).into()),
     }
+}
+
+/// What the card form may load: Stripe.js, its frames (the card fields, 3-D
+/// Secure), its API — and nothing else from outside the shop. The shop's own
+/// stylesheet is inline, hence `style-src`.
+const PAY_PAGE_CSP: &str = "default-src 'self'; \
+    script-src 'self' https://js.stripe.com; \
+    frame-src https://js.stripe.com https://hooks.stripe.com; \
+    connect-src 'self' https://api.stripe.com; \
+    img-src 'self' data: https://*.stripe.com; \
+    style-src 'self' 'unsafe-inline'; \
+    base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+
+/// The card form's script, served by the shop so the page needs no inline
+/// script.
+#[route(GET "/checkout/pay.js")]
+pub async fn pay_script(_cx: &Cx) -> Result<Js<&'static str>> {
+    Ok(Js(include_str!("pay.js")))
 }
 
 #[page("/checkout/pay/{order_id}")]
@@ -479,11 +511,22 @@ pub async fn pay(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .map(|o| (o.display_number().to_owned(), money(&o.total)));
     let details = href!(account::order_detail, OrderId(id.clone())).resolve(cx);
+    let pay_label = summary
+        .as_ref()
+        .map(|(_, total)| total.clone())
+        .unwrap_or_default();
+    if matches!(step, PayStep::Embedded { .. }) {
+        // The only page that loads a third party's script says exactly which.
+        response_headers(cx).append(
+            CONTENT_SECURITY_POLICY,
+            topcoat::router::HeaderValue::from_static(PAY_PAGE_CSP),
+        );
+    }
     let (title, refresh) = match &step {
         PayStep::Registering => ("Commande en cours d'enregistrement", Some(2)),
         PayStep::Processing => ("Commande en cours de traitement", Some(2)),
         PayStep::Manual => ("Commande enregistrée", Some(10)),
-        PayStep::Redirect(_) | PayStep::Embedded => ("Paiement de votre commande", None),
+        PayStep::Redirect(_) | PayStep::Embedded { .. } => ("Paiement de votre commande", None),
         PayStep::Cancelled(_) => ("Commande annulée", None),
     };
 
@@ -508,9 +551,20 @@ pub async fn pay(cx: &Cx) -> Result<impl View> {
                     <h1>"Il ne reste qu'à payer"</h1>
                     <p><a class="button" href=(url.clone())>"Payer ma commande"</a></p>
                 }
-                PayStep::Embedded => {
+                PayStep::Embedded { client_secret, publishable_key, return_url } => {
                     <h1>"Il ne reste qu'à payer"</h1>
-                    <p role="alert">"Le paiement par carte sur cette page n'est pas encore disponible dans cette boutique."</p>
+                    <form id="payment-form" class="stack"
+                        data-client-secret=(client_secret.clone())
+                        data-publishable-key=(publishable_key.clone())
+                        data-return-url=(return_url.clone())>
+                        <div id="payment-element"></div>
+                        <p id="payment-problem" role="alert" hidden=(true)></p>
+                        <button id="payment-submit" type="submit" disabled=(true)>"Payer " (pay_label.clone())</button>
+                    </form>
+                    <p id="payment-progress" role="status" hidden=(true)></p>
+                    <noscript><p role="alert">"Le paiement par carte a besoin de JavaScript. Activez-le, puis rechargez cette page."</p></noscript>
+                    <script src="https://js.stripe.com/v3/"></script>
+                    <script src=(href!(pay_script)) defer=(true)></script>
                 }
                 PayStep::Cancelled(reason) => {
                     <h1>"Votre commande a été annulée"</h1>

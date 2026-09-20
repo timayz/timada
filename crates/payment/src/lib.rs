@@ -19,6 +19,8 @@ mod query;
 mod refund_execution;
 mod refund_list;
 mod session;
+#[cfg(feature = "stripe")]
+mod stripe;
 mod value_object;
 
 pub use command::*;
@@ -30,4 +32,6 @@ pub use query::*;
 pub use refund_execution::*;
 pub use refund_list::*;
 pub use session::*;
+#[cfg(feature = "stripe")]
+pub use stripe::*;
 pub use value_object::*;

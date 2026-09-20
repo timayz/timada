@@ -46,10 +46,17 @@ Environment of the demo:
 
 | Variable | Default | |
 |---|---|---|
-| `TIMADA_BASE_URL` | `http://127.0.0.1:3000` | links in e-mails |
+| `TIMADA_BASE_URL` | `http://127.0.0.1:3000` | links in e-mails, and where the payment provider sends shoppers back |
 | `TIMADA_MAIL_FROM` | `Timada demo <no-reply@timada.example>` | |
 | `TIMADA_SMTP_URL` | — | with `--features smtp`, e-mails are sent instead of logged |
 | `TIMADA_PAYMENT_TIMEOUT_SECS` | `1800` | an unpaid order is cancelled and its stock released |
+| `TIMADA_STRIPE_SECRET_KEY`, `TIMADA_STRIPE_PUBLISHABLE_KEY`, `TIMADA_STRIPE_WEBHOOK_SECRET` | — | with `--features stripe`, shoppers pay by card on the payment step and refunds go back through Stripe |
+
+To pay for real (in Stripe's test mode): build with `--features stripe`, set the
+three keys, and let Stripe reach the webhook —
+`stripe listen --forward-to 127.0.0.1:3000/webhooks/stripe` prints the
+`whsec_…` to use. The card `4242 4242 4242 4242` pays, `4000 0027 6000 3184`
+asks for 3-D Secure.
 
 ## The crates
 
@@ -64,7 +71,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-customer` | customers, their e-mail, billing and delivery addresses; customer list |
 | `timada-cart` | carts: lines with a price snapshot, promo code, saved carts, the checkout fact |
 | `timada-promotion` | promo codes (capped redemptions) and vouchers (balances) |
-| `timada-payment` | the payment of an order: requested, captured, declined, refunded — and the `PaymentProvider` port the money moves through |
+| `timada-payment` | the payment of an order: requested, captured, declined, refunded — and the `PaymentProvider` port the money moves through, with a Stripe adapter behind the `stripe` feature |
 | `timada-shipping` | delivery methods and the shipment of an order |
 | `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate |
 | `timada-order` | the order, the checkout ACL that places it, the fulfillment saga, payment timeouts |
