@@ -11,21 +11,35 @@ use timada_promotion::{
 use topcoat::{
     Result,
     context::{Cx, app_context},
-    router::{content::Form, error::see_other, href, page, path_param as param},
+    router::{
+        content::Form, error::see_other, href, page, path_param as param, query_params,
+        query_params as query,
+    },
     view::{View, component, view},
 };
 
 use super::{
     account,
     catalog::{self, ProductId, available_stock},
-    checkout, document,
+    checkout, currency, document,
     format::money,
+    safe_next,
 };
 use crate::{
     Store,
     auth::{current_account, require_account},
     cart_session::{current_cart, ensure_cart, forget_cart, fresh_cart},
+    currency::shopper_currency,
+    db::shop_currencies,
 };
+
+/// Set by `POST /currency` when the cart holds articles priced in another
+/// currency: the switch is confirmed here.
+#[query_params(error = bad_request)]
+struct ShowQuery {
+    devise: Option<String>,
+    next: Option<String>,
+}
 
 #[page("/cart")]
 pub async fn show() -> Result<impl View> {
@@ -64,6 +78,15 @@ async fn add_to_cart(
         return Ok(Err(
             "Ce produit n'est plus disponible à la vente.".to_owned()
         ));
+    };
+    // In the shopper's currency — the cart's own, once it holds something.
+    let currency = shopper_currency(cx).await?;
+    let Some(price) = price.price_in(&currency) else {
+        return Ok(Err(format!(
+            "« {} » n'est pas vendu en {}.",
+            product.name,
+            timada_core::format::currency_symbol(&currency)
+        )));
     };
 
     let in_cart = match current_cart(cx).await {
@@ -330,6 +353,22 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
     let login_link = href!(account::login)
         .query([("next", href!(show).resolve(cx))])
         .resolve(cx);
+    // A currency asked for while the cart holds articles priced in another:
+    // `(code, how it is written, where to go back to)`.
+    let asked = query::<ShowQuery>(cx)?;
+    let switch_to = asked
+        .devise
+        .clone()
+        .filter(|code| shop_currencies().sells_in(code))
+        .filter(|code| {
+            cart.as_ref()
+                .is_some_and(|cart| cart.subtotal.currency != *code)
+        })
+        .map(|code| {
+            let written = timada_core::format::currency_symbol(&code).to_owned();
+            let next = safe_next(asked.next.clone()).unwrap_or_else(|| "/".to_owned());
+            (code, written, next)
+        });
 
     Ok(view! {
         document(
@@ -337,6 +376,19 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
             <h1>"Votre panier"</h1>
             if let Some(error) = &error { <p role="alert" class="error">(error.clone())</p> }
             for notice in &price_notices { <p role="status" class="notice">(notice.clone())</p> }
+            if let Some((code, written, next)) = &switch_to {
+                <div role="alert" class="notice">
+                    <p>"Votre panier est en " (timada_core::format::currency_symbol(cart.as_ref().map_or("", |c| c.subtotal.currency.as_str())).to_owned()) " : un panier ne mélange pas les devises. Passer en " (written.clone()) " le vide."</p>
+                    <form method="post" action=(href!(currency::switch)) class="inline">
+                        <input type="hidden" name="currency" value=(code.clone())>
+                        <input type="hidden" name="next" value=(next.clone())>
+                        <input type="hidden" name="empty_cart" value="on">
+                        <button type="submit">"Vider le panier et passer en " (written.clone())</button>
+                    </form>
+                    " "
+                    <a href=(href!(show))>"Garder mon panier"</a>
+                </div>
+            }
             match &cart {
                 Some(cart) => {
                     <table>

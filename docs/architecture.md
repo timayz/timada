@@ -409,6 +409,16 @@ the SMTP relay.
   The storefront listing keeps every price (`catalog_listing_currency_price`):
   asked for in one currency (`ListingQuery::currency`), it holds what is sold
   in it, and its prices, price filter, price sort and facets are all in it.
+- **The shopper's currency is a preference; the cart's is a fact.** The demo
+  keeps the choice in a cookie (`__Host-timada_currency`, validated against
+  `ShopCurrencies`), but a cart that holds something decides: its lines were
+  priced in one currency and a cart never mixes two, so the shop is shown in
+  the cart's currency — a saved cart reopened brings its own back. Switching
+  with a cart in hand is asked on the cart page and empties it. Product
+  pages, listings, add-to-cart and repricing all go through `price_in`;
+  checkout offers `DeliveryFees::offers(currency)`. Paying in several times is
+  only offered in the base currency: its handling fee is an amount of that
+  currency.
 - **Destination VAT** (EU one-stop shop) has no product tax category: a
   product only knows the rate it is listed with, and each country's zone maps
   that rate to its own (`5,5 % → 7 %` in Germany), falling back to the

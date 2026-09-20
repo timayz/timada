@@ -2773,3 +2773,147 @@ async fn reviews_and_questions_are_paged_separately() -> anyhow::Result<()> {
     assert!(beyond.contains("Avis — page 2 sur 2"), "{beyond}");
     Ok(())
 }
+
+#[tokio::test]
+async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    let product_uri = format!("/p/{product_id}");
+
+    // Euros until told otherwise; the header offers the shop's currencies.
+    let page = text(browser.get(&product_uri).await).await?;
+    assert!(page.contains("119,95 €"), "{page}");
+    assert!(page.contains("ou 3 × "), "{page}");
+    assert!(page.contains("name=\"currency\""), "{page}");
+    assert!(page.contains("GBP (£)"), "{page}");
+
+    // A currency the shop does not sell in is not a choice.
+    let unknown = browser.post("/currency", "currency=USD&next=%2F").await;
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+    // Pounds: back where the shopper was, and everything follows — the
+    // product page, the listing, its price filter.
+    let switched = browser
+        .post(
+            "/currency",
+            &format!("currency=GBP&next=%2Fp%2F{product_id}"),
+        )
+        .await;
+    assert_eq!(location(&switched), product_uri);
+    let page = text(browser.get(&product_uri).await).await?;
+    assert!(page.contains("109,00 £"), "{page}");
+    assert!(!page.contains("119,95"), "{page}");
+    // The instalment offer is a euro one.
+    assert!(!page.contains("ou 3 × "), "{page}");
+    let listing = text(browser.get("/recherche?q=AOC").await).await?;
+    assert!(listing.contains("109,00 £"), "{listing}");
+    let dearer = text(browser.get("/recherche?q=AOC&prix_min=115").await).await?;
+    assert!(!dearer.contains("109,00 £"), "{dearer}");
+
+    // Into the cart at its pound price.
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("109,00 £"), "{cart}");
+
+    // A cart never mixes currencies: going back to euros is asked, not done.
+    let asked = browser.post("/currency", "currency=EUR&next=%2Fcart").await;
+    assert_eq!(location(&asked), "/cart?devise=EUR&next=%2Fcart");
+    let confirm = text(browser.get(&location(&asked)).await).await?;
+    assert!(
+        confirm.contains("Vider le panier et passer en €"),
+        "{confirm}"
+    );
+    assert!(confirm.contains("Garder mon panier"), "{confirm}");
+    // Kept: the shop stays in pounds, the cart's currency.
+    let page = text(browser.get(&product_uri).await).await?;
+    assert!(page.contains("109,00 £"), "{page}");
+
+    // Checked out in pounds: delivery at its pound fee, no paying in
+    // several times (its fee is a euro amount), a pound order and payment.
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+    let checkout = text(browser.get("/checkout").await).await?;
+    assert!(checkout.contains("4,90 £"), "{checkout}");
+    // Not a euro on the page itself (the header's switcher names them).
+    let body = checkout.split("<main>").nth(1).unwrap_or_default();
+    assert!(!body.contains('€'), "{body}");
+    assert!(!checkout.contains("value=\"installments\""), "{checkout}");
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address"))?
+        .to_owned();
+    let sneaky = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=installments"
+            ),
+        )
+        .await;
+    assert!(text(sneaky).await?.contains("n'est pas proposé"));
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    db::run_subscriptions_once(&store).await?;
+    let order = timada_order::load_order_details(&store.executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order missing"))?;
+    assert_eq!(order.shipping_fee, timada_core::Money::new(490, "GBP"));
+    assert_eq!(order.total, timada_core::Money::new(11_390, "GBP"));
+    let payment =
+        timada_payment::load_payment(&store.executor, timada_payment::payment_id(&order_id))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.amount, timada_core::Money::new(11_390, "GBP"));
+    let order_page = text(browser.get(&format!("/account/orders/{order_id}")).await).await?;
+    assert!(order_page.contains("113,90 £"), "{order_page}");
+
+    // The cart is gone: euros again at once. Then a euro cart, emptied on
+    // purpose to shop in pounds.
+    let back = browser
+        .post(
+            "/currency",
+            &format!("currency=EUR&next=%2Fp%2F{product_id}"),
+        )
+        .await;
+    assert_eq!(location(&back), product_uri);
+    assert!(
+        text(browser.get(&product_uri).await)
+            .await?
+            .contains("119,95 €")
+    );
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    let emptied = browser
+        .post("/currency", "currency=GBP&next=%2Fcart&empty_cart=on")
+        .await;
+    assert_eq!(location(&emptied), "/cart");
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("Votre panier est vide."), "{cart}");
+    assert!(
+        text(browser.get(&product_uri).await)
+            .await?
+            .contains("109,00 £")
+    );
+    // An emptied cart is in no currency: it takes a pound line at once.
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("109,00 £"), "{cart}");
+    Ok(())
+}

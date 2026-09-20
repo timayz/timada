@@ -437,9 +437,16 @@ async fn product_view(
     let product = load_product_page(&store.executor, &id)
         .await?
         .ok_or_not_found()?;
+    // What the product costs in the shopper's currency; `None` when it is
+    // not sold in it (or not sold any more).
+    let currency = crate::currency::shopper_currency(cx).await?;
     let price = load_product_price(&store.executor, price_id(&id))
         .await?
-        .filter(|p| !p.withdrawn);
+        .and_then(|p| p.price_in(&currency));
+    let not_in_currency = format!(
+        "Ce produit n'est pas vendu en {}.",
+        timada_core::format::currency_symbol(&currency)
+    );
     // The way back up: the product's category, while the shop shows it; the
     // label the product was created with otherwise.
     let lineage = match &product.category_id {
@@ -713,11 +720,11 @@ async fn product_view(
             match &price {
                 Some(price) => {
                     <p class="price">(money(&price.price_incl_tax))</p>
-                    if let Some(amount) = &price.installment_amount {
-                        <p class="muted">"ou 3 × " (money(amount))</p>
+                    if let Some((offer, amount)) = &price.installment {
+                        <p class="muted">"ou " (offer.count.to_string()) " × " (money(amount))</p>
                     }
                 }
-                None => <p class="muted">"Prix indisponible"</p>,
+                None => <p class="muted">(not_in_currency.clone())</p>,
             }
             <p>(availability) " · garantie " (product.warranty_months.to_string()) " mois"</p>
             if price.is_some() && available > 0 && !product.archived {

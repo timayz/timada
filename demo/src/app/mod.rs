@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod category;
 pub mod checkout;
 pub mod company;
+pub mod currency;
 mod format;
 pub mod invoice;
 pub mod listing;
@@ -109,6 +110,37 @@ pub async fn document(
         Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
     };
 
+    // The currencies to pick from, when the shop sells in more than one:
+    // `(code, how it is written, current)`.
+    let current_currency = crate::currency::shopper_currency(cx).await?;
+    let currencies: Vec<(String, String, bool)> = {
+        let shop = crate::db::shop_currencies();
+        if shop.others().is_empty() {
+            Vec::new()
+        } else {
+            shop.all()
+                .map(|code| {
+                    let symbol = timada_core::format::currency_symbol(code);
+                    let written = if symbol == code {
+                        code.to_owned()
+                    } else {
+                        format!("{code} ({symbol})")
+                    };
+                    (code.to_owned(), written, code == current_currency)
+                })
+                .collect()
+        }
+    };
+    // Where the switch comes back to: this page — unless it answers a form,
+    // whose address is not one to `GET`.
+    let here = if topcoat::router::request::method(cx) == topcoat::router::Method::GET {
+        topcoat::router::request::uri(cx)
+            .path_and_query()
+            .map_or_else(|| "/".to_owned(), |path| path.as_str().to_owned())
+    } else {
+        "/".to_owned()
+    };
+
     Ok(view! {
         <!DOCTYPE html>
         <html lang="fr">
@@ -138,6 +170,20 @@ pub async fn document(
                         <input type="search" name="q" aria-label="Rechercher un produit" placeholder="Rechercher…" size="18">
                         <button type="submit">"Chercher"</button>
                     </form>
+                    if !currencies.is_empty() {
+                        <form method="post" action=(href!(currency::switch)) class="inline">
+                            <input type="hidden" name="next" value=(here.clone())>
+                            <label for="currency" class="muted">"Devise"</label>
+                            " "
+                            <select id="currency" name="currency">
+                                for (code, written, current) in &currencies {
+                                    <option value=(code.clone()) selected=(*current)>(written.clone())</option>
+                                }
+                            </select>
+                            " "
+                            <button type="submit">"Changer"</button>
+                        </form>
+                    }
                     <nav aria-label="Principal">
                         <a href=(href!(cart::show))>"Panier (" (cart_count.to_string()) ")"</a>
                         match &account {

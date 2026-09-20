@@ -221,6 +221,7 @@ impl Listing {
 /// string. A page past the end is the last one.
 pub async fn load_listing(cx: &Cx, base: String, scope: Scope) -> Result<Listing> {
     let store = app_context::<Store>(cx);
+    let currency = crate::currency::shopper_currency(cx).await?;
     let mut filters = Filters::parse(uri(cx).query(), &scope.spec_facets);
     let brand_scoped = scope.brand_slug.is_some();
     let query_for = |filters: &Filters| ListingQuery {
@@ -232,9 +233,8 @@ pub async fn load_listing(cx: &Cx, base: String, scope: Scope) -> Result<Listing
         },
         price_min_minor: filters.price_min.map(|p| p.saturating_mul(100)),
         price_max_minor: filters.price_max.map(|p| p.saturating_mul(100)),
-        // The listed prices, until the storefront lets a shopper pick a
-        // currency.
-        currency: None,
+        // What is sold in the shopper's currency, at its price there.
+        currency: Some(currency.clone()),
         in_stock: filters.in_stock,
         min_rating: filters.min_rating,
         specs: filters.specs.clone(),

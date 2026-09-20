@@ -113,6 +113,10 @@ async fn on_cart_line_removed(
 ) -> anyhow::Result<()> {
     row.products.retain(|p| p != &event.data.product_id);
     row.prices.retain(|(p, _)| p != &event.data.product_id);
+    // An empty cart is in no currency: the next line decides again.
+    if row.products.is_empty() {
+        row.currency = None;
+    }
     Ok(())
 }
 
