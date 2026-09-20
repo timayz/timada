@@ -8,8 +8,8 @@ use timada_tax::{BusinessBuyer, ReverseChargeProof, TaxTreatment, VatLine};
 use crate::{
     aggregator::{
         Order, OrderBuyerIdentified, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied,
-        OrderNumberAssigned, OrderPaid, OrderPlaced, OrderReverseCharged, OrderSettled,
-        OrderShipped, OrderTaxed,
+        OrderNumberAssigned, OrderPaid, OrderPlaced, OrderRatePinned, OrderReverseCharged,
+        OrderSettled, OrderShipped, OrderTaxed,
     },
     value_object::{
         DeliveryChoice, OrderDiscount, OrderLine, OrderStatus, PaymentMode, Seller, order_total,
@@ -45,6 +45,9 @@ pub struct OrderDetailsView {
     /// The order is an intra-community supply, exempt on this proof; its
     /// `tax` then says `Export`, and documents say "autoliquidation".
     pub reverse_charge: Option<ReverseChargeProof>,
+    /// The rate the order goes to the books at; `None` for an order in the
+    /// books' own currency (or one no rate could be had for yet).
+    pub exchange_rate: Option<timada_tax::PinnedRate>,
     pub total: Money,
     /// The code typed in the cart, honoured or not.
     pub promo_code: Option<String>,
@@ -71,10 +74,11 @@ pub fn create_projection<E: Executor>() -> Projection<E, OrderDetailsView> {
         .handler(on_order_taxed())
         .handler(on_order_buyer_identified())
         .handler(on_order_reverse_charged())
+        .handler(on_order_rate_pinned())
         // The view gained `order_number`, then `tax`, then `buyer` and
         // `reverse_charge`: snapshots taken with a previous shape must not be
         // decoded.
-        .revision(3)
+        .revision(4)
         .strict()
 }
 
@@ -251,5 +255,14 @@ async fn on_order_confirmation_resent(
     row: &mut OrderDetailsView,
 ) -> anyhow::Result<()> {
     row.confirmation_resent_count += 1;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_rate_pinned(
+    event: Event<OrderRatePinned>,
+    row: &mut OrderDetailsView,
+) -> anyhow::Result<()> {
+    row.exchange_rate = Some(event.data.rate);
     Ok(())
 }

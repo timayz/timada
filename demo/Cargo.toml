@@ -14,6 +14,9 @@ smtp = ["timada-mailer/smtp"]
 stripe = ["timada-payment/stripe"]
 # Check business customers' VAT numbers against VIES (`TIMADA_VIES=1`).
 vies = ["timada-tax/vies"]
+# Pin orders in other currencies at the European Central Bank's reference
+# rates (`TIMADA_ECB=1`) instead of the demo's fixed ones.
+ecb = ["timada-tax/ecb"]
 
 [dependencies]
 timada-core.workspace = true

@@ -272,7 +272,8 @@ fn router(store: Store, assets: AssetConfig, stylesheet: Stylesheet) -> Router {
         .token_store(CookieTokenStore::new().name(auth::SESSION_COOKIE))
         .build();
     let services = AdminServices::new(store.executor.clone(), store.db.clone())
-        .with_archive(store.archive.clone());
+        .with_archive(store.archive.clone())
+        .with_exchange_rates(db::exchange_rates());
     let builder = Router::builder()
         .discover()
         .app_context(store)

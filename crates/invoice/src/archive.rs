@@ -394,12 +394,15 @@ mod issue {
             return Ok(None);
         };
         // The order itself gives its number: no read model to wait for.
-        let order_number = timada_order::load_order_details(executor, &invoice.order_id)
-            .await?
-            .and_then(|order| order.order_number);
+        let order = timada_order::load_order_details(executor, &invoice.order_id).await?;
+        let (order_number, rate) = match order {
+            Some(order) => (order.order_number, order.exchange_rate),
+            None => (None, None),
+        };
         let Some(document) = invoice_document(issuer, invoice, order_number, Vec::new())? else {
             return Ok(None);
         };
+        let document = document.with_exchange_rate(rate)?;
         let (number, issued_at) = (document.number.clone(), document.issued_at);
         file(
             db,

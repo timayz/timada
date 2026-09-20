@@ -244,13 +244,13 @@ pool as data unless noted:
 | payment | `dispute_list_subscription` | read models (disputes, and whose payment a provider's reference is) | |
 | order | `payment_hold_subscription` | ACL ← payment: the orders held while their payment is disputed | |
 | order | `order_history_subscription`, `payment_deadline_subscription` | read models | |
-| order | `order_checkout_subscription` | ACL ← cart | `timada_tax::TaxZones`; optionally a `timada_tax::VatRegistry` (a business's VAT number is asked about again before its order is placed without VAT) and a `timada_order::ReverseChargePolicy`; optionally `timada_shipping::DeliveryFees` (delivery charged in the cart's currency), `timada_order::InstallmentHandlingFees` |
+| order | `order_checkout_subscription` | ACL ← cart | `timada_tax::TaxZones`; optionally a `timada_tax::VatRegistry` (a business's VAT number is asked about again before its order is placed without VAT) and a `timada_order::ReverseChargePolicy`; optionally `timada_shipping::DeliveryFees` (delivery charged in the cart's currency), `timada_order::InstallmentHandlingFees`, `timada_core::ShopCurrencies` + `timada_tax::ExchangeRateSource` (the rate pinned on an order in another currency) |
 | order | `order_fulfillment_subscription` | saga | *(no pool)* |
 | order | `order_promo_release_subscription` | ACL → promotion | |
 | invoice | `invoice_from_orders_subscription` | ACL ← order | |
 | invoice | `credit_notes_from_refunds_subscription` | ACL ← payment | |
 | invoice | `invoice_list_subscription`, `credit_note_list_subscription` | read models | |
-| invoice | `vat_journal_subscription` | read model: the VAT of issued invoices and credit notes, per rate | |
+| invoice | `vat_journal_subscription` | read model, in the books' currency (also follows `OrderRatePinned`): the VAT of issued invoices and credit notes, per rate | |
 | invoice | `invoice_archive_subscription` (feature `pdf`) | files each issued invoice's PDF in the archive | `timada_invoice::InvoiceArchive`, `timada_invoice::InvoiceIssuer`; optionally an `ArchivePolicy` |
 | invoice | `credit_note_archive_subscription` (feature `pdf`) | files each credit note's PDF in the archive | same as `invoice_archive_subscription` |
 | returns | `return_processing_subscription` | process manager | |
@@ -277,6 +277,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it. `default()` = France + overseas exports; `france_with_eu_oss()` adds the 26 other member states at their own VAT, reduced rates mapped by the host with `with_mapped_rate(zone, listed_bp, destination_bp)` |
 | `timada_shipping::DeliveryFees` | what each delivery method costs **per currency** (the built-in euro fees by default; a method without a fee in a currency is not offered to a cart in it) — to the checkout subscription, and to whatever page offers delivery methods |
 | `timada_order::InstallmentHandlingFees` | what paying in several times costs **per currency** (4,49 € by default; no fee in a currency = not offered in it) — to the checkout subscription, and to whatever page offers the payment modes |
+| `timada_tax::ExchangeRateSource` | where exchange rates come from (`FixedRates`, `EcbRates` with feature `ecb`, or the host's own `ExchangeRates`): with a `timada_core::ShopCurrencies`, to the checkout subscription — an order in another currency than the books' is pinned the rate of its day — and to `AdminServices::with_exchange_rates` |
 | `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `StripeProvider` (feature `stripe`), `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
 | `Arc<dyn timada_tax::VatNumberValidator>` | who says whether a business's VAT number is valid: `ViesValidator` (feature `vies`, the EU's registry — name the shop's own number and each check comes with its consultation number), `FormatValidator` (no registry: what reads well passes), `FakeValidator` in tests |
 | `timada_invoice::InvoiceArchive` | where issued invoices and credit notes are kept unaltered: `SqliteArchiveStore` (in the database, replicated with it), `DirectoryArchiveStore` (files, the host's to back up), or the host's own `ArchiveStore`. Handed to both archive subscriptions, to the mailer (the e-mailed file is the archived one) and to `AdminServices::with_archive` |
@@ -418,6 +419,23 @@ the SMTP relay.
   with a cart in hand is asked on the cart page and empties it. Product
   pages, listings, add-to-cart and repricing all go through `price_in`;
   checkout offers `DeliveryFees::offers(currency)`.
+- **The books are kept in one currency; an order says at what rate it enters
+  them.** Nothing a customer pays is ever converted, but a French seller
+  states the VAT in euros even on a pound invoice, and files its returns in
+  euros. When a cart in another currency than `ShopCurrencies::base()` is
+  checked out, the ACL asks a `timada_tax::ExchangeRates` source —
+  `FixedRates`, or `EcbRates` (feature `ecb`: the bank's daily file, fetched
+  hourly, the last table known answering when the bank does not) — and the
+  order records `OrderRatePinned`, quoted as central banks quote
+  (`PinnedRate::per_base_micros`, integers all the way). **The order is the
+  one place the rate lives**: invoice and credit-note documents
+  (`with_exchange_rate` → `base_currency`, « Contre-valeur en € au cours BCE
+  du … ») and the VAT journal read it from there, so credit notes use their
+  invoice's rate by construction. No rate to be had never loses an order: it
+  is placed without one, its documents stay silent, its journal rows wait in
+  their own currency (`VatReport::unconverted`), and `pin_exchange_rate` —
+  the admin's « Épingler le cours du jour » — brings them into the books;
+  the first rate stays.
 - **Every configured amount is said per currency** (`timada_core::PerCurrency`):
   delivery fees, the instalment handling fee
   (`timada_order::InstallmentHandlingFees`, 4,49 € by default — instalments

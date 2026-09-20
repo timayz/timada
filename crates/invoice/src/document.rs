@@ -51,6 +51,54 @@ pub struct DocumentCreditNote {
     pub amount: Money,
 }
 
+/// A document's amounts in the currency of the books, for a sale made in
+/// another one: what a French seller must state on the document (the VAT at
+/// least), at a rate that can be pointed at — the one pinned on the order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BaseCurrencyAmounts {
+    pub rate: timada_tax::PinnedRate,
+    pub total_excl_vat: Money,
+    pub vat_total: Money,
+    pub total: Money,
+}
+
+impl BaseCurrencyAmounts {
+    /// The VAT and the total go through the rate; the pre-tax amount is what
+    /// is left, so the three always add up.
+    fn of(
+        rate: timada_tax::PinnedRate,
+        total: &Money,
+        vat_total: Option<&Money>,
+    ) -> anyhow::Result<Self> {
+        let total = rate.to_base(total)?;
+        let vat_total = match vat_total {
+            Some(vat) => rate.to_base(vat)?,
+            None => Money::zero(&total.currency),
+        };
+        Ok(Self {
+            total_excl_vat: total.checked_sub(&vat_total)?,
+            vat_total,
+            total,
+            rate,
+        })
+    }
+
+    /// The sentence a document prints.
+    pub fn mention(&self) -> String {
+        use timada_core::format::{date, money};
+        format!(
+            "Contre-valeur en {} au cours {} du {} ({}) : total HT {}, TVA {}, total TTC {}.",
+            timada_core::format::currency_symbol(&self.rate.base),
+            self.rate.source,
+            date(self.rate.as_of),
+            self.rate.quote(),
+            money(&self.total_excl_vat),
+            money(&self.vat_total),
+            money(&self.total),
+        )
+    }
+}
+
 /// A numbered invoice, ready to be rendered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvoiceDocument {
@@ -87,9 +135,30 @@ pub struct InvoiceDocument {
     pub credit_notes: Vec<DocumentCreditNote>,
     /// `total` less the credit notes.
     pub net_after_credit_notes: Money,
+    /// The invoice in the currency of the books, when it is in another one
+    /// and its order's rate is known ([`Self::with_exchange_rate`]).
+    pub base_currency: Option<BaseCurrencyAmounts>,
 }
 
 impl InvoiceDocument {
+    /// States the invoice in the currency of the books too, at the rate
+    /// pinned on its order. A rate of another currency than the invoice's —
+    /// or none — leaves it as it is.
+    pub fn with_exchange_rate(
+        mut self,
+        rate: Option<timada_tax::PinnedRate>,
+    ) -> anyhow::Result<Self> {
+        self.base_currency = match rate.filter(|rate| rate.currency == self.total.currency) {
+            Some(rate) => Some(BaseCurrencyAmounts::of(
+                rate,
+                &self.total,
+                self.vat_total().as_ref(),
+            )?),
+            None => None,
+        };
+        Ok(self)
+    }
+
     /// The pre-tax total, from the VAT summary.
     pub fn total_excl_vat(&self) -> Option<Money> {
         let first = self.vat_lines.first()?;
@@ -167,6 +236,7 @@ pub fn invoice_document(
         handling_fee: invoice.handling_fee,
         total: invoice.total,
         credit_notes: notes,
+        base_currency: None,
     }))
 }
 
@@ -186,7 +256,14 @@ pub async fn load_invoice_document<E: evento::Executor>(
             .await?
             .remove(&invoice.order_id);
     let credit_notes = credit_notes_of_invoice(db, invoice_id).await?;
-    invoice_document(issuer, invoice, order_number, credit_notes)
+    // The rate lives on the order: pinned late, it still reaches its invoice.
+    let rate = timada_order::load_order_details(executor, &invoice.order_id)
+        .await?
+        .and_then(|order| order.exchange_rate);
+    match invoice_document(issuer, invoice, order_number, credit_notes)? {
+        Some(document) => Ok(Some(document.with_exchange_rate(rate)?)),
+        None => Ok(None),
+    }
 }
 
 impl InvoiceDocument {
@@ -240,9 +317,30 @@ pub struct CreditNoteDocument {
     /// than tax zones.
     pub vat_lines: Vec<VatLine>,
     pub regime_mention: Option<&'static str>,
+    /// The credit note in the currency of the books, at its order's rate.
+    pub base_currency: Option<BaseCurrencyAmounts>,
 }
 
 impl CreditNoteDocument {
+    /// States the credit note in the currency of the books too — at the rate
+    /// of the *order*, the one its invoice was stated at.
+    pub fn with_exchange_rate(
+        mut self,
+        rate: Option<timada_tax::PinnedRate>,
+    ) -> anyhow::Result<Self> {
+        self.base_currency = match rate.filter(|rate| rate.currency == self.amount.currency) {
+            Some(rate) => Some(BaseCurrencyAmounts::of(
+                rate,
+                &self.amount,
+                self.vat_total()
+                    .filter(|_| self.amounts_include_vat)
+                    .as_ref(),
+            )?),
+            None => None,
+        };
+        Ok(self)
+    }
+
     pub fn total_excl_vat(&self) -> Option<Money> {
         let first = self.vat_lines.first()?;
         let minor = self.vat_lines.iter().map(|l| l.base.minor).sum();
@@ -336,6 +434,7 @@ pub fn credit_note_document(
         customer_id: invoice.customer_id,
         buyer: invoice.billing_address,
         company: invoice.company,
+        base_currency: None,
     }
 }
 
@@ -357,15 +456,14 @@ pub async fn load_credit_note_document<E: evento::Executor>(
             note.invoice_id
         );
     };
-    let order_number = timada_order::load_order_details(executor, &note.order_id)
-        .await?
-        .and_then(|order| order.order_number);
-    Ok(Some(credit_note_document(
-        issuer,
-        note,
-        invoice,
-        order_number,
-    )))
+    let order = timada_order::load_order_details(executor, &note.order_id).await?;
+    let (order_number, rate) = match order {
+        Some(order) => (order.order_number, order.exchange_rate),
+        None => (None, None),
+    };
+    Ok(Some(
+        credit_note_document(issuer, note, invoice, order_number).with_exchange_rate(rate)?,
+    ))
 }
 
 #[cfg(test)]

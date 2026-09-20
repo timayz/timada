@@ -1401,3 +1401,123 @@ async fn delivery_and_instalment_fees_are_charged_in_the_carts_currency() -> any
     assert_eq!(francs.total, Money::new(10_000, "CHF"));
     Ok(())
 }
+
+/// Quotes pounds, and fails for everything else as a source that is down.
+struct PoundsOnly;
+
+impl timada_tax::ExchangeRates for PoundsOnly {
+    fn rate<'a>(&'a self, base: &'a str, currency: &'a str, at: u64) -> timada_tax::RateFuture<'a> {
+        Box::pin(async move {
+            if currency == "GBP" {
+                Ok(timada_tax::PinnedRate {
+                    base: base.to_owned(),
+                    currency: currency.to_owned(),
+                    per_base_micros: 853_800,
+                    as_of: at,
+                    source: "BCE".into(),
+                })
+            } else {
+                Err(timada_tax::RateError::Unavailable("bank closed".into()))
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn an_order_in_another_currency_is_pinned_the_rate_of_its_day() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let inventory = timada_inventory::Command(&executor);
+    let stock = inventory
+        .register_stock_item(RegisterStockItem {
+            product_id: PRODUCT.into(),
+            location: StockLocation::Warehouse,
+        })
+        .await?;
+    inventory.receive_stock(&stock, 10).await?;
+
+    let cart = timada_cart::Command(&executor);
+    let mut carts = Vec::new();
+    for currency in ["EUR", "GBP", "CHF"] {
+        let cart_id = cart.open_cart(Some(CUSTOMER.into())).await?;
+        cart.add_line(
+            &cart_id,
+            AddLine {
+                product_id: PRODUCT.into(),
+                name: "AOC 23.8\" LED - 24G4XE".into(),
+                quantity: 1,
+                unit_price: Money::new(10_000, currency),
+                warranty_months: 60,
+            },
+        )
+        .await?;
+        cart.checkout(
+            &cart_id,
+            Checkout {
+                customer_id: None,
+                delivery_address: address("121, Avenue Tolosane", "31520", "Ramonville", "FR"),
+                billing_address: address("121, Avenue Tolosane", "31520", "Ramonville", "FR"),
+                delivery: timada_cart::DeliveryChoice {
+                    method_code: "store-pickup".into(),
+                    pickup_store_id: Some("toulouse".into()),
+                },
+                payment_mode: timada_cart::PaymentMode::Card,
+            },
+        )
+        .await?;
+        carts.push(order_id(&cart_id));
+    }
+    for _ in 0..2 {
+        order_checkout_subscription()
+            .data(db.clone())
+            .data(timada_core::ShopCurrencies::new("EUR", &["GBP", "CHF"])?)
+            .data(timada_tax::ExchangeRateSource::new(PoundsOnly))
+            .data(
+                timada_shipping::DeliveryFees::default()
+                    .with_fee("store-pickup", Money::new(0, "GBP"))
+                    .with_fee("store-pickup", Money::new(0, "CHF")),
+            )
+            .run_once(&executor)
+            .await?;
+    }
+    let rate_of = |id: String| {
+        let executor = &executor;
+        async move {
+            Ok::<_, anyhow::Error>(
+                timada_order::load_order_details(executor, id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("order missing"))?
+                    .exchange_rate,
+            )
+        }
+    };
+    // The books' own currency needs no rate.
+    assert_eq!(rate_of(carts[0].clone()).await?, None);
+    // Pounds: the rate of the day the cart was checked out.
+    let pounds = rate_of(carts[1].clone())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no rate pinned on the pound order"))?;
+    assert_eq!(
+        (
+            pounds.base.as_str(),
+            pounds.currency.as_str(),
+            pounds.per_base_micros
+        ),
+        ("EUR", "GBP", 853_800)
+    );
+    assert!(pounds.as_of > 0);
+    // Francs: the source was down. The order is placed all the same, and
+    // gets its rate later — once.
+    assert_eq!(rate_of(carts[2].clone()).await?, None);
+    let late = timada_tax::PinnedRate {
+        base: "EUR".into(),
+        currency: "CHF".into(),
+        per_base_micros: 941_200,
+        as_of: pounds.as_of,
+        source: "BCE".into(),
+    };
+    let orders = timada_order::Command(&executor);
+    assert!(orders.pin_exchange_rate(&carts[2], late.clone()).await?);
+    assert!(!orders.pin_exchange_rate(&carts[2], late.clone()).await?);
+    assert_eq!(rate_of(carts[2].clone()).await?, Some(late));
+    Ok(())
+}

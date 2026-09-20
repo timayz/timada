@@ -310,6 +310,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         </table>
                     }
                     if let Some(mention) = document.regime_mention { <p>(mention)</p> }
+                    if let Some(base) = &document.base_currency { <p>(base.mention())</p> }
                     if !credit_notes.is_empty() {
                         <table>
                             <caption class="muted">"Avoirs émis sur cette facture"</caption>

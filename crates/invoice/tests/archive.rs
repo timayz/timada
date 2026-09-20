@@ -51,6 +51,7 @@ fn order(cart: &str) -> PlaceOrder {
         order_number: Some("C2026-000001".into()),
         tax: None,
         business: None,
+        exchange_rate: None,
     }
 }
 

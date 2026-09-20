@@ -64,6 +64,10 @@ pub struct AdminServices {
     /// Who makes prepaid return labels, when a carrier is plugged in; without
     /// one the operator attaches the label by hand.
     pub return_labels: Option<timada_returns::ReturnLabels>,
+    /// Where exchange rates come from, when the shop sells in other
+    /// currencies than its books': an order no rate could be had for when it
+    /// was placed gets one from its page.
+    pub exchange_rates: Option<timada_tax::ExchangeRateSource>,
 }
 
 impl AdminServices {
@@ -73,6 +77,7 @@ impl AdminServices {
             db,
             archive: None,
             return_labels: None,
+            exchange_rates: None,
         }
     }
 
@@ -83,6 +88,11 @@ impl AdminServices {
 
     pub fn with_return_labels(mut self, labels: timada_returns::ReturnLabels) -> Self {
         self.return_labels = Some(labels);
+        self
+    }
+
+    pub fn with_exchange_rates(mut self, rates: timada_tax::ExchangeRateSource) -> Self {
+        self.exchange_rates = Some(rates);
         self
     }
 }

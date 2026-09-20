@@ -602,6 +602,10 @@ fn lay_out(faces: &Faces, document: &InvoiceDocument) -> Vec<Vec<Mark>> {
         page.paragraph(Weight::Regular, BODY, Ink::Text, mention);
         page.y += 12.0;
     }
+    if let Some(base) = &document.base_currency {
+        page.paragraph(Weight::Regular, BODY, Ink::Text, &base.mention());
+        page.y += 12.0;
+    }
 
     if !document.credit_notes.is_empty() {
         page.caption("Avoirs émis sur cette facture");
@@ -801,6 +805,10 @@ fn lay_out_credit_note(faces: &Faces, document: &CreditNoteDocument) -> Vec<Vec<
         page.paragraph(Weight::Regular, BODY, Ink::Text, mention);
         page.y += 12.0;
     }
+    if let Some(base) = &document.base_currency {
+        page.paragraph(Weight::Regular, BODY, Ink::Text, &base.mention());
+        page.y += 12.0;
+    }
     page.paragraph(
         Weight::Regular,
         BODY,
@@ -962,6 +970,7 @@ mod tests {
             regime_mention: None,
             credit_notes: Vec::new(),
             net_after_credit_notes: total.clone(),
+            base_currency: None,
             total,
         }
     }
@@ -986,7 +995,7 @@ mod tests {
         let faces = Faces::load()?;
         // Narrow no-break space of amounts, the minus of reductions, the dot
         // of the footer.
-        for ch in "éèàçùôÉ€°«»’\u{202f}\u{a0}−·".chars() {
+        for ch in "éèàçùôÉ€£$°«»’\u{202f}\u{a0}−·".chars() {
             assert!(faces.regular.has(ch), "regular lacks {ch:?}");
             assert!(faces.bold.has(ch), "bold lacks {ch:?}");
         }
@@ -1131,6 +1140,7 @@ mod tests {
                 total: Money::eur(6_000),
             }],
             regime_mention: None,
+            base_currency: None,
         }
     }
 
@@ -1195,6 +1205,58 @@ mod tests {
             credit_note_pdf_file_name(&document),
             "avoir-A2026-000007.pdf"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_foreign_currency_invoice_states_itself_in_the_books_currency()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let faces = Faces::load()?;
+        let pound = |minor| Money::new(minor, "GBP");
+        let mut document = invoice(1);
+        document.lines[0].unit_price = pound(5_450);
+        document.lines[0].total = pound(10_900);
+        document.subtotal = pound(10_900);
+        document.shipping_fee = pound(490);
+        document.handling_fee = pound(0);
+        document.total = pound(11_390);
+        document.net_after_credit_notes = pound(11_390);
+        document.vat_lines = vec![VatLine {
+            rate_bp: 2_000,
+            base: pound(9_492),
+            vat: pound(1_898),
+            total: pound(11_390),
+        }];
+        let document = document.with_exchange_rate(Some(timada_tax::PinnedRate {
+            base: "EUR".into(),
+            currency: "GBP".into(),
+            per_base_micros: 853_800,
+            // 18/09/2026.
+            as_of: 1_789_689_600,
+            source: "BCE".into(),
+        }))?;
+        let base = document
+            .base_currency
+            .clone()
+            .ok_or("no amounts in the books' currency")?;
+        // 113,90 £ → 133,40 €; 18,98 £ of VAT → 22,23 €; what is left is the
+        // pre-tax amount, so the three add up.
+        assert_eq!(base.total, Money::eur(13_340));
+        assert_eq!(base.vat_total, Money::eur(2_223));
+        assert_eq!(base.total_excl_vat, Money::eur(11_117));
+        let all = texts(&lay_out(&faces, &document)).concat().join(" ");
+        assert!(all.contains("113,90 £"), "{all}");
+        for expected in [
+            "Contre-valeur en € au cours BCE du 18/09/2026",
+            "1 EUR = 0,8538 GBP",
+            "TVA 22,23 €",
+            "total TTC 133,40 €",
+        ] {
+            assert!(all.contains(expected), "{expected}: {all}");
+        }
+        // A rate of another currency says nothing of this invoice.
+        let euros = invoice(1).with_exchange_rate(document.base_currency.map(|b| b.rate))?;
+        assert!(euros.base_currency.is_none());
         Ok(())
     }
 

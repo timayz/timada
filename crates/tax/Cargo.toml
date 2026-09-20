@@ -8,6 +8,8 @@ repository.workspace = true
 [features]
 # Check VAT numbers against VIES, the EU's registry.
 vies = ["dep:reqwest", "dep:serde", "dep:serde_json"]
+# The European Central Bank's daily reference rates as an `ExchangeRates`.
+ecb = ["dep:reqwest"]
 
 [dependencies]
 timada-core.workspace = true

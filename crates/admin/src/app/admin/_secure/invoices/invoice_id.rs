@@ -469,6 +469,7 @@ pub async fn print(cx: &Cx) -> Result<impl View> {
                 }
             </dl>
             if let Some(mention) = document.regime_mention { <p class="mt-6">(mention)</p> }
+            if let Some(base) = &document.base_currency { <p class="mt-3">(base.mention())</p> }
             <footer class="mt-8 border-t border-border pt-3 text-xs text-muted-foreground">
                 (document.issuer.name.clone()) " · " (document.issuer.registration.clone()) " · TVA " (document.issuer.vat_number.clone()) " · " (document.issuer.contact.clone())
             </footer>

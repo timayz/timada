@@ -45,6 +45,7 @@ fn place_order(cart_id: &str) -> PlaceOrder {
         order_number: None,
         tax: None,
         business: None,
+        exchange_rate: None,
     }
 }
 

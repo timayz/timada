@@ -2874,6 +2874,27 @@ async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::
     let order_page = text(browser.get(&format!("/account/orders/{order_id}")).await).await?;
     assert!(order_page.contains("113,90 £"), "{order_page}");
 
+    // Pinned the rate of the day, the order goes to the books in euros: its
+    // invoice says what it comes to, next to the pounds the customer paid.
+    assert!(
+        order
+            .exchange_rate
+            .as_ref()
+            .is_some_and(|rate| rate.currency == "GBP" && rate.base == "EUR")
+    );
+    timada_payment::Command(&store.executor)
+        .capture_payment(timada_payment::payment_id(&order_id), "psp-gbp".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let invoice = text(
+        browser
+            .get(&format!("/account/orders/{order_id}/invoice"))
+            .await,
+    )
+    .await?;
+    assert!(invoice.contains("Contre-valeur en €"), "{invoice}");
+    assert!(invoice.contains("1 EUR = 0,8538 GBP"), "{invoice}");
+
     // The cart is gone: euros again at once. Then a euro cart, emptied on
     // purpose to shop in pounds.
     let back = browser

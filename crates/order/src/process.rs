@@ -171,7 +171,9 @@ pub async fn business_purchase<E: Executor>(
 /// a `timada_tax::VatRegistry`, asked again about a business's VAT number
 /// before its order is placed without VAT, and a [`ReverseChargePolicy`];
 /// `timada_shipping::DeliveryFees`, what each delivery method costs per
-/// currency (the built-in euro fees otherwise); [`InstallmentHandlingFees`].
+/// currency (the built-in euro fees otherwise); [`InstallmentHandlingFees`];
+/// a `timada_core::ShopCurrencies` and a `timada_tax::ExchangeRateSource`, to
+/// pin the rate an order in another currency goes to the books at.
 pub fn order_checkout_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ORDER_CHECKOUT_SUBSCRIPTION).handler(place_order_on_cart_checked_out())
 }
@@ -297,6 +299,35 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         .ok_or_else(|| anyhow::anyhow!("SqlitePool missing from subscription context"))?;
     let order_number = allocate_order_number(&db, &order_id(&cart_id)).await?;
 
+    // An order in another currency than the books goes to them at the rate
+    // of the day it is placed. The event's own date, so a redelivery asks
+    // about the same day. No rate to be had — the source is down, or does
+    // not quote the pair — never loses the order: it is placed, and the rate
+    // is pinned later (`Command::pin_exchange_rate`).
+    let base = ctx
+        .get::<timada_core::ShopCurrencies>()
+        .unwrap_or_default()
+        .base()
+        .to_owned();
+    let exchange_rate = match ctx.get::<timada_tax::ExchangeRateSource>() {
+        Some(source) if currency != base => {
+            match source.0.rate(&base, &currency, event.timestamp).await {
+                Ok(rate) => Some(rate),
+                Err(error) => {
+                    tracing::error!(%cart_id, %currency, %error, "no exchange rate: order placed without one");
+                    None
+                }
+            }
+        }
+        Some(_) => None,
+        None => {
+            if currency != base {
+                tracing::warn!(%cart_id, %currency, "order in another currency and no ExchangeRateSource: no rate pinned");
+            }
+            None
+        }
+    };
+
     let cmd = PlaceOrder {
         cart_id: cart_id.clone(),
         customer_id: event.data.customer_id,
@@ -319,6 +350,7 @@ async fn place_order_on_cart_checked_out<E: Executor>(
         order_number: Some(order_number),
         tax: Some(tax),
         business,
+        exchange_rate,
     };
 
     match Command(ctx.executor).place_order(cmd).await {

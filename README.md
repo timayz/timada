@@ -53,6 +53,7 @@ Environment of the demo:
 | `TIMADA_ALERTS_TO` | `boutique@timada.example` | where the shop itself is written to — a payment being disputed, and what the bank decided |
 | `TIMADA_ARCHIVE_DIR` | — | issued invoices and credit notes are archived as files under this directory instead of in the database |
 | `TIMADA_VIES`, `TIMADA_VAT_NUMBER` | — | with `--features vies` and `TIMADA_VIES=1`, business customers' VAT numbers are checked against the EU's VIES registry; the shop's own number gets each check its consultation number |
+| `TIMADA_ECB` | — | with `--features ecb` and `TIMADA_ECB=1`, an order in pounds or francs is pinned the European Central Bank's reference rate of the day (fixed demo rates otherwise): what its invoice states in euros, and what the VAT report counts |
 | `TIMADA_STRIPE_SECRET_KEY`, `TIMADA_STRIPE_PUBLISHABLE_KEY`, `TIMADA_STRIPE_WEBHOOK_SECRET` | — | with `--features stripe`, shoppers pay by card on the payment step and refunds go back through Stripe |
 
 The demo sells in euros, pounds and Swiss francs: the header's « Devise » switches, each product has a price *set* per currency (a few are not sold in francs), and delivery has its own fees in each.
@@ -80,7 +81,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-promotion` | promo codes (capped redemptions) and vouchers (balances) |
 | `timada-payment` | the payment of an order: requested, captured, declined, refunded, disputed — and the `PaymentProvider` port the money moves through, with a Stripe adapter behind the `stripe` feature |
 | `timada-shipping` | delivery methods, the shipment of an order and the parcels replacing what a return brought back |
-| `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate; VAT numbers and the registry (VIES) that checks them |
+| `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate; VAT numbers and the registry (VIES) that checks them; exchange rates for the books (a fixed table, or the ECB's) |
 | `timada-order` | the order, the checkout ACL that places it, the fulfillment saga, payment timeouts |
 | `timada-invoice` | one invoice per order, legal numbering, credit notes, both as documents — and, with the `pdf` feature, as PDF files, archived unaltered when they are issued; the VAT of a quarter |
 | `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock, then a refund — or the same product sent again; prepaid return labels, by hand or through a carrier port |

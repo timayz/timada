@@ -1,5 +1,5 @@
 use timada_core::{Address, Money};
-use timada_tax::{BusinessBuyer, ReverseChargeProof, TaxTreatment, VatLine};
+use timada_tax::{BusinessBuyer, PinnedRate, ReverseChargeProof, TaxTreatment, VatLine};
 
 use crate::value_object::{
     DeliveryChoice, FulfillmentLine, OrderLine, PaymentMode, PromoKind, Seller,
@@ -46,6 +46,12 @@ pub enum Order {
     /// the check of the buyer's VAT number it rests on. Committed together
     /// with `OrderPlaced` and `OrderBuyerIdentified`.
     OrderReverseCharged { proof: ReverseChargeProof },
+
+    /// The order is in another currency than the shop's books: the rate its
+    /// amounts go to the books at — the invoice's VAT in euros, the VAT
+    /// journal. Committed together with `OrderPlaced`, or on its own later
+    /// when no rate could be had then. It changes nothing the customer pays.
+    OrderRatePinned { rate: PinnedRate },
 
     /// The cart's code was honoured: `amount` comes off the total. Committed
     /// together with `OrderPlaced`, never on its own.

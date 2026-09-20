@@ -63,6 +63,10 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
             ))
             .with_return_labels(timada_returns::ReturnLabels::new(
                 timada_returns::FakeLabelProvider::default(),
+            ))
+            // Pounds are quoted; francs are not.
+            .with_exchange_rates(timada_tax::ExchangeRateSource::new(
+                timada_tax::FixedRates::new("EUR", "BCE").with("GBP", 853_800),
             )),
     );
     Ok(Harness {
@@ -215,6 +219,7 @@ async fn place_order(h: &Harness) -> anyhow::Result<String> {
                 shipping_rate_bp: 2_000,
             }),
             business: None,
+            exchange_rate: None,
         })
         .await?;
     order_history_subscription()
@@ -2522,5 +2527,88 @@ async fn a_product_is_priced_in_each_currency_the_shop_sells_in() -> anyhow::Res
         ))
         .await;
     assert_eq!(foreign.status(), StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_order_without_its_exchange_rate_gets_one_from_its_page() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let in_currency = |cart: &str, currency: &str| PlaceOrder {
+        cart_id: cart.into(),
+        customer_id: "customer-1".into(),
+        seller: Default::default(),
+        lines: vec![OrderLine {
+            product_id: "aoc-24g4xe".into(),
+            name: "AOC 24G4XE".into(),
+            quantity: 1,
+            unit_price: Money::new(10_900, currency),
+            warranty_months: 60,
+        }],
+        delivery_address: address(),
+        billing_address: address(),
+        delivery: timada_order::DeliveryChoice {
+            method_code: "colissimo".into(),
+            pickup_store_id: None,
+        },
+        payment_mode: timada_order::PaymentMode::Card,
+        shipping_fee: Money::new(490, currency),
+        handling_fee: Money::new(0, currency),
+        promo_code: None,
+        discount: None,
+        order_number: None,
+        tax: None,
+        business: None,
+        // The rate source was down when these were placed.
+        exchange_rate: None,
+    };
+    let orders = timada_order::Command(&h.executor);
+    let pounds = orders.place_order(in_currency("cart-gbp", "GBP")).await?;
+    let francs = orders.place_order(in_currency("cart-chf", "CHF")).await?;
+    let euros = place_order(&h).await?;
+
+    // The books' own currency: nothing to say.
+    let page = text(
+        h.router
+            .handle(get(&format!("/admin/orders/{euros}"), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(!page.contains("Cours de change"), "{page}");
+
+    let uri = format!("/admin/orders/{pounds}");
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("113,90 £"), "{page}");
+    assert!(page.contains("Aucun cours épinglé"), "{page}");
+    assert!(page.contains("Épingler le cours du jour"), "{page}");
+    for _ in 0..2 {
+        let pinned = h
+            .router
+            .handle(post(&format!("{uri}/exchange-rate"), "", Some(&cookie)))
+            .await;
+        assert_eq!(location(&pinned), uri);
+    }
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("1 EUR = 0,8538 GBP"), "{page}");
+    assert!(!page.contains("Aucun cours épinglé"), "{page}");
+    assert!(!page.contains("Épingler le cours du jour"), "{page}");
+
+    // Nobody quotes francs here: the operator is told, the order keeps waiting.
+    let uri = format!("/admin/orders/{francs}");
+    let refused = h
+        .router
+        .handle(post(&format!("{uri}/exchange-rate"), "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&refused), format!("{uri}?refund_error=rate"));
+    let page = text(
+        h.router
+            .handle(get(&location(&refused), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(
+        page.contains("Aucun cours de change n'a pu être obtenu"),
+        "{page}"
+    );
     Ok(())
 }

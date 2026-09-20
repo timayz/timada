@@ -61,6 +61,7 @@ fn order(
             shipping_rate_bp: rate_bp,
         }),
         business: None,
+        exchange_rate: None,
     }
 }
 
@@ -379,5 +380,163 @@ async fn a_reverse_charged_sale_is_neither_an_export_nor_the_one_stop_shops() ->
     let report = vat_report(&db, now).await?;
     assert_eq!(report.intra_community[0].base_minor, 10_000);
     assert_eq!(report.exports_base_minor, 12_000);
+    Ok(())
+}
+
+/// A pound order: 100,00 £ of goods and 20,00 £ of delivery, all at 20 %.
+fn pound_order(cart: &str, rate: Option<timada_tax::PinnedRate>) -> PlaceOrder {
+    let mut order = order(cart, "FR", "fr", TaxTreatment::Domestic, 2_000);
+    order.lines[0].unit_price = Money::new(10_000, "GBP");
+    order.shipping_fee = Money::new(2_000, "GBP");
+    order.handling_fee = Money::new(0, "GBP");
+    order.exchange_rate = rate;
+    order
+}
+
+fn pounds_per_euro() -> timada_tax::PinnedRate {
+    timada_tax::PinnedRate {
+        base: "EUR".into(),
+        currency: "GBP".into(),
+        // 1 EUR = 0,80 GBP: 120,00 £ are 150,00 €.
+        per_base_micros: 800_000,
+        as_of: 1_789_689_600,
+        source: "BCE".into(),
+    }
+}
+
+#[tokio::test]
+async fn a_sale_in_pounds_goes_to_the_books_in_euros_at_its_orders_rate() -> anyhow::Result<()> {
+    let mut all = migrations();
+    all.extend(timada_order::migrations());
+    let (executor, db) = timada_core::testing::memory_executor(all).await?;
+    let orders = timada_order::Command(&executor);
+    let invoices = Command {
+        executor: &executor,
+        db: db.clone(),
+    };
+    let journal = || async {
+        vat_journal_subscription()
+            .data(db.clone())
+            .run_once(&executor)
+            .await
+    };
+    let period = VatPeriod::of(timada_core::time::now_unix_secs()?);
+
+    // A euro sale, a pound sale with its rate, a pound sale without one (the
+    // source was down when it was placed).
+    let euros = orders
+        .place_order(order("cart-eur", "FR", "fr", TaxTreatment::Domestic, 2_000))
+        .await?;
+    let pinned = orders
+        .place_order(pound_order("cart-gbp", Some(pounds_per_euro())))
+        .await?;
+    let waiting = orders
+        .place_order(pound_order("cart-gbp-late", None))
+        .await?;
+    // A rate is of the order's currency, or it is refused.
+    assert!(matches!(
+        orders
+            .place_order(pound_order(
+                "cart-gbp-wrong",
+                Some(timada_tax::PinnedRate {
+                    currency: "CHF".into(),
+                    ..pounds_per_euro()
+                })
+            ))
+            .await,
+        Err(timada_order::OrderError::RateOfAnotherCurrency { .. })
+    ));
+    invoice_from_orders_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    for order_id in [&euros, &pinned, &waiting] {
+        invoices.issue_invoice(invoice_id(order_id)).await?;
+    }
+    // Half of the pinned sale comes back.
+    invoices
+        .issue_credit_note(IssueCreditNote {
+            refund_id: "refund-gbp".into(),
+            invoice_id: invoice_id(&pinned),
+            amount: Money::new(6_000, "GBP"),
+            reason: "geste".into(),
+        })
+        .await?;
+    journal().await?;
+
+    // Euros and converted pounds add up; the sale without a rate stays out,
+    // and the report says so.
+    let report = vat_report(&db, period).await?;
+    assert_eq!(report.currency, "EUR");
+    assert_eq!(report.unconverted, 1);
+    // 100,00 € + 20,00 € of VAT, then 125,00 € + 25,00 €, less 62,50 € + 12,50 €.
+    assert_eq!(report.domestic, [line("FR", 2_000, 16_250, 3_250)]);
+
+    // The documents say the same, in the same euros.
+    let issuer = timada_invoice::InvoiceIssuer::default();
+    let document =
+        timada_invoice::load_invoice_document(&executor, &db, &issuer, &invoice_id(&pinned))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no invoice document"))?;
+    assert_eq!(document.total, Money::new(12_000, "GBP"));
+    let base = document
+        .base_currency
+        .ok_or_else(|| anyhow::anyhow!("not stated in euros"))?;
+    assert_eq!(
+        (
+            base.total_excl_vat.clone(),
+            base.vat_total.clone(),
+            base.total.clone()
+        ),
+        (Money::eur(12_500), Money::eur(2_500), Money::eur(15_000))
+    );
+    assert!(
+        base.mention().contains("1 EUR = 0,8000 GBP"),
+        "{}",
+        base.mention()
+    );
+    let note = timada_invoice::load_credit_note_document(
+        &executor,
+        &issuer,
+        &timada_invoice::credit_note_id("refund-gbp"),
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("no credit note document"))?;
+    assert_eq!(
+        note.base_currency.map(|base| (base.vat_total, base.total)),
+        Some((Money::eur(1_250), Money::eur(7_500)))
+    );
+    let silent =
+        timada_invoice::load_invoice_document(&executor, &db, &issuer, &invoice_id(&waiting))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no invoice document"))?;
+    assert!(silent.base_currency.is_none());
+
+    // The rate is pinned at last — once: the first word stays.
+    assert!(
+        orders
+            .pin_exchange_rate(&waiting, pounds_per_euro())
+            .await?
+    );
+    assert!(
+        !orders
+            .pin_exchange_rate(
+                &waiting,
+                timada_tax::PinnedRate {
+                    per_base_micros: 900_000,
+                    ..pounds_per_euro()
+                }
+            )
+            .await?
+    );
+    assert!(matches!(
+        orders.pin_exchange_rate(&euros, pounds_per_euro()).await,
+        Err(timada_order::OrderError::RateOfAnotherCurrency { .. })
+    ));
+    journal().await?;
+    journal().await?;
+    let report = vat_report(&db, period).await?;
+    assert_eq!(report.unconverted, 0);
+    assert_eq!(report.domestic, [line("FR", 2_000, 28_750, 5_750)]);
     Ok(())
 }
