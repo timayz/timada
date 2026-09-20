@@ -418,6 +418,13 @@ the SMTP relay.
   with a cart in hand is asked on the cart page and empties it. Product
   pages, listings, add-to-cart and repricing all go through `price_in`;
   checkout offers `DeliveryFees::offers(currency)`.
+- **A value belongs to its currency.** A voucher, a store credit from a
+  return, a fixed-amount promo code: each is worth what it says in the
+  currency it was issued in, and is refused — unspent — on a cart in another
+  one (`quote_code` gives nothing, `redeem_code` fails on the currency);
+  `code_currency` lets a page say *why* rather than "no longer valid". A
+  percentage belongs to no currency and works everywhere. The admin issues
+  vouchers and fixed amounts in any currency the shop sells in.
 - **Every configured amount is said per currency** (`timada_core::PerCurrency`):
   delivery fees, the instalment handling fee
   (`timada_order::InstallmentHandlingFees`, 4,49 € by default — instalments

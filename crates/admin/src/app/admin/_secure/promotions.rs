@@ -22,7 +22,7 @@ use crate::{
         card::{card, card_content},
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
-    config::AdminServices,
+    config::{AdminConfig, AdminServices},
     ui::{date, empty_state, money, page_header, pagination},
 };
 
@@ -140,6 +140,8 @@ pub struct NewDiscountForm {
     code: String,
     kind: String,
     value: u32,
+    /// Of a fixed amount; a percentage works in every currency.
+    currency: Option<String>,
     max_redemptions: String,
     valid_days: String,
 }
@@ -161,6 +163,39 @@ pub async fn create_discount(cx: &Cx, Form(form): Form<NewDiscountForm>) -> Resu
     Ok(view! { new_discount_form(error: Some(error)) })
 }
 
+/// The currency a form asks for — the base one when it says nothing — if the
+/// shop sells in it. An amount belongs to its currency: it is never
+/// converted, and is refused on a cart in another one.
+fn sold_currency(cx: &Cx, asked: Option<&str>) -> Option<String> {
+    let currencies = &app_context::<AdminConfig>(cx).currencies;
+    match asked.map(str::trim).filter(|code| !code.is_empty()) {
+        Some(code) => currencies.sells_in(code).then(|| code.to_owned()),
+        None => Some(currencies.base().to_owned()),
+    }
+}
+
+/// The shop's currencies as a select — nothing when it has only one.
+#[topcoat::view::component]
+async fn currency_select(cx: &Cx, hint: &str) -> Result<impl View> {
+    let currencies = &app_context::<AdminConfig>(cx).currencies;
+    let codes: Vec<String> = if currencies.others().is_empty() {
+        Vec::new()
+    } else {
+        currencies.all().map(str::to_owned).collect()
+    };
+    Ok(view! {
+        if !codes.is_empty() {
+            <div class="flex flex-col gap-1.5">
+                <label for="currency" class="text-sm font-medium">"Devise"</label>
+                <select id="currency" name="currency" class="h-9 rounded-lg border border-border bg-background px-2 text-sm">
+                    for code in &codes { <option value=(code.clone())>(code.clone())</option> }
+                </select>
+                <p class="text-xs text-muted-foreground">(hint.to_owned())</p>
+            </div>
+        }
+    })
+}
+
 async fn save_discount(
     cx: &Cx,
     form: NewDiscountForm,
@@ -170,8 +205,11 @@ async fn save_discount(
             Ok(bp) => DiscountKind::Percent { bp },
             Err(_) => return Ok(Err("Pourcentage trop élevé.".into())),
         },
-        "fixed" => DiscountKind::FixedAmount {
-            amount: Money::eur(i64::from(form.value)),
+        "fixed" => match sold_currency(cx, form.currency.as_deref()) {
+            Some(currency) => DiscountKind::FixedAmount {
+                amount: Money::new(i64::from(form.value), currency),
+            },
+            None => return Ok(Err("La boutique ne vend pas dans cette devise.".into())),
         },
         _ => return Ok(Err("Choisissez un type de remise.".into())),
     };
@@ -215,6 +253,7 @@ async fn new_discount_form(cx: &Cx, error: Option<String>) -> Result<impl View> 
                         </select>
                     </div>
                     field(name: "value", label_text: "Valeur", attrs: topcoat::view::attributes! { type="number" min="1" required=(true) })
+                    currency_select(hint: "D'un montant fixe : il ne vaut que sur un panier dans cette devise. Un pourcentage vaut partout.")
                     field(name: "max_redemptions", label_text: "Utilisations maximum (vide = illimité)", attrs: topcoat::view::attributes! { type="number" min="1" })
                     field(name: "valid_days", label_text: "Durée de validité en jours (vide = sans limite)", attrs: topcoat::view::attributes! { type="number" min="1" })
                     if let Some(error) = &error {
@@ -233,6 +272,7 @@ async fn new_discount_form(cx: &Cx, error: Option<String>) -> Result<impl View> 
 pub struct NewVoucherForm {
     code: String,
     value_cents: i64,
+    currency: Option<String>,
     customer_id: String,
     valid_days: String,
 }
@@ -263,6 +303,9 @@ async fn save_voucher(
         Err(error) => return Ok(Err(error)),
     };
     let customer_id = Some(form.customer_id.trim().to_owned()).filter(|id| !id.is_empty());
+    let Some(currency) = sold_currency(cx, form.currency.as_deref()) else {
+        return Ok(Err("La boutique ne vend pas dans cette devise.".into()));
+    };
 
     let services = app_context::<AdminServices>(cx);
     let issued = timada_promotion::Command {
@@ -272,7 +315,7 @@ async fn save_voucher(
     .issue_voucher(IssueVoucher {
         code: form.code,
         customer_id,
-        value: Money::eur(form.value_cents),
+        value: Money::new(form.value_cents, currency),
         kind: VoucherKind::GiftVoucher,
         expires_at: days_from_now(valid_days)?,
     })
@@ -289,6 +332,7 @@ async fn new_voucher_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
                 <form method="post" action=(href!(create_voucher).resolve(cx)) class="grid gap-4 sm:grid-cols-2">
                     field(name: "code", label_text: "Code", attrs: topcoat::view::attributes! { required=(true) autocomplete="off" })
                     field(name: "value_cents", label_text: "Valeur (centimes)", attrs: topcoat::view::attributes! { type="number" min="1" required=(true) })
+                    currency_select(hint: "Le bon vaut dans cette devise et ne se dépense que sur un panier qui y est.")
                     field(name: "customer_id", label_text: "Client (identifiant, vide = au porteur)", attrs: topcoat::view::attributes! {})
                     field(name: "valid_days", label_text: "Durée de validité en jours (vide = sans limite)", attrs: topcoat::view::attributes! { type="number" min="1" })
                     if let Some(error) = &error {
