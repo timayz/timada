@@ -11,6 +11,9 @@ pub struct MailerConfig {
     /// Where customers send their returns, one line per address line; printed
     /// in the "return approved" e-mail.
     pub returns_address: String,
+    /// Where the shop itself is written to about what needs somebody — a
+    /// payment being disputed, with its deadline. `None`: nobody is told.
+    pub alerts_to: Option<String>,
     /// Events older than this many seconds are not e-mailed about. A
     /// subscription replays history when it first starts (or after a long
     /// outage): without this guard, plugging the mailer into an existing shop

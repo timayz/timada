@@ -50,6 +50,7 @@ Environment of the demo:
 | `TIMADA_MAIL_FROM` | `Timada demo <no-reply@timada.example>` | |
 | `TIMADA_SMTP_URL` | — | with `--features smtp`, e-mails are sent instead of logged |
 | `TIMADA_PAYMENT_TIMEOUT_SECS` | `1800` | an unpaid order is cancelled and its stock released |
+| `TIMADA_ALERTS_TO` | `boutique@timada.example` | where the shop itself is written to — a payment being disputed, and what the bank decided |
 | `TIMADA_ARCHIVE_DIR` | — | issued invoices and credit notes are archived as files under this directory instead of in the database |
 | `TIMADA_VIES`, `TIMADA_VAT_NUMBER` | — | with `--features vies` and `TIMADA_VIES=1`, business customers' VAT numbers are checked against the EU's VIES registry; the shop's own number gets each check its consultation number |
 | `TIMADA_STRIPE_SECRET_KEY`, `TIMADA_STRIPE_PUBLISHABLE_KEY`, `TIMADA_STRIPE_WEBHOOK_SECRET` | — | with `--features stripe`, shoppers pay by card on the payment step and refunds go back through Stripe |

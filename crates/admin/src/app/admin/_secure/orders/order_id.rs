@@ -7,7 +7,7 @@ use timada_invoice::{invoice_id as invoice_id_of, load_invoice};
 use timada_order::{
     FulfillmentStatus, OrderDetailsView, OrderStatus, load_fulfillment, load_order_details,
 };
-use timada_payment::{PaymentError, PaymentStatus, RefundStatus, payment_id};
+use timada_payment::{DisputeStatus, PaymentError, PaymentStatus, RefundStatus, payment_id};
 use timada_shipping::{ShipmentStatus, shipment_id};
 use topcoat::{
     Result,
@@ -20,7 +20,9 @@ use topcoat::{
 };
 
 use crate::{
-    app::admin::_secure::{invoices::invoice_id, returns::return_id},
+    app::admin::_secure::{
+        disputes::dispute_status_badge, invoices::invoice_id, returns::return_id,
+    },
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -45,8 +47,28 @@ fn refund_error_message(code: Option<&str>) -> Option<&'static str> {
         "amount" => Some("Le montant à rembourser doit être positif."),
         "state" => Some("Seul un paiement encaissé peut être remboursé."),
         "stale" => Some("Ce remboursement n'attend plus cette action."),
+        "disputed" => Some(
+            "Un litige bancaire est en cours sur ce paiement : ni expédition ni remboursement avant la décision de la banque.",
+        ),
+        "credit" => Some(
+            "L'avoir n'a pas pu être émis : la facture n'est pas émise, ou ses avoirs couvrent déjà son montant.",
+        ),
         _ => None,
     }
+}
+
+/// One dispute of the order's payment, worded.
+struct DisputeLine {
+    reference: String,
+    amount: String,
+    reason: String,
+    opened_on: String,
+    /// When the evidence is due, while the dispute is open.
+    respond_by: Option<String>,
+    status: DisputeStatus,
+    /// Lost, and not documented by a credit note yet.
+    can_credit: bool,
+    credit_note: Option<String>,
 }
 
 async fn load(cx: &Cx) -> Result<(String, OrderDetailsView)> {
@@ -101,16 +123,45 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .collect();
     let refund_error = refund_error_message(query::<ShowQuery>(cx)?.refund_error.as_deref());
 
+    // The payment's disputes. An open one holds the order: no parcel, no
+    // refund. A lost one may be documented by a credit note — the operator's
+    // decision, once per dispute.
+    let disputed = payment.as_ref().is_some_and(|p| p.open_dispute().is_some());
+    let mut disputes = Vec::new();
+    for dispute in payment.iter().flat_map(|p| &p.disputes) {
+        let credit_note = timada_invoice::load_credit_note(
+            &services.executor,
+            timada_invoice::credit_note_id(&timada_invoice::dispute_credit_reference(
+                &dispute.dispute_id,
+            )),
+        )
+        .await?
+        .map(|note| note.credit_note_number);
+        disputes.push(DisputeLine {
+            reference: dispute.dispute_id.clone(),
+            amount: money(&dispute.amount),
+            reason: timada_payment::dispute_reason_label(&dispute.reason).to_owned(),
+            opened_on: date(dispute.opened_at),
+            respond_by: dispute
+                .respond_by
+                .filter(|_| dispute.status == DisputeStatus::Open)
+                .map(date),
+            status: dispute.status,
+            can_credit: dispute.status == DisputeStatus::Lost && credit_note.is_none(),
+            credit_note,
+        });
+    }
+
     // What is still refundable, in cents, once the payment is captured.
     // Refunds on their way to the provider already hold their amount.
     let refundable = match payment
         .as_ref()
         .filter(|p| p.status == PaymentStatus::Captured)
     {
-        Some(p) => {
+        Some(p) if !disputed => {
             Some(p.refundable().map_err(anyhow::Error::from)?.minor).filter(|left| *left > 0)
         }
-        None => None,
+        _ => None,
     };
     // Refunds asked for that did not go back yet: `(id, amount, reason,
     // failure)` — a failure is what the operator can act on.
@@ -142,6 +193,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .is_some_and(|p| p.status == PaymentStatus::Requested);
     let can_ship = order.status != OrderStatus::Cancelled
+        && !disputed
         && shipment
             .as_ref()
             .is_some_and(|s| s.status == ShipmentStatus::Created);
@@ -240,6 +292,46 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         </dl>
                     )
                 )
+                if !disputes.is_empty() {
+                    card(
+                        card_header(card_title("Litige bancaire"))
+                        card_content(
+                            if disputed {
+                                <p role="alert" class="mb-3 text-sm text-destructive">"Paiement contesté : la commande est retenue, aucun remboursement ne part avant la décision de la banque."</p>
+                            }
+                            <ul class="flex flex-col gap-4 text-sm">
+                                for dispute in &disputes {
+                                    <li class="flex flex-col gap-1">
+                                        <span class="flex items-center justify-between gap-2">
+                                            <span class="tabular-nums">(dispute.amount.clone())</span>
+                                            dispute_status_badge(status: dispute.status)
+                                        </span>
+                                        <span>(dispute.reason.clone())</span>
+                                        <span class="text-muted-foreground">"Ouvert le " (dispute.opened_on.clone()) " · " <span class="font-mono text-xs">(dispute.reference.clone())</span></span>
+                                        if let Some(respond_by) = &dispute.respond_by {
+                                            <span>"Justificatifs à transmettre au prestataire avant le " <strong>(respond_by.clone())</strong></span>
+                                        }
+                                        if let Some(number) = &dispute.credit_note {
+                                            <span class="text-muted-foreground">"Documenté par l'avoir " <span class="font-mono text-xs">(number.clone())</span></span>
+                                        }
+                                        if dispute.can_credit {
+                                            <span class="text-muted-foreground">"La banque a rendu cette somme au client. Si la vente est annulée, un avoir la sort du chiffre d'affaires et de la TVA ; si c'est une créance irrécouvrable, n'en émettez pas."</span>
+                                            <form method="post" action=(href!(credit_dispute, OrderId(id.clone())))>
+                                                <input type="hidden" name="dispute_id" value=(dispute.reference.clone())>
+                                                button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Émettre un avoir")
+                                            </form>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                            if refundable.is_none() && open_refunds.is_empty() {
+                                if let Some(error) = refund_error {
+                                    <p role="alert" class="mt-3 text-sm text-destructive">(error)</p>
+                                }
+                            }
+                        )
+                    )
+                }
                 card(
                     card_header(card_title("Actions"))
                     card_content(
@@ -340,6 +432,10 @@ pub struct ShipForm {
 pub async fn ship(cx: &Cx, Form(form): Form<ShipForm>) -> Result<impl View> {
     let (id, _) = load(cx).await?;
     let services = app_context::<AdminServices>(cx);
+    if is_disputed(cx, &id).await? {
+        let target = format!("{}?refund_error=disputed", back(cx, &id));
+        return Err::<(), _>(see_other(target).into());
+    }
     timada_shipping::Command(&services.executor)
         .dispatch_shipment(shipment_id(&id), form.carrier, form.tracking_number)
         .await?;
@@ -396,6 +492,12 @@ pub struct RefundForm {
 pub async fn refund(cx: &Cx, Form(form): Form<RefundForm>) -> Result<impl View> {
     let (id, order) = load(cx).await?;
     let services = app_context::<AdminServices>(cx);
+    // The payment context would take the request and hold it; an operator is
+    // told no instead — the money is with the bank.
+    if is_disputed(cx, &id).await? {
+        let target = format!("{}?refund_error=disputed", back(cx, &id));
+        return Err::<(), _>(see_other(target).into());
+    }
     let refunded = timada_payment::Command(&services.executor)
         .refund_payment(
             payment_id(&id),
@@ -472,4 +574,63 @@ pub async fn settle_refund(cx: &Cx, Form(form): Form<SettleRefundForm>) -> Resul
         .await
         .map(|_| ());
     refund_outcome(cx, &id, outcome)
+}
+
+/// Whether the order's payment has a dispute the bank has not decided.
+async fn is_disputed(cx: &Cx, order_id: &str) -> Result<bool> {
+    let services = app_context::<AdminServices>(cx);
+    Ok(
+        timada_payment::load_payment(&services.executor, payment_id(order_id))
+            .await?
+            .is_some_and(|payment| payment.open_dispute().is_some()),
+    )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreditDisputeForm {
+    dispute_id: String,
+}
+
+/// The operator's decision on a lost dispute: the sale is cancelled, a
+/// credit note documents what the bank gave back. One per dispute — asking
+/// again changes nothing.
+#[page(POST "./disputes/credit-note")]
+pub async fn credit_dispute(cx: &Cx, Form(form): Form<CreditDisputeForm>) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let lost = timada_payment::load_payment(&services.executor, payment_id(&id))
+        .await?
+        .and_then(|payment| {
+            payment
+                .disputes
+                .into_iter()
+                .find(|d| d.dispute_id == form.dispute_id && d.status == DisputeStatus::Lost)
+        });
+    let Some(dispute) = lost else {
+        let target = format!("{}?refund_error=stale", back(cx, &id));
+        return Err::<(), _>(see_other(target).into());
+    };
+    let reference = timada_invoice::dispute_credit_reference(&dispute.dispute_id);
+    let issued = timada_invoice::Command {
+        executor: &services.executor,
+        db: services.db.clone(),
+    }
+    .issue_credit_note(timada_invoice::IssueCreditNote {
+        refund_id: reference.clone(),
+        invoice_id: invoice_id_of(&id),
+        amount: dispute.amount,
+        reason: reference,
+    })
+    .await;
+    let target = match issued {
+        Ok(_) => back(cx, &id),
+        Err(
+            timada_invoice::InvoiceError::CreditExceedsInvoice
+            | timada_invoice::InvoiceError::InvoiceNotIssued
+            | timada_invoice::InvoiceError::InvoiceVoided
+            | timada_invoice::InvoiceError::InvoiceNotFound,
+        ) => format!("{}?refund_error=credit", back(cx, &id)),
+        Err(err) => return Err(anyhow::Error::from(err).into()),
+    };
+    Err::<(), _>(see_other(target).into())
 }

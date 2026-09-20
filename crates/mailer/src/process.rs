@@ -15,7 +15,7 @@ use timada_order::{
     OrderDetailsView,
     aggregator::{OrderCancelled, OrderConfirmationResent, OrderPlaced, OrderShipped},
 };
-use timada_payment::aggregator::PaymentRefunded;
+use timada_payment::aggregator::{DisputeLost, DisputeOpened, DisputeWon, PaymentRefunded};
 use timada_returns::{
     ReturnView,
     aggregator::{ReturnApproved, ReturnCompleted, ReturnRefused},
@@ -47,6 +47,9 @@ pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(notify_on_order_shipped())
         .handler(notify_on_order_cancelled())
         .handler(notify_on_payment_refunded())
+        .handler(alert_on_dispute_opened())
+        .handler(alert_on_dispute_won())
+        .handler(alert_on_dispute_lost())
         .handler(notify_on_alert_triggered())
         .handler(notify_on_question_answered())
         .handler(notify_on_answer_published())
@@ -243,6 +246,85 @@ async fn notify_on_payment_refunded<E: Executor>(
         .0
         .refund(&config, &first_name, &order, &event.data.amount);
     queue(&db, &config, &event.id.to_string(), "refund", &to, content).await
+}
+
+/// A dispute is the shop's business, not the customer's: it goes to
+/// [`MailerConfig::alerts_to`], and nowhere when the host gave none.
+async fn alert_on_dispute<E: Executor>(
+    ctx: &Context<'_, E>,
+    payment_id: &str,
+    dispute_id: &str,
+    event_id: String,
+    event_timestamp: u64,
+    kind: &str,
+) -> anyhow::Result<()> {
+    let Some((db, config, templates)) = setup(ctx, event_timestamp)? else {
+        return Ok(());
+    };
+    let Some(to) = config.alerts_to.clone() else {
+        tracing::warn!(%payment_id, %dispute_id, "payment dispute: no `alerts_to`, nobody is told");
+        return Ok(());
+    };
+    let Some(payment) = timada_payment::load_payment(ctx.executor, payment_id).await? else {
+        anyhow::bail!("payment {payment_id} disputed but cannot be loaded");
+    };
+    let Some(dispute) = payment.disputes.iter().find(|d| d.dispute_id == dispute_id) else {
+        anyhow::bail!("payment {payment_id} has no dispute {dispute_id}");
+    };
+    let Some(order) = timada_order::load_order_details(ctx.executor, &payment.order_id).await?
+    else {
+        anyhow::bail!("order {} disputed but cannot be loaded", payment.order_id);
+    };
+    let content = templates.0.payment_disputed(&config, &order, dispute);
+    queue(&db, &config, &event_id, kind, &to, content).await
+}
+
+#[evento::subscription]
+async fn alert_on_dispute_opened<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<DisputeOpened>,
+) -> anyhow::Result<()> {
+    alert_on_dispute(
+        ctx,
+        &event.aggregate_id,
+        &event.data.dispute_id,
+        event.id.to_string(),
+        event.timestamp,
+        "dispute-opened",
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn alert_on_dispute_won<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<DisputeWon>,
+) -> anyhow::Result<()> {
+    alert_on_dispute(
+        ctx,
+        &event.aggregate_id,
+        &event.data.dispute_id,
+        event.id.to_string(),
+        event.timestamp,
+        "dispute-closed",
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn alert_on_dispute_lost<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<DisputeLost>,
+) -> anyhow::Result<()> {
+    alert_on_dispute(
+        ctx,
+        &event.aggregate_id,
+        &event.data.dispute_id,
+        event.id.to_string(),
+        event.timestamp,
+        "dispute-closed",
+    )
+    .await
 }
 
 /// Goes to the address given when the alert was asked for.
