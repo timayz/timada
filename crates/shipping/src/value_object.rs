@@ -23,6 +23,7 @@ pub struct DeliveryMethod {
 const METHODS: &[(&str, &str, bool, i64)] = &[
     ("chronopost-dom", "Chronopost", false, 2_395),
     ("colissimo", "Colissimo", false, 590),
+    ("colissimo-europe", "Colissimo", false, 1_290),
     ("store-pickup", "LDLC", true, 0),
 ];
 

@@ -394,6 +394,13 @@ async fn an_invoice_carries_the_vat_of_its_order() -> anyhow::Result<()> {
             ..place_order("cart-mq")
         })
         .await?;
+    // EU distance sale: the same order with German VAT inside.
+    let oss = orders
+        .place_order(PlaceOrder {
+            tax: Some(taxed("de", timada_tax::TaxTreatment::DestinationVat, 1_900)),
+            ..place_order("cart-de")
+        })
+        .await?;
     sync_invoices(&executor, db.clone()).await?;
 
     let invoice = load_invoice(&executor, invoice_id(&domestic))
@@ -403,6 +410,7 @@ async fn an_invoice_carries_the_vat_of_its_order() -> anyhow::Result<()> {
         .tax
         .ok_or_else(|| anyhow::anyhow!("invoice without VAT summary"))?;
     assert_eq!(tax.exemption_mention(), None);
+    assert_eq!(tax.regime_mention(), None);
     let rates: Vec<(u16, i64, i64)> = tax
         .vat_lines
         .iter()
@@ -423,7 +431,24 @@ async fn an_invoice_carries_the_vat_of_its_order() -> anyhow::Result<()> {
         tax.exemption_mention()
             .is_some_and(|mention| mention.contains("262"))
     );
+    assert_eq!(tax.regime_mention(), tax.exemption_mention());
     assert!(tax.vat_lines.iter().all(|l| l.vat.minor == 0));
+
+    // The amounts stay tax-inclusive; the invoice says whose VAT it is.
+    let invoice = load_invoice(&executor, invoice_id(&oss))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("invoice not drafted"))?;
+    let tax = invoice
+        .tax
+        .ok_or_else(|| anyhow::anyhow!("invoice without VAT summary"))?;
+    assert_eq!(tax.exemption_mention(), None);
+    assert!(
+        tax.regime_mention()
+            .is_some_and(|mention| mention.contains("258 A"))
+    );
+    assert_eq!(tax.vat_lines[0].rate_bp, 1_900);
+    let charged: i64 = tax.vat_lines.iter().map(|l| l.total.minor).sum();
+    assert_eq!(charged, invoice.total.minor);
     Ok(())
 }
 

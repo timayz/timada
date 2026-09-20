@@ -283,6 +283,94 @@ async fn out_of_stock_cancels_the_order() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A monitor listed at 20 % and two books listed at 5,5 %, delivered to
+/// Germany by a shop on the EU one-stop shop: French VAT comes off, German
+/// VAT goes on — 19 % by default, 7 % for what the host mapped from 5,5 %.
+#[tokio::test]
+async fn an_eu_delivery_is_charged_the_vat_of_its_destination() -> anyhow::Result<()> {
+    const BOOK: &str = "rust-book";
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let pricing = timada_pricing::Command(&executor);
+    for (product_id, price, vat_rate_bp) in [(PRODUCT, 12_000, 2_000), (BOOK, 2_110, 550)] {
+        pricing
+            .list_price(timada_pricing::ListPrice {
+                product_id: product_id.into(),
+                price_incl_tax: Money::eur(price),
+                vat_rate_bp,
+                eco_participation: Money::eur(0),
+            })
+            .await?;
+    }
+
+    let cart = timada_cart::Command(&executor);
+    let cart_id = cart.open_cart(Some(CUSTOMER.into())).await?;
+    for (product_id, name, quantity, price) in [
+        (PRODUCT, "AOC 23.8\" LED - 24G4XE", 1, 12_000),
+        (BOOK, "The Rust Programming Language", 2, 2_110),
+    ] {
+        cart.add_line(
+            &cart_id,
+            AddLine {
+                product_id: product_id.into(),
+                name: name.into(),
+                quantity,
+                unit_price: Money::eur(price),
+                warranty_months: 0,
+            },
+        )
+        .await?;
+    }
+    cart.checkout(
+        &cart_id,
+        Checkout {
+            customer_id: None,
+            delivery_address: address("Unter den Linden 1", "10117", "Berlin", "DE"),
+            billing_address: address("Unter den Linden 1", "10117", "Berlin", "DE"),
+            delivery: timada_cart::DeliveryChoice {
+                method_code: timada_tax::EU_DELIVERY_METHOD.into(),
+                pickup_store_id: None,
+            },
+            payment_mode: timada_cart::PaymentMode::Card,
+        },
+    )
+    .await?;
+
+    let zones = timada_tax::TaxZones::france_with_eu_oss().with_mapped_rate("de", 550, 700)?;
+    order_checkout_subscription()
+        .data(db.clone())
+        .data(zones)
+        .run_once(&executor)
+        .await?;
+
+    let order = load_order_details(&executor, order_id(&cart_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order not placed"))?;
+    // 120,00 TTC = 100,00 HT → 119,00 ; 21,10 TTC = 20,00 HT → 21,40.
+    let unit_prices: Vec<_> = order.lines.iter().map(|l| l.unit_price.clone()).collect();
+    assert_eq!(unit_prices, [Money::eur(11_900), Money::eur(2_140)]);
+    assert_eq!(order.subtotal, Money::eur(11_900 + 2 * 2_140));
+    // Delivery follows: 12,90 TTC = 10,75 HT, + 19 %.
+    assert_eq!(order.shipping_fee, Money::eur(1_279));
+    assert_eq!(order.total, Money::eur(17_459));
+
+    let tax = order
+        .tax
+        .ok_or_else(|| anyhow::anyhow!("order not taxed"))?;
+    assert_eq!(tax.zone_code, "de");
+    assert_eq!(tax.treatment, timada_tax::TaxTreatment::DestinationVat);
+    let lines: Vec<_> = tax
+        .vat_lines
+        .iter()
+        .map(|l| (l.rate_bp, l.base.minor, l.vat.minor, l.total.minor))
+        .collect();
+    assert_eq!(
+        lines,
+        [(1_900, 11_075, 2_104, 13_179), (700, 4_000, 280, 4_280)]
+    );
+    assert_eq!(tax.vat_total()?, Money::eur(2_384));
+    Ok(())
+}
+
 #[tokio::test]
 async fn declined_payment_releases_stock_and_cancels() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;

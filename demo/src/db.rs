@@ -55,9 +55,12 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
 }
 
 /// Where the shop delivers and how each destination is taxed: metropolitan
-/// France as listed, the overseas territories without French VAT.
+/// France as listed, the overseas territories without French VAT, and the
+/// rest of the EU with the VAT of the destination (one-stop shop). Everything
+/// the demo sells is at the standard rate; a shop with reduced-rate products
+/// maps them per country with `TaxZones::with_mapped_rate`.
 pub fn tax_zones() -> timada_tax::TaxZones {
-    timada_tax::TaxZones::france_with_overseas()
+    timada_tax::TaxZones::france_with_eu_oss()
 }
 
 /// Who issues the demo shop's invoices.

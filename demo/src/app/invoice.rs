@@ -208,7 +208,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             </tbody>
                         </table>
                     }
-                    if let Some(mention) = document.exemption_mention { <p>(mention)</p> }
+                    if let Some(mention) = document.regime_mention { <p>(mention)</p> }
                     if !credit_notes.is_empty() {
                         <table>
                             <caption class="muted">"Avoirs émis sur cette facture"</caption>

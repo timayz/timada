@@ -87,7 +87,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let vat_mention = order
         .tax
         .as_ref()
-        .and_then(|tax| tax.treatment.exemption_mention());
+        .and_then(|tax| tax.treatment.regime_mention());
     let order_returns: Vec<(String, String)> = timada_returns::returns_of_order(&services.db, &id)
         .await?
         .into_iter()

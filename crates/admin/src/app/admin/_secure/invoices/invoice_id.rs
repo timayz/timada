@@ -74,7 +74,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             )
         })
         .collect();
-    let vat_mention = invoice.tax.as_ref().and_then(|tax| tax.exemption_mention());
+    let vat_mention = invoice.tax.as_ref().and_then(|tax| tax.regime_mention());
     let mut lines = Vec::with_capacity(invoice.lines.len());
     for line in &invoice.lines {
         lines.push((
@@ -324,7 +324,7 @@ pub async fn print(cx: &Cx) -> Result<impl View> {
                     <dt class="font-semibold">"Net après avoirs"</dt><dd class="text-right font-semibold tabular-nums">(money(&document.net_after_credit_notes))</dd>
                 }
             </dl>
-            if let Some(mention) = document.exemption_mention { <p class="mt-6">(mention)</p> }
+            if let Some(mention) = document.regime_mention { <p class="mt-6">(mention)</p> }
             <footer class="mt-8 border-t border-border pt-3 text-xs text-muted-foreground">
                 (document.issuer.name.clone()) " · " (document.issuer.registration.clone()) " · TVA " (document.issuer.vat_number.clone()) " · " (document.issuer.contact.clone())
             </footer>

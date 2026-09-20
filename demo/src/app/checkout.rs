@@ -25,7 +25,7 @@ use topcoat::{
 
 use super::{
     account, cart, document,
-    format::{address_lines, money},
+    format::{address_lines, money, vat_rate},
 };
 use crate::{
     Store,
@@ -171,6 +171,7 @@ fn offer_label(code: &str) -> &'static str {
     match code {
         "chronopost-dom" => "Chronopost (DOM-TOM)",
         "colissimo" => "Colissimo à domicile",
+        "colissimo-europe" => "Colissimo Europe",
         "store-pickup" => "Retrait en boutique LDLC Toulouse",
         _ => "Livraison",
     }
@@ -230,7 +231,13 @@ async fn checkout_view(
              d'éventuelles taxes locales sont à régler à la réception.",
             pricing_zone.label
         )),
-        TaxTreatment::Domestic | TaxTreatment::DestinationVat => None,
+        TaxTreatment::DestinationVat => Some(format!(
+            "Livraison {} : les prix ci-dessous incluent la TVA du pays de livraison \
+             (taux normal {}) à la place de la TVA française.",
+            pricing_zone.label,
+            vat_rate(pricing_zone.applied_rate_bp(zones.fee_vat_rate_bp))
+        )),
+        TaxTreatment::Domestic => None,
     };
     let offers: Vec<OfferLine> = delivery_offers()
         .into_iter()

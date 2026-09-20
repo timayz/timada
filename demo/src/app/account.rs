@@ -1000,10 +1000,9 @@ async fn order_view(
         .filter(|line| line.rate_bp > 0)
         .map(|line| (vat_rate(line.rate_bp), money(&line.base), money(&line.vat)))
         .collect();
-    let vat_mention = order
-        .tax
-        .as_ref()
-        .and_then(|tax| tax.treatment.exemption_mention());
+    let treatment = order.tax.as_ref().map(|tax| tax.treatment);
+    let without_vat = treatment.is_some_and(|t| t.exemption_mention().is_some());
+    let vat_mention = treatment.and_then(|t| t.regime_mention());
     let mut line_totals = Vec::with_capacity(order.lines.len());
     for line in &order.lines {
         line_totals.push((line, money(&line.total()?)));
@@ -1056,7 +1055,7 @@ async fn order_view(
                     if let Some(discount) = &order.discount {
                         <tr><td>"Remise (" (discount.code.clone()) ")"</td><td class="num">"− " (money(&discount.amount))</td></tr>
                     }
-                    <tr class="total"><td>(if vat_mention.is_some() { "Total HT" } else { "Total TTC" })</td><td class="num">(money(&order.total))</td></tr>
+                    <tr class="total"><td>(if without_vat { "Total HT" } else { "Total TTC" })</td><td class="num">(money(&order.total))</td></tr>
                     for (rate, base, vat) in &vat_lines {
                         <tr><td class="muted">"dont TVA " (rate.clone()) " sur " (base.clone())</td><td class="num muted">(vat.clone())</td></tr>
                     }
