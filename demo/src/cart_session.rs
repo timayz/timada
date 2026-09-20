@@ -56,9 +56,10 @@ pub async fn current_cart(cx: &Cx) -> topcoat::Result<Option<CartDetailsView>> {
 ///
 /// A cart line keeps the price of the day it was added, and a cart can wait
 /// a month in its cookie — or much longer among the saved carts. Wherever a
-/// total is shown or confirmed, the lines are compared with the listed prices
-/// first: a line whose price moved is repriced, a line whose product is no
-/// longer sold is removed, and the shopper is told.
+/// total is shown or confirmed, the lines are compared with today's prices
+/// **in the cart's currency** first: a line whose price moved is repriced, a
+/// line whose product is no longer sold — at all, or in that currency — is
+/// removed, and the shopper is told.
 pub async fn fresh_cart(cx: &Cx) -> topcoat::Result<Option<(CartDetailsView, Vec<String>)>> {
     let cart = match current_cart(cx).await {
         Ok(Some(cart)) => cart.clone(),
@@ -71,7 +72,7 @@ pub async fn fresh_cart(cx: &Cx) -> topcoat::Result<Option<(CartDetailsView, Vec
     for line in &cart.lines {
         let listed = load_product_price(&store.executor, price_id(&line.product_id))
             .await?
-            .filter(|price| !price.withdrawn)
+            .and_then(|price| price.price_in(&line.unit_price.currency))
             .map(|price| price.price_incl_tax);
         match listed {
             Some(price) if price != line.unit_price => {

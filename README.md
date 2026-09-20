@@ -55,6 +55,8 @@ Environment of the demo:
 | `TIMADA_VIES`, `TIMADA_VAT_NUMBER` | — | with `--features vies` and `TIMADA_VIES=1`, business customers' VAT numbers are checked against the EU's VIES registry; the shop's own number gets each check its consultation number |
 | `TIMADA_STRIPE_SECRET_KEY`, `TIMADA_STRIPE_PUBLISHABLE_KEY`, `TIMADA_STRIPE_WEBHOOK_SECRET` | — | with `--features stripe`, shoppers pay by card on the payment step and refunds go back through Stripe |
 
+The demo sells in euros, pounds and Swiss francs: the header's « Devise » switches, each product has a price *set* per currency (a few are not sold in francs), and delivery has its own fees in each.
+
 To pay for real (in Stripe's test mode): build with `--features stripe`, set the
 three keys, and let Stripe reach the webhook —
 `stripe listen --forward-to 127.0.0.1:3000/webhooks/stripe` prints the

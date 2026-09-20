@@ -137,6 +137,13 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
             eco_participation: Money::eur(170),
         })
         .await?;
+    // Decided, not converted: what the monitor costs in the shop's other
+    // currencies.
+    for price in [Money::new(10_900, "GBP"), Money::new(12_900, "CHF")] {
+        pricing
+            .set_currency_price(timada_pricing::price_id(&product_id), price)
+            .await?;
+    }
     pricing
         .attach_installment_offer(
             timada_pricing::price_id(&product_id),

@@ -144,11 +144,42 @@ async fn specify(
     }
 }
 
+/// The demo's prices in its other currencies: a rule of thumb rounded to
+/// `…,90`, as a shop would — decided once, never computed at checkout. Every
+/// fifth product has no price in francs: it is simply not sold there.
+async fn price_abroad<E: evento::Executor>(
+    executor: &E,
+    product_id: &str,
+    index: usize,
+    cents: i64,
+) -> anyhow::Result<()> {
+    let pricing = timada_pricing::Command(executor);
+    let rounded = |percent: i64| ((cents * percent / 100) / 100).max(1) * 100 + 90;
+    let mut prices = vec![Money::new(rounded(88), "GBP")];
+    if index % 5 != 4 {
+        prices.push(Money::new(rounded(97), "CHF"));
+    }
+    for price in prices {
+        match pricing
+            .set_currency_price(timada_pricing::price_id(product_id), price)
+            .await
+        {
+            Ok(())
+            | Err(
+                timada_pricing::PricingError::PriceWithdrawn
+                | timada_pricing::PricingError::PriceNotFound,
+            ) => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
+}
+
 pub async fn run(store: &Store) -> anyhow::Result<()> {
     let executor = &store.executor;
     let catalog = Command(executor);
     let mut added = 0;
-    for item in ITEMS {
+    for (index, item) in ITEMS.iter().enumerate() {
         let created = catalog
             .create_product(CreateProduct {
                 sku: item.sku.into(),
@@ -166,7 +197,9 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
             Ok(id) => id,
             // Seeded before: only what later versions of the seed added.
             Err(CatalogError::SkuAlreadyExists(_)) => {
-                specify(&catalog, &timada_catalog::product_id(item.sku), item).await?;
+                let known = timada_catalog::product_id(item.sku);
+                specify(&catalog, &known, item).await?;
+                price_abroad(executor, &known, index, item.cents).await?;
                 continue;
             }
             Err(err) => return Err(err.into()),
@@ -201,6 +234,7 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
                 eco_participation: Money::eur(0),
             })
             .await?;
+        price_abroad(executor, &product_id, index, item.cents).await?;
         let inventory = timada_inventory::Command(executor);
         let stock = inventory
             .register_stock_item(RegisterStockItem {

@@ -13,6 +13,7 @@
 mod app;
 mod auth;
 mod cart_session;
+mod currency;
 mod db;
 mod seed;
 mod seed_catalogue;

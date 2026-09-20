@@ -18,7 +18,6 @@ use timada_payment::{
     PaymentError, PaymentMethod, PaymentStart, PaymentStatus, ReturnUrls, load_payment, payment_id,
     start_payment,
 };
-use timada_shipping::delivery_offers;
 use timada_tax::{TaxTreatment, reverse_charged};
 use topcoat::{
     Result,
@@ -101,8 +100,8 @@ async fn check_out(
     let account = require_account(cx).await?;
     let store = app_context::<Store>(cx);
     let back_to_cart = || see_other(href!(cart::show).resolve(cx));
-    let cart_id = match current_cart(cx).await {
-        Ok(Some(cart)) => cart.id.clone(),
+    let (cart_id, cart_currency) = match current_cart(cx).await {
+        Ok(Some(cart)) => (cart.id.clone(), cart.subtotal.currency.clone()),
         Ok(None) => return Err(back_to_cart().into()),
         Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
     };
@@ -134,7 +133,10 @@ async fn check_out(
     let Some(zone) = zones.zone_of(&delivery_address.country_code) else {
         return refuse("Nous ne livrons pas encore ce pays. Choisissez une autre adresse.");
     };
-    let Some(offer) = delivery_offers()
+    // Delivery is priced per currency: a method without a fee in the cart's
+    // is not one of the offers.
+    let Some(offer) = crate::db::delivery_fees()
+        .offers(&cart_currency)
         .into_iter()
         .find(|o| o.code == form.delivery_method)
     else {
@@ -173,7 +175,7 @@ async fn check_out(
         },
         _ => return refuse("Choisissez un mode de paiement."),
     };
-    if payment_mode != PaymentMode::Card && !offers_installments(store) {
+    if payment_mode != PaymentMode::Card && !offers_installments(store, &cart_currency) {
         return refuse("Ce mode de paiement n'est pas proposé. Choisissez la carte bancaire.");
     }
 
@@ -229,11 +231,11 @@ async fn checkout_view(
 ) -> Result<impl View> {
     let account = require_account(cx).await?;
     let store = app_context::<Store>(cx);
-    let installments = offers_installments(store);
     let (cart, price_notices) = match fresh_cart(cx).await? {
         Some((cart, notices)) if !cart.lines.is_empty() => (cart, notices),
         _ => return Err(see_other(href!(cart::show).resolve(cx)).into()),
     };
+    let installments = offers_installments(store, &cart.subtotal.currency);
     let book = load_address_book(&store.executor, &account.customer_id)
         .await?
         .ok_or_not_found()?;
@@ -313,7 +315,8 @@ async fn checkout_view(
         )),
         TaxTreatment::Domestic => None,
     };
-    let offers: Vec<OfferLine> = delivery_offers()
+    let offers: Vec<OfferLine> = crate::db::delivery_fees()
+        .offers(&cart.subtotal.currency)
         .into_iter()
         .filter(|offer| pricing_zone.offers(offer.code))
         .map(|offer| {
@@ -451,12 +454,15 @@ path_param!(pub order_id: String, error = not_found);
 
 /// Shown right after checkout. Until the process manager has placed the
 /// order the page says so and reloads itself.
-/// Only what the shop's payment provider can take is offered.
-fn offers_installments(store: &Store) -> bool {
-    store.provider.supports(&PaymentMethod::Installments {
-        count: INSTALLMENT_COUNT,
-        fee: timada_core::Money::eur(0),
-    })
+/// Only what the shop's payment provider can take is offered — and paying
+/// in several times only in the shop's base currency: its handling fee is an
+/// amount of that currency, and nothing is ever converted.
+fn offers_installments(store: &Store, currency: &str) -> bool {
+    currency == crate::db::shop_currencies().base()
+        && store.provider.supports(&PaymentMethod::Installments {
+            count: INSTALLMENT_COUNT,
+            fee: timada_core::Money::zero(currency),
+        })
 }
 
 /// Where a shopper stands between checking out and having paid.
