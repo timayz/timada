@@ -23,9 +23,16 @@
 //! A business of another member state buys without the seller's VAT when its
 //! VAT number is valid there: [`VatNumber`] reads one, a
 //! [`VatNumberValidator`] asks the registry.
+//!
+//! A sale in another currency than the shop's books is converted *for the
+//! books only*, at a rate pinned when the order is placed: [`PinnedRate`],
+//! from an [`ExchangeRates`] source.
 
 mod breakdown;
 mod business;
+#[cfg(feature = "ecb")]
+mod ecb;
+mod exchange;
 mod vat_number;
 #[cfg(feature = "vies")]
 mod vies;
@@ -33,6 +40,9 @@ mod zone;
 
 pub use breakdown::*;
 pub use business::*;
+#[cfg(feature = "ecb")]
+pub use ecb::*;
+pub use exchange::*;
 pub use vat_number::*;
 #[cfg(feature = "vies")]
 pub use vies::*;

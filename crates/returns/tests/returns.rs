@@ -103,6 +103,7 @@ impl Shop {
                 order_number: None,
                 tax: None,
                 business: None,
+                exchange_rate: None,
             })
             .await?;
         let payments = timada_payment::Command(&self.executor);

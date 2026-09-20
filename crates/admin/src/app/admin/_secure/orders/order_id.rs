@@ -29,7 +29,7 @@ use crate::{
         input::input,
         separator::separator,
     },
-    config::AdminServices,
+    config::{AdminConfig, AdminServices},
     ui::{date, money, order_status_badge, page_header, vat_rate},
 };
 
@@ -50,6 +50,9 @@ fn refund_error_message(code: Option<&str>) -> Option<&'static str> {
         "disputed" => Some(
             "Un litige bancaire est en cours sur ce paiement : ni expédition ni remboursement avant la décision de la banque.",
         ),
+        "rate" => {
+            Some("Aucun cours de change n'a pu être obtenu pour cette devise. Réessayez plus tard.")
+        }
         "credit" => Some(
             "L'avoir n'a pas pu être émis : la facture n'est pas émise, ou ses avoirs couvrent déjà son montant.",
         ),
@@ -122,6 +125,20 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         })
         .collect();
     let refund_error = refund_error_message(query::<ShowQuery>(cx)?.refund_error.as_deref());
+
+    // An order in another currency than the books: the rate it goes to them
+    // at — or that it still lacks one, which keeps it out of the VAT report.
+    let base_currency = app_context::<AdminConfig>(cx).currencies.base().to_owned();
+    let exchange_rate = order
+        .exchange_rate
+        .as_ref()
+        .map(|rate| format!("{} — {} du {}", rate.quote(), rate.source, date(rate.as_of)));
+    let rate_missing = order.exchange_rate.is_none() && order.total.currency != base_currency;
+    let can_pin_rate = rate_missing && services.exchange_rates.is_some();
+    // Said where the button is: this page has no refund section to say it in.
+    let rate_error = refund_error.filter(|_| {
+        query::<ShowQuery>(cx).is_ok_and(|q| q.refund_error.as_deref() == Some("rate"))
+    });
 
     // The payment's disputes. An open one holds the order: no parcel, no
     // refund. A lost one may be documented by a credit note — the operator's
@@ -266,6 +283,25 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             }
                             if let Some(business) = &business {
                                 <div><dt class="text-muted-foreground">"Entreprise"</dt><dd>(business.clone())</dd></div>
+                            }
+                            if let Some(rate) = &exchange_rate {
+                                <div><dt class="text-muted-foreground">"Cours de change"</dt><dd>(rate.clone())</dd></div>
+                            }
+                            if rate_missing {
+                                <div>
+                                    <dt class="text-muted-foreground">"Cours de change"</dt>
+                                    <dd>
+                                        <span role="alert" class="text-destructive">"Aucun cours épinglé : cette vente en devise étrangère reste hors du rapport de TVA."</span>
+                                        if let Some(error) = rate_error {
+                                            <span role="alert" class="mt-1 block text-destructive">(error)</span>
+                                        }
+                                        if can_pin_rate {
+                                            <form method="post" action=(href!(pin_rate, OrderId(id.clone()))) class="mt-2">
+                                                button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Épingler le cours du jour")
+                                            </form>
+                                        }
+                                    </dd>
+                                </div>
                             }
                             <div><dt class="text-muted-foreground">"Paiement"</dt><dd>(payment_label)</dd></div>
                             if let Some(refunded) = &refunded {
@@ -631,6 +667,40 @@ pub async fn credit_dispute(cx: &Cx, Form(form): Form<CreditDisputeForm>) -> Res
             | timada_invoice::InvoiceError::InvoiceNotFound,
         ) => format!("{}?refund_error=credit", back(cx, &id)),
         Err(err) => return Err(anyhow::Error::from(err).into()),
+    };
+    Err::<(), _>(see_other(target).into())
+}
+
+/// Pins today's rate on an order placed while no rate could be had. The
+/// first rate stays: asking again changes nothing.
+#[page(POST "./exchange-rate")]
+pub async fn pin_rate(cx: &Cx) -> Result<impl View> {
+    let (id, order) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let base = app_context::<AdminConfig>(cx).currencies.base().to_owned();
+    let rate = match &services.exchange_rates {
+        Some(source) if order.exchange_rate.is_none() && order.total.currency != base => source
+            .0
+            .rate(
+                &base,
+                &order.total.currency,
+                timada_core::time::now_unix_secs()?,
+            )
+            .await
+            .map_err(|error| tracing::warn!(order_id = %id, %error, "no exchange rate"))
+            .ok(),
+        _ => None,
+    };
+    let target = match rate {
+        Some(rate) => {
+            timada_order::Command(&services.executor)
+                .pin_exchange_rate(&id, rate)
+                .await
+                .map_err(anyhow::Error::from)?;
+            back(cx, &id)
+        }
+        None if order.exchange_rate.is_some() => back(cx, &id),
+        None => format!("{}?refund_error=rate", back(cx, &id)),
     };
     Err::<(), _>(see_other(target).into())
 }

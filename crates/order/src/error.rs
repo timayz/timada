@@ -17,6 +17,8 @@ pub enum OrderError {
     AmountDue { due: timada_core::Money },
     #[error("discount must be positive and at most {} {}", max.minor, max.currency)]
     InvalidDiscount { max: timada_core::Money },
+    #[error("an order in {order} cannot be pinned a rate of {rate}")]
+    RateOfAnotherCurrency { order: String, rate: String },
     #[error("unknown delivery method `{0}`")]
     UnknownDeliveryMethod(String),
     #[error("`{0}` is required")]

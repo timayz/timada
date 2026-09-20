@@ -186,6 +186,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <p class="text-sm">"Ventes hors TVA hors de l'Union : " <strong class="tabular-nums">(exports)</strong> " HT"</p>
                     )
                 )
+                if report.unconverted > 0 {
+                    <p role="alert" class="text-sm text-destructive">
+                        (report.unconverted.to_string()) " document(s) en devise étrangère sans cours de change : ils ne sont pas dans ce rapport. Épinglez le cours sur leur commande pour les y faire entrer."
+                    </p>
+                }
                 if unbroken_count > 0 {
                     <p role="alert" class="text-sm text-destructive">
                         (unbroken_count.to_string()) " facture(s) antérieure(s) aux zones fiscales n'ont pas de ventilation de TVA : " (unbroken_total) " TTC à ventiler à la main."

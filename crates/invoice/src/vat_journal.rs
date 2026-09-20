@@ -31,6 +31,7 @@ pub fn vat_journal_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(journal_on_invoice_issued())
         .handler(unjournal_on_invoice_voided())
         .handler(journal_on_credit_note_issued())
+        .handler(convert_on_order_rate_pinned())
 }
 
 /// A calendar quarter: what a VAT return covers.
@@ -245,6 +246,33 @@ async fn write_rows(
     Ok(())
 }
 
+/// The rows as the books hold them: a document in another currency goes in
+/// at the rate pinned on its order — the one its own VAT mention was stated
+/// at — and comes out in the currency of the books. A document whose order
+/// has no rate (yet) keeps its currency: the report leaves it aside and says
+/// so, rather than add pounds to euros.
+async fn in_books<E: Executor>(
+    executor: &E,
+    order_id: &str,
+    currency: &str,
+    rows: Vec<JournalRow>,
+) -> anyhow::Result<(Vec<JournalRow>, String)> {
+    let rate = timada_order::load_order_details(executor, order_id)
+        .await?
+        .and_then(|order| order.exchange_rate)
+        .filter(|rate| rate.currency == currency);
+    let Some(rate) = rate else {
+        return Ok((rows, currency.to_owned()));
+    };
+    let mut converted = Vec::with_capacity(rows.len());
+    for (rate_bp, base_minor, vat_minor) in rows {
+        let base = rate.to_base(&timada_core::Money::new(base_minor, currency))?;
+        let vat = rate.to_base(&timada_core::Money::new(vat_minor, currency))?;
+        converted.push((rate_bp, base.minor, vat.minor));
+    }
+    Ok((converted, rate.base))
+}
+
 /// Where the goods went: the member state of consumption. The order knows;
 /// an order that cannot be read leaves the invoice's billing country.
 async fn destination<E: Executor>(
@@ -286,6 +314,13 @@ async fn journal_on_invoice_issued<E: Executor>(
         // From before tax zones: the total, its VAT unknown.
         None => ("", "unknown", vec![(None, invoice.total.minor, 0)]),
     };
+    let (rows, currency) = in_books(
+        ctx.executor,
+        &invoice.order_id,
+        &invoice.total.currency,
+        rows,
+    )
+    .await?;
     write_rows(
         &pool(ctx)?,
         &Document {
@@ -299,7 +334,7 @@ async fn journal_on_invoice_issued<E: Executor>(
             zone_code,
             treatment,
             country_code: &country,
-            currency: &invoice.total.currency,
+            currency: &currency,
             buyer_vat_number: invoice
                 .reverse_charge
                 .as_ref()
@@ -322,6 +357,43 @@ async fn unjournal_on_invoice_voided<E: Executor>(
         .bind(&event.aggregate_id)
         .execute(&pool(ctx)?)
         .await?;
+    Ok(())
+}
+
+/// A rate pinned on an order *after* its documents were journalled (no rate
+/// could be had when it was placed): the rows waiting in the order's own
+/// currency go to the books now. Rows already converted are in the base
+/// currency and are left alone, so a redelivery changes nothing — and the
+/// usual case, a rate pinned with the order, finds no row at all.
+#[evento::subscription]
+async fn convert_on_order_rate_pinned<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<timada_order::aggregator::OrderRatePinned>,
+) -> anyhow::Result<()> {
+    let db = pool(ctx)?;
+    let rate = &event.data.rate;
+    let waiting: Vec<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT rowid, base_minor, vat_minor FROM invoice_vat_journal
+         WHERE order_id = ? AND currency = ?",
+    )
+    .bind(&event.aggregate_id)
+    .bind(&rate.currency)
+    .fetch_all(&db)
+    .await?;
+    for (rowid, base_minor, vat_minor) in waiting {
+        let base = rate.to_base(&timada_core::Money::new(base_minor, &rate.currency))?;
+        let vat = rate.to_base(&timada_core::Money::new(vat_minor, &rate.currency))?;
+        sqlx::query(
+            "UPDATE invoice_vat_journal SET base_minor = ?, vat_minor = ?, currency = ?
+             WHERE rowid = ?",
+        )
+        .bind(base.minor)
+        .bind(vat.minor)
+        .bind(&rate.base)
+        .bind(rowid)
+        .execute(&db)
+        .await?;
+    }
     Ok(())
 }
 
@@ -353,6 +425,8 @@ async fn journal_on_credit_note_issued<E: Executor>(
         ),
         None => ("", "unknown", vec![(None, -note.amount.minor, 0)]),
     };
+    let (rows, currency) =
+        in_books(ctx.executor, &invoice.order_id, &note.amount.currency, rows).await?;
     write_rows(
         &pool(ctx)?,
         &Document {
@@ -366,7 +440,7 @@ async fn journal_on_credit_note_issued<E: Executor>(
             zone_code,
             treatment,
             country_code: &country,
-            currency: &note.amount.currency,
+            currency: &currency,
             buyer_vat_number: invoice
                 .reverse_charge
                 .as_ref()
@@ -445,6 +519,11 @@ pub struct VatReport {
     /// Invoices from before tax zones, which carry no breakdown: how many,
     /// and their total, all taxes included.
     pub unbroken: (i64, i64),
+    /// Documents of the quarter left out because they are in another
+    /// currency than the report's: sales in a foreign currency whose order
+    /// has no exchange rate pinned. Pin one (`timada_order`'s
+    /// `pin_exchange_rate`) and the journal takes them in.
+    pub unconverted: i64,
 }
 
 impl VatReport {
@@ -462,8 +541,10 @@ impl VatReport {
     }
 }
 
-/// The VAT of a quarter. A shop sells in one currency; should the journal
-/// hold several, the report is that of the currency with the most rows.
+/// The VAT of a quarter, in the currency of the books: the journal converts
+/// what is sold in another one at the rate pinned on the order. Documents it
+/// could not convert are counted in [`VatReport::unconverted`]; the report's
+/// currency is the one with the most rows.
 pub async fn vat_report(db: &SqlitePool, period: VatPeriod) -> sqlx::Result<VatReport> {
     let (start, end) = period.bounds();
     let currency: Option<String> = sqlx::query_scalar(
@@ -551,6 +632,15 @@ pub async fn vat_report(db: &SqlitePool, period: VatPeriod) -> sqlx::Result<VatR
     .fetch_all(db)
     .await?;
 
+    let unconverted: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT document_id) FROM invoice_vat_journal
+         WHERE issued_at >= ?1 AND issued_at < ?2 AND currency <> ?3",
+    )
+    .bind(start)
+    .bind(end)
+    .bind(&currency)
+    .fetch_one(db)
+    .await?;
     let unbroken: (i64, Option<i64>) = sqlx::query_as(
         "SELECT COUNT(DISTINCT CASE WHEN document_kind = 'invoice' THEN document_id END),
                 SUM(base_minor)
@@ -590,6 +680,7 @@ pub async fn vat_report(db: &SqlitePool, period: VatPeriod) -> sqlx::Result<VatR
             .collect(),
         exports_base_minor,
         unbroken: (unbroken.0, unbroken.1.unwrap_or(0)),
+        unconverted,
     })
 }
 

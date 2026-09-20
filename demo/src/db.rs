@@ -99,6 +99,27 @@ pub fn installment_fees() -> timada_order::InstallmentHandlingFees {
     )
 }
 
+/// Where the rate an order in pounds or francs goes to the books at comes
+/// from: the European Central Bank with `--features ecb` and `TIMADA_ECB=1`,
+/// a fixed table otherwise — good enough for a demo, not for a tax return.
+pub fn exchange_rates() -> timada_tax::ExchangeRateSource {
+    #[cfg(feature = "ecb")]
+    if std::env::var("TIMADA_ECB").is_ok_and(|v| v == "1") {
+        match timada_tax::EcbRates::new() {
+            Ok(bank) => {
+                tracing::info!("exchange rates come from the European Central Bank");
+                return timada_tax::ExchangeRateSource::new(bank);
+            }
+            Err(error) => tracing::error!(%error, "ECB rates unavailable: fixed demo rates"),
+        }
+    }
+    timada_tax::ExchangeRateSource::new(
+        timada_tax::FixedRates::new("EUR", "cours de démonstration")
+            .with("GBP", 853_800)
+            .with("CHF", 941_200),
+    )
+}
+
 /// What delivery costs: the built-in euro fees, and the demo shop's own for
 /// the other currencies it sells in. Overseas Chronopost is a euro matter.
 pub fn delivery_fees() -> timada_shipping::DeliveryFees {
@@ -209,6 +230,8 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(timada_tax::VatRegistry(store.vat_validator.clone()))
             .data(delivery_fees())
             .data(installment_fees())
+            .data(shop_currencies())
+            .data(exchange_rates())
             .start(executor)
             .await?,
         timada_order::order_fulfillment_subscription()
@@ -354,6 +377,8 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .data(timada_tax::VatRegistry(store.vat_validator.clone()))
             .data(delivery_fees())
             .data(installment_fees())
+            .data(shop_currencies())
+            .data(exchange_rates())
             .run_once(executor)
             .await?;
         timada_order::order_fulfillment_subscription()

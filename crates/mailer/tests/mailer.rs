@@ -411,6 +411,7 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
             order_number: Some("C2026-000042".into()),
             tax: None,
             business: None,
+            exchange_rate: None,
         })
         .await?;
     sync().await?;
@@ -651,6 +652,7 @@ async fn the_shop_is_told_about_a_dispute_and_about_its_outcome() -> anyhow::Res
             order_number: Some("C2026-000007".into()),
             tax: None,
             business: None,
+            exchange_rate: None,
         })
         .await?;
     let payments = timada_payment::Command(&executor);
@@ -786,6 +788,7 @@ async fn a_return_label_travels_with_the_approval_or_on_its_own() -> anyhow::Res
             order_number: Some("C2026-000009".into()),
             tax: None,
             business: None,
+            exchange_rate: None,
         })
         .await?;
     orders.mark_paid(&order_id, "payment-1").await?;
@@ -940,6 +943,7 @@ async fn an_issued_invoice_and_its_credit_notes_are_emailed_as_pdfs() -> anyhow:
         order_number: Some(format!("C2026-{cart}")),
         tax: None,
         business: None,
+        exchange_rate: None,
     };
     let invoices = || async {
         timada_invoice::invoice_from_orders_subscription()

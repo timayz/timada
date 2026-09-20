@@ -5,7 +5,7 @@ use timada_tax::{BusinessPurchase, Charged, TaxTreatment, vat_breakdown};
 use crate::{
     aggregator::{
         OrderBuyerIdentified, OrderDiscountApplied, OrderNumberAssigned, OrderPlaced,
-        OrderReverseCharged, OrderTaxed,
+        OrderRatePinned, OrderReverseCharged, OrderTaxed,
     },
     error::OrderError,
     value_object::{
@@ -51,6 +51,9 @@ pub struct PlaceOrder {
     /// The business the order is for, and the proof of its reverse charge
     /// when it is exempt; `None` for a consumer's order.
     pub business: Option<BusinessPurchase>,
+    /// The rate the order goes to the books at, when it is in another
+    /// currency than theirs. Must be a rate *of the order's currency*.
+    pub exchange_rate: Option<timada_tax::PinnedRate>,
 }
 
 #[evento::command]
@@ -81,6 +84,9 @@ impl<E: Executor> super::Command<'_, E> {
         cmd.billing_address.validate()?;
         // Rejects mixed currencies and overflow before anything is written.
         let totals = order_total(&cmd.lines, &cmd.shipping_fee, &cmd.handling_fee)?;
+        if let Some(rate) = &cmd.exchange_rate {
+            rate_fits(rate, &totals.total.currency)?;
+        }
         if let Some(discount) = &cmd.discount {
             let max = totals.max_discount();
             discount.amount.same_currency(&max)?;
@@ -169,6 +175,9 @@ impl<E: Executor> super::Command<'_, E> {
         if let Some(taxed) = &taxed {
             write.event(taxed);
         }
+        if let Some(rate) = cmd.exchange_rate {
+            write.event(&OrderRatePinned { rate });
+        }
         if let Some(business) = cmd.business {
             write.event(&OrderBuyerIdentified {
                 buyer: business.buyer,
@@ -196,5 +205,17 @@ impl<E: Executor> super::Command<'_, E> {
             }
             Err(err) => Err(err.into()),
         }
+    }
+}
+
+/// A pinned rate must convert the order's own currency, and into another.
+pub(crate) fn rate_fits(rate: &timada_tax::PinnedRate, currency: &str) -> Result<(), OrderError> {
+    if rate.currency == currency && rate.base != currency && rate.per_base_micros > 0 {
+        Ok(())
+    } else {
+        Err(OrderError::RateOfAnotherCurrency {
+            order: currency.to_owned(),
+            rate: format!("{}/{}", rate.base, rate.currency),
+        })
     }
 }

@@ -26,6 +26,7 @@ timada-returns.workspace = true
 timada-payment.workspace = true
 timada-promotion.workspace = true
 timada-shipping.workspace = true
+timada-tax.workspace = true
 evento.workspace = true
 topcoat = { workspace = true, features = ["router", "view", "cookie", "session", "asset", "tower", "tailwind", "discover", "multipart"] }
 inventory = "0.3"
@@ -47,7 +48,6 @@ topcoat = { workspace = true, features = ["serve"] }
 tokio.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http = "1"
-timada-tax.workspace = true
 # The archive's subscriptions render PDFs whether or not the admin serves them.
 timada-invoice = { workspace = true, features = ["pdf"] }
 

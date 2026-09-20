@@ -1,6 +1,7 @@
 mod cancel_order;
 mod mark_paid;
 mod mark_shipped;
+mod pin_exchange_rate;
 mod place_order;
 mod resend_confirmation;
 mod settle_order;
@@ -14,8 +15,8 @@ use evento::{Executor, Projection, metadata::Event};
 use crate::{
     aggregator::{
         Order, OrderBuyerIdentified, OrderCancelled, OrderConfirmationResent, OrderDiscountApplied,
-        OrderNumberAssigned, OrderPaid, OrderPlaced, OrderReverseCharged, OrderSettled,
-        OrderShipped, OrderTaxed,
+        OrderNumberAssigned, OrderPaid, OrderPlaced, OrderRatePinned, OrderReverseCharged,
+        OrderSettled, OrderShipped, OrderTaxed,
     },
     error::OrderError,
     value_object::OrderStatus,
@@ -56,6 +57,10 @@ pub struct OrderState {
     pub customer_id: String,
     pub payment_id: Option<String>,
     pub shipment_id: Option<String>,
+    /// The currency the order was placed in.
+    pub currency: String,
+    /// Whether the rate it goes to the books at is known.
+    pub rate_pinned: bool,
 }
 
 impl OrderState {
@@ -86,6 +91,7 @@ fn create_projection<E: Executor>() -> Projection<E, OrderState> {
         .skip::<OrderReverseCharged>()
         .skip::<OrderDiscountApplied>()
         .skip::<OrderConfirmationResent>()
+        .handler(on_order_rate_pinned())
         .strict()
 }
 
@@ -94,6 +100,16 @@ async fn on_order_placed(event: Event<OrderPlaced>, row: &mut OrderState) -> any
     row.id = event.aggregate_id.to_owned();
     row.customer_id = event.data.customer_id;
     row.status = OrderStatus::Placed;
+    row.currency = event.data.shipping_fee.currency;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_rate_pinned(
+    _event: Event<OrderRatePinned>,
+    row: &mut OrderState,
+) -> anyhow::Result<()> {
+    row.rate_pinned = true;
     Ok(())
 }
 

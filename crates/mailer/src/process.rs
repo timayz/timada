@@ -840,6 +840,8 @@ mod invoice {
             // Voided since: there is no invoice to send any more.
             return Ok(());
         };
+        // In another currency than the books: stated in theirs too, as filed.
+        let document = document.with_exchange_rate(order.exchange_rate.clone())?;
 
         let content = templates.0.invoice_issued(&config, &first_name, &document);
         let file_name = invoice_pdf_file_name(&document);
