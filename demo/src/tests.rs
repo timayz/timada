@@ -2954,3 +2954,59 @@ async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::
     assert!(text(sneaky).await?.contains("n'est pas proposé"));
     Ok(())
 }
+
+#[tokio::test]
+async fn a_voucher_is_spent_in_its_own_currency_only() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let promotions = timada_promotion::Command {
+        executor: &store.executor,
+        db: store.db.clone(),
+    };
+    promotions
+        .issue_voucher(timada_promotion::IssueVoucher {
+            code: "cadeau-eur".into(),
+            customer_id: None,
+            value: timada_core::Money::eur(2_000),
+            kind: timada_promotion::VoucherKind::GiftVoucher,
+            expires_at: None,
+        })
+        .await?;
+    promotions
+        .issue_voucher(timada_promotion::IssueVoucher {
+            code: "cadeau-gbp".into(),
+            customer_id: None,
+            value: timada_core::Money::new(2_000, "GBP"),
+            kind: timada_promotion::VoucherKind::GiftVoucher,
+            expires_at: None,
+        })
+        .await?;
+
+    let mut browser = Browser::new(&router);
+    browser.post("/currency", "currency=GBP&next=%2F").await;
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+
+    // Twenty euros are not twenty pounds: the voucher does nothing here, and
+    // the page says why rather than "no longer valid".
+    browser.post("/cart/promo", "code=cadeau-eur").await;
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("vaut en €"), "{cart}");
+    assert!(cart.contains("panier en £"), "{cart}");
+    assert!(!cart.contains("n'est plus valable"), "{cart}");
+    assert!(!cart.contains("Bon d'achat CADEAU-EUR"), "{cart}");
+
+    // The pound one is spent; so is a percentage, which belongs to no currency.
+    browser.post("/cart/promo", "code=cadeau-gbp").await;
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("Bon d'achat CADEAU-GBP"), "{cart}");
+    assert!(cart.contains("20,00 £"), "{cart}");
+    assert!(cart.contains("89,00 £"), "{cart}");
+    browser
+        .post("/cart/promo", &format!("code={}", seed::PROMO_CODE))
+        .await;
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("Code promo BIENVENUE10"), "{cart}");
+    assert!(cart.contains("10,90 £"), "{cart}");
+    Ok(())
+}

@@ -442,6 +442,13 @@ the SMTP relay.
   are offered only in the currencies that have one) and the return-label fee
   (`ReturnPolicy::label_fees` — a currency without one gets its labels free).
   What a currency has no amount for is never derived from another.
+- **A value belongs to its currency.** A voucher, a store credit from a
+  return, a fixed-amount promo code: each is worth what it says in the
+  currency it was issued in, and is refused — unspent — on a cart in another
+  one (`quote_code` gives nothing, `redeem_code` fails on the currency);
+  `code_currency` lets a page say *why* rather than "no longer valid". A
+  percentage belongs to no currency and works everywhere. The admin issues
+  vouchers and fixed amounts in any currency the shop sells in.
 - **Destination VAT** (EU one-stop shop) has no product tax category: a
   product only knows the rate it is listed with, and each country's zone maps
   that rate to its own (`5,5 % → 7 %` in Germany), falling back to the

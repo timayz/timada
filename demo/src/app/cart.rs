@@ -6,7 +6,8 @@ use timada_cart::{AddLine, CartDetailsView, CartError, CartLine};
 use timada_catalog::load_product_page;
 use timada_pricing::{load_product_price, price_id};
 use timada_promotion::{
-    CodeKind, discount_id, load_discount_details, load_voucher_balance, quote_code, voucher_id,
+    CodeKind, code_currency, discount_id, load_discount_details, load_voucher_balance, quote_code,
+    voucher_id,
 };
 use topcoat::{
     Result,
@@ -281,6 +282,9 @@ pub(super) struct PromoLine {
     /// What the code takes off and the subtotal once it did; `None` when the
     /// code stopped being usable since it was typed in.
     pub effect: Option<(String, String)>,
+    /// The code is worth something — in another currency than the cart's:
+    /// `(the code's, the cart's)`, as they are written.
+    pub other_currency: Option<(String, String)>,
 }
 
 /// An estimate on the goods alone — the binding amount is set when the order
@@ -304,9 +308,21 @@ pub(super) async fn promo_line_on(
     };
     let quote = quote_code(&store.executor, code, subtotal, subtotal).await?;
     let Some(quote) = quote else {
+        // A voucher or a fixed amount belongs to its currency: never converted.
+        let symbol = timada_core::format::currency_symbol;
+        let other_currency = code_currency(&store.executor, code)
+            .await?
+            .filter(|bound| *bound != subtotal.currency)
+            .map(|bound| {
+                (
+                    symbol(&bound).to_owned(),
+                    symbol(&subtotal.currency).to_owned(),
+                )
+            });
         return Ok(Some(PromoLine {
             label: code.clone(),
             effect: None,
+            other_currency,
         }));
     };
     let label = match quote.kind {
@@ -317,6 +333,7 @@ pub(super) async fn promo_line_on(
     Ok(Some(PromoLine {
         label,
         effect: Some((money(&quote.amount), money(&net))),
+        other_currency: None,
     }))
 }
 
@@ -475,11 +492,19 @@ pub(super) async fn promo_totals(subtotal: String, promo: &Option<PromoLine>) ->
 pub(super) async fn promo_notice(promo: &Option<PromoLine>) -> Result<impl View> {
     let dead_code = promo
         .as_ref()
-        .filter(|p| p.effect.is_none())
+        .filter(|p| p.effect.is_none() && p.other_currency.is_none())
         .map(|p| p.label.clone());
+    let foreign_code = promo.as_ref().and_then(|p| {
+        p.other_currency
+            .clone()
+            .map(|(bound, cart)| (p.label.clone(), bound, cart))
+    });
     Ok(view! {
         if let Some(code) = &dead_code {
             <p role="status" class="notice">"Le code " <strong>(code.clone())</strong> " n'est plus valable : il ne sera pas appliqué à la commande."</p>
+        }
+        if let Some((code, bound, cart)) = &foreign_code {
+            <p role="status" class="notice">"Le code " <strong>(code.clone())</strong> " vaut en " (bound.clone()) " : il ne s'applique pas à un panier en " (cart.clone()) ", et garde toute sa valeur."</p>
         }
     })
 }

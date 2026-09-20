@@ -52,3 +52,22 @@ pub async fn quote_code<E: Executor>(
         amount,
     }))
 }
+
+/// The currency a code is bound to: a voucher's, or a fixed-amount promo
+/// code's. `None` for a percentage — it works in every currency — and for a
+/// code nobody knows. What a page needs to say *why* a code does nothing on
+/// a cart in another currency: a value is never converted.
+pub async fn code_currency<E: Executor>(
+    executor: &E,
+    code: &str,
+) -> anyhow::Result<Option<String>> {
+    if let Some(discount) = load_discount_details(executor, discount_id(code)).await? {
+        return Ok(match discount.kind {
+            crate::value_object::DiscountKind::FixedAmount { amount } => Some(amount.currency),
+            crate::value_object::DiscountKind::Percent { .. } => None,
+        });
+    }
+    Ok(load_voucher_balance(executor, voucher_id(code))
+        .await?
+        .map(|voucher| voucher.remaining.currency))
+}

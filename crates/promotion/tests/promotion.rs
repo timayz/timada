@@ -1,8 +1,9 @@
 use timada_core::Money;
 use timada_promotion::{
     CodeKind, Command, CreateDiscount, DISCOUNT, DiscountKind, IssueVoucher, ListCodes,
-    PromotionError, VOUCHER, VoucherKind, code_list_subscription, count_codes, discount_id,
-    list_codes, load_discount_details, load_voucher_balance, migrations, quote_code, voucher_id,
+    PromotionError, VOUCHER, VoucherKind, code_currency, code_list_subscription, count_codes,
+    discount_id, list_codes, load_discount_details, load_voucher_balance, migrations, quote_code,
+    voucher_id,
 };
 
 #[tokio::test]
@@ -311,5 +312,84 @@ async fn code_list_follows_both_kinds_of_code() -> anyhow::Result<()> {
     .await?;
     assert_eq!(vouchers[0].amount_minor, Some(5_000));
     assert!(!vouchers[0].active, "cancelled voucher");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_value_belongs_to_its_currency_and_a_percentage_to_none() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command {
+        executor: &executor,
+        db,
+    };
+    cmd.create_discount(CreateDiscount {
+        code: "dix".into(),
+        kind: DiscountKind::Percent { bp: 1_000 },
+        max_redemptions: None,
+        valid_until: None,
+    })
+    .await?;
+    cmd.create_discount(CreateDiscount {
+        code: "moins20".into(),
+        kind: DiscountKind::FixedAmount {
+            amount: Money::eur(2_000),
+        },
+        max_redemptions: None,
+        valid_until: None,
+    })
+    .await?;
+    cmd.issue_voucher(IssueVoucher {
+        code: "cadeau".into(),
+        customer_id: None,
+        value: Money::new(5_000, "GBP"),
+        kind: VoucherKind::GiftVoucher,
+        expires_at: None,
+    })
+    .await?;
+
+    assert_eq!(code_currency(&executor, "dix").await?, None);
+    assert_eq!(
+        code_currency(&executor, "moins20").await?.as_deref(),
+        Some("EUR")
+    );
+    assert_eq!(
+        code_currency(&executor, "CADEAU").await?.as_deref(),
+        Some("GBP")
+    );
+    assert_eq!(code_currency(&executor, "nobody").await?, None);
+
+    let euros = Money::eur(10_000);
+    let pounds = Money::new(10_000, "GBP");
+    // Ten per cent of whatever the cart is in.
+    assert_eq!(
+        quote_code(&executor, "dix", &pounds, &pounds)
+            .await?
+            .map(|quote| quote.amount),
+        Some(Money::new(1_000, "GBP"))
+    );
+    // 20 € are not 20 £, and 50 £ are not 50 €: no quote, nothing spent.
+    assert!(
+        quote_code(&executor, "moins20", &pounds, &pounds)
+            .await?
+            .is_none()
+    );
+    assert!(
+        quote_code(&executor, "cadeau", &euros, &euros)
+            .await?
+            .is_none()
+    );
+    assert!(matches!(
+        cmd.redeem_code("cadeau", "order-eur", &euros, &euros).await,
+        Err(PromotionError::Money(_))
+    ));
+    let balance = load_voucher_balance(&executor, voucher_id("cadeau"))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("voucher missing"))?;
+    assert_eq!(balance.remaining, Money::new(5_000, "GBP"));
+    // In its own currency it is spent as usual.
+    let spent = cmd
+        .redeem_code("cadeau", "order-gbp", &pounds, &pounds)
+        .await?;
+    assert_eq!(spent.amount, Money::new(5_000, "GBP"));
     Ok(())
 }
