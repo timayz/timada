@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 use timada_catalog::{
-    CatalogError, DescribeProduct, ProductPageView, category_lineage, load_product_page,
+    CatalogError, DescribeProduct, ProductPageView, Spec, category_lineage, load_product_page,
 };
 use timada_core::Money;
 use timada_inventory::{StockLocation, stock_item_id};
@@ -67,6 +67,12 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         None => product.category_path.join(" > "),
     };
     let categories = category_options(cx, None).await?;
+    let sheet = product
+        .specs
+        .iter()
+        .map(|spec| format!("{} | {} | {}", spec.group, spec.label, spec.value))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     Ok(view! {
         page_header(
@@ -98,6 +104,19 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             </div>
                             if !product.archived {
                                 <div>button(variant: ButtonVariant::Secondary, attrs: topcoat::view::attributes! { type="submit" }, "Enregistrer")</div>
+                            }
+                        </form>
+                    )
+                )
+                card(
+                    card_header(card_title("Fiche technique"))
+                    card_content(
+                        <form method="post" action=(href!(specify, ProductId(id.clone()))) class="flex flex-col gap-3">
+                            label(attrs: topcoat::view::attributes! { for="specs" }, "Une ligne par caractéristique : Groupe | Libellé | Valeur")
+                            textarea(attrs: topcoat::view::attributes! { id="specs" name="specs" rows="8" placeholder="Dalle | Taille | 27 pouces" }, (sheet.clone()))
+                            <p class="text-sm text-muted-foreground">"Les filtres des catégories s'appuient sur ces lignes : une même valeur s'écrit partout de la même façon."</p>
+                            if !product.archived {
+                                <div>button(variant: ButtonVariant::Secondary, attrs: topcoat::view::attributes! { type="submit" }, "Enregistrer la fiche")</div>
                             }
                         </form>
                     )
@@ -267,5 +286,39 @@ pub async fn categorise(cx: &Cx, Form(form): Form<CategoriseForm>) -> Result<imp
             Err(err) => return Err(anyhow::Error::from(err).into()),
         }
     }
+    Err::<(), _>(see_other(back(cx, &id)).into())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SpecifyForm {
+    specs: String,
+}
+
+/// Replaces the technical sheet: `Groupe | Libellé | Valeur` per line, the
+/// group optional; lines without a label or a value are dropped.
+#[page(POST "./specify")]
+pub async fn specify(cx: &Cx, Form(form): Form<SpecifyForm>) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let specs = form
+        .specs
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('|').map(str::trim).collect();
+            let (group, name, value) = match parts.as_slice() {
+                [group, name, value] => (*group, *name, *value),
+                [name, value] => ("", *name, *value),
+                _ => return None,
+            };
+            (!name.is_empty() && !value.is_empty()).then(|| Spec {
+                group: group.to_owned(),
+                label: name.to_owned(),
+                value: value.to_owned(),
+            })
+        })
+        .collect();
+    timada_catalog::Command(&services.executor)
+        .specify_product(&id, specs)
+        .await?;
     Err::<(), _>(see_other(back(cx, &id)).into())
 }

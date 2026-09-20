@@ -3,8 +3,8 @@
 
 use serde::Deserialize;
 use timada_catalog::{
-    CatalogError, CategoryRow, category_by_id, category_lineage, category_subtree_ids,
-    count_products_in_categories,
+    CatalogError, CategoryRow, SpecKey, category_by_id, category_lineage, category_subtree_ids,
+    count_products_in_categories, effective_facets, specs_in_category,
 };
 use topcoat::{
     Result,
@@ -61,6 +61,19 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         count_products_in_categories(db, &category_subtree_ids(db, &category.id).await?).await?;
     // Anywhere but under itself.
     let parents = category_options(cx, Some(&category.id)).await?;
+    // The spec filters: the category's own list, what it inherits when it has
+    // none, and the specs its products actually have, to pick from.
+    let own_facets = facet_lines(&category.facet_keys());
+    let inherited = if own_facets.is_empty() {
+        facet_lines(&effective_facets(&lineage)).replace('\n', ", ")
+    } else {
+        String::new()
+    };
+    let available: Vec<(String, String)> = specs_in_category(db, &category.id)
+        .await?
+        .into_iter()
+        .map(|(key, products)| (facet_lines(&[key]), products.to_string()))
+        .collect();
 
     Ok(view! {
         page_header(
@@ -107,6 +120,30 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     )
                 )
             </div>
+            <div class="flex flex-col gap-6">
+            if !category.archived {
+                card(
+                    card_header(card_title("Filtres de la fiche technique"))
+                    card_content(
+                        <form method="post" action=(href!(define_facets, CategoryId(category.id.clone()))) class="flex flex-col gap-3">
+                            label(attrs: topcoat::view::attributes! { for="facets" }, "Un par ligne : Groupe > Libellé, dans l'ordre affiché")
+                            textarea(attrs: topcoat::view::attributes! { id="facets" name="facets" rows="5" placeholder="Dalle > Taille" }, (own_facets.clone()))
+                            if !inherited.is_empty() {
+                                <p class="text-sm text-muted-foreground">"Sans liste propre, la catégorie hérite de : " (inherited.clone())</p>
+                            }
+                            <div>button(variant: ButtonVariant::Secondary, attrs: topcoat::view::attributes! { type="submit" }, "Enregistrer les filtres")</div>
+                        </form>
+                        if !available.is_empty() {
+                            <h3 class="mt-4 mb-2 text-sm font-medium">"Caractéristiques des produits de la catégorie"</h3>
+                            <ul class="flex flex-col gap-1 text-sm text-muted-foreground">
+                                for (line, products) in &available {
+                                    <li><span class="font-mono text-xs">(line.clone())</span> " — " (products.clone()) " produit(s)"</li>
+                                }
+                            </ul>
+                        }
+                    )
+                )
+            }
             if !category.archived {
                 card(
                     card_header(card_title("Archiver"))
@@ -118,6 +155,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     )
                 )
             }
+            </div>
         </div>
     })
 }
@@ -166,4 +204,50 @@ pub async fn archive(cx: &Cx) -> Result<impl View> {
         .archive_category(&category.id)
         .await?;
     Err::<(), _>(see_other(back(cx, &category.id)).into())
+}
+
+/// `Groupe > Libellé`, a line per spec.
+fn facet_lines(facets: &[SpecKey]) -> String {
+    facets
+        .iter()
+        .map(|facet| format!("{} > {}", facet.group, facet.label))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FacetsForm {
+    facets: String,
+}
+
+/// Replaces the category's list of spec filters; an empty box hands the
+/// category back to its parent's list.
+#[page(POST "./facets")]
+pub async fn define_facets(cx: &Cx, Form(form): Form<FacetsForm>) -> Result<impl View> {
+    let category = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let facets = form
+        .facets
+        .lines()
+        .map(|line| match line.split_once('>') {
+            Some((group, name)) => SpecKey::new(group, name),
+            None => SpecKey::new("", line),
+        })
+        .collect();
+    let defined = timada_catalog::Command(&services.executor)
+        .define_category_facets(&category.id, facets)
+        .await;
+    let target = match defined {
+        Ok(()) => back(cx, &category.id),
+        Err(CatalogError::TooManyFacets(max)) => href!(show, CategoryId(category.id.clone()))
+            .query([("error", format!("{max} filtres au plus par catégorie."))])
+            .resolve(cx),
+        Err(err) => match refusal(&err) {
+            Some(message) => href!(show, CategoryId(category.id.clone()))
+                .query([("error", message)])
+                .resolve(cx),
+            None => return Err(anyhow::Error::from(err).into()),
+        },
+    };
+    Err::<(), _>(see_other(target).into())
 }

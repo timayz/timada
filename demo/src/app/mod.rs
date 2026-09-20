@@ -73,6 +73,7 @@ li.product h2{font-size:1rem;margin:0}li.product p{margin:0}li.product .price{fo
 li.product .thumb{display:block;aspect-ratio:1;background:#f4f4f4;border-radius:.2rem;overflow:hidden}\
 li.product img{width:100%;height:100%;object-fit:contain;display:block}\
 li.product .no-image{display:grid;place-items:center;height:100%;color:#595959;font-size:.85rem}\
+table.sheet th[scope=colgroup]{background:#f4f4f4}table.sheet th[scope=row]{font-weight:400;color:#595959;width:40%}\
 .in-stock{color:#176b2c;font-weight:500}\
 nav.pager{display:flex;gap:1rem;align-items:baseline;margin-top:1rem}\
 .cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}\

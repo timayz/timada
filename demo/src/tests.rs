@@ -1182,6 +1182,59 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
         StatusCode::NOT_FOUND
     );
 
+    // A category is filtered by the lines of the technical sheet its operator
+    // picked, each value counted within the other picks.
+    let screens = text(browser.get("/c/ecran-pc").await).await?;
+    assert!(screens.contains(">7 produits<"), "{screens}");
+    for offered in [
+        "<legend>Taille</legend>",
+        "24 pouces (2)",
+        "IPS (4)",
+        "VA (2)",
+        "60 Hz",
+    ] {
+        assert_eq!(
+            screens.contains(offered),
+            offered != "<span>60 Hz",
+            "{offered}: {screens}"
+        );
+    }
+    // By their number: 75 Hz before 144 Hz before 165 Hz.
+    let hz = |value: &str| screens.find(value).unwrap_or(usize::MAX);
+    assert!(hz("75 Hz (1)") < hz("144 Hz (2)") && hz("144 Hz (2)") < hz("165 Hz (2)"));
+    let fast_va = text(
+        browser
+            .get("/c/ecran-pc?f_dalle-type=VA&f_dalle-frequence=144+Hz")
+            .await,
+    )
+    .await?;
+    assert_eq!(listed(&fast_va), ["Samsung 32\" Odyssey G5"]);
+    assert!(
+        fast_va.contains("name=\"f_dalle-type\" value=\"VA\" checked"),
+        "{fast_va}"
+    );
+    assert!(
+        fast_va.contains("IPS (1)"),
+        "the other panel among the 144 Hz ones: {fast_va}"
+    );
+    assert!(fast_va.contains("content=\"noindex,follow\""), "{fast_va}");
+    // Above, nobody picked filters: the same parameter means nothing there.
+    let above = text(browser.get("/c/ecran-ordinateur?f_dalle-type=VA").await).await?;
+    assert!(above.contains(">7 produits<"), "{above}");
+    assert!(!above.contains("<legend>Taille</legend>"), "{above}");
+    assert!(above.contains("rel=\"canonical\""), "{above}");
+    // The sheet itself is on the product's page.
+    let ssd = timada_catalog::product_id("CRU-P3-1T");
+    let sheet = text(browser.get(&format!("/p/{ssd}")).await).await?;
+    assert!(
+        sheet.contains("<h2 id=\"fiche-technique\">Fiche technique</h2>"),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains("<th scope=\"row\">Interface</th><td>NVMe PCIe 4.0</td>"),
+        "{sheet}"
+    );
+
     // What search engines are handed.
     let sitemap = browser.get("/sitemap.xml").await;
     assert_eq!(sitemap.status(), StatusCode::OK);

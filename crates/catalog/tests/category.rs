@@ -355,3 +355,66 @@ async fn category_paths_from_before_are_adopted() -> anyhow::Result<()> {
     assert_eq!(list_categories(&db, true).await?.len(), 6);
     Ok(())
 }
+
+#[tokio::test]
+async fn a_category_is_filtered_by_its_own_specs_or_its_parents() -> anyhow::Result<()> {
+    use timada_catalog::{MAX_CATEGORY_FACETS, SpecKey, effective_facets};
+
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command(&executor);
+    let computing = cmd.create_category(category("Informatique", None)).await?;
+    let screens = cmd
+        .create_category(category("Écrans PC", Some(&computing)))
+        .await?;
+    let gaming = cmd
+        .create_category(category("Écrans gamer", Some(&screens)))
+        .await?;
+
+    let size = SpecKey::new("Dalle", "Taille");
+    let panel = SpecKey::new("Dalle", "Type");
+    // Tidied: trimmed, blanks and repeats dropped, the order kept.
+    cmd.define_category_facets(
+        &screens,
+        vec![
+            SpecKey::new(" Dalle ", " Taille "),
+            panel.clone(),
+            SpecKey::new("Dalle", "  "),
+            size.clone(),
+        ],
+    )
+    .await?;
+    sync(&executor, &db).await?;
+    let facets_of = |id: String| {
+        let db = &db;
+        async move { Ok::<_, anyhow::Error>(effective_facets(&category_lineage(db, &id).await?)) }
+    };
+    assert_eq!(
+        facets_of(screens.clone()).await?,
+        [size.clone(), panel.clone()]
+    );
+    // Inherited below, nothing above.
+    assert_eq!(
+        facets_of(gaming.clone()).await?,
+        [size.clone(), panel.clone()]
+    );
+    assert!(facets_of(computing.clone()).await?.is_empty());
+
+    // A list of its own replaces the inherited one; emptied, it is inherited again.
+    let refresh = SpecKey::new("Dalle", "Fréquence");
+    cmd.define_category_facets(&gaming, vec![refresh.clone()])
+        .await?;
+    sync(&executor, &db).await?;
+    assert_eq!(facets_of(gaming.clone()).await?, [refresh]);
+    cmd.define_category_facets(&gaming, Vec::new()).await?;
+    sync(&executor, &db).await?;
+    assert_eq!(facets_of(gaming).await?, [size, panel]);
+
+    let too_many = (0..=MAX_CATEGORY_FACETS)
+        .map(|n| SpecKey::new("Dalle", format!("Spec {n}")))
+        .collect();
+    assert!(matches!(
+        cmd.define_category_facets(&screens, too_many).await,
+        Err(CatalogError::TooManyFacets(_))
+    ));
+    Ok(())
+}

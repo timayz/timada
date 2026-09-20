@@ -4,7 +4,8 @@
 //! not found.
 
 use timada_catalog::{
-    CategoryRow, category_by_slug, category_lineage, is_on_storefront, list_categories,
+    CategoryRow, category_by_slug, category_lineage, effective_facets, is_on_storefront,
+    list_categories,
 };
 use topcoat::{
     Result,
@@ -64,6 +65,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         Scope {
             category_id: Some(category.id.clone()),
             brand_slug: None,
+            spec_facets: effective_facets(&lineage),
         },
     )
     .await?;

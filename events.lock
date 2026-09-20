@@ -18,6 +18,7 @@ event timada-cart/Cart::PromoCodeRemoved unit
 event timada-catalog/Category::CategoryArchived unit
 event timada-catalog/Category::CategoryCreated { slug: String, name: String, parent_id: Option<String> }
 event timada-catalog/Category::CategoryDescribed { description: String }
+event timada-catalog/Category::CategoryFacetsDefined { facets: Vec<SpecKey> }
 event timada-catalog/Category::CategoryMoved { parent_id: Option<String> }
 event timada-catalog/Category::CategoryPositioned { position: u32 }
 event timada-catalog/Category::CategoryRenamed { name: String }
@@ -115,6 +116,7 @@ type timada-catalog::EnergyClass enum { A, B, C, D, E, F, G }
 type timada-catalog::Media { url: String, kind: MediaKind, alt: String }
 type timada-catalog::MediaKind enum { Image, Video }
 type timada-catalog::Spec { group: String, label: String, value: String }
+type timada-catalog::SpecKey { group: String, label: String }
 type timada-core::Address { civility: Civility, first_name: String, last_name: String, line1: String, line2: Option<String>, postal_code: String, city: String, country_code: String, phone: Option<String>, mobile: Option<String> }
 type timada-core::Civility enum { Mr, Mrs }
 type timada-core::Money { minor: i64, currency: String }

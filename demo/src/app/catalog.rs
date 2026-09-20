@@ -135,8 +135,8 @@ pub async fn brand(cx: &Cx) -> Result<impl View> {
         cx,
         here.clone(),
         Scope {
-            category_id: None,
             brand_slug: Some(slug),
+            ..Scope::default()
         },
     )
     .await?;
@@ -451,6 +451,15 @@ async fn product_view(
     } else {
         Vec::new()
     };
+    // The technical sheet, its lines gathered by group in the order given.
+    let mut sheet: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for spec in &product.specs {
+        let line = (spec.label.clone(), spec.value.clone());
+        match sheet.iter_mut().find(|(group, _)| *group == spec.group) {
+            Some((_, lines)) => lines.push(line),
+            None => sheet.push((spec.group.clone(), vec![line])),
+        }
+    }
     let here = href!(product_page, ProductId(id.clone())).resolve(cx);
     let head = Head {
         description: Some(product.short_description.clone()).filter(|text| !text.is_empty()),
@@ -710,6 +719,21 @@ async fn product_view(
                 <ul>for feature in &product.key_features { <li>(feature.clone())</li> }</ul>
             }
             if !product.long_description.is_empty() { <p>(product.long_description.clone())</p> }
+            if !sheet.is_empty() {
+                <h2 id="fiche-technique">"Fiche technique"</h2>
+                <table class="sheet">
+                    for (group, lines) in &sheet {
+                        <tbody>
+                            if !group.is_empty() {
+                                <tr><th colspan="2" scope="colgroup">(group.clone())</th></tr>
+                            }
+                            for (name, value) in lines {
+                                <tr><th scope="row">(name.clone())</th><td>(value.clone())</td></tr>
+                            }
+                        </tbody>
+                    }
+                </table>
+            }
 
             <h2 id="avis">"Avis clients"</h2>
             if reviews.is_empty() {

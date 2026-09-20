@@ -6,7 +6,9 @@
 //! value that makes no sense is ignored rather than refused — these URLs get
 //! edited, shared and crawled.
 
-use timada_catalog::{ListingPage, ListingQuery, ListingRow, ListingSort, search_listing};
+use timada_catalog::{
+    ListingPage, ListingQuery, ListingRow, ListingSort, SpecFilter, SpecKey, search_listing,
+};
 use timada_core::Money;
 use topcoat::{
     Result,
@@ -25,6 +27,17 @@ pub const PER_PAGE: u32 = 24;
 pub struct Scope {
     pub category_id: Option<String>,
     pub brand_slug: Option<String>,
+    /// The lines of the technical sheet the page can be filtered by — a
+    /// category's (`timada_catalog::effective_facets`).
+    pub spec_facets: Vec<SpecKey>,
+}
+
+/// The query parameter of a spec filter: `f_dalle-taille=27+pouces`.
+pub fn spec_param(key: &SpecKey) -> String {
+    format!(
+        "f_{}",
+        timada_core::slug::slugify(&format!("{} {}", key.group, key.label))
+    )
 }
 
 /// The shopper's filters, as the query string spells them.
@@ -37,6 +50,8 @@ pub struct Filters {
     pub price_max: Option<i64>,
     pub in_stock: bool,
     pub min_rating: Option<u8>,
+    /// The values picked, per spec of the scope.
+    pub specs: Vec<SpecFilter>,
     pub sort: ListingSort,
     pub page: u32,
 }
@@ -54,11 +69,16 @@ const SORTS: [(&str, ListingSort, &str); 5] = [
 ];
 
 impl Filters {
-    pub fn parse(query: Option<&str>) -> Self {
+    /// `spec_facets` are the specs the page offers: only those are read.
+    pub fn parse(query: Option<&str>, spec_facets: &[SpecKey]) -> Self {
         let mut filters = Self {
             page: 1,
             ..Self::default()
         };
+        let params: Vec<(String, &SpecKey)> = spec_facets
+            .iter()
+            .map(|key| (spec_param(key), key))
+            .collect();
         for (key, value) in form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
             let value = value.trim();
             if value.is_empty() {
@@ -80,11 +100,37 @@ impl Filters {
                         .map_or(ListingSort::Relevance, |(_, sort, _)| *sort);
                 }
                 "page" => filters.page = value.parse().unwrap_or(1).max(1),
+                param if value.chars().count() <= 80 => {
+                    let Some((_, key)) = params.iter().find(|(name, _)| name == param) else {
+                        continue;
+                    };
+                    let at = match filters.specs.iter().position(|f| f.key == **key) {
+                        Some(at) => at,
+                        None => {
+                            filters.specs.push(SpecFilter {
+                                key: (*key).clone(),
+                                values: Vec::new(),
+                            });
+                            filters.specs.len() - 1
+                        }
+                    };
+                    let values = &mut filters.specs[at].values;
+                    if values.len() < 20 && !values.iter().any(|v| v == value) {
+                        values.push(value.to_owned());
+                    }
+                }
                 _ => {}
             }
         }
         filters.brands.sort();
         filters.brands.dedup();
+        // One spelling per set of filters: the order of the page's specs.
+        filters
+            .specs
+            .sort_by_key(|filter| spec_facets.iter().position(|key| *key == filter.key));
+        for filter in &mut filters.specs {
+            filter.values.sort();
+        }
         filters
     }
 
@@ -117,6 +163,12 @@ impl Filters {
         }
         if let Some(stars) = self.min_rating {
             query.append_pair("note", &stars.to_string());
+        }
+        for filter in &self.specs {
+            let param = spec_param(&filter.key);
+            for value in &filter.values {
+                query.append_pair(&param, value);
+            }
         }
         if let Some((code, ..)) = SORTS
             .iter()
@@ -169,7 +221,7 @@ impl Listing {
 /// string. A page past the end is the last one.
 pub async fn load_listing(cx: &Cx, base: String, scope: Scope) -> Result<Listing> {
     let store = app_context::<Store>(cx);
-    let mut filters = Filters::parse(uri(cx).query());
+    let mut filters = Filters::parse(uri(cx).query(), &scope.spec_facets);
     let brand_scoped = scope.brand_slug.is_some();
     let query_for = |filters: &Filters| ListingQuery {
         q: filters.q.clone(),
@@ -182,6 +234,8 @@ pub async fn load_listing(cx: &Cx, base: String, scope: Scope) -> Result<Listing
         price_max_minor: filters.price_max.map(|p| p.saturating_mul(100)),
         in_stock: filters.in_stock,
         min_rating: filters.min_rating,
+        specs: filters.specs.clone(),
+        facet_specs: scope.spec_facets.clone(),
         sort: filters.sort,
         limit: PER_PAGE,
         offset: (filters.page - 1).saturating_mul(PER_PAGE),
@@ -242,6 +296,11 @@ async fn product_card(cx: &Cx, row: &ListingRow) -> Result<impl View> {
     })
 }
 
+/// A choice of a filter: its value, its label with the count, whether picked.
+type Choice = (String, String, bool);
+/// A spec's fieldset: the query parameter, the legend, the choices.
+type SpecFieldset = (String, String, Vec<Choice>);
+
 /// The filters, the products and the pages of a [`Listing`].
 #[component]
 pub async fn listing_view(listing: &Listing) -> Result<impl View> {
@@ -281,6 +340,31 @@ pub async fn listing_view(listing: &Listing) -> Result<impl View> {
                 format!("{stars} étoiles et plus ({count})"),
                 filters.min_rating == Some(*stars),
             )
+        })
+        .collect();
+    // A fieldset per spec of the technical sheet: its values, counted.
+    let spec_fieldsets: Vec<SpecFieldset> = facets
+        .specs
+        .iter()
+        .map(|facet| {
+            let picked = filters
+                .specs
+                .iter()
+                .find(|filter| filter.key == facet.key)
+                .map(|filter| filter.values.as_slice())
+                .unwrap_or_default();
+            let values = facet
+                .values
+                .iter()
+                .map(|(value, count)| {
+                    (
+                        value.clone(),
+                        format!("{value} ({count})"),
+                        picked.contains(value),
+                    )
+                })
+                .collect();
+            (spec_param(&facet.key), facet.key.label.clone(), values)
         })
         .collect();
     let sorts: Vec<(&str, &str, bool)> = SORTS
@@ -323,6 +407,17 @@ pub async fn listing_view(listing: &Listing) -> Result<impl View> {
                         <input type="number" name="prix_max" min="0" inputmode="numeric" placeholder=(dearest) value=(filters.price_max.map(|p| p.to_string()).unwrap_or_default())>
                     </label>
                 </fieldset>
+                for (param, legend, values) in &spec_fieldsets {
+                    <fieldset>
+                        <legend>(legend.clone())</legend>
+                        for (value, value_label, checked) in values {
+                            <label class="choice">
+                                <input type="checkbox" name=(param.clone()) value=(value.clone()) checked=(*checked)>
+                                <span>(value_label.clone())</span>
+                            </label>
+                        }
+                    </fieldset>
+                }
                 <label class="choice">
                     <input type="checkbox" name="stock" value="1" checked=(filters.in_stock)>
                     <span>(stock_label)</span>
@@ -377,10 +472,13 @@ mod tests {
 
     #[test]
     fn filters_are_read_leniently_and_written_back_the_same() {
-        let filters = Filters::parse(Some(
-            "q=%C3%A9cran+24&marque=lg&marque=aoc&marque=LG!&marque=lg&prix_min=50&prix_max=abc\
-             &stock=1&note=9&tri=prix-croissant&page=3&utm_source=x",
-        ));
+        let filters = Filters::parse(
+            Some(
+                "q=%C3%A9cran+24&marque=lg&marque=aoc&marque=LG!&marque=lg&prix_min=50&prix_max=abc\
+                 &stock=1&note=9&tri=prix-croissant&page=3&utm_source=x",
+            ),
+            &[],
+        );
         assert_eq!(filters.q.as_deref(), Some("écran 24"));
         assert_eq!(filters.brands, ["aoc", "lg"]);
         assert_eq!((filters.price_min, filters.price_max), (Some(50), None));
@@ -395,15 +493,56 @@ mod tests {
             link,
             "/c/ecrans?q=%C3%A9cran+24&marque=aoc&marque=lg&prix_min=50&stock=1&tri=prix-croissant&page=2"
         );
-        let again = Filters::parse(link.split_once('?').map(|(_, query)| query));
+        let again = Filters::parse(link.split_once('?').map(|(_, query)| query), &[]);
         assert_eq!(Filters { page: 3, ..again }, filters);
 
         // Nothing but a page: the plain listing.
-        let plain = Filters::parse(Some("page=2&tri=pertinence&note="));
+        let plain = Filters::parse(Some("page=2&tri=pertinence&note="), &[]);
         assert!(!plain.is_narrowed());
         assert_eq!(plain.link("/", 1), "/");
         assert_eq!(plain.link("/", 2), "/?page=2");
-        assert_eq!(Filters::parse(None).page, 1);
-        assert_eq!(Filters::parse(Some("page=0")).page, 1);
+        assert_eq!(Filters::parse(None, &[]).page, 1);
+        assert_eq!(Filters::parse(Some("page=0"), &[]).page, 1);
+    }
+
+    #[test]
+    fn only_the_specs_a_page_offers_are_read() {
+        let size = SpecKey::new("Dalle", "Taille");
+        let panel = SpecKey::new("Dalle", "Type");
+        assert_eq!(spec_param(&size), "f_dalle-taille");
+        assert_eq!(spec_param(&SpecKey::new("", "Capacité")), "f_capacite");
+
+        let offered = [size.clone(), panel.clone()];
+        let filters = Filters::parse(
+            Some(
+                "f_dalle-type=VA&f_dalle-type=IPS&f_dalle-type=IPS&f_dalle-taille=27+pouces&f_poids=3+kg",
+            ),
+            &offered,
+        );
+        assert_eq!(
+            filters.specs,
+            [
+                SpecFilter {
+                    key: size,
+                    values: vec!["27 pouces".into()]
+                },
+                SpecFilter {
+                    key: panel,
+                    values: vec!["IPS".into(), "VA".into()]
+                },
+            ]
+        );
+        assert!(filters.is_narrowed());
+        let link = filters.link("/c/ecran-pc", 1);
+        assert_eq!(
+            link,
+            "/c/ecran-pc?f_dalle-taille=27+pouces&f_dalle-type=IPS&f_dalle-type=VA"
+        );
+        assert_eq!(
+            Filters::parse(link.split_once('?').map(|(_, query)| query), &offered),
+            filters
+        );
+        // On a page that offers no spec, the same parameters mean nothing.
+        assert!(!Filters::parse(Some("f_dalle-type=VA"), &[]).is_narrowed());
     }
 }

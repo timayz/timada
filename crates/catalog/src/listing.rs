@@ -29,11 +29,11 @@ use timada_review::{aggregator::ReviewPublished, load_review_details};
 use crate::{
     aggregator::{
         CategoryMoved, CategoryRenamed, ProductArchived, ProductCategorised, ProductCreated,
-        ProductDescribed, ProductMediaAdded,
+        ProductDescribed, ProductMediaAdded, ProductSpecified,
     },
     command::{Command, MAX_CATEGORY_DEPTH},
     query::load_product_page,
-    value_object::MediaKind,
+    value_object::{MediaKind, SpecKey},
 };
 
 /// Subscription key; the caller attaches the pool with `.data(pool)`.
@@ -46,6 +46,7 @@ pub fn listing_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(on_product_created())
         .handler(on_product_described())
         .handler(on_product_media_added())
+        .handler(on_product_specified())
         .handler(on_product_categorised())
         .handler(on_product_archived())
         .handler(on_price_listed())
@@ -109,6 +110,12 @@ pub struct ListingQuery {
     pub in_stock: bool,
     /// At least that many stars on average.
     pub min_rating: Option<u8>,
+    /// Lines of the technical sheet: every filter must match, by any of its
+    /// values.
+    pub specs: Vec<SpecFilter>,
+    /// The specs to count values for ([`ListingFacets::specs`]) — those the
+    /// category is filtered by.
+    pub facet_specs: Vec<SpecKey>,
     pub sort: ListingSort,
     pub limit: u32,
     pub offset: u32,
@@ -124,11 +131,28 @@ impl Default for ListingQuery {
             price_max_minor: None,
             in_stock: false,
             min_rating: None,
+            specs: Vec::new(),
+            facet_specs: Vec::new(),
             sort: ListingSort::default(),
             limit: 24,
             offset: 0,
         }
     }
+}
+
+/// "`Dalle` › `Type` is `IPS` or `VA`".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecFilter {
+    pub key: SpecKey,
+    pub values: Vec<String>,
+}
+
+/// The values a spec takes among the products the other filters leave, with
+/// how many products have each — numbers first, by size.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecFacet {
+    pub key: SpecKey,
+    pub values: Vec<(String, i64)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,6 +173,8 @@ pub struct ListingFacets {
     pub in_stock: i64,
     /// How many products average at least 4, 3, 2 and 1 stars, in that order.
     pub rated_at_least: [(u8, i64); 4],
+    /// One per [`ListingQuery::facet_specs`] that has values, in that order.
+    pub specs: Vec<SpecFacet>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -173,11 +199,12 @@ fn fts_expression(q: &str) -> Option<String> {
 
 /// A filter a facet leaves out when it counts.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Filter {
+enum Filter<'a> {
     Brand,
     Price,
     Stock,
     Rating,
+    Spec(&'a SpecKey),
 }
 
 /// `FROM … WHERE …` for a query, leaving `without` out.
@@ -185,9 +212,16 @@ fn push_matching(
     sql: &mut QueryBuilder<Sqlite>,
     query: &ListingQuery,
     fts: Option<&str>,
-    without: Option<Filter>,
+    without: Option<Filter<'_>>,
 ) {
     sql.push(" FROM catalog_listing l");
+    // Counting a spec's values: one row per product that has the spec.
+    if let Some(Filter::Spec(key)) = without {
+        sql.push(" JOIN catalog_listing_spec s ON s.product_id = l.product_id AND s.spec_group = ")
+            .push_bind(key.group.clone())
+            .push(" AND s.label = ")
+            .push_bind(key.label.clone());
+    }
     if fts.is_some() {
         sql.push(" JOIN catalog_listing_fts ON catalog_listing_fts.rowid = l.rowid");
     }
@@ -224,6 +258,24 @@ fn push_matching(
     {
         sql.push(" AND l.rating_avg >= ")
             .push_bind(f64::from(stars));
+    }
+    for filter in &query.specs {
+        if without == Some(Filter::Spec(&filter.key)) || filter.values.is_empty() {
+            continue;
+        }
+        sql.push(
+            " AND EXISTS (SELECT 1 FROM catalog_listing_spec f
+               WHERE f.product_id = l.product_id AND f.spec_group = ",
+        )
+        .push_bind(filter.key.group.clone())
+        .push(" AND f.label = ")
+        .push_bind(filter.key.label.clone())
+        .push(" AND f.value IN (");
+        let mut values = sql.separated(", ");
+        for value in &filter.values {
+            values.push_bind(value.clone());
+        }
+        sql.push("))");
     }
 }
 
@@ -286,6 +338,22 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
     let (four, three, two, one): (i64, i64, i64, i64) =
         rated.build_query_as().fetch_one(db).await?;
 
+    let mut specs = Vec::new();
+    for key in &query.facet_specs {
+        let mut values = QueryBuilder::<Sqlite>::new("SELECT s.value, COUNT(*)");
+        push_matching(&mut values, query, fts, Some(Filter::Spec(key)));
+        // "24 pouces" before "27 pouces" before "100 Hz"… by their number;
+        // words (a cast gives them 0) by the alphabet.
+        values.push(" GROUP BY s.value ORDER BY CAST(s.value AS REAL), s.value COLLATE NOCASE");
+        let values: Vec<(String, i64)> = values.build_query_as().fetch_all(db).await?;
+        if !values.is_empty() {
+            specs.push(SpecFacet {
+                key: key.clone(),
+                values,
+            });
+        }
+    }
+
     Ok(ListingPage {
         rows,
         total,
@@ -297,6 +365,7 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
             price_range: cheapest.zip(dearest),
             in_stock,
             rated_at_least: [(4, four), (3, three), (2, two), (1, one)],
+            specs,
         },
     })
 }
@@ -449,7 +518,53 @@ async fn refresh_product<E: Executor>(
     ))
     .execute(db)
     .await?;
+
+    // The technical sheet, line by line. A label given twice in a group keeps
+    // its last value.
+    sqlx::query("DELETE FROM catalog_listing_spec WHERE product_id = ?")
+        .bind(&product.id)
+        .execute(db)
+        .await?;
+    for spec in &product.specs {
+        let value = spec.value.trim();
+        if spec.label.trim().is_empty() || value.is_empty() {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO catalog_listing_spec (product_id, spec_group, label, value)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (product_id, spec_group, label) DO UPDATE SET value = excluded.value",
+        )
+        .bind(&product.id)
+        .bind(spec.group.trim())
+        .bind(spec.label.trim())
+        .bind(value)
+        .execute(db)
+        .await?;
+    }
     Ok(())
+}
+
+/// The specs the products on sale under a category have, most common first,
+/// with how many products have each: what an operator picks filters from.
+pub async fn specs_in_category(
+    db: &SqlitePool,
+    category_id: &str,
+) -> sqlx::Result<Vec<(SpecKey, i64)>> {
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT s.spec_group, s.label, COUNT(*) AS products
+         FROM catalog_listing_spec s JOIN catalog_listing l ON l.product_id = s.product_id
+         WHERE l.archived = 0 AND l.price_minor IS NOT NULL AND instr(l.category_trail, ?) > 0
+         GROUP BY s.spec_group, s.label
+         ORDER BY products DESC, s.spec_group COLLATE NOCASE, s.label COLLATE NOCASE",
+    )
+    .bind(format!("/{category_id}/"))
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(group, label, products)| (SpecKey::new(group, label), products))
+        .collect())
 }
 
 async fn refresh<E: Executor>(
@@ -526,6 +641,14 @@ async fn on_product_described<E: Executor>(
 async fn on_product_media_added<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<ProductMediaAdded>,
+) -> anyhow::Result<()> {
+    refresh(ctx, &event.aggregate_id, event.timestamp).await
+}
+
+#[evento::subscription]
+async fn on_product_specified<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ProductSpecified>,
 ) -> anyhow::Result<()> {
     refresh(ctx, &event.aggregate_id, event.timestamp).await
 }
