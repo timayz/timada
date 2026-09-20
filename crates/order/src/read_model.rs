@@ -102,9 +102,16 @@ pub struct OrderToShipRow {
     pub currency: String,
 }
 
+impl OrderToShipRow {
+    pub fn total(&self) -> timada_core::Money {
+        timada_core::Money::new(self.total_minor, &self.currency)
+    }
+}
+
 /// The orders paid and not shipped yet, the one waiting longest first: what
 /// an operator prepares next. The fulfillment saga never times these out —
-/// somebody has to ship them.
+/// somebody has to ship them. Orders held for a dispute on their payment
+/// (`order_payment_hold`) are left out until the bank decides.
 pub async fn orders_to_ship(
     db: &SqlitePool,
     limit: u32,
@@ -115,6 +122,7 @@ pub async fn orders_to_ship(
                 COALESCE(paid_at, placed_at) AS waiting_since, total_minor, currency
          FROM order_history
          WHERE status = 'paid'
+           AND order_id NOT IN (SELECT order_id FROM order_payment_hold)
          ORDER BY waiting_since, order_id
          LIMIT ? OFFSET ?",
     )
@@ -129,7 +137,9 @@ pub async fn orders_to_ship(
 pub async fn count_orders_to_ship(db: &SqlitePool, late_before: u64) -> sqlx::Result<(i64, i64)> {
     sqlx::query_as(
         "SELECT COUNT(*), COALESCE(SUM(COALESCE(paid_at, placed_at) < ?), 0)
-         FROM order_history WHERE status = 'paid'",
+         FROM order_history
+         WHERE status = 'paid'
+           AND order_id NOT IN (SELECT order_id FROM order_payment_hold)",
     )
     .bind(late_before as i64)
     .fetch_one(db)

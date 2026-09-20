@@ -260,12 +260,23 @@ impl CreditNoteDocument {
     }
 }
 
+/// What a credit note issued for a lost dispute is keyed by and gives as its
+/// reason: there is no refund of the shop's behind it — the bank took the
+/// money back — so the operator decides whether the sale is cancelled. One
+/// credit note per dispute, however often it is asked for.
+pub fn dispute_credit_reference(dispute_id: &str) -> String {
+    format!("dispute {dispute_id}")
+}
+
 /// A refund's reason as a document words it. Refunds are asked for by code
 /// ("return R2026-000003", "order cancelled: …") or by an operator, whose
 /// words are kept.
 pub fn credit_reason_label(reason: &str) -> String {
     if let Some(rma) = reason.strip_prefix("return ") {
         return format!("Retour {rma}");
+    }
+    if let Some(dispute) = reason.strip_prefix("dispute ") {
+        return format!("Litige bancaire {dispute}");
     }
     match reason.strip_prefix("order cancelled") {
         Some("") => "Commande annulée".to_owned(),
@@ -375,6 +386,10 @@ mod tests {
         assert_eq!(
             credit_reason_label("order cancelled: changement d'avis"),
             "Commande annulée : changement d'avis"
+        );
+        assert_eq!(
+            credit_reason_label(&super::dispute_credit_reference("dp_1")),
+            "Litige bancaire dp_1"
         );
         // An operator's words are kept.
         assert_eq!(credit_reason_label("geste commercial"), "geste commercial");

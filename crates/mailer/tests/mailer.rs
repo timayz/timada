@@ -18,6 +18,7 @@ fn config() -> MailerConfig {
         shop_name: "Timada".into(),
         base_url: "https://shop.example/".into(),
         returns_address: "Timada — Service retours\n1 rue de l'Entrepôt\n31000 Toulouse".into(),
+        alerts_to: Some("boutique@shop.example".into()),
         max_event_age_secs: MailerConfig::DEFAULT_MAX_EVENT_AGE_SECS,
     }
 }
@@ -606,6 +607,139 @@ async fn old_events_are_not_emailed_about() -> anyhow::Result<()> {
         .run_once(&executor)
         .await?;
     assert_eq!(count_outbox(&db, None).await?, 0);
+    Ok(())
+}
+
+/// A disputed payment is the shop's business: the alert goes to the address
+/// the host gave for that, never to the customer.
+#[tokio::test]
+async fn the_shop_is_told_about_a_dispute_and_about_its_outcome() -> anyhow::Result<()> {
+    let mut all = migrations();
+    all.extend(timada_order::migrations());
+    let (executor, db) = timada_core::testing::memory_executor(all).await?;
+    let customer_id = timada_customer::Command(&executor)
+        .register_customer(timada_customer::RegisterCustomer {
+            email: "ada@example.com".into(),
+            civility: Civility::Mrs,
+            first_name: "Ada".into(),
+            last_name: "Lovelace".into(),
+        })
+        .await?;
+    let order_id = timada_order::Command(&executor)
+        .place_order(PlaceOrder {
+            cart_id: "cart-disputed".into(),
+            customer_id,
+            seller: Seller::Ldlc,
+            lines: vec![OrderLine {
+                product_id: "aoc-24g4xe".into(),
+                name: "AOC 24G4XE".into(),
+                quantity: 1,
+                unit_price: Money::eur(11_995),
+                warranty_months: 36,
+            }],
+            delivery_address: address(),
+            billing_address: address(),
+            delivery: DeliveryChoice {
+                method_code: "colissimo".into(),
+                pickup_store_id: None,
+            },
+            payment_mode: PaymentMode::Card,
+            shipping_fee: Money::eur(590),
+            handling_fee: Money::eur(0),
+            promo_code: None,
+            discount: None,
+            order_number: Some("C2026-000007".into()),
+            tax: None,
+            business: None,
+        })
+        .await?;
+    let payments = timada_payment::Command(&executor);
+    let payment_id = payments
+        .request_payment(timada_payment::RequestPayment {
+            order_id: order_id.clone(),
+            amount: Money::eur(12_585),
+            method: timada_payment::PaymentMethod::Card,
+        })
+        .await?;
+    payments.capture_payment(&payment_id, "pi_1".into()).await?;
+    let claim = |reference: &str| timada_payment::OpenDispute {
+        dispute_id: reference.into(),
+        amount: Money::eur(12_585),
+        reason: "product_not_received".into(),
+        // 15/01/2027.
+        respond_by: Some(1_800_000_000),
+    };
+
+    // Nobody to tell: nothing is queued, and nothing goes to the customer.
+    payments
+        .open_dispute(&payment_id, claim("dp_quiet"))
+        .await?;
+    payments.win_dispute(&payment_id, "dp_quiet").await?;
+    mailer_subscription()
+        .data(db.clone())
+        .data(MailerConfig {
+            alerts_to: None,
+            ..config()
+        })
+        .run_once(&executor)
+        .await?;
+    let kinds = |rows: Vec<timada_mailer::OutboxRow>| -> Vec<String> {
+        rows.into_iter().map(|m| m.kind).collect()
+    };
+    let queued = kinds(list_outbox(&db, None, 50, 0).await?);
+    assert!(
+        !queued.iter().any(|k| k.starts_with("dispute")),
+        "{queued:?}"
+    );
+
+    payments.open_dispute(&payment_id, claim("dp_1")).await?;
+    for _ in 0..2 {
+        mailer_subscription()
+            .data(db.clone())
+            .data(config())
+            .run_once(&executor)
+            .await?;
+    }
+    payments.lose_dispute(&payment_id, "dp_1").await?;
+    mailer_subscription()
+        .data(db.clone())
+        .data(config())
+        .run_once(&executor)
+        .await?;
+
+    let outbox = MemoryTransport::default();
+    deliver_pending(&db, &outbox).await?;
+    let alerts: Vec<Email> = outbox
+        .sent()
+        .into_iter()
+        .filter(|m| m.subject.contains("itige"))
+        .collect();
+    assert_eq!(alerts.len(), 2, "{alerts:?}");
+    assert!(alerts.iter().all(|m| m.to == "boutique@shop.example"));
+    let opened = alerts
+        .iter()
+        .find(|m| m.subject.starts_with("Litige bancaire"))
+        .ok_or_else(|| anyhow::anyhow!("no alert for the opening"))?;
+    assert_eq!(
+        opened.subject,
+        "Litige bancaire sur la commande C2026-000007 — 125,85 €"
+    );
+    for expected in ["produit non reçu", "dp_1", "avant le 15/01/2027"] {
+        assert!(
+            opened.body.contains(expected),
+            "{expected}: {}",
+            opened.body
+        );
+    }
+    let lost = alerts
+        .iter()
+        .find(|m| m.subject.starts_with("Litige perdu"))
+        .ok_or_else(|| anyhow::anyhow!("no alert for the outcome"))?;
+    assert!(
+        lost.body.contains("Aucun avoir n'est émis d'office"),
+        "{}",
+        lost.body
+    );
     Ok(())
 }
 

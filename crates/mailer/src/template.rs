@@ -145,6 +145,77 @@ pub(crate) fn order_cancelled(
     )
 }
 
+/// To the shop, not to a customer: no greeting by name, no storefront link.
+pub(crate) fn payment_disputed(
+    config: &MailerConfig,
+    order: &OrderDetailsView,
+    dispute: &timada_payment::DisputeView,
+) -> Content {
+    use timada_payment::DisputeStatus;
+
+    let number = order.display_number();
+    let amount = money(&dispute.amount);
+    let reason = timada_payment::dispute_reason_label(&dispute.reason);
+    let (subject, paragraphs) = match dispute.status {
+        DisputeStatus::Open => (
+            format!("Litige bancaire sur la commande {number} — {amount}"),
+            vec![
+                format!(
+                    "Le titulaire de la carte conteste le paiement de la commande {number} \
+                     auprès de sa banque : {amount}, motif « {reason} » (référence {}).",
+                    dispute.dispute_id
+                ),
+                match dispute.respond_by {
+                    Some(respond_by) => format!(
+                        "Les justificatifs sont à transmettre au prestataire de paiement \
+                         avant le {}.",
+                        date(respond_by)
+                    ),
+                    None => "Les justificatifs sont à transmettre au prestataire de paiement \
+                             sans attendre."
+                        .to_owned(),
+                },
+                "D'ici la décision de la banque, la commande n'est plus proposée à \
+                 l'expédition et aucun remboursement ne part sur ce paiement."
+                    .to_owned(),
+            ],
+        ),
+        DisputeStatus::Won => (
+            format!("Litige gagné sur la commande {number}"),
+            vec![
+                format!(
+                    "La banque a tranché en faveur de la boutique : les {amount} de la \
+                     commande {number} restent acquis (référence {}).",
+                    dispute.dispute_id
+                ),
+                "La commande retrouve sa place dans la file d'expédition et les \
+                 remboursements en attente repartent."
+                    .to_owned(),
+            ],
+        ),
+        DisputeStatus::Lost => (
+            format!("Litige perdu sur la commande {number} — {amount}"),
+            vec![
+                format!(
+                    "La banque a tranché en faveur du titulaire de la carte : les {amount} de \
+                     la commande {number} lui ont été rendus (référence {}).",
+                    dispute.dispute_id
+                ),
+                "Aucun avoir n'est émis d'office : depuis la page de la commande, vous \
+                 décidez s'il y a lieu d'en émettre un (vente annulée) ou non (créance \
+                 irrécouvrable, à voir avec votre comptable)."
+                    .to_owned(),
+            ],
+        ),
+    };
+    let body = format!(
+        "Bonjour,\n\n{}\n\nMessage automatique de {}.\n",
+        paragraphs.join("\n\n"),
+        config.shop_name
+    );
+    (subject, body)
+}
+
 pub(crate) fn refund(
     config: &MailerConfig,
     first_name: &str,

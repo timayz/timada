@@ -92,6 +92,10 @@ pub fn mailer_config() -> timada_mailer::MailerConfig {
         base_url: std::env::var("TIMADA_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:3000".to_owned()),
         returns_address: RETURNS_ADDRESS.to_owned(),
+        alerts_to: Some(
+            std::env::var("TIMADA_ALERTS_TO")
+                .unwrap_or_else(|_| "boutique@timada.example".to_owned()),
+        ),
         max_event_age_secs: timada_mailer::MailerConfig::DEFAULT_MAX_EVENT_AGE_SECS,
     }
 }
@@ -200,6 +204,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .start(executor)
             .await?,
         timada_payment::dispute_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
+        timada_order::payment_hold_subscription()
             .data(db.clone())
             .start(executor)
             .await?,
@@ -352,6 +360,10 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .run_once(executor)
             .await?;
         timada_payment::dispute_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_order::payment_hold_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;
