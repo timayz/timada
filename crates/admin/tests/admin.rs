@@ -1844,6 +1844,198 @@ async fn categories_are_managed_and_products_filed_under_them() -> anyhow::Resul
 }
 
 #[tokio::test]
+async fn a_family_gathers_the_versions_of_an_article() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let sync = || async {
+        timada_catalog::family_list_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await?;
+        timada_catalog::product_list_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await
+    };
+    let catalog = timada_catalog::Command(&h.executor);
+    let mut players = Vec::new();
+    for (sku, name) in [("NWA-N", "Baladeur noir"), ("NWA-A", "Baladeur argent")] {
+        let id = catalog
+            .create_product(timada_catalog::CreateProduct {
+                sku: sku.into(),
+                name: name.into(),
+                brand: timada_catalog::Brand {
+                    name: "Sony".into(),
+                    slug: "sony".into(),
+                },
+                category_path: vec!["Audio".into()],
+                short_description: String::new(),
+                warranty_months: 24,
+            })
+            .await?;
+        players.push(id);
+    }
+    sync().await?;
+
+    let empty = text(h.router.handle(get("/admin/families", Some(&cookie))).await).await?;
+    assert!(empty.contains("Aucune famille."), "{empty}");
+    assert!(empty.contains(">Familles<"), "{empty}");
+
+    let created = h
+        .router
+        .handle(post(
+            "/admin/families/new",
+            "name=Baladeur+NW-A&slug=",
+            Some(&cookie),
+        ))
+        .await;
+    let family = timada_catalog::family_id("baladeur-nw-a");
+    let page = format!("/admin/families/{family}");
+    assert_eq!(location(&created), page);
+    let taken = h
+        .router
+        .handle(post(
+            "/admin/families/new",
+            "name=Autre&slug=baladeur-nw-a",
+            Some(&cookie),
+        ))
+        .await;
+    assert!(text(taken).await?.contains("déjà celui d"));
+
+    // Nothing to stand on before the options are said.
+    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
+    assert!(
+        shown.contains("Dites d&#39;abord") || shown.contains("Dites d'abord"),
+        "{shown}"
+    );
+    let defined = h
+        .router
+        .handle(post(
+            &format!("{page}/options"),
+            "options=Couleur+%3A+Noir%2C+Argent%0D%0ACapacit%C3%A9+%3A+64+Go",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&defined), page);
+    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
+    assert!(shown.contains("Couleur : Noir, Argent"), "{shown}");
+    assert!(shown.contains("name=\"value_1\""), "{shown}");
+
+    // Placed by reference; what the catalog refuses comes back as a message.
+    let placed = h
+        .router
+        .handle(post(
+            &format!("{page}/place"),
+            "sku=NWA-N&value_0=Noir&value_1=64+Go",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&placed), page);
+    for (form, told) in [
+        ("sku=NWA-A&value_0=Noir&value_1=64+Go", "occupe"),
+        ("sku=NOPE&value_0=Argent&value_1=64+Go", "Aucun produit"),
+        ("sku=NWA-A&value_0=Rose&value_1=64+Go", "pas une valeur"),
+        ("sku=NWA-A&value_0=Argent", "Choisissez une valeur"),
+    ] {
+        let refused = h
+            .router
+            .handle(post(&format!("{page}/place"), form, Some(&cookie)))
+            .await;
+        let back = location(&refused);
+        assert!(
+            back.starts_with(&format!("{page}?error=")),
+            "{form}: {back}"
+        );
+        let shown = text(h.router.handle(get(&back, Some(&cookie))).await).await?;
+        assert!(shown.contains(told), "{form}: {shown}");
+    }
+    h.router
+        .handle(post(
+            &format!("{page}/place"),
+            "sku=NWA-A&value_0=Argent&value_1=64+Go",
+            Some(&cookie),
+        ))
+        .await;
+    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
+    assert!(shown.contains("Baladeur noir"), "{shown}");
+    assert!(shown.contains("Baladeur argent"), "{shown}");
+    assert!(shown.contains("2 variante(s)"), "{shown}");
+
+    // A value a variant stands on stays.
+    let narrowed = h
+        .router
+        .handle(post(
+            &format!("{page}/options"),
+            "options=Couleur+%3A+Noir%0D%0ACapacit%C3%A9+%3A+64+Go",
+            Some(&cookie),
+        ))
+        .await;
+    assert!(
+        location(&narrowed).contains("error="),
+        "{}",
+        location(&narrowed)
+    );
+
+    sync().await?;
+    let list = text(h.router.handle(get("/admin/families", Some(&cookie))).await).await?;
+    assert!(list.contains("Baladeur NW-A"), "{list}");
+    assert!(list.contains("Couleur, Capacité"), "{list}");
+
+    // The product's own page says where it stands, and lets it leave.
+    let silver = &players[1];
+    let product_page = text(
+        h.router
+            .handle(get(&format!("/admin/products/{silver}"), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(product_page.contains("Variante de"), "{product_page}");
+    assert!(
+        product_page.contains("Couleur : Argent · Capacité : 64 Go"),
+        "{product_page}"
+    );
+    let left = h
+        .router
+        .handle(post(
+            &format!("/admin/products/{silver}/leave-family"),
+            "",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&left), format!("/admin/products/{silver}"));
+    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
+    assert!(shown.contains("1 variante(s)"), "{shown}");
+
+    // Dissolved only once empty.
+    let kept = h
+        .router
+        .handle(post(&format!("{page}/dissolve"), "", Some(&cookie)))
+        .await;
+    assert!(location(&kept).contains("error="), "{}", location(&kept));
+    h.router
+        .handle(post(
+            &format!("{page}/remove"),
+            &format!("product_id={}", players[0]),
+            Some(&cookie),
+        ))
+        .await;
+    let dissolved = h
+        .router
+        .handle(post(&format!("{page}/dissolve"), "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&dissolved), page);
+    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
+    assert!(shown.contains("Dissoute"), "{shown}");
+
+    let missing = h
+        .router
+        .handle(get("/admin/families/nope", Some(&cookie)))
+        .await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+#[tokio::test]
 async fn technical_sheets_are_edited_and_categories_pick_their_filters() -> anyhow::Result<()> {
     let h = harness("admin").await?;
     let cookie = sign_in(&h, "admin").await?;

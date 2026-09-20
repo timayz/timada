@@ -426,6 +426,77 @@ fn stars(rating: i64) -> String {
     format!("{}{}", "★".repeat(full), "☆".repeat(5 - full))
 }
 
+/// One option of the product's family — « Couleur » — as the page offers it.
+struct Version {
+    option: String,
+    choices: Vec<VersionChoice>,
+}
+
+struct VersionChoice {
+    value: String,
+    current: bool,
+    /// The sibling's page; `None` when no version on sale has this value.
+    link: Option<String>,
+    /// Said on a link that changes more than its own option.
+    hint: String,
+}
+
+/// The other versions of the article, when the product is a variant of a
+/// family: the siblings still in the catalogue and priced in the shopper's
+/// currency. Read from the family's events — nothing to wait for.
+async fn versions_of(
+    cx: &Cx,
+    product: &timada_catalog::ProductPageView,
+    currency: &str,
+) -> Result<Vec<Version>> {
+    let store = app_context::<Store>(cx);
+    let Some(family_id) = &product.family_id else {
+        return Ok(Vec::new());
+    };
+    let Some(family) = timada_catalog::Command(&store.executor)
+        .load_family(family_id)
+        .await?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut on_sale = std::collections::HashSet::new();
+    for variant in &family.variants {
+        if variant.product_id == product.id {
+            continue;
+        }
+        let sibling = load_product_page(&store.executor, &variant.product_id).await?;
+        let priced = load_product_price(&store.executor, price_id(&variant.product_id))
+            .await?
+            .and_then(|price| price.price_in(currency));
+        if sibling.is_some_and(|sibling| !sibling.archived) && priced.is_some() {
+            on_sale.insert(variant.product_id.clone());
+        }
+    }
+    let versions = timada_catalog::variant_choices(&family, &product.id, |id| on_sale.contains(id))
+        .into_iter()
+        .map(|choice| Version {
+            option: choice.option,
+            choices: choice
+                .values
+                .into_iter()
+                .map(|value| VersionChoice {
+                    link: value
+                        .product_id
+                        .map(|id| href!(product_page, ProductId(id)).resolve(cx)),
+                    hint: if value.exact {
+                        String::new()
+                    } else {
+                        "Cette version diffère aussi sur un autre choix".to_owned()
+                    },
+                    value: value.value,
+                    current: value.current,
+                })
+                .collect(),
+        })
+        .collect();
+    Ok(versions)
+}
+
 #[component]
 async fn product_view(
     cx: &Cx,
@@ -467,6 +538,7 @@ async fn product_view(
             None => sheet.push((spec.group.clone(), vec![line])),
         }
     }
+    let versions = versions_of(cx, &product, &currency).await?;
     let available = available_stock(store, &id).await?;
     let availability = if available > 0 {
         format!("En stock ({available} disponibles)")
@@ -717,6 +789,22 @@ async fn product_view(
                 <p><a href="#avis">(summary.clone())</a></p>
             }
             <p>(product.short_description.clone())</p>
+            if !versions.is_empty() {
+                <div class="versions" role="group" aria-label="Versions de cet article">
+                    for version in &versions {
+                        <p><strong>(version.option.clone()) " : "</strong>
+                            for choice in &version.choices {
+                                match &choice.link {
+                                    _ if choice.current => <span class="version current" aria-current="true">(choice.value.clone())</span>,
+                                    Some(link) => <a class="version" href=(link.clone()) title=(choice.hint.clone())>(choice.value.clone())</a>,
+                                    None => <span class="version off" title="Indisponible">(choice.value.clone())</span>,
+                                }
+                                " "
+                            }
+                        </p>
+                    }
+                </div>
+            }
             match &price {
                 Some(price) => {
                     <p class="price">(money(&price.price_incl_tax))</p>
