@@ -183,6 +183,12 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
+        timada_invoice::invoice_archive_subscription()
+            .data(db.clone())
+            .data(store.archive.clone())
+            .data(invoice_issuer())
+            .start(executor)
+            .await?,
         timada_payment::refund_list_subscription()
             .data(db.clone())
             .start(executor)
@@ -210,8 +216,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
         timada_mailer::mailer_subscription()
             .data(db)
             .data(mailer_config())
-            // Who issues the invoices: turns on the e-mail that carries them.
+            // Who issues the invoices: turns on the e-mail that carries them —
+            // the archived file, the one the account serves.
             .data(invoice_issuer())
+            .data(store.archive.clone())
             .start(executor)
             .await?,
     ])
@@ -304,6 +312,12 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .data(db.clone())
             .run_once(executor)
             .await?;
+        timada_invoice::invoice_archive_subscription()
+            .data(db.clone())
+            .data(store.archive.clone())
+            .data(invoice_issuer())
+            .run_once(executor)
+            .await?;
         // Refunds asked for are handed to the provider right away here; the
         // running shop has `run_provider_refunds` for that.
         timada_payment::refund_execution_subscription()
@@ -341,6 +355,7 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .data(db.clone())
             .data(mailer_config())
             .data(invoice_issuer())
+            .data(store.archive.clone())
             .run_once(executor)
             .await?;
     }

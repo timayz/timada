@@ -4,6 +4,7 @@
 //! every refund is documented by a credit note ("avoir") with its own number.
 
 pub mod aggregator;
+mod archive;
 mod command;
 mod credit_note_list;
 mod document;
@@ -17,6 +18,7 @@ mod query;
 mod value_object;
 mod vat_journal;
 
+pub use archive::*;
 pub use command::*;
 pub use credit_note_list::*;
 pub use document::*;

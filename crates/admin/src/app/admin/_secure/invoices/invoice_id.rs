@@ -8,7 +8,10 @@ use timada_order::order_numbers_by_ids;
 use topcoat::{
     Result,
     context::{Cx, app_context},
-    router::{error::RouterErrorExt, href, page, path_param, path_param as param},
+    router::{
+        error::RouterErrorExt, error::see_other, href, page, path_param, path_param as param,
+        query_params, query_params as query,
+    },
     view::{View, view},
 };
 
@@ -25,10 +28,45 @@ use crate::{
 
 path_param!(pub invoice_id: String, error = not_found);
 
+#[query_params(error = bad_request)]
+struct ShowQuery {
+    /// The outcome of "Vérifier": `intact`, `altered`, `missing`.
+    archive: Option<String>,
+}
+
 #[page]
 pub async fn show(cx: &Cx) -> Result<impl View> {
     let id = param::<InvoiceId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
+    // What the archive holds of this invoice, when the shop has one.
+    let archived = match &services.archive {
+        Some(_) => timada_invoice::archived_document(&services.db, &id).await?,
+        None => None,
+    }
+    .map(|entry| {
+        (
+            date(entry.archived_at.max(0) as u64),
+            entry.sha256,
+            format!("{} Ko", (entry.size + 1_023) / 1_024),
+            entry.reconstituted,
+        )
+    });
+    let has_archive = services.archive.is_some();
+    let checked = match query::<ShowQuery>(cx)?.archive.as_deref() {
+        Some("intact") => Some((
+            false,
+            "Le fichier archivé est intact : son empreinte est celle du jour de l'archivage.",
+        )),
+        Some("altered") => Some((
+            true,
+            "Le fichier archivé a été modifié : son empreinte n'est plus celle du jour de l'archivage.",
+        )),
+        Some("missing") => Some((
+            true,
+            "Le fichier archivé est introuvable dans le dépôt d'archives.",
+        )),
+        _ => None,
+    };
     let invoice = load_invoice(&services.executor, &id)
         .await?
         .ok_or_not_found()?;
@@ -201,6 +239,31 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             </div>
 
             <div class="flex flex-col gap-6">
+                if has_archive {
+                    card(
+                        card_header(card_title("Archive"))
+                        card_content(
+                            match &archived {
+                                Some((archived_on, sha256, size, reconstituted)) => {
+                                    <dl class="flex flex-col gap-2 text-sm">
+                                        <div><dt class="text-muted-foreground">"Archivée le"</dt><dd>(archived_on.clone()) " · " (size.clone())</dd></div>
+                                        <div><dt class="text-muted-foreground">"Empreinte SHA-256"</dt><dd class="break-all font-mono text-xs">(sha256.clone())</dd></div>
+                                    </dl>
+                                    if *reconstituted {
+                                        <p class="mt-2 text-sm text-muted-foreground">"Reconstituée : archivée longtemps après son émission, avec l'émetteur et la mise en page du jour de l'archivage. Figée depuis."</p>
+                                    }
+                                    if let Some((alarming, message)) = checked {
+                                        <p role=(if alarming { "alert" } else { "status" }) class=(if alarming { "mt-3 text-sm text-destructive" } else { "mt-3 text-sm" })>(message)</p>
+                                    }
+                                    <form method="post" action=(href!(verify, InvoiceId(id.clone()))) class="mt-3">
+                                        <button type="submit" class="text-sm underline underline-offset-4">"Vérifier le fichier archivé"</button>
+                                    </form>
+                                }
+                                None => { <p class="text-sm text-muted-foreground">"Pas encore archivée : seule une facture émise l'est, quelques instants après son émission."</p> }
+                            }
+                        )
+                    )
+                }
                 card(
                     card_header(card_title("Facturé à"))
                     card_content(
@@ -381,8 +444,52 @@ pub async fn download(cx: &Cx) -> Result<PdfDownload> {
     let document = load_invoice_document(&services.executor, &services.db, issuer, &id)
         .await?
         .ok_or_not_found()?;
+    // The archived file when the shop has an archive — filed now if need be —
+    // so the operator downloads what the customer does.
+    let archived = match &services.archive {
+        Some(archive) => timada_invoice::archive_invoice(
+            &services.executor,
+            &services.db,
+            archive.0.as_ref(),
+            issuer,
+            &id,
+            &timada_invoice::ArchivePolicy::default(),
+        )
+        .await
+        .map_err(anyhow::Error::from)?
+        .map(|(_, bytes)| bytes),
+        None => None,
+    };
+    let bytes = match archived {
+        Some(bytes) => bytes,
+        None => timada_invoice::render_invoice_pdf(&document).map_err(anyhow::Error::from)?,
+    };
     Ok(PdfDownload {
         file_name: timada_invoice::invoice_pdf_file_name(&document),
-        bytes: timada_invoice::render_invoice_pdf(&document).map_err(anyhow::Error::from)?,
+        bytes,
     })
+}
+
+/// Re-reads the archived file and compares it with the hash taken when it was
+/// filed; the outcome comes back on the invoice's page.
+#[page(POST "./verify")]
+pub async fn verify(cx: &Cx) -> Result<impl View> {
+    let id = param::<InvoiceId>(cx)?.clone();
+    let services = app_context::<AdminServices>(cx);
+    let outcome = match &services.archive {
+        Some(archive) => timada_invoice::verify_archived(&services.db, archive.0.as_ref(), &id)
+            .await
+            .map_err(anyhow::Error::from)?,
+        None => None,
+    };
+    let code = match outcome {
+        Some(timada_invoice::ArchiveCheck::Intact) => "intact",
+        Some(timada_invoice::ArchiveCheck::Altered) => "altered",
+        Some(timada_invoice::ArchiveCheck::Missing) => "missing",
+        None => "",
+    };
+    let target = href!(show, InvoiceId(id))
+        .query([("archive", code)])
+        .resolve(cx);
+    Err::<(), _>(see_other(target).into())
 }

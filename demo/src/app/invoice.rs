@@ -4,7 +4,8 @@
 //! server renders ("Télécharger la facture").
 
 use timada_invoice::{
-    InvoiceDocument, invoice_id, invoice_pdf_file_name, load_invoice_document, render_invoice_pdf,
+    ArchivePolicy, InvoiceDocument, archive_invoice, invoice_id, invoice_pdf_file_name,
+    load_invoice_document,
 };
 use timada_order::load_order_details;
 use topcoat::{
@@ -86,10 +87,24 @@ impl IntoResponse for PdfDownload {
 
 #[route(GET "/account/orders/{order_id}/invoice.pdf")]
 pub async fn pdf(cx: &Cx) -> Result<PdfDownload> {
-    let (_, document) = own_invoice(cx).await?;
+    let (order_id, document) = own_invoice(cx).await?;
+    let store = app_context::<Store>(cx);
+    // The archived file — filed now if the archive has not caught up yet:
+    // what is downloaded today is what will be downloaded in ten years.
+    let (_, bytes) = archive_invoice(
+        &store.executor,
+        &store.db,
+        store.archive.0.as_ref(),
+        &invoice_issuer(),
+        &invoice_id(&order_id),
+        &ArchivePolicy::default(),
+    )
+    .await
+    .map_err(anyhow::Error::from)?
+    .ok_or_not_found()?;
     Ok(PdfDownload {
         file_name: invoice_pdf_file_name(&document),
-        bytes: render_invoice_pdf(&document).map_err(anyhow::Error::from)?,
+        bytes,
     })
 }
 

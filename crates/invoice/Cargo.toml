@@ -17,6 +17,9 @@ thiserror.workspace = true
 tracing.workspace = true
 sqlx.workspace = true
 sqlx_migrator.workspace = true
+tokio.workspace = true
+sha2 = "0.10"
+hex = "0.4"
 krilla = { workspace = true, optional = true }
 rustybuzz = { workspace = true, optional = true }
 
@@ -26,7 +29,6 @@ pdf = ["dep:krilla", "dep:rustybuzz"]
 
 [dev-dependencies]
 timada-core = { workspace = true, features = ["test-support"] }
-tokio.workspace = true
 
 [lints]
 workspace = true

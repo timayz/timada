@@ -50,7 +50,11 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
             ..AdminConfig::default()
         },
         AssetConfig::hosted_at("/assets", AssetCatalog::default()),
-        AdminServices::new(executor.clone(), db.clone()),
+        AdminServices::new(executor.clone(), db.clone()).with_archive(
+            timada_invoice::InvoiceArchive::new(timada_invoice::SqliteArchiveStore::new(
+                db.clone(),
+            )),
+        ),
     );
     Ok(Harness {
         router,
@@ -1740,5 +1744,92 @@ async fn paid_orders_wait_in_a_queue_until_they_ship() -> anyhow::Result<()> {
     assert!(queue.contains("Aucune commande"), "{queue}");
     let orders = text(h.router.handle(get("/admin/orders", Some(&cookie))).await).await?;
     assert!(orders.contains(">À expédier<"), "{orders}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_issued_invoice_is_archived_checked_and_served_from_the_archive() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let order_id = place_order(&h).await?;
+    let invoice_id = timada_invoice::invoice_id(&order_id);
+    timada_invoice::invoice_from_orders_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let uri = format!("/admin/invoices/{invoice_id}");
+
+    // A draft has nothing to archive.
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("Pas encore archivée"), "{page}");
+
+    timada_order::Command(&h.executor)
+        .mark_paid(&order_id, "payment-1")
+        .await?;
+    timada_invoice::invoice_from_orders_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let store = timada_invoice::SqliteArchiveStore::new(h.db.clone());
+    timada_invoice::invoice_archive_subscription()
+        .data(h.db.clone())
+        .data(timada_invoice::InvoiceArchive::new(store.clone()))
+        .data(timada_invoice::InvoiceIssuer::default())
+        .run_once(&h.executor)
+        .await?;
+    let (entry, archived) = timada_invoice::read_archived(&h.db, &store, &invoice_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("not archived"))?;
+
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("Archivée le"), "{page}");
+    assert!(page.contains(&entry.sha256), "{page}");
+    assert!(!page.contains("Reconstituée"), "{page}");
+
+    // The operator downloads the archived bytes, not a fresh rendering.
+    #[cfg(feature = "pdf")]
+    {
+        let pdf = h
+            .router
+            .handle(get(&format!("{uri}/pdf"), Some(&cookie)))
+            .await;
+        assert_eq!(pdf.status(), StatusCode::OK);
+        let bytes = to_bytes(pdf.into_body(), usize::MAX)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+        assert_eq!(bytes.as_ref(), archived.as_slice());
+    }
+
+    let verified = h
+        .router
+        .handle(post(&format!("{uri}/verify"), "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&verified), format!("{uri}?archive=intact"));
+    let page = text(
+        h.router
+            .handle(get(&location(&verified), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(page.contains("est intact"), "{page}");
+
+    // Somebody touched the file.
+    sqlx::query("UPDATE invoice_archive_blob SET content = x'2550' WHERE key = ?")
+        .bind(&entry.storage_key)
+        .execute(&h.db)
+        .await?;
+    let verified = h
+        .router
+        .handle(post(&format!("{uri}/verify"), "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&verified), format!("{uri}?archive=altered"));
+    let page = text(
+        h.router
+            .handle(get(&location(&verified), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(page.contains("a été modifié"), "{page}");
+    assert!(page.contains("role=\"alert\""), "{page}");
     Ok(())
 }

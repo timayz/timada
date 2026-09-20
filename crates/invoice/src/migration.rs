@@ -155,6 +155,41 @@ sqlite_migration!(
     )]
 );
 
+pub struct M0007Archive;
+
+sqlite_migration!(
+    M0007Archive,
+    "invoice",
+    "m0007_archive",
+    vec_box![M0006VatJournalBuyer],
+    vec_box![
+        // The index of archived documents: what was filed, where, and the
+        // hash it had then.
+        (
+            "CREATE TABLE invoice_archive (
+                document_id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                number TEXT NOT NULL,
+                storage_key TEXT NOT NULL UNIQUE,
+                sha256 TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                archived_at INTEGER NOT NULL,
+                reconstituted INTEGER NOT NULL DEFAULT 0
+            )",
+            "DROP TABLE invoice_archive"
+        ),
+        // The files themselves, for hosts that keep them in the database
+        // (`SqliteArchiveStore`); empty otherwise.
+        (
+            "CREATE TABLE invoice_archive_blob (
+                key TEXT PRIMARY KEY,
+                content BLOB NOT NULL
+            )",
+            "DROP TABLE invoice_archive_blob"
+        )
+    ]
+);
+
 /// Write-side and read-model migrations for this context, to register
 /// alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
@@ -164,6 +199,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
         M0003CreditNoteNumber,
         M0004CreditNoteList,
         M0005VatJournal,
-        M0006VatJournalBuyer
+        M0006VatJournalBuyer,
+        M0007Archive
     ]
 }
