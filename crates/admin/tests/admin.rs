@@ -484,6 +484,91 @@ async fn promo_codes_and_vouchers_are_created_listed_and_ended() -> anyhow::Resu
 }
 
 #[tokio::test]
+async fn a_voucher_and_a_fixed_amount_are_created_in_a_currency_the_shop_sells_in()
+-> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+
+    // The forms offer the shop's currencies.
+    let form = text(
+        h.router
+            .handle(get("/admin/promotions/new-voucher", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(form.contains("name=\"currency\""), "{form}");
+    assert!(form.contains(">GBP<"), "{form}");
+
+    let issued = h
+        .router
+        .handle(post(
+            "/admin/promotions/new-voucher",
+            "code=gift50&value_cents=5000&currency=GBP&customer_id=&valid_days=",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(issued.status(), StatusCode::SEE_OTHER);
+    let voucher =
+        timada_promotion::load_voucher_balance(&h.executor, timada_promotion::voucher_id("gift50"))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("voucher missing"))?;
+    assert_eq!(voucher.remaining, Money::new(5_000, "GBP"));
+    let detail = text(
+        h.router
+            .handle(get(&location(&issued), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(detail.contains("50,00 £"), "{detail}");
+
+    let created = h
+        .router
+        .handle(post(
+            "/admin/promotions/new-discount",
+            "code=moins10chf&kind=fixed&value=1000&currency=CHF&max_redemptions=&valid_days=",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(created.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        timada_promotion::code_currency(&h.executor, "moins10chf")
+            .await?
+            .as_deref(),
+        Some("CHF")
+    );
+
+    // Dollars are not sold here; saying nothing means the books' currency.
+    let refused = h
+        .router
+        .handle(post(
+            "/admin/promotions/new-voucher",
+            "code=gift-usd&value_cents=5000&currency=USD&customer_id=&valid_days=",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(refused.status(), StatusCode::OK);
+    assert!(
+        text(refused)
+            .await?
+            .contains("ne vend pas dans cette devise")
+    );
+    h.router
+        .handle(post(
+            "/admin/promotions/new-voucher",
+            "code=gift-base&value_cents=1000&customer_id=&valid_days=",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(
+        timada_promotion::code_currency(&h.executor, "gift-base")
+            .await?
+            .as_deref(),
+        Some("EUR")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn stock_is_tracked_received_and_filtered() -> anyhow::Result<()> {
     let h = harness("admin").await?;
     let cookie = sign_in(&h, "admin").await?;
@@ -2522,90 +2607,5 @@ async fn a_product_is_priced_in_each_currency_the_shop_sells_in() -> anyhow::Res
         ))
         .await;
     assert_eq!(foreign.status(), StatusCode::BAD_REQUEST);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_voucher_and_a_fixed_amount_are_created_in_a_currency_the_shop_sells_in()
--> anyhow::Result<()> {
-    let h = harness("admin").await?;
-    let cookie = sign_in(&h, "admin").await?;
-
-    // The forms offer the shop's currencies.
-    let form = text(
-        h.router
-            .handle(get("/admin/promotions/new-voucher", Some(&cookie)))
-            .await,
-    )
-    .await?;
-    assert!(form.contains("name=\"currency\""), "{form}");
-    assert!(form.contains(">GBP<"), "{form}");
-
-    let issued = h
-        .router
-        .handle(post(
-            "/admin/promotions/new-voucher",
-            "code=gift50&value_cents=5000&currency=GBP&customer_id=&valid_days=",
-            Some(&cookie),
-        ))
-        .await;
-    assert_eq!(issued.status(), StatusCode::SEE_OTHER);
-    let voucher =
-        timada_promotion::load_voucher_balance(&h.executor, timada_promotion::voucher_id("gift50"))
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("voucher missing"))?;
-    assert_eq!(voucher.remaining, Money::new(5_000, "GBP"));
-    let detail = text(
-        h.router
-            .handle(get(&location(&issued), Some(&cookie)))
-            .await,
-    )
-    .await?;
-    assert!(detail.contains("50,00 £"), "{detail}");
-
-    let created = h
-        .router
-        .handle(post(
-            "/admin/promotions/new-discount",
-            "code=moins10chf&kind=fixed&value=1000&currency=CHF&max_redemptions=&valid_days=",
-            Some(&cookie),
-        ))
-        .await;
-    assert_eq!(created.status(), StatusCode::SEE_OTHER);
-    assert_eq!(
-        timada_promotion::code_currency(&h.executor, "moins10chf")
-            .await?
-            .as_deref(),
-        Some("CHF")
-    );
-
-    // Dollars are not sold here; saying nothing means the books' currency.
-    let refused = h
-        .router
-        .handle(post(
-            "/admin/promotions/new-voucher",
-            "code=gift-usd&value_cents=5000&currency=USD&customer_id=&valid_days=",
-            Some(&cookie),
-        ))
-        .await;
-    assert_eq!(refused.status(), StatusCode::OK);
-    assert!(
-        text(refused)
-            .await?
-            .contains("ne vend pas dans cette devise")
-    );
-    h.router
-        .handle(post(
-            "/admin/promotions/new-voucher",
-            "code=gift-base&value_cents=1000&customer_id=&valid_days=",
-            Some(&cookie),
-        ))
-        .await;
-    assert_eq!(
-        timada_promotion::code_currency(&h.executor, "gift-base")
-            .await?
-            .as_deref(),
-        Some("EUR")
-    );
     Ok(())
 }
