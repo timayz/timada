@@ -131,9 +131,15 @@ pub async fn document(
                 .collect()
         }
     };
-    let here = topcoat::router::request::uri(cx)
-        .path_and_query()
-        .map_or_else(|| "/".to_owned(), |path| path.as_str().to_owned());
+    // Where the switch comes back to: this page — unless it answers a form,
+    // whose address is not one to `GET`.
+    let here = if topcoat::router::request::method(cx) == topcoat::router::Method::GET {
+        topcoat::router::request::uri(cx)
+            .path_and_query()
+            .map_or_else(|| "/".to_owned(), |path| path.as_str().to_owned())
+    } else {
+        "/".to_owned()
+    };
 
     Ok(view! {
         <!DOCTYPE html>

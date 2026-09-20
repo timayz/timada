@@ -155,6 +155,22 @@ async fn checkout_guards() -> anyhow::Result<()> {
         .await;
     assert!(matches!(usd, Err(CartError::Money(_))));
 
+    // Emptied, a cart is in no currency any more: the next line decides
+    // again — what a shopper changing currency relies on.
+    let other = cmd.open_cart(None).await?;
+    cmd.add_line(&other, aoc_monitor()).await?;
+    cmd.remove_line(&other, aoc_monitor().product_id).await?;
+    cmd.add_line(
+        &other,
+        AddLine {
+            unit_price: Money::new(100, "USD"),
+            ..headset()
+        },
+    )
+    .await?;
+    let mixed = cmd.add_line(&other, aoc_monitor()).await;
+    assert!(matches!(mixed, Err(CartError::Money(_))));
+
     let too_many = cmd
         .checkout(
             &id,

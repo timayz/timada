@@ -2909,5 +2909,11 @@ async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::
             .await?
             .contains("109,00 £")
     );
+    // An emptied cart is in no currency: it takes a pound line at once.
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    let cart = text(browser.get("/cart").await).await?;
+    assert!(cart.contains("109,00 £"), "{cart}");
     Ok(())
 }
