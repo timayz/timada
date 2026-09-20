@@ -186,6 +186,18 @@ pub trait Templates: Send + Sync {
         template::return_completed(config, first_name, request).into()
     }
 
+    /// The parcel replacing a return's articles left the warehouse.
+    fn replacement_shipped(
+        &self,
+        config: &MailerConfig,
+        first_name: &str,
+        request: &ReturnView,
+        carrier: &str,
+        tracking_number: &str,
+    ) -> Content {
+        template::replacement_shipped(config, first_name, request, carrier, tracking_number).into()
+    }
+
     /// Goes out with the invoice attached as a PDF.
     #[cfg(feature = "invoice-pdf")]
     fn invoice_issued(

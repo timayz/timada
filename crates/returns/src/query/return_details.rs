@@ -6,10 +6,12 @@ use timada_core::Money;
 
 use crate::{
     aggregator::{
-        Return, ReturnApproved, ReturnCancelled, ReturnCompleted, ReturnReceived, ReturnRefused,
-        ReturnRequested,
+        ReplacementAbandoned, ReplacementArranged, ReplacementPlanned, Return, ReturnApproved,
+        ReturnCancelled, ReturnCompleted, ReturnReceived, ReturnRefused, ReturnRequested,
     },
-    value_object::{ReceivedLine, RefundMethod, ReturnLine, ReturnStatus},
+    value_object::{
+        ReceivedLine, RefundMethod, ReplacementLine, ReplacementStatus, ReturnLine, ReturnStatus,
+    },
 };
 
 #[evento::projection(bitcode::Encode, bitcode::Decode)]
@@ -35,6 +37,22 @@ pub struct ReturnView {
     pub credit: Money,
     pub voucher_code: Option<String>,
     pub completed_at: Option<u64>,
+    /// The products sent again instead of a refund, when the operator chose
+    /// so.
+    pub replacement: Option<ReplacementView>,
+}
+
+/// The replacement of a return: what is sent again, and how far it got.
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct ReplacementView {
+    pub lines: Vec<ReplacementLine>,
+    pub status: ReplacementStatus,
+    /// The parcel, in the shipping context, once it is arranged.
+    pub shipment_id: Option<String>,
+    pub abandoned_reason: Option<String>,
+    /// What the refund is if the replacement is abandoned.
+    pub fallback_money: Money,
+    pub fallback_credit: Money,
 }
 
 impl ReturnView {
@@ -52,6 +70,11 @@ pub fn create_projection<E: Executor>() -> Projection<E, ReturnView> {
         .handler(on_return_cancelled())
         .handler(on_return_received())
         .handler(on_return_completed())
+        .handler(on_replacement_planned())
+        .handler(on_replacement_abandoned())
+        .handler(on_replacement_arranged())
+        // `replacement` joined the snapshot.
+        .revision(1)
         .strict()
 }
 
@@ -137,5 +160,48 @@ async fn on_return_completed(
     row.money = event.data.refunded;
     row.credit = event.data.credited;
     row.voucher_code = event.data.voucher_code;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_replacement_planned(
+    event: Event<ReplacementPlanned>,
+    row: &mut ReturnView,
+) -> anyhow::Result<()> {
+    row.replacement = Some(ReplacementView {
+        lines: event.data.lines,
+        status: ReplacementStatus::Planned,
+        shipment_id: None,
+        abandoned_reason: None,
+        fallback_money: event.data.fallback_money,
+        fallback_credit: event.data.fallback_credit,
+    });
+    Ok(())
+}
+
+/// The return is a refund again: the amounts it shows are the fallback's.
+#[evento::handler]
+async fn on_replacement_abandoned(
+    event: Event<ReplacementAbandoned>,
+    row: &mut ReturnView,
+) -> anyhow::Result<()> {
+    if let Some(replacement) = &mut row.replacement {
+        replacement.status = ReplacementStatus::Abandoned;
+        replacement.abandoned_reason = Some(event.data.reason);
+        row.money = replacement.fallback_money.clone();
+        row.credit = replacement.fallback_credit.clone();
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_replacement_arranged(
+    event: Event<ReplacementArranged>,
+    row: &mut ReturnView,
+) -> anyhow::Result<()> {
+    if let Some(replacement) = &mut row.replacement {
+        replacement.status = ReplacementStatus::Arranged;
+        replacement.shipment_id = Some(event.data.shipment_id);
+    }
     Ok(())
 }

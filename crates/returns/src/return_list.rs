@@ -11,8 +11,8 @@ use sqlx::SqlitePool;
 
 use crate::{
     aggregator::{
-        ReturnApproved, ReturnCancelled, ReturnCompleted, ReturnReceived, ReturnRefused,
-        ReturnRequested,
+        ReplacementAbandoned, ReplacementArranged, ReplacementPlanned, ReturnApproved,
+        ReturnCancelled, ReturnCompleted, ReturnReceived, ReturnRefused, ReturnRequested,
     },
     query::load_return,
     value_object::ReturnStatus,
@@ -64,6 +64,11 @@ pub fn return_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(refresh_on_return_cancelled())
         .handler(refresh_on_return_received())
         .handler(refresh_on_return_completed())
+        // A replacement changes nothing the list shows: the amounts of an
+        // abandoned one are written when the return completes.
+        .skip::<ReplacementPlanned>()
+        .skip::<ReplacementAbandoned>()
+        .skip::<ReplacementArranged>()
         .strict()
 }
 

@@ -98,6 +98,9 @@ event timada-promotion/Voucher::VoucherCancelled { reason: String }
 event timada-promotion/Voucher::VoucherIssued { code: String, customer_id: Option<String>, value: Money, kind: VoucherKind, expires_at: Option<u64> }
 event timada-promotion/Voucher::VoucherRedeemed { order_id: String, amount: Money }
 event timada-promotion/Voucher::VoucherRedemptionRefunded { order_id: String, amount: Money }
+event timada-returns/Return::ReplacementAbandoned { reason: String }
+event timada-returns/Return::ReplacementArranged { shipment_id: String }
+event timada-returns/Return::ReplacementPlanned { lines: Vec<ReplacementLine>, fallback_money: Money, fallback_credit: Money }
 event timada-returns/Return::ReturnApproved unit
 event timada-returns/Return::ReturnCancelled unit
 event timada-returns/Return::ReturnCompleted { refunded: Money, credited: Money, voucher_code: Option<String> }
@@ -118,6 +121,7 @@ event timada-shipping/Shipment::ShipmentCancelled { reason: String }
 event timada-shipping/Shipment::ShipmentCreated { order_id: String, method: DeliveryMethod, destination: Address, lines: Vec<ShipmentLine> }
 event timada-shipping/Shipment::ShipmentDelivered unit
 event timada-shipping/Shipment::ShipmentDispatched { carrier: String, tracking_number: String }
+event timada-shipping/Shipment::ShipmentReplacesReturn { reference: String }
 
 type timada-cart::DeliveryChoice { method_code: String, pickup_store_id: Option<String> }
 type timada-cart::PaymentMode enum { Card, Installments { count: u8 } }
@@ -144,6 +148,7 @@ type timada-promotion::DiscountKind enum { Percent { bp: u16 }, FixedAmount { am
 type timada-promotion::VoucherKind enum { GiftVoucher, CreditNote { origin_order_id: String } }
 type timada-returns::ReceivedLine { product_id: String, accepted: u32, restock: bool }
 type timada-returns::RefundMethod enum { OriginalPayment, StoreCredit }
+type timada-returns::ReplacementLine { product_id: String, name: String, quantity: u32 }
 type timada-returns::ReturnLine { product_id: String, name: String, quantity: u32, unit_price: Money }
 type timada-review::AnswerAuthor enum { Staff, Customer { customer_id: String } }
 type timada-shipping::DeliveryKind enum { HomeDelivery, StorePickup { store_id: String } }
@@ -165,6 +170,6 @@ view timada-payment::PaymentView rev=2 { id: String, order_id: String, amount: M
 view timada-pricing::ProductPriceView rev=0 { product_id: String, price_incl_tax: Money, price_excl_tax: Money, vat_rate_bp: u16, eco_participation: Money, installment: Option<InstallmentOffer>, installment_amount: Option<Money>, withdrawn: bool }
 view timada-promotion::DiscountView rev=0 { id: String, code: String, kind: DiscountKind, max_redemptions: Option<u32>, redeemed: u32, active: bool, valid_until: Option<u64> }
 view timada-promotion::VoucherView rev=0 { id: String, code: String, customer_id: Option<String>, value: Money, remaining: Money, kind: VoucherKind, expires_at: Option<u64>, cancelled: bool, cancelled_reason: Option<String>, redemptions: Vec<VoucherRedemption> } with VoucherRedemption { order_id: String, amount: Money }
-view timada-returns::ReturnView rev=0 { id: String, rma_number: String, order_id: String, customer_id: String, status: ReturnStatus, lines: Vec<ReturnLine>, reason: String, requested_at: u64, refused_reason: Option<String>, received: Vec<ReceivedLine>, received_at: Option<u64>, refund_method: Option<RefundMethod>, money: Money, credit: Money, voucher_code: Option<String>, completed_at: Option<u64> } with ReturnStatus enum { Requested, Approved, Refused, Cancelled, Received, Completed }
+view timada-returns::ReturnView rev=1 { id: String, rma_number: String, order_id: String, customer_id: String, status: ReturnStatus, lines: Vec<ReturnLine>, reason: String, requested_at: u64, refused_reason: Option<String>, received: Vec<ReceivedLine>, received_at: Option<u64>, refund_method: Option<RefundMethod>, money: Money, credit: Money, voucher_code: Option<String>, completed_at: Option<u64>, replacement: Option<ReplacementView> } with ReplacementView { lines: Vec<ReplacementLine>, status: ReplacementStatus, shipment_id: Option<String>, abandoned_reason: Option<String>, fallback_money: Money, fallback_credit: Money }; ReplacementStatus enum { Planned, Arranged, Abandoned }; ReturnStatus enum { Requested, Approved, Refused, Cancelled, Received, Completed }
 view timada-review::ReviewView rev=0 { id: String, product_id: String, customer_id: String, order_id: Option<String>, rating: u8, title: String, body: String, status: ReviewStatus, rejection_reason: Option<String> } with ReviewStatus enum { Pending, Published, Rejected }
-view timada-shipping::ShipmentView rev=1 { id: String, order_id: String, method: DeliveryMethod, destination: Address, lines: Vec<ShipmentLine>, status: ShipmentStatus, carrier: Option<String>, tracking_number: Option<String>, cancelled_reason: Option<String> } with ShipmentStatus enum { Created, Dispatched, Delivered, Cancelled }
+view timada-shipping::ShipmentView rev=2 { id: String, order_id: String, method: DeliveryMethod, destination: Address, lines: Vec<ShipmentLine>, status: ShipmentStatus, carrier: Option<String>, tracking_number: Option<String>, cancelled_reason: Option<String>, replaces_return: Option<String> } with ShipmentStatus enum { Created, Dispatched, Delivered, Cancelled }

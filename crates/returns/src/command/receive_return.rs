@@ -3,10 +3,12 @@ use timada_core::Money;
 use timada_order::load_order_details;
 use timada_payment::{PaymentStatus, load_payment, payment_id};
 
+use timada_inventory::{StockLocation, load_stock_availability, stock_item_id};
+
 use crate::{
-    aggregator::ReturnReceived,
+    aggregator::{ReplacementPlanned, ReturnReceived},
     error::ReturnError,
-    value_object::{ReceivedLine, RefundMethod, ReturnStatus, refund_split},
+    value_object::{ReceivedLine, RefundMethod, ReplacementLine, ReturnStatus, refund_split},
 };
 
 #[derive(Debug, Clone)]
@@ -14,7 +16,12 @@ pub struct ReceiveReturn {
     /// What was found in the parcel; a requested line left out counts as
     /// nothing accepted.
     pub lines: Vec<ReceivedLine>,
+    /// How the customer is refunded — or would be, should a replacement turn
+    /// out impossible.
     pub refund_method: RefundMethod,
+    /// Send the accepted units again instead of refunding them: the
+    /// after-sales answer to a defective, damaged or wrong item.
+    pub replace: bool,
 }
 
 impl<E: Executor> super::Command<'_, E> {
@@ -23,6 +30,13 @@ impl<E: Executor> super::Command<'_, E> {
     /// what the original payment cannot take any more (it was partly refunded
     /// already, or the order was paid with a voucher) becomes store credit —
     /// so the process manager only has to execute them.
+    ///
+    /// With `replace`, nothing goes back: the accepted units are sent again.
+    /// The warehouse must hold them (counting what this very return puts back
+    /// on the shelf) or the operator is told at once
+    /// ([`ReturnError::ReplacementOutOfStock`]) and refunds instead; the
+    /// refund's amounts are still settled, as the fallback should the stock be
+    /// gone by the time it is reserved.
     pub async fn receive_return(
         &self,
         id: impl Into<String>,
@@ -86,16 +100,58 @@ impl<E: Executor> super::Command<'_, E> {
             split.credit = split.credit.checked_add(&overflow)?;
         }
 
-        request
-            .write()?
-            .event(&ReturnReceived {
+        let mut write = request.write()?;
+        if cmd.replace {
+            let mut replacement = Vec::new();
+            for (requested, received) in request.lines.iter().zip(&lines) {
+                if received.accepted == 0 {
+                    continue;
+                }
+                let item = stock_item_id(&requested.product_id, &StockLocation::Warehouse);
+                let available = load_stock_availability(self.executor, &item)
+                    .await?
+                    .map_or(0, |stock| stock.available);
+                let coming_back = if received.restock {
+                    received.accepted
+                } else {
+                    0
+                };
+                if available + coming_back < received.accepted {
+                    return Err(ReturnError::ReplacementOutOfStock(
+                        requested.product_id.clone(),
+                    ));
+                }
+                replacement.push(ReplacementLine {
+                    product_id: requested.product_id.clone(),
+                    name: requested.name.clone(),
+                    quantity: received.accepted,
+                });
+            }
+            if replacement.is_empty() {
+                return Err(ReturnError::NothingToReplace);
+            }
+            let nothing = Money::zero(&split.money.currency);
+            write
+                .event(&ReturnReceived {
+                    lines: lines.clone(),
+                    refund_method: cmd.refund_method,
+                    money: nothing.clone(),
+                    credit: nothing,
+                })
+                .event(&ReplacementPlanned {
+                    lines: replacement,
+                    fallback_money: split.money,
+                    fallback_credit: split.credit,
+                });
+        } else {
+            write.event(&ReturnReceived {
                 lines: lines.clone(),
                 refund_method: cmd.refund_method,
                 money: split.money,
                 credit: split.credit,
-            })
-            .commit(self.executor)
-            .await?;
+            });
+        }
+        write.commit(self.executor).await?;
 
         // Units not taken back may be returned again later.
         for line in &lines {

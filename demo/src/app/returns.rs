@@ -286,6 +286,40 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         })
         .collect();
     let address: Vec<&str> = RETURNS_ADDRESS.lines().collect();
+    // A replacement instead of a refund: what is sent again, and how far the
+    // parcel got.
+    let replacement = match &request.replacement {
+        None => None,
+        Some(replacement) => {
+            let parcel = match &replacement.shipment_id {
+                Some(shipment_id) => {
+                    timada_shipping::load_shipment(&store.executor, shipment_id).await?
+                }
+                None => None,
+            };
+            let what = replacement
+                .lines
+                .iter()
+                .map(|line| format!("{} × {}", line.quantity, line.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let tracking = parcel.as_ref().and_then(|p| {
+                p.carrier
+                    .clone()
+                    .zip(p.tracking_number.clone())
+                    .map(|(carrier, number)| format!("{carrier}, suivi {number}"))
+            });
+            Some(match (replacement.status, tracking) {
+                (timada_returns::ReplacementStatus::Abandoned, _) => format!(
+                    "Nous n'avons plus ce produit en stock pour le remplacer ({what}) : votre retour est remboursé."
+                ),
+                (_, Some(tracking)) => {
+                    format!("Votre remplacement est expédié ({what}) : {tracking}.")
+                }
+                _ => format!("Votre remplacement est en préparation : {what}."),
+            })
+        }
+    };
     let refunded = request.money.is_positive().then(|| money(&request.money));
     let credited = request
         .voucher_code
@@ -330,6 +364,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     <p>"Inscrivez le numéro " <strong>(request.rma_number.clone())</strong> " sur le colis et envoyez-le à :"</p>
                     <address>for line in &address { (*line) <br> }</address>
                 </div>
+            }
+            if let Some(replacement) = &replacement {
+                <p role="status" class="notice">(replacement.clone())</p>
             }
             if let Some(refunded) = &refunded {
                 <p role="status" class="notice">"Remboursement sur votre moyen de paiement : " <strong>(refunded.clone())</strong> " — un e-mail vous confirme son arrivée."</p>

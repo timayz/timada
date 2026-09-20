@@ -22,6 +22,7 @@ timada-invoice = { workspace = true, features = ["pdf"], optional = true }
 timada-payment.workspace = true
 timada-returns.workspace = true
 timada-review.workspace = true
+timada-shipping.workspace = true
 evento.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true

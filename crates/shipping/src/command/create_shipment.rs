@@ -2,12 +2,12 @@ use evento::Executor;
 use timada_core::Address;
 
 use crate::{
-    aggregator::ShipmentCreated,
+    aggregator::{ShipmentCreated, ShipmentReplacesReturn},
     error::ShippingError,
     value_object::{DeliveryMethod, ShipmentLine},
 };
 
-use super::shipment_id;
+use super::{replacement_shipment_id, shipment_id};
 
 #[derive(Debug, Clone)]
 pub struct CreateShipment {
@@ -50,6 +50,51 @@ impl<E: Executor> super::Command<'_, E> {
         match result {
             Ok(id) => {
                 tracing::info!(shipment_id = %id, order_id = %cmd.order_id, "shipment created");
+                Ok(id)
+            }
+            Err(evento::WriteError::InvalidOriginalVersion) => Ok(id),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
+impl<E: Executor> super::Command<'_, E> {
+    /// Prepares a second parcel for an order: the replacement of what a
+    /// return brought back. `reference` is the return's id — the shipment's
+    /// id derives from it, so a retry finds it already created. It carries
+    /// the order's id like the first parcel, and says what it replaces.
+    pub async fn create_replacement_shipment(
+        &self,
+        cmd: CreateShipment,
+        reference: &str,
+    ) -> Result<String, ShippingError> {
+        if cmd.order_id.trim().is_empty() {
+            return Err(ShippingError::Required("order_id"));
+        }
+        if reference.trim().is_empty() {
+            return Err(ShippingError::Required("reference"));
+        }
+        if cmd.lines.is_empty() {
+            return Err(ShippingError::NoLines);
+        }
+        cmd.destination.validate()?;
+
+        let id = replacement_shipment_id(reference);
+        let result = evento::append(&id)
+            .event(&ShipmentCreated {
+                order_id: cmd.order_id.clone(),
+                method: cmd.method,
+                destination: cmd.destination,
+                lines: cmd.lines,
+            })
+            .event(&ShipmentReplacesReturn {
+                reference: reference.to_owned(),
+            })
+            .commit(self.0)
+            .await;
+        match result {
+            Ok(id) => {
+                tracing::info!(shipment_id = %id, order_id = %cmd.order_id, %reference, "replacement shipment created");
                 Ok(id)
             }
             Err(evento::WriteError::InvalidOriginalVersion) => Ok(id),
