@@ -183,7 +183,8 @@ async fn refund_captured<E: Executor>(
     if payment.status != PaymentStatus::Captured {
         return Ok(());
     }
-    let left = payment.amount.checked_sub(&payment.refunded)?;
+    // Refunds already on their way to the provider are not asked for again.
+    let left = payment.refundable()?;
     if !left.is_positive() {
         return Ok(());
     }

@@ -41,6 +41,7 @@ impl Shop {
         let mut all = migrations();
         all.extend(timada_order::migrations());
         all.extend(timada_promotion::migrations());
+        all.extend(timada_payment::migrations());
         let (executor, db) = timada_core::testing::memory_executor(all).await?;
         let inventory = timada_inventory::Command(&executor);
         let item = inventory
@@ -147,6 +148,19 @@ impl Shop {
                 .run_once(&self.executor)
                 .await?;
         }
+        // The refunds the process manager asked for go back at once: no
+        // payment provider here.
+        timada_payment::refund_execution_subscription()
+            .data(self.db.clone())
+            .run_once(&self.executor)
+            .await?;
+        timada_payment::execute_pending_refunds(
+            &self.executor,
+            &self.db,
+            &timada_payment::ManualProvider,
+            &timada_payment::RefundPolicy::without_delays(),
+        )
+        .await?;
         Ok(())
     }
 

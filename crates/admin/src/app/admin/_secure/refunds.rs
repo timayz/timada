@@ -1,13 +1,18 @@
-//! `/{mount}/refunds`: every refund made, newest first, with the credit note
-//! documenting it. Refunds are issued from the order page, or by the
-//! fulfillment saga when a paid order is cancelled.
+//! `/{mount}/refunds`: the refunds still on their way to the payment provider
+//! (or refused by it — those wait for the operator, on the order page), then
+//! every refund made, newest first, with the credit note documenting it.
+//! Refunds are asked for from the order page, by the fulfillment saga when a
+//! paid order is cancelled, or by a return.
 
 use std::collections::HashMap;
 
 use timada_core::Money;
 use timada_invoice::credit_notes_of_refunds;
 use timada_order::order_numbers_by_ids;
-use timada_payment::{RefundListRow, count_refunds, list_refunds};
+use timada_payment::{
+    RefundListRow, RefundRequestRow, RefundStatus, count_refunds, list_refund_requests,
+    list_refunds,
+};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -23,6 +28,7 @@ use crate::{
 };
 
 pub const PAGE_SIZE: u32 = 25;
+const OPEN_LIMIT: u32 = 50;
 
 #[query_params(error = bad_request)]
 struct RefundsQuery {
@@ -44,7 +50,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .into_iter()
         .map(|n| (n.refund_id, (n.credit_note_number, n.invoice_id)))
         .collect();
-    let order_ids: Vec<String> = rows.iter().map(|r| r.order_id.clone()).collect();
+    // Open requests are few: failed ones first, no paging.
+    let mut open = list_refund_requests(db, Some(RefundStatus::Failed), OPEN_LIMIT, 0).await?;
+    open.extend(list_refund_requests(db, Some(RefundStatus::Pending), OPEN_LIMIT, 0).await?);
+
+    let order_ids: Vec<String> = rows
+        .iter()
+        .map(|r| r.order_id.clone())
+        .chain(open.iter().map(|r| r.order_id.clone()))
+        .collect();
     let order_numbers = order_numbers_by_ids(db, &order_ids).await?;
     let lines: Vec<RefundLine> = rows
         .into_iter()
@@ -58,8 +72,35 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         })
         .collect();
 
+    let open_lines: Vec<(RefundRequestRow, String)> = open
+        .into_iter()
+        .map(|row| {
+            let label = order_numbers
+                .get(&row.order_id)
+                .unwrap_or(&row.order_id)
+                .clone();
+            (row, label)
+        })
+        .collect();
+
     Ok(view! {
         page_header(title: "Remboursements")
+        if !open_lines.is_empty() {
+            <section aria-labelledby="open-refunds" class="mb-8 flex flex-col gap-3">
+                <h2 id="open-refunds" class="text-sm font-medium">"En cours auprès du prestataire de paiement"</h2>
+                table(
+                    table_header(table_row(
+                        table_head("Demandé le") table_head("Commande") table_head("Motif") table_head("État")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Montant")
+                    ))
+                    table_body(
+                        for (row, label) in &open_lines {
+                            open_refund_row(row: row, order_label: label)
+                        }
+                    )
+                )
+            </section>
+        }
         if lines.is_empty() {
             empty_state(message: "Aucun remboursement. Un remboursement se fait depuis la page d'une commande payée.")
         } else {
@@ -112,6 +153,28 @@ async fn refund_row(cx: &Cx, line: &RefundLine) -> Result<impl View> {
                 }
             )
             table_cell((row.reason.clone()))
+            table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (amount))
+        )
+    })
+}
+
+#[component]
+async fn open_refund_row(cx: &Cx, row: &RefundRequestRow, order_label: &str) -> Result<impl View> {
+    let order_link = href!(order_id::show, order_id::OrderId(row.order_id.clone())).resolve(cx);
+    let amount = money(&Money::new(row.amount_minor, &row.currency));
+    let failure = (row.status == RefundStatus::Failed.as_str())
+        .then(|| row.failure.clone().unwrap_or_else(|| "refusé".to_owned()));
+    Ok(view! {
+        table_row(
+            table_cell((date(row.requested_at as u64)))
+            table_cell(<a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label.to_owned())</a>)
+            table_cell((row.reason.clone()))
+            table_cell(
+                match &failure {
+                    Some(failure) => { <span class="text-destructive">"Refusé : " (failure.clone())</span> }
+                    None => { <span class="text-muted-foreground">"En attente"</span> }
+                }
+            )
             table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (amount))
         )
     })

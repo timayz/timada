@@ -451,8 +451,12 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
     payments
         .capture_payment(&payment_id, "psp-1".into())
         .await?;
-    payments
+    // The refund e-mail tells of money that went back: a settled refund.
+    let refund = payments
         .refund_payment(&payment_id, Money::eur(2_000), "geste commercial".into())
+        .await?;
+    payments
+        .settle_refund(&payment_id, &refund, "re_1".into())
         .await?;
     orders
         .cancel_order(&order_id, "rupture fournisseur")

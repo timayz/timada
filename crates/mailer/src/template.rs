@@ -299,7 +299,8 @@ pub(crate) fn return_completed(
     )];
     if request.money.is_positive() {
         paragraphs.push(format!(
-            "{} vous sont remboursés sur votre moyen de paiement.",
+            "Le remboursement de {} sur votre moyen de paiement est en cours ; un e-mail vous \
+             le confirmera.",
             money(&request.money)
         ));
     }

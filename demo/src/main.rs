@@ -34,6 +34,9 @@ use timada_admin::{AdminConfig, AdminServices, Stylesheet};
 pub struct Store {
     pub executor: evento::Sqlite,
     pub db: sqlx::SqlitePool,
+    /// Who takes the shoppers' money. The demo has no provider: an operator
+    /// captures payments from the admin.
+    pub provider: std::sync::Arc<dyn timada_payment::PaymentProvider>,
 }
 
 #[tokio::main]
@@ -50,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
     let store = Store {
         executor: executor.clone(),
         db: pool.clone(),
+        provider: std::sync::Arc::new(timada_payment::ManualProvider),
     };
 
     match args.first().map(String::as_str) {
@@ -86,8 +90,16 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(timada_order::run_payment_timeouts(
         executor.clone(),
         pool.clone(),
+        store.provider.clone(),
         std::time::Duration::from_secs(payment_timeout),
         std::time::Duration::from_secs(60),
+    ));
+    // Refunds asked for go to the provider, and come back settled or failed.
+    tokio::spawn(timada_payment::run_provider_refunds(
+        executor.clone(),
+        pool.clone(),
+        store.provider.clone(),
+        std::time::Duration::from_secs(5),
     ));
     tokio::spawn(timada_mailer::run_delivery(
         pool.clone(),

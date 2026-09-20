@@ -332,7 +332,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 </div>
             }
             if let Some(refunded) = &refunded {
-                <p role="status" class="notice">"Remboursé sur votre moyen de paiement : " <strong>(refunded.clone())</strong></p>
+                <p role="status" class="notice">"Remboursement sur votre moyen de paiement : " <strong>(refunded.clone())</strong> " — un e-mail vous confirme son arrivée."</p>
             }
             if let Some((amount, code)) = &credited {
                 <p role="status" class="notice">"Avoir de " <strong>(amount.clone())</strong> " : saisissez le code " <strong>(code.clone())</strong> " dans votre panier."</p>

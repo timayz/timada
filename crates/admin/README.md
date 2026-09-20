@@ -56,9 +56,15 @@ subscriptions: `timada_order::order_history_subscription`,
 their migrations (`timada_payment::migrations()` is new with the refunds
 section).
 
-Refunds are issued from an order's page once its payment is captured, in one
-or several goes up to the captured amount — and by the fulfillment saga when a
-paid order is cancelled; the refunds section is their journal. Invoices are
+Refunds are asked for from an order's page once its payment is captured, in
+one or several goes up to the captured amount — and by the fulfillment saga
+when a paid order is cancelled, or by a return. A refund is only *made* once
+the payment provider confirmed it (the host runs
+`timada_payment::refund_execution_subscription` and
+`timada_payment::run_provider_refunds`): until then it shows as pending on the
+order page and at the top of the refunds section; one the provider refused can
+be asked for again, or settled by hand with the reference of the transfer that
+replaced it. The refunds section is the journal of the refunds made. Invoices are
 read-only: orders drive their lifecycle, and every refund is documented by a
 credit note shown under its invoice, provided the host runs
 `timada_invoice::credit_notes_from_refunds_subscription`.

@@ -8,7 +8,7 @@
 //! path compensates — stock released, order cancelled — and a capture that
 //! still comes in afterwards is refused by the payment context.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use evento::{
     Executor,
@@ -16,7 +16,7 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use sqlx::SqlitePool;
-use timada_payment::{PaymentError, PaymentStatus};
+use timada_payment::{CancelOutcome, PaymentError, PaymentProvider, PaymentStatus};
 
 use crate::{
     aggregator::{
@@ -83,12 +83,14 @@ pub async fn orders_awaiting_payment(
 }
 
 /// Declines every payment requested at or before `requested_before` that is
-/// still pending, and returns how many. Safe to repeat and to race with a
+/// still pending — after calling its session off at the `provider` — and
+/// returns how many. Safe to repeat and to race with a
 /// capture: only a payment still `Requested` is declined, and the saga only
 /// compensates an order still awaiting that payment.
 pub async fn expire_unpaid_orders<E: Executor>(
     executor: &E,
     db: &SqlitePool,
+    provider: &dyn PaymentProvider,
     requested_before: u64,
 ) -> anyhow::Result<u32> {
     let mut expired = 0;
@@ -108,6 +110,22 @@ pub async fn expire_unpaid_orders<E: Executor>(
             .await?
             .is_some_and(|p| p.status == PaymentStatus::Requested);
         if !pending {
+            continue;
+        }
+        // The provider's session goes first, so nobody pays an order that is
+        // being cancelled. Paid in the meantime: that is a capture, not a
+        // timeout.
+        if let CancelOutcome::AlreadyPaid { reference } =
+            timada_payment::cancel_payment_session(db, provider, &row.payment_id).await?
+        {
+            match timada_payment::Command(executor)
+                .capture_payment(&row.payment_id, reference)
+                .await
+            {
+                Ok(()) | Err(PaymentError::NotRequested) => {}
+                Err(err) => return Err(err.into()),
+            }
+            tracing::info!(order_id = %row.order_id, "paid just before the timeout: captured");
             continue;
         }
         match timada_payment::Command(executor)
@@ -131,6 +149,7 @@ pub async fn expire_unpaid_orders<E: Executor>(
 pub async fn run_payment_timeouts<E: Executor>(
     executor: E,
     db: SqlitePool,
+    provider: Arc<dyn PaymentProvider>,
     timeout: Duration,
     every: Duration,
 ) {
@@ -140,7 +159,13 @@ pub async fn run_payment_timeouts<E: Executor>(
         ticker.tick().await;
         let swept = match timada_core::time::now_unix_secs() {
             Ok(now) => {
-                expire_unpaid_orders(&executor, &db, now.saturating_sub(timeout.as_secs())).await
+                expire_unpaid_orders(
+                    &executor,
+                    &db,
+                    provider.as_ref(),
+                    now.saturating_sub(timeout.as_secs()),
+                )
+                .await
             }
             Err(err) => Err(err),
         };

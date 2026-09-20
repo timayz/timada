@@ -12,6 +12,16 @@ pub enum PaymentError {
     NotCaptured,
     #[error("refund exceeds the captured amount")]
     RefundExceedsCapture,
+    #[error("refund not found")]
+    RefundNotFound,
+    #[error("refund has not failed")]
+    RefundNotFailed,
+    #[error("refund is already settled")]
+    RefundAlreadySettled,
+    #[error("payment provider: {0}")]
+    Provider(#[from] crate::provider::ProviderError),
+    #[error(transparent)]
+    Sql(#[from] sqlx::Error),
     #[error(transparent)]
     Money(#[from] timada_core::MoneyError),
     #[error(transparent)]

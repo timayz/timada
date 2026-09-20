@@ -718,10 +718,36 @@ async fn order_covered_by_a_voucher_skips_the_payment() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Refunds and payment sessions live in the payment context's own tables.
+fn migrations_with_payment() -> Vec<Box<dyn sqlx_migrator::Migration<sqlx::Sqlite>>> {
+    let mut all = migrations();
+    all.extend(timada_payment::migrations());
+    all
+}
+
+/// Hands the refunds that were asked for to the (manual) provider, which
+/// settles them at once.
+async fn settle_refunds<E: Executor + Clone + 'static>(
+    executor: &E,
+    db: &sqlx::SqlitePool,
+) -> anyhow::Result<timada_payment::RefundPass> {
+    timada_payment::refund_execution_subscription()
+        .data(db.clone())
+        .run_once(executor)
+        .await?;
+    Ok(timada_payment::execute_pending_refunds(
+        executor,
+        db,
+        &timada_payment::ManualProvider,
+        &timada_payment::RefundPolicy::without_delays(),
+    )
+    .await?)
+}
+
 #[tokio::test]
 async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel()
 -> anyhow::Result<()> {
-    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let (executor, db) = timada_core::testing::memory_executor(migrations_with_payment()).await?;
     let cart_id = checkout_cart(&executor, 5, 2, timada_cart::PaymentMode::Card).await?;
     let order_id = order_id(&cart_id);
     drain(&executor, &db).await?;
@@ -731,7 +757,8 @@ async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel
         .await?;
     drain(&executor, &db).await?;
 
-    // A goodwill gesture first, then the operator cancels the order.
+    // A goodwill gesture first — still on its way to the provider — then the
+    // operator cancels the order: only the rest is asked for.
     payments
         .refund_payment(payment_id(&order_id), Money::eur(1_000), "goodwill".into())
         .await?;
@@ -739,6 +766,12 @@ async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel
         .cancel_order(&order_id, "customer changed mind")
         .await?;
     drain(&executor, &db).await?;
+    let pending = timada_payment::load_payment(&executor, payment_id(&order_id))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(pending.refunded, Money::eur(0));
+    assert_eq!(pending.pending_refunds()?, pending.amount);
+    assert_eq!(settle_refunds(&executor, &db).await?.settled, 2);
 
     let payment = timada_payment::load_payment(&executor, payment_id(&order_id))
         .await?
@@ -763,6 +796,10 @@ async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel
 
     // Redelivery refunds nothing more.
     drain(&executor, &db).await?;
+    assert_eq!(
+        settle_refunds(&executor, &db).await?,
+        timada_payment::RefundPass::default()
+    );
     let again = timada_payment::load_payment(&executor, payment_id(&order_id)).await?;
     assert_eq!(again.as_ref(), Some(&payment));
     Ok(())
@@ -770,7 +807,7 @@ async fn cancelling_a_paid_order_refunds_it_frees_the_stock_and_stops_the_parcel
 
 #[tokio::test]
 async fn payment_captured_after_a_cancellation_is_refunded() -> anyhow::Result<()> {
-    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let (executor, db) = timada_core::testing::memory_executor(migrations_with_payment()).await?;
     let cart_id = checkout_cart(&executor, 5, 1, timada_cart::PaymentMode::Card).await?;
     let order_id = order_id(&cart_id);
     drain(&executor, &db).await?;
@@ -790,6 +827,7 @@ async fn payment_captured_after_a_cancellation_is_refunded() -> anyhow::Result<(
         .capture_payment(payment_id(&order_id), "psp-late".into())
         .await?;
     drain(&executor, &db).await?;
+    assert_eq!(settle_refunds(&executor, &db).await?.settled, 1);
     let payment = timada_payment::load_payment(&executor, payment_id(&order_id))
         .await?
         .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
@@ -820,23 +858,38 @@ async fn drain_with_deadlines<E: Executor + Clone + 'static>(
 
 #[tokio::test]
 async fn a_payment_nobody_completes_times_out_and_frees_the_stock() -> anyhow::Result<()> {
-    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let (executor, db) = timada_core::testing::memory_executor(migrations_with_payment()).await?;
     let abandoned = checkout_cart(&executor, 5, 2, timada_cart::PaymentMode::Card).await?;
     let abandoned = order_id(&abandoned);
     drain_with_deadlines(&executor, &db).await?;
     let now = timada_core::time::now_unix_secs()?;
+    // The shopper opened the provider's page, and left.
+    let provider = timada_payment::FakeProvider::default();
+    let urls = timada_payment::ReturnUrls {
+        paid: "https://shop.test/checkout/pay".into(),
+    };
+    timada_payment::start_payment(&executor, &db, &provider, &payment_id(&abandoned), &urls)
+        .await?;
 
     // Requested a moment ago: inside the delay, nothing expires.
     assert_eq!(orders_awaiting_payment(&db, now + 1).await?.len(), 1);
     assert_eq!(
-        timada_order::expire_unpaid_orders(&executor, &db, now.saturating_sub(1_800)).await?,
+        timada_order::expire_unpaid_orders(&executor, &db, &provider, now.saturating_sub(1_800))
+            .await?,
         0
     );
 
     // Past the delay: the payment is declined, the saga compensates.
     assert_eq!(
-        timada_order::expire_unpaid_orders(&executor, &db, now + 1).await?,
+        timada_order::expire_unpaid_orders(&executor, &db, &provider, now + 1).await?,
         1
+    );
+    // The session was called off first: nobody pays an order being cancelled.
+    assert_eq!(
+        provider.cancelled(),
+        [timada_payment::FakeProvider::session_of(&payment_id(
+            &abandoned
+        ))]
     );
     drain_with_deadlines(&executor, &db).await?;
     let order = load_order_details(&executor, &abandoned)
@@ -863,15 +916,45 @@ async fn a_payment_nobody_completes_times_out_and_frees_the_stock() -> anyhow::R
     ));
     // Sweeping again finds nothing.
     assert_eq!(
-        timada_order::expire_unpaid_orders(&executor, &db, now + 1).await?,
+        timada_order::expire_unpaid_orders(&executor, &db, &provider, now + 1).await?,
         0
     );
     Ok(())
 }
 
 #[tokio::test]
+async fn a_shopper_who_paid_just_before_the_timeout_keeps_their_order() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations_with_payment()).await?;
+    let provider = timada_payment::FakeProvider::default();
+    let urls = timada_payment::ReturnUrls {
+        paid: "https://shop.test/checkout/pay".into(),
+    };
+    let paid = order_id(&checkout_cart(&executor, 5, 1, timada_cart::PaymentMode::Card).await?);
+    drain_with_deadlines(&executor, &db).await?;
+
+    // The shopper is on the provider's page and pays; the provider's own
+    // word has not reached the shop yet when the sweep comes by.
+    timada_payment::start_payment(&executor, &db, &provider, &payment_id(&paid), &urls).await?;
+    provider.mark_paid(&timada_payment::FakeProvider::session_of(&payment_id(
+        &paid,
+    )));
+    let now = timada_core::time::now_unix_secs()?;
+    assert_eq!(
+        timada_order::expire_unpaid_orders(&executor, &db, &provider, now + 1).await?,
+        0
+    );
+    drain_with_deadlines(&executor, &db).await?;
+    let order = load_order_details(&executor, &paid)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("order missing"))?;
+    assert_eq!(order.status, OrderStatus::Paid);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_captured_payment_is_never_timed_out() -> anyhow::Result<()> {
-    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let (executor, db) = timada_core::testing::memory_executor(migrations_with_payment()).await?;
     let cart_id = checkout_cart(&executor, 5, 1, timada_cart::PaymentMode::Card).await?;
     let order_id = order_id(&cart_id);
     drain_with_deadlines(&executor, &db).await?;
@@ -882,7 +965,13 @@ async fn a_captured_payment_is_never_timed_out() -> anyhow::Result<()> {
         .await?;
     let now = timada_core::time::now_unix_secs()?;
     assert_eq!(
-        timada_order::expire_unpaid_orders(&executor, &db, now + 1).await?,
+        timada_order::expire_unpaid_orders(
+            &executor,
+            &db,
+            &timada_payment::ManualProvider,
+            now + 1
+        )
+        .await?,
         0
     );
     drain_with_deadlines(&executor, &db).await?;

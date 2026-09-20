@@ -664,6 +664,78 @@ async fn invoices_are_listed_and_payments_refunded() -> anyhow::Result<()> {
         .await;
     assert_eq!(refunded.status(), StatusCode::SEE_OTHER);
     assert_eq!(location(&refunded), order_uri);
+    // Asked for, not given back yet: it waits for the payment provider.
+    let payment = timada_payment::load_payment(&h.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
+    assert_eq!(payment.refunded, Money::eur(0));
+    assert_eq!(payment.pending_refunds()?, Money::eur(2_000));
+    let refund_id = payment.refunds[0].refund_id.clone();
+    let order_page = text(h.router.handle(get(&order_uri, Some(&cookie))).await).await?;
+    assert!(
+        order_page.contains("Remboursements en cours"),
+        "{order_page}"
+    );
+    assert!(
+        order_page.contains("en attente de confirmation"),
+        "{order_page}"
+    );
+    timada_payment::refund_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let refunds = text(h.router.handle(get("/admin/refunds", Some(&cookie))).await).await?;
+    assert!(refunds.contains("En attente"), "{refunds}");
+
+    // The provider refuses: the operator sees why, and asks again.
+    let provider = timada_payment::FakeProvider::default();
+    provider.answer_refund(Err(timada_payment::ProviderError::Refused(
+        "carte expirée".into(),
+    )));
+    let policy = timada_payment::RefundPolicy::without_delays();
+    timada_payment::refund_execution_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let pass =
+        timada_payment::execute_pending_refunds(&h.executor, &h.db, &provider, &policy).await?;
+    assert_eq!(pass.failed, 1);
+    let order_page = text(h.router.handle(get(&order_uri, Some(&cookie))).await).await?;
+    assert!(
+        order_page.contains("Refusé par le prestataire : carte expirée"),
+        "{order_page}"
+    );
+    assert!(
+        order_page.contains("Relancer le remboursement"),
+        "{order_page}"
+    );
+    let retry_form = format!("refund_id={refund_id}");
+    let retried = h
+        .router
+        .handle(post(
+            &format!("{order_uri}/refunds/retry"),
+            &retry_form,
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&retried), order_uri);
+    // Asking twice is harmless: the refund is no longer failed.
+    let again = h
+        .router
+        .handle(post(
+            &format!("{order_uri}/refunds/retry"),
+            &retry_form,
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&again), format!("{order_uri}?refund_error=stale"));
+    timada_payment::refund_execution_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let pass =
+        timada_payment::execute_pending_refunds(&h.executor, &h.db, &provider, &policy).await?;
+    assert_eq!(pass.settled, 1);
     let payment = timada_payment::load_payment(&h.executor, &payment_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("payment missing"))?;
