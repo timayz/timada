@@ -79,8 +79,35 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0004PaidAt;
+
+sqlite_migration!(
+    M0004PaidAt,
+    "order",
+    "m0004_paid_at",
+    vec_box![M0003AwaitingPayment],
+    vec_box![
+        // When the order was paid (or settled without a payment): what the
+        // queue of orders to ship is sorted by. NULL for orders paid before
+        // this column existed — they go by their placing.
+        (
+            "ALTER TABLE order_history ADD COLUMN paid_at INTEGER",
+            "ALTER TABLE order_history DROP COLUMN paid_at"
+        ),
+        (
+            "CREATE INDEX order_history_status_paid_at ON order_history (status, paid_at)",
+            "DROP INDEX order_history_status_paid_at"
+        )
+    ]
+);
+
 /// Write-side and read-model migrations for this context, to register
 /// alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001OrderHistory, M0002OrderNumber, M0003AwaitingPayment]
+    vec_box![
+        M0001OrderHistory,
+        M0002OrderNumber,
+        M0003AwaitingPayment,
+        M0004PaidAt
+    ]
 }

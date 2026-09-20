@@ -47,6 +47,7 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
                 vat_number: "FR00 000000000".into(),
                 contact: "facturation@timada.example".into(),
             },
+            ..AdminConfig::default()
         },
         AssetConfig::hosted_at("/assets", AssetCatalog::default()),
         AdminServices::new(executor.clone(), db.clone()),
@@ -1652,5 +1653,91 @@ async fn the_vat_of_a_quarter_is_shown_and_exported() -> anyhow::Result<()> {
     );
     let anonymous = h.router.handle(get(&uri, None)).await;
     assert_eq!(anonymous.status(), StatusCode::SEE_OTHER);
+    Ok(())
+}
+
+#[tokio::test]
+async fn paid_orders_wait_in_a_queue_until_they_ship() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let history = || async {
+        order_history_subscription()
+            .data(h.db.clone())
+            .run_once(&h.executor)
+            .await
+    };
+
+    let order_id = place_order(&h).await?;
+    history().await?;
+    // Placed, not paid: nothing to prepare.
+    let queue = text(
+        h.router
+            .handle(get("/admin/orders/to-ship", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(
+        queue.contains("Aucune commande n&#x27;attend son colis.")
+            || queue.contains("Aucune commande n'attend son colis."),
+        "{queue}"
+    );
+
+    timada_order::Command(&h.executor)
+        .mark_paid(&order_id, "payment-1")
+        .await?;
+    history().await?;
+    let orders = text(h.router.handle(get("/admin/orders", Some(&cookie))).await).await?;
+    assert!(orders.contains("À expédier (1)"), "{orders}");
+    assert!(
+        orders.contains("href=\"/admin/orders/to-ship\""),
+        "{orders}"
+    );
+    let queue = text(
+        h.router
+            .handle(get("/admin/orders/to-ship", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(queue.contains("1 commande attend son colis."), "{queue}");
+    assert!(
+        queue.contains(&format!("/admin/orders/{order_id}")),
+        "{queue}"
+    );
+    assert!(queue.contains("0 min"), "{queue}");
+    assert!(!queue.contains("En retard"), "{queue}");
+
+    // Three days later nobody shipped it: flagged, here and on the orders page.
+    sqlx::query("UPDATE order_history SET paid_at = paid_at - 3 * 86400")
+        .execute(&h.db)
+        .await?;
+    let queue = text(
+        h.router
+            .handle(get("/admin/orders/to-ship", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(queue.contains("3 j"), "{queue}");
+    assert!(queue.contains("En retard"), "{queue}");
+    assert!(queue.contains("dont 1 en retard"), "{queue}");
+    let orders = text(h.router.handle(get("/admin/orders", Some(&cookie))).await).await?;
+    assert!(
+        orders.contains("À expédier (1, dont 1 en retard)"),
+        "{orders}"
+    );
+
+    // Shipped: out of the queue.
+    timada_order::Command(&h.executor)
+        .mark_shipped(&order_id, "shipment-1", "Colissimo".into(), "6A123".into())
+        .await?;
+    history().await?;
+    let queue = text(
+        h.router
+            .handle(get("/admin/orders/to-ship", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(queue.contains("Aucune commande"), "{queue}");
+    let orders = text(h.router.handle(get("/admin/orders", Some(&cookie))).await).await?;
+    assert!(orders.contains(">À expédier<"), "{orders}");
     Ok(())
 }

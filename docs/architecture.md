@@ -225,7 +225,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
 | `timada_invoice::InvoiceIssuer` | the seller's identity printed on invoices — also handed to the mailer subscription when invoices are e-mailed |
-| `timada_admin::AdminConfig` | mount segment, stylesheet, invoice issuer |
+| `timada_admin::AdminConfig` | mount segment, stylesheet, invoice issuer, how long a paid order may wait for its parcel before the admin flags it (`ship_within`, two days by default) |
 
 **5. The admin** — see [its README](../crates/admin/README.md). It is mounted
 under its real prefix (never a prefix-stripping mount), and a topcoat host must
