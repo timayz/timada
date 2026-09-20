@@ -1799,6 +1799,8 @@ async fn an_issued_invoice_is_archived_checked_and_served_from_the_archive() -> 
             .map_err(|e| anyhow::anyhow!("{e:#}"))?;
         assert_eq!(bytes.as_ref(), archived.as_slice());
     }
+    #[cfg(not(feature = "pdf"))]
+    assert!(archived.starts_with(b"%PDF-"));
 
     let verified = h
         .router
@@ -1831,5 +1833,119 @@ async fn an_issued_invoice_is_archived_checked_and_served_from_the_archive() -> 
     .await?;
     assert!(page.contains("a été modifié"), "{page}");
     assert!(page.contains("role=\"alert\""), "{page}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_credit_note_is_downloaded_and_checked_from_its_invoice() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let order_id = place_order(&h).await?;
+    let invoice_id = timada_invoice::invoice_id(&order_id);
+    timada_invoice::invoice_from_orders_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    timada_order::Command(&h.executor)
+        .mark_paid(&order_id, "payment-1")
+        .await?;
+    timada_invoice::invoice_from_orders_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let number = timada_invoice::Command {
+        executor: &h.executor,
+        db: h.db.clone(),
+    }
+    .issue_credit_note(timada_invoice::IssueCreditNote {
+        refund_id: "refund-1".into(),
+        invoice_id: invoice_id.clone(),
+        amount: timada_core::Money::eur(1_000),
+        reason: "return R2026-000001".into(),
+    })
+    .await?;
+    let note_id = timada_invoice::credit_note_id("refund-1");
+    timada_invoice::credit_note_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let store = timada_invoice::SqliteArchiveStore::new(h.db.clone());
+    timada_invoice::credit_note_archive_subscription()
+        .data(h.db.clone())
+        .data(timada_invoice::InvoiceArchive::new(store.clone()))
+        .data(timada_invoice::InvoiceIssuer::default())
+        .run_once(&h.executor)
+        .await?;
+
+    let uri = format!("/admin/invoices/{invoice_id}");
+    let note_uri = format!("{uri}/credit-notes/{note_id}");
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains(&number), "{page}");
+    // Worded for people, as on the document.
+    assert!(page.contains("Retour R2026-000001"), "{page}");
+
+    assert!(page.contains("Archivé le"), "{page}");
+    let (entry, archived) = timada_invoice::read_archived(&h.db, &store, &note_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("not archived"))?;
+    assert_eq!(entry.kind, "credit_note");
+
+    // The operator downloads the archived bytes, not a fresh rendering.
+    #[cfg(feature = "pdf")]
+    {
+        assert!(page.contains(&format!("{note_uri}/pdf")), "{page}");
+        let pdf = h
+            .router
+            .handle(get(&format!("{note_uri}/pdf"), Some(&cookie)))
+            .await;
+        assert_eq!(pdf.status(), StatusCode::OK);
+        let bytes = to_bytes(pdf.into_body(), usize::MAX)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+        assert_eq!(bytes.as_ref(), archived.as_slice());
+    }
+    #[cfg(not(feature = "pdf"))]
+    assert!(archived.starts_with(b"%PDF-"));
+
+    let verified = h
+        .router
+        .handle(post(&format!("{note_uri}/verify"), "", Some(&cookie)))
+        .await;
+    assert_eq!(
+        location(&verified),
+        format!("{uri}?archive=intact&avoir={number}")
+    );
+    let page = text(
+        h.router
+            .handle(get(&location(&verified), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(page.contains(&format!("Avoir {number} — ")), "{page}");
+    assert!(page.contains("est intact"), "{page}");
+
+    sqlx::query("DELETE FROM invoice_archive_blob WHERE key = ?")
+        .bind(&entry.storage_key)
+        .execute(&h.db)
+        .await?;
+    let verified = h
+        .router
+        .handle(post(&format!("{note_uri}/verify"), "", Some(&cookie)))
+        .await;
+    assert_eq!(
+        location(&verified),
+        format!("{uri}?archive=missing&avoir={number}")
+    );
+
+    // A credit note is reached through its own invoice only.
+    let elsewhere = h
+        .router
+        .handle(post(
+            &format!("/admin/invoices/another-invoice/credit-notes/{note_id}/verify"),
+            "",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(elsewhere.status(), StatusCode::NOT_FOUND);
     Ok(())
 }

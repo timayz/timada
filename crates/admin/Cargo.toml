@@ -48,6 +48,8 @@ tokio.workspace = true
 tower = { version = "0.5", features = ["util"] }
 http = "1"
 timada-tax.workspace = true
+# The archive's subscriptions render PDFs whether or not the admin serves them.
+timada-invoice = { workspace = true, features = ["pdf"] }
 
 [lints]
 workspace = true

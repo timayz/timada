@@ -1,6 +1,7 @@
 //! `/{mount}/invoices/{invoice_id}`: one invoice as it will be printed —
 //! lines, fees, reduction and total — and the credit notes issued against
-//! it. Read-only: orders drive its lifecycle, refunds its credit notes.
+//! it, each with its own PDF. Read-only: orders drive its lifecycle, refunds
+//! its credit notes.
 
 use timada_core::Money;
 use timada_invoice::{credit_notes_of_invoice, load_invoice, load_invoice_document};
@@ -15,6 +16,7 @@ use topcoat::{
     view::{View, view},
 };
 
+use self::credit_notes::credit_note_id::{self, CreditNoteId};
 use super::invoice_status_badge;
 use crate::{
     app::admin::_secure::{
@@ -26,12 +28,30 @@ use crate::{
     ui::{date, money, page_header, vat_rate},
 };
 
+pub mod credit_notes;
+
 path_param!(pub invoice_id: String, error = not_found);
+
+/// One credit note as the invoice's page lists it.
+struct CreditNoteLine {
+    id: String,
+    number: String,
+    issued: String,
+    reason: String,
+    amount: String,
+    /// When its file was archived, when the shop has an archive and it was.
+    archived_on: Option<String>,
+    /// Where its PDF is downloaded (feature `pdf`).
+    file: Option<String>,
+}
 
 #[query_params(error = bad_request)]
 struct ShowQuery {
     /// The outcome of "Vérifier": `intact`, `altered`, `missing`.
     archive: Option<String>,
+    /// The number of the credit note that was verified, when it was one's
+    /// file rather than the invoice's.
+    avoir: Option<String>,
 }
 
 #[page]
@@ -52,7 +72,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         )
     });
     let has_archive = services.archive.is_some();
-    let checked = match query::<ShowQuery>(cx)?.archive.as_deref() {
+    let asked = query::<ShowQuery>(cx)?;
+    let outcome = match asked.archive.as_deref() {
         Some("intact") => Some((
             false,
             "Le fichier archivé est intact : son empreinte est celle du jour de l'archivage.",
@@ -66,6 +87,14 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             "Le fichier archivé est introuvable dans le dépôt d'archives.",
         )),
         _ => None,
+    };
+    // The invoice's own file, or one of its credit notes'.
+    let (checked, note_checked) = match (&asked.avoir, outcome) {
+        (Some(number), Some((alarming, message))) => (
+            None,
+            Some((alarming, format!("Avoir {number} — {message}"))),
+        ),
+        (_, outcome) => (outcome, None),
     };
     let invoice = load_invoice(&services.executor, &id)
         .await?
@@ -90,12 +119,32 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     for note in credit_notes_of_invoice(&services.db, &id).await? {
         let amount = Money::new(note.amount_minor, &note.currency);
         credited = credited.checked_add(&amount)?;
-        credit_notes.push((
-            note.credit_note_number,
-            date(note.issued_at as u64),
-            note.reason,
-            money(&amount),
-        ));
+        let archived_on = match &services.archive {
+            Some(_) => timada_invoice::archived_document(&services.db, &note.credit_note_id)
+                .await?
+                .map(|entry| date(entry.archived_at.max(0) as u64)),
+            None => None,
+        };
+        #[cfg(feature = "pdf")]
+        let file = Some(
+            href!(
+                credit_note_id::download,
+                InvoiceId(id.clone()),
+                CreditNoteId(note.credit_note_id.clone())
+            )
+            .resolve(cx),
+        );
+        #[cfg(not(feature = "pdf"))]
+        let file: Option<String> = None;
+        credit_notes.push(CreditNoteLine {
+            id: note.credit_note_id,
+            number: note.credit_note_number,
+            issued: date(note.issued_at as u64),
+            reason: timada_invoice::credit_reason_label(&note.reason),
+            amount: money(&amount),
+            archived_on,
+            file,
+        });
     }
     let net = money(&invoice.total.checked_sub(&credited)?);
     // What an invoice must show: the VAT per rate, or why there is none.
@@ -217,22 +266,37 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                         <th scope="col" class="py-2 font-normal">"Date"</th>
                                         <th scope="col" class="py-2 font-normal">"Motif"</th>
                                         <th scope="col" class="py-2 text-right font-normal">"Montant"</th>
+                                        <th scope="col" class="py-2 pl-4 font-normal">"Document"</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    for (number, issued, reason, amount) in &credit_notes {
+                                    for note in &credit_notes {
                                         <tr class="border-b border-border">
-                                            <td class="py-2 font-mono text-xs">(number.clone())</td>
-                                            <td class="py-2">(issued.clone())</td>
-                                            <td class="py-2">(reason.clone())</td>
-                                            <td class="py-2 text-right tabular-nums">"− " (amount.clone())</td>
+                                            <td class="py-2 font-mono text-xs">(note.number.clone())</td>
+                                            <td class="py-2">(note.issued.clone())</td>
+                                            <td class="py-2">(note.reason.clone())</td>
+                                            <td class="py-2 text-right tabular-nums">"− " (note.amount.clone())</td>
+                                            <td class="py-2 pl-4 text-xs">
+                                                if let Some(file) = &note.file {
+                                                    <a href=(file.clone()) aria-label=(format!("Télécharger l'avoir {} (PDF)", note.number)) class="underline underline-offset-4">"PDF"</a>
+                                                }
+                                                if let Some(archived_on) = &note.archived_on {
+                                                    <span class="block text-muted-foreground">"Archivé le " (archived_on.clone())</span>
+                                                    <form method="post" action=(href!(credit_note_id::verify, InvoiceId(id.clone()), CreditNoteId(note.id.clone())))>
+                                                        <button type="submit" aria-label=(format!("Vérifier le fichier archivé de l'avoir {}", note.number)) class="underline underline-offset-4">"Vérifier"</button>
+                                                    </form>
+                                                }
+                                            </td>
                                         </tr>
                                     }
                                 </tbody>
                                 <tfoot>
-                                    <tr class="font-semibold"><td colspan="3" class="pt-2">"Net après avoirs"</td><td class="pt-2 text-right tabular-nums">(net.clone())</td></tr>
+                                    <tr class="font-semibold"><td colspan="3" class="pt-2">"Net après avoirs"</td><td class="pt-2 text-right tabular-nums">(net.clone())</td><td></td></tr>
                                 </tfoot>
                             </table>
+                            if let Some((alarming, message)) = &note_checked {
+                                <p role=(if *alarming { "alert" } else { "status" }) class=(if *alarming { "mt-3 text-sm text-destructive" } else { "mt-3 text-sm" })>(message.clone())</p>
+                            }
                         )
                     )
                 }
@@ -482,14 +546,17 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
             .map_err(anyhow::Error::from)?,
         None => None,
     };
-    let code = match outcome {
+    let target = href!(show, InvoiceId(id))
+        .query([("archive", archive_check_code(outcome))])
+        .resolve(cx);
+    Err::<(), _>(see_other(target).into())
+}
+
+fn archive_check_code(outcome: Option<timada_invoice::ArchiveCheck>) -> &'static str {
+    match outcome {
         Some(timada_invoice::ArchiveCheck::Intact) => "intact",
         Some(timada_invoice::ArchiveCheck::Altered) => "altered",
         Some(timada_invoice::ArchiveCheck::Missing) => "missing",
         None => "",
-    };
-    let target = href!(show, InvoiceId(id))
-        .query([("archive", code)])
-        .resolve(cx);
-    Err::<(), _>(see_other(target).into())
+    }
 }

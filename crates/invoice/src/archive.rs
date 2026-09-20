@@ -1,6 +1,6 @@
-//! The archive of issued documents: the PDF of an invoice, rendered once when
-//! it is issued, kept unaltered and served from then on — the file a customer
-//! downloads in ten years is the one they were sent. Without it a document is
+//! The archive of issued documents: the PDF of an invoice or of a credit
+//! note, rendered once when it is issued, kept unaltered and served from then
+//! on — the file a customer downloads in ten years is the one they were sent. Without it a document is
 //! re-rendered from events each time, and changes whenever the issuer's
 //! address or the layout does.
 //!
@@ -39,7 +39,8 @@ pub enum ArchiveError {
 pub type ArchiveFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ArchiveError>> + Send + 'a>>;
 
 /// Where archived files are kept. Keys look like
-/// `invoice/2026/F2026-000042.pdf`: relative, `/`-separated, made of letters,
+/// `invoice/2026/F2026-000042.pdf` or `credit-note/2026/A2026-000007.pdf`:
+/// relative, `/`-separated, made of letters,
 /// digits, `-`, `_` and `.`.
 pub trait ArchiveStore: Send + Sync {
     /// Stores `bytes` under `key`. Write-once: the same bytes again are fine,
@@ -192,11 +193,11 @@ impl ArchiveStore for DirectoryArchiveStore {
 /// What the index says of an archived document.
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct ArchivedDocument {
-    /// The invoice's id.
+    /// The invoice's id, or the credit note's.
     pub document_id: String,
-    /// `invoice`.
+    /// `invoice` or `credit_note`.
     pub kind: String,
-    /// The legal number: `F2026-000042`.
+    /// The legal number: `F2026-000042`, `A2026-000007`.
     pub number: String,
     pub storage_key: String,
     /// Hex, lower case.
@@ -326,15 +327,20 @@ mod issue {
 
     use super::{ArchiveError, ArchiveStore, ArchivedDocument, InvoiceArchive, NewArchive};
     use crate::{
-        aggregator::InvoiceIssued,
-        document::{InvoiceIssuer, invoice_document},
-        pdf::render_invoice_pdf,
+        aggregator::{CreditNoteIssued, InvoiceIssued},
+        document::{InvoiceIssuer, invoice_document, load_credit_note_document},
+        pdf::{render_credit_note_pdf, render_invoice_pdf},
         query::load_invoice,
     };
 
     /// Subscription key. Data: the pool, an [`InvoiceArchive`] and the
     /// [`InvoiceIssuer`]; optionally an [`ArchivePolicy`].
     pub const INVOICE_ARCHIVE_SUBSCRIPTION: &str = "invoice-archive";
+
+    /// Subscription key of the credit notes' archive; same data. Its own
+    /// subscription, so that a shop which archived its invoices before credit
+    /// notes had a document still gets every credit note ever issued filed.
+    pub const CREDIT_NOTE_ARCHIVE_SUBSCRIPTION: &str = "invoice-credit-note-archive";
 
     /// Not strict: it only looks at invoices being issued. Started on a shop
     /// with history, it archives every invoice ever issued — flagged
@@ -343,9 +349,16 @@ mod issue {
         SubscriptionBuilder::new(INVOICE_ARCHIVE_SUBSCRIPTION).handler(archive_on_invoice_issued())
     }
 
+    /// Not strict either; credit notes issued before it first ran are filed
+    /// as `reconstituted`.
+    pub fn credit_note_archive_subscription<E: Executor>() -> SubscriptionBuilder<E> {
+        SubscriptionBuilder::new(CREDIT_NOTE_ARCHIVE_SUBSCRIPTION)
+            .handler(archive_on_credit_note_issued())
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ArchivePolicy {
-        /// An invoice archived longer than this after it was issued is flagged
+        /// A document archived longer than this after it was issued is flagged
         /// `reconstituted`: it was rendered with the issuer and the layout of
         /// another day. A day by default — a subscription that was down for a
         /// night is no reconstitution.
@@ -387,14 +400,84 @@ mod issue {
         let Some(document) = invoice_document(issuer, invoice, order_number, Vec::new())? else {
             return Ok(None);
         };
+        let (number, issued_at) = (document.number.clone(), document.issued_at);
+        file(
+            db,
+            store,
+            Filing {
+                document_id: invoice_id,
+                kind: "invoice",
+                folder: "invoice",
+                number: &number,
+                issued_at,
+            },
+            policy,
+            move || render_invoice_pdf(&document),
+        )
+        .await
+        .map(Some)
+    }
+
+    /// Renders a credit note and files it under
+    /// `credit-note/{year}/{number}.pdf`, unless it is archived already, in
+    /// which case what was filed then is returned. `Ok(None)`: there is no
+    /// such credit note.
+    pub async fn archive_credit_note<E: Executor>(
+        executor: &E,
+        db: &SqlitePool,
+        store: &dyn ArchiveStore,
+        issuer: &InvoiceIssuer,
+        credit_note_id: &str,
+        policy: &ArchivePolicy,
+    ) -> Result<Option<(ArchivedDocument, Vec<u8>)>, ArchiveError> {
+        if let Some(archived) = super::read_archived(db, store, credit_note_id).await? {
+            return Ok(Some(archived));
+        }
+        let Some(document) = load_credit_note_document(executor, issuer, credit_note_id).await?
+        else {
+            return Ok(None);
+        };
+        let (number, issued_at) = (document.number.clone(), document.issued_at);
+        file(
+            db,
+            store,
+            Filing {
+                document_id: credit_note_id,
+                kind: "credit_note",
+                folder: "credit-note",
+                number: &number,
+                issued_at,
+            },
+            policy,
+            move || render_credit_note_pdf(&document),
+        )
+        .await
+        .map(Some)
+    }
+
+    /// What is being filed, whatever the document.
+    struct Filing<'a> {
+        document_id: &'a str,
+        kind: &'a str,
+        folder: &'a str,
+        number: &'a str,
+        issued_at: u64,
+    }
+
+    async fn file(
+        db: &SqlitePool,
+        store: &dyn ArchiveStore,
+        filing: Filing<'_>,
+        policy: &ArchivePolicy,
+        render: impl FnOnce() -> Result<Vec<u8>, crate::pdf::InvoicePdfError> + Send + 'static,
+    ) -> Result<(ArchivedDocument, Vec<u8>), ArchiveError> {
         let now = timada_core::time::now_unix_secs()?;
         let reconstituted =
-            now.saturating_sub(document.issued_at) > policy.reconstituted_after.as_secs();
-        let year = timada_core::time::year_of(document.issued_at);
-        let number = document.number.clone();
-        let storage_key = format!("invoice/{year}/{number}.pdf");
+            now.saturating_sub(filing.issued_at) > policy.reconstituted_after.as_secs();
+        let year = timada_core::time::year_of(filing.issued_at);
+        let storage_key = format!("{}/{year}/{}.pdf", filing.folder, filing.number);
 
-        let bytes = tokio::task::spawn_blocking(move || render_invoice_pdf(&document))
+        let bytes = tokio::task::spawn_blocking(render)
             .await
             .map_err(anyhow::Error::from)?
             .map_err(anyhow::Error::from)?;
@@ -402,23 +485,22 @@ mod issue {
             db,
             store,
             NewArchive {
-                document_id: invoice_id,
-                kind: "invoice",
-                number: &number,
+                document_id: filing.document_id,
+                kind: filing.kind,
+                number: filing.number,
                 storage_key: &storage_key,
                 reconstituted,
             },
             &bytes,
         )
         .await?;
-        Ok(Some((entry, bytes)))
+        Ok((entry, bytes))
     }
 
-    #[evento::subscription]
-    async fn archive_on_invoice_issued<E: Executor>(
+    /// The pool, the archive, the issuer and the policy a handler files with.
+    fn filing_data<E: Executor>(
         ctx: &Context<'_, E>,
-        event: Event<InvoiceIssued>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<(SqlitePool, InvoiceArchive, InvoiceIssuer, ArchivePolicy)> {
         let db = ctx
             .get::<SqlitePool>()
             .ok_or_else(|| anyhow::anyhow!("SqlitePool missing from subscription context"))?;
@@ -429,7 +511,34 @@ mod issue {
             .get::<InvoiceIssuer>()
             .ok_or_else(|| anyhow::anyhow!("InvoiceIssuer missing from subscription context"))?;
         let policy = ctx.get::<ArchivePolicy>().unwrap_or_default();
+        Ok((db, archive, issuer, policy))
+    }
+
+    #[evento::subscription]
+    async fn archive_on_invoice_issued<E: Executor>(
+        ctx: &Context<'_, E>,
+        event: Event<InvoiceIssued>,
+    ) -> anyhow::Result<()> {
+        let (db, archive, issuer, policy) = filing_data(ctx)?;
         archive_invoice(
+            ctx.executor,
+            &db,
+            archive.0.as_ref(),
+            &issuer,
+            &event.aggregate_id,
+            &policy,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[evento::subscription]
+    async fn archive_on_credit_note_issued<E: Executor>(
+        ctx: &Context<'_, E>,
+        event: Event<CreditNoteIssued>,
+    ) -> anyhow::Result<()> {
+        let (db, archive, issuer, policy) = filing_data(ctx)?;
+        archive_credit_note(
             ctx.executor,
             &db,
             archive.0.as_ref(),

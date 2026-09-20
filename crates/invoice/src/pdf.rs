@@ -25,7 +25,7 @@ use timada_core::{
     format::{civil_date, date, money, vat_rate},
 };
 
-use crate::document::InvoiceDocument;
+use crate::document::{CreditNoteDocument, InvoiceDocument, InvoiceIssuer};
 
 static REGULAR: &[u8] = include_bytes!("../fonts/NotoSans-Regular.ttf");
 static BOLD: &[u8] = include_bytes!("../fonts/NotoSans-Bold.ttf");
@@ -54,13 +54,41 @@ pub enum InvoicePdfError {
 pub fn render_invoice_pdf(document: &InvoiceDocument) -> Result<Vec<u8>, InvoicePdfError> {
     let faces = Faces::load()?;
     let pages = lay_out(&faces, document);
-    draw(document, pages)
+    draw(
+        &FileInfo {
+            title: format!("Facture {}", document.number),
+            author: &document.issuer.name,
+            dated: document.issued_at,
+        },
+        pages,
+    )
+}
+
+/// Renders a credit note ("avoir") as a PDF file, in the invoice's hand.
+pub fn render_credit_note_pdf(document: &CreditNoteDocument) -> Result<Vec<u8>, InvoicePdfError> {
+    let faces = Faces::load()?;
+    let pages = lay_out_credit_note(&faces, document);
+    draw(
+        &FileInfo {
+            title: format!("Avoir {}", document.number),
+            author: &document.issuer.name,
+            dated: document.issued_at,
+        },
+        pages,
+    )
 }
 
 /// The file name to offer a download or an attachment under.
 pub fn invoice_pdf_file_name(document: &InvoiceDocument) -> String {
-    let number: String = document
-        .number
+    format!("facture-{}.pdf", file_name_part(&document.number))
+}
+
+pub fn credit_note_pdf_file_name(document: &CreditNoteDocument) -> String {
+    format!("avoir-{}.pdf", file_name_part(&document.number))
+}
+
+fn file_name_part(number: &str) -> String {
+    number
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' {
@@ -69,8 +97,7 @@ pub fn invoice_pdf_file_name(document: &InvoiceDocument) -> String {
                 '_'
             }
         })
-        .collect();
-    format!("facture-{number}.pdf")
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -409,65 +436,67 @@ fn columns(text_columns: &[f32], numeric_widths: &[f32]) -> Vec<Column> {
     all
 }
 
-fn lay_out(faces: &Faces, document: &InvoiceDocument) -> Vec<Vec<Mark>> {
-    let mut page = Layout::new(faces);
-    let incl_vat = document.amounts_include_vat;
-
-    // Who issues it, on the right; what it is, on the left.
+/// The top of a document: what it is, on the left, under `title`; who issues
+/// it, on the right.
+fn masthead(page: &mut Layout<'_>, title: &str, facts: &[String], issuer: &InvoiceIssuer) {
+    let faces = page.faces;
     let issuer_left = 340.0;
     let top = page.y;
-    page.text_at(
-        MARGIN,
-        top,
-        Weight::Bold,
-        18.0,
-        Ink::Text,
-        &format!("Facture {}", document.number),
-    );
+    page.text_at(MARGIN, top, Weight::Bold, 18.0, Ink::Text, title);
     page.y = top + 18.0 * LEADING + 4.0;
-    page.line(
-        MARGIN,
-        Weight::Regular,
-        BODY,
-        Ink::Text,
-        &format!("Date : {}", date(document.issued_at)),
-    );
-    page.line(
-        MARGIN,
-        Weight::Regular,
-        BODY,
-        Ink::Text,
-        &format!("Commande : {}", document.order_label),
-    );
+    for fact in facts {
+        page.line(MARGIN, Weight::Regular, BODY, Ink::Text, fact);
+    }
     let left_bottom = page.y;
 
     page.y = top;
     let issuer_width = RIGHT - issuer_left;
-    for line in faces.wrap(Weight::Bold, BODY, &document.issuer.name, issuer_width) {
+    for line in faces.wrap(Weight::Bold, BODY, &issuer.name, issuer_width) {
         page.line(issuer_left, Weight::Bold, BODY, Ink::Text, &line);
     }
-    let mut issuer = document.issuer.address_lines.clone();
-    issuer.push(document.issuer.registration.clone());
-    issuer.push(format!("TVA {}", document.issuer.vat_number));
-    for entry in issuer.iter().filter(|l| !l.trim().is_empty()) {
+    let mut identity = issuer.address_lines.clone();
+    identity.push(issuer.registration.clone());
+    identity.push(format!("TVA {}", issuer.vat_number));
+    for entry in identity.iter().filter(|l| !l.trim().is_empty()) {
         for line in faces.wrap(Weight::Regular, BODY, entry, issuer_width) {
             page.line(issuer_left, Weight::Regular, BODY, Ink::Text, &line);
         }
     }
     page.y = page.y.max(left_bottom) + 22.0;
+}
 
-    page.line(MARGIN, Weight::Regular, SMALL, Ink::Muted, "Facturé à");
+/// Who the document is for: the business, when it is one's, then the address.
+fn addressee(page: &mut Layout<'_>, caption: &str, company_lines: Vec<String>, buyer: &Address) {
+    let faces = page.faces;
+    page.line(MARGIN, Weight::Regular, SMALL, Ink::Muted, caption);
     page.y += 2.0;
-    let bill_to = document
-        .company_lines()
-        .into_iter()
-        .chain(address_lines(&document.buyer));
-    for entry in bill_to {
+    for entry in company_lines.into_iter().chain(address_lines(buyer)) {
         for line in faces.wrap(Weight::Regular, BODY, &entry, 280.0) {
             page.line(MARGIN, Weight::Regular, BODY, Ink::Text, &line);
         }
     }
     page.y += 22.0;
+}
+
+fn lay_out(faces: &Faces, document: &InvoiceDocument) -> Vec<Vec<Mark>> {
+    let mut page = Layout::new(faces);
+    let incl_vat = document.amounts_include_vat;
+
+    masthead(
+        &mut page,
+        &format!("Facture {}", document.number),
+        &[
+            format!("Date : {}", date(document.issued_at)),
+            format!("Commande : {}", document.order_label),
+        ],
+        &document.issuer,
+    );
+    addressee(
+        &mut page,
+        "Facturé à",
+        document.company_lines(),
+        &document.buyer,
+    );
 
     // The lines.
     let (price_heading, total_heading) = if incl_vat {
@@ -610,17 +639,29 @@ fn lay_out(faces: &Faces, document: &InvoiceDocument) -> Vec<Vec<Mark>> {
         page.y += BODY * LEADING;
     }
 
-    // The footer of every page, once the number of pages is known.
-    let mut pages = page.pages;
+    footers(
+        faces,
+        page.pages,
+        &document.issuer,
+        "Une question sur cette facture ?",
+        &format!("Facture {}", document.number),
+    )
+}
+
+/// The footer of every page, once the number of pages is known.
+fn footers(
+    faces: &Faces,
+    mut pages: Vec<Vec<Mark>>,
+    issuer: &InvoiceIssuer,
+    question: &str,
+    label: &str,
+) -> Vec<Vec<Mark>> {
     let count = pages.len();
     let identity = format!(
         "{} · {} · TVA {}",
-        document.issuer.name, document.issuer.registration, document.issuer.vat_number
+        issuer.name, issuer.registration, issuer.vat_number
     );
-    let contact = format!(
-        "Une question sur cette facture ? {}",
-        document.issuer.contact
-    );
+    let contact = format!("{question} {}", issuer.contact);
     for (index, marks) in pages.iter_mut().enumerate() {
         let mut footer = Layout {
             faces,
@@ -649,26 +690,157 @@ fn lay_out(faces: &Faces, document: &InvoiceDocument) -> Vec<Vec<Mark>> {
             Weight::Regular,
             SMALL,
             Ink::Muted,
-            &format!("Facture {} · page {}/{count}", document.number, index + 1),
+            &format!("{label} · page {}/{count}", index + 1),
         );
         marks.extend(footer.pages.into_iter().flatten());
     }
     pages
 }
 
-fn draw(document: &InvoiceDocument, pages: Vec<Vec<Mark>>) -> Result<Vec<u8>, InvoicePdfError> {
+/// A credit note: what is credited, against which invoice, and the VAT that
+/// goes back with it.
+fn lay_out_credit_note(faces: &Faces, document: &CreditNoteDocument) -> Vec<Vec<Mark>> {
+    let mut page = Layout::new(faces);
+    let incl_vat = document.amounts_include_vat;
+
+    let invoice = match document.invoice_issued_at {
+        Some(issued_at) => format!(
+            "Facture : {} du {}",
+            document.invoice_number,
+            date(issued_at)
+        ),
+        None => format!("Facture : {}", document.invoice_number),
+    };
+    masthead(
+        &mut page,
+        &format!("Avoir {}", document.number),
+        &[
+            format!("Date : {}", date(document.issued_at)),
+            invoice,
+            format!("Commande : {}", document.order_label),
+        ],
+        &document.issuer,
+    );
+    addressee(
+        &mut page,
+        "Adressé à",
+        document.company_lines(),
+        &document.buyer,
+    );
+
+    let total_heading = if incl_vat {
+        "Montant TTC"
+    } else {
+        "Montant HT"
+    };
+    page.table(
+        &columns(&[1.0], &[110.0]),
+        &["Motif", total_heading],
+        &[vec![document.reason.clone(), money(&document.amount)]],
+    );
+    page.y += 10.0;
+
+    let totals_left = RIGHT - 230.0;
+    let row_height = BODY * LEADING + 3.0;
+    let mut totals: Vec<(String, String)> = Vec::new();
+    if let (true, Some(base), Some(vat)) =
+        (incl_vat, document.total_excl_vat(), document.vat_total())
+    {
+        totals.push(("Total HT".into(), money(&base)));
+        totals.push(("TVA".into(), money(&vat)));
+    }
+    page.make_room(row_height * (totals.len() as f32 + 1.0) + 12.0);
+    for (label, amount) in &totals {
+        let top = page.y;
+        page.text_at(totals_left, top, Weight::Regular, BODY, Ink::Text, label);
+        page.text_ending_at(RIGHT, top, Weight::Regular, BODY, Ink::Text, amount);
+        page.y += row_height;
+    }
+    page.y += 2.0;
+    page.rule(totals_left, RIGHT, Ink::Strong);
+    page.y += 5.0;
+    let top = page.y;
+    let net_heading = if incl_vat {
+        "Net de l'avoir TTC"
+    } else {
+        "Net de l'avoir HT"
+    };
+    page.text_at(totals_left, top, Weight::Bold, 11.0, Ink::Text, net_heading);
+    page.text_ending_at(
+        RIGHT,
+        top,
+        Weight::Bold,
+        11.0,
+        Ink::Text,
+        &money(&document.amount),
+    );
+    page.y += 11.0 * LEADING + 18.0;
+
+    if incl_vat && !document.vat_lines.is_empty() {
+        page.caption("TVA par taux");
+        let rows: Vec<Vec<String>> = document
+            .vat_lines
+            .iter()
+            .map(|l| {
+                vec![
+                    vat_rate(l.rate_bp),
+                    money(&l.base),
+                    money(&l.vat),
+                    money(&l.total),
+                ]
+            })
+            .collect();
+        page.table(
+            &columns(&[1.0], &[110.0, 110.0, 110.0]),
+            &["Taux", "Base HT", "TVA", "TTC"],
+            &rows,
+        );
+        page.y += 10.0;
+    }
+    if let Some(mention) = document.regime_mention {
+        page.paragraph(Weight::Regular, BODY, Ink::Text, mention);
+        page.y += 12.0;
+    }
+    page.paragraph(
+        Weight::Regular,
+        BODY,
+        Ink::Text,
+        &format!(
+            "Cet avoir vient en déduction de la facture {}, qu'il ne remplace pas.",
+            document.invoice_number
+        ),
+    );
+
+    footers(
+        faces,
+        page.pages,
+        &document.issuer,
+        "Une question sur cet avoir ?",
+        &format!("Avoir {}", document.number),
+    )
+}
+
+/// What the file says of itself.
+struct FileInfo<'a> {
+    title: String,
+    author: &'a str,
+    /// Unix seconds: the document's own date, so that rendering it again
+    /// gives the same file.
+    dated: u64,
+}
+
+fn draw(info: &FileInfo<'_>, pages: Vec<Vec<Mark>>) -> Result<Vec<u8>, InvoicePdfError> {
     let regular = Font::new(REGULAR.into(), 0).ok_or(InvoicePdfError::Font)?;
     let bold = Font::new(BOLD.into(), 0).ok_or(InvoicePdfError::Font)?;
 
     let mut pdf = Document::new();
-    let (year, month, day) = civil_date(document.issued_at);
+    let (year, month, day) = civil_date(info.dated);
     pdf.set_metadata(
         Metadata::new()
-            .title(format!("Facture {}", document.number))
-            .authors(vec![document.issuer.name.clone()])
+            .title(info.title.clone())
+            .authors(vec![info.author.to_owned()])
             .language("fr".to_owned())
             .creator("timada-invoice".to_owned())
-            // The invoice's own date: rendering it again gives the same file.
             .creation_date(
                 DateTime::new(u16::try_from(year).unwrap_or(1970))
                     .month(month)
@@ -926,6 +1098,102 @@ mod tests {
         assert!(
             all.iter().any(|t| t.starts_with("Exonération de TVA")),
             "{all:?}"
+        );
+        Ok(())
+    }
+
+    fn credit_note() -> CreditNoteDocument {
+        let invoice = invoice(1);
+        CreditNoteDocument {
+            issuer: invoice.issuer,
+            credit_note_id: "credit-note-1".into(),
+            number: "A2026-000007".into(),
+            // 20/09/2026.
+            issued_at: 1_789_862_400,
+            invoice_id: invoice.invoice_id,
+            invoice_number: invoice.number,
+            invoice_issued_at: Some(invoice.issued_at),
+            order_id: invoice.order_id,
+            order_label: invoice.order_label,
+            customer_id: invoice.customer_id,
+            buyer: invoice.buyer,
+            company: Some(timada_tax::BusinessBuyer {
+                company_name: "Analytical Engines SARL".into(),
+                vat_number: "FR40303265045".into(),
+            }),
+            reason: "Retour R2026-000003".into(),
+            amount: Money::eur(6_000),
+            amounts_include_vat: true,
+            vat_lines: vec![VatLine {
+                rate_bp: 2_000,
+                base: Money::eur(5_000),
+                vat: Money::eur(1_000),
+                total: Money::eur(6_000),
+            }],
+            regime_mention: None,
+        }
+    }
+
+    #[test]
+    fn a_credit_note_names_its_invoice_and_the_vat_that_goes_back() -> Result<(), InvoicePdfError> {
+        let faces = Faces::load()?;
+        let document = credit_note();
+        let pages = lay_out_credit_note(&faces, &document);
+        assert_eq!(pages.len(), 1);
+        let all = texts(&pages).concat();
+        for expected in [
+            "Avoir A2026-000007",
+            "Date : 20/09/2026",
+            "Facture : F2026-000042 du 19/09/2026",
+            "Commande : C2026-000042",
+            "Timada demo SAS",
+            "Adressé à",
+            "Analytical Engines SARL",
+            "N° TVA : FR40303265045",
+            "Ada Lovelace",
+            "Retour R2026-000003",
+            "Montant TTC",
+            "Total HT",
+            "50,00 €",
+            "10,00 €",
+            "Net de l'avoir TTC",
+            "60,00 €",
+            "20 %",
+            "Une question sur cet avoir ? facturation@timada.example",
+            "Avoir A2026-000007 · page 1/1",
+        ] {
+            assert!(all.iter().any(|t| t == expected), "{expected}: {all:?}");
+        }
+        assert!(
+            all.iter()
+                .any(|t| t.starts_with("Cet avoir vient en déduction de la facture F2026-000042")),
+            "{all:?}"
+        );
+
+        // An export's credit note is pre-tax and says why, like its invoice.
+        let mut export = credit_note();
+        export.amounts_include_vat = false;
+        export.vat_lines = vec![VatLine {
+            rate_bp: 0,
+            base: Money::eur(6_000),
+            vat: Money::eur(0),
+            total: Money::eur(6_000),
+        }];
+        export.regime_mention = timada_tax::TaxTreatment::Export.regime_mention();
+        let all = texts(&lay_out_credit_note(&faces, &export)).concat();
+        assert!(all.iter().any(|t| t == "Net de l'avoir HT"), "{all:?}");
+        assert!(!all.iter().any(|t| t == "TVA par taux"), "{all:?}");
+        assert!(
+            all.iter().any(|t| t.starts_with("Exonération de TVA")),
+            "{all:?}"
+        );
+
+        let pdf = render_credit_note_pdf(&document)?;
+        assert!(pdf.starts_with(b"%PDF-"), "not a PDF");
+        assert_eq!(pdf, render_credit_note_pdf(&document)?);
+        assert_eq!(
+            credit_note_pdf_file_name(&document),
+            "avoir-A2026-000007.pdf"
         );
         Ok(())
     }
