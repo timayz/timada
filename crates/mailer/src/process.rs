@@ -609,8 +609,8 @@ async fn notify_on_review_rejected<E: Executor>(
 mod invoice {
     use evento::{Executor, metadata::Event, subscription::Context};
     use timada_invoice::{
-        InvoiceIssuer, aggregator::InvoiceIssued, invoice_document, invoice_pdf_file_name,
-        load_invoice, render_invoice_pdf,
+        ArchivePolicy, InvoiceArchive, InvoiceIssuer, aggregator::InvoiceIssued, archive_invoice,
+        invoice_document, invoice_pdf_file_name, load_invoice, render_invoice_pdf,
     };
 
     use super::{order_and_customer, queue_with, setup};
@@ -618,7 +618,10 @@ mod invoice {
 
     /// `InvoiceIssued` → the invoice, as issued, in the customer's mailbox.
     /// Opt-in: without an [`InvoiceIssuer`] in the subscription data there is
-    /// nobody to put at the top of the document, and nothing is sent.
+    /// nobody to put at the top of the document, and nothing is sent. With an
+    /// [`InvoiceArchive`] in the data too, what is sent is the archived file —
+    /// filed here if the archive has not caught up — so the customer's
+    /// mailbox and their account hold the same bytes.
     #[evento::subscription]
     pub(super) async fn send_on_invoice_issued<E: Executor>(
         ctx: &Context<'_, E>,
@@ -648,7 +651,26 @@ mod invoice {
 
         let content = templates.0.invoice_issued(&config, &first_name, &document);
         let file_name = invoice_pdf_file_name(&document);
-        let pdf = tokio::task::spawn_blocking(move || render_invoice_pdf(&document)).await??;
+        let archived = match ctx.get::<InvoiceArchive>() {
+            Some(archive) => {
+                let policy = ctx.get::<ArchivePolicy>().unwrap_or_default();
+                archive_invoice(
+                    ctx.executor,
+                    &db,
+                    archive.0.as_ref(),
+                    &issuer,
+                    &event.aggregate_id,
+                    &policy,
+                )
+                .await?
+                .map(|(_, bytes)| bytes)
+            }
+            None => None,
+        };
+        let pdf = match archived {
+            Some(bytes) => bytes,
+            None => tokio::task::spawn_blocking(move || render_invoice_pdf(&document)).await??,
+        };
         queue_with(
             &db,
             &config,

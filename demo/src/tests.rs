@@ -111,6 +111,9 @@ async fn shop_checking(
     let (executor, pool) = timada_core::testing::memory_executor(db::migrations()).await?;
     let store = Store {
         executor,
+        archive: timada_invoice::InvoiceArchive::new(timada_invoice::SqliteArchiveStore::new(
+            pool.clone(),
+        )),
         db: pool,
         provider,
         #[cfg(feature = "stripe")]
@@ -1846,8 +1849,25 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
         header("content-disposition")
     );
     assert_eq!(header("cache-control"), "private, no-store");
-    assert!(text(pdf).await?.starts_with("%PDF-"));
+    let downloaded = to_bytes(pdf.into_body(), usize::MAX)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    assert!(downloaded.starts_with(b"%PDF-"));
     assert_eq!(other.get(&pdf_uri).await.status(), StatusCode::NOT_FOUND);
+    // It is the archived file — the invoice as issued, filed once — and it
+    // stays the same download after download, credit notes or not.
+    let invoice_id = timada_invoice::invoice_id(order_page.rsplit('/').next().unwrap_or_default());
+    let (entry, archived) =
+        timada_invoice::read_archived(&store.db, store.archive.0.as_ref(), &invoice_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("invoice not archived"))?;
+    assert_eq!(downloaded.as_ref(), archived.as_slice());
+    assert_eq!(entry.sha256, timada_invoice::sha256_hex(&downloaded));
+    assert!(!entry.reconstituted);
+    let again = to_bytes(browser.get(&pdf_uri).await.into_body(), usize::MAX)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    assert_eq!(again, downloaded);
 
     // The order page lists the return, shows the refund and its credit note,
     // and still offers to return the unit that is left.
@@ -1889,6 +1909,8 @@ async fn a_shipped_order_is_returned_from_the_account() -> anyhow::Result<()> {
     assert_eq!(files.len(), 1, "{files:?}");
     assert!(files[0].file_name.starts_with("facture-F"), "{files:?}");
     assert!(files[0].size > 5_000, "{files:?}");
+    // …the very file the account serves.
+    assert_eq!(files[0].size, entry.size, "{files:?}");
     let approved = outbox
         .iter()
         .find(|m| m.kind == "return-approved")

@@ -49,6 +49,9 @@ impl AdminConfig {
 pub struct AdminServices {
     pub executor: Evento,
     pub db: SqlitePool,
+    /// Where issued invoices are archived, when the shop has an archive: the
+    /// invoice page then shows what was filed, checks it, and serves it.
+    pub archive: Option<timada_invoice::InvoiceArchive>,
 }
 
 impl AdminServices {
@@ -56,6 +59,12 @@ impl AdminServices {
         Self {
             executor: Evento::new(executor),
             db,
+            archive: None,
         }
+    }
+
+    pub fn with_archive(mut self, archive: timada_invoice::InvoiceArchive) -> Self {
+        self.archive = Some(archive);
+        self
     }
 }

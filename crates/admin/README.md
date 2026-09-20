@@ -77,6 +77,11 @@ those waiting longer than `AdminConfig::ship_within` are flagged, and counted
 on the orders page. The fulfillment saga never times a paid order out —
 somebody ships it.
 
+With an archive (`AdminServices::new(..).with_archive(archive)`), an invoice's
+page shows what was filed — date, size, SHA-256, whether it was reconstituted —
+checks the file against that hash on demand, and its PDF download serves the
+archived file rather than a fresh rendering.
+
 The VAT section reads a quarter out of the issued invoices and the credit
 notes: the shop's own VAT by rate, the one-stop-shop (OSS) return by member
 state and rate with the corrections of earlier quarters, the intra-community

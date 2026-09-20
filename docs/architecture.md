@@ -200,6 +200,7 @@ pool as data unless noted:
 | invoice | `credit_notes_from_refunds_subscription` | ACL ← payment | |
 | invoice | `invoice_list_subscription`, `credit_note_list_subscription` | read models | |
 | invoice | `vat_journal_subscription` | read model: the VAT of issued invoices and credit notes, per rate | |
+| invoice | `invoice_archive_subscription` (feature `pdf`) | files each issued invoice's PDF in the archive | `timada_invoice::InvoiceArchive`, `timada_invoice::InvoiceIssuer`; optionally an `ArchivePolicy` |
 | returns | `return_processing_subscription` | process manager | |
 | returns | `return_list_subscription` | read model | |
 | mailer | `mailer_subscription` | ACL ← seven contexts (eight with `invoice-pdf`) | `timada_mailer::MailerConfig`, optionally `MailerTemplates`; with feature `invoice-pdf`, a `timada_invoice::InvoiceIssuer` turns on the invoice e-mail |
@@ -224,6 +225,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it. `default()` = France + overseas exports; `france_with_eu_oss()` adds the 26 other member states at their own VAT, reduced rates mapped by the host with `with_mapped_rate(zone, listed_bp, destination_bp)` |
 | `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `StripeProvider` (feature `stripe`), `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
 | `Arc<dyn timada_tax::VatNumberValidator>` | who says whether a business's VAT number is valid: `ViesValidator` (feature `vies`, the EU's registry — name the shop's own number and each check comes with its consultation number), `FormatValidator` (no registry: what reads well passes), `FakeValidator` in tests |
+| `timada_invoice::InvoiceArchive` | where issued invoices are kept unaltered: `SqliteArchiveStore` (in the database, replicated with it), `DirectoryArchiveStore` (files, the host's to back up), or the host's own `ArchiveStore`. Handed to the archive subscription, to the mailer (the e-mailed file is the archived one) and to `AdminServices::with_archive` |
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
@@ -296,6 +298,17 @@ the SMTP relay.
   aggregate would overwrite the first one's snapshot. A second view is
   declared `#[evento::snapshot(none)]` (see `CompanyIdentityView`, and the
   proposal at the end of [event evolution](event-evolution.md)).
+- **An issued invoice is a file, kept.** `invoice_archive_subscription`
+  renders each invoice once, *as issued* — the issuer of that day, no credit
+  note on it — and files the PDF in an `ArchiveStore`, write-once; the index
+  (`invoice_archive`) keeps its SHA-256, so `verify_archived` tells a file
+  that was altered or lost. Downloads and the e-mail all go through
+  `archive_invoice`, which returns the filed bytes or files them first: the
+  customer's mailbox, their account and the operator hold the same file, ten
+  years on. The HTML pages stay live (credit notes since, net after them).
+  Started on a shop with history, the subscription files every past invoice,
+  flagged `reconstituted`: rendered with today's issuer and layout, honest
+  about it, frozen from then on. Operational data, not events.
 - **VAT is read from the documents.** `vat_journal_subscription` keeps a row
   per VAT rate of each *issued* invoice, and a negative one per credit note —
   its amount spread over the invoice's rates in proportion to what each was
@@ -357,9 +370,8 @@ the SMTP relay.
   (`timada_invoice::vat_report`, the admin's TVA section) adds up what was
   invoiced; filing it — and the rule that a quarter starts at midnight UTC,
   not Paris time — stays with the accountant.
-- An archive of invoice files: the PDF is rendered from the events each time
-  it is asked for (same invoice, same bytes — but a change of issuer address
-  or of layout shows on past invoices too). Storing the bytes at issue, with
-  a hash, is what a 10-year retention policy would add.
+- An archive of **credit notes**: invoices are archived when they are issued;
+  a credit note has no document of its own yet (it shows as a line on its
+  invoice's page), so it has nothing to file.
 - Upcasting of old event shapes: an evento feature, to build when the first
   `V2` event exists.

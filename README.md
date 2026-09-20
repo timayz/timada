@@ -50,6 +50,7 @@ Environment of the demo:
 | `TIMADA_MAIL_FROM` | `Timada demo <no-reply@timada.example>` | |
 | `TIMADA_SMTP_URL` | — | with `--features smtp`, e-mails are sent instead of logged |
 | `TIMADA_PAYMENT_TIMEOUT_SECS` | `1800` | an unpaid order is cancelled and its stock released |
+| `TIMADA_ARCHIVE_DIR` | — | issued invoices are archived as files under this directory instead of in the database |
 | `TIMADA_VIES`, `TIMADA_VAT_NUMBER` | — | with `--features vies` and `TIMADA_VIES=1`, business customers' VAT numbers are checked against the EU's VIES registry; the shop's own number gets each check its consultation number |
 | `TIMADA_STRIPE_SECRET_KEY`, `TIMADA_STRIPE_PUBLISHABLE_KEY`, `TIMADA_STRIPE_WEBHOOK_SECRET` | — | with `--features stripe`, shoppers pay by card on the payment step and refunds go back through Stripe |
 
@@ -76,7 +77,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-shipping` | delivery methods and the shipment of an order |
 | `timada-tax` | **library, no events**: tax zones, what is charged in a zone, VAT per rate; VAT numbers and the registry (VIES) that checks them |
 | `timada-order` | the order, the checkout ACL that places it, the fulfillment saga, payment timeouts |
-| `timada-invoice` | one invoice per order, legal numbering, credit notes, the invoice as a document — and, with the `pdf` feature, as a PDF file |
+| `timada-invoice` | one invoice per order, legal numbering, credit notes, the invoice as a document — and, with the `pdf` feature, as a PDF file, archived unaltered when it is issued; the VAT of a quarter |
 | `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock and refund |
 | `timada-review` | product reviews (moderated) and questions & answers |
 | `timada-mailer` | transactional e-mails (with attachments) through a SQL outbox and pluggable transports; feature `invoice-pdf` e-mails each issued invoice as a PDF |

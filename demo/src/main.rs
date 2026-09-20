@@ -44,6 +44,24 @@ pub struct Store {
     pub stripe: Option<std::sync::Arc<timada_payment::StripeProvider>>,
     /// Who says whether a business's VAT number is valid.
     pub vat_validator: std::sync::Arc<dyn timada_tax::VatNumberValidator>,
+    /// Where issued invoices are kept, unaltered.
+    pub archive: timada_invoice::InvoiceArchive,
+}
+
+/// The invoice archive: files under `TIMADA_ARCHIVE_DIR` when it is set, in
+/// the database otherwise.
+fn invoice_archive(db: &sqlx::SqlitePool) -> timada_invoice::InvoiceArchive {
+    match env::var("TIMADA_ARCHIVE_DIR") {
+        Ok(directory) => {
+            tracing::info!(%directory, "invoices are archived as files");
+            timada_invoice::InvoiceArchive::new(timada_invoice::DirectoryArchiveStore::new(
+                directory,
+            ))
+        }
+        Err(_) => {
+            timada_invoice::InvoiceArchive::new(timada_invoice::SqliteArchiveStore::new(db.clone()))
+        }
+    }
 }
 
 /// VIES when the demo is built with `--features vies` and `TIMADA_VIES=1`;
@@ -100,6 +118,7 @@ fn open_store(executor: evento::Sqlite, db: sqlx::SqlitePool) -> anyhow::Result<
         };
         Ok(Store {
             executor,
+            archive: invoice_archive(&db),
             db,
             provider,
             stripe,
@@ -115,6 +134,7 @@ fn open_store(executor: evento::Sqlite, db: sqlx::SqlitePool) -> anyhow::Result<
         }
         Ok(Store {
             executor,
+            archive: invoice_archive(&db),
             db,
             provider: std::sync::Arc::new(timada_payment::ManualProvider),
             vat_validator: vat_validator()?,
@@ -250,7 +270,8 @@ fn router(store: Store, assets: AssetConfig, stylesheet: Stylesheet) -> Router {
     let sessions = SessionConfig::builder()
         .token_store(CookieTokenStore::new().name(auth::SESSION_COOKIE))
         .build();
-    let services = AdminServices::new(store.executor.clone(), store.db.clone());
+    let services = AdminServices::new(store.executor.clone(), store.db.clone())
+        .with_archive(store.archive.clone());
     let builder = Router::builder()
         .discover()
         .app_context(store)
