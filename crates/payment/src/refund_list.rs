@@ -13,8 +13,8 @@ use sqlx::SqlitePool;
 
 use crate::{
     aggregator::{
-        PaymentCaptured, PaymentDeclined, PaymentRefunded, PaymentRequested, RefundFailed,
-        RefundRequested, RefundSettled,
+        DisputeLost, DisputeOpened, DisputeWon, PaymentCaptured, PaymentDeclined, PaymentRefunded,
+        PaymentRequested, RefundFailed, RefundRequested, RefundSettled,
     },
     query::load_payment,
     value_object::RefundStatus,
@@ -45,6 +45,9 @@ pub fn refund_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .skip::<PaymentRequested>()
         .skip::<PaymentCaptured>()
         .skip::<PaymentDeclined>()
+        .skip::<DisputeOpened>()
+        .skip::<DisputeWon>()
+        .skip::<DisputeLost>()
         .strict()
 }
 

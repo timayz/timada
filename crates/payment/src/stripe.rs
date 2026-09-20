@@ -19,7 +19,7 @@ use crate::{
         CancelOutcome, PaymentProvider, PaymentStart, ProviderError, ProviderFuture,
         ProviderRefund, RefundOutcome, ReturnUrls, StartedPayment,
     },
-    provider_event::ProviderEvent,
+    provider_event::{DisputeStanding, ProviderDispute, ProviderEvent},
     query::PaymentView,
     value_object::PaymentMethod,
 };
@@ -361,8 +361,54 @@ fn read_event(payload: &[u8]) -> Result<Option<ProviderEvent>, WebhookError> {
                 _ => None,
             })
         }
+        // Created, evidence updated, funds withdrawn or reinstated, closed:
+        // each carries the whole dispute, and its status says where it stands.
+        kind if kind.starts_with("charge.dispute.") => {
+            let dispute: Dispute = serde_json::from_value(event.data.object).map_err(object)?;
+            // A charge made without an intent was not made by this shop.
+            let Some(payment_reference) = dispute.payment_intent else {
+                return Ok(None);
+            };
+            let standing = match dispute.status.as_str() {
+                // An inquiry the bank closed never became a chargeback.
+                "won" | "warning_closed" => DisputeStanding::Won,
+                "lost" => DisputeStanding::Lost,
+                _ => DisputeStanding::Open,
+            };
+            Ok(Some(ProviderEvent::Dispute(ProviderDispute {
+                payment_reference,
+                reference: dispute.id,
+                amount: Money::new(dispute.amount, dispute.currency.to_uppercase()),
+                reason: dispute.reason.unwrap_or_default(),
+                respond_by: dispute
+                    .evidence_details
+                    .and_then(|details| details.due_by)
+                    .and_then(|due_by| u64::try_from(due_by).ok()),
+                standing,
+            })))
+        }
         _ => Ok(None),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct Dispute {
+    id: String,
+    amount: i64,
+    currency: String,
+    status: String,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    payment_intent: Option<String>,
+    #[serde(default)]
+    evidence_details: Option<DisputeEvidenceDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DisputeEvidenceDetails {
+    #[serde(default)]
+    due_by: Option<i64>,
 }
 
 impl PaymentProvider for StripeProvider {
@@ -541,6 +587,88 @@ mod tests {
             read_event(b"not json"),
             Err(WebhookError::Payload(_))
         ));
+    }
+
+    #[test]
+    fn a_stripe_dispute_says_where_it_stands_each_time() {
+        let report = |kind: &str, status: &str| {
+            format!(
+                r#"{{"type":"{kind}","data":{{"object":{{
+                    "id":"dp_1","amount":12585,"currency":"eur","status":"{status}",
+                    "reason":"product_not_received","charge":"ch_1","payment_intent":"pi_1",
+                    "evidence_details":{{"due_by":1800000000,"has_evidence":false}}}}}}}}"#
+            )
+        };
+        let expected = |standing| {
+            Ok(Some(ProviderEvent::Dispute(ProviderDispute {
+                payment_reference: "pi_1".into(),
+                reference: "dp_1".into(),
+                amount: Money::eur(12_585),
+                reason: "product_not_received".into(),
+                respond_by: Some(1_800_000_000),
+                standing,
+            })))
+        };
+        for (kind, status, standing) in [
+            (
+                "charge.dispute.created",
+                "needs_response",
+                DisputeStanding::Open,
+            ),
+            (
+                "charge.dispute.created",
+                "warning_needs_response",
+                DisputeStanding::Open,
+            ),
+            (
+                "charge.dispute.funds_withdrawn",
+                "needs_response",
+                DisputeStanding::Open,
+            ),
+            (
+                "charge.dispute.updated",
+                "under_review",
+                DisputeStanding::Open,
+            ),
+            ("charge.dispute.closed", "won", DisputeStanding::Won),
+            (
+                "charge.dispute.funds_reinstated",
+                "won",
+                DisputeStanding::Won,
+            ),
+            (
+                "charge.dispute.closed",
+                "warning_closed",
+                DisputeStanding::Won,
+            ),
+            ("charge.dispute.closed", "lost", DisputeStanding::Lost),
+        ] {
+            assert_eq!(
+                read_event(report(kind, status).as_bytes()),
+                expected(standing),
+                "{kind} {status}"
+            );
+        }
+        // A charge without an intent was not made by this shop; a dispute
+        // with little said is still a dispute.
+        let foreign = br#"{"type":"charge.dispute.created","data":{"object":{
+            "id":"dp_2","amount":100,"currency":"eur","status":"needs_response",
+            "payment_intent":null}}}"#;
+        assert_eq!(read_event(foreign), Ok(None));
+        let bare = br#"{"type":"charge.dispute.created","data":{"object":{
+            "id":"dp_3","amount":100,"currency":"usd","status":"needs_response",
+            "payment_intent":"pi_3"}}}"#;
+        assert_eq!(
+            read_event(bare),
+            Ok(Some(ProviderEvent::Dispute(ProviderDispute {
+                payment_reference: "pi_3".into(),
+                reference: "dp_3".into(),
+                amount: Money::new(100, "USD"),
+                reason: String::new(),
+                respond_by: None,
+                standing: DisputeStanding::Open,
+            })))
+        );
     }
 
     #[test]

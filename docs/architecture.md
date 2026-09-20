@@ -137,6 +137,18 @@ is the intent's id, which refunds are made against; a refund Stripe takes as
 `pending` settles on `refund.updated`. A cancelled intent can never be paid,
 so the timeout leaves no window for a payment on a cancelled order.
 
+A cardholder may **dispute** the charge with their bank. The provider reports
+it against its own reference (`ProviderEvent::Dispute`, from Stripe's
+`charge.dispute.*` — each report carries the whole dispute, so they may come
+in any order), `payment_capture_reference` says whose payment that is, and
+the payment records `DisputeOpened`, then `DisputeWon` or `DisputeLost`.
+While a dispute is open the refund worker hands nothing of that payment to
+the provider: refunds can be decided, they wait. Won, they go through. Lost,
+the disputed amount is gone — out of `refundable()`, and the waiting refunds
+that no longer fit fail with it. A chargeback is not a refund: no
+`PaymentRefunded`, hence no credit note and no e-mail to the customer; what
+the books say of it is the operator's decision.
+
 Every handler is idempotent — derived ids, status guards, idempotency keys —
 so a redelivery after a crash converges instead of duplicating.
 
@@ -192,6 +204,7 @@ pool as data unless noted:
 | promotion | `code_list_subscription` | read model | |
 | payment | `refund_list_subscription` | read models (refunds made, refunds asked for) | |
 | payment | `refund_execution_subscription` | process: enqueues refunds for the provider | |
+| payment | `dispute_list_subscription` | read models (disputes, and whose payment a provider's reference is) | |
 | order | `order_history_subscription`, `payment_deadline_subscription` | read models | |
 | order | `order_checkout_subscription` | ACL ← cart | `timada_tax::TaxZones`; optionally a `timada_tax::VatRegistry` (a business's VAT number is asked about again before its order is placed without VAT) and a `timada_order::ReverseChargePolicy` |
 | order | `order_fulfillment_subscription` | saga | *(no pool)* |
@@ -375,8 +388,8 @@ the SMTP relay.
 
 ## What is deliberately not here yet
 
-- Payments beyond the card form: disputes and chargebacks (a lost dispute
-  takes the money back without any refund of ours), saved cards, instalments
+- Payments beyond the card form: answering a dispute from the admin (the
+  evidence goes through the provider's own dashboard), saved cards, instalments
   through a provider (Stripe takes cards only here), reconciliation with the
   provider's payouts, and a second provider.
 - VAT beyond goods sold to consumers and to businesses of the Union:

@@ -18,6 +18,14 @@ pub enum PaymentError {
     RefundNotFailed,
     #[error("refund is already settled")]
     RefundAlreadySettled,
+    #[error("dispute not found")]
+    DisputeNotFound,
+    #[error("dispute is already closed the other way")]
+    DisputeAlreadyClosed,
+    #[error("a dispute needs a reference")]
+    DisputeReferenceRequired,
+    #[error("disputed amount exceeds the captured amount")]
+    DisputeExceedsCapture,
     #[error("payment provider: {0}")]
     Provider(#[from] crate::provider::ProviderError),
     #[error(transparent)]

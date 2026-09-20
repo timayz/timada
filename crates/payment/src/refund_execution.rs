@@ -74,10 +74,14 @@ pub struct RefundPolicy {
     pub lease: Duration,
     /// Rows claimed per pass.
     pub batch: u32,
+    /// How long a refund whose payment is disputed waits before the dispute
+    /// is looked at again. Waiting costs it no attempt.
+    pub dispute_hold: Duration,
 }
 
 impl Default for RefundPolicy {
-    /// 1 min, 5 min, 30 min, 2 h; a five-minute lease; 50 rows a pass.
+    /// 1 min, 5 min, 30 min, 2 h; a five-minute lease; 50 rows a pass; a
+    /// disputed payment is looked at again every hour.
     fn default() -> Self {
         Self {
             retry_delays: [60, 300, 1_800, 7_200]
@@ -86,6 +90,7 @@ impl Default for RefundPolicy {
                 .collect(),
             lease: Duration::from_secs(300),
             batch: 50,
+            dispute_hold: Duration::from_secs(3_600),
         }
     }
 }
@@ -96,6 +101,7 @@ impl RefundPolicy {
         let policy = Self::default();
         Self {
             retry_delays: vec![Duration::ZERO; policy.retry_delays.len()],
+            dispute_hold: Duration::ZERO,
             ..policy
         }
     }
@@ -116,6 +122,8 @@ pub struct RefundPass {
     pub failed: u32,
     /// The provider was unavailable; the refund will be tried again.
     pub postponed: u32,
+    /// The payment is disputed: nothing goes back until the bank decides.
+    pub held: u32,
 }
 
 #[derive(sqlx::FromRow)]
@@ -205,6 +213,24 @@ pub async fn execute_pending_refunds<E: Executor>(
         if !still_pending {
             // Settled by hand or failed in the meantime: nothing to send.
             close(db, &row, None, None).await?;
+            continue;
+        }
+        if payment.open_dispute().is_some() {
+            // The disputed money is with the bank: a provider would refuse,
+            // and a refund on top of a lost dispute would pay twice. It waits
+            // — `lose_dispute` fails it if it no longer fits.
+            sqlx::query(
+                "UPDATE payment_provider_refund
+                 SET next_attempt_at = ?, last_error = 'payment disputed',
+                     claimed_by = NULL, claimed_until = NULL
+                 WHERE request_id = ? AND claimed_by = ?",
+            )
+            .bind(now + policy.dispute_hold.as_secs() as i64)
+            .bind(&row.request_id)
+            .bind(&worker)
+            .execute(db)
+            .await?;
+            pass.held += 1;
             continue;
         }
         let Some(psp_reference) = payment.psp_reference.clone() else {

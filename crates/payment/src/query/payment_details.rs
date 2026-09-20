@@ -6,10 +6,10 @@ use timada_core::Money;
 
 use crate::{
     aggregator::{
-        Payment, PaymentCaptured, PaymentDeclined, PaymentRefunded, PaymentRequested, RefundFailed,
-        RefundRequested, RefundSettled,
+        DisputeLost, DisputeOpened, DisputeWon, Payment, PaymentCaptured, PaymentDeclined,
+        PaymentRefunded, PaymentRequested, RefundFailed, RefundRequested, RefundSettled,
     },
-    value_object::{PaymentMethod, PaymentStatus, RefundStatus},
+    value_object::{DisputeStatus, PaymentMethod, PaymentStatus, RefundStatus},
 };
 
 #[evento::projection(bitcode::Encode, bitcode::Decode)]
@@ -27,6 +27,24 @@ pub struct PaymentView {
     /// Every refund that was asked for, oldest first. Refunds recorded before
     /// refunds were asked for first only show in `refunded`.
     pub refunds: Vec<RefundView>,
+    /// Every dispute the provider reported, oldest first.
+    pub disputes: Vec<DisputeView>,
+}
+
+/// One dispute of a payment, from the cardholder's claim to the bank's
+/// decision.
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct DisputeView {
+    /// The provider's own reference.
+    pub dispute_id: String,
+    pub amount: Money,
+    /// The provider's reason code: see [`crate::dispute_reason_label`].
+    pub reason: String,
+    pub status: DisputeStatus,
+    pub opened_at: u64,
+    /// Unix seconds: when the shop's evidence is due.
+    pub respond_by: Option<u64>,
+    pub closed_at: Option<u64>,
 }
 
 /// One refund of a payment, from the request to its outcome.
@@ -53,11 +71,30 @@ impl PaymentView {
     }
 
     /// What can still be given back: the captured amount, less what was
-    /// refunded and what pending refunds hold.
+    /// refunded, what lost disputes took and what pending refunds hold.
     pub fn refundable(&self) -> Result<Money, timada_core::MoneyError> {
         self.amount
             .checked_sub(&self.refunded)?
+            .checked_sub(&self.charged_back()?)?
             .checked_sub(&self.pending_refunds()?)
+    }
+
+    /// The dispute the bank has not decided yet, if any. While there is one
+    /// the order is not to be shipped and no refund reaches the provider.
+    pub fn open_dispute(&self) -> Option<&DisputeView> {
+        self.disputes
+            .iter()
+            .find(|d| d.status == DisputeStatus::Open)
+    }
+
+    /// What lost disputes took back.
+    pub fn charged_back(&self) -> Result<Money, timada_core::MoneyError> {
+        self.disputes
+            .iter()
+            .filter(|d| d.status == DisputeStatus::Lost)
+            .try_fold(Money::zero(&self.amount.currency), |sum, dispute| {
+                sum.checked_add(&dispute.amount)
+            })
     }
 }
 
@@ -70,9 +107,12 @@ pub fn create_projection<E: Executor>() -> Projection<E, PaymentView> {
         .handler(on_refund_requested())
         .handler(on_refund_settled())
         .handler(on_refund_failed())
+        .handler(on_dispute_opened())
+        .handler(on_dispute_won())
+        .handler(on_dispute_lost())
         .strict()
-        // `refunds` joined the snapshot.
-        .revision(1)
+        // `refunds`, then `disputes`, joined the snapshot.
+        .revision(2)
 }
 
 pub async fn load<E: Executor>(
@@ -183,5 +223,52 @@ async fn on_refund_failed(event: Event<RefundFailed>, row: &mut PaymentView) -> 
         refund.status = RefundStatus::Failed;
         refund.failure = Some(event.data.reason);
     }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_dispute_opened(
+    event: Event<DisputeOpened>,
+    row: &mut PaymentView,
+) -> anyhow::Result<()> {
+    let opened_at = event.timestamp;
+    row.disputes.push(DisputeView {
+        dispute_id: event.data.dispute_id,
+        amount: event.data.amount,
+        reason: event.data.reason,
+        status: DisputeStatus::Open,
+        opened_at,
+        respond_by: event.data.respond_by,
+        closed_at: None,
+    });
+    Ok(())
+}
+
+fn close_dispute(row: &mut PaymentView, dispute_id: &str, status: DisputeStatus, at: u64) {
+    if let Some(dispute) = row.disputes.iter_mut().find(|d| d.dispute_id == dispute_id) {
+        dispute.status = status;
+        dispute.closed_at = Some(at);
+    }
+}
+
+#[evento::handler]
+async fn on_dispute_won(event: Event<DisputeWon>, row: &mut PaymentView) -> anyhow::Result<()> {
+    close_dispute(
+        row,
+        &event.data.dispute_id,
+        DisputeStatus::Won,
+        event.timestamp,
+    );
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_dispute_lost(event: Event<DisputeLost>, row: &mut PaymentView) -> anyhow::Result<()> {
+    close_dispute(
+        row,
+        &event.data.dispute_id,
+        DisputeStatus::Lost,
+        event.timestamp,
+    );
     Ok(())
 }

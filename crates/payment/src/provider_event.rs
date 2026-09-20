@@ -6,7 +6,8 @@ use sqlx::SqlitePool;
 use timada_core::Money;
 
 use crate::{
-    command::Command,
+    command::{Command, OpenDispute},
+    dispute_list::payment_by_reference,
     error::PaymentError,
     provider::{PaymentProvider, ProviderRefund},
     query::load_payment,
@@ -30,6 +31,33 @@ pub enum ProviderEvent {
         provider_reference: String,
         reason: String,
     },
+    /// Where a dispute stands. A provider reports the same dispute many times
+    /// — opened, evidence updated, funds moved, closed — and not always in
+    /// order: each report says everything, so any of them can be the first.
+    Dispute(ProviderDispute),
+}
+
+/// A dispute as the provider reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderDispute {
+    /// What the disputed payment was captured under (`PaymentCaptured`'s
+    /// `psp_reference`).
+    pub payment_reference: String,
+    /// The provider's own reference for the dispute.
+    pub reference: String,
+    pub amount: Money,
+    /// The provider's reason code, as given.
+    pub reason: String,
+    /// Unix seconds: when the shop's evidence is due.
+    pub respond_by: Option<u64>,
+    pub standing: DisputeStanding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisputeStanding {
+    Open,
+    Won,
+    Lost,
 }
 
 /// What [`apply_provider_event`] did with an event.
@@ -127,6 +155,40 @@ pub async fn apply_provider_event<E: Executor>(
                 Ok(false) | Err(PaymentError::RefundAlreadySettled) => Ok(Applied::Ignored),
                 Err(err) => Err(err),
             }
+        }
+        ProviderEvent::Dispute(dispute) => {
+            // The reference is learnt by the `payment-dispute-list`
+            // subscription; a dispute comes days after the capture.
+            let Some(payment_id) = payment_by_reference(db, &dispute.payment_reference).await?
+            else {
+                tracing::warn!(
+                    dispute = %dispute.reference,
+                    payment_reference = %dispute.payment_reference,
+                    "provider reports a dispute on a payment this shop does not know"
+                );
+                return Ok(Applied::Ignored);
+            };
+            let opened = cmd
+                .open_dispute(
+                    &payment_id,
+                    OpenDispute {
+                        dispute_id: dispute.reference.clone(),
+                        amount: dispute.amount,
+                        reason: dispute.reason,
+                        respond_by: dispute.respond_by,
+                    },
+                )
+                .await?;
+            let closed = match dispute.standing {
+                DisputeStanding::Open => false,
+                DisputeStanding::Won => cmd.win_dispute(&payment_id, &dispute.reference).await?,
+                DisputeStanding::Lost => cmd.lose_dispute(&payment_id, &dispute.reference).await?,
+            };
+            Ok(if opened || closed {
+                Applied::Done
+            } else {
+                Applied::Ignored
+            })
         }
     }
 }

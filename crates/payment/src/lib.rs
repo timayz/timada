@@ -8,9 +8,14 @@
 //! pays on, [`apply_provider_event`] records what the provider reports, and a
 //! refund is *requested* first, handed to the provider by
 //! [`run_provider_refunds`], and only a `PaymentRefunded` once confirmed.
+//!
+//! A cardholder may contest a charge with their bank: the provider reports
+//! the dispute, which holds every refund until the bank decides, and takes
+//! the disputed amount out of what can be refunded when it is lost.
 
 pub mod aggregator;
 mod command;
+mod dispute_list;
 mod error;
 mod migration;
 mod provider;
@@ -24,6 +29,7 @@ mod stripe;
 mod value_object;
 
 pub use command::*;
+pub use dispute_list::*;
 pub use error::*;
 pub use migration::migrations;
 pub use provider::*;

@@ -199,6 +199,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
+        timada_payment::dispute_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
         timada_payment::refund_execution_subscription()
             .data(db.clone())
             .start(executor)
@@ -344,6 +348,10 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
         )
         .await?;
         timada_payment::refund_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_payment::dispute_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;
