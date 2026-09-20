@@ -1324,3 +1324,71 @@ async fn a_paid_order_waits_in_the_queue_until_it_ships() -> anyhow::Result<()> 
     assert_eq!(count_orders_to_ship(&db, now + 3_600).await?, (0, 0));
     Ok(())
 }
+
+#[tokio::test]
+async fn delivery_is_charged_in_the_carts_currency() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let fees = timada_shipping::DeliveryFees::default()
+        .with_fee("colissimo-europe", Money::new(1_190, "GBP"));
+    let inventory = timada_inventory::Command(&executor);
+    let stock = inventory
+        .register_stock_item(RegisterStockItem {
+            product_id: PRODUCT.into(),
+            location: StockLocation::Warehouse,
+        })
+        .await?;
+    inventory.receive_stock(&stock, 10).await?;
+
+    let cart = timada_cart::Command(&executor);
+    let mut carts = Vec::new();
+    for currency in ["GBP", "CHF"] {
+        let cart_id = cart.open_cart(Some(CUSTOMER.into())).await?;
+        cart.add_line(
+            &cart_id,
+            AddLine {
+                product_id: PRODUCT.into(),
+                name: "AOC 23.8\" LED - 24G4XE".into(),
+                quantity: 1,
+                unit_price: Money::new(10_000, currency),
+                warranty_months: 60,
+            },
+        )
+        .await?;
+        cart.checkout(
+            &cart_id,
+            Checkout {
+                customer_id: None,
+                delivery_address: address("121, Avenue Tolosane", "31520", "Ramonville", "FR"),
+                billing_address: address("121, Avenue Tolosane", "31520", "Ramonville", "FR"),
+                delivery: timada_cart::DeliveryChoice {
+                    method_code: "colissimo-europe".into(),
+                    pickup_store_id: None,
+                },
+                payment_mode: timada_cart::PaymentMode::Card,
+            },
+        )
+        .await?;
+        carts.push(cart_id);
+    }
+    order_checkout_subscription()
+        .data(db.clone())
+        .data(fees)
+        .run_once(&executor)
+        .await?;
+
+    // Pounds: the host's pound fee, and a total in pounds — nothing in euros
+    // slipped in.
+    let pounds = timada_order::load_order_details(&executor, order_id(&carts[0]))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("pound order missing"))?;
+    assert_eq!(pounds.shipping_fee, Money::new(1_190, "GBP"));
+    assert_eq!(pounds.total, Money::new(11_190, "GBP"));
+    // Francs: the host priced no delivery there. The storefront would not
+    // have offered the method; should it slip by, the order is kept.
+    let francs = timada_order::load_order_details(&executor, order_id(&carts[1]))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("franc order missing"))?;
+    assert_eq!(francs.shipping_fee, Money::new(0, "CHF"));
+    assert_eq!(francs.total, Money::new(10_000, "CHF"));
+    Ok(())
+}
