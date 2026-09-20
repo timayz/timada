@@ -8,6 +8,9 @@ repository.workspace = true
 [features]
 # SMTP delivery through `lettre`; without it the crate only logs or collects.
 smtp = ["dep:lettre"]
+# The `invoice-issued` e-mail: the customer's invoice, attached as a PDF. Sent
+# once the host also hands an `InvoiceIssuer` to the mailer subscription.
+invoice-pdf = ["dep:timada-invoice"]
 
 [dependencies]
 timada-core.workspace = true
@@ -15,6 +18,7 @@ timada-catalog.workspace = true
 timada-customer.workspace = true
 timada-inventory.workspace = true
 timada-order.workspace = true
+timada-invoice = { workspace = true, features = ["pdf"], optional = true }
 timada-payment.workspace = true
 timada-returns.workspace = true
 timada-review.workspace = true

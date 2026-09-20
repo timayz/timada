@@ -174,6 +174,17 @@ pub trait Templates: Send + Sync {
     ) -> Content {
         template::return_completed(config, first_name, request).into()
     }
+
+    /// Goes out with the invoice attached as a PDF.
+    #[cfg(feature = "invoice-pdf")]
+    fn invoice_issued(
+        &self,
+        config: &MailerConfig,
+        first_name: &str,
+        invoice: &timada_invoice::InvoiceDocument,
+    ) -> Content {
+        template::invoice_issued(config, first_name, invoice).into()
+    }
 }
 
 /// The built-in French e-mails, unchanged.

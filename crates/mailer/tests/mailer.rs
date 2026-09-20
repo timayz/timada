@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use timada_core::{Address, Civility, Money};
 use timada_mailer::{
-    Content, DeliveryPolicy, Email, LogTransport, MAX_ATTEMPTS, MailError, MailerConfig,
-    MailerTemplates, MemoryTransport, OutboxStatus, SendFuture, Templates, Transport, count_outbox,
-    deliver_pending, deliver_pending_with, enqueue, list_outbox, load_outbox_message,
-    mailer_subscription, migrations, retry,
+    Attachment, Content, DeliveryPolicy, Email, LogTransport, MAX_ATTEMPTS, MailError,
+    MailerConfig, MailerTemplates, MemoryTransport, OutboxStatus, SendFuture, Templates, Transport,
+    count_outbox, deliver_pending, deliver_pending_with, enqueue, list_outbox, load_outbox_message,
+    mailer_subscription, migrations, outbox_attachments, retry,
 };
 use timada_order::{DeliveryChoice, OrderLine, PaymentMode, PlaceOrder, Seller};
 
@@ -29,6 +29,7 @@ fn email(to: &str) -> Email {
         subject: "Bonjour".into(),
         body: "Un message.".into(),
         html_body: None,
+        attachments: Vec::new(),
     }
 }
 
@@ -236,6 +237,61 @@ impl Templates for EnglishWelcome {
             "<p>Hello <strong>{first_name}</strong>, your account is ready.</p>"
         ))
     }
+}
+
+#[tokio::test]
+async fn files_are_queued_with_their_email_and_dropped_once_sent() -> anyhow::Result<()> {
+    let (_executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let pdf = b"%PDF-1.7 not really".to_vec();
+    let with_file = Email {
+        attachments: vec![Attachment::pdf("facture-F2026-000001.pdf", pdf.clone())],
+        ..email("ada@example.com")
+    };
+    assert!(enqueue(&db, "m-1", "invoice-issued", &with_file).await?);
+    // A redelivered handler queues neither the e-mail nor its file again.
+    assert!(!enqueue(&db, "m-1", "invoice-issued", &with_file).await?);
+    let files = outbox_attachments(&db, "m-1").await?;
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].file_name, "facture-F2026-000001.pdf");
+    assert_eq!(files[0].content_type, "application/pdf");
+    assert_eq!(files[0].size, pdf.len() as i64);
+    // What the log transport prints never includes the bytes.
+    assert!(
+        !format!("{with_file:?}").contains("37, 80"),
+        "{with_file:?}"
+    );
+
+    // A relay that fails once: the file is still there for the second try.
+    let policy = DeliveryPolicy::without_delays();
+    let flaky = Flaky {
+        failures: 1,
+        calls: AtomicU32::new(0),
+    };
+    assert_eq!(deliver_pending_with(&db, &flaky, &policy).await?.failed, 1);
+    let stored = |db: sqlx::SqlitePool| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT length(content) FROM mailer_attachment WHERE message_id = 'm-1'",
+        )
+        .fetch_one(&db)
+        .await
+    };
+    assert_eq!(stored(db.clone()).await?, pdf.len() as i64);
+
+    let outbox = MemoryTransport::default();
+    assert_eq!(deliver_pending_with(&db, &outbox, &policy).await?.sent, 1);
+    let sent = outbox.sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].attachments, with_file.attachments);
+    // Sent: the outbox keeps what was attached, not the bytes.
+    assert_eq!(stored(db.clone()).await?, 0);
+    assert_eq!(outbox_attachments(&db, "m-1").await?, files);
+
+    // An e-mail without files is what it always was.
+    enqueue(&db, "m-2", "welcome", &email("bob@example.com")).await?;
+    deliver_pending_with(&db, &outbox, &policy).await?;
+    assert!(outbox.sent()[1].attachments.is_empty());
+    assert!(outbox_attachments(&db, "m-2").await?.is_empty());
+    Ok(())
 }
 
 #[tokio::test]
@@ -545,5 +601,127 @@ async fn old_events_are_not_emailed_about() -> anyhow::Result<()> {
         .run_once(&executor)
         .await?;
     assert_eq!(count_outbox(&db, None).await?, 0);
+    Ok(())
+}
+
+/// An order that gets paid: its invoice is issued, and — once the host says
+/// who issues it — lands in the customer's mailbox as a PDF.
+#[cfg(feature = "invoice-pdf")]
+#[tokio::test]
+async fn an_issued_invoice_is_emailed_as_a_pdf() -> anyhow::Result<()> {
+    let mut all = migrations();
+    all.extend(timada_order::migrations());
+    all.extend(timada_invoice::migrations());
+    let (executor, db) = timada_core::testing::memory_executor(all).await?;
+    let issuer = timada_invoice::InvoiceIssuer {
+        name: "Timada SAS".into(),
+        address_lines: vec!["1 rue de l'Entrepôt".into(), "31000 Toulouse".into()],
+        registration: "SIRET 000 000 000 00000".into(),
+        vat_number: "FR00 000000000".into(),
+        contact: "facturation@timada.example".into(),
+    };
+
+    let customer_id = timada_customer::Command(&executor)
+        .register_customer(timada_customer::RegisterCustomer {
+            email: "ada@example.com".into(),
+            civility: Civility::Mrs,
+            first_name: "Ada".into(),
+            last_name: "Lovelace".into(),
+        })
+        .await?;
+    let orders = timada_order::Command(&executor);
+    let place = |cart: &str| PlaceOrder {
+        cart_id: cart.into(),
+        customer_id: customer_id.clone(),
+        seller: Seller::Ldlc,
+        lines: vec![OrderLine {
+            product_id: "aoc-24g4xe".into(),
+            name: "AOC 24G4XE".into(),
+            quantity: 2,
+            unit_price: Money::eur(11_995),
+            warranty_months: 36,
+        }],
+        delivery_address: address(),
+        billing_address: address(),
+        delivery: DeliveryChoice {
+            method_code: "colissimo".into(),
+            pickup_store_id: None,
+        },
+        payment_mode: PaymentMode::Card,
+        shipping_fee: Money::eur(590),
+        handling_fee: Money::eur(0),
+        promo_code: None,
+        discount: None,
+        order_number: Some(format!("C2026-{cart}")),
+        tax: None,
+    };
+    let invoices = || async {
+        timada_invoice::invoice_from_orders_subscription()
+            .data(db.clone())
+            .run_once(&executor)
+            .await
+    };
+
+    // Without an issuer the mailer does not know whose invoice it would be.
+    let silent = orders.place_order(place("000001")).await?;
+    invoices().await?;
+    orders.mark_paid(&silent, "pay-1").await?;
+    invoices().await?;
+    mailer_subscription()
+        .data(db.clone())
+        .data(config())
+        .run_once(&executor)
+        .await?;
+    let kinds = |rows: Vec<timada_mailer::OutboxRow>| -> Vec<String> {
+        rows.into_iter().map(|m| m.kind).collect()
+    };
+    let queued = kinds(list_outbox(&db, None, 50, 0).await?);
+    assert!(!queued.contains(&"invoice-issued".to_owned()), "{queued:?}");
+
+    let order_id = orders.place_order(place("000002")).await?;
+    invoices().await?;
+    orders.mark_paid(&order_id, "pay-2").await?;
+    invoices().await?;
+    for _ in 0..2 {
+        mailer_subscription()
+            .data(db.clone())
+            .data(config())
+            .data(issuer.clone())
+            .run_once(&executor)
+            .await?;
+    }
+    let outbox = MemoryTransport::default();
+    deliver_pending(&db, &outbox).await?;
+    let sent: Vec<Email> = outbox
+        .sent()
+        .into_iter()
+        .filter(|m| m.subject.starts_with("Votre facture"))
+        .collect();
+    // Once, however often the subscription runs.
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let invoice = timada_invoice::load_invoice(&executor, timada_invoice::invoice_id(&order_id))
+        .await?
+        .and_then(|invoice| invoice.invoice_number)
+        .ok_or_else(|| anyhow::anyhow!("invoice not issued"))?;
+    assert_eq!(sent[0].to, "ada@example.com");
+    assert_eq!(sent[0].subject, format!("Votre facture {invoice}"));
+    assert!(sent[0].body.contains("C2026-000002"), "{}", sent[0].body);
+    assert!(
+        sent[0].body.contains("Total TTC — 245,80 €"),
+        "{}",
+        sent[0].body
+    );
+    assert!(
+        sent[0]
+            .body
+            .contains(&format!("https://shop.example/account/orders/{order_id}")),
+        "{}",
+        sent[0].body
+    );
+    assert_eq!(sent[0].attachments.len(), 1);
+    let file = &sent[0].attachments[0];
+    assert_eq!(file.file_name, format!("facture-{invoice}.pdf"));
+    assert_eq!(file.content_type, "application/pdf");
+    assert!(file.content.starts_with(b"%PDF-"));
     Ok(())
 }

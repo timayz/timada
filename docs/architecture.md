@@ -36,6 +36,7 @@ graph TD
     invoice --> order & payment & tax
     returns --> order & payment & inventory & promotion
     mailer --> order & payment & inventory & returns & review & customer & catalog
+    mailer -. feature invoice-pdf .-> invoice
     admin --> everything[every context]
 ```
 
@@ -159,7 +160,7 @@ pool as data unless noted:
 | invoice | `invoice_list_subscription`, `credit_note_list_subscription` | read models | |
 | returns | `return_processing_subscription` | process manager | |
 | returns | `return_list_subscription` | read model | |
-| mailer | `mailer_subscription` | ACL ← seven contexts | `timada_mailer::MailerConfig`, optionally `MailerTemplates` |
+| mailer | `mailer_subscription` | ACL ← seven contexts (eight with `invoice-pdf`) | `timada_mailer::MailerConfig`, optionally `MailerTemplates`; with feature `invoice-pdf`, a `timada_invoice::InvoiceIssuer` turns on the invoice e-mail |
 
 Read-model subscriptions are `.strict()`: they name every event of their
 aggregate (a handler or a `.skip`), so a new event cannot be forgotten
@@ -181,7 +182,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
-| `timada_invoice::InvoiceIssuer` | the seller's identity printed on invoices |
+| `timada_invoice::InvoiceIssuer` | the seller's identity printed on invoices — also handed to the mailer subscription when invoices are e-mailed |
 | `timada_admin::AdminConfig` | mount segment, stylesheet, invoice issuer |
 
 **5. The admin** — see [its README](../crates/admin/README.md). It is mounted
@@ -219,6 +220,10 @@ the SMTP relay.
   `render_invoice_pdf` (feature `pdf`: krilla, bundled Noto Sans under the
   OFL, laid out as data before it is drawn) only present it. The admin offers
   the file with its own `pdf` feature.
+- **E-mail attachments** are queued with their e-mail in one transaction
+  (`mailer_attachment`), survive failed attempts, and lose their bytes once
+  the e-mail is sent — name and size stay for the admin. The outbox is not an
+  archive: what was attached can be rendered again.
 - **Logging** goes through `tracing`; libraries never print.
 - **Errors**: `thiserror` enums per context, with `anyhow` for the
   infrastructure underneath. No `unwrap`/`expect` outside tests.

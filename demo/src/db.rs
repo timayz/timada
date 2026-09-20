@@ -191,6 +191,8 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
         timada_mailer::mailer_subscription()
             .data(db)
             .data(mailer_config())
+            // Who issues the invoices: turns on the e-mail that carries them.
+            .data(invoice_issuer())
             .start(executor)
             .await?,
     ])
@@ -291,6 +293,7 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
         timada_mailer::mailer_subscription()
             .data(db.clone())
             .data(mailer_config())
+            .data(invoice_issuer())
             .run_once(executor)
             .await?;
     }
