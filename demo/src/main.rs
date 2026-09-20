@@ -37,6 +37,63 @@ pub struct Store {
     /// Who takes the shoppers' money. The demo has no provider: an operator
     /// captures payments from the admin.
     pub provider: std::sync::Arc<dyn timada_payment::PaymentProvider>,
+    /// The same provider when it is Stripe, for the webhook route: checking a
+    /// webhook's signature is Stripe's own business, not the port's.
+    #[cfg(feature = "stripe")]
+    pub stripe: Option<std::sync::Arc<timada_payment::StripeProvider>>,
+}
+
+/// Stripe when `TIMADA_STRIPE_SECRET_KEY` is set (feature `stripe`), with
+/// `TIMADA_STRIPE_PUBLISHABLE_KEY` and `TIMADA_STRIPE_WEBHOOK_SECRET`.
+#[cfg(feature = "stripe")]
+fn stripe_provider() -> anyhow::Result<Option<std::sync::Arc<timada_payment::StripeProvider>>> {
+    let Ok(secret_key) = env::var("TIMADA_STRIPE_SECRET_KEY") else {
+        return Ok(None);
+    };
+    let var = |name: &str| {
+        env::var(name).map_err(|_| anyhow::anyhow!("{name} must be set with the Stripe secret key"))
+    };
+    let config = timada_payment::StripeConfig::new(
+        secret_key,
+        var("TIMADA_STRIPE_PUBLISHABLE_KEY")?,
+        var("TIMADA_STRIPE_WEBHOOK_SECRET")?,
+    );
+    tracing::info!("payments go through Stripe; webhook on /webhooks/stripe");
+    Ok(Some(std::sync::Arc::new(
+        timada_payment::StripeProvider::new(config)?,
+    )))
+}
+
+/// The shop as the pages see it, taking its payments through Stripe when it
+/// is configured and by hand from the admin otherwise.
+fn open_store(executor: evento::Sqlite, db: sqlx::SqlitePool) -> anyhow::Result<Store> {
+    #[cfg(feature = "stripe")]
+    {
+        let stripe = stripe_provider()?;
+        let provider: std::sync::Arc<dyn timada_payment::PaymentProvider> = match &stripe {
+            Some(stripe) => stripe.clone(),
+            None => std::sync::Arc::new(timada_payment::ManualProvider),
+        };
+        Ok(Store {
+            executor,
+            db,
+            provider,
+            stripe,
+        })
+    }
+    #[cfg(not(feature = "stripe"))]
+    {
+        if env::var("TIMADA_STRIPE_SECRET_KEY").is_ok() {
+            tracing::warn!(
+                "TIMADA_STRIPE_SECRET_KEY is set but the demo was built without `--features stripe`"
+            );
+        }
+        Ok(Store {
+            executor,
+            db,
+            provider: std::sync::Arc::new(timada_payment::ManualProvider),
+        })
+    }
 }
 
 #[tokio::main]
@@ -50,11 +107,7 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = env::args().skip(1).collect();
     let (executor, pool) = db::open("data/demo.db").await?;
-    let store = Store {
-        executor: executor.clone(),
-        db: pool.clone(),
-        provider: std::sync::Arc::new(timada_payment::ManualProvider),
-    };
+    let store = open_store(executor.clone(), pool.clone())?;
 
     match args.first().map(String::as_str) {
         Some("--seed") => {

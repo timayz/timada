@@ -121,6 +121,16 @@ operator captures from the admin, and refunds settle at once).
   refuses for good waits for the operator, who asks again or settles it by
   hand. A return completes as soon as its refund is asked for.
 
+With **Stripe** (feature `stripe`, a thin client over three REST calls, no
+SDK) a payment is one PaymentIntent — created under the payment's id as
+idempotency key, so two tabs open one intent, and carrying the payment and
+order ids as metadata, which is how `payment_intent.succeeded` finds its way
+back. The shopper pays on Stripe's Payment Element: the card fields live in
+Stripe's frames and never touch the shop (PCI SAQ-A). The capture's reference
+is the intent's id, which refunds are made against; a refund Stripe takes as
+`pending` settles on `refund.updated`. A cancelled intent can never be paid,
+so the timeout leaves no window for a payment on a cancelled order.
+
 Every handler is idempotent — derived ids, status guards, idempotency keys —
 so a redelivery after a crash converges instead of duplicating.
 
@@ -204,7 +214,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | Value | For |
 |---|---|
 | `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it. `default()` = France + overseas exports; `france_with_eu_oss()` adds the 26 other member states at their own VAT, reduced rates mapped by the host with `with_mapped_rate(zone, listed_bp, destination_bp)` |
-| `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
+| `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `StripeProvider` (feature `stripe`), `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, maximum event age |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
@@ -216,7 +226,11 @@ under its real prefix (never a prefix-stripping mount), and a topcoat host must
 use explicit page paths rather than `module_router!()`.
 
 **6. What stays the host's** — shopper accounts and sessions, the storefront,
-the payment provider's webhook route (the demo has no provider: payments are
+the payment provider's webhook route — raw body and signature header to
+`StripeProvider::parse_webhook`, the event to `apply_provider_event`, 2xx
+unless applying failed — and the page of the embedded card form with its
+`Content-Security-Policy` (the demo's `/webhooks/stripe` and
+`/checkout/pay/{order_id}` show both; without Stripe keys its payments are
 captured by hand from the admin), and
 the SMTP relay.
 
@@ -262,10 +276,10 @@ the SMTP relay.
 
 ## What is deliberately not here yet
 
-- A real payment provider: the `PaymentProvider` port, the payment step and
-  the two-phase refunds are there, the Stripe adapter (embedded card form,
-  webhook) is the next step. Disputes and chargebacks, saved cards and
-  reconciliation are further out.
+- Payments beyond the card form: disputes and chargebacks (a lost dispute
+  takes the money back without any refund of ours), saved cards, instalments
+  through a provider (Stripe takes cards only here), reconciliation with the
+  provider's payouts, and a second provider.
 - VAT outside the consumer case: B2B reverse charge (no VAT number is
   collected), the territories of a member state outside the EU VAT area (they
   share their country's code), multi-currency, the OSS return itself (orders

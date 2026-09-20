@@ -9,6 +9,9 @@ publish = false
 [features]
 # Deliver e-mails over SMTP (`TIMADA_SMTP_URL`) instead of logging them.
 smtp = ["timada-mailer/smtp"]
+# Take payments through Stripe (`TIMADA_STRIPE_*`) instead of capturing them
+# by hand from the admin.
+stripe = ["timada-payment/stripe"]
 
 [dependencies]
 timada-core.workspace = true

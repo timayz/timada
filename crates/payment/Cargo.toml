@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# The Stripe adapter: PaymentIntents for the embedded card form, refunds, and
+# webhook verification.
+stripe = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:hmac", "dep:sha2", "dep:hex"]
+
 [dependencies]
 timada-core.workspace = true
 evento.workspace = true
@@ -15,9 +20,17 @@ tracing.workspace = true
 sqlx.workspace = true
 sqlx_migrator.workspace = true
 tokio.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { version = "1", optional = true }
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
 
 [dev-dependencies]
 timada-core = { workspace = true, features = ["test-support"] }
+axum = "0.8"
+serde_json = "1"
 
 [lints]
 workspace = true

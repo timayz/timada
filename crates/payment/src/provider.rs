@@ -156,6 +156,7 @@ struct FakeState {
     refund_answers: Vec<Result<RefundOutcome, ProviderError>>,
     paid_sessions: Vec<String>,
     card_only: bool,
+    embedded: bool,
 }
 
 impl FakeProvider {
@@ -167,6 +168,15 @@ impl FakeProvider {
     pub fn card_only() -> Self {
         let provider = Self::default();
         provider.state().card_only = true;
+        provider
+    }
+
+    /// A card-only provider paid on an embedded form rather than on a page of
+    /// its own: [`PaymentStart::ClientSecret`], the secret being
+    /// `"{session}_secret"` and the key `pk_fake`.
+    pub fn embedded() -> Self {
+        let provider = Self::card_only();
+        provider.state().embedded = true;
         provider
     }
 
@@ -208,11 +218,16 @@ impl PaymentProvider for FakeProvider {
     ) -> ProviderFuture<'a, StartedPayment> {
         Box::pin(async move {
             let session = session.map_or_else(|| Self::session_of(&payment.id), str::to_owned);
+            let start = if self.state().embedded {
+                PaymentStart::ClientSecret {
+                    client_secret: format!("{session}_secret"),
+                    publishable_key: "pk_fake".to_owned(),
+                }
+            } else {
+                PaymentStart::Redirect(format!("https://pay.invalid/{session}?back={}", urls.paid))
+            };
             Ok(StartedPayment {
-                start: PaymentStart::Redirect(format!(
-                    "https://pay.invalid/{session}?back={}",
-                    urls.paid
-                )),
+                start,
                 session_reference: Some(session),
             })
         })
