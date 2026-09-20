@@ -197,6 +197,7 @@ pool as data unless noted:
 | invoice | `invoice_from_orders_subscription` | ACL ← order | |
 | invoice | `credit_notes_from_refunds_subscription` | ACL ← payment | |
 | invoice | `invoice_list_subscription`, `credit_note_list_subscription` | read models | |
+| invoice | `vat_journal_subscription` | read model: the VAT of issued invoices and credit notes, per rate | |
 | returns | `return_processing_subscription` | process manager | |
 | returns | `return_list_subscription` | read model | |
 | mailer | `mailer_subscription` | ACL ← seven contexts (eight with `invoice-pdf`) | `timada_mailer::MailerConfig`, optionally `MailerTemplates`; with feature `invoice-pdf`, a `timada_invoice::InvoiceIssuer` turns on the invoice e-mail |
@@ -263,6 +264,16 @@ the SMTP relay.
   price; a product under an archived category stays listed under what is
   above it. A new deployment of the subscription builds the table from the
   whole history.
+- **VAT is read from the documents.** `vat_journal_subscription` keeps a row
+  per VAT rate of each *issued* invoice, and a negative one per credit note —
+  its amount spread over the invoice's rates in proportion to what each was
+  charged. `vat_report(db, VatPeriod)` reads a calendar quarter as three
+  returns: the shop's own VAT, the one-stop-shop return by member state of
+  delivery and rate, and exports. A credit note nets the sale when both fall
+  in the same quarter; on an invoice of an earlier quarter it is a
+  *correction of that quarter* in the one-stop-shop return, while the
+  domestic return simply deducts it. Invoices from before tax zones carry no
+  breakdown and are reported apart.
 - **Categories are managed, and their address is for ever.** A category's id
   derives from its slug, so links never break whatever it is renamed to or
   moved under; archiving one takes its whole branch off the storefront while
@@ -309,8 +320,10 @@ the SMTP relay.
   provider's payouts, and a second provider.
 - VAT outside the consumer case: B2B reverse charge (no VAT number is
   collected), the territories of a member state outside the EU VAT area (they
-  share their country's code), multi-currency, the OSS return itself (orders
-  record zone and VAT per rate — the quarterly report is a query to write).
+  share their country's code), multi-currency. The quarterly report
+  (`timada_invoice::vat_report`, the admin's TVA section) adds up what was
+  invoiced; filing it — and the rule that a quarter starts at midnight UTC,
+  not Paris time — stays with the accountant.
 - An archive of invoice files: the PDF is rendered from the events each time
   it is asked for (same invoice, same bytes — but a change of issuer address
   or of layout shows on past invoices too). Storing the bytes at issue, with

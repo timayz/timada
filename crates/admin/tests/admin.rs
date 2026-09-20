@@ -1564,3 +1564,93 @@ async fn technical_sheets_are_edited_and_categories_pick_their_filters() -> anyh
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn the_vat_of_a_quarter_is_shown_and_exported() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+
+    let empty = text(h.router.handle(get("/admin/vat", Some(&cookie))).await).await?;
+    assert!(
+        empty.contains("Aucune facture émise sur ce trimestre."),
+        "{empty}"
+    );
+
+    // A paid order: its invoice is issued, its VAT is due.
+    let order_id = place_order(&h).await?;
+    let payments = timada_payment::Command(&h.executor);
+    let payment_id = payments
+        .request_payment(timada_payment::RequestPayment {
+            order_id: order_id.clone(),
+            amount: Money::eur(14_390),
+            method: timada_payment::PaymentMethod::Card,
+        })
+        .await?;
+    payments
+        .capture_payment(&payment_id, "psp-1".into())
+        .await?;
+    timada_order::Command(&h.executor)
+        .mark_paid(&order_id, &payment_id)
+        .await?;
+    timada_invoice::invoice_from_orders_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    timada_invoice::vat_journal_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+
+    let now = timada_invoice::VatPeriod::of(timada_core::time::now_unix_secs()?);
+    let page = text(h.router.handle(get("/admin/vat", Some(&cookie))).await).await?;
+    assert!(page.contains(&format!("TVA — {}", now.label())), "{page}");
+    // 143,90 all taxes included at 20 %.
+    assert!(page.contains("119,92 €"), "{page}");
+    assert!(page.contains("23,98 €"), "{page}");
+    assert!(
+        page.contains("Rien à déclarer."),
+        "no distance sale: {page}"
+    );
+    assert!(
+        page.contains(&format!("/admin/vat?periode={}", now.previous().code())),
+        "{page}"
+    );
+
+    // Another quarter, asked for by its code; nonsense is the current one.
+    let before = format!("/admin/vat?periode={}", now.previous().code());
+    let page = text(h.router.handle(get(&before, Some(&cookie))).await).await?;
+    assert!(page.contains(&now.previous().label()), "{page}");
+    assert!(page.contains("Aucune facture émise"), "{page}");
+    let odd = text(
+        h.router
+            .handle(get("/admin/vat?periode=hier", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(odd.contains(&now.label()), "{odd}");
+
+    // The one-stop-shop return as a file — behind the session like the rest.
+    let uri = format!("/admin/vat/oss.csv?periode={}", now.code());
+    let file = h.router.handle(get(&uri, Some(&cookie))).await;
+    assert_eq!(file.status(), StatusCode::OK);
+    let header = |name: &str| {
+        file.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert_eq!(header("content-type"), "text/csv; charset=utf-8");
+    assert_eq!(
+        header("content-disposition"),
+        format!("attachment; filename=\"oss-{}.csv\"", now.code())
+    );
+    assert!(
+        text(file)
+            .await?
+            .starts_with("kind,period,corrected_period,member_state")
+    );
+    let anonymous = h.router.handle(get(&uri, None)).await;
+    assert_eq!(anonymous.status(), StatusCode::SEE_OTHER);
+    Ok(())
+}

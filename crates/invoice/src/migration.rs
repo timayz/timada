@@ -100,6 +100,46 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0005VatJournal;
+
+sqlite_migration!(
+    M0005VatJournal,
+    "invoice",
+    "m0005_vat_journal",
+    vec_box![M0004CreditNoteList],
+    vec_box![
+        // A row per VAT rate of each issued invoice and — negative — of each
+        // credit note. `rate_bp` is NULL for an invoice without a breakdown.
+        (
+            "CREATE TABLE invoice_vat_journal (
+                document_kind TEXT NOT NULL,
+                document_id TEXT NOT NULL,
+                document_number TEXT NOT NULL,
+                invoice_id TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                issued_at INTEGER NOT NULL,
+                invoice_issued_at INTEGER NOT NULL,
+                zone_code TEXT NOT NULL,
+                treatment TEXT NOT NULL,
+                country_code TEXT NOT NULL,
+                rate_bp INTEGER,
+                base_minor INTEGER NOT NULL,
+                vat_minor INTEGER NOT NULL,
+                currency TEXT NOT NULL
+            )",
+            "DROP TABLE invoice_vat_journal"
+        ),
+        (
+            "CREATE INDEX invoice_vat_journal_period ON invoice_vat_journal (issued_at, treatment)",
+            "DROP INDEX invoice_vat_journal_period"
+        ),
+        (
+            "CREATE INDEX invoice_vat_journal_document ON invoice_vat_journal (document_id)",
+            "DROP INDEX invoice_vat_journal_document"
+        )
+    ]
+);
+
 /// Write-side and read-model migrations for this context, to register
 /// alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
@@ -107,6 +147,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
         M0001InvoiceNumber,
         M0002InvoiceList,
         M0003CreditNoteNumber,
-        M0004CreditNoteList
+        M0004CreditNoteList,
+        M0005VatJournal
     ]
 }
