@@ -47,6 +47,8 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
                 vat_number: "FR00 000000000".into(),
                 contact: "facturation@timada.example".into(),
             },
+            // Euros first; pounds and francs next to them.
+            currencies: timada_core::ShopCurrencies::new("EUR", &["GBP", "CHF"])?,
             // A prepaid return label costs a change of mind 6,90 €.
             return_policy: timada_returns::ReturnPolicy {
                 label_fee_minor: 690,
@@ -2449,5 +2451,76 @@ async fn a_disputed_payment_holds_its_order_until_the_bank_decides() -> anyhow::
     ))
     .await?;
     assert!(invoice.contains("Litige bancaire dp_1"), "{invoice}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_product_is_priced_in_each_currency_the_shop_sells_in() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let created = h
+        .router
+        .handle(post(
+            "/admin/products/new",
+            "sku=aoc-27&name=AOC+27&brand=AOC&category_id=&short_description=&warranty_months=24&price_cents=11995&vat_rate_bp=2000&eco_participation_cents=170",
+            Some(&cookie),
+        ))
+        .await;
+    let uri = location(&created);
+    let product_id = timada_catalog::product_id("AOC-27");
+    assert_eq!(uri, format!("/admin/products/{product_id}"));
+    let price_id = timada_pricing::price_id(&product_id);
+
+    // Listed in the base currency; the others are offered, none is set.
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("119,95 €"), "{page}");
+    assert!(page.contains("Autres devises"), "{page}");
+    assert!(page.contains("Prix TTC en GBP"), "{page}");
+    assert!(page.contains("Prix TTC en CHF"), "{page}");
+    assert_eq!(page.matches("non vendu").count(), 2, "{page}");
+
+    let priced = h
+        .router
+        .handle(post(
+            &format!("{uri}/currency-price"),
+            "currency=GBP&price_cents=10900",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&priced), uri);
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert!(page.contains("109,00 £"), "{page}");
+    assert_eq!(page.matches("non vendu").count(), 1, "{page}");
+    let view = timada_pricing::load_product_price(&h.executor, &price_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("price missing"))?;
+    assert_eq!(view.price_incl_tax, Money::eur(11_995));
+    assert_eq!(
+        view.price_in("GBP").map(|p| p.price_incl_tax),
+        Some(Money::new(10_900, "GBP"))
+    );
+
+    // Left empty: no longer sold in pounds.
+    let removed = h
+        .router
+        .handle(post(
+            &format!("{uri}/currency-price"),
+            "currency=GBP&price_cents=",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&removed), uri);
+    let page = text(h.router.handle(get(&uri, Some(&cookie))).await).await?;
+    assert_eq!(page.matches("non vendu").count(), 2, "{page}");
+    // A currency the shop does not sell in has no price to be given.
+    let foreign = h
+        .router
+        .handle(post(
+            &format!("{uri}/currency-price"),
+            "currency=USD&price_cents=12900",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(foreign.status(), StatusCode::BAD_REQUEST);
     Ok(())
 }

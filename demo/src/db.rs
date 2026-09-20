@@ -63,6 +63,12 @@ pub fn tax_zones() -> timada_tax::TaxZones {
     timada_tax::TaxZones::france_with_eu_oss()
 }
 
+/// The currencies the demo shop sells in: euros first — the base currency,
+/// the one the books are kept in — then pounds and Swiss francs.
+pub fn shop_currencies() -> timada_core::ShopCurrencies {
+    timada_core::ShopCurrencies::new("EUR", &["GBP", "CHF"]).unwrap_or_default()
+}
+
 /// How the demo shop takes articles back: 14 days, and a prepaid label at
 /// 6,90 € — free when the shop is at fault.
 pub fn return_policy() -> timada_returns::ReturnPolicy {

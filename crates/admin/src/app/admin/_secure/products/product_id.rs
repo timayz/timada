@@ -26,7 +26,7 @@ use crate::{
         label::label,
         textarea::textarea,
     },
-    config::AdminServices,
+    config::{AdminConfig, AdminServices},
     ui::{money, page_header},
 };
 
@@ -50,6 +50,27 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let (id, product) = load(cx).await?;
     let services = app_context::<AdminServices>(cx);
     let price = load_product_price(&services.executor, price_id(&id)).await?;
+    // The shop's other currencies with what the product costs in each:
+    // `(currency, price or "non vendu", cents for the field)`.
+    let other_prices: Vec<(String, String, String)> = app_context::<AdminConfig>(cx)
+        .currencies
+        .all()
+        .filter(|currency| {
+            price
+                .as_ref()
+                .is_some_and(|p| p.listed_currency() != *currency)
+        })
+        .map(|currency| {
+            let set = price
+                .as_ref()
+                .and_then(|p| p.currency_prices.iter().find(|m| m.currency == currency));
+            (
+                currency.to_owned(),
+                set.map_or_else(|| "non vendu".to_owned(), money),
+                set.map(|m| m.minor.to_string()).unwrap_or_default(),
+            )
+        })
+        .collect();
     let stock = timada_inventory::load_stock_availability(
         &services.executor,
         stock_item_id(&id, &StockLocation::Warehouse),
@@ -147,6 +168,18 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                             button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" }, "Proposer 3x")
                                         </form>
                                     }
+                                    if !other_prices.is_empty() {
+                                        <h3 class="mt-4 text-sm font-medium">"Autres devises"</h3>
+                                        <p class="mb-2 text-xs text-muted-foreground">"Un prix décidé par devise, jamais converti. Sans prix, le produit n'est pas vendu dans cette devise ; laissez vide pour le retirer."</p>
+                                        for (currency, current, cents) in &other_prices {
+                                            <form method="post" action=(href!(set_currency_price, ProductId(id.clone()))) class="mb-2 flex items-center gap-2 text-sm">
+                                                <input type="hidden" name="currency" value=(currency.clone())>
+                                                <span class="w-24 tabular-nums">(current.clone())</span>
+                                                input(attrs: topcoat::view::attributes! { name="price_cents" type="number" min="1" value=(cents.clone()) placeholder=(format!("Prix TTC en {currency} (centimes)")) aria-label=(format!("Prix TTC en {currency}, en centimes")) })
+                                                button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" }, "Enregistrer")
+                                            </form>
+                                        }
+                                    }
                                 }
                             }
                             None => <p class="text-sm text-muted-foreground">"Aucun prix."</p>,
@@ -229,9 +262,70 @@ pub struct PriceForm {
 pub async fn change_price(cx: &Cx, Form(form): Form<PriceForm>) -> Result<impl View> {
     let (id, _) = load(cx).await?;
     let services = app_context::<AdminServices>(cx);
+    let currency = listed_currency(cx, &id).await?;
     timada_pricing::Command(&services.executor)
-        .change_price(price_id(&id), Money::eur(form.price_cents))
+        .change_price(price_id(&id), Money::new(form.price_cents, currency))
         .await?;
+    Err::<(), _>(see_other(back(cx, &id)).into())
+}
+
+/// The currency the product's price was listed in — the shop's base currency
+/// for a product without a price.
+async fn listed_currency(cx: &Cx, product_id: &str) -> Result<String> {
+    let services = app_context::<AdminServices>(cx);
+    Ok(load_product_price(&services.executor, price_id(product_id))
+        .await?
+        .map(|price| price.listed_currency().to_owned())
+        .unwrap_or_else(|| app_context::<AdminConfig>(cx).currencies.base().to_owned()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CurrencyPriceForm {
+    currency: String,
+    /// Empty: the product is no longer sold in that currency.
+    price_cents: Option<String>,
+}
+
+/// Sets — or, left empty, removes — the product's price in one of the shop's
+/// other currencies.
+#[page(POST "./currency-price")]
+pub async fn set_currency_price(cx: &Cx, Form(form): Form<CurrencyPriceForm>) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    let currencies = &app_context::<AdminConfig>(cx).currencies;
+    // Only the currencies the shop sells in: a price elsewhere would never
+    // be shown.
+    if !currencies.others().contains(&form.currency) {
+        return Err(topcoat::router::error::bad_request(format!(
+            "the shop does not sell in {}",
+            form.currency
+        ))
+        .into());
+    }
+    let pricing = timada_pricing::Command(&services.executor);
+    match form
+        .price_cents
+        .as_deref()
+        .map(str::trim)
+        .filter(|cents| !cents.is_empty())
+    {
+        Some(cents) => {
+            let Ok(minor) = cents.parse::<i64>() else {
+                return Err(topcoat::router::error::bad_request(format!(
+                    "`{cents}` is not an amount in cents"
+                ))
+                .into());
+            };
+            pricing
+                .set_currency_price(price_id(&id), Money::new(minor, &form.currency))
+                .await?;
+        }
+        None => {
+            pricing
+                .remove_currency_price(price_id(&id), &form.currency)
+                .await?;
+        }
+    }
     Err::<(), _>(see_other(back(cx, &id)).into())
 }
 
@@ -244,12 +338,13 @@ pub struct InstallmentsForm {
 pub async fn offer_installments(cx: &Cx, Form(form): Form<InstallmentsForm>) -> Result<impl View> {
     let (id, _) = load(cx).await?;
     let services = app_context::<AdminServices>(cx);
+    let currency = listed_currency(cx, &id).await?;
     timada_pricing::Command(&services.executor)
         .attach_installment_offer(
             price_id(&id),
             InstallmentOffer {
                 count: 3,
-                fee: Money::eur(form.fee_cents),
+                fee: Money::new(form.fee_cents, currency),
             },
         )
         .await?;

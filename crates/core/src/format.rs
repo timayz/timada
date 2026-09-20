@@ -16,12 +16,22 @@ pub fn money(money: &Money) -> String {
         }
         grouped.push(ch);
     }
-    let symbol = match money.currency.as_str() {
-        "EUR" => "€".to_owned(),
-        "USD" => "$".to_owned(),
-        other => other.to_owned(),
-    };
+    let symbol = currency_symbol(&money.currency);
     format!("{sign}{grouped},{cents:02} {symbol}")
+}
+
+/// How a currency is written after an amount, French style: its sign when
+/// one is unambiguous here, its ISO code otherwise (`109,00 £`, `129,00 CHF`,
+/// `149,00 $US`).
+pub fn currency_symbol(currency: &str) -> &str {
+    match currency {
+        "EUR" => "€",
+        "GBP" => "£",
+        "USD" => "$US",
+        "CAD" => "$CA",
+        "AUD" => "$AU",
+        other => other,
+    }
 }
 
 /// `20 %` or `5,5 %` from basis points.

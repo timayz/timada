@@ -14,6 +14,10 @@ pub struct AdminConfig {
     /// How long a paid order may wait for its parcel before the queue of
     /// orders to ship flags it as late. Two days by default.
     pub ship_within: std::time::Duration,
+    /// The currencies the shop sells in: products are listed in the base
+    /// one, and may be given a price in each of the others. Euros only by
+    /// default.
+    pub currencies: timada_core::ShopCurrencies,
     /// How the shop takes articles back: what a prepaid return label costs
     /// the customer is settled from the return's page.
     pub return_policy: timada_returns::ReturnPolicy,
@@ -35,6 +39,7 @@ impl Default for AdminConfig {
             stylesheet: Stylesheet::Bundled,
             invoice_issuer: timada_invoice::InvoiceIssuer::default(),
             ship_within: std::time::Duration::from_secs(2 * 86_400),
+            currencies: timada_core::ShopCurrencies::default(),
             return_policy: timada_returns::ReturnPolicy::default(),
         }
     }
