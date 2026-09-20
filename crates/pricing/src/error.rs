@@ -12,6 +12,12 @@ pub enum PricingError {
     NegativeAmount,
     #[error("installment count must be between 2 and 4, got {0}")]
     InvalidInstallmentCount(u8),
+    #[error("`{0}` is not a currency code")]
+    InvalidCurrency(String),
+    #[error("the product has no price in {0}")]
+    NoPriceInCurrency(String),
+    #[error("{0} is the currency the product is listed in: withdraw the price instead")]
+    ListedCurrency(String),
     #[error("`{0}` is required")]
     Required(&'static str),
     #[error(transparent)]

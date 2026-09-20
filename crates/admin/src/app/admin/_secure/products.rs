@@ -25,7 +25,7 @@ use crate::{
         label::label,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
-    config::AdminServices,
+    config::{AdminConfig, AdminServices},
     ui::{empty_state, page_header, pagination},
 };
 
@@ -130,6 +130,9 @@ pub async fn create(cx: &Cx, Form(form): Form<NewProductForm>) -> Result<impl Vi
             .collect(),
         None => Vec::new(),
     };
+    // A product is listed in the shop's base currency; the others are given
+    // from its page.
+    let base_currency = app_context::<AdminConfig>(cx).currencies.base();
     let catalog = timada_catalog::Command(&services.executor);
     let created = catalog
         .create_product(CreateProduct {
@@ -155,9 +158,9 @@ pub async fn create(cx: &Cx, Form(form): Form<NewProductForm>) -> Result<impl Vi
             let priced = timada_pricing::Command(&services.executor)
                 .list_price(ListPrice {
                     product_id: id.clone(),
-                    price_incl_tax: Money::eur(form.price_cents),
+                    price_incl_tax: Money::new(form.price_cents, base_currency),
                     vat_rate_bp: form.vat_rate_bp,
-                    eco_participation: Money::eur(form.eco_participation_cents),
+                    eco_participation: Money::new(form.eco_participation_cents, base_currency),
                 })
                 .await;
             match priced {

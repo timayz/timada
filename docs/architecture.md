@@ -278,6 +278,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `StripeProvider` (feature `stripe`), `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
 | `Arc<dyn timada_tax::VatNumberValidator>` | who says whether a business's VAT number is valid: `ViesValidator` (feature `vies`, the EU's registry — name the shop's own number and each check comes with its consultation number), `FormatValidator` (no registry: what reads well passes), `FakeValidator` in tests |
 | `timada_invoice::InvoiceArchive` | where issued invoices and credit notes are kept unaltered: `SqliteArchiveStore` (in the database, replicated with it), `DirectoryArchiveStore` (files, the host's to back up), or the host's own `ArchiveStore`. Handed to both archive subscriptions, to the mailer (the e-mailed file is the archived one) and to `AdminServices::with_archive` |
+| `timada_core::ShopCurrencies` | the currencies the shop sells in, the base one first (euros only by default; currencies that do not count in hundredths are refused) — to `AdminConfig::currencies` |
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for, and what a prepaid return label costs a customer when the shop is not at fault — to the returns commands and `AdminConfig::return_policy` |
 | `timada_returns::ReturnLabels` | optional: the carrier adapter (`ReturnLabelProvider`) that makes prepaid return labels, to `AdminServices::with_return_labels`; without it labels are attached by hand |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, where the shop itself is alerted (`alerts_to`), maximum event age |
@@ -396,6 +397,14 @@ the SMTP relay.
 - **Money** is an integer of minor units plus a currency; arithmetic is
   checked. Listed prices include the domestic VAT; a tax zone decides what is
   charged from there.
+- **A price per currency is a decision, never a conversion.** A product is
+  listed in the shop's base currency (`ProductPriceListed`, frozen) and the
+  operator may give it a price in each other currency the shop sells in
+  (`CurrencyPriceSet` / `CurrencyPriceRemoved`); `ProductPriceView::price_in`
+  answers for one currency, and `None` means "not sold in it". The VAT rate is
+  the product's whatever the currency; the éco-participation and the
+  instalment offer belong to the currency they were given in. Amounts are
+  hundredths everywhere, so `ShopCurrencies` refuses yen and dinars.
 - **Destination VAT** (EU one-stop shop) has no product tax category: a
   product only knows the rate it is listed with, and each country's zone maps
   that rate to its own (`5,5 % → 7 %` in Germany), falling back to the
