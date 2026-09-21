@@ -10,7 +10,7 @@ use crate::{
         categories, customers, disputes, emails, families, inventory, invoices, orders, products,
         promotions, questions, refunds, returns, reviews, vat,
     },
-    auth::signed_in_admin,
+    auth::{Section, signed_in_admin},
     config::{AdminConfig, Stylesheet},
 };
 
@@ -19,21 +19,47 @@ use crate::{
 pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
     let config = app_context::<AdminConfig>(cx);
     let admin = signed_in_admin(cx);
-    let orders_link = href!(orders::index);
-    let products_link = href!(products::index);
-    let categories_link = href!(categories::index);
-    let families_link = href!(families::index);
-    let inventory_link = href!(inventory::index);
-    let customers_link = href!(customers::index);
-    let promotions_link = href!(promotions::index);
-    let invoices_link = href!(invoices::index);
-    let refunds_link = href!(refunds::index);
-    let disputes_link = href!(disputes::index);
-    let vat_link = href!(vat::index);
-    let returns_link = href!(returns::index);
-    let reviews_link = href!(reviews::index);
-    let questions_link = href!(questions::index);
-    let emails_link = href!(emails::index);
+    // Every section, in the order shown: `(section, link, current, label)` —
+    // an operator's navigation holds those their role opens.
+    macro_rules! entry {
+        ($section:ident, $page:path, $label:literal) => {{
+            let link = href!($page);
+            (
+                Section::$section,
+                link.resolve(cx),
+                link.is_current(cx),
+                $label,
+            )
+        }};
+    }
+    let sections = [
+        entry!(Orders, orders::index, "Commandes"),
+        entry!(Products, products::index, "Produits"),
+        entry!(Categories, categories::index, "Catégories"),
+        entry!(Families, families::index, "Familles"),
+        entry!(Inventory, inventory::index, "Stock"),
+        entry!(Customers, customers::index, "Clients"),
+        entry!(Promotions, promotions::index, "Promotions"),
+        entry!(Invoices, invoices::index, "Factures"),
+        entry!(Returns, returns::index, "Retours"),
+        entry!(Refunds, refunds::index, "Remboursements"),
+        entry!(Disputes, disputes::index, "Litiges"),
+        entry!(Vat, vat::index, "TVA"),
+        entry!(Reviews, reviews::index, "Avis"),
+        entry!(Questions, questions::index, "Questions"),
+        entry!(Emails, emails::index, "E-mails"),
+    ];
+    let navigation: Vec<(String, bool, &'static str)> = sections
+        .into_iter()
+        .filter(|(section, ..)| admin.is_some_and(|admin| admin.role.opens(*section)))
+        .map(|(_, link, current, label)| (link, current, label))
+        .collect();
+    // The name of the shop leads to where the operator works.
+    let home = navigation
+        .first()
+        .map(|(link, ..)| link.clone())
+        .unwrap_or_else(|| href!(orders::index).resolve(cx));
+    let standing = admin.map(|admin| format!("{} · {}", admin.email, admin.role.label()));
 
     Ok(view! {
         <!DOCTYPE html>
@@ -50,27 +76,15 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
             <body class="min-h-full flex flex-col">
                 <header class="border-b border-border bg-background print:hidden">
                     <div class="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
-                        <a href=(href!(orders::index)) class="font-semibold tracking-tight">"Timada admin"</a>
+                        <a href=(home) class="font-semibold tracking-tight">"Timada admin"</a>
                         if admin.is_some() {
                             <nav aria-label="Sections" class="flex gap-1 text-sm">
-                                nav_link(link: orders_link.resolve(cx), current: orders_link.is_current(cx), "Commandes")
-                                nav_link(link: products_link.resolve(cx), current: products_link.is_current(cx), "Produits")
-                                nav_link(link: categories_link.resolve(cx), current: categories_link.is_current(cx), "Catégories")
-                                nav_link(link: families_link.resolve(cx), current: families_link.is_current(cx), "Familles")
-                                nav_link(link: inventory_link.resolve(cx), current: inventory_link.is_current(cx), "Stock")
-                                nav_link(link: customers_link.resolve(cx), current: customers_link.is_current(cx), "Clients")
-                                nav_link(link: promotions_link.resolve(cx), current: promotions_link.is_current(cx), "Promotions")
-                                nav_link(link: invoices_link.resolve(cx), current: invoices_link.is_current(cx), "Factures")
-                                nav_link(link: returns_link.resolve(cx), current: returns_link.is_current(cx), "Retours")
-                                nav_link(link: refunds_link.resolve(cx), current: refunds_link.is_current(cx), "Remboursements")
-                                nav_link(link: disputes_link.resolve(cx), current: disputes_link.is_current(cx), "Litiges")
-                                nav_link(link: vat_link.resolve(cx), current: vat_link.is_current(cx), "TVA")
-                                nav_link(link: reviews_link.resolve(cx), current: reviews_link.is_current(cx), "Avis")
-                                nav_link(link: questions_link.resolve(cx), current: questions_link.is_current(cx), "Questions")
-                                nav_link(link: emails_link.resolve(cx), current: emails_link.is_current(cx), "E-mails")
+                                for (link, current, label) in &navigation {
+                                    nav_link(link: link.clone(), current: *current, (*label))
+                                }
                             </nav>
                             <form method="post" action=(href!(crate::app::admin::logout)) class="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
-                                if let Some(admin) = admin { <span>(admin.email.clone())</span> }
+                                if let Some(standing) = &standing { <span>(standing.clone())</span> }
                                 <button type="submit" class="underline-offset-4 hover:underline">"Se déconnecter"</button>
                             </form>
                         }
