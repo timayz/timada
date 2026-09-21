@@ -693,6 +693,178 @@ async fn a_guest_returns_an_article_then_opens_an_account() -> anyhow::Result<()
     Ok(())
 }
 
+/// Orders one unit with the account `browser` is signed into, which has a
+/// delivery address: the order's id, the order placed.
+async fn order_again(
+    browser: &mut Browser<'_>,
+    store: &Store,
+    product_id: &str,
+) -> anyhow::Result<String> {
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    let checkout = text(browser.get("/checkout").await).await?;
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address radio"))?
+        .to_owned();
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    db::run_subscriptions_once(store).await?;
+    Ok(order_id)
+}
+
+#[tokio::test]
+async fn an_order_is_called_off_by_its_customer_until_it_ships() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+    let in_stock = crate::app::catalog::available_stock(&store, &product_id).await?;
+
+    // Not paid yet: called off, and what was reserved is for sale again.
+    let unpaid = order_again(&mut browser, &store, &product_id).await?;
+    let page_uri = format!("/account/orders/{unpaid}");
+    let cancel_uri = format!("{page_uri}/cancel");
+    let page = text(browser.get(&page_uri).await).await?;
+    assert!(page.contains(&format!("action=\"{cancel_uri}\"")), "{page}");
+    assert!(
+        !page.contains("vous est remboursé"),
+        "nothing was paid: {page}"
+    );
+    assert_eq!(
+        crate::app::catalog::available_stock(&store, &product_id).await?,
+        in_stock - 1
+    );
+    // Somebody else's order is nobody else's to cancel; nor is a button
+    // pressed without the box ticked a cancellation.
+    let mut other = Browser::new(&router);
+    other
+        .post(
+            "/login",
+            &format!(
+                "email={}&password={}",
+                seed::SHOPPER_EMAIL.replace('@', "%40"),
+                seed::SHOPPER_PASSWORD
+            ),
+        )
+        .await;
+    assert_eq!(
+        other.post(&cancel_uri, "confirm=on").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(location(&browser.post(&cancel_uri, "").await), page_uri);
+    db::run_subscriptions_once(&store).await?;
+    let page = text(browser.get(&page_uri).await).await?;
+    assert!(
+        page.contains(&format!("action=\"{cancel_uri}\"")),
+        "still on: {page}"
+    );
+
+    assert_eq!(
+        location(&browser.post(&cancel_uri, "confirm=on").await),
+        page_uri
+    );
+    db::run_subscriptions_once(&store).await?;
+    let page = text(browser.get(&page_uri).await).await?;
+    assert!(
+        page.contains("Motif d'annulation : à la demande du client"),
+        "{page}"
+    );
+    assert!(!page.contains("Annuler ma commande"), "{page}");
+    assert_eq!(
+        crate::app::catalog::available_stock(&store, &product_id).await?,
+        in_stock
+    );
+    // Asked twice: nothing more happens.
+    assert_eq!(
+        location(&browser.post(&cancel_uri, "confirm=on").await),
+        page_uri
+    );
+
+    // Paid: the money goes back on its own, documented by a credit note.
+    let paid = order_again(&mut browser, &store, &product_id).await?;
+    timada_payment::Command(&store.executor)
+        .capture_payment(timada_payment::payment_id(&paid), "psp-paid".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let page = text(browser.get(&format!("/account/orders/{paid}")).await).await?;
+    assert!(page.contains("vous est remboursé"), "{page}");
+    browser
+        .post(&format!("/account/orders/{paid}/cancel"), "confirm=on")
+        .await;
+    db::run_subscriptions_once(&store).await?;
+    let payment = timada_payment::load_payment(&store.executor, timada_payment::payment_id(&paid))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no payment"))?;
+    assert_eq!(payment.refunded, payment.amount, "{payment:?}");
+    let page = text(browser.get(&format!("/account/orders/{paid}")).await).await?;
+    assert!(page.contains("Remboursé"), "{page}");
+    let notes =
+        timada_invoice::credit_notes_of_invoice(&store.db, &timada_invoice::invoice_id(&paid))
+            .await?;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let outbox = timada_mailer::list_outbox(&store.db, None, 100, 0).await?;
+    let told = outbox
+        .iter()
+        .filter(|m| m.kind == "order-cancelled" && m.body.contains("à la demande du client"))
+        .count();
+    assert_eq!(told, 2, "{outbox:?}");
+
+    // Shipped: it is on its way, a return is the way back.
+    let shipped = order_again(&mut browser, &store, &product_id).await?;
+    timada_payment::Command(&store.executor)
+        .capture_payment(timada_payment::payment_id(&shipped), "psp-shipped".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    timada_shipping::Command(&store.executor)
+        .dispatch_shipment(
+            timada_shipping::shipment_id(&shipped),
+            "Colissimo".into(),
+            "XY456".into(),
+        )
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let page = text(browser.get(&format!("/account/orders/{shipped}")).await).await?;
+    assert!(!page.contains("Annuler ma commande"), "{page}");
+    browser
+        .post(&format!("/account/orders/{shipped}/cancel"), "confirm=on")
+        .await;
+    let still = timada_order::load_order_details(&store.executor, &shipped)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no order"))?;
+    assert_eq!(still.status, timada_order::OrderStatus::Shipped);
+
+    // Without an account, from the order's own page.
+    let (mut guest, guest_order_id) = guest_order(&router, &store, &product_id, GUEST).await?;
+    let page = text(guest.get(&format!("/order/{guest_order_id}")).await).await?;
+    assert!(page.contains("Annuler ma commande"), "{page}");
+    let called_off = guest
+        .post(
+            &format!("/account/orders/{guest_order_id}/cancel"),
+            "confirm=on",
+        )
+        .await;
+    assert_eq!(location(&called_off), format!("/order/{guest_order_id}"));
+    db::run_subscriptions_once(&store).await?;
+    let page = text(guest.get(&format!("/order/{guest_order_id}")).await).await?;
+    assert!(page.contains("à la demande du client"), "{page}");
+    Ok(())
+}
+
 #[tokio::test]
 async fn accounts_are_unique_and_passwords_checked() -> anyhow::Result<()> {
     let (router, _store, _) = shop().await?;

@@ -97,6 +97,16 @@ sequenceDiagram
     end
 ```
 
+Until it ships, an order can be **called off** — by an operator, or by its
+own customer from the order's page (`CANCELLED_BY_CUSTOMER`, worded by
+`cancellation_reason_label` wherever a reason is shown: the page, the e-mail,
+the credit note). `cancel_order` only records `OrderCancelled`; the saga
+hears it like a cancellation of its own and compensates: the reserved stock
+goes back on sale, the pending parcel is cancelled, what was captured is
+refunded, and the refund gets its credit note and e-mails like any other. An
+order held by a payment dispute is not the customer's to cancel: that is
+settled with the bank first. Once shipped, the way back is a return.
+
 A zero-total order (a voucher covering everything, free delivery) skips the
 payment leg: `OrderSettled` instead of `OrderPaid`. After shipping, the way
 back is a **return**: request → approve/refuse → receive (what is taken back,

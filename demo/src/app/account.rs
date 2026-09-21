@@ -6,7 +6,9 @@ use timada_core::{Address, Civility};
 use timada_customer::{
     AddressBookView, CustomerError, DeliveryAddress, RegisterCustomer, load_address_book,
 };
-use timada_order::{OrderDetailsView, PaymentMode, load_order_details, orders_of_customer};
+use timada_order::{
+    OrderDetailsView, OrderStatus, PaymentMode, load_order_details, orders_of_customer,
+};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -988,9 +990,17 @@ pub(super) async fn order_page(
     let new_return = returns::can_request_return(store, &order)
         .await?
         .then(|| href!(returns::new_return, OrderId(id.clone())).resolve(cx));
+    let actions = OrderActions {
+        invoice: invoice_link,
+        new_return,
+        cancel: can_be_called_off(store, &order)
+            .await?
+            .then(|| href!(cancel_order, OrderId(id.clone())).resolve(cx)),
+        // A captured payment goes back on its own once the order is cancelled.
+        refunded_on_cancel: order.status == OrderStatus::Paid && order.total.is_positive(),
+    };
     let reader = if guest {
         OrderReader::Guest {
-            new_return,
             open_account: href!(
                 super::guest::open_account,
                 super::guest::OrderId(id.clone())
@@ -999,7 +1009,7 @@ pub(super) async fn order_page(
             account_error,
         }
     } else {
-        OrderReader::Account { new_return }
+        OrderReader::Account
     };
     Ok(view! {
         order_view(
@@ -1007,20 +1017,72 @@ pub(super) async fn order_page(
             refunds: RefundNotice { made: refunded, pending: refund_pending },
             credit_notes: &credit_notes,
             order_returns: &order_returns,
-            invoice_link: invoice_link,
-            reader: reader
+            reader: reader,
+            actions: actions
         )
     })
 }
 
+/// What whoever reads the order may still do about it: where each is asked.
+struct OrderActions {
+    /// The issued invoice: `(its PDF, its printable page)`.
+    invoice: Option<(String, String)>,
+    /// Another return, while one can be asked for.
+    new_return: Option<String>,
+    /// Calling the order off, while it has not shipped.
+    cancel: Option<String>,
+    refunded_on_cancel: bool,
+}
+
+/// An order its customer may still call off: not shipped, not cancelled, and
+/// not held by a payment dispute — that is settled with the bank first.
+async fn can_be_called_off(store: &Store, order: &OrderDetailsView) -> anyhow::Result<bool> {
+    Ok(
+        matches!(order.status, OrderStatus::Placed | OrderStatus::Paid)
+            && !timada_order::is_order_on_hold(&store.db, &order.id).await?,
+    )
+}
+
+/// The shopper — an account, or a guest — calls their own order off before
+/// it ships. The order context does the rest: the stock goes back, the
+/// parcel is not sent, what was paid is refunded and documented.
+#[page(POST "/account/orders/{order_id}/cancel")]
+pub async fn cancel_order(cx: &Cx, Form(form): Form<CancelOrderForm>) -> Result<impl View> {
+    let shopper = crate::guest::require_shopper(cx).await?;
+    let id = param::<OrderId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    let placed = load_order_details(&store.executor, &id)
+        .await?
+        .filter(|o| o.customer_id == shopper.customer_id)
+        .ok_or_not_found()?;
+    // Shipped in the meantime, or never confirmed: the page says where the
+    // order stands, and a return is the way once it has arrived.
+    if form.confirm.as_deref() == Some("on") && can_be_called_off(store, &placed).await? {
+        match timada_order::Command(&store.executor)
+            .cancel_order(&id, timada_order::CANCELLED_BY_CUSTOMER)
+            .await
+        {
+            Ok(()) | Err(timada_order::OrderError::WrongStatus { .. }) => {}
+            Err(err) => return Err(anyhow::Error::from(err).into()),
+        }
+    }
+    let back = super::guest::order_link(cx, &id).await?;
+    Err::<(), _>(see_other(back).into())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CancelOrderForm {
+    /// The box ticked next to the button: `on`.
+    confirm: Option<String>,
+}
+
 /// Who reads the order's page, and what that offers them.
 enum OrderReader {
-    /// In their account: where another return is asked for, while one can be.
-    Account { new_return: Option<String> },
+    /// In their account.
+    Account,
     /// Without an account: no account pages to go back to, and one to open
     /// — where the form posts, and why the last try was refused.
     Guest {
-        new_return: Option<String>,
         open_account: String,
         account_error: Option<String>,
     },
@@ -1055,17 +1117,22 @@ async fn order_view(
     refunds: RefundNotice,
     credit_notes: &Vec<CreditNoteLine>,
     order_returns: &Vec<ReturnLink>,
-    invoice_link: Option<(String, String)>,
     reader: OrderReader,
+    actions: OrderActions,
 ) -> Result<impl View> {
-    let (new_return, open_account) = match reader {
-        OrderReader::Account { new_return } => (new_return, None),
+    let open_account = match reader {
+        OrderReader::Account => None,
         OrderReader::Guest {
-            new_return,
             open_account,
             account_error,
-        } => (new_return, Some((open_account, account_error))),
+        } => Some((open_account, account_error)),
     };
+    let OrderActions {
+        invoice: invoice_link,
+        new_return,
+        cancel,
+        refunded_on_cancel,
+    } = actions;
     let payment = match order.payment_mode {
         // The code covered the whole total: nothing was charged.
         _ if !order.total.is_positive() => "Aucun paiement requis".to_owned(),
@@ -1202,6 +1269,17 @@ async fn order_view(
             }
             if let Some(link) = &new_return {
                 <p><a href=(link.clone())>"Retourner des articles"</a></p>
+            }
+            if let Some(action) = &cancel {
+                <form method="post" action=(action.clone()) class="stack">
+                    <h2>"Annuler ma commande"</h2>
+                    <p class="muted">
+                        "Tant qu'elle n'est pas expédiée, vous pouvez l'annuler."
+                        if refunded_on_cancel { " Ce que vous avez payé vous est remboursé sur le moyen de paiement utilisé." }
+                    </p>
+                    <label for="confirm"><input id="confirm" name="confirm" type="checkbox" required=(true)> " Je confirme l'annulation de cette commande"</label>
+                    <button type="submit">"Annuler ma commande"</button>
+                </form>
             }
             <div class="cards">
                 <div class="card"><h2>"Livraison"</h2> address_block(address: &order.delivery_address)</div>
