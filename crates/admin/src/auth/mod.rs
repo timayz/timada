@@ -3,6 +3,7 @@
 //! a hash to an admin are ours.
 
 mod password;
+mod role;
 mod store;
 
 use topcoat::context::{Cx, app_context, memoize, try_request_context};
@@ -10,7 +11,8 @@ use topcoat::session;
 
 use crate::config::AdminServices;
 
-pub use store::{AdminUser, create_admin};
+pub use role::{Role, Section};
+pub use store::{AdminUser, create_admin, create_operator};
 
 /// The admin authenticated for this request, attached by the `_secure` layer.
 #[derive(Debug, Clone)]
@@ -31,17 +33,17 @@ pub fn signed_in_admin(cx: &Cx) -> Option<&AdminUser> {
     try_request_context::<CurrentAdmin>(cx).map(|c| &c.0)
 }
 
-/// Checks the credentials and opens a session. `Ok(false)` on a bad
-/// email/password pair (no hint which).
-pub async fn sign_in(cx: &Cx, email: &str, password: &str) -> topcoat::Result<bool> {
+/// Checks the credentials and opens a session: the operator who signed in.
+/// `Ok(None)` on a bad email/password pair (no hint which).
+pub async fn sign_in(cx: &Cx, email: &str, password: &str) -> topcoat::Result<Option<AdminUser>> {
     let services = app_context::<AdminServices>(cx);
     let Some((admin, hash)) = store::find_credentials(&services.db, email).await? else {
         // Burn comparable time so a missing account is not distinguishable.
         password::verify(password, &password::DUMMY_HASH);
-        return Ok(false);
+        return Ok(None);
     };
     if !password::verify(password, &hash) {
-        return Ok(false);
+        return Ok(None);
     }
     let started = session::start(cx).await?;
     store::insert_session(
@@ -52,7 +54,7 @@ pub async fn sign_in(cx: &Cx, email: &str, password: &str) -> topcoat::Result<bo
     )
     .await?;
     tracing::info!(admin_id = %admin.id, "admin signed in");
-    Ok(true)
+    Ok(Some(admin))
 }
 
 /// Closes the current session, if any.

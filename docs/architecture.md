@@ -364,6 +364,22 @@ the SMTP relay.
   carries the rating of the family's reviews together
   (`refresh_family_rating`), so a card says the same whichever version
   stands for it; a version that leaves takes its reviews with it.
+- **An operator has a role, and a role is a table in code.**
+  `timada_admin::Role` — owner, catalogue, customer service, accounting — is
+  a fixed set of sections, and inside the orders section of kinds of action:
+  money moved by hand (refund, settle or retry a refund, record a capture, a
+  credit note for a lost dispute, the rate an order enters the books at) is
+  the owner's and accounting's; shipping, cancelling and writing again are
+  the owner's and customer service's. What a *process* refunds — a cancelled
+  order, a return taken back — is nobody's action. It is enforced in one
+  place, the layer every signed-in page sits behind (`Role::permits` on the
+  path under the mount and whether the request writes), so nothing runs for
+  a refused request, and **a page added later is the owner's alone until the
+  table names it**. The navigation and the order page only show what the
+  role may do; signing in lands where the role works. `create_admin` makes
+  an owner (whoever signed in before roles existed is one), `create_operator`
+  takes the role. A host wanting other roles changes `auth/role.rs`: nothing
+  is configured at run time.
 - **A guest is a customer without an account.** Orders, invoices, returns
   and e-mails all go by a customer id, and the customer context never held
   credentials — a login is the host's — so somebody ordering without an

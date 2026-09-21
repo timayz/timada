@@ -88,7 +88,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock, then a refund — or the same product sent again; prepaid return labels, by hand or through a carrier port |
 | `timada-review` | product reviews (moderated) and questions & answers |
 | `timada-mailer` | transactional e-mails (with attachments) through a SQL outbox and pluggable transports; feature `invoice-pdf` e-mails each issued invoice, and each credit note, as a PDF |
-| `timada-admin` | the mountable back-office over all of the above |
+| `timada-admin` | the mountable back-office over all of the above, its operators each with a role: owner, catalogue, customer service, accounting |
 
 `tools/event-lock` keeps the persisted shapes append-only, and `demo/` is the
 example host.

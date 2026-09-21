@@ -134,7 +134,12 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .map(|rate| format!("{} — {} du {}", rate.quote(), rate.source, date(rate.as_of)));
     let rate_missing = order.exchange_rate.is_none() && order.total.currency != base_currency;
-    let can_pin_rate = rate_missing && services.exchange_rates.is_some();
+    // What the page offers is what the operator's role may do: the gate
+    // refuses the rest anyway, a form that leads to a refusal helps nobody.
+    let role = crate::auth::signed_in_admin(cx).map(|admin| admin.role);
+    let moves_money = role.is_some_and(|role| role.moves_money());
+    let handles_orders = role.is_some_and(|role| role.handles_orders());
+    let can_pin_rate = rate_missing && services.exchange_rates.is_some() && moves_money;
     // Said where the button is: this page has no refund section to say it in.
     let rate_error = refund_error.filter(|_| {
         query::<ShowQuery>(cx).is_ok_and(|q| q.refund_error.as_deref() == Some("rate"))
@@ -164,7 +169,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 .filter(|_| dispute.status == DisputeStatus::Open)
                 .map(date),
             status: dispute.status,
-            can_credit: dispute.status == DisputeStatus::Lost && credit_note.is_none(),
+            can_credit: dispute.status == DisputeStatus::Lost
+                && credit_note.is_none()
+                && moves_money,
             credit_note,
         });
     }
@@ -175,7 +182,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .filter(|p| p.status == PaymentStatus::Captured)
     {
-        Some(p) if !disputed => {
+        // Shown to who may refund; everybody reads what was refunded.
+        Some(p) if !disputed && moves_money => {
             Some(p.refundable().map_err(anyhow::Error::from)?.minor).filter(|left| *left > 0)
         }
         _ => None,
@@ -206,15 +214,19 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         None if !order.total.is_positive() => "aucun paiement requis".to_owned(),
         None => "non demandé".to_owned(),
     };
-    let can_capture = payment
-        .as_ref()
-        .is_some_and(|p| p.status == PaymentStatus::Requested);
-    let can_ship = order.status != OrderStatus::Cancelled
+    let can_capture = moves_money
+        && payment
+            .as_ref()
+            .is_some_and(|p| p.status == PaymentStatus::Requested);
+    let can_ship = handles_orders
+        && order.status != OrderStatus::Cancelled
         && !disputed
         && shipment
             .as_ref()
             .is_some_and(|s| s.status == ShipmentStatus::Created);
-    let can_cancel = matches!(order.status, OrderStatus::Placed | OrderStatus::Paid);
+    let can_cancel =
+        handles_orders && matches!(order.status, OrderStatus::Placed | OrderStatus::Paid);
+    let can_resend = handles_orders && order.status != OrderStatus::Cancelled;
     let fulfillment_label = match fulfillment.map(|f| f.status) {
         None => "non démarrée",
         Some(FulfillmentStatus::ReservingStock) => "réservation du stock",
@@ -384,7 +396,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     button(attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Expédier")
                                 </form>
                             }
-                            if order.status != OrderStatus::Cancelled {
+                            if can_resend {
                                 <form method="post" action=(href!(resend_confirmation, OrderId(id.clone())))>
                                     button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Renvoyer la confirmation")
                                 </form>
@@ -400,6 +412,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                                 None => { <span class="text-muted-foreground">"Transmis au prestataire de paiement, en attente de confirmation."</span> }
                                                 Some(failure) => {
                                                     <span role="alert" class="text-destructive">"Refusé par le prestataire : " (failure.clone())</span>
+                                                    if moves_money {
                                                     <form method="post" action=(href!(retry_refund, OrderId(id.clone())))>
                                                         <input type="hidden" name="refund_id" value=(refund_id.clone())>
                                                         button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Relancer le remboursement")
@@ -409,6 +422,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                                         input(attrs: topcoat::view::attributes! { name="reference" placeholder="Référence du virement" aria-label="Référence du remboursement fait à la main" required=(true) })
                                                         button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Remboursé par un autre moyen")
                                                     </form>
+                                                    }
                                                 }
                                             }
                                         </li>

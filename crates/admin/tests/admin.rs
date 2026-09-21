@@ -2,7 +2,9 @@
 //! segment, the orders, promotions, inventory, invoices, refunds, returns,
 //! reviews, questions and e-mails sections, branded 404s.
 
-use timada_admin::{AdminConfig, AdminServices, Stylesheet, create_admin, migrations};
+use timada_admin::{
+    AdminConfig, AdminServices, Role, Stylesheet, create_admin, create_operator, migrations,
+};
 use timada_core::{Address, Money};
 use timada_order::{
     OrderLine, OrderStatus, PlaceOrder, load_order_details, order_history_subscription,
@@ -362,6 +364,159 @@ async fn the_mount_segment_is_configurable() -> anyhow::Result<()> {
 
     let response = h.router.handle(get("/admin/products", Some(&cookie))).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
+/// Creates an operator with `role` and signs them in: `(session cookie,
+/// where the login sent them)`.
+async fn operator(h: &Harness, email: &str, role: Role) -> anyhow::Result<(String, String)> {
+    create_operator(&h.db, email, "a long enough password", role).await?;
+    let form = format!(
+        "email={}&password=a+long+enough+password",
+        email.replace('@', "%40")
+    );
+    let response = h.router.handle(post("/admin/login", &form, None)).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let cookie = session_cookie(&response).ok_or_else(|| anyhow::anyhow!("no session cookie"))?;
+    Ok((cookie, location(&response)))
+}
+
+#[tokio::test]
+async fn an_operator_does_what_their_role_is_there_for() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    // Whoever was created before there were roles — and whoever the host
+    // creates — owns the shop.
+    let owner = sign_in(&h, "admin").await?;
+    let (catalogue, catalogue_home) = operator(&h, "cat@shop.example", Role::Catalogue).await?;
+    let (support, support_home) = operator(&h, "sav@shop.example", Role::Support).await?;
+    let (books, books_home) = operator(&h, "compta@shop.example", Role::Accounting).await?;
+
+    // Each lands where they work, and is shown their own sections.
+    assert_eq!(catalogue_home, "/admin/products");
+    assert_eq!(support_home, "/admin/orders");
+    assert_eq!(books_home, "/admin/orders");
+    let landing = h.router.handle(get("/admin", Some(&catalogue))).await;
+    assert_eq!(location(&landing), "/admin/products");
+    let page = |uri: &'static str, cookie: &String| {
+        let (h, cookie) = (&h, cookie.clone());
+        async move { h.router.handle(get(uri, Some(&cookie))).await }
+    };
+    let products = text(page("/admin/products", &catalogue).await).await?;
+    assert!(
+        products.contains("cat@shop.example · Catalogue"),
+        "{products}"
+    );
+    assert!(products.contains("href=\"/admin/inventory\""), "{products}");
+    assert!(!products.contains("href=\"/admin/orders\""), "{products}");
+    assert!(!products.contains("href=\"/admin/vat\""), "{products}");
+    let orders = text(page("/admin/orders", &support).await).await?;
+    assert!(orders.contains("href=\"/admin/returns\""), "{orders}");
+    assert!(!orders.contains("href=\"/admin/products\""), "{orders}");
+    assert!(!orders.contains("href=\"/admin/refunds\""), "{orders}");
+    let everything = text(page("/admin/orders", &owner).await).await?;
+    for section in ["products", "customers", "vat", "emails"] {
+        assert!(
+            everything.contains(&format!("href=\"/admin/{section}\"")),
+            "{section}"
+        );
+    }
+
+    // A section that is not theirs is refused, read or written.
+    for (uri, cookie) in [
+        ("/admin/orders", &catalogue),
+        ("/admin/products", &support),
+        ("/admin/vat", &support),
+        ("/admin/customers", &books),
+        ("/admin/promotions", &books),
+    ] {
+        let refused = page(uri, cookie).await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{uri}");
+        assert!(text(refused).await?.contains("Accès refusé"));
+    }
+    let written = h
+        .router
+        .handle(post(
+            "/admin/promotions/new-discount",
+            "code=GRATUIT",
+            Some(&support),
+        ))
+        .await;
+    assert_eq!(written.status(), StatusCode::FORBIDDEN);
+    assert_eq!(page("/admin/vat", &books).await.status(), StatusCode::OK);
+
+    // A paid order: support ships and cancels, accounting moves the money.
+    let order_id = place_order(&h).await?;
+    let payments = timada_payment::Command(&h.executor);
+    let payment_id = payments
+        .request_payment(timada_payment::RequestPayment {
+            order_id: order_id.clone(),
+            amount: Money::eur(14_390),
+            method: timada_payment::PaymentMethod::Card,
+        })
+        .await?;
+    payments
+        .capture_payment(&payment_id, "psp-1".into())
+        .await?;
+    timada_order::Command(&h.executor)
+        .mark_paid(&order_id, &payment_id)
+        .await?;
+    let order_uri = format!("/admin/orders/{order_id}");
+    let read = |cookie: &String| {
+        let (h, uri, cookie) = (&h, order_uri.clone(), cookie.clone());
+        async move { text(h.router.handle(get(&uri, Some(&cookie))).await).await }
+    };
+    let refund_form = format!("action=\"{order_uri}/refund\"");
+    let cancel_form = format!("action=\"{order_uri}/cancel\"");
+    let as_support = read(&support).await?;
+    assert!(!as_support.contains(&refund_form), "{as_support}");
+    assert!(as_support.contains(&cancel_form), "{as_support}");
+    let as_books = read(&books).await?;
+    assert!(as_books.contains(&refund_form), "{as_books}");
+    assert!(!as_books.contains(&cancel_form), "{as_books}");
+    let as_owner = read(&owner).await?;
+    assert!(as_owner.contains(&refund_form) && as_owner.contains(&cancel_form));
+
+    // Hiding a form is a courtesy; the gate is what refuses.
+    let refund = "amount_cents=1000&reason=geste+commercial";
+    for (action, form, cookie) in [
+        ("refund", refund, &support),
+        (
+            "refunds/settle",
+            "refund_id=r-1&reference=virement",
+            &support,
+        ),
+        ("capture-payment", "", &support),
+        ("cancel", "reason=erreur", &books),
+        ("ship", "carrier=Colissimo&tracking_number=XY1", &books),
+    ] {
+        let refused = h
+            .router
+            .handle(post(&format!("{order_uri}/{action}"), form, Some(cookie)))
+            .await;
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{action}");
+    }
+    let payment = timada_payment::load_payment(&h.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no payment"))?;
+    assert!(payment.refunds.is_empty(), "{payment:?}");
+    let refunded = h
+        .router
+        .handle(post(&format!("{order_uri}/refund"), refund, Some(&books)))
+        .await;
+    assert_eq!(refunded.status(), StatusCode::SEE_OTHER);
+    let payment = timada_payment::load_payment(&h.executor, &payment_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no payment"))?;
+    assert_eq!(payment.refunds.len(), 1, "{payment:?}");
+    let cancelled = h
+        .router
+        .handle(post(
+            &format!("{order_uri}/cancel"),
+            "reason=erreur",
+            Some(&support),
+        ))
+        .await;
+    assert_eq!(cancelled.status(), StatusCode::SEE_OTHER);
     Ok(())
 }
 

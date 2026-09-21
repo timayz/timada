@@ -41,7 +41,22 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0003AdminRole;
+
+sqlite_migration!(
+    M0003AdminRole,
+    "admin",
+    "m0003_admin_role",
+    vec_box![M0002AdminSession],
+    vec_box![(
+        // Whoever signed in before there were roles could do everything:
+        // they stay the shop's owners.
+        "ALTER TABLE admin_user ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'",
+        "ALTER TABLE admin_user DROP COLUMN role"
+    )]
+);
+
 /// Admin users and sessions, to register alongside the contexts' migrations.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001AdminUser, M0002AdminSession]
+    vec_box![M0001AdminUser, M0002AdminSession, M0003AdminRole]
 }

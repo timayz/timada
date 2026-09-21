@@ -4,7 +4,7 @@ use serde::Deserialize;
 use topcoat::{
     Result,
     context::Cx,
-    router::{content::Form, error::see_other, href, page, query_params, query_params as query},
+    router::{content::Form, error::see_other, page, query_params, query_params as query},
     view::{View, view},
 };
 
@@ -38,11 +38,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
 #[page(POST)]
 pub async fn submit(cx: &Cx, Form(form): Form<LoginForm>) -> Result<impl View> {
-    if sign_in(cx, &form.email, &form.password).await? {
+    if let Some(admin) = sign_in(cx, &form.email, &form.password).await? {
+        // Back where they were going, or to where their role works.
         let target = form
             .next
             .filter(|n| n.starts_with('/') && !n.starts_with("//"))
-            .unwrap_or_else(|| href!(super::_secure::orders::index).resolve(cx));
+            .unwrap_or_else(|| super::_secure::section_link(cx, admin.role.home()));
         return Err(see_other(target).into());
     }
     Ok(view! { login_form(next: form.next, error: Some("Email ou mot de passe incorrect.")) })

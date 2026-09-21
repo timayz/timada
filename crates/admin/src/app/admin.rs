@@ -54,9 +54,14 @@ pub async fn logout(cx: &Cx) -> Result<impl View> {
     Err::<(), _>(see_other(href!(login::index).resolve(cx)).into())
 }
 
-/// `/{mount}` → the orders list.
+/// `/{mount}` → where the operator's role works; the orders list — hence the
+/// login — for a visitor.
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let orders = href!(_secure::orders::index).resolve(cx);
-    Err::<(), _>(see_other(orders).into())
+    let section = match crate::auth::current_admin(cx).await {
+        Ok(Some(admin)) => admin.role.home(),
+        Ok(None) => crate::auth::Section::Orders,
+        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+    };
+    Err::<(), _>(see_other(_secure::section_link(cx, section)).into())
 }
