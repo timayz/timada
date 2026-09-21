@@ -8,6 +8,7 @@ pub mod category;
 pub mod checkout;
 pub mod company;
 pub mod currency;
+pub mod forgot;
 mod format;
 pub mod invoice;
 pub mod listing;

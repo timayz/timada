@@ -147,7 +147,7 @@ pub async fn sitemap(cx: &Cx) -> Result<Sitemap> {
 #[route(GET "/robots.txt")]
 pub async fn robots(cx: &Cx) -> Result<String> {
     Ok(format!(
-        "User-agent: *\nDisallow: /account\nDisallow: /cart\nDisallow: /checkout\nDisallow: /admin\n\nSitemap: {}\n",
+        "User-agent: *\nDisallow: /account\nDisallow: /cart\nDisallow: /checkout\nDisallow: /password\nDisallow: /admin\n\nSitemap: {}\n",
         absolute(&href!(sitemap).resolve(cx))
     ))
 }
