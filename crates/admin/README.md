@@ -1,7 +1,7 @@
 # timada-admin
 
 A [topcoat](https://github.com/tokio-rs/topcoat) admin for the timada contexts
-(orders, products, categories, stock, customers, promotions, invoices, VAT, refunds, returns,
+(orders, products, categories, families, stock, customers, promotions, invoices, VAT, refunds, returns,
 reviews, questions, e-mails) that you mount into your own app — a topcoat app or any tower/axum
 app.
 
@@ -45,6 +45,7 @@ The listings read the contexts' SQL read models, so the host must run their
 subscriptions: `timada_order::order_history_subscription`,
 `timada_catalog::product_list_subscription`,
 `timada_catalog::category_list_subscription`,
+`timada_catalog::family_list_subscription`,
 `timada_inventory::stock_list_subscription`,
 `timada_customer::customer_list_subscription`,
 `timada_promotion::code_list_subscription`,
@@ -96,6 +97,13 @@ each), picked from the specs its products actually have; a category without a
 list of its own goes by its parent's. Products are filed from their own page,
 or when they are created; the same page edits their technical sheet
 (`Groupe | Libellé | Valeur`, a line each).
+
+The families section gathers the products that are one article in several
+versions: a family says what tells them apart (`Couleur : Noir, Argent`, a
+line per option, the values in the order shoppers see them) and products take
+their place in it by reference (SKU). Each version stays a product — priced,
+stocked and edited from its own page, which shows its family and lets it leave.
+A value a variant stands on cannot be removed; a family dissolves once empty.
 
 Reviews wait in the reviews section until an operator publishes or rejects
 them; only published ones reach the storefront and the product rating. Product

@@ -160,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
         Some("--seed") => {
             seed::run(&store).await?;
             seed_catalogue::run(&store).await?;
+            seed_catalogue::run_families(&store).await?;
             db::run_subscriptions_once(&store).await?;
             tracing::info!("seeded; admin login is admin@timada.example / admin");
             tracing::info!(

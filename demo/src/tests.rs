@@ -1166,6 +1166,107 @@ fn listed(page: &str) -> Vec<String> {
         .collect()
 }
 
+/// The values a product page offers for `option`: `(value, link, current)`.
+fn versions(page: &str, option: &str) -> Vec<(String, Option<String>, bool)> {
+    let Some((_, rest)) = page.split_once(&format!("<strong>{option} : </strong>")) else {
+        return Vec::new();
+    };
+    let line = rest.split("</p>").next().unwrap_or_default();
+    line.split("class=\"version")
+        .skip(1)
+        .map(|choice| {
+            let value = choice
+                .split_once('>')
+                .and_then(|(_, rest)| rest.split_once('<'))
+                .map(|(value, _)| value.to_owned())
+                .unwrap_or_default();
+            let link = choice
+                .split_once('>')
+                .and_then(|(tag, _)| tag.split_once("href=\""))
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map(|(link, _)| link.to_owned());
+            (value, link, choice.starts_with(" current"))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Result<()> {
+    let (router, store, lone_product) = shop().await?;
+    crate::seed_catalogue::run(&store).await?;
+    crate::seed_catalogue::run_families(&store).await?;
+    // Seeding twice changes nothing.
+    crate::seed_catalogue::run_families(&store).await?;
+    db::run_subscriptions_once(&store).await?;
+    let mut browser = Browser::new(&router);
+    let id = timada_catalog::product_id;
+    let page_of = |sku: &str| format!("/p/{}", id(sku));
+
+    // One option: the colours, the current one marked, the others linked.
+    let black = text(browser.get(&page_of("SONY-XM5")).await).await?;
+    assert!(
+        black.contains("aria-label=\"Versions de cet article\""),
+        "{black}"
+    );
+    assert_eq!(
+        versions(&black, "Couleur"),
+        [
+            ("Noir".to_owned(), None, true),
+            ("Argent".to_owned(), Some(page_of("SONY-XM5-ARG")), false),
+            ("Bleu nuit".to_owned(), Some(page_of("SONY-XM5-BLU")), false),
+        ]
+    );
+    let silver = text(browser.get(&page_of("SONY-XM5-ARG")).await).await?;
+    assert_eq!(
+        versions(&silver, "Couleur")[1],
+        ("Argent".to_owned(), None, true)
+    );
+
+    // Two options: from the 2 To without heatsink, « Avec » is not sold in
+    // 2 To — it leads to the closest version and says so; 4 To only exists
+    // with one.
+    let ssd = text(browser.get(&page_of("SAM-990P-2T")).await).await?;
+    assert_eq!(
+        versions(&ssd, "Capacité"),
+        [
+            ("1 To".to_owned(), Some(page_of("SAM-990P-1T")), false),
+            ("2 To".to_owned(), None, true),
+            ("4 To".to_owned(), Some(page_of("SAM-990P-4T-H")), false),
+        ]
+    );
+    let heatsink = versions(&ssd, "Dissipateur");
+    assert_eq!(heatsink[0], ("Sans".to_owned(), None, true));
+    assert_eq!(heatsink[1].0, "Avec");
+    assert!(heatsink[1].1.is_some(), "{heatsink:?}");
+    assert!(ssd.contains("diffère aussi sur un autre choix"), "{ssd}");
+
+    // A version taken out of the catalogue leads nowhere; one not sold in the
+    // shopper's currency neither.
+    timada_catalog::Command(&store.executor)
+        .archive_product(id("SONY-XM5-BLU"))
+        .await?;
+    let black = text(browser.get(&page_of("SONY-XM5")).await).await?;
+    assert_eq!(
+        versions(&black, "Couleur")[2],
+        ("Bleu nuit".to_owned(), None, false)
+    );
+    assert!(black.contains("title=\"Indisponible\""), "{black}");
+    timada_pricing::Command(&store.executor)
+        .remove_currency_price(timada_pricing::price_id(&id("SONY-XM5-ARG")), "GBP")
+        .await?;
+    browser.post("/currency", "currency=GBP&next=%2F").await;
+    let black = text(browser.get(&page_of("SONY-XM5")).await).await?;
+    assert!(
+        versions(&black, "Couleur").is_empty(),
+        "alone on sale in pounds: {black}"
+    );
+
+    // A product of no family offers nothing.
+    let lone = text(browser.get(&format!("/p/{lone_product}")).await).await?;
+    assert!(!lone.contains("Versions de cet article"), "{lone}");
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Result<()> {
     let (router, store, _) = shop().await?;

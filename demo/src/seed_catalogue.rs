@@ -4,8 +4,8 @@
 //! to say. Safe to run again: what exists is left alone.
 
 use timada_catalog::{
-    Brand, CatalogError, Command, CreateCategory, CreateProduct, DescribeProduct, Media, MediaKind,
-    Spec, SpecKey, category_id,
+    Brand, CatalogError, Command, CreateCategory, CreateFamily, CreateProduct, DescribeProduct,
+    FamilyOption, Media, MediaKind, OptionValue, Spec, SpecKey, category_id,
 };
 use timada_core::{Money, slug::slugify};
 use timada_inventory::{RegisterStockItem, StockLocation};
@@ -180,89 +180,9 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
     let catalog = Command(executor);
     let mut added = 0;
     for (index, item) in ITEMS.iter().enumerate() {
-        let created = catalog
-            .create_product(CreateProduct {
-                sku: item.sku.into(),
-                name: item.name.into(),
-                brand: Brand {
-                    name: item.brand.into(),
-                    slug: slugify(item.brand),
-                },
-                category_path: item.path.iter().map(|s| (*s).to_owned()).collect(),
-                short_description: item.feature.into(),
-                warranty_months: 24,
-            })
-            .await;
-        let product_id = match created {
-            Ok(id) => id,
-            // Seeded before: only what later versions of the seed added.
-            Err(CatalogError::SkuAlreadyExists(_)) => {
-                let known = timada_catalog::product_id(item.sku);
-                specify(&catalog, &known, item).await?;
-                price_abroad(executor, &known, index, item.cents).await?;
-                continue;
-            }
-            Err(err) => return Err(err.into()),
-        };
-        specify(&catalog, &product_id, item).await?;
-        let category = branch(&catalog, item.path).await?;
-        catalog.categorise_product(&product_id, category).await?;
-        catalog
-            .describe_product(
-                &product_id,
-                DescribeProduct {
-                    long_description: format!("{} — {}.", item.name, item.feature),
-                    key_features: item.feature.split(", ").map(str::to_owned).collect(),
-                },
-            )
-            .await?;
-        catalog
-            .add_product_media(
-                &product_id,
-                Media {
-                    url: format!("/media/demo/{}.svg", item.sku.to_lowercase()),
-                    kind: MediaKind::Image,
-                    alt: item.name.into(),
-                },
-            )
-            .await?;
-        timada_pricing::Command(executor)
-            .list_price(ListPrice {
-                product_id: product_id.clone(),
-                price_incl_tax: Money::eur(item.cents),
-                vat_rate_bp: 2_000,
-                eco_participation: Money::eur(0),
-            })
-            .await?;
-        price_abroad(executor, &product_id, index, item.cents).await?;
-        let inventory = timada_inventory::Command(executor);
-        let stock = inventory
-            .register_stock_item(RegisterStockItem {
-                product_id: product_id.clone(),
-                location: StockLocation::Warehouse,
-            })
-            .await?;
-        if item.stock > 0 {
-            inventory.receive_stock(&stock, item.stock).await?;
+        if seed_item(store, index, item).await? {
+            added += 1;
         }
-        let reviews = timada_review::Command(executor);
-        for (index, rating) in item.ratings.iter().enumerate() {
-            let review = reviews
-                .submit_review(timada_review::SubmitReview {
-                    product_id: product_id.clone(),
-                    customer_id: format!("demo-reviewer-{index}"),
-                    order_id: None,
-                    rating: *rating,
-                    title: "Avis de démonstration".into(),
-                    body: format!(
-                        "{} : noté {rating} sur 5 par un client de démonstration.",
-                        item.name
-                    ),
-                })
-                .await?;
-            reviews.publish_review(&review).await?;
-        }
-        added += 1;
     }
     for (slug, facets) in FACETS {
         let facets = facets
@@ -278,5 +198,245 @@ pub async fn run(store: &Store) -> anyhow::Result<()> {
         }
     }
     tracing::info!(added, "catalogue seeded");
+    Ok(())
+}
+
+/// One product with its sheet, category, price, stock and reviews. `false`
+/// when it was seeded before — only what later versions of the seed added is
+/// brought to it then.
+async fn seed_item(store: &Store, index: usize, item: &Item) -> anyhow::Result<bool> {
+    let executor = &store.executor;
+    let catalog = Command(executor);
+    let created = catalog
+        .create_product(CreateProduct {
+            sku: item.sku.into(),
+            name: item.name.into(),
+            brand: Brand {
+                name: item.brand.into(),
+                slug: slugify(item.brand),
+            },
+            category_path: item.path.iter().map(|s| (*s).to_owned()).collect(),
+            short_description: item.feature.into(),
+            warranty_months: 24,
+        })
+        .await;
+    let product_id = match created {
+        Ok(id) => id,
+        // Seeded before: only what later versions of the seed added.
+        Err(CatalogError::SkuAlreadyExists(_)) => {
+            let known = timada_catalog::product_id(item.sku);
+            specify(&catalog, &known, item).await?;
+            price_abroad(executor, &known, index, item.cents).await?;
+            return Ok(false);
+        }
+        Err(err) => return Err(err.into()),
+    };
+    specify(&catalog, &product_id, item).await?;
+    let category = branch(&catalog, item.path).await?;
+    catalog.categorise_product(&product_id, category).await?;
+    catalog
+        .describe_product(
+            &product_id,
+            DescribeProduct {
+                long_description: format!("{} — {}.", item.name, item.feature),
+                key_features: item.feature.split(", ").map(str::to_owned).collect(),
+            },
+        )
+        .await?;
+    catalog
+        .add_product_media(
+            &product_id,
+            Media {
+                url: format!("/media/demo/{}.svg", item.sku.to_lowercase()),
+                kind: MediaKind::Image,
+                alt: item.name.into(),
+            },
+        )
+        .await?;
+    timada_pricing::Command(executor)
+        .list_price(ListPrice {
+            product_id: product_id.clone(),
+            price_incl_tax: Money::eur(item.cents),
+            vat_rate_bp: 2_000,
+            eco_participation: Money::eur(0),
+        })
+        .await?;
+    price_abroad(executor, &product_id, index, item.cents).await?;
+    let inventory = timada_inventory::Command(executor);
+    let stock = inventory
+        .register_stock_item(RegisterStockItem {
+            product_id: product_id.clone(),
+            location: StockLocation::Warehouse,
+        })
+        .await?;
+    if item.stock > 0 {
+        inventory.receive_stock(&stock, item.stock).await?;
+    }
+    let reviews = timada_review::Command(executor);
+    for (index, rating) in item.ratings.iter().enumerate() {
+        let review = reviews
+            .submit_review(timada_review::SubmitReview {
+                product_id: product_id.clone(),
+                customer_id: format!("demo-reviewer-{index}"),
+                order_id: None,
+                rating: *rating,
+                title: "Avis de démonstration".into(),
+                body: format!(
+                    "{} : noté {rating} sur 5 par un client de démonstration.",
+                    item.name
+                ),
+            })
+            .await?;
+        reviews.publish_review(&review).await?;
+    }
+    Ok(true)
+}
+
+/// An article sold in several versions: `(name, options, [(sku, values)])`,
+/// the values in the options' order.
+type Family = (
+    &'static str,
+    &'static [(&'static str, &'static [&'static str])],
+    &'static [(&'static str, &'static [&'static str])],
+);
+
+/// The versions that are not in [`ITEMS`] — kept apart so the catalogue above
+/// stays the one its listing was described with.
+const FAMILY_ITEMS: &[Item] = &[
+    Item {
+        sku: "SONY-XM5-ARG",
+        name: "Sony WH-1000XM5 Argent",
+        brand: "Sony",
+        path: HEADSETS,
+        cents: 34_900,
+        stock: 6,
+        ratings: &[5],
+        feature: "Casque Bluetooth à réduction de bruit, 30 h d'autonomie, coloris argent",
+        specs: &[
+            ("Audio", "Réduction de bruit", "Oui"),
+            ("Connexion", "Liaison", "Sans fil"),
+        ],
+    },
+    Item {
+        sku: "SONY-XM5-BLU",
+        name: "Sony WH-1000XM5 Bleu nuit",
+        brand: "Sony",
+        path: HEADSETS,
+        cents: 35_900,
+        stock: 0,
+        ratings: &[],
+        feature: "Casque Bluetooth à réduction de bruit, 30 h d'autonomie, coloris bleu nuit",
+        specs: &[
+            ("Audio", "Réduction de bruit", "Oui"),
+            ("Connexion", "Liaison", "Sans fil"),
+        ],
+    },
+    Item {
+        sku: "SAM-990P-1T",
+        name: "Samsung 990 PRO 1 To",
+        brand: "Samsung",
+        path: SSDS,
+        cents: 11_995,
+        stock: 20,
+        ratings: &[5, 4],
+        feature: "SSD M.2 NVMe PCIe 4.0, 7450 Mo/s",
+        specs: &[
+            ("Stockage", "Capacité", "1 To"),
+            ("Stockage", "Interface", "NVMe PCIe 4.0"),
+        ],
+    },
+    Item {
+        sku: "SAM-990P-1T-H",
+        name: "Samsung 990 PRO 1 To avec dissipateur",
+        brand: "Samsung",
+        path: SSDS,
+        cents: 13_495,
+        stock: 9,
+        ratings: &[],
+        feature: "SSD M.2 NVMe PCIe 4.0, 7450 Mo/s, dissipateur thermique",
+        specs: &[
+            ("Stockage", "Capacité", "1 To"),
+            ("Stockage", "Interface", "NVMe PCIe 4.0"),
+        ],
+    },
+    Item {
+        sku: "SAM-990P-4T-H",
+        name: "Samsung 990 PRO 4 To avec dissipateur",
+        brand: "Samsung",
+        path: SSDS,
+        cents: 36_995,
+        stock: 3,
+        ratings: &[5],
+        feature: "SSD M.2 NVMe PCIe 4.0, 7450 Mo/s, dissipateur thermique",
+        specs: &[
+            ("Stockage", "Capacité", "4 To"),
+            ("Stockage", "Interface", "NVMe PCIe 4.0"),
+        ],
+    },
+];
+
+const FAMILIES: &[Family] = &[
+    (
+        "Sony WH-1000XM5",
+        &[("Couleur", &["Noir", "Argent", "Bleu nuit"])],
+        &[
+            ("SONY-XM5", &["Noir"]),
+            ("SONY-XM5-ARG", &["Argent"]),
+            ("SONY-XM5-BLU", &["Bleu nuit"]),
+        ],
+    ),
+    (
+        "Samsung 990 PRO",
+        &[
+            ("Capacité", &["1 To", "2 To", "4 To"]),
+            ("Dissipateur", &["Sans", "Avec"]),
+        ],
+        &[
+            ("SAM-990P-1T", &["1 To", "Sans"]),
+            ("SAM-990P-1T-H", &["1 To", "Avec"]),
+            ("SAM-990P-2T", &["2 To", "Sans"]),
+            ("SAM-990P-4T-H", &["4 To", "Avec"]),
+        ],
+    ),
+];
+
+/// A few articles in several versions, on top of [`run`]: the versions missing
+/// from the catalogue, then the families that gather them. Safe to run again.
+pub async fn run_families(store: &Store) -> anyhow::Result<()> {
+    let catalog = Command(&store.executor);
+    for (index, item) in FAMILY_ITEMS.iter().enumerate() {
+        seed_item(store, ITEMS.len() + index, item).await?;
+    }
+    for (name, options, variants) in FAMILIES {
+        let family = match catalog
+            .create_family(CreateFamily {
+                name: (*name).into(),
+                slug: None,
+            })
+            .await
+        {
+            Ok(id) => id,
+            Err(CatalogError::FamilySlugAlreadyExists(slug)) => timada_catalog::family_id(&slug),
+            Err(err) => return Err(err.into()),
+        };
+        let told_apart_by = options
+            .iter()
+            .map(|(option, values)| FamilyOption::new(*option, values))
+            .collect();
+        catalog
+            .define_family_options(&family, told_apart_by)
+            .await?;
+        for (sku, values) in *variants {
+            let place = options
+                .iter()
+                .zip(*values)
+                .map(|((option, _), value)| OptionValue::new(*option, *value))
+                .collect();
+            catalog
+                .place_variant(&family, timada_catalog::product_id(sku), place)
+                .await?;
+        }
+    }
+    tracing::info!(families = FAMILIES.len(), "product families seeded");
     Ok(())
 }

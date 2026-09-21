@@ -211,6 +211,43 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0007Families;
+
+sqlite_migration!(
+    M0007Families,
+    "catalog",
+    "m0007_families",
+    vec_box![M0006ListingPrices],
+    vec_box![
+        (
+            "CREATE TABLE catalog_family (
+                id TEXT PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                options TEXT NOT NULL DEFAULT '',
+                variant_count INTEGER NOT NULL DEFAULT 0,
+                dissolved INTEGER NOT NULL DEFAULT 0
+            )",
+            "DROP TABLE catalog_family"
+        ),
+        // `position`: the order the variants joined in.
+        (
+            "CREATE TABLE catalog_family_variant (
+                family_id TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                option_values TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                PRIMARY KEY (family_id, product_id)
+            )",
+            "DROP TABLE catalog_family_variant"
+        ),
+        (
+            "CREATE INDEX catalog_family_variant_product ON catalog_family_variant (product_id)",
+            "DROP INDEX catalog_family_variant_product"
+        )
+    ]
+);
+
 /// Read-model migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     vec_box![
@@ -219,6 +256,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
         M0003Listing,
         M0004SpecFacets,
         M0005ListingSortName,
-        M0006ListingPrices
+        M0006ListingPrices,
+        M0007Families
     ]
 }

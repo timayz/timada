@@ -5,6 +5,7 @@ pub mod categories;
 pub mod customers;
 pub mod disputes;
 pub mod emails;
+pub mod families;
 pub mod inventory;
 pub mod invoices;
 pub mod orders;

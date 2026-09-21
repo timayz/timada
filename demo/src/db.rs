@@ -182,6 +182,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
+        timada_catalog::family_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
         timada_catalog::listing_subscription()
             .data(db.clone())
             .start(executor)
@@ -326,6 +330,10 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .run_once(executor)
             .await?;
         timada_catalog::category_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_catalog::family_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;

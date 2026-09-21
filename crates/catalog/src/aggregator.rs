@@ -1,4 +1,4 @@
-use crate::value_object::{Brand, EnergyClass, Media, Spec, SpecKey};
+use crate::value_object::{Brand, EnergyClass, FamilyOption, Media, OptionValue, Spec, SpecKey};
 
 // The explicit name pins the on-disk identity: renaming the crate or the enum
 // must never orphan stored events.
@@ -39,6 +39,50 @@ pub enum Product {
     /// `category_path` it was created with is only a label from before
     /// categories were managed.
     ProductCategorised { category_id: String },
+
+    /// The product became a variant of a family. Recorded here first: it is
+    /// what keeps a product in one family at a time. Where it stands among
+    /// its siblings is the family's to say (`FamilyVariantPlaced`).
+    ProductJoinedFamily { family_id: String },
+
+    /// The product is on its own again.
+    ProductLeftFamily,
+}
+
+/// Products that are one article in several versions — a colour, a capacity,
+/// a size. Each version stays a product of its own (its SKU, price, stock and
+/// page); the family names what tells them apart and places each on it. Its
+/// id derives from its slug, which is for ever.
+#[evento::aggregate(name = "timada-catalog/ProductFamily")]
+pub enum ProductFamily {
+    FamilyCreated {
+        slug: String,
+        name: String,
+    },
+
+    FamilyRenamed {
+        name: String,
+    },
+
+    /// What tells the variants apart, and the values each option takes, both
+    /// in the order shown — the whole list, replacing the one before.
+    FamilyOptionsDefined {
+        options: Vec<FamilyOption>,
+    },
+
+    /// A product took its place in the family — or another place: the values
+    /// replace the ones it had.
+    FamilyVariantPlaced {
+        product_id: String,
+        values: Vec<OptionValue>,
+    },
+
+    FamilyVariantRemoved {
+        product_id: String,
+    },
+
+    /// The family is no more; it had no variant left.
+    FamilyDissolved,
 }
 
 /// A node of the shop's category tree. Its id derives from its slug, which is

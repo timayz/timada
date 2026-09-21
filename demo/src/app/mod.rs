@@ -54,6 +54,7 @@ header nav{display:flex;flex-wrap:wrap;gap:1rem;margin-left:auto;align-items:bas
 a{color:#0b5fa5}ul{padding-left:1.2rem}.price{font-size:1.5rem;font-weight:600}.muted{color:#595959}\
 table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:.5rem;border-bottom:1px solid #e5e5e5;vertical-align:top}\
 td.num,th.num{text-align:right;white-space:nowrap}\
+.version{display:inline-block;padding:.2rem .6rem;border:1px solid #767676;border-radius:.3rem;text-decoration:none}.version.current{border-color:#0b5fa5;box-shadow:inset 0 0 0 1px #0b5fa5;font-weight:600}.version.off{color:#595959;border-style:dashed}\
 form.inline{display:inline}form.stack{display:grid;gap:.75rem;max-width:28rem}\
 label{display:grid;gap:.25rem;font-weight:500}label.choice{display:flex;gap:.5rem;align-items:baseline;font-weight:400}\
 input,select,button{font:inherit;padding:.45rem .6rem;border:1px solid #767676;border-radius:.3rem}\

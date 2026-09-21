@@ -231,7 +231,7 @@ pool as data unless noted:
 
 | Context | Subscription | Kind | Extra data |
 |---|---|---|---|
-| catalog | `product_list_subscription`, `category_list_subscription` | read models | |
+| catalog | `product_list_subscription`, `category_list_subscription`, `family_list_subscription` | read models | |
 | catalog | `listing_subscription` | read model ← catalog, pricing, inventory, review | |
 | cart | `saved_cart_list_subscription` | read model | |
 | inventory | `stock_list_subscription`, `alert_list_subscription` | read models | |
@@ -398,6 +398,19 @@ the SMTP relay.
   `ProductCreated` is only the label from before — a shop with such history
   calls `timada_catalog::adopt_category_paths` once, which opens the
   categories those labels name and files the products.
+- **A variant is a product.** An article sold in several versions — colours,
+  capacities, sizes — is several products, each with its SKU, price, stock,
+  page and order lines: no other context knows about variants. A
+  `ProductFamily` (its id derives from a slug, like a category's) names the
+  options that tell the versions apart, with the values each takes in the
+  order shown, and places products on them. Two rules, two aggregates:
+  `ProductJoinedFamily` on the product keeps it in one family at a time,
+  `FamilyVariantPlaced` on the family keeps each place to one product —
+  `place_variant` writes the first then the second, and asking again finishes
+  a job left half done. A product page reads the family from its events
+  (`Command::load_family`) and `timada_catalog::variant_choices` says where
+  each value leads: the sibling on sale that shares the most with the current
+  product.
 - **Companion events** carry what an event cannot gain: `OrderTaxed`,
   `OrderNumberAssigned`, `OrderDiscountApplied` are committed in the same batch
   as `OrderPlaced`. Consumers that need them load the view, not the payload.
@@ -494,5 +507,8 @@ the SMTP relay.
   (`timada_invoice::vat_report`, the admin's TVA section) adds up what was
   invoiced; filing it — and the rule that a quarter starts at midnight UTC,
   not Paris time — stays with the accountant.
+- Variants beyond the product page: the storefront listing still shows a card
+  per product rather than one per family, and reviews and questions are still
+  each version's own — both are the next steps.
 - Upcasting of old event shapes: an evento feature, to build when the first
   `V2` event exists.

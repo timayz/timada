@@ -18,7 +18,10 @@ use topcoat::{
 };
 
 use crate::{
-    app::admin::_secure::categories::{category_options, category_select},
+    app::admin::_secure::{
+        categories::{category_options, category_select},
+        families::family_id::{FamilyId, show as show_family},
+    },
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -88,6 +91,30 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         None => product.category_path.join(" > "),
     };
     let categories = category_options(cx, None).await?;
+    // The family the product is a variant of: its name, where it stands in
+    // it, and the way there. A product that says it joined a family where it
+    // has no place yet shows « à placer ».
+    let variant_of: Option<(String, String, String)> = match &product.family_id {
+        Some(family_id) => timada_catalog::Command(&services.executor)
+            .load_family(family_id)
+            .await?
+            .map(|family| {
+                let standing = family.variant(&id).map_or_else(
+                    || "à placer".to_owned(),
+                    |variant| {
+                        variant
+                            .values
+                            .iter()
+                            .map(|placed| format!("{} : {}", placed.option, placed.value))
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    },
+                );
+                let link = href!(show_family, FamilyId(family.id.clone())).resolve(cx);
+                (family.name, standing, link)
+            }),
+        None => None,
+    };
     let sheet = product
         .specs
         .iter()
@@ -213,6 +240,20 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     category_select(name: "category_id", options: &categories, selected: product.category_id.as_deref(), none_label: product.category_id.is_none().then_some("— non rangé —"))
                                     <div>button(variant: ButtonVariant::Secondary, attrs: topcoat::view::attributes! { type="submit" }, "Ranger")</div>
                                 </form>
+                            }
+                        )
+                    )
+                    card(
+                        card_header(card_title("Famille"))
+                        card_content(
+                            if let Some((family_name, standing, link)) = &variant_of {
+                                <p class="text-sm">"Variante de " <a href=(link.clone()) class="underline underline-offset-4">(family_name.clone())</a></p>
+                                <p class="mb-3 text-sm text-muted-foreground">(standing.clone())</p>
+                                <form method="post" action=(href!(leave_family, ProductId(id.clone())))>
+                                    button(variant: ButtonVariant::Secondary, attrs: topcoat::view::attributes! { type="submit" }, "Retirer de la famille")
+                                </form>
+                            } else {
+                                <p class="text-sm text-muted-foreground">"Ce produit n'est la variante d'aucune famille. Il se place depuis la section Familles, par sa référence."</p>
                             }
                         )
                     )
@@ -364,6 +405,20 @@ pub async fn archive(cx: &Cx) -> Result<impl View> {
 #[derive(Debug, Deserialize)]
 pub struct CategoriseForm {
     category_id: String,
+}
+
+/// Takes the product out of the family it says it is in — also when the
+/// family never recorded its place.
+#[page(POST "./leave-family")]
+pub async fn leave_family(cx: &Cx) -> Result<impl View> {
+    let (id, product) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    if let Some(family_id) = &product.family_id {
+        timada_catalog::Command(&services.executor)
+            .remove_variant(family_id, &id)
+            .await?;
+    }
+    Err::<(), _>(see_other(back(cx, &id)).into())
 }
 
 /// Files the product under a category; a category archived in the meantime
