@@ -16,8 +16,9 @@ use evento::{Executor, Projection, metadata::Event};
 use crate::{
     aggregator::{
         BillingAddressSet, CompanyIdentified, CompanyIdentityRemoved, Customer,
-        CustomerEmailChanged, CustomerRegistered, DeliveryAddressAdded, DeliveryAddressChanged,
-        DeliveryAddressRemoved, PreferredDeliveryAddressChosen, VatNumberChecked,
+        CustomerAccountOpened, CustomerEmailChanged, CustomerRegistered, CustomerRegisteredAsGuest,
+        DeliveryAddressAdded, DeliveryAddressChanged, DeliveryAddressRemoved,
+        PreferredDeliveryAddressChosen, VatNumberChecked,
     },
     error::CustomerError,
 };
@@ -58,6 +59,8 @@ pub struct CustomerState {
     pub preferred: Option<String>,
     /// `(company name, VAT number)` while the customer buys as a business.
     pub company: Option<(String, String)>,
+    /// Registered while ordering and without an account so far.
+    pub guest: bool,
 }
 
 impl CustomerState {
@@ -76,6 +79,8 @@ fn create_projection<E: Executor>() -> Projection<E, CustomerState> {
         .handler(on_preferred_delivery_address_chosen())
         .handler(on_company_identified())
         .handler(on_company_identity_removed())
+        .handler(on_customer_registered_as_guest())
+        .handler(on_customer_account_opened())
         .skip::<VatNumberChecked>()
         .skip::<CustomerEmailChanged>()
         .skip::<BillingAddressSet>()
@@ -90,6 +95,24 @@ async fn on_customer_registered(
 ) -> anyhow::Result<()> {
     row.id = event.aggregate_id.to_owned();
     row.next_address_seq = 1;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_customer_registered_as_guest(
+    _event: Event<CustomerRegisteredAsGuest>,
+    row: &mut CustomerState,
+) -> anyhow::Result<()> {
+    row.guest = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_customer_account_opened(
+    _event: Event<CustomerAccountOpened>,
+    row: &mut CustomerState,
+) -> anyhow::Result<()> {
+    row.guest = false;
     Ok(())
 }
 

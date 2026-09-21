@@ -60,4 +60,12 @@ pub enum Customer {
         consultation_ref: Option<String>,
         registered_name: Option<String>,
     },
+
+    /// Registered while ordering, without an account: there is nothing to
+    /// sign in to. Committed together with `CustomerRegistered`.
+    CustomerRegisteredAsGuest,
+
+    /// The guest chose to have an account: a customer like any other from
+    /// now on. Credentials are handled elsewhere.
+    CustomerAccountOpened,
 }

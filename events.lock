@@ -40,8 +40,10 @@ event timada-catalog/ProductFamily::FamilyVariantRemoved { product_id: String }
 event timada-customer/Customer::BillingAddressSet { address: Address }
 event timada-customer/Customer::CompanyIdentified { company_name: String, vat_number: String }
 event timada-customer/Customer::CompanyIdentityRemoved unit
+event timada-customer/Customer::CustomerAccountOpened unit
 event timada-customer/Customer::CustomerEmailChanged { email: String }
 event timada-customer/Customer::CustomerRegistered { email: String, civility: Civility, first_name: String, last_name: String }
+event timada-customer/Customer::CustomerRegisteredAsGuest unit
 event timada-customer/Customer::DeliveryAddressAdded { address_id: String, address: Address }
 event timada-customer/Customer::DeliveryAddressChanged { address_id: String, address: Address }
 event timada-customer/Customer::DeliveryAddressRemoved { address_id: String }
@@ -179,7 +181,7 @@ type timada-tax::VatLine { rate_bp: u16, base: Money, vat: Money, total: Money }
 
 view timada-cart::CartDetailsView rev=1 { id: String, customer_id: Option<String>, lines: Vec<CartLine>, promo_code: Option<String>, subtotal: Money, status: CartStatus, saved_name: Option<String>, saved_at: Option<u64> } with CartLine { product_id: String, name: String, quantity: u32, unit_price: Money, warranty_months: u16 }; CartStatus enum { Open, Saved, CheckedOut, Discarded }
 view timada-catalog::ProductPageView rev=2 { id: String, sku: String, name: String, brand: Brand, category_path: Vec<String>, category_id: Option<String>, family_id: Option<String>, short_description: String, long_description: String, key_features: Vec<String>, specs: Vec<Spec>, media: Vec<Media>, energy_class: Option<EnergyClass>, energy_info_sheet_url: Option<String>, warranty_months: u16, archived: bool }
-view timada-customer::AddressBookView rev=1 { customer_id: String, email: String, civility: Civility, first_name: String, last_name: String, billing: Option<Address>, deliveries: Vec<DeliveryAddress> } with DeliveryAddress { id: String, address: Address, preferred: bool }
+view timada-customer::AddressBookView rev=2 { customer_id: String, email: String, civility: Civility, first_name: String, last_name: String, billing: Option<Address>, deliveries: Vec<DeliveryAddress>, guest: bool } with DeliveryAddress { id: String, address: Address, preferred: bool }
 view timada-inventory::StockAvailabilityView rev=0 { id: String, product_id: String, location: StockLocation, on_hand: u32, reserved: u32, available: u32, status: Availability } with Availability enum { InStock, OutOfStock }
 view timada-invoice::CreditNoteView rev=0 { id: String, credit_note_number: String, refund_id: String, invoice_id: String, invoice_number: String, order_id: String, amount: Money, reason: String, issued_at: u64 }
 view timada-invoice::InvoiceView rev=3 { id: String, order_id: String, customer_id: String, invoice_number: Option<String>, billing_address: Address, lines: Vec<InvoiceLine>, subtotal: Money, shipping_fee: Money, handling_fee: Money, discount: Option<InvoiceDiscount>, total: Money, tax: Option<InvoiceTax>, company: Option<timada_tax::BusinessBuyer>, reverse_charge: Option<timada_tax::ReverseChargeProof>, status: InvoiceStatus, voided_reason: Option<String>, drafted_at: u64, issued_at: Option<u64> } with InvoiceDiscount { label: String, amount: Money }; InvoiceTax { zone_code: String, treatment: TaxTreatment, vat_lines: Vec<VatLine> }; InvoiceStatus enum { Draft, Issued, Voided }

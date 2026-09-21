@@ -583,6 +583,45 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn a_guest_is_welcomed_when_they_open_an_account_not_before() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let outbox = MemoryTransport::default();
+    let sync = || async {
+        mailer_subscription()
+            .data(db.clone())
+            .data(config())
+            .run_once(&executor)
+            .await?;
+        deliver_pending(&db, &outbox).await?;
+        anyhow::Ok(())
+    };
+    let customers = timada_customer::Command(&executor);
+    let guest = customers
+        .register_guest(timada_customer::RegisterCustomer {
+            email: "grace@example.com".into(),
+            civility: Civility::Mrs,
+            first_name: "Grace".into(),
+            last_name: "Hopper".into(),
+        })
+        .await?;
+    sync().await?;
+    assert!(outbox.sent().is_empty(), "no account to be welcomed to");
+
+    customers.open_account(&guest).await?;
+    sync().await?;
+    let sent = outbox.sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, "grace@example.com");
+    assert_eq!(sent[0].subject, "Bienvenue chez Timada");
+    assert!(
+        sent[0].body.starts_with("Bonjour Grace,"),
+        "{}",
+        sent[0].body
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn old_events_are_not_emailed_about() -> anyhow::Result<()> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let inventory = timada_inventory::Command(&executor);

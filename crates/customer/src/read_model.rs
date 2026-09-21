@@ -10,9 +10,10 @@ use evento::{
 use sqlx::SqlitePool;
 
 use crate::aggregator::{
-    BillingAddressSet, CompanyIdentified, CompanyIdentityRemoved, CustomerEmailChanged,
-    CustomerRegistered, DeliveryAddressAdded, DeliveryAddressChanged, DeliveryAddressRemoved,
-    PreferredDeliveryAddressChosen, VatNumberChecked,
+    BillingAddressSet, CompanyIdentified, CompanyIdentityRemoved, CustomerAccountOpened,
+    CustomerEmailChanged, CustomerRegistered, CustomerRegisteredAsGuest, DeliveryAddressAdded,
+    DeliveryAddressChanged, DeliveryAddressRemoved, PreferredDeliveryAddressChosen,
+    VatNumberChecked,
 };
 
 /// Subscription key; the caller attaches the pool with `.data(pool)`.
@@ -26,6 +27,8 @@ pub struct CustomerListRow {
     pub last_name: String,
     /// Unix seconds of `CustomerRegistered`.
     pub registered_at: i64,
+    /// Ordered without an account, and has none so far.
+    pub guest: bool,
 }
 
 /// Filters for [`list_customers`]; `q` matches email, first or last name.
@@ -50,6 +53,8 @@ pub fn customer_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(CUSTOMER_LIST_SUBSCRIPTION)
         .handler(insert_on_customer_registered())
         .handler(update_on_customer_email_changed())
+        .handler(flag_on_customer_registered_as_guest())
+        .handler(unflag_on_customer_account_opened())
         .skip::<BillingAddressSet>()
         .skip::<DeliveryAddressAdded>()
         .skip::<DeliveryAddressChanged>()
@@ -68,7 +73,7 @@ pub async fn list_customers(
     filter: &ListCustomers,
 ) -> sqlx::Result<Vec<CustomerListRow>> {
     sqlx::query_as(
-        "SELECT customer_id, email, first_name, last_name, registered_at
+        "SELECT customer_id, email, first_name, last_name, registered_at, guest
          FROM customer_list
          WHERE (?1 IS NULL OR email LIKE ?1 OR first_name LIKE ?1 OR last_name LIKE ?1)
          ORDER BY registered_at DESC, customer_id DESC
@@ -91,7 +96,7 @@ pub async fn customers_by_ids(
         return Ok(Vec::new());
     }
     let mut query = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
-        "SELECT customer_id, email, first_name, last_name, registered_at
+        "SELECT customer_id, email, first_name, last_name, registered_at, guest
          FROM customer_list
          WHERE customer_id IN (",
     );
@@ -157,4 +162,35 @@ async fn update_on_customer_email_changed<E: Executor>(
         .execute(&pool(ctx)?)
         .await?;
     Ok(())
+}
+
+/// Absolute, so a redelivery changes nothing; the row exists already, the
+/// registration comes first in the stream.
+async fn set_guest<E: Executor>(
+    ctx: &Context<'_, E>,
+    customer_id: &str,
+    guest: bool,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE customer_list SET guest = ? WHERE customer_id = ?")
+        .bind(guest)
+        .bind(customer_id)
+        .execute(&pool(ctx)?)
+        .await?;
+    Ok(())
+}
+
+#[evento::subscription]
+async fn flag_on_customer_registered_as_guest<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<CustomerRegisteredAsGuest>,
+) -> anyhow::Result<()> {
+    set_guest(ctx, &event.aggregate_id, true).await
+}
+
+#[evento::subscription]
+async fn unflag_on_customer_account_opened<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<CustomerAccountOpened>,
+) -> anyhow::Result<()> {
+    set_guest(ctx, &event.aggregate_id, false).await
 }

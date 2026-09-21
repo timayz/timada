@@ -26,7 +26,21 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0002CustomerListGuest;
+
+sqlite_migration!(
+    M0002CustomerListGuest,
+    "customer",
+    "m0002_customer_list_guest",
+    vec_box![M0001CustomerList],
+    vec_box![(
+        // Ordered without an account, and has none so far.
+        "ALTER TABLE customer_list ADD COLUMN guest INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE customer_list DROP COLUMN guest"
+    )]
+);
+
 /// Read-model migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001CustomerList]
+    vec_box![M0001CustomerList, M0002CustomerListGuest]
 }
