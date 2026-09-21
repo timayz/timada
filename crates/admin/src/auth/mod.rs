@@ -5,13 +5,14 @@
 mod password;
 mod role;
 mod store;
+pub mod team;
 
 use topcoat::context::{Cx, app_context, memoize, try_request_context};
 use topcoat::session;
 
 use crate::config::AdminServices;
 
-pub use role::{Role, Section};
+pub use role::{OWN_PASSWORD, Role, Section};
 pub use store::{AdminUser, create_admin, create_operator};
 
 /// The admin authenticated for this request, attached by the `_secure` layer.

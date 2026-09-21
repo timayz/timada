@@ -91,6 +91,10 @@ impl Role {
     /// and HEAD. A path no section claims is the owner's alone.
     pub fn permits(self, path: &str, writes: bool) -> bool {
         let mut segments = path.trim_matches('/').split('/');
+        // Everybody's: their own password.
+        if path.trim_matches('/') == OWN_PASSWORD {
+            return true;
+        }
         let Some(section) = segments.next().and_then(Section::of_segment) else {
             return self == Role::Owner;
         };
@@ -106,6 +110,9 @@ impl Role {
         }
     }
 }
+
+/// The page where an operator changes their own password.
+pub const OWN_PASSWORD: &str = "password";
 
 /// A section of the admin: the first URL segment under the mount.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -268,7 +275,11 @@ mod tests {
 
     #[test]
     fn what_no_section_claims_is_the_owners_alone() {
-        for path in ["team", "journal", "", "orders-export"] {
+        for role in Role::ALL {
+            assert!(role.permits("password", true), "{role:?}");
+            assert!(role.permits("/password/", false), "{role:?}");
+        }
+        for path in ["team", "journal", "", "orders-export", "password/other"] {
             assert!(Role::Owner.permits(path, false), "{path}");
             for role in [Role::Catalogue, Role::Support, Role::Accounting] {
                 assert!(!role.permits(path, false), "{role:?} {path}");

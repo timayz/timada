@@ -520,6 +520,212 @@ async fn an_operator_does_what_their_role_is_there_for() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Tries to sign in: the response of the login form.
+async fn try_sign_in(h: &Harness, email: &str, password: &str) -> Response {
+    let form = format!(
+        "email={}&password={}",
+        email.replace('@', "%40"),
+        password.replace(' ', "+")
+    );
+    h.router.handle(post("/admin/login", &form, None)).await
+}
+
+#[tokio::test]
+async fn the_owners_run_the_team() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let owner = sign_in(&h, "admin").await?;
+    let send = |uri: String, form: &'static str, cookie: &String| {
+        let (h, cookie) = (&h, cookie.clone());
+        async move { h.router.handle(post(&uri, form, Some(&cookie))).await }
+    };
+    let read = |uri: String, cookie: &String| {
+        let (h, cookie) = (&h, cookie.clone());
+        async move { h.router.handle(get(&uri, Some(&cookie))).await }
+    };
+
+    // The owners' page, and theirs alone.
+    let team = text(read("/admin/team".into(), &owner).await).await?;
+    assert!(
+        team.contains(EMAIL) && team.contains("Propriétaire"),
+        "{team}"
+    );
+    assert!(team.contains("href=\"/admin/team\""), "{team}");
+    let (agent, _) = operator(&h, "ancien@shop.example", Role::Support).await?;
+    assert_eq!(
+        read("/admin/team".into(), &agent).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let orders = text(read("/admin/orders".into(), &agent).await).await?;
+    assert!(!orders.contains("href=\"/admin/team\""), "{orders}");
+    assert!(orders.contains("href=\"/admin/password\""), "{orders}");
+
+    // Added with a temporary password — a real address, a real password.
+    let new = "/admin/team/new".to_owned();
+    let weak = send(
+        new.clone(),
+        "email=sav%40shop.example&role=support&temporary_password=court",
+        &owner,
+    )
+    .await;
+    assert!(text(weak).await?.contains("au moins 10 caractères"));
+    let nobody = send(
+        new.clone(),
+        "email=sav&role=support&temporary_password=provisoire-2026",
+        &owner,
+    )
+    .await;
+    assert!(text(nobody).await?.contains("Adresse e-mail invalide"));
+    let added = send(
+        new.clone(),
+        "email=SAV%40shop.example&role=support&temporary_password=provisoire-2026",
+        &owner,
+    )
+    .await;
+    assert_eq!(added.status(), StatusCode::SEE_OTHER);
+    let theirs = location(&added);
+    assert!(theirs.starts_with("/admin/team/"), "{theirs}");
+    let twice = send(
+        new,
+        "email=sav%40shop.example&role=catalogue&temporary_password=provisoire-2026",
+        &owner,
+    )
+    .await;
+    assert!(text(twice).await?.contains("existe déjà"));
+    let page = text(read(theirs.clone(), &owner).await).await?;
+    assert!(
+        page.contains("Service client") && page.contains("Mot de passe temporaire"),
+        "{page}"
+    );
+
+    // A temporary password opens one page: the one that replaces it.
+    let first = try_sign_in(&h, "sav@shop.example", "provisoire-2026").await;
+    let sav = session_cookie(&first).ok_or_else(|| anyhow::anyhow!("no session"))?;
+    assert_eq!(
+        location(&read("/admin/orders".into(), &sav).await),
+        "/admin/password"
+    );
+    let forced = send("/admin/orders/o-1/cancel".into(), "reason=x", &sav).await;
+    assert_eq!(location(&forced), "/admin/password");
+    let form = text(read("/admin/password".into(), &sav).await).await?;
+    assert!(form.contains("Votre mot de passe est temporaire"), "{form}");
+    let change = "/admin/password".to_owned();
+    for (posted, refusal) in [
+        (
+            "current=faux&new=le-mien-pour-2026&confirm=le-mien-pour-2026",
+            "actuel incorrect",
+        ),
+        (
+            "current=provisoire-2026&new=le-mien-pour-2026&confirm=un-autre-2026",
+            "pas identiques",
+        ),
+        (
+            "current=provisoire-2026&new=court&confirm=court",
+            "au moins 10 caractères",
+        ),
+        (
+            "current=provisoire-2026&new=provisoire-2026&confirm=provisoire-2026",
+            "différent de l'actuel",
+        ),
+    ] {
+        let refused = send(change.clone(), posted, &sav).await;
+        assert!(text(refused).await?.contains(refusal), "{refusal}");
+    }
+    let chosen = send(
+        change,
+        "current=provisoire-2026&new=le-mien-pour-2026&confirm=le-mien-pour-2026",
+        &sav,
+    )
+    .await;
+    assert_eq!(location(&chosen), "/admin/orders");
+    assert_eq!(
+        read("/admin/orders".into(), &sav).await.status(),
+        StatusCode::OK
+    );
+    assert!(
+        session_cookie(&try_sign_in(&h, "sav@shop.example", "provisoire-2026").await).is_none()
+    );
+
+    // Another role: at their very next request.
+    let moved = send(format!("{theirs}/role"), "role=catalogue", &owner).await;
+    assert_eq!(location(&moved), theirs);
+    assert_eq!(
+        read("/admin/orders".into(), &sav).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        read("/admin/products".into(), &sav).await.status(),
+        StatusCode::OK
+    );
+
+    // A lost password: signed out everywhere, a temporary one again.
+    let reset = send(
+        format!("{theirs}/reset-password"),
+        "temporary_password=encore-provisoire",
+        &owner,
+    )
+    .await;
+    assert_eq!(location(&reset), theirs);
+    assert!(location(&read("/admin/products".into(), &sav).await).starts_with("/admin/login"));
+    let again = try_sign_in(&h, "sav@shop.example", "encore-provisoire").await;
+    let sav = session_cookie(&again).ok_or_else(|| anyhow::anyhow!("no session"))?;
+    assert_eq!(
+        location(&read("/admin/products".into(), &sav).await),
+        "/admin/password"
+    );
+
+    // Access ended: out at once, and no way back in — until it is given back.
+    let ended = send(format!("{theirs}/deactivate"), "", &owner).await;
+    assert_eq!(location(&ended), theirs);
+    assert!(location(&read("/admin/password".into(), &sav).await).starts_with("/admin/login"));
+    let refused = try_sign_in(&h, "sav@shop.example", "encore-provisoire").await;
+    assert!(session_cookie(&refused).is_none());
+    assert!(
+        text(refused)
+            .await?
+            .contains("Email ou mot de passe incorrect")
+    );
+    let page = text(read(theirs.clone(), &owner).await).await?;
+    assert!(page.contains("Accès retiré"), "{page}");
+    send(format!("{theirs}/reactivate"), "", &owner).await;
+    assert!(
+        session_cookie(&try_sign_in(&h, "sav@shop.example", "encore-provisoire").await).is_some()
+    );
+
+    // Nobody demotes or locks out themselves; the shop keeps an owner.
+    let operators = timada_admin::team::list_operators(&h.db).await?;
+    let me = operators
+        .iter()
+        .find(|operator| operator.email == EMAIL)
+        .ok_or_else(|| anyhow::anyhow!("the owner is not listed"))?;
+    let mine = format!("/admin/team/{}", me.id);
+    let own_page = text(read(mine.clone(), &owner).await).await?;
+    assert!(own_page.contains("C'est vous"), "{own_page}");
+    assert!(!own_page.contains("Retirer l'accès"), "{own_page}");
+    for (action, form) in [("role", "role=support"), ("deactivate", "")] {
+        let refused = send(format!("{mine}/{action}"), form, &owner).await;
+        assert!(
+            text(refused).await?.contains("Un autre propriétaire"),
+            "{action}"
+        );
+    }
+    for last in [
+        timada_admin::team::change_role(&h.db, "somebody-else", &me.id, Role::Support).await,
+        timada_admin::team::deactivate(&h.db, "somebody-else", &me.id).await,
+    ] {
+        assert!(
+            matches!(last, Err(timada_admin::team::TeamError::LastOwner)),
+            "{last:?}"
+        );
+    }
+    assert_eq!(
+        read("/admin/team".into(), &owner).await.status(),
+        StatusCode::OK
+    );
+    let gone = read("/admin/team/nobody".into(), &owner).await;
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_customer_who_ordered_without_an_account_is_marked_a_guest() -> anyhow::Result<()> {
     let h = harness("admin").await?;

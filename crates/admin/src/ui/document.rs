@@ -7,10 +7,10 @@ use topcoat::{
 
 use crate::{
     app::admin::_secure::{
-        categories, customers, disputes, emails, families, inventory, invoices, orders, products,
-        promotions, questions, refunds, returns, reviews, vat,
+        categories, customers, disputes, emails, families, inventory, invoices, orders, password,
+        products, promotions, questions, refunds, returns, reviews, team, vat,
     },
-    auth::{Section, signed_in_admin},
+    auth::{Role, Section, signed_in_admin},
     config::{AdminConfig, Stylesheet},
 };
 
@@ -49,11 +49,17 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
         entry!(Questions, questions::index, "Questions"),
         entry!(Emails, emails::index, "E-mails"),
     ];
-    let navigation: Vec<(String, bool, &'static str)> = sections
+    let mut navigation: Vec<(String, bool, &'static str)> = sections
         .into_iter()
         .filter(|(section, ..)| admin.is_some_and(|admin| admin.role.opens(*section)))
         .map(|(_, link, current, label)| (link, current, label))
         .collect();
+    // No role's section: the owners' own.
+    if admin.is_some_and(|admin| admin.role == Role::Owner) {
+        let team_link = href!(team::index);
+        navigation.push((team_link.resolve(cx), team_link.is_current(cx), "Équipe"));
+    }
+    let own_password = href!(password::index).resolve(cx);
     // The name of the shop leads to where the operator works.
     let home = navigation
         .first()
@@ -85,6 +91,7 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
                             </nav>
                             <form method="post" action=(href!(crate::app::admin::logout)) class="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
                                 if let Some(standing) = &standing { <span>(standing.clone())</span> }
+                                <a href=(own_password) class="underline-offset-4 hover:underline">"Mon mot de passe"</a>
                                 <button type="submit" class="underline-offset-4 hover:underline">"Se déconnecter"</button>
                             </form>
                         }

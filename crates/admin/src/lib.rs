@@ -35,7 +35,7 @@ use topcoat::{
     session::{RouterBuilderSessionExt, SessionConfig, cookie::CookieTokenStore},
 };
 
-pub use auth::{AdminUser, Role, Section, create_admin, create_operator};
+pub use auth::{AdminUser, Role, Section, create_admin, create_operator, team};
 pub use config::{AdminConfig, AdminServices, Stylesheet};
 pub use error::AdminError;
 pub use migration::migrations;
