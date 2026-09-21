@@ -50,6 +50,17 @@ pub fn date(unix_secs: u64) -> String {
     format!("{day:02}/{month:02}/{year}")
 }
 
+/// `21/11/2024 14:05` from Unix seconds (UTC).
+pub fn date_time(unix_secs: u64) -> String {
+    let minutes = unix_secs % 86_400 / 60;
+    format!(
+        "{} {:02}:{:02}",
+        date(unix_secs),
+        minutes / 60,
+        minutes % 60
+    )
+}
+
 /// `(year, month, day)` of Unix seconds (UTC).
 pub fn civil_date(unix_secs: u64) -> (i64, u8, u8) {
     let days = (unix_secs / 86_400) as i64;
@@ -76,6 +87,10 @@ mod tests {
         assert_eq!(money(&Money::eur(-5)), "-0,05 €");
         assert_eq!(money(&Money::new(1_000_000, "CHF")), "10\u{202f}000,00 CHF");
         assert_eq!(date(1_732_147_200), "21/11/2024");
+        assert_eq!(
+            date_time(1_732_147_200 + 14 * 3_600 + 5 * 60 + 59),
+            "21/11/2024 14:05"
+        );
         assert_eq!(vat_rate(2_000), "20 %");
         assert_eq!(vat_rate(550), "5,5 %");
         assert_eq!(vat_rate(825), "8,25 %");

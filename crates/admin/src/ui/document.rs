@@ -7,8 +7,8 @@ use topcoat::{
 
 use crate::{
     app::admin::_secure::{
-        categories, customers, disputes, emails, families, inventory, invoices, orders, password,
-        products, promotions, questions, refunds, returns, reviews, team, vat,
+        categories, customers, disputes, emails, families, inventory, invoices, journal, orders,
+        password, products, promotions, questions, refunds, returns, reviews, team, vat,
     },
     auth::{Role, Section, signed_in_admin},
     config::{AdminConfig, Stylesheet},
@@ -22,32 +22,32 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
     // Every section, in the order shown: `(section, link, current, label)` —
     // an operator's navigation holds those their role opens.
     macro_rules! entry {
-        ($section:ident, $page:path, $label:literal) => {{
+        ($section:ident, $page:path) => {{
             let link = href!($page);
             (
                 Section::$section,
                 link.resolve(cx),
                 link.is_current(cx),
-                $label,
+                Section::$section.label(),
             )
         }};
     }
     let sections = [
-        entry!(Orders, orders::index, "Commandes"),
-        entry!(Products, products::index, "Produits"),
-        entry!(Categories, categories::index, "Catégories"),
-        entry!(Families, families::index, "Familles"),
-        entry!(Inventory, inventory::index, "Stock"),
-        entry!(Customers, customers::index, "Clients"),
-        entry!(Promotions, promotions::index, "Promotions"),
-        entry!(Invoices, invoices::index, "Factures"),
-        entry!(Returns, returns::index, "Retours"),
-        entry!(Refunds, refunds::index, "Remboursements"),
-        entry!(Disputes, disputes::index, "Litiges"),
-        entry!(Vat, vat::index, "TVA"),
-        entry!(Reviews, reviews::index, "Avis"),
-        entry!(Questions, questions::index, "Questions"),
-        entry!(Emails, emails::index, "E-mails"),
+        entry!(Orders, orders::index),
+        entry!(Products, products::index),
+        entry!(Categories, categories::index),
+        entry!(Families, families::index),
+        entry!(Inventory, inventory::index),
+        entry!(Customers, customers::index),
+        entry!(Promotions, promotions::index),
+        entry!(Invoices, invoices::index),
+        entry!(Returns, returns::index),
+        entry!(Refunds, refunds::index),
+        entry!(Disputes, disputes::index),
+        entry!(Vat, vat::index),
+        entry!(Reviews, reviews::index),
+        entry!(Questions, questions::index),
+        entry!(Emails, emails::index),
     ];
     let mut navigation: Vec<(String, bool, &'static str)> = sections
         .into_iter()
@@ -58,6 +58,12 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
     if admin.is_some_and(|admin| admin.role == Role::Owner) {
         let team_link = href!(team::index);
         navigation.push((team_link.resolve(cx), team_link.is_current(cx), "Équipe"));
+        let journal_link = href!(journal::index);
+        navigation.push((
+            journal_link.resolve(cx),
+            journal_link.is_current(cx),
+            "Journal",
+        ));
     }
     let own_password = href!(password::index).resolve(cx);
     // The name of the shop leads to where the operator works.

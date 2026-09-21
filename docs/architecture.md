@@ -389,6 +389,17 @@ the SMTP relay.
   demotes or deactivates *themselves*, and whoever asks, the last active
   owner stays one — counted inside the write's own `BEGIN IMMEDIATE`
   transaction, so two owners demoting each other cannot both succeed.
+  The same layer keeps the **journal** (`admin_journal`,
+  `timada_admin::journal`, the owners' « Journal » page): one row for every
+  request that writes — with how it went: it reached its page and what the
+  page answered, or the page failed — for every refusal at the door, reads
+  included, and for every sign-in, the failed ones with the address that
+  was typed. A row says who (the e-mail and the role *as they were*), when,
+  the method and the path under the mount, which holds the ids. **It never
+  holds a form**: a body may carry a password or a customer's words.
+  Writing it never fails the request it is about. It is a host-side record
+  of who asked for what, next to the event store, which says what happened;
+  nothing purges it.
 - **A guest is a customer without an account.** Orders, invoices, returns
   and e-mails all go by a customer id, and the customer context never held
   credentials — a login is the host's — so somebody ordering without an

@@ -77,12 +77,50 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0005AdminJournal;
+
+sqlite_migration!(
+    M0005AdminJournal,
+    "admin",
+    "m0005_admin_journal",
+    vec_box![M0004AdminTeam],
+    vec_box![
+        // What operators did, and tried to. The e-mail and the role are
+        // written down as they were: the row outlives a renamed or demoted
+        // operator. No form is ever kept — a path holds ids, a body may hold
+        // a password.
+        (
+            "CREATE TABLE admin_journal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                at INTEGER NOT NULL,
+                admin_id TEXT,
+                email TEXT NOT NULL,
+                role TEXT,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                status INTEGER NOT NULL
+            )",
+            "DROP TABLE admin_journal"
+        ),
+        (
+            "CREATE INDEX admin_journal_admin ON admin_journal (admin_id, id)",
+            "DROP INDEX admin_journal_admin"
+        ),
+        (
+            "CREATE INDEX admin_journal_outcome ON admin_journal (outcome, id)",
+            "DROP INDEX admin_journal_outcome"
+        )
+    ]
+);
+
 /// Admin users and sessions, to register alongside the contexts' migrations.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     vec_box![
         M0001AdminUser,
         M0002AdminSession,
         M0003AdminRole,
-        M0004AdminTeam
+        M0004AdminTeam,
+        M0005AdminJournal
     ]
 }
