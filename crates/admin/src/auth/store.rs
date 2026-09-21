@@ -12,12 +12,24 @@ pub struct AdminUser {
     pub id: String,
     pub email: String,
     pub role: Role,
+    /// Signed in with a temporary password: nothing else until it is replaced.
+    pub must_change_password: bool,
 }
 
 /// A stored role nobody knows is nobody's: the operator cannot sign in.
-fn operator(id: String, email: String, role: &str) -> Option<AdminUser> {
+fn operator(
+    id: String,
+    email: String,
+    role: &str,
+    must_change_password: bool,
+) -> Option<AdminUser> {
     match Role::parse(role) {
-        Some(role) => Some(AdminUser { id, email, role }),
+        Some(role) => Some(AdminUser {
+            id,
+            email,
+            role,
+            must_change_password,
+        }),
         None => {
             tracing::error!(admin_id = %id, %role, "unknown role: the operator is refused");
             None
@@ -89,28 +101,33 @@ pub async fn find_credentials(
     db: &SqlitePool,
     email: &str,
 ) -> sqlx::Result<Option<(AdminUser, String)>> {
-    let row: Option<(String, String, String, String)> =
-        sqlx::query_as("SELECT id, email, role, password_hash FROM admin_user WHERE email = ?")
-            .bind(normalize_email(email))
-            .fetch_optional(db)
-            .await?;
-    Ok(row.and_then(|(id, email, role, hash)| Some((operator(id, email, &role)?, hash))))
+    // Who left the team has no credentials any more.
+    let row: Option<(String, String, String, bool, String)> = sqlx::query_as(
+        "SELECT id, email, role, must_change_password, password_hash FROM admin_user
+         WHERE email = ? AND active = 1",
+    )
+    .bind(normalize_email(email))
+    .fetch_optional(db)
+    .await?;
+    Ok(row.and_then(|(id, email, role, must_change, hash)| {
+        Some((operator(id, email, &role, must_change)?, hash))
+    }))
 }
 
 pub async fn find_by_session(
     db: &SqlitePool,
     token_hash: &TokenHash,
 ) -> anyhow::Result<Option<AdminUser>> {
-    let row: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT u.id, u.email, u.role FROM admin_session s
+    let row: Option<(String, String, String, bool)> = sqlx::query_as(
+        "SELECT u.id, u.email, u.role, u.must_change_password FROM admin_session s
          JOIN admin_user u ON u.id = s.admin_id
-         WHERE s.token_hash = ? AND s.expires_at > ?",
+         WHERE s.token_hash = ? AND s.expires_at > ? AND u.active = 1",
     )
     .bind(token_hash.as_slice())
     .bind(now_secs()?)
     .fetch_optional(db)
     .await?;
-    Ok(row.and_then(|(id, email, role)| operator(id, email, &role)))
+    Ok(row.and_then(|(id, email, role, must_change)| operator(id, email, &role, must_change)))
 }
 
 pub async fn insert_session(

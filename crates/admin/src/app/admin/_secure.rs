@@ -11,12 +11,14 @@ pub mod families;
 pub mod inventory;
 pub mod invoices;
 pub mod orders;
+pub mod password;
 pub mod products;
 pub mod promotions;
 pub mod questions;
 pub mod refunds;
 pub mod returns;
 pub mod reviews;
+pub mod team;
 pub mod vat;
 
 use topcoat::{
@@ -33,7 +35,7 @@ use topcoat::{
 };
 
 use crate::{
-    auth::{CurrentAdmin, Section, current_admin},
+    auth::{CurrentAdmin, OWN_PASSWORD, Section, current_admin},
     config::{AdminConfig, Stylesheet},
 };
 
@@ -104,6 +106,12 @@ async fn require_admin(cx: &Cx, body: Body, next: Next<'_>) -> Result<Response> 
             let config = app_context::<AdminConfig>(cx);
             let path = uri(cx).path().to_owned();
             let writes = !matches!(*method(cx), Method::GET | Method::HEAD);
+            // A temporary password opens one page: the one that replaces it.
+            if admin.must_change_password
+                && path_under_mount(&path, &config.mount).trim_matches('/') != OWN_PASSWORD
+            {
+                return Err(see_other(href!(password::index).resolve(cx)).into());
+            }
             if !admin
                 .role
                 .permits(path_under_mount(&path, &config.mount), writes)

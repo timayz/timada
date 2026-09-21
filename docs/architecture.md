@@ -380,6 +380,15 @@ the SMTP relay.
   an owner (whoever signed in before roles existed is one), `create_operator`
   takes the role. A host wanting other roles changes `auth/role.rs`: nothing
   is configured at run time.
+  The owners run the **team** from « Équipe » (`timada_admin::team`, also
+  there for a host's CLI): an operator is added with a temporary password
+  and is let nowhere but to the page that replaces it (`must_change_password`,
+  checked by the same layer; « Mon mot de passe » is every role's); a new
+  role applies at the operator's next request; a reset or an ended access
+  (`active`) closes their sessions at once, and nothing is deleted. Nobody
+  demotes or deactivates *themselves*, and whoever asks, the last active
+  owner stays one — counted inside the write's own `BEGIN IMMEDIATE`
+  transaction, so two owners demoting each other cannot both succeed.
 - **A guest is a customer without an account.** Orders, invoices, returns
   and e-mails all go by a customer id, and the customer context never held
   credentials — a login is the host's — so somebody ordering without an

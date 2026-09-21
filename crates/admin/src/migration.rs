@@ -56,7 +56,33 @@ sqlite_migration!(
     )]
 );
 
+pub struct M0004AdminTeam;
+
+sqlite_migration!(
+    M0004AdminTeam,
+    "admin",
+    "m0004_admin_team",
+    vec_box![M0003AdminRole],
+    vec_box![
+        // Who left no longer signs in; nothing is deleted.
+        (
+            "ALTER TABLE admin_user ADD COLUMN active INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE admin_user DROP COLUMN active"
+        ),
+        // Given a temporary password, to be replaced at the first sign-in.
+        (
+            "ALTER TABLE admin_user ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE admin_user DROP COLUMN must_change_password"
+        )
+    ]
+);
+
 /// Admin users and sessions, to register alongside the contexts' migrations.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001AdminUser, M0002AdminSession, M0003AdminRole]
+    vec_box![
+        M0001AdminUser,
+        M0002AdminSession,
+        M0003AdminRole,
+        M0004AdminTeam
+    ]
 }
