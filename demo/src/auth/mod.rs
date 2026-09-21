@@ -89,6 +89,50 @@ pub async fn sign_up(
     Ok(Account { customer_id, email })
 }
 
+/// Gives somebody who ordered without an account one: a password for the
+/// customer they already are, their orders with it. Same order as a sign-up —
+/// the address is claimed in SQL first, its primary key being the uniqueness
+/// guard — then the customer is told; a refusal there releases the claim.
+///
+/// An address that already signs into another customer is refused: the two
+/// stay two customers, and the guest keeps the link of their e-mails.
+pub async fn open_guest_account(
+    store: &Store,
+    customer_id: &str,
+    password: &str,
+) -> Result<Account, SignUpError> {
+    if password.chars().count() < MIN_PASSWORD_LEN {
+        return Err(SignUpError::WeakPassword);
+    }
+    let guest = timada_customer::load_address_book(&store.executor, customer_id)
+        .await?
+        .filter(|customer| customer.guest)
+        .ok_or_else(|| SignUpError::Server(anyhow::anyhow!("{customer_id} is not a guest")))?;
+    let email = store::normalize_email(&guest.email);
+    let hash = password::hash(password)
+        .ok_or_else(|| SignUpError::Server(anyhow::anyhow!("password hashing failed")))?;
+    if !store::claim_email(&store.db, &email, &hash).await? {
+        return Err(SignUpError::EmailTaken);
+    }
+    let opened = timada_customer::Command(&store.executor)
+        .open_account(customer_id)
+        .await;
+    if let Err(err) = opened {
+        store::release_claim(&store.db, &email)
+            .await
+            .map_err(anyhow::Error::from)?;
+        return Err(SignUpError::Server(err.into()));
+    }
+    store::attach_customer(&store.db, &email, customer_id)
+        .await
+        .map_err(anyhow::Error::from)?;
+    tracing::info!(%customer_id, "a guest opened an account");
+    Ok(Account {
+        customer_id: customer_id.to_owned(),
+        email,
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ChangeEmailError {
     #[error("Mot de passe incorrect.")]

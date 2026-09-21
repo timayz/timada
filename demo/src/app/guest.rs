@@ -23,9 +23,9 @@ use topcoat::{
 use super::{account, cart, checkout, document};
 use crate::{
     Store,
-    auth::current_account,
+    auth::{SignUpError, current_account, open_guest_account, start_session},
     cart_session::current_cart,
-    guest::{current_guest, current_shopper, order_key_is_valid, remember_guest},
+    guest::{current_guest, current_shopper, forget_guest, order_key_is_valid, remember_guest},
 };
 
 #[derive(Debug, Deserialize)]
@@ -237,6 +237,19 @@ async fn guest_form_view(
 
 path_param!(pub order_id: String, error = not_found);
 
+/// Where the shopper reads an order: in their account, or — a guest — on the
+/// order's own page.
+pub(super) async fn order_link(cx: &Cx, id: &str) -> Result<String> {
+    let guest = current_shopper(cx)
+        .await?
+        .is_some_and(|shopper| shopper.guest);
+    Ok(if guest {
+        href!(order, OrderId(id.to_owned())).resolve(cx)
+    } else {
+        href!(account::order_detail, checkout::OrderId(id.to_owned())).resolve(cx)
+    })
+}
+
 /// `?cle=<key>`: the signature of the link written in the e-mails.
 #[query_params(error = bad_request)]
 struct OrderQuery {
@@ -274,7 +287,7 @@ pub async fn order(cx: &Cx) -> Result<impl View> {
     }
     match current_shopper(cx).await? {
         Some(shopper) if shopper.guest => Ok(view! {
-            account::order_page(id: id, customer_id: shopper.customer_id, guest: true)
+            account::order_page(id: id, customer_id: shopper.customer_id, guest: true, account_error: None)
         }),
         // An account reads its orders in its account.
         Some(_) => {
@@ -283,4 +296,51 @@ pub async fn order(cx: &Cx) -> Result<impl View> {
         }
         None => Err(topcoat::router::error::not_found().into()),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenAccountForm {
+    password: String,
+    password_confirm: String,
+}
+
+/// « Créer mon compte », from a guest's order page: a password for the
+/// customer they already are. Their orders come with them; the browser is
+/// signed in, and stops being a guest's.
+#[page(POST "/order/{order_id}/account")]
+pub async fn open_account(cx: &Cx, Form(form): Form<OpenAccountForm>) -> Result<impl View> {
+    let id = param::<OrderId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    // The guest whose order this is, nobody else.
+    let shopper = current_shopper(cx)
+        .await?
+        .filter(|shopper| shopper.guest)
+        .ok_or_not_found()?;
+    load_order_details(&store.executor, &id)
+        .await?
+        .filter(|placed| placed.customer_id == shopper.customer_id)
+        .ok_or_not_found()?;
+
+    let error = if form.password != form.password_confirm {
+        "Les deux mots de passe ne sont pas identiques.".to_owned()
+    } else {
+        match open_guest_account(store, &shopper.customer_id, &form.password).await {
+            Ok(account) => {
+                start_session(cx, &account).await?;
+                forget_guest(cx);
+                let theirs = href!(account::order_detail, checkout::OrderId(id)).resolve(cx);
+                return Err(see_other(theirs).into());
+            }
+            // Said to somebody holding the guest's own link or cookie.
+            Err(SignUpError::EmailTaken) => "Un compte existe déjà avec votre adresse e-mail : \
+                 connectez-vous pour l'utiliser. Cette commande reste accessible par le lien de \
+                 vos e-mails."
+                .to_owned(),
+            Err(SignUpError::Server(err)) => return Err(err.into()),
+            Err(refused) => refused.to_string(),
+        }
+    };
+    Ok(view! {
+        account::order_page(id: id, customer_id: shopper.customer_id, guest: true, account_error: Some(error))
+    })
 }

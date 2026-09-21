@@ -85,6 +85,11 @@ pub fn remember_guest(cx: &Cx, customer_id: &str) {
     );
 }
 
+/// With an account, they sign in: the browser stops being a guest's.
+pub fn forget_guest(cx: &Cx) {
+    jar(cx).remove(GUEST_COOKIE);
+}
+
 /// The guest customer this browser orders as, while they are still a guest.
 #[memoize(as_ref)]
 pub async fn current_guest(cx: &Cx) -> topcoat::Result<Option<String>> {

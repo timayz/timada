@@ -25,15 +25,15 @@ use topcoat::{
 };
 
 use super::{
-    account,
     checkout::OrderId,
     document,
     format::{date, money},
+    guest as guest_pages,
 };
 use crate::{
     Store,
-    auth::require_account,
     db::{RETURNS_ADDRESS, return_policy},
+    guest::require_shopper,
 };
 
 path_param!(pub return_id: String, error = not_found);
@@ -116,12 +116,12 @@ pub async fn can_request_return(store: &Store, order: &OrderDetailsView) -> anyh
 }
 
 async fn own_order(cx: &Cx) -> Result<OrderDetailsView> {
-    let account = require_account(cx).await?;
+    let shopper = require_shopper(cx).await?;
     let id = param::<OrderId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     Ok(load_order_details(&store.executor, &id)
         .await?
-        .filter(|o| o.customer_id == account.customer_id)
+        .filter(|o| o.customer_id == shopper.customer_id)
         .ok_or_not_found()?)
 }
 
@@ -219,7 +219,7 @@ async fn return_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
     } else {
         "L'étiquette de retour prépayée vous est offerte.".to_owned()
     };
-    let back = href!(account::order_detail, OrderId(order.id.clone())).resolve(cx);
+    let back = guest_pages::order_link(cx, &order.id).await?;
 
     Ok(view! {
         document(
@@ -311,12 +311,12 @@ impl IntoResponse for LabelDownload {
 /// return, or one without a label file, is a 404.
 #[route(GET "/account/returns/{return_id}/label")]
 pub async fn label_file(cx: &Cx) -> Result<LabelDownload> {
-    let account = require_account(cx).await?;
+    let shopper = require_shopper(cx).await?;
     let id = param::<ReturnId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     load_return(&store.executor, &id)
         .await?
-        .filter(|request| request.customer_id == account.customer_id)
+        .filter(|request| request.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
     let file = load_return_label_file(&store.db, &id)
         .await?
@@ -328,15 +328,15 @@ pub async fn label_file(cx: &Cx) -> Result<LabelDownload> {
 /// request stands. Someone else's return is a 404.
 #[page("/account/returns/{return_id}")]
 pub async fn show(cx: &Cx) -> Result<impl View> {
-    let account = require_account(cx).await?;
+    let shopper = require_shopper(cx).await?;
     let id = param::<ReturnId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     let request = load_return(&store.executor, &id)
         .await?
-        .filter(|r| r.customer_id == account.customer_id)
+        .filter(|r| r.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
 
-    let order_link = href!(account::order_detail, OrderId(request.order_id.clone())).resolve(cx);
+    let order_link = guest_pages::order_link(cx, &request.order_id).await?;
     let cancel_action = href!(cancel, ReturnId(id.clone())).resolve(cx);
     let lines: Vec<(String, String, String)> = request
         .lines
@@ -484,11 +484,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
 #[page(POST "/account/returns/{return_id}/cancel")]
 pub async fn cancel(cx: &Cx) -> Result<impl View> {
-    let account = require_account(cx).await?;
+    let shopper = require_shopper(cx).await?;
     let id = param::<ReturnId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     match returns(store)
-        .cancel_return(&id, &account.customer_id)
+        .cancel_return(&id, &shopper.customer_id)
         .await
     {
         // Already received in the meantime: the slip says where it stands.

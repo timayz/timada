@@ -504,19 +504,6 @@ enum PayStep {
     Cancelled(String),
 }
 
-/// Where the shopper reads the order afterwards: in their account, or — a
-/// guest — on the order's own page.
-async fn order_details_link(cx: &Cx, id: &str) -> Result<String> {
-    let guest = current_shopper(cx)
-        .await?
-        .is_some_and(|shopper| shopper.guest);
-    Ok(if guest {
-        href!(guest_pages::order, guest_pages::OrderId(id.to_owned())).resolve(cx)
-    } else {
-        href!(account::order_detail, OrderId(id.to_owned())).resolve(cx)
-    })
-}
-
 /// The shopper's own order, if it exists yet.
 async fn own_order(cx: &Cx, id: &str) -> Result<Option<OrderDetailsView>> {
     let shopper = require_shopper(cx).await?;
@@ -615,7 +602,7 @@ pub async fn pay(cx: &Cx) -> Result<impl View> {
     let summary = order
         .as_ref()
         .map(|o| (o.display_number().to_owned(), money(&o.total)));
-    let details = order_details_link(cx, &id).await?;
+    let details = guest_pages::order_link(cx, &id).await?;
     let pay_label = summary
         .as_ref()
         .map(|(_, total)| total.clone())
@@ -698,7 +685,7 @@ async fn paid_order(cx: &Cx, id: &str) -> Result<OrderDetailsView> {
 pub async fn confirmation(cx: &Cx) -> Result<impl View> {
     let id = param::<OrderId>(cx)?.clone();
     let order = paid_order(cx, &id).await?;
-    let details = order_details_link(cx, &id).await?;
+    let details = guest_pages::order_link(cx, &id).await?;
 
     Ok(view! {
         document(

@@ -912,7 +912,9 @@ pub async fn orders(cx: &Cx) -> Result<impl View> {
 pub async fn order_detail(cx: &Cx) -> Result<impl View> {
     let account = require_account(cx).await?;
     let id = param::<OrderId>(cx)?.clone();
-    Ok(view! { order_page(id: id, customer_id: account.customer_id, guest: false) })
+    Ok(
+        view! { order_page(id: id, customer_id: account.customer_id, guest: false, account_error: None) },
+    )
 }
 
 /// The page of an order of `customer_id` — an account's, or a guest's, who
@@ -923,6 +925,8 @@ pub(super) async fn order_page(
     id: String,
     customer_id: String,
     guest: bool,
+    // Why the account a guest asked for was not opened.
+    account_error: Option<String>,
 ) -> Result<impl View> {
     let store = app_context::<Store>(cx);
     let order = load_order_details(&store.executor, &id)
@@ -961,13 +965,8 @@ pub(super) async fn order_page(
             })
             .collect();
     // The order's returns, and whether another one can still be asked for.
-    // The return pages are the account's so far: a guest is shown none.
-    let listed_returns = if guest {
-        Vec::new()
-    } else {
-        timada_returns::returns_of_order(&store.db, &id).await?
-    };
-    let order_returns: Vec<ReturnLink> = listed_returns
+    let order_returns: Vec<ReturnLink> = timada_returns::returns_of_order(&store.db, &id)
+        .await?
         .into_iter()
         .map(|row| ReturnLink {
             link: href!(returns::show, returns::ReturnId(row.return_id)).resolve(cx),
@@ -986,14 +985,21 @@ pub(super) async fn order_page(
                     href!(invoice::show, OrderId(id.clone())).resolve(cx),
                 )
             });
+    let new_return = returns::can_request_return(store, &order)
+        .await?
+        .then(|| href!(returns::new_return, OrderId(id.clone())).resolve(cx));
     let reader = if guest {
-        OrderReader::Guest
-    } else {
-        OrderReader::Account {
-            new_return: returns::can_request_return(store, &order)
-                .await?
-                .then(|| href!(returns::new_return, OrderId(id.clone())).resolve(cx)),
+        OrderReader::Guest {
+            new_return,
+            open_account: href!(
+                super::guest::open_account,
+                super::guest::OrderId(id.clone())
+            )
+            .resolve(cx),
+            account_error,
         }
+    } else {
+        OrderReader::Account { new_return }
     };
     Ok(view! {
         order_view(
@@ -1011,8 +1017,13 @@ pub(super) async fn order_page(
 enum OrderReader {
     /// In their account: where another return is asked for, while one can be.
     Account { new_return: Option<String> },
-    /// Without an account: no account pages to go back to.
-    Guest,
+    /// Without an account: no account pages to go back to, and one to open
+    /// — where the form posts, and why the last try was refused.
+    Guest {
+        new_return: Option<String>,
+        open_account: String,
+        account_error: Option<String>,
+    },
 }
 
 /// One return of the order as its page lists it.
@@ -1047,9 +1058,13 @@ async fn order_view(
     invoice_link: Option<(String, String)>,
     reader: OrderReader,
 ) -> Result<impl View> {
-    let (new_return, guest) = match reader {
-        OrderReader::Account { new_return } => (new_return, false),
-        OrderReader::Guest => (None, true),
+    let (new_return, open_account) = match reader {
+        OrderReader::Account { new_return } => (new_return, None),
+        OrderReader::Guest {
+            new_return,
+            open_account,
+            account_error,
+        } => (new_return, Some((open_account, account_error))),
     };
     let payment = match order.payment_mode {
         // The code covered the whole total: nothing was charged.
@@ -1192,10 +1207,19 @@ async fn order_view(
                 <div class="card"><h2>"Livraison"</h2> address_block(address: &order.delivery_address)</div>
                 <div class="card"><h2>"Facturation"</h2> address_block(address: &order.billing_address)</div>
             </div>
-            if guest {
-                <p class="muted">"Vous avez commandé sans compte : gardez l'e-mail de confirmation, son lien ramène à cette page."</p>
-            } else {
-                <p><a href=(href!(orders))>"Retour à mes commandes"</a></p>
+            match &open_account {
+                Some((action, error)) => {
+                    <p class="muted">"Vous avez commandé sans compte : gardez l'e-mail de confirmation, son lien ramène à cette page."</p>
+                    <h2 id="compte">"Créer mon compte"</h2>
+                    <p>"Choisissez un mot de passe : vos commandes passées sans compte s'y retrouvent, avec vos adresses."</p>
+                    if let Some(error) = error { <p role="alert" class="error">(error.clone())</p> }
+                    <form method="post" action=(action.clone()) class="stack">
+                        <label for="password">"Mot de passe" <input id="password" name="password" type="password" required=(true) autocomplete="new-password"></label>
+                        <label for="password_confirm">"Confirmez le mot de passe" <input id="password_confirm" name="password_confirm" type="password" required=(true) autocomplete="new-password"></label>
+                        <button type="submit">"Créer mon compte"</button>
+                    </form>
+                }
+                None => { <p><a href=(href!(orders))>"Retour à mes commandes"</a></p> }
             }
         )
     })

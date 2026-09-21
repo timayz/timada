@@ -298,7 +298,7 @@ pub(crate) fn question_answered(
 }
 
 fn return_link(config: &MailerConfig, request: &ReturnView) -> String {
-    config.url(&format!("/account/returns/{}", request.id))
+    config.return_url(&request.id)
 }
 
 fn return_lines(request: &ReturnView) -> String {

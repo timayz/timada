@@ -52,6 +52,15 @@ impl MailerConfig {
 
     /// Where the customer this e-mail is written to reads the order: their
     /// account, or a guest's signed link. For a host's own [`crate::Templates`].
+    /// Where they follow a return: its slip in their account, or — a guest —
+    /// the signed link of the order, whose page lists its returns.
+    pub fn return_url(&self, return_id: &str) -> String {
+        match &self.guest_order_path {
+            Some(path) => self.url(path),
+            None => self.url(&format!("/account/returns/{return_id}")),
+        }
+    }
+
     pub fn order_url(&self, order_id: &str) -> String {
         match &self.guest_order_path {
             Some(path) => self.url(path),
