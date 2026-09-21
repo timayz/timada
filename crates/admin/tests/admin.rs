@@ -727,6 +727,185 @@ async fn the_owners_run_the_team() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn what_operators_do_and_try_is_written_down() -> anyhow::Result<()> {
+    use timada_admin::journal::{JournalFilter, Outcome, count_journal, list_journal};
+    let h = harness("admin").await?;
+    let everything = JournalFilter::default();
+
+    // Sign-ins, the failed ones with the address that was typed.
+    try_sign_in(&h, EMAIL, "pas le bon").await;
+    try_sign_in(&h, "Intrus@Ailleurs.example", "au hasard").await;
+    let owner = sign_in(&h, "admin").await?;
+    let rows = list_journal(&h.db, &everything).await?;
+    let signed: Vec<_> = rows
+        .iter()
+        .rev()
+        .map(|row| {
+            (
+                row.email.as_str(),
+                row.path.as_str(),
+                row.outcome,
+                row.admin_id.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        signed,
+        [
+            (EMAIL, "login", Outcome::Refused, false),
+            ("intrus@ailleurs.example", "login", Outcome::Refused, false),
+            (EMAIL, "login", Outcome::Passed, true),
+        ]
+    );
+
+    // Reading leaves no trace; writing does, with how it went.
+    let before = count_journal(&h.db, &everything).await?;
+    h.router.handle(get("/admin/orders", Some(&owner))).await;
+    h.router.handle(get("/admin/families", Some(&owner))).await;
+    assert_eq!(count_journal(&h.db, &everything).await?, before);
+    let opened = h
+        .router
+        .handle(post(
+            "/admin/families/new",
+            "name=Casque+Aria&slug=",
+            Some(&owner),
+        ))
+        .await;
+    assert_eq!(opened.status(), StatusCode::SEE_OTHER);
+    let refused_by_the_page = h
+        .router
+        .handle(post("/admin/families/new", "name=+&slug=", Some(&owner)))
+        .await;
+    assert_eq!(refused_by_the_page.status(), StatusCode::OK);
+    let rows = list_journal(&h.db, &everything).await?;
+    assert_eq!(
+        (
+            rows[1].path.as_str(),
+            rows[1].outcome,
+            rows[1].status,
+            rows[1].method.as_str()
+        ),
+        ("families/new", Outcome::Passed, 303, "POST")
+    );
+    assert_eq!((rows[0].outcome, rows[0].status), (Outcome::Passed, 200));
+    assert_eq!(rows[0].role, Some(Role::Owner));
+
+    // What is refused at the door is written down — a read too.
+    let (support, _) = operator(&h, "sav@shop.example", Role::Support).await?;
+    let order_id = place_order(&h).await?;
+    h.router
+        .handle(post(
+            &format!("/admin/orders/{order_id}/refund"),
+            "amount_cents=1000&reason=geste",
+            Some(&support),
+        ))
+        .await;
+    h.router.handle(get("/admin/vat", Some(&support))).await;
+    let peek = h.router.handle(get("/admin/journal", Some(&support))).await;
+    assert_eq!(peek.status(), StatusCode::FORBIDDEN);
+    let refusals = list_journal(
+        &h.db,
+        &JournalFilter {
+            outcome: Some(Outcome::Refused),
+            ..JournalFilter::default()
+        },
+    )
+    .await?;
+    let tried: Vec<_> = refusals
+        .iter()
+        .take(3)
+        .map(|row| (row.method.as_str(), row.path.clone(), row.status))
+        .collect();
+    assert_eq!(
+        tried,
+        [
+            ("GET", "journal".to_owned(), 403),
+            ("GET", "vat".to_owned(), 403),
+            ("POST", format!("orders/{order_id}/refund"), 403),
+        ]
+    );
+    let refund = &refusals[2];
+    assert_eq!(
+        (
+            refund.section(),
+            refund.target(),
+            refund.action().as_str(),
+            refund.role
+        ),
+        (
+            "orders",
+            Some(order_id.as_str()),
+            "refund",
+            Some(Role::Support)
+        )
+    );
+
+    // A form is never kept: not a temporary password, not anything typed.
+    h.router
+        .handle(post(
+            "/admin/team/new",
+            "email=compta%40shop.example&role=accounting&temporary_password=provisoire-2026",
+            Some(&owner),
+        ))
+        .await;
+    let rows = list_journal(&h.db, &everything).await?;
+    assert_eq!(rows[0].path, "team/new");
+    assert!(
+        rows.iter()
+            .all(|row| !format!("{row:?}").contains("provisoire")),
+        "{rows:?}"
+    );
+    // Somebody with a temporary password who writes anyway is stopped, and noted.
+    let first = try_sign_in(&h, "compta@shop.example", "provisoire-2026").await;
+    let books = session_cookie(&first).ok_or_else(|| anyhow::anyhow!("no session"))?;
+    h.router
+        .handle(post(
+            &format!("/admin/orders/{order_id}/refund"),
+            "amount_cents=1",
+            Some(&books),
+        ))
+        .await;
+    let rows = list_journal(&h.db, &everything).await?;
+    assert_eq!(
+        (rows[0].email.as_str(), rows[0].outcome, rows[0].status),
+        ("compta@shop.example", Outcome::Refused, 303)
+    );
+
+    // The owners read it, filtered by who and by how it went.
+    let page = text(h.router.handle(get("/admin/journal", Some(&owner))).await).await?;
+    assert!(page.contains("href=\"/admin/journal\""), "{page}");
+    for shown in [
+        "intrus@ailleurs.example",
+        "Connexion",
+        "Refusé",
+        "POST refund",
+        "Familles",
+        "Équipe",
+    ] {
+        assert!(page.contains(shown), "{shown}: {page}");
+    }
+    assert!(page.contains(&order_id), "{page}");
+    let theirs = list_journal(
+        &h.db,
+        &JournalFilter {
+            admin_id: refund.admin_id.clone(),
+            ..JournalFilter::default()
+        },
+    )
+    .await?;
+    assert_eq!(theirs.len(), 4, "a sign-in and three refusals: {theirs:?}");
+    let by_operator = format!(
+        "/admin/journal?operateur={}&issue=refused",
+        refund.admin_id.clone().unwrap_or_default()
+    );
+    let filtered = text(h.router.handle(get(&by_operator, Some(&owner))).await).await?;
+    assert!(filtered.contains("POST refund"), "{filtered}");
+    assert!(!filtered.contains("intrus@ailleurs.example"), "{filtered}");
+    assert!(!filtered.contains("POST new"), "{filtered}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_customer_who_ordered_without_an_account_is_marked_a_guest() -> anyhow::Result<()> {
     let h = harness("admin").await?;
     let cookie = sign_in(&h, "admin").await?;

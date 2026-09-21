@@ -174,6 +174,27 @@ impl Section {
         }
     }
 
+    /// As the navigation names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Section::Orders => "Commandes",
+            Section::Products => "Produits",
+            Section::Categories => "Catégories",
+            Section::Families => "Familles",
+            Section::Inventory => "Stock",
+            Section::Customers => "Clients",
+            Section::Promotions => "Promotions",
+            Section::Invoices => "Factures",
+            Section::Returns => "Retours",
+            Section::Refunds => "Remboursements",
+            Section::Disputes => "Litiges",
+            Section::Vat => "TVA",
+            Section::Reviews => "Avis",
+            Section::Questions => "Questions",
+            Section::Emails => "E-mails",
+        }
+    }
+
     pub fn of_segment(segment: &str) -> Option<Self> {
         Self::ALL
             .into_iter()

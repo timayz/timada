@@ -2,6 +2,7 @@
 //! events). topcoat's session layer hands out a token hash; the rows that tie
 //! a hash to an admin are ours.
 
+pub mod journal;
 mod password;
 mod role;
 mod store;
@@ -38,12 +39,35 @@ pub fn signed_in_admin(cx: &Cx) -> Option<&AdminUser> {
 /// `Ok(None)` on a bad email/password pair (no hint which).
 pub async fn sign_in(cx: &Cx, email: &str, password: &str) -> topcoat::Result<Option<AdminUser>> {
     let services = app_context::<AdminServices>(cx);
+    // A sign-in nobody's credentials matched is written down with the
+    // address that was typed, cut to what an address may be.
+    let typed: String = email.trim().to_lowercase().chars().take(254).collect();
     let Some((admin, hash)) = store::find_credentials(&services.db, email).await? else {
         // Burn comparable time so a missing account is not distinguishable.
         password::verify(password, &password::DUMMY_HASH);
+        journal::record(
+            &services.db,
+            None,
+            &typed,
+            "POST",
+            journal::SIGN_IN,
+            journal::Outcome::Refused,
+            401,
+        )
+        .await;
         return Ok(None);
     };
     if !password::verify(password, &hash) {
+        journal::record(
+            &services.db,
+            None,
+            &typed,
+            "POST",
+            journal::SIGN_IN,
+            journal::Outcome::Refused,
+            401,
+        )
+        .await;
         return Ok(None);
     }
     let started = session::start(cx).await?;
@@ -54,6 +78,16 @@ pub async fn sign_in(cx: &Cx, email: &str, password: &str) -> topcoat::Result<Op
         started.expires_at,
     )
     .await?;
+    journal::record(
+        &services.db,
+        Some(&admin),
+        &admin.email,
+        "POST",
+        journal::SIGN_IN,
+        journal::Outcome::Passed,
+        303,
+    )
+    .await;
     tracing::info!(admin_id = %admin.id, "admin signed in");
     Ok(Some(admin))
 }

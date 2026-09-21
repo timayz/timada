@@ -10,6 +10,7 @@ pub mod emails;
 pub mod families;
 pub mod inventory;
 pub mod invoices;
+pub mod journal;
 pub mod orders;
 pub mod password;
 pub mod products;
@@ -27,7 +28,7 @@ use topcoat::{
     router::{
         Body, Method, Next, StatusCode,
         content::Html,
-        error::see_other,
+        error::{BadRequestError, NotFoundError, SeeOther, see_other},
         href, layer,
         request::{method, uri},
         response::{IntoResponse, Response},
@@ -35,9 +36,28 @@ use topcoat::{
 };
 
 use crate::{
-    auth::{CurrentAdmin, OWN_PASSWORD, Section, current_admin},
-    config::{AdminConfig, Stylesheet},
+    auth::{
+        CurrentAdmin, OWN_PASSWORD, Section, current_admin,
+        journal::{self as records, Outcome},
+    },
+    config::{AdminConfig, AdminServices, Stylesheet},
 };
+
+/// How a request that reached its page went. A redirect — how a page says
+/// "done" — and the refusals a page words itself travel as errors too: only
+/// what is none of them is a failure.
+fn how_it_went(answered: &Result<Response>) -> (Outcome, u16) {
+    match answered {
+        Ok(response) if response.status().is_server_error() => {
+            (Outcome::Error, response.status().as_u16())
+        }
+        Ok(response) => (Outcome::Passed, response.status().as_u16()),
+        Err(err) if err.downcast_ref::<SeeOther>().is_some() => (Outcome::Passed, 303),
+        Err(err) if err.downcast_ref::<NotFoundError>().is_some() => (Outcome::Passed, 404),
+        Err(err) if err.downcast_ref::<BadRequestError>().is_some() => (Outcome::Passed, 400),
+        Err(_) => (Outcome::Error, 500),
+    }
+}
 
 /// What a refused operator is answered. A layer's error never reaches the
 /// layout's error boundary — that is what makes a refused write safe: no
@@ -104,18 +124,24 @@ async fn require_admin(cx: &Cx, body: Body, next: Next<'_>) -> Result<Response> 
         Err(err) => Err(anyhow::anyhow!("{err:#}").into()),
         Ok(Some(admin)) => {
             let config = app_context::<AdminConfig>(cx);
+            let db = &app_context::<AdminServices>(cx).db;
             let path = uri(cx).path().to_owned();
+            let under = path_under_mount(&path, &config.mount).to_owned();
+            let verb = method(cx).as_str().to_owned();
             let writes = !matches!(*method(cx), Method::GET | Method::HEAD);
             // A temporary password opens one page: the one that replaces it.
-            if admin.must_change_password
-                && path_under_mount(&path, &config.mount).trim_matches('/') != OWN_PASSWORD
-            {
+            if admin.must_change_password && under.trim_matches('/') != OWN_PASSWORD {
+                if writes {
+                    let refused = Outcome::Refused;
+                    records::record(db, Some(admin), &admin.email, &verb, &under, refused, 303)
+                        .await;
+                }
                 return Err(see_other(href!(password::index).resolve(cx)).into());
             }
-            if !admin
-                .role
-                .permits(path_under_mount(&path, &config.mount), writes)
-            {
+            if !admin.role.permits(&under, writes) {
+                // Every refusal is written down, a read too: somebody tried.
+                let refused = Outcome::Refused;
+                records::record(db, Some(admin), &admin.email, &verb, &under, refused, 403).await;
                 tracing::warn!(
                     admin_id = %admin.id,
                     role = admin.role.as_str(),
@@ -125,7 +151,22 @@ async fn require_admin(cx: &Cx, body: Body, next: Next<'_>) -> Result<Response> 
                 return refusal(cx, config, &section_link(cx, admin.role.home()));
             }
             let cx = cx.with(CurrentAdmin(admin.clone()));
-            next.run(&cx, body).await
+            let answered = next.run(&cx, body).await;
+            // What writes is written down, with how it went.
+            if writes {
+                let (outcome, status) = how_it_went(&answered);
+                records::record(
+                    db,
+                    Some(admin),
+                    &admin.email,
+                    &verb,
+                    &under,
+                    outcome,
+                    status,
+                )
+                .await;
+            }
+            answered
         }
         Ok(None) => {
             let login = href!(super::login::index)
