@@ -630,7 +630,7 @@ impl AddressForm {
     }
 }
 
-fn civility(value: &str) -> Civility {
+pub(super) fn civility(value: &str) -> Civility {
     match value {
         "mrs" => Civility::Mrs,
         _ => Civility::Mr,
@@ -809,7 +809,7 @@ pub async fn set_billing_address(cx: &Cx, Form(form): Form<AddressForm>) -> Resu
 }
 
 #[component]
-async fn civility_select(selected: &Civility) -> Result<impl View> {
+pub(super) async fn civility_select(selected: &Civility) -> Result<impl View> {
     Ok(view! {
         <label for="civility">"Civilité"
             <select id="civility" name="civility" autocomplete="honorific-prefix">
@@ -912,10 +912,22 @@ pub async fn orders(cx: &Cx) -> Result<impl View> {
 pub async fn order_detail(cx: &Cx) -> Result<impl View> {
     let account = require_account(cx).await?;
     let id = param::<OrderId>(cx)?.clone();
+    Ok(view! { order_page(id: id, customer_id: account.customer_id, guest: false) })
+}
+
+/// The page of an order of `customer_id` — an account's, or a guest's, who
+/// has no account pages to go back to. Someone else's order is a 404.
+#[component]
+pub(super) async fn order_page(
+    cx: &Cx,
+    id: String,
+    customer_id: String,
+    guest: bool,
+) -> Result<impl View> {
     let store = app_context::<Store>(cx);
     let order = load_order_details(&store.executor, &id)
         .await?
-        .filter(|o| o.customer_id == account.customer_id)
+        .filter(|o| o.customer_id == customer_id)
         .ok_or_not_found()?;
 
     // What went back to the shopper, and the credit notes documenting it.
@@ -949,8 +961,13 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
             })
             .collect();
     // The order's returns, and whether another one can still be asked for.
-    let order_returns: Vec<ReturnLink> = timada_returns::returns_of_order(&store.db, &id)
-        .await?
+    // The return pages are the account's so far: a guest is shown none.
+    let listed_returns = if guest {
+        Vec::new()
+    } else {
+        timada_returns::returns_of_order(&store.db, &id).await?
+    };
+    let order_returns: Vec<ReturnLink> = listed_returns
         .into_iter()
         .map(|row| ReturnLink {
             link: href!(returns::show, returns::ReturnId(row.return_id)).resolve(cx),
@@ -969,19 +986,33 @@ pub async fn order_detail(cx: &Cx) -> Result<impl View> {
                     href!(invoice::show, OrderId(id.clone())).resolve(cx),
                 )
             });
-    let new_return = returns::can_request_return(store, &order)
-        .await?
-        .then(|| href!(returns::new_return, OrderId(id.clone())).resolve(cx));
+    let reader = if guest {
+        OrderReader::Guest
+    } else {
+        OrderReader::Account {
+            new_return: returns::can_request_return(store, &order)
+                .await?
+                .then(|| href!(returns::new_return, OrderId(id.clone())).resolve(cx)),
+        }
+    };
     Ok(view! {
         order_view(
             order: &order,
             refunds: RefundNotice { made: refunded, pending: refund_pending },
             credit_notes: &credit_notes,
             order_returns: &order_returns,
-            new_return: new_return,
-            invoice_link: invoice_link
+            invoice_link: invoice_link,
+            reader: reader
         )
     })
+}
+
+/// Who reads the order's page, and what that offers them.
+enum OrderReader {
+    /// In their account: where another return is asked for, while one can be.
+    Account { new_return: Option<String> },
+    /// Without an account: no account pages to go back to.
+    Guest,
 }
 
 /// One return of the order as its page lists it.
@@ -1013,9 +1044,13 @@ async fn order_view(
     refunds: RefundNotice,
     credit_notes: &Vec<CreditNoteLine>,
     order_returns: &Vec<ReturnLink>,
-    new_return: Option<String>,
     invoice_link: Option<(String, String)>,
+    reader: OrderReader,
 ) -> Result<impl View> {
+    let (new_return, guest) = match reader {
+        OrderReader::Account { new_return } => (new_return, false),
+        OrderReader::Guest => (None, true),
+    };
     let payment = match order.payment_mode {
         // The code covered the whole total: nothing was charged.
         _ if !order.total.is_positive() => "Aucun paiement requis".to_owned(),
@@ -1157,7 +1192,11 @@ async fn order_view(
                 <div class="card"><h2>"Livraison"</h2> address_block(address: &order.delivery_address)</div>
                 <div class="card"><h2>"Facturation"</h2> address_block(address: &order.billing_address)</div>
             </div>
-            <p><a href=(href!(orders))>"Retour à mes commandes"</a></p>
+            if guest {
+                <p class="muted">"Vous avez commandé sans compte : gardez l'e-mail de confirmation, son lien ramène à cette page."</p>
+            } else {
+                <p><a href=(href!(orders))>"Retour à mes commandes"</a></p>
+            }
         )
     })
 }

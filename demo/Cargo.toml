@@ -44,6 +44,7 @@ form_urlencoded = "1"
 argon2.workspace = true
 sha2 = "0.10"
 hex = "0.4"
+hmac = "0.12"
 tokio.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true

@@ -119,6 +119,7 @@ async fn shop_checking(
         #[cfg(feature = "stripe")]
         stripe: None,
         vat_validator: std::sync::Arc::new(registry),
+        link_secret: b"a secret for the tests".to_vec(),
     };
     seed::run(&store).await?;
     db::run_subscriptions_once(&store).await?;
@@ -169,10 +170,17 @@ async fn guest_cart_to_placed_order() -> anyhow::Result<()> {
     assert_eq!(too_many.status(), StatusCode::OK);
     assert!(text(too_many).await?.contains("Seulement 4 exemplaire"));
 
-    // Checkout needs an account and comes back after sign-up.
+    // Nobody is ordering yet: sign in, or order without an account. This
+    // shopper signs up, and comes back to the checkout.
     let gate = browser.get("/checkout").await;
     assert_eq!(gate.status(), StatusCode::SEE_OTHER);
-    assert!(location(&gate).starts_with("/login?next="));
+    assert_eq!(location(&gate), "/checkout/guest");
+    let choice = text(browser.get("/checkout/guest").await).await?;
+    assert!(
+        choice.contains("href=\"/login?next=%2Fcheckout\""),
+        "{choice}"
+    );
+    assert!(choice.contains("Commander sans compte"), "{choice}");
     let registered = browser.post("/register", REGISTER).await;
     assert_eq!(registered.status(), StatusCode::SEE_OTHER);
     assert_eq!(location(&registered), "/checkout");
@@ -278,6 +286,183 @@ async fn guest_cart_to_placed_order() -> anyhow::Result<()> {
     assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
     let own = text(other.get("/account/orders").await).await?;
     assert!(!own.contains(&order_id));
+    Ok(())
+}
+
+const GUEST: &str = "email=Grace%40Example.com&civility=mrs&first_name=Grace&last_name=Hopper&line1=1+quai+des+Compilateurs&line2=&postal_code=33000&city=Bordeaux&country_code=fr&phone=";
+
+#[tokio::test]
+async fn an_order_without_an_account_from_the_cart_to_the_invoice() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let mut browser = Browser::new(&router);
+    // With nothing in the cart there is nothing to order.
+    assert_eq!(location(&browser.get("/checkout/guest").await), "/cart");
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+
+    // What is wrong is said on the form, and nobody is remembered yet.
+    let no_email = browser
+        .post(
+            "/checkout/guest",
+            &GUEST.replace("Grace%40Example.com", "grace"),
+        )
+        .await;
+    assert_eq!(no_email.status(), StatusCode::OK);
+    assert!(text(no_email).await?.contains("adresse e-mail valide"));
+    let no_street = browser
+        .post(
+            "/checkout/guest",
+            &GUEST.replace("1+quai+des+Compilateurs", "+"),
+        )
+        .await;
+    assert!(text(no_street).await?.contains("Adresse incomplète"));
+    assert!(!browser.cookies.contains_key("__Host-timada_guest"));
+
+    // Who and where: the checkout is priced for that address, like anybody's.
+    let said = browser.post("/checkout/guest", GUEST).await;
+    assert_eq!(location(&said), "/checkout");
+    assert!(browser.cookies.contains_key("__Host-timada_guest"));
+    assert!(!browser.cookies.contains_key("__Host-timada_shop"));
+    let checkout = text(browser.get("/checkout").await).await?;
+    assert!(checkout.contains("1 quai des Compilateurs"), "{checkout}");
+    assert!(checkout.contains("href=\"/checkout/guest\""), "{checkout}");
+    assert!(!checkout.contains("/account/addresses/new"), "{checkout}");
+    // Coming back to correct the address keeps the same guest.
+    let again = text(browser.get("/checkout/guest").await).await?;
+    assert!(again.contains("value=\"grace@example.com\""), "{again}");
+    browser
+        .post("/checkout/guest", &GUEST.replace("1+quai", "2+quai"))
+        .await;
+    db::run_subscriptions_once(&store).await?;
+    let grace = timada_customer::ListCustomers {
+        q: Some("grace@example.com".into()),
+        ..Default::default()
+    };
+    let guests = timada_customer::list_customers(&store.db, &grace).await?;
+    assert_eq!(guests.len(), 1, "{guests:?}");
+    assert!(guests[0].guest);
+    let checkout = text(browser.get("/checkout").await).await?;
+    assert!(checkout.contains("2 quai des Compilateurs"), "{checkout}");
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address radio"))?
+        .to_owned();
+
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    let pay = location(&placed);
+    assert!(pay.starts_with("/checkout/pay/"), "{pay}");
+    let order_id = pay.rsplit('/').next().unwrap_or_default().to_owned();
+    db::run_subscriptions_once(&store).await?;
+    let waiting = text(browser.get(&pay).await).await?;
+    assert!(
+        waiting.contains("votre commande est enregistrée"),
+        "{waiting}"
+    );
+    assert!(
+        waiting.contains(&format!("href=\"/order/{order_id}\"")),
+        "{waiting}"
+    );
+
+    // Written to like any customer — but never welcomed to an account, and
+    // sent to a page that needs none.
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let to_grace: Vec<_> = outbox
+        .iter()
+        .filter(|m| m.recipient == "grace@example.com")
+        .collect();
+    assert!(to_grace.iter().all(|m| m.kind != "welcome"), "{to_grace:?}");
+    let confirmation = to_grace
+        .iter()
+        .find(|m| m.kind == "order-confirmation")
+        .ok_or_else(|| anyhow::anyhow!("no confirmation: {outbox:?}"))?;
+    assert!(
+        !confirmation.body.contains("/account/"),
+        "{}",
+        confirmation.body
+    );
+    let link = confirmation
+        .body
+        .split("http://127.0.0.1:3000")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .ok_or_else(|| anyhow::anyhow!("no link: {}", confirmation.body))?
+        .to_owned();
+    assert!(
+        link.starts_with(&format!("/order/{order_id}?cle=")),
+        "{link}"
+    );
+
+    // From anywhere, the link opens the order — and only that link does.
+    let mut elsewhere = Browser::new(&router);
+    assert_eq!(
+        elsewhere.get(&format!("/order/{order_id}")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let forged = format!("/order/{order_id}?cle={}", "0".repeat(64));
+    assert_eq!(elsewhere.get(&forged).await.status(), StatusCode::NOT_FOUND);
+    let opened = elsewhere.get(&link).await;
+    assert_eq!(
+        location(&opened),
+        format!("/order/{order_id}"),
+        "the key leaves the address"
+    );
+    let order = text(elsewhere.get(&format!("/order/{order_id}")).await).await?;
+    assert!(order.contains("2 quai des Compilateurs"), "{order}");
+    assert!(order.contains("Vous avez commandé sans compte"), "{order}");
+    assert!(!order.contains("Retour à mes commandes"), "{order}");
+    // The account pages stay the accounts'.
+    let theirs = elsewhere.get(&format!("/account/orders/{order_id}")).await;
+    assert!(location(&theirs).starts_with("/login"));
+
+    // Paid: the confirmation, then the invoice, without an account.
+    timada_payment::Command(&store.executor)
+        .capture_payment(timada_payment::payment_id(&order_id), "psp-guest".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let paid = browser.get(&pay).await;
+    assert_eq!(
+        location(&paid),
+        format!("/checkout/confirmation/{order_id}")
+    );
+    let order = text(elsewhere.get(&format!("/order/{order_id}")).await).await?;
+    assert!(order.contains("Télécharger la facture"), "{order}");
+    let invoice = elsewhere
+        .get(&format!("/account/orders/{order_id}/invoice"))
+        .await;
+    assert_eq!(invoice.status(), StatusCode::OK);
+    assert!(text(invoice).await?.contains("Grace Hopper"));
+
+    // Somebody else's order stays somebody else's, guest or not.
+    let seeded = timada_order::list_orders(&store.db, &timada_order::ListOrders::default())
+        .await?
+        .into_iter()
+        .find(|row| row.order_id != order_id)
+        .ok_or_else(|| anyhow::anyhow!("no seeded order"))?;
+    assert_eq!(
+        elsewhere
+            .get(&format!("/order/{}", seeded.order_id))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    // A shopper who signs in reads their orders in their account.
+    let mut member = Browser::new(&router);
+    member.post("/register", REGISTER).await;
+    assert_eq!(
+        location(&member.get(&link).await),
+        format!("/order/{order_id}"),
+        "the link still opens the guest's order"
+    );
     Ok(())
 }
 

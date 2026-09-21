@@ -255,7 +255,7 @@ pool as data unless noted:
 | invoice | `credit_note_archive_subscription` (feature `pdf`) | files each credit note's PDF in the archive | same as `invoice_archive_subscription` |
 | returns | `return_processing_subscription` | process manager | |
 | returns | `return_list_subscription` | read model | |
-| mailer | `mailer_subscription` | ACL ← seven contexts (eight with `invoice-pdf`) | `timada_mailer::MailerConfig`, optionally `MailerTemplates`; with feature `invoice-pdf`, a `timada_invoice::InvoiceIssuer` turns on the invoice and credit note e-mails, and a `timada_invoice::InvoiceArchive` makes them carry the archived files |
+| mailer | `mailer_subscription` | ACL ← seven contexts (eight with `invoice-pdf`) | `timada_mailer::MailerConfig`, optionally `MailerTemplates` and `GuestOrderLinks`; with feature `invoice-pdf`, a `timada_invoice::InvoiceIssuer` turns on the invoice and credit note e-mails, and a `timada_invoice::InvoiceArchive` makes them carry the archived files |
 
 Read-model subscriptions are `.strict()`: they name every event of their
 aggregate (a handler or a `.skip`), so a new event cannot be forgotten
@@ -285,6 +285,7 @@ tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any numb
 | `timada_returns::ReturnPolicy` | how long after shipping a return may be asked for, and what a prepaid return label costs a customer, per currency, when the shop is not at fault — to the returns commands and `AdminConfig::return_policy` |
 | `timada_returns::ReturnLabels` | optional: the carrier adapter (`ReturnLabelProvider`) that makes prepaid return labels, to `AdminServices::with_return_labels`; without it labels are attached by hand |
 | `timada_mailer::MailerConfig` | sender, shop name, base URL, returns address, where the shop itself is alerted (`alerts_to`), maximum event age |
+| `timada_mailer::GuestOrderLinks` | *optional* — where somebody who ordered without an account reads an order: the path, key included, for an order id. Without it their e-mails point to account pages they cannot open |
 | `timada_mailer::MailerTemplates` | *optional* — the host's own wording of any e-mail (another language, an HTML alternative); the built-in French texts otherwise |
 | `timada_invoice::InvoiceIssuer` | the seller's identity printed on invoices — also handed to the mailer subscription when invoices are e-mailed |
 | `timada_admin::AdminConfig` | mount segment, stylesheet, invoice issuer, how long a paid order may wait for its parcel before the admin flags it (`ship_within`, two days by default) |
@@ -365,6 +366,16 @@ the SMTP relay.
   `customer_list.guest` say who has no page to sign in to: the mailer
   welcomes a customer when there is an account to be welcomed to — at
   registration, or when a guest opens one — and the admin marks guests.
+  What stands in for the session a guest does not have is the host's: the
+  demo signs two things with one secret (HMAC-SHA256, nothing stored,
+  changing the secret calls them all off) — a cookie naming the guest this
+  browser registered at `/checkout/guest`, so the ordinary checkout, payment
+  step and order page serve a *shopper*, account or guest; and the link to
+  an order written in the e-mails. The mailer stays out of it: it asks
+  `GuestOrderLinks` for the path when the customer is a guest
+  (`MailerConfig::order_url`, for a host's own templates too). Opening the
+  link makes the browser the guest's and leaves for the same address
+  without the key; once the guest has an account, it only leads there.
 - **A business is a customer with a company identity.** `CompanyIdentified`
   records its name and VAT number (`timada_tax::VatNumber` reads one as typed
   and checks its country's shape); each answer of the VAT registry is a

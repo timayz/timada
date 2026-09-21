@@ -10,6 +10,7 @@ pub mod company;
 pub mod currency;
 pub mod forgot;
 mod format;
+pub mod guest;
 pub mod invoice;
 pub mod listing;
 pub mod media;
