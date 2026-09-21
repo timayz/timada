@@ -1,9 +1,10 @@
 use timada_review::{
     AnswerAuthor, AskQuestion, Command, ListReviews, QuestionFilter, ReviewError, ReviewStatus,
-    SubmitReview, answers_of_questions, count_published_questions, count_questions, count_reviews,
-    list_questions, list_reviews, load_review_details, migrations, own_unpublished_questions,
-    product_rating, product_summary_subscription, published_questions, published_reviews,
-    question_list_subscription, review_list_subscription,
+    SubmitReview, answers_of_questions, count_published_questions, count_published_questions_of,
+    count_questions, count_reviews, list_questions, list_reviews, load_review_details, migrations,
+    own_unpublished_questions, own_unpublished_questions_of, product_rating, product_rating_of,
+    product_summary_subscription, published_questions, published_questions_of, published_reviews,
+    published_reviews_of, question_list_subscription, review_list_subscription,
 };
 
 const PRODUCT: &str = "aoc-24g4xe";
@@ -128,6 +129,91 @@ async fn the_review_list_feeds_the_product_page_and_the_moderation_queue() -> an
     assert_eq!(rows[0].rejection_reason.as_deref(), Some("insulting"));
     assert!(!rows[0].verified_purchase);
     assert_eq!(count_reviews(&db, Some(&ReviewStatus::Rejected)).await?, 1);
+    Ok(())
+}
+
+/// The versions of one article are read as one: the review context is only
+/// told which products.
+#[tokio::test]
+async fn several_products_are_read_as_one_article() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command(&executor);
+    let (black, silver, other) = ("casque-noir", "casque-argent", "enceinte");
+    let of = |product: &str, customer: &str, rating: u8| SubmitReview {
+        product_id: product.into(),
+        ..review(customer, rating)
+    };
+    for (product, customer, rating) in [
+        (black, "jonathan", 5),
+        (silver, "marie", 3),
+        (silver, "ada", 4),
+        (other, "jonathan", 1),
+    ] {
+        let id = cmd.submit_review(of(product, customer, rating)).await?;
+        cmd.publish_review(&id).await?;
+    }
+    cmd.submit_review(of(black, "bob", 1)).await?;
+
+    let mut asked = Vec::new();
+    for (product, customer, body) in [
+        (black, "jonathan", "Pliable ?"),
+        (silver, "marie", "Livré avec une housse ?"),
+        (silver, "jonathan", "Et en vert ?"),
+        (other, "marie", "Étanche ?"),
+    ] {
+        let id = cmd
+            .ask_question(AskQuestion {
+                product_id: product.into(),
+                customer_id: customer.into(),
+                body: body.into(),
+            })
+            .await?;
+        asked.push(id);
+    }
+    cmd.publish_question(&asked[0]).await?;
+    cmd.publish_question(&asked[1]).await?;
+    cmd.publish_question(&asked[3]).await?;
+
+    product_summary_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    review_list_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    question_list_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+
+    let article = [black.to_owned(), silver.to_owned()];
+    let rating = product_rating_of(&db, &article).await?;
+    assert_eq!((rating.review_count, rating.average_rating), (3, Some(4.0)));
+    assert_eq!(product_rating(&db, black).await?.review_count, 1);
+    assert_eq!(product_rating_of(&db, &[]).await?.review_count, 0);
+
+    let reviews = published_reviews_of(&db, &article, 10, 0).await?;
+    let mut about: Vec<&str> = reviews.iter().map(|row| row.product_id.as_str()).collect();
+    about.sort_unstable();
+    assert_eq!(about, [silver, silver, black], "each says which version");
+    assert_eq!(published_reviews_of(&db, &article, 2, 2).await?.len(), 1);
+    assert!(published_reviews_of(&db, &[], 10, 0).await?.is_empty());
+
+    assert_eq!(count_published_questions_of(&db, &article).await?, 2);
+    assert_eq!(count_published_questions_of(&db, &[]).await?, 0);
+    let questions = published_questions_of(&db, &article, 10, 0).await?;
+    assert_eq!(questions.len(), 2);
+    assert!(questions.iter().all(|q| q.product_id != other));
+    // What a shopper asked about another version follows them on this one.
+    assert!(
+        own_unpublished_questions(&db, black, "jonathan")
+            .await?
+            .is_empty()
+    );
+    let own = own_unpublished_questions_of(&db, &article, "jonathan").await?;
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].body, "Et en vert ?");
     Ok(())
 }
 

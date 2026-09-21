@@ -340,6 +340,19 @@ the SMTP relay.
   match versions — a card is what they leave of its family — while the
   total, the facets and the category counts count cards. Every version keeps
   its own page and its line in the sitemap.
+- **Reviews and questions are about the article, read together.** A review
+  or a question stays the product's it was written on — no event changed,
+  `timada-review` knows nothing of families. The read side takes several
+  products as one (`product_rating_of`, `published_reviews_of`,
+  `published_questions_of`, `count_published_questions_of`,
+  `own_unpublished_questions_of`), and the host says which: the storefront
+  reads the family's variants from its events — versions no longer on sale
+  included, what was said of them is still about the article — and marks
+  each line with the version it is about (« Version : Argent »). A question
+  can be answered from any version's page. In the listing every version
+  carries the rating of the family's reviews together
+  (`refresh_family_rating`), so a card says the same whichever version
+  stands for it; a version that leaves takes its reviews with it.
 - **A business is a customer with a company identity.** `CompanyIdentified`
   records its name and VAT number (`timada_tax::VatNumber` reads one as typed
   and checks its country's shape); each answer of the VAT registry is a
@@ -515,9 +528,9 @@ the SMTP relay.
   (`timada_invoice::vat_report`, the admin's TVA section) adds up what was
   invoiced; filing it — and the rule that a quarter starts at midnight UTC,
   not Paris time — stays with the accountant.
-- Variants beyond the product page and the listing: reviews and questions
-  are still each version's own, so a family's card shows the rating of the
-  version that stands for it — sharing them across the family is the next
-  step.
+- Variants in the back office: the admin's moderation queues and the mailer
+  name the product a review or a question was written on, not its family;
+  and a shopper reviews each version they bought separately (one review per
+  customer per product).
 - Upcasting of old event shapes: an evento feature, to build when the first
   `V2` event exists.

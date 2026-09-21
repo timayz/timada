@@ -11,7 +11,7 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::{
     aggregator::{
@@ -98,29 +98,60 @@ pub async fn published_questions(
     limit: u32,
     offset: u32,
 ) -> sqlx::Result<Vec<QuestionListRow>> {
-    sqlx::query_as(
-        "SELECT question_id, product_id, customer_id, body, asked_at, answer_count, status,
-                rejection_reason
-         FROM review_question_list
-         WHERE product_id = ?1 AND status = 'published'
-         ORDER BY asked_at DESC, question_id DESC
-         LIMIT ?2 OFFSET ?3",
-    )
-    .bind(product_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(db)
-    .await
+    published_questions_of(db, &[product_id.to_owned()], limit, offset).await
+}
+
+/// `FROM review_question_list WHERE product_id IN (…)`, after `select`.
+fn questions_of(select: &str, product_ids: &[String]) -> QueryBuilder<Sqlite> {
+    let mut sql = QueryBuilder::<Sqlite>::new(select);
+    sql.push(" FROM review_question_list WHERE product_id IN (");
+    let mut ids = sql.separated(", ");
+    for id in product_ids {
+        ids.push_bind(id.clone());
+    }
+    sql.push(")");
+    sql
+}
+
+const QUESTION_COLUMNS: &str =
+    "SELECT question_id, product_id, customer_id, body, asked_at, answer_count, status,
+            rejection_reason";
+
+/// The published questions of several products taken as one — the versions
+/// of one article — newest first. Each row says which product it is about.
+pub async fn published_questions_of(
+    db: &SqlitePool,
+    product_ids: &[String],
+    limit: u32,
+    offset: u32,
+) -> sqlx::Result<Vec<QuestionListRow>> {
+    if product_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sql = questions_of(QUESTION_COLUMNS, product_ids);
+    sql.push(" AND status = 'published' ORDER BY asked_at DESC, question_id DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    sql.build_query_as().fetch_all(db).await
 }
 
 /// How many published questions a product has: the pages of [`published_questions`].
 pub async fn count_published_questions(db: &SqlitePool, product_id: &str) -> sqlx::Result<i64> {
-    sqlx::query_scalar(
-        "SELECT COUNT(*) FROM review_question_list WHERE product_id = ? AND status = 'published'",
-    )
-    .bind(product_id)
-    .fetch_one(db)
-    .await
+    count_published_questions_of(db, &[product_id.to_owned()]).await
+}
+
+/// The pages of [`published_questions_of`].
+pub async fn count_published_questions_of(
+    db: &SqlitePool,
+    product_ids: &[String],
+) -> sqlx::Result<i64> {
+    if product_ids.is_empty() {
+        return Ok(0);
+    }
+    let mut sql = questions_of("SELECT COUNT(*)", product_ids);
+    sql.push(" AND status = 'published'");
+    sql.build_query_scalar().fetch_one(db).await
 }
 
 /// What a customer asked about a product that is not public: still awaiting
@@ -130,17 +161,23 @@ pub async fn own_unpublished_questions(
     product_id: &str,
     customer_id: &str,
 ) -> sqlx::Result<Vec<QuestionListRow>> {
-    sqlx::query_as(
-        "SELECT question_id, product_id, customer_id, body, asked_at, answer_count, status,
-                rejection_reason
-         FROM review_question_list
-         WHERE product_id = ?1 AND customer_id = ?2 AND status != 'published'
-         ORDER BY asked_at DESC, question_id DESC",
-    )
-    .bind(product_id)
-    .bind(customer_id)
-    .fetch_all(db)
-    .await
+    own_unpublished_questions_of(db, &[product_id.to_owned()], customer_id).await
+}
+
+/// [`own_unpublished_questions`] over the versions of one article.
+pub async fn own_unpublished_questions_of(
+    db: &SqlitePool,
+    product_ids: &[String],
+    customer_id: &str,
+) -> sqlx::Result<Vec<QuestionListRow>> {
+    if product_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sql = questions_of(QUESTION_COLUMNS, product_ids);
+    sql.push(" AND customer_id = ")
+        .push_bind(customer_id.to_owned())
+        .push(" AND status != 'published' ORDER BY asked_at DESC, question_id DESC");
+    sql.build_query_as().fetch_all(db).await
 }
 
 /// Questions across all products, oldest first: the queue is worked from the top.

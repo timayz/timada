@@ -16,8 +16,8 @@ use timada_order::{OrderStatus, load_order_details, orders_of_customer};
 use timada_pricing::{load_product_price, price_id};
 use timada_review::{
     AskQuestion, ReviewError, ReviewStatus, SubmitReview, answers_of_questions,
-    count_published_questions, load_review_details, own_unpublished_questions, product_rating,
-    published_questions, published_reviews, review_id,
+    count_published_questions_of, load_review_details, own_unpublished_questions_of,
+    product_rating_of, published_questions_of, published_reviews_of, review_id,
 };
 use topcoat::{
     Result,
@@ -349,6 +349,8 @@ async fn purchase_of(
 
 /// One published review, ready to render.
 struct ReviewLine {
+    /// Which version of the article it is about, in a family.
+    version: Option<String>,
     author: String,
     stars: String,
     rating_label: String,
@@ -374,11 +376,16 @@ pub async fn submit_answer(cx: &Cx, Form(form): Form<AnswerForm>) -> Result<impl
     let question = param::<QuestionId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     let reviews = timada_review::Command(&store.executor);
-    // The question must be one of this product's.
+    // The question must be about this article: this product, or another
+    // version of it — their questions are shown here too.
+    let product = load_product_page(&store.executor, &id)
+        .await?
+        .ok_or_not_found()?;
+    let article = Article::of(store, &product).await?;
     reviews
         .load_question(&question)
         .await?
-        .filter(|q| q.product_id == id)
+        .filter(|q| article.products.contains(&q.product_id))
         .ok_or_not_found()?;
 
     let error = match reviews
@@ -402,6 +409,8 @@ pub async fn submit_answer(cx: &Cx, Form(form): Form<AnswerForm>) -> Result<impl
 
 /// One published question with its answers, ready to render.
 struct QuestionLine {
+    /// Which version of the article it was asked about, in a family.
+    version: Option<String>,
     body: String,
     asked: String,
     /// `(author, text, date)` of the published answers.
@@ -441,22 +450,58 @@ struct VersionChoice {
     hint: String,
 }
 
+/// What reviews and questions are about: the product, or — in a family —
+/// the one article its versions are. Read from the family's events — nothing
+/// to wait for.
+struct Article {
+    family: Option<timada_catalog::FamilyState>,
+    /// The product and the other versions, whether still on sale or not:
+    /// what was said of a version that is gone is still about the article.
+    products: Vec<String>,
+}
+
+impl Article {
+    async fn of(store: &Store, product: &timada_catalog::ProductPageView) -> anyhow::Result<Self> {
+        let family = match &product.family_id {
+            Some(family_id) => {
+                timada_catalog::Command(&store.executor)
+                    .load_family(family_id)
+                    .await?
+            }
+            None => None,
+        };
+        let mut products = vec![product.id.clone()];
+        for variant in family.iter().flat_map(|family| &family.variants) {
+            if variant.product_id != product.id {
+                products.push(variant.product_id.clone());
+            }
+        }
+        Ok(Self { family, products })
+    }
+
+    /// « Noir », « 1 To · Avec »: the version a review or a question is about.
+    fn version(&self, product_id: &str) -> Option<String> {
+        let variant = self.family.as_ref()?.variant(product_id)?;
+        let values: Vec<&str> = variant
+            .values
+            .iter()
+            .map(|placed| placed.value.as_str())
+            .collect();
+        (!values.is_empty()).then(|| values.join(" · "))
+    }
+}
+
 /// The other versions of the article, when the product is a variant of a
 /// family: the siblings still in the catalogue and priced in the shopper's
-/// currency. Read from the family's events — nothing to wait for.
+/// currency.
 async fn versions_of(
     cx: &Cx,
     product: &timada_catalog::ProductPageView,
+    article: &Article,
     currency: &str,
 ) -> Result<Vec<Version>> {
     let store = app_context::<Store>(cx);
-    let Some(family_id) = &product.family_id else {
-        return Ok(Vec::new());
-    };
-    let Some(family) = timada_catalog::Command(&store.executor)
-        .load_family(family_id)
-        .await?
-    else {
+    let Some(family) = &article.family else {
         return Ok(Vec::new());
     };
     let mut on_sale = std::collections::HashSet::new();
@@ -472,7 +517,7 @@ async fn versions_of(
             on_sale.insert(variant.product_id.clone());
         }
     }
-    let versions = timada_catalog::variant_choices(&family, &product.id, |id| on_sale.contains(id))
+    let versions = timada_catalog::variant_choices(family, &product.id, |id| on_sale.contains(id))
         .into_iter()
         .map(|choice| Version {
             option: choice.option,
@@ -538,7 +583,8 @@ async fn product_view(
             None => sheet.push((spec.group.clone(), vec![line])),
         }
     }
-    let versions = versions_of(cx, &product, &currency).await?;
+    let article = Article::of(store, &product).await?;
+    let versions = versions_of(cx, &product, &article, &currency).await?;
     let available = available_stock(store, &id).await?;
     let availability = if available > 0 {
         format!("En stock ({available} disponibles)")
@@ -546,7 +592,8 @@ async fn product_view(
         "Rupture".to_owned()
     };
 
-    let rating = product_rating(&store.db, &id).await?;
+    // In a family, reviews and questions are those of every version.
+    let rating = product_rating_of(&store.db, &article.products).await?;
     let rating_summary = rating.average_rating.map(|average| {
         format!(
             "{} / 5 — {} avis",
@@ -621,12 +668,12 @@ async fn product_view(
         "questions",
         ("avis", review_page),
         question_page,
-        count_published_questions(&store.db, &id).await?,
+        count_published_questions_of(&store.db, &article.products).await?,
         QUESTIONS_PER_PAGE,
     );
-    let rows = published_reviews(
+    let rows = published_reviews_of(
         &store.db,
-        &id,
+        &article.products,
         REVIEWS_PER_PAGE,
         (reviews_pager.current - 1) * REVIEWS_PER_PAGE,
     )
@@ -646,6 +693,7 @@ async fn product_view(
     let reviews: Vec<ReviewLine> = rows
         .into_iter()
         .map(|row| ReviewLine {
+            version: article.version(&row.product_id),
             author: authors
                 .get(&row.customer_id)
                 .cloned()
@@ -664,9 +712,9 @@ async fn product_view(
         Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
     };
 
-    let asked = published_questions(
+    let asked = published_questions_of(
         &store.db,
-        &id,
+        &article.products,
         QUESTIONS_PER_PAGE,
         (questions_pager.current - 1) * QUESTIONS_PER_PAGE,
     )
@@ -704,6 +752,7 @@ async fn product_view(
     let questions: Vec<QuestionLine> = asked
         .into_iter()
         .map(|q| QuestionLine {
+            version: article.version(&q.product_id),
             answers: answers_by_question
                 .remove(&q.question_id)
                 .unwrap_or_default(),
@@ -721,17 +770,19 @@ async fn product_view(
         .collect();
     // The shopper's own questions that are not public: `(text, standing)`.
     let own_questions: Vec<(String, String)> = match &account {
-        Some(account) => own_unpublished_questions(&store.db, &id, &account.customer_id)
-            .await?
-            .into_iter()
-            .map(|q| {
-                let standing = match q.rejection_reason {
-                    Some(reason) => format!("non retenue : {reason}"),
-                    None => "en attente de validation".to_owned(),
-                };
-                (q.body, standing)
-            })
-            .collect(),
+        Some(account) => {
+            own_unpublished_questions_of(&store.db, &article.products, &account.customer_id)
+                .await?
+                .into_iter()
+                .map(|q| {
+                    let standing = match q.rejection_reason {
+                        Some(reason) => format!("non retenue : {reason}"),
+                        None => "en attente de validation".to_owned(),
+                    };
+                    (q.body, standing)
+                })
+                .collect()
+        }
         None => Vec::new(),
     };
     // Out of stock: can this shopper ask for an alert, or is one pending?
@@ -872,6 +923,7 @@ async fn product_view(
                     <p class="muted">
                         (review.author.clone()) ", le " (review.written.clone())
                         if review.verified { " · Achat vérifié" }
+                        if let Some(version) = &review.version { " · Version : " (version.clone()) }
                     </p>
                 </article>
             }
@@ -924,7 +976,10 @@ async fn product_view(
             for question in &questions {
                 <article class="card">
                     <h3>(question.body.clone())</h3>
-                    <p class="muted">"Posée le " (question.asked.clone())</p>
+                    <p class="muted">
+                        "Posée le " (question.asked.clone())
+                        if let Some(version) = &question.version { " · Version : " (version.clone()) }
+                    </p>
                     if question.answers.is_empty() {
                         <p class="muted">"Pas encore de réponse."</p>
                     }
