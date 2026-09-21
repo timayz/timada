@@ -702,6 +702,8 @@ async fn the_versions_of_a_family_are_one_card() -> anyhow::Result<()> {
     assert_eq!(card.versions, 3);
     assert_eq!(card.price_minor, 7_490, "from the cheapest");
     assert!(card.price_varies);
+    // Reviewed in red only: the review is about the article, in any colour.
+    assert_eq!((card.rating_avg, card.review_count), (Some(5.0), 1));
     let lamp = all
         .rows
         .iter()
@@ -777,7 +779,8 @@ async fn the_versions_of_a_family_are_one_card() -> anyhow::Result<()> {
         sorted(ListingSort::PriceDesc).await?,
         ["LG-27U", "AOC-24G", "LG-KB1", "ARIA-B", "LMP-1"]
     );
-    assert_eq!(sorted(ListingSort::Rating).await?[0], "ARIA-R");
+    // Every version has the family's rating: the first by name stands for it.
+    assert_eq!(sorted(ListingSort::Rating).await?[0], "ARIA-B");
     assert_eq!(sorted(ListingSort::Newest).await?[0], "ARIA-R");
 
     // Pages are pages of cards.
@@ -811,12 +814,15 @@ async fn the_versions_of_a_family_are_one_card() -> anyhow::Result<()> {
         .find(|row| row.family_id.is_some())
         .ok_or_else(|| anyhow::anyhow!("no card for the family"))?;
     assert_eq!((card.title(), card.versions), ("Casques Aria", 2));
+    // The red one took its review with it.
+    assert_eq!((card.rating_avg, card.review_count), (None, 0));
     let red = after
         .rows
         .iter()
         .find(|row| row.sku == "ARIA-R")
         .ok_or_else(|| anyhow::anyhow!("the red one is not listed"))?;
     assert_eq!((red.family_id.as_deref(), red.versions), (None, 1));
+    assert_eq!((red.rating_avg, red.review_count), (Some(5.0), 1));
     Ok(())
 }
 

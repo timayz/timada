@@ -12,7 +12,8 @@
 //! The versions of one article (a [`ProductFamily`](crate::aggregator::ProductFamily))
 //! are **one card**: a search gives, of each family, the matching version
 //! that comes first, with the cheapest price among those that match. Totals
-//! and facets count cards.
+//! and facets count cards. The reviews of a family's versions are about the
+//! one article: every version carries the rating of them all.
 
 use evento::{
     Executor,
@@ -594,6 +595,26 @@ async fn category_trail<E: Executor>(
     Ok((format!("/{ids}"), names))
 }
 
+/// Gives every version of a family the rating of all their published reviews
+/// together.
+async fn refresh_family_rating(db: &SqlitePool, family_id: &str) -> sqlx::Result<()> {
+    let (rating_avg, review_count): (Option<f64>, i64) = sqlx::query_as(
+        "SELECT AVG(r.rating), COUNT(*) FROM catalog_listing_review r
+         JOIN catalog_listing l ON l.product_id = r.product_id
+         WHERE l.family_id = ?",
+    )
+    .bind(family_id)
+    .fetch_one(db)
+    .await?;
+    sqlx::query("UPDATE catalog_listing SET rating_avg = ?, review_count = ? WHERE family_id = ?")
+        .bind(rating_avg)
+        .bind(review_count)
+        .bind(family_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 /// Rewrites a product's row — and its full-text entry — with what the four
 /// contexts say about it *now*. `at` is the event's time.
 async fn refresh_product<E: Executor>(
@@ -639,6 +660,13 @@ async fn refresh_product<E: Executor>(
         .media
         .iter()
         .find(|media| media.kind == MediaKind::Image);
+    // The family the row was in: its rating changes when a version leaves.
+    let family_before: Option<String> =
+        sqlx::query_scalar("SELECT family_id FROM catalog_listing WHERE product_id = ?")
+            .bind(product_id)
+            .fetch_optional(db)
+            .await?
+            .flatten();
 
     let rowid: i64 = sqlx::query_scalar(
         "INSERT INTO catalog_listing
@@ -683,6 +711,19 @@ async fn refresh_product<E: Executor>(
     .bind(family.as_ref().map(|family| family.name.as_str()))
     .fetch_one(db)
     .await?;
+
+    // The row was written with the product's own rating; in a family, the
+    // rating is the family's — and that of the one it left changes too.
+    let family_now = family.as_ref().map(|family| family.id.as_str());
+    if let Some(family_id) = family_now {
+        refresh_family_rating(db, family_id).await?;
+    }
+    if let Some(left) = family_before
+        .as_deref()
+        .filter(|id| Some(*id) != family_now)
+    {
+        refresh_family_rating(db, left).await?;
+    }
 
     // The prices, rewritten whole: a currency the product left is gone.
     sqlx::query("DELETE FROM catalog_listing_currency_price WHERE product_id = ?")

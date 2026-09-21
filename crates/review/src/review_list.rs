@@ -7,7 +7,7 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::{
     aggregator::{ReviewPublished, ReviewRejected, ReviewSubmitted},
@@ -66,19 +66,35 @@ pub async fn published_reviews(
     limit: u32,
     offset: u32,
 ) -> sqlx::Result<Vec<ReviewListRow>> {
-    sqlx::query_as(
+    published_reviews_of(db, &[product_id.to_owned()], limit, offset).await
+}
+
+/// The published reviews of several products taken as one — the versions of
+/// one article — newest first. Each row says which product it is about.
+pub async fn published_reviews_of(
+    db: &SqlitePool,
+    product_ids: &[String],
+    limit: u32,
+    offset: u32,
+) -> sqlx::Result<Vec<ReviewListRow>> {
+    if product_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sql = QueryBuilder::<Sqlite>::new(
         "SELECT review_id, product_id, customer_id, verified_purchase, rating, title, body,
                 status, rejection_reason, submitted_at
          FROM review_list
-         WHERE product_id = ?1 AND status = 'published'
-         ORDER BY submitted_at DESC, review_id DESC
-         LIMIT ?2 OFFSET ?3",
-    )
-    .bind(product_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(db)
-    .await
+         WHERE status = 'published' AND product_id IN (",
+    );
+    let mut ids = sql.separated(", ");
+    for id in product_ids {
+        ids.push_bind(id);
+    }
+    sql.push(") ORDER BY submitted_at DESC, review_id DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    sql.build_query_as().fetch_all(db).await
 }
 
 /// Reviews across all products, oldest first: the queue is worked from the top.

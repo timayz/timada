@@ -7,7 +7,7 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::aggregator::{ReviewPublished, ReviewRejected, ReviewSubmitted};
 
@@ -30,14 +30,32 @@ pub fn product_summary_subscription<E: Executor>() -> SubscriptionBuilder<E> {
 
 /// Count and mean rating over published reviews of a product.
 pub async fn product_rating(db: &SqlitePool, product_id: &str) -> sqlx::Result<ProductRating> {
-    sqlx::query_as(
+    product_rating_of(db, &[product_id.to_owned()]).await
+}
+
+/// Count and mean rating over the published reviews of several products taken
+/// as one — the versions of one article.
+pub async fn product_rating_of(
+    db: &SqlitePool,
+    product_ids: &[String],
+) -> sqlx::Result<ProductRating> {
+    if product_ids.is_empty() {
+        return Ok(ProductRating {
+            review_count: 0,
+            average_rating: None,
+        });
+    }
+    let mut sql = QueryBuilder::<Sqlite>::new(
         "SELECT COUNT(*) AS review_count, AVG(rating) AS average_rating
          FROM review_product_review
-         WHERE product_id = ? AND published = 1",
-    )
-    .bind(product_id)
-    .fetch_one(db)
-    .await
+         WHERE published = 1 AND product_id IN (",
+    );
+    let mut ids = sql.separated(", ");
+    for id in product_ids {
+        ids.push_bind(id);
+    }
+    sql.push(")");
+    sql.build_query_as().fetch_one(db).await
 }
 
 fn pool<E: Executor>(ctx: &Context<'_, E>) -> anyhow::Result<SqlitePool> {

@@ -1214,6 +1214,78 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
     assert_eq!(listed(&blue), ["Sony WH-1000XM5 Bleu nuit"], "{blue}");
     assert!(!blue.contains("à partir de"), "{blue}");
     assert!(!blue.contains("versions<"), "{blue}");
+    // Never reviewed in blue, but the article was: four times in black, once
+    // in silver.
+    assert!(blue.contains("4,8 / 5 (5 avis)"), "{blue}");
+
+    // Reviews and questions are the article's: every version shows them all,
+    // each marked with the version it is about.
+    let blue_page = page_of("SONY-XM5-BLU");
+    let reviewed = text(browser.get(&blue_page).await).await?;
+    assert!(reviewed.contains("4,8 / 5 — 5 avis"), "{reviewed}");
+    assert!(reviewed.contains(" · Version : Noir"), "{reviewed}");
+    assert!(reviewed.contains(" · Version : Argent"), "{reviewed}");
+    assert!(!reviewed.contains("Version : Bleu nuit"), "{reviewed}");
+    // Asked about the silver one, answered from the blue one's page.
+    let mut shopper = Browser::new(&router);
+    shopper.post("/register", REGISTER).await;
+    let silver_page = page_of("SONY-XM5-ARG");
+    shopper
+        .post(&format!("{silver_page}/questions"), "body=Pliable+%3F")
+        .await;
+    db::run_subscriptions_once(&store).await?;
+    let waiting = text(shopper.get(&blue_page).await).await?;
+    assert!(waiting.contains("en attente de validation"), "{waiting}");
+    let asked =
+        timada_review::list_questions(&store.db, timada_review::QuestionFilter::All, 50, 0).await?;
+    let question_id = asked
+        .iter()
+        .find(|question| question.body == "Pliable ?")
+        .map(|question| question.question_id.clone())
+        .ok_or_else(|| anyhow::anyhow!("the question was not recorded"))?;
+    timada_review::Command(&store.executor)
+        .publish_question(&question_id)
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let public = text(browser.get(&blue_page).await).await?;
+    assert!(public.contains("Pliable ?"), "{public}");
+    let (_, after) = public
+        .split_once("Pliable ?")
+        .ok_or_else(|| anyhow::anyhow!("no question"))?;
+    assert!(
+        after
+            .split("</article>")
+            .next()
+            .unwrap_or_default()
+            .contains(" · Version : Argent"),
+        "{public}"
+    );
+    let mut helper = Browser::new(&router);
+    helper
+        .post(
+            "/login",
+            &format!(
+                "email={}&password={}",
+                seed::SHOPPER_EMAIL.replace('@', "%40"),
+                seed::SHOPPER_PASSWORD
+            ),
+        )
+        .await;
+    let answered = helper
+        .post(
+            &format!("{blue_page}/questions/{question_id}/answers"),
+            "body=Oui%2C+%C3%A0+plat.",
+        )
+        .await;
+    assert_eq!(location(&answered), format!("{blue_page}#questions"));
+    // A question of another article is still not this page's to answer.
+    let elsewhere = helper
+        .post(
+            &format!("/p/{lone_product}/questions/{question_id}/answers"),
+            "body=Non",
+        )
+        .await;
+    assert_eq!(elsewhere.status(), StatusCode::NOT_FOUND);
 
     // One option: the colours, the current one marked, the others linked.
     let black = text(browser.get(&page_of("SONY-XM5")).await).await?;
