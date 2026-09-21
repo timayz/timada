@@ -248,6 +248,42 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0008ListingFamilies;
+
+sqlite_migration!(
+    M0008ListingFamilies,
+    "catalog",
+    "m0008_listing_families",
+    vec_box![M0007Families],
+    vec_box![
+        // The family a product is a version of, and its name: a listing shows
+        // one card per family.
+        (
+            "ALTER TABLE catalog_listing ADD COLUMN family_id TEXT",
+            "ALTER TABLE catalog_listing DROP COLUMN family_id"
+        ),
+        (
+            "ALTER TABLE catalog_listing ADD COLUMN family_name TEXT",
+            "ALTER TABLE catalog_listing DROP COLUMN family_name"
+        ),
+        (
+            "CREATE INDEX catalog_listing_family ON catalog_listing (family_id)",
+            "DROP INDEX catalog_listing_family"
+        ),
+        // The variants placed so far; the others come with the next refresh
+        // of each product.
+        (
+            "UPDATE catalog_listing
+             SET family_id = (SELECT v.family_id FROM catalog_family_variant v
+                              WHERE v.product_id = catalog_listing.product_id),
+                 family_name = (SELECT f.name FROM catalog_family_variant v
+                                JOIN catalog_family f ON f.id = v.family_id
+                                WHERE v.product_id = catalog_listing.product_id)",
+            "UPDATE catalog_listing SET family_id = NULL, family_name = NULL"
+        )
+    ]
+);
+
 /// Read-model migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     vec_box![
@@ -257,6 +293,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
         M0004SpecFacets,
         M0005ListingSortName,
         M0006ListingPrices,
-        M0007Families
+        M0007Families,
+        M0008ListingFamilies
     ]
 }

@@ -1202,6 +1202,19 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
     let id = timada_catalog::product_id;
     let page_of = |sku: &str| format!("/p/{}", id(sku));
 
+    // A listing shows a family once: 30 products, 7 of them in 2 families.
+    let home = text(browser.get("/").await).await?;
+    assert!(home.contains(">25 produits<"), "{home}");
+    let sony = text(browser.get("/recherche?q=sony").await).await?;
+    assert_eq!(listed(&sony), ["Sony WH-1000XM5"], "{sony}");
+    assert!(sony.contains("3 versions"), "{sony}");
+    assert!(sony.contains("à partir de 349,00"), "{sony}");
+    // One version left by the search: the card is that product, at its price.
+    let blue = text(browser.get("/recherche?q=sony+bleu").await).await?;
+    assert_eq!(listed(&blue), ["Sony WH-1000XM5 Bleu nuit"], "{blue}");
+    assert!(!blue.contains("à partir de"), "{blue}");
+    assert!(!blue.contains("versions<"), "{blue}");
+
     // One option: the colours, the current one marked, the others linked.
     let black = text(browser.get(&page_of("SONY-XM5")).await).await?;
     assert!(
