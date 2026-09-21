@@ -4,9 +4,9 @@
 use evento::Executor;
 use sqlx::SqlitePool;
 use timada_catalog::{
-    Brand, Command, CreateCategory, CreateProduct, DescribeProduct, ListingQuery, ListingSort,
-    Media, MediaKind, brand_by_slug, listed_products, listing_subscription, migrations,
-    search_listing,
+    Brand, Command, CreateCategory, CreateFamily, CreateProduct, DescribeProduct, FamilyOption,
+    ListingQuery, ListingSort, Media, MediaKind, OptionValue, brand_by_slug,
+    listed_counts_by_category, listed_products, listing_subscription, migrations, search_listing,
 };
 use timada_core::Money;
 use timada_inventory::{RegisterStockItem, StockLocation};
@@ -645,6 +645,178 @@ async fn names_are_sorted_for_people_and_branches_are_counted() -> anyhow::Resul
     assert_eq!(counts.get(&audio), Some(&4));
     assert_eq!(counts.get(&headsets), Some(&2));
     assert_eq!(counts.get(&empty), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_versions_of_a_family_are_one_card() -> anyhow::Result<()> {
+    let (shop, _, [computing, ..]) = stocked_shop().await?;
+    let cmd = Command(&shop.executor);
+    let family = cmd
+        .create_family(CreateFamily {
+            name: "Casque Aria".into(),
+            slug: None,
+        })
+        .await?;
+    cmd.define_family_options(
+        &family,
+        vec![FamilyOption::new("Couleur", &["Noir", "Blanc", "Rouge"])],
+    )
+    .await?;
+    let mut versions = Vec::new();
+    for (sku, colour, cents, stock) in [
+        ("ARIA-N", "Noir", 8_990, 0),
+        ("ARIA-B", "Blanc", 7_490, 4),
+        ("ARIA-R", "Rouge", 9_990, 2),
+    ] {
+        let id = shop
+            .sell(
+                sku,
+                &format!("Casque Aria {colour}"),
+                "Aria",
+                Some(&computing),
+                cents,
+                stock,
+            )
+            .await?;
+        cmd.place_variant(&family, &id, vec![OptionValue::new("Couleur", colour)])
+            .await?;
+        versions.push(id);
+    }
+    shop.review(&versions[2], "ada", 5).await?;
+    shop.sync().await?;
+
+    // Four products on their own and one family: five cards.
+    let all = search_listing(&shop.db, &ListingQuery::default()).await?;
+    assert_eq!(all.total, 5);
+    let card = all
+        .rows
+        .iter()
+        .find(|row| row.family_id.as_deref() == Some(family.as_str()))
+        .ok_or_else(|| anyhow::anyhow!("no card for the family"))?;
+    assert_eq!(
+        card.sku, "ARIA-B",
+        "the first by name stands for the family"
+    );
+    assert_eq!(card.title(), "Casque Aria");
+    assert_eq!(card.versions, 3);
+    assert_eq!(card.price_minor, 7_490, "from the cheapest");
+    assert!(card.price_varies);
+    let lamp = all
+        .rows
+        .iter()
+        .find(|row| row.sku == "LMP-1")
+        .ok_or_else(|| anyhow::anyhow!("no lamp"))?;
+    assert_eq!((lamp.versions, lamp.price_varies), (1, false));
+    assert_eq!(lamp.title(), "Lampe de bureau");
+
+    // Facets count cards, a family once whichever of its versions qualifies.
+    let aria = all
+        .facets
+        .brands
+        .iter()
+        .find(|brand| brand.slug == "aria")
+        .map(|brand| brand.count);
+    assert_eq!(aria, Some(1));
+    assert_eq!(all.facets.in_stock, 4, "three of the four, and the family");
+    assert_eq!(all.facets.rated_at_least[0], (4, 1));
+    assert_eq!(
+        listed_counts_by_category(&shop.db, std::slice::from_ref(&computing), None).await?
+            [&computing],
+        4,
+        "two monitors, a keyboard, a family"
+    );
+
+    // A filter only some versions pass: the card is what is left of the family.
+    let dear = search_listing(
+        &shop.db,
+        &ListingQuery {
+            brand_slugs: vec!["aria".into()],
+            price_min_minor: Some(8_500),
+            ..ListingQuery::default()
+        },
+    )
+    .await?;
+    assert_eq!(dear.total, 1);
+    assert_eq!(dear.rows[0].sku, "ARIA-N");
+    assert_eq!(
+        (dear.rows[0].versions, dear.rows[0].price_minor),
+        (2, 8_990)
+    );
+    let red = search_listing(
+        &shop.db,
+        &ListingQuery {
+            q: Some("aria rouge".into()),
+            ..ListingQuery::default()
+        },
+    )
+    .await?;
+    assert_eq!(red.total, 1);
+    assert_eq!(red.rows[0].sku, "ARIA-R");
+    assert_eq!(
+        red.rows[0].title(),
+        "Casque Aria Rouge",
+        "one version: its name"
+    );
+    assert!(!red.rows[0].price_varies);
+
+    // Each order picks who stands for the family; prices go by "from".
+    let sorted = |sort: ListingSort| {
+        let query = ListingQuery {
+            sort,
+            ..ListingQuery::default()
+        };
+        let shop = &shop;
+        async move { shop.skus(&query).await }
+    };
+    assert_eq!(
+        sorted(ListingSort::PriceAsc).await?,
+        ["LMP-1", "ARIA-B", "LG-KB1", "AOC-24G", "LG-27U"]
+    );
+    assert_eq!(
+        sorted(ListingSort::PriceDesc).await?,
+        ["LG-27U", "AOC-24G", "LG-KB1", "ARIA-B", "LMP-1"]
+    );
+    assert_eq!(sorted(ListingSort::Rating).await?[0], "ARIA-R");
+    assert_eq!(sorted(ListingSort::Newest).await?[0], "ARIA-R");
+
+    // Pages are pages of cards.
+    let page = search_listing(
+        &shop.db,
+        &ListingQuery {
+            sort: ListingSort::PriceAsc,
+            limit: 2,
+            offset: 2,
+            ..ListingQuery::default()
+        },
+    )
+    .await?;
+    assert_eq!(
+        page.rows
+            .iter()
+            .map(|row| row.sku.as_str())
+            .collect::<Vec<_>>(),
+        ["LG-KB1", "AOC-24G"]
+    );
+
+    // A new name reaches the cards; a version that leaves is a card again.
+    cmd.rename_family(&family, "Casques Aria").await?;
+    cmd.remove_variant(&family, &versions[2]).await?;
+    shop.sync().await?;
+    let after = search_listing(&shop.db, &ListingQuery::default()).await?;
+    assert_eq!(after.total, 6);
+    let card = after
+        .rows
+        .iter()
+        .find(|row| row.family_id.is_some())
+        .ok_or_else(|| anyhow::anyhow!("no card for the family"))?;
+    assert_eq!((card.title(), card.versions), ("Casques Aria", 2));
+    let red = after
+        .rows
+        .iter()
+        .find(|row| row.sku == "ARIA-R")
+        .ok_or_else(|| anyhow::anyhow!("the red one is not listed"))?;
+    assert_eq!((red.family_id.as_deref(), red.versions), (None, 1));
     Ok(())
 }
 

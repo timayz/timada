@@ -331,7 +331,15 @@ the SMTP relay.
   above it. A new deployment of the subscription builds the table from the
   whole history. Names are sorted by `timada_core::slug::sort_key` — lower
   case, accents folded — because SQLite's collations put `Écran` after `Zoom`;
-  `fill_listing_sort_names` gives older rows their key.
+  `fill_listing_sort_names` gives older rows their key. The versions of a
+  family are **one card**: each row carries its family's id and name (read
+  from the events, so the listing never waits on the family list), and
+  `search_listing` gives, of each family, the matching version that comes
+  first in the order asked for, with the cheapest price among those that
+  match (`ListingRow::versions`, `price_varies`, `title()`). Filters still
+  match versions — a card is what they leave of its family — while the
+  total, the facets and the category counts count cards. Every version keeps
+  its own page and its line in the sitemap.
 - **A business is a customer with a company identity.** `CompanyIdentified`
   records its name and VAT number (`timada_tax::VatNumber` reads one as typed
   and checks its country's shape); each answer of the VAT registry is a
@@ -507,8 +515,9 @@ the SMTP relay.
   (`timada_invoice::vat_report`, the admin's TVA section) adds up what was
   invoiced; filing it — and the rule that a quarter starts at midnight UTC,
   not Paris time — stays with the accountant.
-- Variants beyond the product page: the storefront listing still shows a card
-  per product rather than one per family, and reviews and questions are still
-  each version's own — both are the next steps.
+- Variants beyond the product page and the listing: reviews and questions
+  are still each version's own, so a family's card shows the rating of the
+  version that stands for it — sharing them across the family is the next
+  step.
 - Upcasting of old event shapes: an evento feature, to build when the first
   `V2` event exists.

@@ -8,6 +8,11 @@
 //!
 //! A product is **on sale** — listed — while it is not archived and has a
 //! price that was not withdrawn.
+//!
+//! The versions of one article (a [`ProductFamily`](crate::aggregator::ProductFamily))
+//! are **one card**: a search gives, of each family, the matching version
+//! that comes first, with the cheapest price among those that match. Totals
+//! and facets count cards.
 
 use evento::{
     Executor,
@@ -31,8 +36,9 @@ use timada_review::{aggregator::ReviewPublished, load_review_details};
 
 use crate::{
     aggregator::{
-        CategoryMoved, CategoryRenamed, ProductArchived, ProductCategorised, ProductCreated,
-        ProductDescribed, ProductMediaAdded, ProductSpecified,
+        CategoryMoved, CategoryRenamed, FamilyRenamed, ProductArchived, ProductCategorised,
+        ProductCreated, ProductDescribed, ProductJoinedFamily, ProductLeftFamily,
+        ProductMediaAdded, ProductSpecified,
     },
     command::{Command, MAX_CATEGORY_DEPTH},
     query::load_product_page,
@@ -52,6 +58,9 @@ pub fn listing_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(on_product_specified())
         .handler(on_product_categorised())
         .handler(on_product_archived())
+        .handler(on_product_joined_family())
+        .handler(on_product_left_family())
+        .handler(on_family_renamed())
         .handler(on_price_listed())
         .handler(on_price_changed())
         .handler(on_price_withdrawn())
@@ -66,7 +75,8 @@ pub fn listing_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(on_category_moved())
 }
 
-/// A product as a listing shows it.
+/// A card of a listing: a product, or — for a family — the version of it
+/// that comes first among those that match.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct ListingRow {
     pub product_id: String,
@@ -80,6 +90,8 @@ pub struct ListingRow {
     pub thumbnail_alt: Option<String>,
     /// The price, all taxes included, in minor units — in the currency the
     /// listing was asked for, or the one the product was listed in.
+    ///
+    /// Of a family: the cheapest among the versions that match — "from".
     pub price_minor: i64,
     pub currency: String,
     /// What the warehouse can deliver.
@@ -87,6 +99,24 @@ pub struct ListingRow {
     /// The average of the published reviews, when there is one.
     pub rating_avg: Option<f64>,
     pub review_count: i64,
+    /// The family the product is a version of.
+    pub family_id: Option<String>,
+    pub family_name: Option<String>,
+    /// How many versions of the family match — 1 for a product on its own.
+    pub versions: i64,
+    /// Whether the versions that match have different prices.
+    pub price_varies: bool,
+}
+
+impl ListingRow {
+    /// What the card is called: the family when it stands for several
+    /// versions, the product otherwise.
+    pub fn title(&self) -> &str {
+        match &self.family_name {
+            Some(family) if self.versions > 1 => family,
+            _ => &self.name,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -208,6 +238,9 @@ fn fts_expression(q: &str) -> Option<String> {
     (!words.is_empty()).then(|| words.join(" "))
 }
 
+/// What makes a card: the family, or the product on its own.
+const CARD: &str = "COALESCE(l.family_id, l.product_id)";
+
 /// A filter a facet leaves out when it counts.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Filter<'a> {
@@ -314,31 +347,61 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
     let fts = fts.as_deref();
 
     let in_currency = query.currency.is_some();
-    let mut page = QueryBuilder::<Sqlite>::new(if in_currency {
+    // Innermost: what matches, under plain names. Then each family's versions
+    // are ranked in the order asked for, and the first of each is its card.
+    let mut page = QueryBuilder::<Sqlite>::new(
+        "SELECT product_id, sku, name, brand_name, brand_slug, category_id, short_description,
+                thumbnail_url, thumbnail_alt, from_minor AS price_minor, currency, available,
+                rating_avg, review_count, family_id, family_name, versions,
+                from_minor <> to_minor AS price_varies
+         FROM (SELECT m.*,
+                      ROW_NUMBER() OVER (PARTITION BY card ORDER BY ",
+    );
+    // Whatever the direction, a family is shown by its cheapest version.
+    let within = match (query.sort, fts.is_some()) {
+        (ListingSort::Relevance, true) => "score, sort_key, product_id",
+        (ListingSort::Relevance, false) => "sort_key, product_id",
+        (ListingSort::PriceAsc | ListingSort::PriceDesc, _) => "price, sort_key, product_id",
+        (ListingSort::Rating, _) => {
+            "rating_avg DESC NULLS LAST, review_count DESC, sort_key, product_id"
+        }
+        (ListingSort::Newest, _) => "created_at DESC, listing_rowid DESC",
+    };
+    page.push(within).push(
+        ") AS place,
+                      MIN(price) OVER (PARTITION BY card) AS from_minor,
+                      MAX(price) OVER (PARTITION BY card) AS to_minor,
+                      COUNT(*) OVER (PARTITION BY card) AS versions
+               FROM (",
+    );
+    page.push(if in_currency {
         "SELECT l.product_id, l.sku, l.name, l.brand_name, l.brand_slug, l.category_id,
                 l.short_description, l.thumbnail_url, l.thumbnail_alt,
-                p.price_minor AS price_minor, p.currency AS currency,
-                l.available, l.rating_avg, l.review_count"
+                p.price_minor AS price, p.currency AS currency,
+                l.available, l.rating_avg, l.review_count, l.family_id, l.family_name,
+                l.created_at, l.rowid AS listing_rowid,
+                COALESCE(NULLIF(l.sort_name, ''), lower(l.name)) AS sort_key, "
     } else {
         "SELECT l.product_id, l.sku, l.name, l.brand_name, l.brand_slug, l.category_id,
-                l.short_description, l.thumbnail_url, l.thumbnail_alt, l.price_minor, l.currency,
-                l.available, l.rating_avg, l.review_count"
+                l.short_description, l.thumbnail_url, l.thumbnail_alt,
+                l.price_minor AS price, l.currency AS currency,
+                l.available, l.rating_avg, l.review_count, l.family_id, l.family_name,
+                l.created_at, l.rowid AS listing_rowid,
+                COALESCE(NULLIF(l.sort_name, ''), lower(l.name)) AS sort_key, "
+    });
+    page.push(CARD).push(" AS card, ");
+    // Name and brand weigh most, then the SKU, the category, the features.
+    page.push(if fts.is_some() {
+        "bm25(catalog_listing_fts, 10.0, 6.0, 2.0, 8.0, 1.0) AS score"
+    } else {
+        "0 AS score"
     });
     push_matching(&mut page, query, fts, None);
-    page.push(match (query.sort, fts.is_some()) {
-        // Name and brand weigh most, then the SKU, the category, the features.
-        (ListingSort::Relevance, true) => {
-            " ORDER BY bm25(catalog_listing_fts, 10.0, 6.0, 2.0, 8.0, 1.0), COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id"
-        }
-        (ListingSort::Relevance, false) => " ORDER BY COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
-        (ListingSort::PriceAsc, _) if in_currency => " ORDER BY p.price_minor, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
-        (ListingSort::PriceDesc, _) if in_currency => " ORDER BY p.price_minor DESC, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
-        (ListingSort::PriceAsc, _) => " ORDER BY l.price_minor, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
-        (ListingSort::PriceDesc, _) => " ORDER BY l.price_minor DESC, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id",
-        (ListingSort::Rating, _) => {
-            " ORDER BY l.rating_avg DESC NULLS LAST, l.review_count DESC, COALESCE(NULLIF(l.sort_name, ''), lower(l.name)), l.product_id"
-        }
-        (ListingSort::Newest, _) => " ORDER BY l.created_at DESC, l.rowid DESC",
+    page.push(") m) WHERE place = 1 ORDER BY ");
+    page.push(match query.sort {
+        ListingSort::PriceAsc => "from_minor, sort_key, product_id",
+        ListingSort::PriceDesc => "from_minor DESC, sort_key, product_id",
+        _ => within,
     });
     page.push(" LIMIT ")
         .push_bind(query.limit)
@@ -346,12 +409,14 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
         .push_bind(query.offset);
     let rows: Vec<ListingRow> = page.build_query_as().fetch_all(db).await?;
 
-    let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*)");
+    let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(DISTINCT ");
+    count.push(CARD).push(")");
     push_matching(&mut count, query, fts, None);
     let total: i64 = count.build_query_scalar().fetch_one(db).await?;
 
     let mut brands =
-        QueryBuilder::<Sqlite>::new("SELECT l.brand_slug, MIN(l.brand_name), COUNT(*)");
+        QueryBuilder::<Sqlite>::new("SELECT l.brand_slug, MIN(l.brand_name), COUNT(DISTINCT ");
+    brands.push(CARD).push(")");
     push_matching(&mut brands, query, fts, Some(Filter::Brand));
     brands.push(" GROUP BY l.brand_slug ORDER BY MIN(l.brand_name) COLLATE NOCASE, l.brand_slug");
     let mut brands: Vec<(String, String, i64)> = brands.build_query_as().fetch_all(db).await?;
@@ -367,21 +432,31 @@ pub async fn search_listing(db: &SqlitePool, query: &ListingQuery) -> sqlx::Resu
     let (cheapest, dearest): (Option<i64>, Option<i64>) =
         prices.build_query_as().fetch_one(db).await?;
 
-    let mut stock = QueryBuilder::<Sqlite>::new("SELECT COALESCE(SUM(l.available > 0), 0)");
+    // A card counts once, whichever of its versions qualifies.
+    let mut stock =
+        QueryBuilder::<Sqlite>::new("SELECT COUNT(DISTINCT CASE WHEN l.available > 0 THEN ");
+    stock.push(CARD).push(" END)");
     push_matching(&mut stock, query, fts, Some(Filter::Stock));
     let in_stock: i64 = stock.build_query_scalar().fetch_one(db).await?;
 
-    let mut rated = QueryBuilder::<Sqlite>::new(
-        "SELECT COALESCE(SUM(l.rating_avg >= 4), 0), COALESCE(SUM(l.rating_avg >= 3), 0),
-                COALESCE(SUM(l.rating_avg >= 2), 0), COALESCE(SUM(l.rating_avg >= 1), 0)",
-    );
+    let mut rated = QueryBuilder::<Sqlite>::new("SELECT ");
+    for (nth, stars) in ["4", "3", "2", "1"].into_iter().enumerate() {
+        rated
+            .push(if nth == 0 { "" } else { ", " })
+            .push("COUNT(DISTINCT CASE WHEN l.rating_avg >= ")
+            .push(stars)
+            .push(" THEN ")
+            .push(CARD)
+            .push(" END)");
+    }
     push_matching(&mut rated, query, fts, Some(Filter::Rating));
     let (four, three, two, one): (i64, i64, i64, i64) =
         rated.build_query_as().fetch_one(db).await?;
 
     let mut specs = Vec::new();
     for key in &query.facet_specs {
-        let mut values = QueryBuilder::<Sqlite>::new("SELECT s.value, COUNT(*)");
+        let mut values = QueryBuilder::<Sqlite>::new("SELECT s.value, COUNT(DISTINCT ");
+        values.push(CARD).push(")");
         push_matching(&mut values, query, fts, Some(Filter::Spec(key)));
         // "24 pouces" before "27 pouces" before "100 Hz"… by their number;
         // words (a cast gives them 0) by the alphabet.
@@ -432,8 +507,9 @@ pub async fn fill_listing_sort_names(db: &SqlitePool) -> sqlx::Result<u64> {
     Ok(filled)
 }
 
-/// How many products on sale each of `category_ids` spans — its own and those
-/// of the categories under it. Categories without any are left out.
+/// How many cards — products on sale, a family counting once — each of
+/// `category_ids` spans: its own and those of the categories under it.
+/// Categories without any are left out.
 ///
 /// With a `currency`, only what is sold in it counts.
 pub async fn listed_counts_by_category(
@@ -444,7 +520,7 @@ pub async fn listed_counts_by_category(
     let mut counts = std::collections::HashMap::new();
     for category_id in category_ids {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM catalog_listing l
+            "SELECT COUNT(DISTINCT COALESCE(l.family_id, l.product_id)) FROM catalog_listing l
              WHERE l.archived = 0 AND l.price_minor IS NOT NULL
                AND instr(l.category_trail, ?1) > 0
                AND (?2 IS NULL OR EXISTS (
@@ -554,6 +630,11 @@ async fn refresh_product<E: Executor>(
     .fetch_one(db)
     .await?;
     let (trail, category_names) = category_trail(executor, product.category_id.as_deref()).await?;
+    // Read from the event store: the family list may trail behind.
+    let family = match &product.family_id {
+        Some(family_id) => Command(executor).load_family(family_id).await?,
+        None => None,
+    };
     let thumbnail = product
         .media
         .iter()
@@ -563,8 +644,9 @@ async fn refresh_product<E: Executor>(
         "INSERT INTO catalog_listing
             (product_id, sku, name, sort_name, brand_name, brand_slug, category_id, category_trail,
              short_description, thumbnail_url, thumbnail_alt, price_minor, currency, available,
-             rating_avg, review_count, archived, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?18, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)
+             rating_avg, review_count, archived, created_at, updated_at, family_id, family_name)
+         VALUES (?1, ?2, ?3, ?18, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17,
+                 ?19, ?20)
          ON CONFLICT (product_id) DO UPDATE
          SET name = excluded.name, sort_name = excluded.sort_name,
              brand_name = excluded.brand_name,
@@ -575,6 +657,7 @@ async fn refresh_product<E: Executor>(
              price_minor = excluded.price_minor, currency = excluded.currency,
              available = excluded.available, rating_avg = excluded.rating_avg,
              review_count = excluded.review_count, archived = excluded.archived,
+             family_id = excluded.family_id, family_name = excluded.family_name,
              updated_at = MAX(updated_at, excluded.updated_at)
          RETURNING rowid",
     )
@@ -596,6 +679,8 @@ async fn refresh_product<E: Executor>(
     .bind(product.archived)
     .bind(at as i64)
     .bind(timada_core::slug::sort_key(&product.name))
+    .bind(family.as_ref().map(|family| family.id.as_str()))
+    .bind(family.as_ref().map(|family| family.name.as_str()))
     .fetch_one(db)
     .await?;
 
@@ -785,6 +870,43 @@ async fn on_product_archived<E: Executor>(
     event: Event<ProductArchived>,
 ) -> anyhow::Result<()> {
     refresh(ctx, &event.aggregate_id, event.timestamp).await
+}
+
+#[evento::subscription]
+async fn on_product_joined_family<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ProductJoinedFamily>,
+) -> anyhow::Result<()> {
+    refresh(ctx, &event.aggregate_id, event.timestamp).await
+}
+
+#[evento::subscription]
+async fn on_product_left_family<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<ProductLeftFamily>,
+) -> anyhow::Result<()> {
+    refresh(ctx, &event.aggregate_id, event.timestamp).await
+}
+
+/// The name its cards go by — the one the family has *now*, so a redelivered
+/// rename does not bring an old one back.
+#[evento::subscription]
+async fn on_family_renamed<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<FamilyRenamed>,
+) -> anyhow::Result<()> {
+    let Some(family) = Command(ctx.executor)
+        .load_family(&event.aggregate_id)
+        .await?
+    else {
+        return Ok(());
+    };
+    sqlx::query("UPDATE catalog_listing SET family_name = ? WHERE family_id = ?")
+        .bind(&family.name)
+        .bind(&family.id)
+        .execute(&pool(ctx)?)
+        .await?;
+    Ok(())
 }
 
 #[evento::subscription]

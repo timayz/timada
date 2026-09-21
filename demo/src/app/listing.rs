@@ -276,6 +276,14 @@ async fn product_card(cx: &Cx, row: &ListingRow) -> Result<impl View> {
     )
     .resolve(cx);
     let price = money(&Money::new(row.price_minor, &row.currency));
+    // A family's card: the cheapest of its versions, and how many there are.
+    let price = if row.price_varies {
+        format!("à partir de {price}")
+    } else {
+        price
+    };
+    let versions = (row.versions > 1).then(|| format!("{} versions", row.versions));
+    let title = row.title().to_owned();
     let rating = rating_label(row);
     let alt = row.thumbnail_alt.clone().unwrap_or_default();
     Ok(view! {
@@ -286,8 +294,9 @@ async fn product_card(cx: &Cx, row: &ListingRow) -> Result<impl View> {
                     None => { <span class="no-image">"Pas d'image"</span> }
                 }
             </a>
-            <h2><a href=(link)>(row.name.clone())</a></h2>
+            <h2><a href=(link)>(title)</a></h2>
             <p class="muted">(row.brand_name.clone())</p>
+            if let Some(versions) = &versions { <p class="muted">(versions.clone())</p> }
             if let Some(rating) = &rating { <p>(rating.clone())</p> }
             <p class="price">(price)</p>
             if row.available > 0 {
