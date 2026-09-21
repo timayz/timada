@@ -4,9 +4,10 @@
 use evento::{Executor, metadata::Event, projection::Projection};
 
 use crate::aggregator::{
-    BillingAddressSet, CompanyIdentified, CompanyIdentityRemoved, Customer, CustomerEmailChanged,
-    CustomerRegistered, DeliveryAddressAdded, DeliveryAddressChanged, DeliveryAddressRemoved,
-    PreferredDeliveryAddressChosen, VatNumberChecked,
+    BillingAddressSet, CompanyIdentified, CompanyIdentityRemoved, Customer, CustomerAccountOpened,
+    CustomerEmailChanged, CustomerRegistered, CustomerRegisteredAsGuest, DeliveryAddressAdded,
+    DeliveryAddressChanged, DeliveryAddressRemoved, PreferredDeliveryAddressChosen,
+    VatNumberChecked,
 };
 
 /// One answer of the VAT registry.
@@ -68,6 +69,8 @@ pub fn create_projection<E: Executor>() -> Projection<E, CompanyIdentityView> {
         .skip::<DeliveryAddressChanged>()
         .skip::<DeliveryAddressRemoved>()
         .skip::<PreferredDeliveryAddressChosen>()
+        .skip::<CustomerRegisteredAsGuest>()
+        .skip::<CustomerAccountOpened>()
         .strict()
 }
 

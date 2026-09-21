@@ -353,6 +353,18 @@ the SMTP relay.
   carries the rating of the family's reviews together
   (`refresh_family_rating`), so a card says the same whichever version
   stands for it; a version that leaves takes its reviews with it.
+- **A guest is a customer without an account.** Orders, invoices, returns
+  and e-mails all go by a customer id, and the customer context never held
+  credentials — a login is the host's — so somebody ordering without an
+  account is registered like anybody else, with one more fact:
+  `CustomerRegisteredAsGuest`, committed together with `CustomerRegistered`
+  (`register_guest`). A guest claims nothing: the address may be one an
+  account already uses, and the two stay two customers. `open_account`
+  (`CustomerAccountOpened`, asked once) makes the guest a customer like any
+  other; setting the password is the host's. `AddressBookView::guest` and
+  `customer_list.guest` say who has no page to sign in to: the mailer
+  welcomes a customer when there is an account to be welcomed to — at
+  registration, or when a guest opens one — and the admin marks guests.
 - **A business is a customer with a company identity.** `CompanyIdentified`
   records its name and VAT number (`timada_tax::VatNumber` reads one as typed
   and checks its country's shape); each answer of the VAT registry is a

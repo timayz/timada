@@ -180,6 +180,70 @@ async fn customer_list_follows_registrations_and_email_changes() -> anyhow::Resu
 }
 
 #[tokio::test]
+async fn a_guest_orders_without_an_account_and_may_open_one_later() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command(&executor);
+
+    // The same address as an account's: a guest claims nothing.
+    let member = cmd.register_customer(jonathan()).await?;
+    let guest = cmd.register_guest(jonathan()).await?;
+    assert_ne!(member, guest);
+    assert!(matches!(
+        cmd.register_guest(RegisterCustomer {
+            email: "nowhere".into(),
+            ..jonathan()
+        })
+        .await,
+        Err(CustomerError::InvalidEmail(_))
+    ));
+
+    let book = |id: String| {
+        let executor = &executor;
+        async move {
+            load_address_book(executor, id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no address book"))
+        }
+    };
+    assert!(book(guest.clone()).await?.guest);
+    assert!(!book(member.clone()).await?.guest);
+    // A guest is a customer: delivered and invoiced like any other.
+    cmd.add_delivery_address(&guest, gwada()).await?;
+    assert_eq!(book(guest.clone()).await?.deliveries.len(), 1);
+
+    customer_list_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    let guests = |rows: Vec<timada_customer::CustomerListRow>| {
+        rows.into_iter()
+            .filter(|row| row.guest)
+            .map(|row| row.customer_id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        guests(list_customers(&db, &ListCustomers::default()).await?),
+        std::slice::from_ref(&guest)
+    );
+
+    // An account is opened once; an account holder has nothing to open.
+    assert!(cmd.open_account(&guest).await?);
+    assert!(!cmd.open_account(&guest).await?);
+    assert!(!cmd.open_account(&member).await?);
+    assert!(matches!(
+        cmd.open_account("nobody").await,
+        Err(CustomerError::CustomerNotFound)
+    ));
+    assert!(!book(guest.clone()).await?.guest);
+    customer_list_subscription()
+        .data(db.clone())
+        .run_once(&executor)
+        .await?;
+    assert!(guests(list_customers(&db, &ListCustomers::default()).await?).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_business_is_identified_and_its_vat_number_checked() -> anyhow::Result<()> {
     use timada_customer::{CustomerError, load_company_identity};
     use timada_tax::{FakeValidator, VatNumber};

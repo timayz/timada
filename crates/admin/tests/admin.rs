@@ -366,6 +366,52 @@ async fn the_mount_segment_is_configurable() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn a_customer_who_ordered_without_an_account_is_marked_a_guest() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let cookie = sign_in(&h, "admin").await?;
+    let customers = timada_customer::Command(&h.executor);
+    let someone = |email: &str, first_name: &str| timada_customer::RegisterCustomer {
+        email: email.into(),
+        civility: timada_core::Civility::Mrs,
+        first_name: first_name.into(),
+        last_name: "Hopper".into(),
+    };
+    let member = customers
+        .register_customer(someone("grace@example.com", "Grace"))
+        .await?;
+    let guest = customers
+        .register_guest(someone("grace@example.com", "Gracie"))
+        .await?;
+    timada_customer::customer_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+
+    let list = text(
+        h.router
+            .handle(get("/admin/customers", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(list.contains("Gracie Hopper · Invité"), "{list}");
+    assert!(!list.contains("Grace Hopper · Invité"), "{list}");
+    let page = |id: String| {
+        let (h, cookie) = (&h, &cookie);
+        async move {
+            let uri = format!("/admin/customers/{id}");
+            text(h.router.handle(get(&uri, Some(cookie))).await).await
+        }
+    };
+    assert!(page(guest.clone()).await?.contains("Invité (sans compte)"));
+    assert!(!page(member).await?.contains("Invité (sans compte)"));
+
+    // With an account, a customer like any other.
+    customers.open_account(&guest).await?;
+    assert!(!page(guest).await?.contains("Invité (sans compte)"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn promo_codes_and_vouchers_are_created_listed_and_ended() -> anyhow::Result<()> {
     let h = harness("admin").await?;
     let cookie = sign_in(&h, "admin").await?;

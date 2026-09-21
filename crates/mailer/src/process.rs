@@ -9,7 +9,7 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use sqlx::SqlitePool;
-use timada_customer::aggregator::CustomerRegistered;
+use timada_customer::aggregator::{CustomerAccountOpened, CustomerRegistered};
 use timada_inventory::aggregator::BackInStockAlertTriggered;
 use timada_order::{
     OrderDetailsView,
@@ -42,6 +42,7 @@ pub const MAILER_SUBSCRIPTION: &str = "mailer";
 pub fn mailer_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     let builder = SubscriptionBuilder::new(MAILER_SUBSCRIPTION)
         .handler(welcome_on_customer_registered())
+        .handler(welcome_on_account_opened())
         .handler(confirm_on_order_placed())
         .handler(confirm_again_on_confirmation_resent())
         .handler(notify_on_order_shipped())
@@ -662,6 +663,14 @@ async fn welcome_on_customer_registered<E: Executor>(
     let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
+    // Somebody ordering as a guest has no account to be welcomed to: said
+    // in the same write as the registration, so the view knows already.
+    let guest = timada_customer::load_address_book(ctx.executor, &event.aggregate_id)
+        .await?
+        .is_some_and(|customer| customer.guest);
+    if guest {
+        return Ok(());
+    }
     let content = templates.0.welcome(&config, &event.data.first_name);
     queue(
         &db,
@@ -669,6 +678,32 @@ async fn welcome_on_customer_registered<E: Executor>(
         &event.id.to_string(),
         "welcome",
         &event.data.email,
+        content,
+    )
+    .await
+}
+
+/// A guest who opens an account is welcomed then.
+#[evento::subscription]
+async fn welcome_on_account_opened<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<CustomerAccountOpened>,
+) -> anyhow::Result<()> {
+    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+        return Ok(());
+    };
+    let Some(customer) =
+        timada_customer::load_address_book(ctx.executor, &event.aggregate_id).await?
+    else {
+        return Ok(());
+    };
+    let content = templates.0.welcome(&config, &customer.first_name);
+    queue(
+        &db,
+        &config,
+        &event.id.to_string(),
+        "welcome",
+        &customer.email,
         content,
     )
     .await

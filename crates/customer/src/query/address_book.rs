@@ -7,8 +7,9 @@ use timada_core::{Address, Civility};
 use crate::{
     aggregator::{
         BillingAddressSet, CompanyIdentified, CompanyIdentityRemoved, Customer,
-        CustomerEmailChanged, CustomerRegistered, DeliveryAddressAdded, DeliveryAddressChanged,
-        DeliveryAddressRemoved, PreferredDeliveryAddressChosen, VatNumberChecked,
+        CustomerAccountOpened, CustomerEmailChanged, CustomerRegistered, CustomerRegisteredAsGuest,
+        DeliveryAddressAdded, DeliveryAddressChanged, DeliveryAddressRemoved,
+        PreferredDeliveryAddressChosen, VatNumberChecked,
     },
     value_object::DeliveryAddress,
 };
@@ -23,6 +24,9 @@ pub struct AddressBookView {
     pub last_name: String,
     pub billing: Option<Address>,
     pub deliveries: Vec<DeliveryAddress>,
+    /// Ordered without an account, and has none so far: no page to sign in
+    /// to, so what is written to them must not send them to one.
+    pub guest: bool,
 }
 
 impl AddressBookView {
@@ -40,6 +44,8 @@ pub fn create_projection<E: Executor>() -> Projection<E, AddressBookView> {
         .handler(on_delivery_address_changed())
         .handler(on_delivery_address_removed())
         .handler(on_preferred_delivery_address_chosen())
+        .handler(on_customer_registered_as_guest())
+        .handler(on_customer_account_opened())
         .skip::<CompanyIdentified>()
         .skip::<CompanyIdentityRemoved>()
         .skip::<VatNumberChecked>()
@@ -47,8 +53,8 @@ pub fn create_projection<E: Executor>() -> Projection<E, AddressBookView> {
         // Same shape as before, new revision: for a few hours another view of
         // `Customer` was snapshotted under the same key (evento keys a
         // snapshot by aggregate, revision and id, not by view), so what is
-        // stored at revision 0 may not be an address book.
-        .revision(1)
+        // stored at revision 0 may not be an address book. Revision 2: `guest`.
+        .revision(2)
 }
 
 pub async fn load<E: Executor>(
@@ -68,6 +74,24 @@ async fn on_customer_registered(
     row.civility = event.data.civility;
     row.first_name = event.data.first_name;
     row.last_name = event.data.last_name;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_customer_registered_as_guest(
+    _event: Event<CustomerRegisteredAsGuest>,
+    row: &mut AddressBookView,
+) -> anyhow::Result<()> {
+    row.guest = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_customer_account_opened(
+    _event: Event<CustomerAccountOpened>,
+    row: &mut AddressBookView,
+) -> anyhow::Result<()> {
+    row.guest = false;
     Ok(())
 }
 

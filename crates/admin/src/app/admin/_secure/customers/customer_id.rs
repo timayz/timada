@@ -29,6 +29,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .ok_or_not_found()?;
     let orders = orders_of_customer(&services.db, &id).await?;
     let title = format!("{} {}", book.first_name, book.last_name);
+    let standing = if book.guest {
+        "Invité (sans compte) · "
+    } else {
+        ""
+    };
     // The business the customer buys as, and what the VAT registry last said.
     let company = load_company_identity(&services.executor, &id)
         .await?
@@ -52,7 +57,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(title: &title)
-        <p class="-mt-4 mb-6 text-sm text-muted-foreground">(book.email.clone()) " · " <span class="font-mono text-xs">(id.clone())</span></p>
+        <p class="-mt-4 mb-6 text-sm text-muted-foreground">(standing) (book.email.clone()) " · " <span class="font-mono text-xs">(id.clone())</span></p>
 
         <div class="grid gap-6 lg:grid-cols-3">
             <div class="lg:col-span-2">

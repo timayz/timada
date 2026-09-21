@@ -74,11 +74,17 @@ async fn customer_row(cx: &Cx, row: &CustomerListRow) -> Result<impl View> {
         customer_id::CustomerId(row.customer_id.clone())
     )
     .resolve(cx);
+    // Somebody who ordered without an account, and has none so far.
+    let name = if row.guest {
+        format!("{} {} · Invité", row.first_name, row.last_name)
+    } else {
+        format!("{} {}", row.first_name, row.last_name)
+    };
     Ok(view! {
         table_row(
             table_cell((date(row.registered_at as u64)))
             table_cell(<a href=(link) class="underline-offset-4 hover:underline">(row.email.clone())</a>)
-            table_cell((format!("{} {}", row.first_name, row.last_name)))
+            table_cell((name))
             table_cell(<span class="font-mono text-xs">(row.customer_id.clone())</span>)
         )
     })

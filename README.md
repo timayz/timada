@@ -76,7 +76,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-catalog` | products — description, specs, media, archiving — the category tree they are filed under, the families of products that are one article in several versions, and what the storefront lists: search, filters, facets, sorting |
 | `timada-pricing` | listed price (tax-inclusive) with its VAT rate, a price per other currency the shop sells in, eco-participation, instalment offers |
 | `timada-inventory` | stock per product and location, reservations, returned stock, back-in-stock alerts |
-| `timada-customer` | customers, their e-mail, billing and delivery addresses, the company they buy as and its VAT number; customer list |
+| `timada-customer` | customers — with an account or ordering as guests — their e-mail, billing and delivery addresses, the company they buy as and its VAT number; customer list |
 | `timada-cart` | carts: lines with a price snapshot, promo code, saved carts, the checkout fact |
 | `timada-promotion` | promo codes (capped redemptions) and vouchers (balances) |
 | `timada-payment` | the payment of an order: requested, captured, declined, refunded, disputed — and the `PaymentProvider` port the money moves through, with a Stripe adapter behind the `stripe` feature |
