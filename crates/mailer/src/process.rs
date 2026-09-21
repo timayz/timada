@@ -427,21 +427,34 @@ async fn notify_on_question_answered<E: Executor>(
     .await
 }
 
-/// The return and who asked for it: `(return, e-mail, first name)`.
+/// The return and who asked for it: `(return, e-mail, first name)`. When
+/// they ordered without an account, `config` is told where they read the
+/// order the return is of.
 async fn return_and_customer<E: Executor>(
-    executor: &E,
+    ctx: &Context<'_, E>,
+    config: &mut MailerConfig,
     return_id: &str,
 ) -> anyhow::Result<(ReturnView, String, String)> {
-    let Some(request) = timada_returns::load_return(executor, return_id).await? else {
+    let Some(request) = timada_returns::load_return(ctx.executor, return_id).await? else {
         anyhow::bail!("return {return_id} cannot be loaded");
     };
-    let Some(customer) = timada_customer::load_address_book(executor, &request.customer_id).await?
+    let Some(customer) =
+        timada_customer::load_address_book(ctx.executor, &request.customer_id).await?
     else {
         anyhow::bail!(
             "customer {} of return {return_id} cannot be loaded",
             request.customer_id
         );
     };
+    if customer.guest {
+        match ctx.get::<GuestOrderLinks>() {
+            Some(links) => config.guest_order_path = Some(links.path(&request.order_id)),
+            None => tracing::warn!(
+                %return_id,
+                "a guest is written to without GuestOrderLinks: the link leads to an account"
+            ),
+        }
+    }
     Ok((request, customer.email, customer.first_name))
 }
 
@@ -450,10 +463,11 @@ async fn notify_on_return_approved<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<ReturnApproved>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
-    let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let (request, to, first_name) =
+        return_and_customer(ctx, &mut config, &event.aggregate_id).await?;
     let content = templates.0.return_approved(&config, &first_name, &request);
     // A label handed over with the approval travels with its announcement;
     // one given later has its own e-mail.
@@ -504,10 +518,11 @@ async fn notify_on_return_label_issued<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<timada_returns::aggregator::ReturnLabelIssued>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
-    let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let (request, to, first_name) =
+        return_and_customer(ctx, &mut config, &event.aggregate_id).await?;
     if request
         .label
         .as_ref()
@@ -534,10 +549,11 @@ async fn notify_on_return_refused<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<ReturnRefused>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
-    let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let (request, to, first_name) =
+        return_and_customer(ctx, &mut config, &event.aggregate_id).await?;
     let content = templates.0.return_refused(&config, &first_name, &request);
     queue(
         &db,
@@ -555,10 +571,11 @@ async fn notify_on_return_completed<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<ReturnCompleted>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
-    let (request, to, first_name) = return_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let (request, to, first_name) =
+        return_and_customer(ctx, &mut config, &event.aggregate_id).await?;
     let content = templates.0.return_completed(&config, &first_name, &request);
     queue(
         &db,
@@ -578,7 +595,7 @@ async fn notify_on_replacement_dispatched<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<timada_shipping::aggregator::ShipmentDispatched>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let Some(shipment) = timada_shipping::load_shipment(ctx.executor, &event.aggregate_id).await?
@@ -591,7 +608,7 @@ async fn notify_on_replacement_dispatched<E: Executor>(
     let Some(return_id) = shipment.replaces_return else {
         return Ok(());
     };
-    let (request, to, first_name) = return_and_customer(ctx.executor, &return_id).await?;
+    let (request, to, first_name) = return_and_customer(ctx, &mut config, &return_id).await?;
     let content = templates.0.replacement_shipped(
         &config,
         &first_name,

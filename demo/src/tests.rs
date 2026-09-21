@@ -466,6 +466,233 @@ async fn an_order_without_an_account_from_the_cart_to_the_invoice() -> anyhow::R
     Ok(())
 }
 
+/// Puts `quantity` of the product in a new browser's cart and orders it as
+/// the guest of `form`: `(browser, order id)`, the order placed.
+async fn guest_order<'a>(
+    router: &'a Router,
+    store: &Store,
+    product_id: &str,
+    form: &str,
+) -> anyhow::Result<(Browser<'a>, String)> {
+    let mut browser = Browser::new(router);
+    browser
+        .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
+        .await;
+    browser.post("/checkout/guest", form).await;
+    let checkout = text(browser.get("/checkout").await).await?;
+    let address_id = checkout
+        .split("name=\"delivery_address_id\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .ok_or_else(|| anyhow::anyhow!("no delivery address radio"))?
+        .to_owned();
+    let placed = browser
+        .post(
+            "/checkout",
+            &format!(
+                "delivery_address_id={address_id}&delivery_method=colissimo&payment_mode=card"
+            ),
+        )
+        .await;
+    let order_id = location(&placed)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    db::run_subscriptions_once(store).await?;
+    Ok((browser, order_id))
+}
+
+#[tokio::test]
+async fn a_guest_returns_an_article_then_opens_an_account() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let (mut browser, order_id) = guest_order(&router, &store, &product_id, GUEST).await?;
+    let order_page = format!("/order/{order_id}");
+    timada_payment::Command(&store.executor)
+        .capture_payment(timada_payment::payment_id(&order_id), "psp-guest".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+    let page = text(browser.get(&order_page).await).await?;
+    assert!(
+        !page.contains("Retourner des articles"),
+        "not shipped yet: {page}"
+    );
+    timada_shipping::Command(&store.executor)
+        .dispatch_shipment(
+            timada_shipping::shipment_id(&order_id),
+            "Colissimo".into(),
+            "XY123".into(),
+        )
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+
+    // A return is asked for and followed like anybody's, without an account.
+    let page = text(browser.get(&order_page).await).await?;
+    assert!(page.contains("Retourner des articles"), "{page}");
+    let form_uri = format!("/account/orders/{order_id}/return");
+    let form = text(browser.get(&form_uri).await).await?;
+    assert!(form.contains("Quantité à retourner"), "{form}");
+    assert!(form.contains(&format!("href=\"{order_page}\"")), "{form}");
+    // Asked too fast: a guest calls their own request off, nobody else does.
+    let hasty = browser
+        .post(
+            &form_uri,
+            &format!("product_0={product_id}&quantity_0=1&ground=other"),
+        )
+        .await;
+    let hasty_slip = location(&hasty);
+    let stranger = Browser::new(&router)
+        .post(&format!("{hasty_slip}/cancel"), "")
+        .await;
+    assert!(location(&stranger).starts_with("/login"));
+    let called_off = browser.post(&format!("{hasty_slip}/cancel"), "").await;
+    assert_eq!(location(&called_off), hasty_slip);
+    db::run_subscriptions_once(&store).await?;
+    let asked = browser
+        .post(
+            &form_uri,
+            &format!(
+                "product_0={product_id}&quantity_0=1&ground=defective&details=Ne+s%27allume+pas"
+            ),
+        )
+        .await;
+    let slip_uri = location(&asked);
+    assert!(slip_uri.starts_with("/account/returns/"), "{slip_uri}");
+    let return_id = slip_uri.rsplit('/').next().unwrap_or_default().to_owned();
+    db::run_subscriptions_once(&store).await?;
+    let slip = text(browser.get(&slip_uri).await).await?;
+    assert!(slip.contains("Demande en cours d"), "{slip}");
+    assert!(slip.contains(&format!("href=\"{order_page}\"")), "{slip}");
+    let page = text(browser.get(&order_page).await).await?;
+    assert!(
+        page.contains(&slip_uri),
+        "the order lists its return: {page}"
+    );
+    // Not somebody else's to read.
+    let stranger = Browser::new(&router).get(&slip_uri).await;
+    assert!(location(&stranger).starts_with("/login"));
+
+    // What the shop writes about the return leads to a page a guest can open.
+    timada_returns::Command {
+        executor: &store.executor,
+        db: store.db.clone(),
+        policy: db::return_policy(),
+    }
+    .approve_return(&return_id)
+    .await?;
+    db::run_subscriptions_once(&store).await?;
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    let approved = outbox
+        .iter()
+        .find(|m| m.recipient == "grace@example.com" && m.kind == "return-approved")
+        .ok_or_else(|| anyhow::anyhow!("no approval e-mail: {outbox:?}"))?;
+    assert!(
+        approved
+            .body
+            .contains(&format!("http://127.0.0.1:3000/order/{order_id}?cle=")),
+        "{}",
+        approved.body
+    );
+    assert!(!approved.body.contains("/account/"), "{}", approved.body);
+    let link = approved
+        .body
+        .split("http://127.0.0.1:3000")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_default()
+        .to_owned();
+
+    // « Créer mon compte »: what is wrong is said, then it is theirs.
+    let action = format!("{order_page}/account");
+    assert!(page.contains(&format!("action=\"{action}\"")), "{page}");
+    let mismatch = browser
+        .post(
+            &action,
+            "password=analytical-engine&password_confirm=difference-engine",
+        )
+        .await;
+    assert!(text(mismatch).await?.contains("ne sont pas identiques"));
+    let weak = browser
+        .post(&action, "password=abc&password_confirm=abc")
+        .await;
+    assert!(text(weak).await?.contains("au moins"));
+    // Only the guest whose order it is.
+    let stranger = Browser::new(&router)
+        .post(
+            &action,
+            "password=analytical-engine&password_confirm=analytical-engine",
+        )
+        .await;
+    assert_eq!(stranger.status(), StatusCode::NOT_FOUND);
+    let opened = browser
+        .post(
+            &action,
+            "password=analytical-engine&password_confirm=analytical-engine",
+        )
+        .await;
+    assert_eq!(location(&opened), format!("/account/orders/{order_id}"));
+    assert!(browser.cookies.contains_key("__Host-timada_shop"));
+    assert!(!browser.cookies.contains_key("__Host-timada_guest"));
+    db::run_subscriptions_once(&store).await?;
+    let history = text(browser.get("/account/orders").await).await?;
+    assert!(history.contains(&order_id), "{history}");
+    let theirs = text(browser.get(&slip_uri).await).await?;
+    assert!(
+        theirs.contains(&format!("href=\"/account/orders/{order_id}\"")),
+        "{theirs}"
+    );
+    // Welcomed now that there is an account to be welcomed to.
+    let outbox = timada_mailer::list_outbox(&store.db, None, 50, 0).await?;
+    assert_eq!(
+        outbox
+            .iter()
+            .filter(|m| m.recipient == "grace@example.com" && m.kind == "welcome")
+            .count(),
+        1,
+        "{outbox:?}"
+    );
+    // They sign in like anybody else, and the old link only leads there.
+    let mut later = Browser::new(&router);
+    assert_eq!(
+        location(&later.get(&link).await),
+        format!("/account/orders/{order_id}")
+    );
+    assert!(!later.cookies.contains_key("__Host-timada_guest"));
+    let signed_in = later
+        .post(
+            "/login",
+            "email=grace%40example.com&password=analytical-engine",
+        )
+        .await;
+    assert_eq!(signed_in.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        later
+            .get(&format!("/account/orders/{order_id}"))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+
+    // An address that already signs into an account: the guest stays a guest.
+    Browser::new(&router).post("/register", REGISTER).await;
+    let as_ada = GUEST.replace("Grace%40Example.com", "ada%40example.com");
+    let (mut second, second_order) = guest_order(&router, &store, &product_id, &as_ada).await?;
+    let refused = second
+        .post(
+            &format!("/order/{second_order}/account"),
+            "password=analytical-engine&password_confirm=analytical-engine",
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::OK);
+    assert!(text(refused).await?.contains("Un compte existe déjà"));
+    assert!(second.cookies.contains_key("__Host-timada_guest"));
+    assert_eq!(
+        second.get(&format!("/order/{second_order}")).await.status(),
+        StatusCode::OK
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn accounts_are_unique_and_passwords_checked() -> anyhow::Result<()> {
     let (router, _store, _) = shop().await?;

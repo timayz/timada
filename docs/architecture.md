@@ -376,6 +376,16 @@ the SMTP relay.
   (`MailerConfig::order_url`, for a host's own templates too). Opening the
   link makes the browser the guest's and leaves for the same address
   without the key; once the guest has an account, it only leads there.
+  After-sales goes by the shopper too: a guest asks for a return, follows
+  it, calls it off and downloads its label on the same pages as an account,
+  and what the shop writes about a return carries the signed link of its
+  order, whose page lists it (`MailerConfig::return_url`). « Créer mon
+  compte », on the guest's order page, is a sign-up for the customer they
+  already are (`auth::open_guest_account`): the address is claimed in SQL
+  first, then `open_account` — so their orders, addresses and returns are
+  simply there, nothing is merged. An address that already signs into
+  another customer is refused, and the guest stays a guest: claiming guest
+  orders placed under an account's address is deliberately not built.
 - **A business is a customer with a company identity.** `CompanyIdentified`
   records its name and VAT number (`timada_tax::VatNumber` reads one as typed
   and checks its country's shape); each answer of the VAT registry is a
