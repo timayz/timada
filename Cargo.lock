@@ -678,6 +678,7 @@ dependencies = [
  "evento",
  "form_urlencoded",
  "hex",
+ "hmac 0.12.1",
  "http",
  "serde",
  "sha2 0.10.9",

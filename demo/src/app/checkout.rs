@@ -1,4 +1,5 @@
-//! `/checkout`: delivery address first — it decides the tax zone, hence the
+//! `/checkout`, for a shopper — a signed-in account, or the guest this browser
+//! registered at `/checkout/guest`: delivery address first — it decides the tax zone, hence the
 //! prices and the delivery methods on offer — then delivery method and payment
 //! mode, and the cart is checked out. The order itself is placed by the order context's
 //! process manager; its id derives from the cart id, so the payment step
@@ -36,12 +37,13 @@ use topcoat::{
 use super::{
     account, cart, document,
     format::{address_lines, money, vat_rate},
+    guest as guest_pages,
 };
 use crate::{
     Store,
-    auth::require_account,
     cart_session::{current_cart, forget_cart, fresh_cart},
     db::{mailer_config, tax_zones},
+    guest::{Shopper, current_shopper, require_shopper},
 };
 
 /// The demo shop's only pickup point for "retrait en boutique".
@@ -57,7 +59,7 @@ struct CheckoutQuery {
 
 #[page("/checkout")]
 pub async fn show(cx: &Cx) -> Result<impl View> {
-    require_account(cx).await?;
+    ordering_shopper(cx).await?;
     let address = query::<CheckoutQuery>(cx)?.address.clone();
     Ok(view! { checkout_view(error: None, address_id: address) })
 }
@@ -71,6 +73,15 @@ pub struct CheckoutForm {
     /// business of another member state.
     #[serde(default)]
     regime: String,
+}
+
+/// Who is ordering. Nobody yet: the page where one signs in, or orders
+/// without an account.
+async fn ordering_shopper(cx: &Cx) -> Result<Shopper> {
+    match current_shopper(cx).await? {
+        Some(shopper) => Ok(shopper),
+        None => Err(see_other(href!(guest_pages::show).resolve(cx)).into()),
+    }
 }
 
 /// What the form's `regime` field says of a reverse-charged order.
@@ -97,7 +108,7 @@ async fn check_out(
 ) -> Result<std::result::Result<String, (String, String)>> {
     let address_id = form.delivery_address_id.clone();
     let refuse = |message: &str| Ok(Err((message.to_owned(), address_id.clone())));
-    let account = require_account(cx).await?;
+    let shopper = ordering_shopper(cx).await?;
     let store = app_context::<Store>(cx);
     let back_to_cart = || see_other(href!(cart::show).resolve(cx));
     let (cart_id, cart_currency) = match current_cart(cx).await {
@@ -115,7 +126,7 @@ async fn check_out(
             notices.join(" ")
         ));
     }
-    let book = load_address_book(&store.executor, &account.customer_id)
+    let book = load_address_book(&store.executor, &shopper.customer_id)
         .await?
         .ok_or_not_found()?;
 
@@ -154,11 +165,11 @@ async fn check_out(
         store.vat_validator.as_ref(),
         &zones,
         zone,
-        &account.customer_id,
+        &shopper.customer_id,
         &policy,
     )
     .await?;
-    let exempt = business_purchase(&store.executor, &zones, zone, &account.customer_id, &policy)
+    let exempt = business_purchase(&store.executor, &zones, zone, &shopper.customer_id, &policy)
         .await?
         .is_some_and(|business| business.reverse_charge.is_some());
     if exempt != (form.regime == REVERSE_CHARGE_REGIME) {
@@ -183,7 +194,7 @@ async fn check_out(
         .checkout(
             &cart_id,
             Checkout {
-                customer_id: Some(account.customer_id.clone()),
+                customer_id: Some(shopper.customer_id.clone()),
                 billing_address: book.billing.unwrap_or_else(|| delivery_address.clone()),
                 delivery_address,
                 delivery: DeliveryChoice {
@@ -229,7 +240,7 @@ async fn checkout_view(
     error: Option<String>,
     address_id: Option<String>,
 ) -> Result<impl View> {
-    let account = require_account(cx).await?;
+    let shopper = ordering_shopper(cx).await?;
     let store = app_context::<Store>(cx);
     let (cart, price_notices) = match fresh_cart(cx).await? {
         Some((cart, notices)) if !cart.lines.is_empty() => (cart, notices),
@@ -237,12 +248,17 @@ async fn checkout_view(
     };
     let handling_fee = installment_fee(store, &cart.subtotal.currency);
     let installments = handling_fee.is_some();
-    let book = load_address_book(&store.executor, &account.customer_id)
+    let book = load_address_book(&store.executor, &shopper.customer_id)
         .await?
         .ok_or_not_found()?;
-    let new_address = href!(account::new_address)
-        .query([("next", href!(show).resolve(cx))])
-        .resolve(cx);
+    // A guest has no address book to manage: they say again who they are.
+    let new_address = if shopper.guest {
+        href!(guest_pages::show).resolve(cx)
+    } else {
+        href!(account::new_address)
+            .query([("next", href!(show).resolve(cx))])
+            .resolve(cx)
+    };
 
     // The address the page is priced for: the one asked for, else the
     // preferred one, else the first.
@@ -265,7 +281,7 @@ async fn checkout_view(
         &store.executor,
         &zones,
         pricing_zone,
-        &account.customer_id,
+        &shopper.customer_id,
         &ReverseChargePolicy::default(),
     )
     .await?;
@@ -488,13 +504,26 @@ enum PayStep {
     Cancelled(String),
 }
 
+/// Where the shopper reads the order afterwards: in their account, or — a
+/// guest — on the order's own page.
+async fn order_details_link(cx: &Cx, id: &str) -> Result<String> {
+    let guest = current_shopper(cx)
+        .await?
+        .is_some_and(|shopper| shopper.guest);
+    Ok(if guest {
+        href!(guest_pages::order, guest_pages::OrderId(id.to_owned())).resolve(cx)
+    } else {
+        href!(account::order_detail, OrderId(id.to_owned())).resolve(cx)
+    })
+}
+
 /// The shopper's own order, if it exists yet.
 async fn own_order(cx: &Cx, id: &str) -> Result<Option<OrderDetailsView>> {
-    let account = require_account(cx).await?;
+    let shopper = require_shopper(cx).await?;
     let store = app_context::<Store>(cx);
     let order = load_order_details(&store.executor, id).await?;
     if let Some(order) = &order {
-        (order.customer_id == account.customer_id)
+        (order.customer_id == shopper.customer_id)
             .then_some(())
             .ok_or_not_found()?;
     }
@@ -586,7 +615,7 @@ pub async fn pay(cx: &Cx) -> Result<impl View> {
     let summary = order
         .as_ref()
         .map(|o| (o.display_number().to_owned(), money(&o.total)));
-    let details = href!(account::order_detail, OrderId(id.clone())).resolve(cx);
+    let details = order_details_link(cx, &id).await?;
     let pay_label = summary
         .as_ref()
         .map(|(_, total)| total.clone())
@@ -669,7 +698,7 @@ async fn paid_order(cx: &Cx, id: &str) -> Result<OrderDetailsView> {
 pub async fn confirmation(cx: &Cx) -> Result<impl View> {
     let id = param::<OrderId>(cx)?.clone();
     let order = paid_order(cx, &id).await?;
-    let details = href!(account::order_detail, OrderId(id.clone())).resolve(cx);
+    let details = order_details_link(cx, &id).await?;
 
     Ok(view! {
         document(

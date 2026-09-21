@@ -51,6 +51,7 @@ Environment of the demo:
 | `TIMADA_SMTP_URL` | — | with `--features smtp`, e-mails are sent instead of logged |
 | `TIMADA_PAYMENT_TIMEOUT_SECS` | `1800` | an unpaid order is cancelled and its stock released |
 | `TIMADA_ALERTS_TO` | `boutique@timada.example` | where the shop itself is written to — a payment being disputed, and what the bank decided |
+| `TIMADA_LINK_SECRET` | a secret of the moment | signs what stands in for the session of somebody ordering without an account: the link to the order in their e-mails, and their browser's cookie. Unset, the links sent so far stop working at each restart |
 | `TIMADA_ARCHIVE_DIR` | — | issued invoices and credit notes are archived as files under this directory instead of in the database |
 | `TIMADA_VIES`, `TIMADA_VAT_NUMBER` | — | with `--features vies` and `TIMADA_VIES=1`, business customers' VAT numbers are checked against the EU's VIES registry; the shop's own number gets each check its consultation number |
 | `TIMADA_ECB` | — | with `--features ecb` and `TIMADA_ECB=1`, an order in pounds or francs is pinned the European Central Bank's reference rate of the day (fixed demo rates otherwise): what its invoice states in euros, and what the VAT report counts |

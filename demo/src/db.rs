@@ -167,7 +167,15 @@ pub fn mailer_config() -> timada_mailer::MailerConfig {
                 .unwrap_or_else(|_| "boutique@timada.example".to_owned()),
         ),
         max_event_age_secs: timada_mailer::MailerConfig::DEFAULT_MAX_EVENT_AGE_SECS,
+        guest_order_path: None,
     }
+}
+
+/// Where the e-mails send somebody who ordered without an account: the
+/// order's page, opened by a link signed with the shop's secret.
+fn guest_order_links(store: &Store) -> timada_mailer::GuestOrderLinks {
+    let secret = store.link_secret.clone();
+    timada_mailer::GuestOrderLinks::new(move |order_id| crate::guest::order_path(&secret, order_id))
 }
 
 /// Every read-model subscription and process manager, running in the background.
@@ -312,6 +320,7 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
         timada_mailer::mailer_subscription()
             .data(db)
             .data(mailer_config())
+            .data(guest_order_links(store))
             // Who issues the invoices: turns on the e-mail that carries them —
             // the archived file, the one the account serves.
             .data(invoice_issuer())
@@ -472,6 +481,7 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
         timada_mailer::mailer_subscription()
             .data(db.clone())
             .data(mailer_config())
+            .data(guest_order_links(store))
             .data(invoice_issuer())
             .data(store.archive.clone())
             .run_once(executor)

@@ -15,6 +15,7 @@ mod auth;
 mod cart_session;
 mod currency;
 mod db;
+mod guest;
 mod seed;
 mod seed_catalogue;
 #[cfg(test)]
@@ -47,6 +48,9 @@ pub struct Store {
     pub vat_validator: std::sync::Arc<dyn timada_tax::VatNumberValidator>,
     /// Where issued invoices are kept, unaltered.
     pub archive: timada_invoice::InvoiceArchive,
+    /// Signs what stands in for a guest's session: the link to an order
+    /// written in their e-mails, and the cookie of the browser they order from.
+    pub link_secret: Vec<u8>,
 }
 
 /// The invoice archive: files under `TIMADA_ARCHIVE_DIR` when it is set, in
@@ -109,6 +113,23 @@ fn stripe_provider() -> anyhow::Result<Option<std::sync::Arc<timada_payment::Str
 
 /// The shop as the pages see it, taking its payments through Stripe when it
 /// is configured and by hand from the admin otherwise.
+/// `TIMADA_LINK_SECRET`, or a secret of the moment: the links in the e-mails
+/// sent so far then stop working when the shop restarts.
+fn link_secret() -> Vec<u8> {
+    match env::var("TIMADA_LINK_SECRET") {
+        Ok(secret) if !secret.trim().is_empty() => secret.into_bytes(),
+        _ => {
+            use argon2::password_hash::rand_core::{OsRng, RngCore};
+            tracing::warn!(
+                "TIMADA_LINK_SECRET is not set: guests' order links will not survive a restart"
+            );
+            let mut secret = vec![0u8; 32];
+            OsRng.fill_bytes(&mut secret);
+            secret
+        }
+    }
+}
+
 fn open_store(executor: evento::Sqlite, db: sqlx::SqlitePool) -> anyhow::Result<Store> {
     #[cfg(feature = "stripe")]
     {
@@ -124,6 +145,7 @@ fn open_store(executor: evento::Sqlite, db: sqlx::SqlitePool) -> anyhow::Result<
             provider,
             stripe,
             vat_validator: vat_validator()?,
+            link_secret: link_secret(),
         })
     }
     #[cfg(not(feature = "stripe"))]
@@ -139,6 +161,7 @@ fn open_store(executor: evento::Sqlite, db: sqlx::SqlitePool) -> anyhow::Result<
             db,
             provider: std::sync::Arc::new(timada_payment::ManualProvider),
             vat_validator: vat_validator()?,
+            link_secret: link_secret(),
         })
     }
 }

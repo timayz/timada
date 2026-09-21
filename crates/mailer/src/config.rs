@@ -19,6 +19,27 @@ pub struct MailerConfig {
     /// outage): without this guard, plugging the mailer into an existing shop
     /// would write to every past customer.
     pub max_event_age_secs: u64,
+    /// Where the customer an e-mail is written to reads their order, when it
+    /// is not their account: the path of a guest's signed link. **Hosts leave
+    /// it `None`** — the mailer fills it, e-mail by e-mail, from
+    /// [`GuestOrderLinks`] when the customer ordered without an account.
+    pub guest_order_path: Option<String>,
+}
+
+/// Where a guest reads an order: the path (with its key) for an order id.
+/// Optional subscription data — `.data(GuestOrderLinks::new(|order_id| …))`.
+/// Without it, a guest's e-mails point to the account pages they cannot open.
+#[derive(Clone)]
+pub struct GuestOrderLinks(std::sync::Arc<dyn Fn(&str) -> String + Send + Sync>);
+
+impl GuestOrderLinks {
+    pub fn new(path_of: impl Fn(&str) -> String + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(path_of))
+    }
+
+    pub fn path(&self, order_id: &str) -> String {
+        (self.0)(order_id)
+    }
 }
 
 impl MailerConfig {
@@ -27,5 +48,14 @@ impl MailerConfig {
 
     pub(crate) fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base_url.trim_end_matches('/'))
+    }
+
+    /// Where the customer this e-mail is written to reads the order: their
+    /// account, or a guest's signed link. For a host's own [`crate::Templates`].
+    pub fn order_url(&self, order_id: &str) -> String {
+        match &self.guest_order_path {
+            Some(path) => self.url(path),
+            None => self.url(&format!("/account/orders/{order_id}")),
+        }
     }
 }

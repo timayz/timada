@@ -18,7 +18,7 @@ mod template;
 mod templates;
 mod transport;
 
-pub use config::MailerConfig;
+pub use config::{GuestOrderLinks, MailerConfig};
 pub use email::{Attachment, Email};
 pub use error::MailError;
 pub use migration::migrations;

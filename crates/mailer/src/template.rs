@@ -19,7 +19,7 @@ fn signed(config: &MailerConfig, greeting_name: &str, paragraphs: &[String]) -> 
 }
 
 fn order_link(config: &MailerConfig, order: &OrderDetailsView) -> String {
-    config.url(&format!("/account/orders/{}", order.id))
+    config.order_url(&order.id)
 }
 
 fn order_lines(order: &OrderDetailsView) -> String {
@@ -625,8 +625,8 @@ pub(crate) fn credit_note_issued(
                 format!("  Motif — {}", credit_note.reason),
                 format!("  {heading} — {}", money(&credit_note.amount)),
                 format!(
-                    "Il reste disponible dans votre compte : {}",
-                    config.url(&format!("/account/orders/{}", credit_note.order_id))
+                    "Il reste disponible ici : {}",
+                    config.order_url(&credit_note.order_id)
                 ),
             ],
         ),
@@ -656,8 +656,8 @@ pub(crate) fn invoice_issued(
                 ),
                 format!("  {heading} — {}", money(&invoice.total)),
                 format!(
-                    "Elle reste disponible dans votre compte : {}",
-                    config.url(&format!("/account/orders/{}", invoice.order_id))
+                    "Elle reste disponible ici : {}",
+                    config.order_url(&invoice.order_id)
                 ),
             ],
         ),

@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use timada_core::{Address, Civility, Money};
 use timada_mailer::{
-    Attachment, Content, DeliveryPolicy, Email, LogTransport, MAX_ATTEMPTS, MailError,
-    MailerConfig, MailerTemplates, MemoryTransport, OutboxStatus, SendFuture, Templates, Transport,
-    count_outbox, deliver_pending, deliver_pending_with, enqueue, list_outbox, load_outbox_message,
-    mailer_subscription, migrations, outbox_attachments, retry,
+    Attachment, Content, DeliveryPolicy, Email, GuestOrderLinks, LogTransport, MAX_ATTEMPTS,
+    MailError, MailerConfig, MailerTemplates, MemoryTransport, OutboxStatus, SendFuture, Templates,
+    Transport, count_outbox, deliver_pending, deliver_pending_with, enqueue, list_outbox,
+    load_outbox_message, mailer_subscription, migrations, outbox_attachments, retry,
 };
 use timada_order::{DeliveryChoice, OrderLine, PaymentMode, PlaceOrder, Seller};
 
@@ -20,6 +20,7 @@ fn config() -> MailerConfig {
         returns_address: "Timada — Service retours\n1 rue de l'Entrepôt\n31000 Toulouse".into(),
         alerts_to: Some("boutique@shop.example".into()),
         max_event_age_secs: MailerConfig::DEFAULT_MAX_EVENT_AGE_SECS,
+        guest_order_path: None,
     }
 }
 
@@ -579,6 +580,105 @@ async fn facts_of_the_other_contexts_become_emails() -> anyhow::Result<()> {
         "{}",
         answered.body
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_guest_is_sent_to_their_signed_link_not_to_an_account() -> anyhow::Result<()> {
+    let mut all = migrations();
+    all.extend(timada_order::migrations());
+    let (executor, db) = timada_core::testing::memory_executor(all).await?;
+    let outbox = MemoryTransport::default();
+    let sync = || async {
+        for _ in 0..2 {
+            mailer_subscription()
+                .data(db.clone())
+                .data(config())
+                .data(GuestOrderLinks::new(|order_id| {
+                    format!("/order/{order_id}?cle=signed")
+                }))
+                .run_once(&executor)
+                .await?;
+        }
+        deliver_pending(&db, &outbox).await?;
+        anyhow::Ok(())
+    };
+    let customers = timada_customer::Command(&executor);
+    let someone = |first_name: &str| timada_customer::RegisterCustomer {
+        email: format!("{}@example.com", first_name.to_lowercase()),
+        civility: Civility::Mrs,
+        first_name: first_name.into(),
+        last_name: "Hopper".into(),
+    };
+    let guest = customers.register_guest(someone("Grace")).await?;
+    let member = customers.register_customer(someone("Ada")).await?;
+    let orders = timada_order::Command(&executor);
+    let mut placed = Vec::new();
+    for (cart_id, customer_id) in [("cart-guest", &guest), ("cart-member", &member)] {
+        let order_id = orders
+            .place_order(PlaceOrder {
+                cart_id: cart_id.into(),
+                customer_id: customer_id.clone(),
+                seller: Seller::Ldlc,
+                lines: vec![OrderLine {
+                    product_id: "p-1".into(),
+                    name: "AOC 24G4XE".into(),
+                    quantity: 1,
+                    unit_price: Money::eur(11_995),
+                    warranty_months: 36,
+                }],
+                delivery_address: address(),
+                billing_address: address(),
+                delivery: DeliveryChoice {
+                    method_code: "colissimo".into(),
+                    pickup_store_id: None,
+                },
+                payment_mode: PaymentMode::Card,
+                shipping_fee: Money::eur(590),
+                handling_fee: Money::eur(0),
+                promo_code: None,
+                discount: None,
+                order_number: None,
+                tax: None,
+                business: None,
+                exchange_rate: None,
+            })
+            .await?;
+        placed.push(order_id);
+    }
+    sync().await?;
+
+    let sent = outbox.sent();
+    let to = |address: &str| {
+        sent.iter()
+            .filter(|email| email.to == address)
+            .map(|email| email.body.clone())
+            .collect::<Vec<_>>()
+    };
+    // The guest: no welcome, and a link that needs no account.
+    let grace = to("grace@example.com");
+    assert_eq!(grace.len(), 1, "{grace:?}");
+    assert!(
+        grace[0].contains(&format!(
+            "https://shop.example/order/{}?cle=signed",
+            placed[0]
+        )),
+        "{}",
+        grace[0]
+    );
+    assert!(!grace[0].contains("/account/"), "{}", grace[0]);
+    // The account holder: welcomed, and sent to their account as before.
+    let ada = to("ada@example.com");
+    assert_eq!(ada.len(), 2, "{ada:?}");
+    assert!(
+        ada[1].contains(&format!(
+            "https://shop.example/account/orders/{}",
+            placed[1]
+        )),
+        "{}",
+        ada[1]
+    );
+    assert!(!ada[1].contains("cle=signed"), "{}", ada[1]);
     Ok(())
 }
 

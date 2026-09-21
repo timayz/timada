@@ -28,7 +28,7 @@ use super::{
     checkout::OrderId,
     format::{address_lines, date, money, vat_rate},
 };
-use crate::{Store, auth::require_account, db::invoice_issuer};
+use crate::{Store, db::invoice_issuer, guest::require_shopper};
 
 const STYLES: &str = "\
 body{font-family:system-ui,sans-serif;max-width:50rem;margin:2rem auto;padding:0 1.5rem;line-height:1.45;color:#111}\
@@ -49,12 +49,12 @@ footer{margin-top:2rem;border-top:1px solid #ccc;padding-top:.75rem;font-size:.8
 /// The invoice of the signed-in shopper's order, once it is issued. Someone
 /// else's order, or an invoice not issued yet, is a 404.
 async fn own_invoice(cx: &Cx) -> Result<(String, InvoiceDocument)> {
-    let account = require_account(cx).await?;
+    let shopper = require_shopper(cx).await?;
     let order_id = param::<OrderId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     load_order_details(&store.executor, &order_id)
         .await?
-        .filter(|order| order.customer_id == account.customer_id)
+        .filter(|order| order.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
     let document = load_invoice_document(
         &store.executor,
@@ -116,13 +116,13 @@ path_param!(pub credit_note_id: String, error = not_found);
 /// file. Someone else's order, or a credit note of another order, is a 404.
 #[route(GET "/account/orders/{order_id}/credit-notes/{credit_note_id}")]
 pub async fn credit_note_pdf(cx: &Cx) -> Result<PdfDownload> {
-    let account = require_account(cx).await?;
+    let shopper = require_shopper(cx).await?;
     let order_id = param::<OrderId>(cx)?.clone();
     let note_id = param::<CreditNoteId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     load_order_details(&store.executor, &order_id)
         .await?
-        .filter(|order| order.customer_id == account.customer_id)
+        .filter(|order| order.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
     let document = load_credit_note_document(&store.executor, &invoice_issuer(), &note_id)
         .await?

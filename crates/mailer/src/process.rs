@@ -25,7 +25,7 @@ use timada_review::aggregator::{
 };
 
 use crate::{
-    config::MailerConfig,
+    config::{GuestOrderLinks, MailerConfig},
     email::Email,
     outbox::enqueue,
     templates::{Content, MailerTemplates},
@@ -124,21 +124,33 @@ async fn queue_with(
     Ok(())
 }
 
-/// The order and who placed it: `(order, e-mail, first name)`.
+/// The order and who placed it: `(order, e-mail, first name)`. When they
+/// ordered without an account, `config` is told where they read the order.
 async fn order_and_customer<E: Executor>(
-    executor: &E,
+    ctx: &Context<'_, E>,
+    config: &mut MailerConfig,
     order_id: &str,
 ) -> anyhow::Result<(OrderDetailsView, String, String)> {
-    let Some(order) = timada_order::load_order_details(executor, order_id).await? else {
+    let Some(order) = timada_order::load_order_details(ctx.executor, order_id).await? else {
         anyhow::bail!("order {order_id} cannot be loaded");
     };
-    let Some(customer) = timada_customer::load_address_book(executor, &order.customer_id).await?
+    let Some(customer) =
+        timada_customer::load_address_book(ctx.executor, &order.customer_id).await?
     else {
         anyhow::bail!(
             "customer {} of order {order_id} cannot be loaded",
             order.customer_id
         );
     };
+    if customer.guest {
+        match ctx.get::<GuestOrderLinks>() {
+            Some(links) => config.guest_order_path = Some(links.path(order_id)),
+            None => tracing::warn!(
+                %order_id,
+                "a guest is written to without GuestOrderLinks: the link leads to an account"
+            ),
+        }
+    }
     Ok((order, customer.email, customer.first_name))
 }
 
@@ -147,10 +159,10 @@ async fn confirm_on_order_placed<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderPlaced>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
-    let (order, to, first_name) = order_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let (order, to, first_name) = order_and_customer(ctx, &mut config, &event.aggregate_id).await?;
     let content = templates.0.order_confirmation(&config, &first_name, &order);
     queue(
         &db,
@@ -169,10 +181,10 @@ async fn confirm_again_on_confirmation_resent<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderConfirmationResent>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
-    let (order, to, first_name) = order_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let (order, to, first_name) = order_and_customer(ctx, &mut config, &event.aggregate_id).await?;
     let content = templates.0.order_confirmation(&config, &first_name, &order);
     queue(
         &db,
@@ -190,10 +202,10 @@ async fn notify_on_order_shipped<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderShipped>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
-    let (order, to, first_name) = order_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let (order, to, first_name) = order_and_customer(ctx, &mut config, &event.aggregate_id).await?;
     let content = templates.0.order_shipped(&config, &first_name, &order);
     queue(
         &db,
@@ -211,10 +223,10 @@ async fn notify_on_order_cancelled<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<OrderCancelled>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
-    let (order, to, first_name) = order_and_customer(ctx.executor, &event.aggregate_id).await?;
+    let (order, to, first_name) = order_and_customer(ctx, &mut config, &event.aggregate_id).await?;
     let content = templates
         .0
         .order_cancelled(&config, &first_name, &order, &event.data.reason);
@@ -234,7 +246,7 @@ async fn notify_on_payment_refunded<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<PaymentRefunded>,
 ) -> anyhow::Result<()> {
-    let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+    let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
         return Ok(());
     };
     let Some(payment) = timada_payment::load_payment(ctx.executor, &event.aggregate_id).await?
@@ -244,7 +256,7 @@ async fn notify_on_payment_refunded<E: Executor>(
             event.aggregate_id
         );
     };
-    let (order, to, first_name) = order_and_customer(ctx.executor, &payment.order_id).await?;
+    let (order, to, first_name) = order_and_customer(ctx, &mut config, &payment.order_id).await?;
     let content = templates
         .0
         .refund(&config, &first_name, &order, &event.data.amount);
@@ -854,7 +866,7 @@ mod invoice {
         ctx: &Context<'_, E>,
         event: Event<InvoiceIssued>,
     ) -> anyhow::Result<()> {
-        let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+        let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
             return Ok(());
         };
         let Some(issuer) = ctx.get::<InvoiceIssuer>() else {
@@ -868,7 +880,8 @@ mod invoice {
             anyhow::bail!("invoice {} cannot be loaded", event.aggregate_id);
         };
         // The order itself gives its number: no read model to wait for.
-        let (order, to, first_name) = order_and_customer(ctx.executor, &invoice.order_id).await?;
+        let (order, to, first_name) =
+            order_and_customer(ctx, &mut config, &invoice.order_id).await?;
         let number = order.order_number.clone();
         // As issued: credit notes come later and have their own e-mail.
         let Some(document) = invoice_document(&issuer, invoice, number, Vec::new())? else {
@@ -921,7 +934,7 @@ mod invoice {
         ctx: &Context<'_, E>,
         event: Event<CreditNoteIssued>,
     ) -> anyhow::Result<()> {
-        let Some((db, config, templates)) = setup(ctx, event.timestamp)? else {
+        let Some((db, mut config, templates)) = setup(ctx, event.timestamp)? else {
             return Ok(());
         };
         let Some(issuer) = ctx.get::<InvoiceIssuer>() else {
@@ -936,7 +949,7 @@ mod invoice {
         else {
             anyhow::bail!("credit note {} cannot be loaded", event.aggregate_id);
         };
-        let (_, to, first_name) = order_and_customer(ctx.executor, &document.order_id).await?;
+        let (_, to, first_name) = order_and_customer(ctx, &mut config, &document.order_id).await?;
 
         let content = templates
             .0
