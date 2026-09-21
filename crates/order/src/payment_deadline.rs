@@ -34,11 +34,16 @@ pub const PAYMENT_DEADLINE_SUBSCRIPTION: &str = "order-payment-deadline";
 /// payment that waited too long.
 pub const PAYMENT_TIMED_OUT: &str = "payment timed out";
 
+/// The reason an order is cancelled with when its customer called it off —
+/// from the storefront, before it shipped.
+pub const CANCELLED_BY_CUSTOMER: &str = "cancelled by customer";
+
 /// How to word a cancellation reason for the customer: the reasons the saga
 /// gives itself are translated, an operator's free text is shown as typed.
 pub fn cancellation_reason_label(reason: &str) -> &str {
     match reason {
         PAYMENT_TIMED_OUT => "paiement non finalisé dans les délais",
+        CANCELLED_BY_CUSTOMER => "à la demande du client",
         "payment declined" => "paiement refusé",
         "out of stock" => "produit indisponible",
         other => other,
