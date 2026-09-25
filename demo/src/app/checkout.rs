@@ -374,6 +374,7 @@ async fn checkout_view(
             }
 
             if let Some(notice) = &zone_notice { <p role="status" class="notice">(notice.clone())</p> }
+            <div class="table-scroll">
             <table>
                 <caption class="muted">"Récapitulatif du panier"</caption>
                 <thead>
@@ -393,13 +394,16 @@ async fn checkout_view(
                     }
                 </tbody>
             </table>
-            <table class="totals">
-                <tbody>
-                    cart::promo_totals(subtotal: money(&subtotal), promo: &promo)
-                </tbody>
-            </table>
-            cart::promo_notice(promo: &promo)
-            <p class="muted">"Les frais de livraison et de dossier s'ajoutent au sous-total. " <a href=(href!(cart::show))>"Modifier le panier"</a></p>
+            </div>
+            <section class="panel">
+                <table class="totals">
+                    <tbody>
+                        cart::promo_totals(subtotal: money(&subtotal), promo: &promo)
+                    </tbody>
+                </table>
+                cart::promo_notice(promo: &promo)
+                <p class="muted">"Les frais de livraison et de dossier s'ajoutent au sous-total. " <a href=(href!(cart::show))>"Modifier le panier"</a></p>
+            </section>
 
             if !book.deliveries.is_empty() && !deliverable {
                 <p role="alert" class="error">"Nous ne livrons pas encore ce pays. Choisissez une autre adresse de livraison."</p>
@@ -408,6 +412,7 @@ async fn checkout_view(
                 <form method="post" action=(href!(submit))>
                     <input type="hidden" name="delivery_address_id" value=(chosen_id.clone())>
                     <input type="hidden" name="regime" value=(regime)>
+                    <div class="panel">
                     <fieldset>
                         <legend>"Mode de livraison"</legend>
                         for (index, offer) in offers.iter().enumerate() {
@@ -430,6 +435,7 @@ async fn checkout_view(
                             </label>
                         }
                     </fieldset>
+                    </div>
                     <button type="submit">"Valider la commande"</button>
                 </form>
             }
