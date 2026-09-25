@@ -20,7 +20,7 @@ use topcoat::{
         response::{IntoResponse, Response},
         route,
     },
-    view::{View, view},
+    view::{Unescaped, View, view},
 };
 
 use super::{
@@ -30,21 +30,8 @@ use super::{
 };
 use crate::{Store, db::invoice_issuer, guest::require_shopper};
 
-const STYLES: &str = "\
-body{font-family:system-ui,sans-serif;max-width:50rem;margin:2rem auto;padding:0 1.5rem;line-height:1.45;color:#111}\
-header.doc{display:flex;justify-content:space-between;gap:2rem;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:1rem}\
-h1{font-size:1.6rem;margin:0}.muted{color:#555}address{font-style:normal}\
-.parties{display:grid;grid-template-columns:1fr 1fr;gap:2rem;margin:1.5rem 0}\
-table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid #ccc;vertical-align:top}\
-td.num,th.num{text-align:right;white-space:nowrap}\
-table.totals{margin-left:auto;width:auto;min-width:20rem}table.totals td{border:none;padding:.15rem .5rem}\
-table.totals tr.total td{font-weight:700;border-top:1px solid #111}\
-.actions{margin:1.5rem 0;display:flex;gap:1rem;align-items:center}\
-button{font:inherit;padding:.45rem .8rem;border:1px solid #0b5fa5;border-radius:.3rem;background:#0b5fa5;color:#fff;cursor:pointer}\
-a{color:#0b5fa5}:focus-visible{outline:3px solid #ffbf47;outline-offset:2px}\
-footer{margin-top:2rem;border-top:1px solid #ccc;padding-top:.75rem;font-size:.85rem;color:#555}\
-@page{size:A4;margin:18mm}\
-@media print{body{margin:0;max-width:none;padding:0}.actions{display:none}a{color:inherit;text-decoration:none}}";
+/// The sheet itself; the palette comes from the shop's own tokens.
+const STYLES: &str = include_str!("invoice.css");
 
 /// The invoice of the signed-in shopper's order, once it is issued. Someone
 /// else's order, or an invoice not issued yet, is a 404.
@@ -220,7 +207,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <title>(title.clone()) " · " (document.issuer.name.clone())</title>
-                <style>(STYLES)</style>
+                <style>(Unescaped::new_unchecked(super::TOKENS))(Unescaped::new_unchecked(STYLES))</style>
             </head>
             <body>
                 <main>
