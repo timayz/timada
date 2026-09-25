@@ -16,6 +16,7 @@ use crate::{
         input::input,
         label::label,
     },
+    ui::form_error,
 };
 
 #[query_params(error = bad_request)]
@@ -66,9 +67,7 @@ async fn login_form(next: Option<String>, error: Option<&str>) -> Result<impl Vi
                             label(attrs: topcoat::view::attributes! { for="password" }, "Mot de passe")
                             input(attrs: topcoat::view::attributes! { id="password" name="password" type="password" required=(true) autocomplete="current-password" })
                         </div>
-                        if let Some(error) = error {
-                            <p role="alert" class="text-sm text-destructive">(error)</p>
-                        }
+                        if let Some(error) = error { form_error(message: error) }
                         button(attrs: topcoat::view::attributes! { type="submit" }, "Se connecter")
                     </form>
                 )
