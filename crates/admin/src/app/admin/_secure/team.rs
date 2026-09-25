@@ -23,6 +23,7 @@ use crate::{
         card::{card, card_content, card_header, card_title},
         input::input,
         label::label,
+        select::select,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
@@ -33,11 +34,12 @@ use crate::{
 #[component]
 pub async fn role_select(selected: Role) -> Result<impl View> {
     Ok(view! {
-        <select id="role" name="role" class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs">
+        select(
+            attrs: topcoat::view::attributes! { id="role" name="role" class="w-full" },
             for role in Role::ALL {
                 <option value=(role.as_str()) selected=(role == selected)>(role.label())</option>
             }
-        </select>
+        )
     })
 }
 

@@ -19,6 +19,7 @@ use super::orders::order_id;
 use crate::{
     components::{
         badge::{BadgeVariant, badge},
+        select::select,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
@@ -111,11 +112,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: "Litiges",
             <form method="get" class="flex items-center gap-2 text-sm">
                 <label for="status" class="text-muted-foreground">"État"</label>
-                <select id="status" name="status" class="h-9 rounded-lg border border-border bg-background px-3">
+                select(
+                    attrs: topcoat::view::attributes! { id="status" name="status" },
                     for (value, wording) in [("open", "En cours"), ("won", "Gagnés"), ("lost", "Perdus"), ("all", "Tous")] {
                         <option value=(value) selected=(chosen == value)>(wording)</option>
                     }
-                </select>
+                )
                 <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
             </form>
         )

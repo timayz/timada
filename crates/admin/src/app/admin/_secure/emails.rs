@@ -14,6 +14,7 @@ use topcoat::{
 use crate::{
     components::{
         badge::{BadgeVariant, badge},
+        select::select,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
@@ -65,12 +66,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: "E-mails",
             <form method="get" class="flex items-center gap-2 text-sm">
                 <label for="status" class="text-muted-foreground">"Statut"</label>
-                <select id="status" name="status" class="h-9 rounded-lg border border-border bg-background px-3">
+                select(
+                    attrs: topcoat::view::attributes! { id="status" name="status" },
                     <option value="" selected=(status.is_none())>"Tous"</option>
                     for (value, label) in [("pending", "En attente"), ("sent", "Envoyés"), ("failed", "En échec")] {
                         <option value=(value) selected=(query.status.as_deref() == Some(value))>(label)</option>
                     }
-                </select>
+                )
                 <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
             </form>
         )

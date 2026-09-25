@@ -32,6 +32,7 @@ use crate::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
         input::input,
+        select::select,
         separator::separator,
     },
     config::{AdminConfig, AdminServices},
@@ -343,10 +344,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                 </fieldset>
                                 <div class="flex flex-col gap-1">
                                     <label for="refund_method" class="text-muted-foreground">"Remboursement — ou à défaut de stock pour le remplacement"</label>
-                                    <select id="refund_method" name="refund_method" class="h-9 rounded-lg border border-border bg-background px-3">
+                                    select(
+                                        attrs: topcoat::view::attributes! { id="refund_method" name="refund_method" },
                                         <option value="original" selected=(true)>"Moyen de paiement d'origine"</option>
                                         <option value="credit">"Avoir"</option>
-                                    </select>
+                                    )
                                 </div>
                                 <div>
                                     button(attrs: topcoat::view::attributes! { type="submit" }, "Valider la réception")

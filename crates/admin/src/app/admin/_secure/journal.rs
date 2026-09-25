@@ -15,7 +15,10 @@ use crate::{
         journal::{JournalEntry, JournalFilter, Outcome, SIGN_IN, count_journal, list_journal},
         team::list_operators,
     },
-    components::table::{table, table_body, table_cell, table_head, table_header, table_row},
+    components::{
+        select::select,
+        table::{table, table_body, table_cell, table_head, table_header, table_row},
+    },
     config::AdminServices,
     ui::{empty_state, page_header, pagination},
 };
@@ -114,20 +117,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         <p class="-mt-4 mb-6 text-sm text-muted-foreground">"Ce que les opérateurs ont fait et tenté : chaque écriture, chaque refus, chaque connexion. Heures UTC. Le contenu des formulaires n'est jamais conservé."</p>
         <form method="get" action=(here) class="mb-6 flex flex-wrap items-end gap-3 text-sm">
             <label class="flex flex-col gap-1.5" for="operateur">"Opérateur"
-                <select id="operateur" name="operateur" class="h-9 rounded-md border border-input bg-background px-3 shadow-xs">
+                select(
+                    attrs: topcoat::view::attributes! { id="operateur" name="operateur" },
                     <option value="">"Tous"</option>
                     for (id, email, chosen) in &operators {
                         <option value=(id.clone()) selected=(*chosen)>(email.clone())</option>
                     }
-                </select>
+                )
             </label>
             <label class="flex flex-col gap-1.5" for="issue">"Issue"
-                <select id="issue" name="issue" class="h-9 rounded-md border border-input bg-background px-3 shadow-xs">
+                select(
+                    attrs: topcoat::view::attributes! { id="issue" name="issue" },
                     <option value="">"Toutes"</option>
                     for (value, label, chosen) in &outcomes {
                         <option value=(*value) selected=(*chosen)>(*label)</option>
                     }
-                </select>
+                )
             </label>
             <button type="submit" class="h-9 rounded-md border border-input px-3 hover:bg-foreground/5">"Filtrer"</button>
         </form>

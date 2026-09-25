@@ -20,6 +20,7 @@ use crate::{
     components::{
         button::{ButtonVariant, button, button_variants},
         card::{card, card_content},
+        select::select,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::{AdminConfig, AdminServices},
@@ -56,11 +57,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: "Promotions",
             <form method="get" class="flex items-center gap-2 text-sm">
                 <label for="kind" class="text-muted-foreground">"Type"</label>
-                <select id="kind" name="kind" class="h-9 rounded-lg border border-border bg-background px-2">
+                select(
+                    attrs: topcoat::view::attributes! { id="kind" name="kind" },
                     <option value="" selected=(kind.is_none())>"Tous"</option>
                     <option value=(DISCOUNT) selected=(kind.as_deref() == Some(DISCOUNT))>"Codes promo"</option>
                     <option value=(VOUCHER) selected=(kind.as_deref() == Some(VOUCHER))>"Bons d'achat"</option>
-                </select>
+                )
                 <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
             </form>
             <a href=(href!(new_discount)) class=(button_variants(ButtonVariant::Primary, Default::default()))>"Nouveau code promo"</a>
@@ -187,9 +189,10 @@ async fn currency_select(cx: &Cx, hint: &str) -> Result<impl View> {
         if !codes.is_empty() {
             <div class="flex flex-col gap-1.5">
                 <label for="currency" class="text-sm font-medium">"Devise"</label>
-                <select id="currency" name="currency" class="h-9 rounded-lg border border-border bg-background px-2 text-sm">
+                select(
+                    attrs: topcoat::view::attributes! { id="currency" name="currency" },
                     for code in &codes { <option value=(code.clone())>(code.clone())</option> }
-                </select>
+                )
                 <p class="text-xs text-muted-foreground">(hint.to_owned())</p>
             </div>
         }
@@ -247,10 +250,11 @@ async fn new_discount_form(cx: &Cx, error: Option<String>) -> Result<impl View> 
                     field(name: "code", label_text: "Code", attrs: topcoat::view::attributes! { required=(true) autocomplete="off" })
                     <div class="flex flex-col gap-1.5">
                         <label for="kind" class="text-sm font-medium">"Type de remise"</label>
-                        <select id="kind" name="kind" required=(true) class="h-9 rounded-lg border border-border bg-background px-2 text-sm">
+                        select(
+                            attrs: topcoat::view::attributes! { id="kind" name="kind" required=(true) },
                             <option value="percent">"Pourcentage (points de base, 1000 = 10 %)"</option>
                             <option value="fixed">"Montant fixe (centimes)"</option>
-                        </select>
+                        )
                     </div>
                     field(name: "value", label_text: "Valeur", attrs: topcoat::view::attributes! { type="number" min="1" required=(true) })
                     currency_select(hint: "D'un montant fixe : il ne vaut que sur un panier dans cette devise. Un pourcentage vaut partout.")

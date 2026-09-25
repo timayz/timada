@@ -26,6 +26,7 @@ use crate::{
         button::{ButtonVariant, button},
         card::{card, card_content},
         input::input,
+        select::select,
         textarea::textarea,
     },
     config::AdminServices,
@@ -152,11 +153,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: "Questions",
             <form method="get" class="flex items-center gap-2 text-sm">
                 <label for="status" class="text-muted-foreground">"Statut"</label>
-                <select id="status" name="status" class="h-9 rounded-lg border border-border bg-background px-3">
+                select(
+                    attrs: topcoat::view::attributes! { id="status" name="status" },
                     for (value, label) in [("review", "À modérer"), ("unanswered", "Sans réponse"), ("answered", "Répondues"), ("rejected", "Refusées"), ("all", "Toutes")] {
                         <option value=(value) selected=(selected == value)>(label)</option>
                     }
-                </select>
+                )
                 <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
             </form>
         )

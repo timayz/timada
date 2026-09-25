@@ -24,6 +24,7 @@ use crate::{
         card::{card, card_content, card_header, card_title},
         input::input,
         label::label,
+        select::select,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
         textarea::textarea,
     },
@@ -182,10 +183,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                 for (field, option_name, values) in &selects {
                                     <div class="flex flex-col gap-1.5">
                                         label(attrs: topcoat::view::attributes! { for=(field.clone()) }, (option_name.clone()))
-                                        <select id=(field.clone()) name=(field.clone()) required=(true) class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs">
+                                        select(
+                                            attrs: topcoat::view::attributes! { id=(field.clone()) name=(field.clone()) required=(true) class="w-full" },
                                             <option value="">"— choisir —"</option>
                                             for value in values { <option value=(value.clone())>(value.clone())</option> }
-                                        </select>
+                                        )
                                     </div>
                                 }
                                 <div class="sm:col-span-2">button(attrs: topcoat::view::attributes! { type="submit" }, "Placer dans la famille")</div>

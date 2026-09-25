@@ -23,6 +23,7 @@ use crate::{
         card::{card, card_content, card_header, card_title},
         input::input,
         label::label,
+        select::select,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
@@ -67,14 +68,15 @@ pub async fn category_select(
     #[default] none_label: Option<&str>,
 ) -> Result<impl View> {
     Ok(view! {
-        <select id=(name) name=(name) class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs">
+        select(
+            attrs: topcoat::view::attributes! { id=(name) name=(name) class="w-full" },
             if let Some(none_label) = none_label {
                 <option value="" selected=(selected.is_none())>(none_label)</option>
             }
             for (id, option_label) in options {
                 <option value=(id.clone()) selected=(selected == Some(id.as_str()))>(option_label.clone())</option>
             }
-        </select>
+        )
     })
 }
 

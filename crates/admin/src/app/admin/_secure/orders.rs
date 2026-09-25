@@ -21,6 +21,7 @@ use crate::{
         badge::{BadgeVariant, badge},
         button::{ButtonVariant, button_variants},
         input::input,
+        select::select,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::{AdminConfig, AdminServices},
@@ -81,12 +82,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <label for="number" class="text-muted-foreground">"Numéro"</label>
                 input(attrs: topcoat::view::attributes! { id="number" name="number" class="w-40" placeholder="C2026-" autocomplete="off" value=(query.number.clone().unwrap_or_default()) })
                 <label for="status" class="text-muted-foreground">"Statut"</label>
-                <select id="status" name="status" class="h-9 rounded-lg border border-border bg-background px-3">
+                select(
+                    attrs: topcoat::view::attributes! { id="status" name="status" },
                     <option value="" selected=(status.is_none())>"Tous"</option>
                     for (value, label) in [("placed", "En attente"), ("paid", "Payée"), ("shipped", "Expédiée"), ("cancelled", "Annulée")] {
                         <option value=(value) selected=(query.status.as_deref() == Some(value))>(label)</option>
                     }
-                </select>
+                )
                 <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
             </form>
         )
