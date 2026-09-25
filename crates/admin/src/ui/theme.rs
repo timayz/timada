@@ -9,12 +9,12 @@
 //! same thing.
 
 use topcoat::{
-    context::{Cx, app_context},
+    context::Cx,
     cookie::{Cookies, cookie, cookies, time::Duration},
     router::request,
 };
 
-use crate::config::AdminConfig;
+use crate::ui::mount_path;
 
 /// Named for the admin: the shop out front keeps its own skin.
 const COOKIE: &str = "timada_admin_theme";
@@ -133,13 +133,6 @@ pub fn remember(cx: &Cx, scheme: Scheme) {
             MaxAge = REMEMBERED
         }),
     }
-}
-
-fn mount_path(cx: &Cx) -> String {
-    format!(
-        "/{}",
-        app_context::<AdminConfig>(cx).mount.trim_matches('/')
-    )
 }
 
 #[cfg(test)]

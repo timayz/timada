@@ -355,6 +355,56 @@ async fn the_operator_chooses_a_colour_scheme() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Folding the rail is a round trip, because the labels stop being rendered
+/// from `md` up and that is markup, not a class. What is asserted is the
+/// cookie and the redirect — the width itself is a class, and this suite reads
+/// none.
+#[tokio::test]
+async fn the_operator_folds_the_rail_away() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let session = sign_in(&h, "admin").await?;
+
+    // Open by default, so the labels are there to read.
+    let body = text(h.router.handle(get("/admin/orders", Some(&session))).await).await?;
+    assert!(body.contains("Replier le menu"), "{body}");
+
+    let response = h
+        .router
+        .handle(post(
+            "/admin/nav",
+            "rail=folded&next=%2Fadmin%2Forders",
+            Some(&session),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/admin/orders");
+    let folded = set_cookie(&response, "timada_admin_rail")
+        .ok_or_else(|| anyhow::anyhow!("no rail cookie"))?;
+    assert_eq!(folded, "timada_admin_rail=folded");
+
+    // Folded, every label is still written out — the drawer below `md` shows
+    // them, and they are what names each entry for a screen reader — and the
+    // toggle now offers the way back.
+    let cookies = format!("{session}; {folded}");
+    let body = text(h.router.handle(get("/admin/orders", Some(&cookies))).await).await?;
+    assert!(body.contains("Déplier le menu"), "{body}");
+    for label in ["Commandes", "Factures", "Équipe", "Se déconnecter"] {
+        assert!(body.contains(label), "{label} missing from a folded rail");
+    }
+
+    // Unfolding forgets the cookie, being the default.
+    let response = h
+        .router
+        .handle(post("/admin/nav", "rail=open", Some(&cookies)))
+        .await;
+    let header = set_cookie_header(&response, "timada_admin_rail").unwrap_or_default();
+    assert!(
+        header.contains("Max-Age=0") || header.contains("Expires="),
+        "{header}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn login_rejects_bad_credentials_and_opens_a_session() -> anyhow::Result<()> {
     let h = harness("admin").await?;

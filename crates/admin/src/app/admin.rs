@@ -18,7 +18,7 @@ use topcoat::{
     view::{View, error_boundary, view},
 };
 
-use crate::ui::{shell, theme};
+use crate::ui::{rail, shell, theme};
 
 #[layout]
 pub async fn admin_layout(slot: Slot<'_>) -> Result<impl View> {
@@ -74,6 +74,27 @@ pub async fn choose_scheme(cx: &Cx, Form(form): Form<SchemeForm>) -> Result<impl
         theme::Scheme::of_value(&form.scheme).unwrap_or_default(),
     );
     // The same rule the login form follows: back inside this site, or home.
+    let back = form
+        .next
+        .filter(|next| next.starts_with('/') && !next.starts_with("//"))
+        .unwrap_or_else(|| href!(index).resolve(cx));
+    Err::<(), _>(see_other(back).into())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RailForm {
+    rail: String,
+    next: Option<String>,
+}
+
+/// `/{mount}/nav`: folds the navigation rail down to its icons, or unfolds it.
+///
+/// A round trip for a width, which is the price of having no JavaScript: the
+/// labels have to stop being rendered, and that is a decision about markup, not
+/// a class a selector can toggle.
+#[page(POST "./nav")]
+pub async fn fold_rail(cx: &Cx, Form(form): Form<RailForm>) -> Result<impl View> {
+    rail::remember(cx, rail::Rail::of_value(&form.rail).unwrap_or_default());
     let back = form
         .next
         .filter(|next| next.starts_with('/') && !next.starts_with("//"))

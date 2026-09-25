@@ -2,14 +2,17 @@
 
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, app_context},
     icon::IconData,
     view::{Attributes, View, class, component, view},
 };
 
+use crate::config::AdminConfig;
+
 mod chrome;
 mod format;
 pub mod icons;
+pub mod rail;
 pub mod theme;
 
 pub use chrome::{empty_state, page_header, pagination, shell, stylesheet_url};
@@ -46,4 +49,13 @@ pub async fn icon(
     attrs.insert(cx, "stroke-linejoin", "round");
     attrs.insert(cx, "class", class);
     Ok(view! { topcoat::icon::icon(data: data, label: label, attrs: attrs) })
+}
+
+/// The admin's own mount, as a cookie `Path`: what the operator chose in the
+/// back office is the back office's business, not the shop's.
+pub(crate) fn mount_path(cx: &Cx) -> String {
+    format!(
+        "/{}",
+        app_context::<AdminConfig>(cx).mount.trim_matches('/')
+    )
 }

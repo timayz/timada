@@ -3,7 +3,7 @@ use topcoat::{
     context::{Cx, app_context, try_app_context},
     icon::IconData,
     router::href,
-    view::{Child, View, attributes, component, view},
+    view::{Child, View, attributes, class, component, view},
 };
 
 use crate::{
@@ -15,6 +15,7 @@ use crate::{
     config::{AdminConfig, Stylesheet},
     ui::{
         icon, icons,
+        rail::{self, Rail},
         theme::{self, Scheme},
     },
 };
@@ -127,6 +128,8 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
         .map(|entry| entry.link.clone())
         .unwrap_or_else(|| href!(orders::index).resolve(cx));
     let standing = admin.map(|admin| format!("{} · {}", admin.email, admin.role.label()));
+    let folded = rail::chosen(cx).is_folded();
+    let back = theme::here(cx);
     // The bar above the work names the page, so the rail is not the only thing
     // saying where the operator is.
     let here = headings
@@ -153,6 +156,8 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
                         home: home.clone(),
                         own_password: own_password,
                         standing: standing.clone().unwrap_or_default(),
+                        folded: folded,
+                        back: back.clone(),
                     )
                 }
                 <div class="flex min-w-0 flex-1 flex-col">
@@ -201,24 +206,67 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
 /// rather than `--card` and `--border` — so the one fixed landmark of the back
 /// office looks the same wherever the operator has the lights.
 ///
-/// Folding it down to its icons would need a second cookie and a round trip per
-/// toggle, because the labels have to stop being rendered and that is a branch,
-/// not a class. The work is centred anyway, so the reclaimed width would change
-/// no layout; it is not worth the state.
+/// Folded, it is 4rem of icons from `md` up. The labels are still written out
+/// and hidden with `md:hidden`, which is what lets the drawer below `md` — full
+/// screen, with room to spare — keep showing them, and what keeps every entry's
+/// accessible name without a single `aria-label`. A `title` gives the pointer
+/// the same words the class hides.
 #[component]
 async fn sidebar(
     headings: Vec<Heading>,
     home: String,
     own_password: String,
     standing: String,
+    folded: bool,
+    back: String,
 ) -> Result<impl View> {
+    // Folded, the rail centres what it keeps and hides what it does not.
+    let width = if folded {
+        "md:w-16 md:items-center"
+    } else {
+        "md:w-64"
+    };
+    let label_class = if folded {
+        "truncate md:hidden"
+    } else {
+        "truncate"
+    };
+    let heading_class = if folded {
+        "px-2 text-xs font-medium tracking-wider text-sidebar-foreground-muted uppercase md:hidden"
+    } else {
+        "px-2 text-xs font-medium tracking-wider text-sidebar-foreground-muted uppercase"
+    };
+    let foot_class = if folded {
+        "mt-auto flex w-full flex-col gap-2 border-t border-sidebar-border px-2 pt-4 text-sm md:items-center"
+    } else {
+        "mt-auto flex w-full flex-col gap-2 border-t border-sidebar-border px-2 pt-4 text-sm"
+    };
     Ok(view! {
         <aside
             id="menu"
-            class="z-40 flex w-full flex-col gap-4 overflow-y-auto border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground max-md:not-target:hidden max-md:target:fixed max-md:target:inset-0 md:sticky md:top-0 md:h-dvh md:w-64 md:shrink-0 md:border-r print:hidden"
+            class=(class!(
+                "z-40 flex w-full flex-col gap-4 overflow-y-auto border-sidebar-border bg-sidebar \
+                 px-3 py-4 text-sidebar-foreground max-md:not-target:hidden max-md:target:fixed \
+                 max-md:target:inset-0 md:sticky md:top-0 md:h-dvh md:shrink-0 md:border-r print:hidden",
+                width
+            ))
         >
             <div class="flex items-center gap-2 px-2">
-                <a href=(home) class="font-semibold tracking-tight">"Timada admin"</a>
+                <a href=(home.clone()) class=(class!("font-semibold tracking-tight", if folded { "md:hidden" } else { "" }))>
+                    "Timada admin"
+                </a>
+                if folded {
+                    // A mark where the name does not fit, so the rail still
+                    // leads home from its top corner.
+                    <a
+                        href=(home)
+                        aria-hidden="true"
+                        tabindex="-1"
+                        class="hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-active font-semibold md:flex"
+                    >
+                        "T"
+                    </a>
+                }
                 <a
                     href="#contenu"
                     aria-label="Fermer le menu"
@@ -227,39 +275,82 @@ async fn sidebar(
                     icon(data: icons::X, attrs: attributes! { class="size-4" })
                 </a>
             </div>
-            <nav aria-label="Sections" class="flex flex-col gap-4">
+            <nav aria-label="Sections" class="flex w-full flex-col gap-4">
                 for heading in &headings {
                     <div class="flex flex-col gap-1">
-                        <p class="px-2 text-xs font-medium tracking-wider text-sidebar-foreground-muted uppercase">
-                            (heading.label)
-                        </p>
+                        <p class=(heading_class)>(heading.label)</p>
                         for entry in &heading.entries {
                             nav_link(
                                 link: entry.link.clone(),
                                 current: entry.current,
                                 glyph: entry.glyph.clone(),
-                                (entry.label)
+                                label: entry.label,
+                                label_class: label_class,
+                                folded: folded,
                             )
                         }
                     </div>
                 }
             </nav>
-            <div class="mt-auto flex flex-col gap-2 border-t border-sidebar-border px-2 pt-4 text-sm">
+            <div class=(foot_class)>
                 if !standing.is_empty() {
-                    <p class="text-sidebar-foreground-muted">(standing)</p>
+                    <p class=(class!("text-sidebar-foreground-muted", if folded { "md:hidden" } else { "" }))>
+                        (standing)
+                    </p>
                 }
-                <a href=(own_password) class="underline-offset-4 hover:underline">"Mon mot de passe"</a>
-                <form method="post" action=(href!(crate::app::admin::logout))>
+                <a
+                    href=(own_password)
+                    title="Mon mot de passe"
+                    class=(class!("inline-flex items-center gap-2 underline-offset-4 hover:underline", if folded { "md:justify-center" } else { "" }))
+                >
+                    icon(data: icons::KEY_ROUND, attrs: attributes! { class="size-4" })
+                    <span class=(label_class)>"Mon mot de passe"</span>
+                </a>
+                <form method="post" action=(href!(crate::app::admin::logout)) class="w-full">
                     <button
                         type="submit"
-                        class="inline-flex items-center gap-2 underline-offset-4 hover:underline"
+                        title="Se déconnecter"
+                        class=(class!("inline-flex w-full items-center gap-2 underline-offset-4 hover:underline", if folded { "md:justify-center" } else { "" }))
                     >
                         icon(data: icons::LOG_OUT, attrs: attributes! { class="size-4" })
-                        "Se déconnecter"
+                        <span class=(label_class)>"Se déconnecter"</span>
                     </button>
                 </form>
+                fold_toggle(folded: folded, back: back)
             </div>
         </aside>
+    })
+}
+
+/// Folds the rail to its icons, or unfolds it.
+///
+/// Hidden below `md`, where the rail is a full-screen drawer and a width has
+/// nothing to say. Named for what pressing it will do, not for where the rail
+/// is now.
+#[component]
+async fn fold_toggle(folded: bool, back: String) -> Result<impl View> {
+    let rail = if folded { Rail::Folded } else { Rail::Open };
+    Ok(view! {
+        <form
+            method="post"
+            action=(href!(crate::app::admin::fold_rail))
+            class="hidden w-full md:block"
+        >
+            <input type="hidden" name="next" value=(back)>
+            <button
+                type="submit"
+                name="rail"
+                value=(rail.flipped().as_str())
+                title=(rail.action_label())
+                class=(class!(
+                    "inline-flex w-full items-center gap-2 rounded-lg p-2 text-sidebar-icon hover:bg-sidebar-hover",
+                    if folded { "justify-center" } else { "" }
+                ))
+            >
+                icon(data: icons::PANEL_LEFT, attrs: attributes! { class="size-4" })
+                <span class=(if folded { "hidden" } else { "" })>(rail.action_label())</span>
+            </button>
+        </form>
     })
 }
 
@@ -389,17 +480,23 @@ async fn nav_link(
     link: String,
     current: bool,
     glyph: IconData,
-    child: Child<'_>,
+    label: &str,
+    label_class: &str,
+    folded: bool,
 ) -> Result<impl View> {
+    let shape = if current {
+        "flex items-center gap-3 rounded-lg bg-sidebar-active p-2 text-sm font-medium text-sidebar-icon-active"
+    } else {
+        "flex items-center gap-3 rounded-lg p-2 text-sm text-sidebar-foreground transition-colors hover:bg-sidebar-hover"
+    };
     Ok(view! {
         <a
             href=(link)
             aria-current=(current.then_some("page"))
-            class=(if current {
-                "flex items-center gap-3 rounded-lg bg-sidebar-active p-2 text-sm font-medium text-sidebar-icon-active"
-            } else {
-                "flex items-center gap-3 rounded-lg p-2 text-sm text-sidebar-foreground transition-colors hover:bg-sidebar-hover"
-            })
+            // The pointer gets the words the class hides when the rail is
+            // folded; the accessible name comes from the label either way.
+            title=(folded.then_some(label))
+            class=(class!(shape, if folded { "md:justify-center" } else { "" }))
         >
             icon(
                 data: glyph,
@@ -407,7 +504,7 @@ async fn nav_link(
                     class=(if current { "size-5 text-sidebar-icon-active" } else { "size-5 text-sidebar-icon" })
                 },
             )
-            <span class="truncate">(child)</span>
+            <span class=(label_class)>(label)</span>
         </a>
     })
 }
