@@ -30,9 +30,9 @@ use topcoat::{
 };
 
 use super::{
-    Crumb, Head, account, breadcrumb, cart, category, document,
+    Crumb, Head, account, breadcrumb, cart, category, company, document,
     format::{date, money},
-    listing::{Listing, Scope, listing_view, load_listing},
+    listing::{Listing, Scope, highlight_card, listing_view, load_highlights, load_listing},
     seo::{ProductOffer, breadcrumb_json_ld, json_ld_graph, product_json_ld},
 };
 use crate::{
@@ -40,16 +40,19 @@ use crate::{
     auth::{current_account, require_account},
 };
 
-/// The top of the tree: the ways into the shop.
-async fn departments(cx: &Cx) -> Result<Vec<(String, String)>> {
+/// The top of the tree: the ways into the shop, as `(link, name, picture)`.
+/// The drawn stand-in goes by the slug, like a product's does by its
+/// reference.
+async fn departments(cx: &Cx) -> Result<Vec<(String, String, String)>> {
     let store = app_context::<Store>(cx);
     Ok(
         category_tree(list_categories(&store.db, false).await?, false)
             .into_iter()
             .map(|node| {
+                let picture = format!("/media/demo/{}.svg", node.category.slug);
                 let link =
                     href!(category::show, category::CategorySlug(node.category.slug)).resolve(cx);
-                (link, node.category.name)
+                (link, node.category.name, picture)
             })
             .collect(),
     )
@@ -75,25 +78,75 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
         Some("Le catalogue de la boutique de démonstration Timada.".to_owned()),
     );
     let seeded = listing.found.total > 0 || listing.filters.is_narrowed();
+    // The strip at the top is editorial: the newest arrivals, whatever the
+    // listing below is showing.
+    let highlights = if seeded {
+        load_highlights(cx, 8).await?
+    } else {
+        Vec::new()
+    };
+    // Every link is resolved before the view: it moves what it is handed.
+    let browse = href!(search).resolve(cx);
+    let follow = href!(account::orders).resolve(cx);
+    let basket = href!(cart::show).resolve(cx);
+    let business = href!(company::show).resolve(cx);
     Ok(view! {
         document(
             title: "Catalogue",
             head: Some(&head),
-            <h1>"Catalogue"</h1>
+            <div class="hero">
+                <h1>"Boutique."</h1>
+                <p>"Pour acheter vos produits préférés, c'est ici."</p>
+                <div class="actions">
+                    <a class="button" href=(browse.clone())>"Parcourir le catalogue"</a>
+                    <a href=(follow.clone())>"Suivre une commande \u{203A}"</a>
+                </div>
+            </div>
             if !departments.is_empty() {
                 <nav aria-label="Catégories">
-                    <ul class="tags">
-                        for (link, name) in &departments {
-                            <li><a href=(link.clone())>(name.clone())</a></li>
+                    <ul class="rail">
+                        for (link, name, picture) in &departments {
+                            <li class="tile round">
+                                <a href=(link.clone())>
+                                    <span class="disc"><img src=(picture.clone()) alt="" width="160" height="160" loading="lazy" decoding="async"></span>
+                                    (name.clone())
+                                </a>
+                            </li>
                         }
                     </ul>
                 </nav>
             }
+            if !highlights.is_empty() {
+                <h2>"Les nouveautés."</h2>
+                <ul class="rail">
+                    for row in &highlights { highlight_card(row: row) }
+                </ul>
+            }
             if seeded {
+                <h2>"Tout le catalogue."</h2>
                 listing_view(listing: &listing)
             } else {
                 <p class="muted">"Aucun produit. Lancez " <code>"cargo run -p demo -- --seed"</code> "."</p>
             }
+            <h2>"Des façons d\u{2019}acheter."</h2>
+            <ul class="cards">
+                <li class="card link-tile">
+                    <p><a href=(basket.clone())>"Votre panier"</a></p>
+                    <p class="muted">"Reprenez ce que vous avez mis de côté, appliquez un code promotionnel et passez commande."</p>
+                </li>
+                <li class="card link-tile">
+                    <p><a href=(follow.clone())>"Vos commandes"</a></p>
+                    <p class="muted">"Suivez une livraison, téléchargez une facture ou renvoyez un article sous quatorze jours."</p>
+                </li>
+                <li class="card link-tile">
+                    <p><a href=(business.clone())>"Acheter pour une entreprise"</a></p>
+                    <p class="muted">"Renseignez votre numéro de TVA intracommunautaire pour être facturé hors taxes."</p>
+                </li>
+                <li class="card link-tile">
+                    <p><a href=(browse.clone())>"Besoin d\u{2019}un conseil ?"</a></p>
+                    <p class="muted">"Filtrez par marque, par prix, par note et par caractéristique technique."</p>
+                </li>
+            </ul>
         )
     })
 }
@@ -825,6 +878,13 @@ async fn product_view(
         }
     };
     let review_action = href!(submit_review, ProductId(id.clone())).resolve(cx);
+    // The page showed no picture at all until now; `media` only fed the
+    // JSON-LD. Owned, because the view moves `product` in.
+    let hero: Option<(String, String)> = product
+        .media
+        .iter()
+        .find(|media| media.kind == timada_catalog::MediaKind::Image)
+        .map(|media| (media.url.clone(), media.alt.clone()));
 
     Ok(view! {
         document(
@@ -835,6 +895,14 @@ async fn product_view(
             } else {
                 breadcrumb(trail: &trail)
             }
+            <div class="buybox">
+            <div class="buybox-media">
+                match &hero {
+                    Some((url, alt)) => { <img src=(url.clone()) alt=(alt.clone()) width="480" height="480" fetchpriority="high" decoding="async"> }
+                    None => { <span class="no-image">"Pas d\u{2019}image"</span> }
+                }
+            </div>
+            <div class="buybox-buy">
             <h1>(product.name.clone())</h1>
             if let Some(summary) = &rating_summary {
                 <p><a href="#avis">(summary.clone())</a></p>
@@ -887,6 +955,8 @@ async fn product_view(
                     <p><a href=(login_link.clone())>"Connectez-vous"</a> " pour être alerté du retour en stock."</p>
                 }
             }
+            </div>
+            </div>
             if !product.key_features.is_empty() {
                 <h2>"Caractéristiques principales"</h2>
                 <ul>for feature in &product.key_features { <li>(feature.clone())</li> }</ul>
@@ -894,6 +964,7 @@ async fn product_view(
             if !product.long_description.is_empty() { <p>(product.long_description.clone())</p> }
             if !sheet.is_empty() {
                 <h2 id="fiche-technique">"Fiche technique"</h2>
+                <div class="table-scroll">
                 <table class="sheet">
                     for (group, lines) in &sheet {
                         <tbody>
@@ -906,6 +977,7 @@ async fn product_view(
                         </tbody>
                     }
                 </table>
+                </div>
             }
 
             <h2 id="avis">"Avis clients"</h2>

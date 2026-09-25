@@ -60,14 +60,21 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let below_ids: Vec<String> = below.iter().map(|c| c.id.clone()).collect();
     let currency = crate::currency::shopper_currency(cx).await?;
     let counts = listed_counts_by_category(&store.db, &below_ids, Some(&currency)).await?;
-    let children: Vec<(String, String)> = below
+    // `(link, label, picture)`: the drawn stand-in goes by the slug, like a
+    // product's does by its reference.
+    let children: Vec<(String, String, String)> = below
         .into_iter()
         .map(|c| {
             let label = match counts.get(&c.id) {
                 Some(count) => format!("{} ({count})", c.name),
                 None => c.name,
             };
-            (href!(show, CategorySlug(c.slug)).resolve(cx), label)
+            let picture = format!("/media/demo/{}.svg", c.slug);
+            (
+                href!(show, CategorySlug(c.slug)).resolve(cx),
+                label,
+                picture,
+            )
         })
         .collect();
 
@@ -103,9 +110,14 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             }
             if !children.is_empty() {
                 <nav aria-label="Sous-catégories">
-                    <ul class="tags">
-                        for (link, name) in &children {
-                            <li><a href=(link.clone())>(name.clone())</a></li>
+                    <ul class="rail">
+                        for (link, name, picture) in &children {
+                            <li class="tile round">
+                                <a href=(link.clone())>
+                                    <span class="disc"><img src=(picture.clone()) alt="" width="160" height="160" loading="lazy" decoding="async"></span>
+                                    (name.clone())
+                                </a>
+                            </li>
                         }
                     </ul>
                 </nav>
