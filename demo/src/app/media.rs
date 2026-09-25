@@ -38,13 +38,21 @@ enum Shape {
     Gpu,
     Ssd,
     Lamp,
+    Laptop,
+    Tv,
+    Soundbar,
+    Cpu,
+    Ram,
+    Webcam,
+    Gamepad,
+    Console,
     Parcel,
 }
 
 impl Shape {
     /// The order the fallback cycles through, so an unknown reference still
     /// gets the same object every time.
-    const ALL: [Shape; 9] = [
+    const ALL: [Shape; 17] = [
         Shape::Speaker,
         Shape::Monitor,
         Shape::Keyboard,
@@ -53,6 +61,14 @@ impl Shape {
         Shape::Gpu,
         Shape::Ssd,
         Shape::Lamp,
+        Shape::Laptop,
+        Shape::Tv,
+        Shape::Soundbar,
+        Shape::Cpu,
+        Shape::Ram,
+        Shape::Webcam,
+        Shape::Gamepad,
+        Shape::Console,
         Shape::Parcel,
     ];
 
@@ -62,6 +78,11 @@ impl Shape {
     /// `mx`-something keyboard.
     fn of(reference: &str, hue: u32) -> Self {
         const NEEDLES: &[(&str, Shape)] = &[
+            // A Switch OLED is a console, not a television; an X3D is a
+            // processor, not the 7800 XT graphics card. Both have to be
+            // read before the needle they would otherwise fall into.
+            ("switch", Shape::Console),
+            ("x3d", Shape::Cpu),
             ("xm5", Shape::Headphones),
             ("hs80", Shape::Headphones),
             ("casque", Shape::Headphones),
@@ -73,7 +94,7 @@ impl Shape {
             ("lampe", Shape::Lamp),
             ("4070", Shape::Gpu),
             ("4060", Shape::Gpu),
-            ("7800", Shape::Gpu),
+            ("7800xt", Shape::Gpu),
             ("carte-graphique", Shape::Gpu),
             ("990p", Shape::Ssd),
             ("mx500", Shape::Ssd),
@@ -104,6 +125,36 @@ impl Shape {
             ("stockage", Shape::Ssd),
             ("audio", Shape::Headphones),
             ("maison", Shape::Lamp),
+            ("xps", Shape::Laptop),
+            ("tp-e14", Shape::Laptop),
+            ("vivo", Shape::Laptop),
+            ("aero", Shape::Laptop),
+            ("portable", Shape::Laptop),
+            ("c920", Shape::Webcam),
+            ("facecam", Shape::Webcam),
+            ("tyro", Shape::Webcam),
+            ("webcam", Shape::Webcam),
+            ("14600", Shape::Cpu),
+            ("7600", Shape::Cpu),
+            ("processeur", Shape::Cpu),
+            ("veng", Shape::Ram),
+            ("tz5", Shape::Ram),
+            ("fury", Shape::Ram),
+            ("memoire", Shape::Ram),
+            ("oled", Shape::Tv),
+            ("55c845", Shape::Tv),
+            ("43a6n", Shape::Tv),
+            ("televiseur", Shape::Tv),
+            ("beam", Shape::Soundbar),
+            ("sb600", Shape::Soundbar),
+            ("barre-de-son", Shape::Soundbar),
+            ("xbox-ctrl", Shape::Gamepad),
+            ("8bd", Shape::Gamepad),
+            ("manette", Shape::Gamepad),
+            ("xbox", Shape::Console),
+            ("console", Shape::Console),
+            ("jeux-video", Shape::Console),
+            ("bulb", Shape::Lamp),
         ];
         NEEDLES
             .iter()
@@ -176,6 +227,68 @@ impl Shape {
                  <circle cx=\"208\" cy=\"182\" r=\"30\" {gloss}/>\
                  <rect x=\"200\" y=\"288\" width=\"80\" height=\"62\" rx=\"12\" fill=\"{detail}\"/>\
                  <rect x=\"200\" y=\"300\" width=\"80\" height=\"9\" fill=\"{body}\" opacity=\".6\"/>"
+            ),
+            Shape::Laptop => format!(
+                "<rect x=\"110\" y=\"126\" width=\"260\" height=\"168\" rx=\"10\" fill=\"{detail}\"/>\
+                 <rect x=\"122\" y=\"138\" width=\"236\" height=\"144\" rx=\"4\" fill=\"{body}\"/>\
+                 <rect x=\"136\" y=\"150\" width=\"92\" height=\"52\" rx=\"4\" {gloss}/>\
+                 <path d=\"M88 294h304l26 46H62z\" fill=\"{detail}\"/>\
+                 <rect x=\"62\" y=\"330\" width=\"356\" height=\"12\" rx=\"6\" fill=\"{body}\"/>"
+            ),
+            Shape::Tv => format!(
+                "<rect x=\"58\" y=\"128\" width=\"364\" height=\"200\" rx=\"8\" fill=\"{detail}\"/>\
+                 <rect x=\"68\" y=\"138\" width=\"344\" height=\"180\" rx=\"3\" fill=\"{body}\"/>\
+                 <rect x=\"86\" y=\"152\" width=\"132\" height=\"62\" rx=\"4\" {gloss}/>\
+                 <rect x=\"212\" y=\"328\" width=\"56\" height=\"20\" fill=\"{detail}\"/>\
+                 <rect x=\"152\" y=\"346\" width=\"176\" height=\"14\" rx=\"7\" fill=\"{detail}\"/>"
+            ),
+            Shape::Soundbar => format!(
+                "<rect x=\"54\" y=\"208\" width=\"372\" height=\"80\" rx=\"40\" fill=\"{body}\"/>\
+                 <rect x=\"84\" y=\"226\" width=\"244\" height=\"44\" rx=\"22\" fill=\"{detail}\" opacity=\".35\"/>\
+                 <rect x=\"82\" y=\"218\" width=\"118\" height=\"14\" rx=\"7\" {gloss}/>\
+                 <circle cx=\"378\" cy=\"248\" r=\"13\" fill=\"{detail}\"/>"
+            ),
+            Shape::Cpu => format!(
+                "<rect x=\"140\" y=\"140\" width=\"200\" height=\"200\" rx=\"14\" fill=\"{body}\"/>\
+                 <rect x=\"182\" y=\"182\" width=\"116\" height=\"116\" rx=\"8\" fill=\"{detail}\"/>\
+                 <rect x=\"156\" y=\"156\" width=\"62\" height=\"20\" rx=\"10\" {gloss}/>\
+                 <circle cx=\"164\" cy=\"316\" r=\"9\" fill=\"{detail}\"/>"
+            ),
+            Shape::Ram => format!(
+                "<rect x=\"68\" y=\"188\" width=\"344\" height=\"92\" rx=\"10\" fill=\"{body}\"/>\
+                 <rect x=\"92\" y=\"206\" width=\"62\" height=\"56\" rx=\"5\" fill=\"{detail}\" opacity=\".5\"/>\
+                 <rect x=\"172\" y=\"206\" width=\"62\" height=\"56\" rx=\"5\" fill=\"{detail}\" opacity=\".5\"/>\
+                 <rect x=\"252\" y=\"206\" width=\"62\" height=\"56\" rx=\"5\" fill=\"{detail}\" opacity=\".5\"/>\
+                 <rect x=\"332\" y=\"206\" width=\"48\" height=\"56\" rx=\"5\" fill=\"{detail}\" opacity=\".5\"/>\
+                 <rect x=\"84\" y=\"196\" width=\"112\" height=\"16\" rx=\"8\" {gloss}/>\
+                 <rect x=\"92\" y=\"270\" width=\"296\" height=\"10\" fill=\"{detail}\"/>"
+            ),
+            Shape::Webcam => format!(
+                "<circle cx=\"240\" cy=\"198\" r=\"64\" fill=\"{body}\"/>\
+                 <circle cx=\"240\" cy=\"198\" r=\"27\" fill=\"{detail}\"/>\
+                 <circle cx=\"226\" cy=\"184\" r=\"10\" fill=\"#fff\" opacity=\".45\"/>\
+                 <path d=\"M176 250h128v38a26 26 0 0 1-26 26H202a26 26 0 0 1-26-26z\" fill=\"{detail}\"/>\
+                 <rect x=\"222\" y=\"314\" width=\"36\" height=\"26\" fill=\"{detail}\"/>\
+                 <rect x=\"176\" y=\"340\" width=\"128\" height=\"14\" rx=\"7\" fill=\"{detail}\"/>"
+            ),
+            Shape::Gamepad => format!(
+                "<circle cx=\"148\" cy=\"292\" r=\"64\" fill=\"{body}\"/>\
+                 <circle cx=\"332\" cy=\"292\" r=\"64\" fill=\"{body}\"/>\
+                 <rect x=\"148\" y=\"196\" width=\"184\" height=\"128\" rx=\"44\" fill=\"{body}\"/>\
+                 <rect x=\"162\" y=\"216\" width=\"64\" height=\"18\" rx=\"9\" {gloss}/>\
+                 <rect x=\"136\" y=\"268\" width=\"52\" height=\"14\" rx=\"7\" fill=\"{detail}\"/>\
+                 <rect x=\"155\" y=\"249\" width=\"14\" height=\"52\" rx=\"7\" fill=\"{detail}\"/>\
+                 <circle cx=\"318\" cy=\"252\" r=\"12\" fill=\"{detail}\"/>\
+                 <circle cx=\"350\" cy=\"282\" r=\"12\" fill=\"{detail}\"/>\
+                 <circle cx=\"286\" cy=\"282\" r=\"12\" fill=\"{detail}\"/>\
+                 <circle cx=\"318\" cy=\"312\" r=\"12\" fill=\"{detail}\"/>\
+                 <circle cx=\"212\" cy=\"310\" r=\"22\" fill=\"{detail}\"/>"
+            ),
+            Shape::Console => format!(
+                "<rect x=\"168\" y=\"116\" width=\"144\" height=\"238\" rx=\"18\" fill=\"{body}\"/>\
+                 <path d=\"M186 116h28v238h-28a18 18 0 0 1-18-18V134a18 18 0 0 1 18-18z\" fill=\"{detail}\"/>\
+                 <rect x=\"226\" y=\"140\" width=\"48\" height=\"74\" rx=\"24\" {gloss}/>\
+                 <rect x=\"232\" y=\"306\" width=\"56\" height=\"10\" rx=\"5\" fill=\"{detail}\"/>"
             ),
             Shape::Parcel => format!(
                 "<rect x=\"118\" y=\"146\" width=\"244\" height=\"202\" rx=\"18\" fill=\"{body}\"/>\

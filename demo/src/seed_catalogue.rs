@@ -40,6 +40,14 @@ const SSDS: &[&str] = &["Informatique", "Composants", "SSD"];
 const HEADSETS: &[&str] = &["Image & Son", "Casque"];
 const SPEAKERS: &[&str] = &["Image & Son", "Enceinte"];
 const LIGHTS: &[&str] = &["Maison", "Éclairage"];
+const LAPTOPS: &[&str] = &["Informatique", "Ordinateur portable"];
+const WEBCAMS: &[&str] = &["Informatique", "Périphériques", "Webcam"];
+const CPUS: &[&str] = &["Informatique", "Composants", "Processeur"];
+const MEMORY: &[&str] = &["Informatique", "Composants", "Mémoire"];
+const TVS: &[&str] = &["Image & Son", "Téléviseur"];
+const SOUNDBARS: &[&str] = &["Image & Son", "Barre de son"];
+const CONSOLES: &[&str] = &["Jeux vidéo", "Console"];
+const PADS: &[&str] = &["Jeux vidéo", "Manette"];
 
 /// What shoppers filter each category by: `(category slug, [(group, label)])`.
 const FACETS: &[(&str, &[(&str, &str)])] = &[
@@ -66,6 +74,24 @@ const FACETS: &[(&str, &[(&str, &str)])] = &[
         &[("Stockage", "Capacité"), ("Stockage", "Interface")],
     ),
     ("image-son", &[("Connexion", "Liaison")]),
+    (
+        "ordinateur-portable",
+        &[
+            ("Écran", "Taille"),
+            ("Mémoire", "Capacité"),
+            ("Stockage", "Capacité"),
+        ],
+    ),
+    ("processeur", &[("Puce", "Fabricant"), ("Puce", "Cœurs")]),
+    ("memoire", &[("Mémoire", "Capacité"), ("Mémoire", "Type")]),
+    (
+        "televiseur",
+        &[("Dalle", "Taille"), ("Dalle", "Technologie")],
+    ),
+    ("webcam", &[("Vidéo", "Définition")]),
+    ("barre-de-son", &[("Audio", "Canaux")]),
+    ("console", &[("Stockage", "Capacité")]),
+    ("manette", &[("Connexion", "Liaison")]),
 ];
 
 #[rustfmt::skip]
@@ -94,6 +120,30 @@ const ITEMS: &[Item] = &[
     Item { sku: "JBL-FLIP6", name: "JBL Flip 6", brand: "JBL", path: SPEAKERS, cents: 12_999, stock: 35, ratings: &[5, 4, 4], feature: "Enceinte Bluetooth étanche IP67, 12 h d'autonomie", specs: &[("Batterie", "Autonomie", "12 h"), ("Résistance", "Étanchéité", "IP67")] },
     Item { sku: "JBL-CHARGE5", name: "JBL Charge 5", brand: "JBL", path: SPEAKERS, cents: 17_999, stock: 0, ratings: &[5], feature: "Enceinte Bluetooth étanche, batterie externe intégrée", specs: &[("Batterie", "Autonomie", "20 h"), ("Résistance", "Étanchéité", "IP67")] },
     Item { sku: "PHI-HUE-GO", name: "Philips Hue Go", brand: "Philips", path: LIGHTS, cents: 7_999, stock: 19, ratings: &[4, 2], feature: "Lampe connectée portable, 16 millions de couleurs", specs: &[("Éclairage", "Couleurs", "16 millions")] },
+    Item { sku: "DELL-XPS13", name: "Dell XPS 13 9340", brand: "Dell", path: LAPTOPS, cents: 129_900, stock: 6, ratings: &[5, 4], feature: "Ultraportable 13,4 pouces, Intel Core Ultra 7, 16 Go", specs: &[("Écran", "Taille", "13,4 pouces"), ("Mémoire", "Capacité", "16 Go"), ("Stockage", "Capacité", "512 Go")] },
+    Item { sku: "LEN-TP-E14", name: "Lenovo ThinkPad E14 Gen 5", brand: "Lenovo", path: LAPTOPS, cents: 89_900, stock: 12, ratings: &[4, 4, 5], feature: "Portable professionnel 14 pouces, AMD Ryzen 5, 16 Go", specs: &[("Écran", "Taille", "14 pouces"), ("Mémoire", "Capacité", "16 Go"), ("Stockage", "Capacité", "512 Go")] },
+    Item { sku: "HP-AERO13", name: "HP Pavilion Aero 13", brand: "HP", path: LAPTOPS, cents: 79_900, stock: 4, ratings: &[4], feature: "Ultraportable d'un kilo, 13,3 pouces, 16 Go", specs: &[("Écran", "Taille", "13,3 pouces"), ("Mémoire", "Capacité", "16 Go"), ("Stockage", "Capacité", "1 To")] },
+    Item { sku: "ASUS-VIVO15", name: "ASUS Vivobook 15", brand: "ASUS", path: LAPTOPS, cents: 64_900, stock: 0, ratings: &[3, 4], feature: "Portable 15,6 pouces, Intel Core i5, 8 Go", specs: &[("Écran", "Taille", "15,6 pouces"), ("Mémoire", "Capacité", "8 Go"), ("Stockage", "Capacité", "512 Go")] },
+    Item { sku: "ELG-FACECAM2", name: "Elgato Facecam MK.2", brand: "Elgato", path: WEBCAMS, cents: 14_999, stock: 5, ratings: &[5], feature: "Webcam 1080p 60 ips, capteur rétroéclairé, autofocus", specs: &[("Vidéo", "Définition", "1080p"), ("Connexion", "Liaison", "Filaire")] },
+    Item { sku: "LOG-C920", name: "Logitech C920 HD Pro", brand: "Logitech", path: WEBCAMS, cents: 6_999, stock: 22, ratings: &[4, 5, 4], feature: "Webcam Full HD 1080p 30 ips, double micro", specs: &[("Vidéo", "Définition", "1080p"), ("Connexion", "Liaison", "Filaire")] },
+    Item { sku: "TRU-TYRO", name: "Trust Tyro", brand: "Trust", path: WEBCAMS, cents: 2_499, stock: 30, ratings: &[3], feature: "Webcam 1080p avec micro intégré", specs: &[("Vidéo", "Définition", "1080p"), ("Connexion", "Liaison", "Filaire")] },
+    Item { sku: "AMD-7800X3D", name: "AMD Ryzen 7 7800X3D", brand: "AMD", path: CPUS, cents: 38_900, stock: 7, ratings: &[5, 5, 5], feature: "8 cœurs, 16 threads, cache 3D V-Cache", specs: &[("Puce", "Fabricant", "AMD"), ("Puce", "Cœurs", "8 cœurs")] },
+    Item { sku: "INT-14600K", name: "Intel Core i5-14600K", brand: "Intel", path: CPUS, cents: 31_900, stock: 10, ratings: &[4, 5], feature: "14 cœurs, 20 threads, jusqu'à 5,3 GHz", specs: &[("Puce", "Fabricant", "Intel"), ("Puce", "Cœurs", "14 cœurs")] },
+    Item { sku: "AMD-7600", name: "AMD Ryzen 5 7600", brand: "AMD", path: CPUS, cents: 19_900, stock: 0, ratings: &[4], feature: "6 cœurs, 12 threads, ventirad inclus", specs: &[("Puce", "Fabricant", "AMD"), ("Puce", "Cœurs", "6 cœurs")] },
+    Item { sku: "GSK-TZ5-32", name: "G.Skill Trident Z5 RGB 32 Go", brand: "G.Skill", path: MEMORY, cents: 14_990, stock: 6, ratings: &[5], feature: "Kit 2 × 16 Go DDR5 6400 MT/s, RGB", specs: &[("Mémoire", "Capacité", "32 Go"), ("Mémoire", "Type", "DDR5")] },
+    Item { sku: "COR-VENG-32", name: "Corsair Vengeance DDR5 32 Go", brand: "Corsair", path: MEMORY, cents: 12_990, stock: 18, ratings: &[5, 4], feature: "Kit 2 × 16 Go DDR5 6000 MT/s, CL30", specs: &[("Mémoire", "Capacité", "32 Go"), ("Mémoire", "Type", "DDR5")] },
+    Item { sku: "KING-FURY-16", name: "Kingston Fury Beast 16 Go", brand: "Kingston", path: MEMORY, cents: 5_990, stock: 25, ratings: &[4, 4], feature: "Kit 2 × 8 Go DDR4 3200 MT/s", specs: &[("Mémoire", "Capacité", "16 Go"), ("Mémoire", "Type", "DDR4")] },
+    Item { sku: "LG-OLED-C4-55", name: "LG OLED evo C4 55\"", brand: "LG", path: TVS, cents: 129_000, stock: 3, ratings: &[5, 5, 4], feature: "OLED 4K 144 Hz, Dolby Vision, webOS", specs: &[("Dalle", "Taille", "55 pouces"), ("Dalle", "Technologie", "OLED")] },
+    Item { sku: "TCL-55C845", name: "TCL 55C845 Mini LED", brand: "TCL", path: TVS, cents: 79_900, stock: 8, ratings: &[4, 4], feature: "Mini LED 4K 144 Hz, Google TV", specs: &[("Dalle", "Taille", "55 pouces"), ("Dalle", "Technologie", "Mini LED")] },
+    Item { sku: "HIS-43A6N", name: "Hisense 43A6N", brand: "Hisense", path: TVS, cents: 29_900, stock: 0, ratings: &[3, 4], feature: "LED 4K HDR10+, système VIDAA", specs: &[("Dalle", "Taille", "43 pouces"), ("Dalle", "Technologie", "LED")] },
+    Item { sku: "SONOS-BEAM2", name: "Sonos Beam Gen 2", brand: "Sonos", path: SOUNDBARS, cents: 49_900, stock: 5, ratings: &[5, 4], feature: "Barre de son Dolby Atmos, Wi-Fi, HDMI eARC", specs: &[("Audio", "Canaux", "5.0"), ("Connexion", "Liaison", "Sans fil")] },
+    Item { sku: "BOSE-SB600", name: "Bose Smart Soundbar 600", brand: "Bose", path: SOUNDBARS, cents: 44_900, stock: 0, ratings: &[4], feature: "Barre de son Dolby Atmos, Bluetooth", specs: &[("Audio", "Canaux", "5.1.2"), ("Connexion", "Liaison", "Sans fil")] },
+    Item { sku: "NIN-SWITCH-OLED", name: "Nintendo Switch OLED", brand: "Nintendo", path: CONSOLES, cents: 31_999, stock: 9, ratings: &[5, 5], feature: "Console hybride, écran OLED 7 pouces", specs: &[("Stockage", "Capacité", "64 Go")] },
+    Item { sku: "MS-XBOX-SS", name: "Microsoft Xbox Series S", brand: "Microsoft", path: CONSOLES, cents: 29_999, stock: 0, ratings: &[4, 4], feature: "Console 4K entièrement numérique", specs: &[("Stockage", "Capacité", "512 Go")] },
+    Item { sku: "MS-XBOX-CTRL", name: "Manette Xbox sans fil", brand: "Microsoft", path: PADS, cents: 5_999, stock: 30, ratings: &[4, 5, 4], feature: "Manette sans fil Bluetooth, prise casque", specs: &[("Connexion", "Liaison", "Sans fil")] },
+    Item { sku: "8BD-ULT2", name: "8BitDo Ultimate 2 Bluetooth", brand: "8BitDo", path: PADS, cents: 4_999, stock: 14, ratings: &[5], feature: "Manette à effet Hall, station de charge", specs: &[("Connexion", "Liaison", "Sans fil")] },
+    Item { sku: "PHI-HUE-E27", name: "Philips Hue White and Color E27", brand: "Philips", path: LIGHTS, cents: 4_999, stock: 40, ratings: &[4, 5], feature: "Ampoule connectée E27, 16 millions de couleurs", specs: &[("Éclairage", "Couleurs", "16 millions")] },
+    Item { sku: "XIA-BULB", name: "Xiaomi Smart LED Bulb", brand: "Xiaomi", path: LIGHTS, cents: 1_499, stock: 60, ratings: &[3, 4], feature: "Ampoule connectée Wi-Fi, blanc et couleurs", specs: &[("Éclairage", "Couleurs", "16 millions")] },
 ];
 
 /// The category a breadcrumb names, opened on the way down. The slug is the
