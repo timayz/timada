@@ -7,11 +7,12 @@ use topcoat::{
     view::{Attributes, View, class, component, view},
 };
 
-mod document;
+mod chrome;
 mod format;
 pub mod icons;
+pub mod theme;
 
-pub use document::{empty_state, page_header, pagination, shell};
+pub use chrome::{empty_state, page_header, pagination, shell, stylesheet_url};
 pub use format::{date, money, order_status_badge, vat_rate};
 
 /// A [Lucide](https://lucide.dev) outline from [`icons`], an em square in the

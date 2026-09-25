@@ -1,6 +1,6 @@
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, app_context, try_app_context},
     router::href,
     view::{Child, View, attributes, component, view},
 };
@@ -12,13 +12,15 @@ use crate::{
     },
     auth::{Role, Section, signed_in_admin},
     config::{AdminConfig, Stylesheet},
-    ui::{icon, icons},
+    ui::{
+        icon, icons,
+        theme::{self, Scheme},
+    },
 };
 
 /// The `<html>` shell: stylesheet, header with navigation, and the page body.
 #[component]
 pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
-    let config = app_context::<AdminConfig>(cx);
     let admin = signed_in_admin(cx);
     // Every section, in the order shown: `(section, link, current, label)` —
     // an operator's navigation holds those their role opens.
@@ -75,41 +77,132 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
     let standing = admin.map(|admin| format!("{} · {}", admin.email, admin.role.label()));
 
     Ok(view! {
-        <!DOCTYPE html>
-        <html lang="fr" class="h-full bg-background text-foreground">
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>"Timada admin"</title>
-                match &config.stylesheet {
-                    Stylesheet::Bundled => <link rel="stylesheet" href=(topcoat::tailwind::stylesheet!())>,
-                    Stylesheet::Url(url) => <link rel="stylesheet" href=(url)>,
-                }
-            </head>
-            <body class="min-h-full flex flex-col">
-                <header class="border-b border-border bg-background print:hidden">
-                    <div class="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
-                        <a href=(home) class="font-semibold tracking-tight">"Timada admin"</a>
+        document(
+            title: "Timada admin",
+            <header class="border-b border-border bg-background print:hidden">
+                <div class="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
+                    <a href=(home) class="font-semibold tracking-tight">"Timada admin"</a>
+                    if admin.is_some() {
+                        <nav aria-label="Sections" class="flex gap-1 text-sm">
+                            for (link, current, label) in &navigation {
+                                nav_link(link: link.clone(), current: *current, (*label))
+                            }
+                        </nav>
+                    }
+                    <div class="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
+                        scheme_switch()
                         if admin.is_some() {
-                            <nav aria-label="Sections" class="flex gap-1 text-sm">
-                                for (link, current, label) in &navigation {
-                                    nav_link(link: link.clone(), current: *current, (*label))
-                                }
-                            </nav>
-                            <form method="post" action=(href!(crate::app::admin::logout)) class="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
+                            <form method="post" action=(href!(crate::app::admin::logout)) class="flex items-center gap-3">
                                 if let Some(standing) = &standing { <span>(standing.clone())</span> }
                                 <a href=(own_password) class="underline-offset-4 hover:underline">"Mon mot de passe"</a>
                                 <button type="submit" class="underline-offset-4 hover:underline">"Se déconnecter"</button>
                             </form>
                         }
                     </div>
-                </header>
-                <main class="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
-                    (child)
-                </main>
+                </div>
+            </header>
+            <main class="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+                (child)
+            </main>
+        )
+    })
+}
+
+/// The `<html>` frame: the colour scheme, the stylesheet, and nothing else.
+///
+/// Separate from [`shell`] because the refusal page is rendered from a layer,
+/// where no page has run and there is no navigation to draw, and it still has
+/// to be the same document — same scheme, same declared `color-scheme`, same
+/// stylesheet. Two hand-written heads is how one of them ends up light while
+/// the operator asked for dark.
+#[component]
+pub async fn document(cx: &Cx, title: &str, #[default] child: Child<'_>) -> Result<impl View> {
+    let scheme = theme::chosen(cx);
+    Ok(view! {
+        <!DOCTYPE html>
+        <html lang="fr" class=(class_list("h-full bg-background text-foreground", scheme.html_class()))>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                // Declared, not only styled: the browser paints the canvas and
+                // draws native widgets from this before any CSS arrives.
+                <meta name="color-scheme" content=(scheme.color_scheme())>
+                <title>(title)</title>
+                <link rel="stylesheet" href=(stylesheet_url(cx))>
+            </head>
+            <body class="min-h-full flex flex-col">
+                (child)
             </body>
         </html>
     })
+}
+
+/// Where the admin stylesheet is served from.
+///
+/// Outside a view an asset is resolved by hand; without a bundle the page goes
+/// unstyled rather than not at all.
+#[must_use]
+pub fn stylesheet_url(cx: &Cx) -> String {
+    match &app_context::<AdminConfig>(cx).stylesheet {
+        Stylesheet::Bundled => try_app_context::<topcoat::asset::AssetConfig>(cx)
+            .map(|assets| assets.resolve(topcoat::tailwind::stylesheet!()))
+            .unwrap_or_default(),
+        Stylesheet::Url(url) => url.clone(),
+    }
+}
+
+fn class_list(base: &str, extra: Option<&str>) -> String {
+    match extra {
+        Some(extra) => format!("{base} {extra}"),
+        None => base.to_owned(),
+    }
+}
+
+/// The colour-scheme switch: three buttons, one form, a POST and a redirect
+/// back to the page it was pressed on.
+///
+/// Three buttons rather than one that cycles, so the operator can see which
+/// state is active and so "Système" is reachable at all. The target is an
+/// `action=`, and each choice a `value=`, so nothing here can be mistaken for
+/// the `href=` the role tests read.
+#[component]
+async fn scheme_switch(cx: &Cx) -> Result<impl View> {
+    let current = theme::chosen(cx);
+    let back = theme::here(cx);
+    Ok(view! {
+        <form
+            method="post"
+            action=(href!(crate::app::admin::choose_scheme))
+            aria-label="Thème"
+            class="flex items-center gap-0.5 rounded-full border border-border bg-card p-0.5 print:hidden"
+        >
+            <input type="hidden" name="next" value=(back)>
+            for scheme in Scheme::ALL {
+                <button
+                    type="submit"
+                    name="scheme"
+                    value=(scheme.as_str())
+                    aria-pressed=(if scheme == current { "true" } else { "false" })
+                    aria-label=(format!("Thème {}", scheme.label().to_lowercase()))
+                    class=(if scheme == current {
+                        "inline-flex size-7 items-center justify-center rounded-full bg-accent text-accent-foreground"
+                    } else {
+                        "inline-flex size-7 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    })
+                >
+                    icon(data: scheme_icon(scheme), attrs: attributes! { class="size-4" })
+                </button>
+            }
+        </form>
+    })
+}
+
+const fn scheme_icon(scheme: Scheme) -> topcoat::icon::IconData {
+    match scheme {
+        Scheme::Light => icons::SUN,
+        Scheme::Dark => icons::MOON,
+        Scheme::System => icons::MONITOR,
+    }
 }
 
 #[component]
