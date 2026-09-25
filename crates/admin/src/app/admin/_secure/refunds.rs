@@ -24,7 +24,7 @@ use super::{invoices::invoice_id, orders::order_id};
 use crate::{
     components::table::{table, table_body, table_cell, table_head, table_header, table_row},
     config::AdminServices,
-    ui::{date, empty_state, money, page_header, pagination},
+    ui::{date, empty_state, link, money, page_header, pagination, table_card},
 };
 
 pub const PAGE_SIZE: u32 = 25;
@@ -88,15 +88,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         if !open_lines.is_empty() {
             <section aria-labelledby="open-refunds" class="mb-8 flex flex-col gap-3">
                 <h2 id="open-refunds" class="text-sm font-medium">"En cours auprès du prestataire de paiement"</h2>
-                table(
-                    table_header(table_row(
-                        table_head("Demandé le") table_head("Commande") table_head("Motif") table_head("État")
-                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Montant")
-                    ))
-                    table_body(
-                        for (row, label) in &open_lines {
-                            open_refund_row(row: row, order_label: label)
-                        }
+                table_card(
+                    table(
+                        table_header(table_row(
+                            table_head("Demandé le") table_head("Commande") table_head("Motif") table_head("État")
+                            table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Montant")
+                        ))
+                        table_body(
+                            for (row, label) in &open_lines {
+                                open_refund_row(row: row, order_label: label)
+                            }
+                        )
                     )
                 )
             </section>
@@ -104,15 +106,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         if lines.is_empty() {
             empty_state(message: "Aucun remboursement. Un remboursement se fait depuis la page d'une commande payée.")
         } else {
-            table(
-                table_header(table_row(
-                    table_head("Date") table_head("Commande") table_head("Avoir") table_head("Motif")
-                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Montant")
-                ))
-                table_body(
-                    for line in &lines {
-                        refund_row(line: line)
-                    }
+            table_card(
+                table(
+                    table_header(table_row(
+                        table_head("Date") table_head("Commande") table_head("Avoir") table_head("Motif")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Montant")
+                    ))
+                    table_body(
+                        for line in &lines {
+                            refund_row(line: line)
+                        }
+                    )
                 )
             )
             pagination(page: page, page_size: PAGE_SIZE, total: total as u64)
@@ -137,18 +141,18 @@ async fn refund_row(cx: &Cx, line: &RefundLine) -> Result<impl View> {
         note,
     } = line;
     let note_link = note.clone().map(|(number, invoice)| {
-        let link = href!(invoice_id::show, invoice_id::InvoiceId(invoice)).resolve(cx);
-        (number, link)
+        let target = href!(invoice_id::show, invoice_id::InvoiceId(invoice)).resolve(cx);
+        (number, target)
     });
     let order_link = href!(order_id::show, order_id::OrderId(row.order_id.clone())).resolve(cx);
     let amount = money(&Money::new(row.amount_minor, &row.currency));
     Ok(view! {
         table_row(
             table_cell((date(row.refunded_at as u64)))
-            table_cell(<a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label.clone())</a>)
+            table_cell(link(href: order_link, class: "font-mono text-xs", (order_label.clone())))
             table_cell(
                 match &note_link {
-                    Some((number, link)) => { <a href=(link.clone()) class="font-mono text-xs underline-offset-4 hover:underline">(number.clone())</a> }
+                    Some((number, target)) => { link(href: target.clone(), class: "font-mono text-xs", (number.clone())) }
                     None => { <span class="text-muted-foreground">"—"</span> }
                 }
             )
@@ -167,7 +171,7 @@ async fn open_refund_row(cx: &Cx, row: &RefundRequestRow, order_label: &str) -> 
     Ok(view! {
         table_row(
             table_cell((date(row.requested_at as u64)))
-            table_cell(<a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label.to_owned())</a>)
+            table_cell(link(href: order_link, class: "font-mono text-xs", (order_label.to_owned())))
             table_cell((row.reason.clone()))
             table_cell(
                 match &failure {

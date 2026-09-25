@@ -23,6 +23,7 @@ use crate::{
     app::admin::_secure::{
         disputes::dispute_status_badge, invoices::invoice_id, returns::return_id,
     },
+    auth::Section,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -30,7 +31,10 @@ use crate::{
         separator::separator,
     },
     config::{AdminConfig, AdminServices},
-    ui::{date, money, order_status_badge, page_header, vat_rate},
+    ui::{
+        date, detail_grid, detail_main, fact, facts, form_error, link, money, order_status_badge,
+        page_header, vat_rate,
+    },
 };
 
 path_param!(pub order_id: String, error = not_found);
@@ -99,8 +103,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         let label = i
             .invoice_number
             .unwrap_or_else(|| "non numérotée".to_owned());
-        let link = href!(invoice_id::show, invoice_id::InvoiceId(i.id)).resolve(cx);
-        (link, label)
+        let target = href!(invoice_id::show, invoice_id::InvoiceId(i.id)).resolve(cx);
+        (target, label)
     });
     let title = format!("Commande {}", order.display_number());
     let tax_zone = order.tax.as_ref().map(|tax| tax.zone_code.clone());
@@ -120,8 +124,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .await?
         .into_iter()
         .map(|row| {
-            let link = href!(return_id::show, return_id::ReturnId(row.return_id)).resolve(cx);
-            (link, row.rma_number)
+            let target = href!(return_id::show, return_id::ReturnId(row.return_id)).resolve(cx);
+            (target, row.rma_number)
         })
         .collect();
     let refund_error = refund_error_message(query::<ShowQuery>(cx)?.refund_error.as_deref());
@@ -238,13 +242,14 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
+            parent: Section::Orders,
             title: &title,
             order_status_badge(status: order.status)
         )
         <p class="-mt-4 mb-6 font-mono text-xs text-muted-foreground">(id.clone()) " · passée le " (date(order.placed_at))</p>
 
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="flex flex-col gap-6 lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Articles"))
                     card_content(
@@ -274,30 +279,30 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 card(
                     card_header(card_title("Livraison"))
                     card_content(
-                        <dl class="grid gap-2 text-sm sm:grid-cols-2">
-                            <div><dt class="text-muted-foreground">"Mode"</dt><dd>(order.delivery.method_code.clone())</dd></div>
-                            <div><dt class="text-muted-foreground">"Suivi"</dt><dd>(order.tracking_number.clone().unwrap_or_else(|| "—".into()))</dd></div>
-                            <div><dt class="text-muted-foreground">"Adresse de livraison"</dt><dd>address_lines(address: &order.delivery_address)</dd></div>
-                            <div><dt class="text-muted-foreground">"Adresse de facturation"</dt><dd>address_lines(address: &order.billing_address)</dd></div>
-                        </dl>
+                        facts(
+                            fact(term: "Mode", (order.delivery.method_code.clone()))
+                            fact(term: "Suivi", (order.tracking_number.clone().unwrap_or_else(|| "—".into())))
+                            fact(term: "Adresse de livraison", address_lines(address: &order.delivery_address))
+                            fact(term: "Adresse de facturation", address_lines(address: &order.billing_address))
+                        )
                     )
                 )
-            </div>
+            )
 
-            <div class="flex flex-col gap-6">
+            detail_main(
                 card(
                     card_header(card_title("État"))
                     card_content(
-                        <dl class="flex flex-col gap-2 text-sm">
-                            <div><dt class="text-muted-foreground">"Client"</dt><dd class="font-mono text-xs">(order.customer_id.clone())</dd></div>
+                        facts(
+                            fact(term: "Client", class: "font-mono text-xs", (order.customer_id.clone()))
                             if let Some(zone) = &tax_zone {
-                                <div><dt class="text-muted-foreground">"Zone fiscale"</dt><dd class="font-mono text-xs">(zone.clone())</dd></div>
+                                fact(term: "Zone fiscale", class: "font-mono text-xs", (zone.clone()))
                             }
                             if let Some(business) = &business {
-                                <div><dt class="text-muted-foreground">"Entreprise"</dt><dd>(business.clone())</dd></div>
+                                fact(term: "Entreprise", (business.clone()))
                             }
                             if let Some(rate) = &exchange_rate {
-                                <div><dt class="text-muted-foreground">"Cours de change"</dt><dd>(rate.clone())</dd></div>
+                                fact(term: "Cours de change", (rate.clone()))
                             }
                             if rate_missing {
                                 <div>
@@ -315,29 +320,29 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     </dd>
                                 </div>
                             }
-                            <div><dt class="text-muted-foreground">"Paiement"</dt><dd>(payment_label)</dd></div>
+                            fact(term: "Paiement", (payment_label))
                             if let Some(refunded) = &refunded {
-                                <div><dt class="text-muted-foreground">"Remboursé"</dt><dd class="tabular-nums">(refunded.clone())</dd></div>
+                                fact(term: "Remboursé", class: "tabular-nums", (refunded.clone()))
                             }
-                            if let Some((link, label)) = &invoice_link {
-                                <div><dt class="text-muted-foreground">"Facture"</dt><dd><a href=(link.clone()) class="font-mono text-xs underline-offset-4 hover:underline">(label.clone())</a></dd></div>
+                            if let Some((target, label)) = &invoice_link {
+                                fact(term: "Facture", link(href: target.clone(), class: "font-mono text-xs", (label.clone())))
                             }
-                            <div><dt class="text-muted-foreground">"Expédition"</dt><dd>(shipment.as_ref().map(|s| format!("{:?}", s.status)).unwrap_or_else(|| "—".into()))</dd></div>
-                            <div><dt class="text-muted-foreground">"Traitement"</dt><dd>(fulfillment_label)</dd></div>
+                            fact(term: "Expédition", (shipment.as_ref().map(|s| format!("{:?}", s.status)).unwrap_or_else(|| "—".into())))
+                            fact(term: "Traitement", (fulfillment_label))
                             if let Some(reason) = &order.cancelled_reason {
-                                <div><dt class="text-muted-foreground">"Motif d'annulation"</dt><dd>(reason.clone())</dd></div>
+                                fact(term: "Motif d'annulation", (reason.clone()))
                             }
                             if !order_returns.is_empty() {
                                 <div>
                                     <dt class="text-muted-foreground">"Retours"</dt>
                                     <dd class="flex flex-wrap gap-2">
-                                        for (link, number) in &order_returns {
-                                            <a href=(link.clone()) class="font-mono text-xs underline-offset-4 hover:underline">(number.clone())</a>
+                                        for (target, number) in &order_returns {
+                                            link(href: target.clone(), class: "font-mono text-xs", (number.clone()))
                                         }
                                     </dd>
                                 </div>
                             }
-                        </dl>
+                        )
                     )
                 )
                 if !disputes.is_empty() {
@@ -345,7 +350,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         card_header(card_title("Litige bancaire"))
                         card_content(
                             if disputed {
-                                <p role="alert" class="mb-3 text-sm text-destructive">"Paiement contesté : la commande est retenue, aucun remboursement ne part avant la décision de la banque."</p>
+                                form_error(class: "mb-3", "Paiement contesté : la commande est retenue, aucun remboursement ne part avant la décision de la banque.")
                             }
                             <ul class="flex flex-col gap-4 text-sm">
                                 for dispute in &disputes {
@@ -374,7 +379,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             </ul>
                             if refundable.is_none() && open_refunds.is_empty() {
                                 if let Some(error) = refund_error {
-                                    <p role="alert" class="mt-3 text-sm text-destructive">(error)</p>
+                                    form_error(class: "mt-3", (error))
                                 }
                             }
                         )
@@ -430,7 +435,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                 </ul>
                                 if refundable.is_none() {
                                     if let Some(error) = refund_error {
-                                        <p role="alert" class="text-sm text-destructive">(error)</p>
+                                        form_error((error))
                                     }
                                 }
                             }
@@ -441,7 +446,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     input(attrs: topcoat::view::attributes! { id="refund-amount" name="amount_cents" type="number" min="1" max=(left.to_string()) value=(left.to_string()) required=(true) })
                                     input(attrs: topcoat::view::attributes! { name="reason" placeholder="Motif du remboursement" aria-label="Motif du remboursement" required=(true) })
                                     if let Some(error) = refund_error {
-                                        <p role="alert" class="text-sm text-destructive">(error)</p>
+                                        form_error((error))
                                     }
                                     button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Rembourser")
                                 </form>
@@ -456,8 +461,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         </div>
                     )
                 )
-            </div>
-        </div>
+            )
+        )
     })
 }
 

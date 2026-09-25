@@ -21,7 +21,7 @@ use crate::{
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
-    ui::{empty_state, page_header},
+    ui::{detail_grid, detail_main, empty_state, form_error, link, page_header, table_card},
 };
 
 /// What the operator is told when the catalog refuses.
@@ -139,31 +139,33 @@ async fn families_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
 
     Ok(view! {
         page_header(title: "Familles de produits")
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="lg:col-span-2">
+        detail_grid(
+            detail_main(
                 if lines.is_empty() {
                     empty_state(message: "Aucune famille. Une famille réunit les produits qui sont un même article en plusieurs versions : couleurs, capacités, tailles.")
                 } else {
-                    table(
-                        table_header(table_row(
-                            table_head("Famille") table_head("Distinguée par")
-                            table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Variantes")
-                        ))
-                        table_body(
-                            for line in &lines {
-                                table_row(
-                                    table_cell(
-                                        <a href=(line.link.clone()) class="underline-offset-4 hover:underline">(line.name.clone())</a>
-                                        if line.dissolved { <span class="ml-2 text-xs text-muted-foreground">"dissoute"</span> }
+                    table_card(
+                        table(
+                            table_header(table_row(
+                                table_head("Famille") table_head("Distinguée par")
+                                table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Variantes")
+                            ))
+                            table_body(
+                                for line in &lines {
+                                    table_row(
+                                        table_cell(
+                                            link(href: line.link.clone(), (line.name.clone()))
+                                            if line.dissolved { <span class="ml-2 text-xs text-muted-foreground">"dissoute"</span> }
+                                        )
+                                        table_cell(<span class="text-muted-foreground">(line.told_apart_by.clone())</span>)
+                                        table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (line.variants.to_string()))
                                     )
-                                    table_cell(<span class="text-muted-foreground">(line.told_apart_by.clone())</span>)
-                                    table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (line.variants.to_string()))
-                                )
-                            }
+                                }
+                            )
                         )
                     )
                 }
-            </div>
+            )
             card(
                 card_header(card_title("Nouvelle famille"))
                 card_content(
@@ -177,12 +179,12 @@ async fn families_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                             input(attrs: topcoat::view::attributes! { id="slug" name="slug" placeholder="baladeur-nw-a" pattern="[a-z0-9]+(-[a-z0-9]+)*" })
                         </div>
                         if let Some(error) = &error {
-                            <p role="alert" class="text-sm text-destructive">(error.clone())</p>
+                            form_error((error.clone()))
                         }
                         <div>button(attrs: topcoat::view::attributes! { type="submit" }, "Ouvrir la famille")</div>
                     </form>
                 )
             )
-        </div>
+        )
     })
 }

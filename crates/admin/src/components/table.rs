@@ -91,7 +91,7 @@ pub async fn table_footer(
     Ok(view! {
         <tfoot
             class=(class!(
-                "border-t border-border bg-foreground/5 font-medium [&>tr]:last:border-b-0",
+                "border-t border-border bg-muted/50 font-medium [&>tr]:last:border-b-0",
                 attrs.remove("class"),
             ))
             (attrs)
@@ -113,7 +113,7 @@ pub async fn table_row(
     Ok(view! {
         <tr
             class=(class!(
-                "border-b border-border transition-colors hover:bg-foreground/5",
+                "border-b border-border transition-colors hover:bg-muted/50",
                 attrs.remove("class"),
             ))
             (attrs)
@@ -133,7 +133,7 @@ pub async fn table_head(
         <th
             class=(class!(
                 "h-10 px-3 text-left align-middle font-medium whitespace-nowrap \
-                 text-muted-foreground",
+                 text-foreground",
                 attrs.remove("class"),
             ))
             (attrs)

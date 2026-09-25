@@ -13,9 +13,10 @@ use topcoat::{
 
 use crate::{
     app::admin::_secure::orders::order_id::{OrderId, show as order_show},
+    auth::Section,
     components::card::{card, card_content, card_header, card_title},
     config::AdminServices,
-    ui::{date, money, page_header},
+    ui::{date, detail_grid, detail_main, detail_side, fact, facts, link, money, page_header},
 };
 
 path_param!(pub customer_id: String, error = not_found);
@@ -56,11 +57,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         });
 
     Ok(view! {
-        page_header(title: &title)
+        page_header(parent: Section::Customers, title: &title)
         <p class="-mt-4 mb-6 text-sm text-muted-foreground">(standing) (book.email.clone()) " · " <span class="font-mono text-xs">(id.clone())</span></p>
 
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Commandes"))
                     card_content(
@@ -72,7 +73,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     for row in &orders {
                                         <tr class="border-b border-border last:border-0">
                                             <td class="py-2">(date(row.placed_at as u64))</td>
-                                            <td class="py-2"><a href=(href!(order_show, OrderId(row.order_id.clone())).resolve(cx)) class="font-mono text-xs underline-offset-4 hover:underline">(row.order_number.clone().unwrap_or_else(|| row.order_id.clone()))</a></td>
+                                            <td class="py-2">link(href: href!(order_show, OrderId(row.order_id.clone())).resolve(cx), class: "font-mono text-xs", (row.order_number.clone().unwrap_or_else(|| row.order_id.clone())))</td>
                                             <td class="py-2">(row.status.clone())</td>
                                             <td class="py-2 text-right tabular-nums">(money(&Money::new(row.total_minor, &row.currency)))</td>
                                         </tr>
@@ -82,17 +83,17 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
-            </div>
-            <div class="flex flex-col gap-6">
+            )
+            detail_side(
                 if let Some((company_name, vat_number, standing)) = &company {
                     card(
                         card_header(card_title("Entreprise"))
                         card_content(
-                            <dl class="flex flex-col gap-2 text-sm">
-                                <div><dt class="text-muted-foreground">"Raison sociale"</dt><dd>(company_name.clone())</dd></div>
-                                <div><dt class="text-muted-foreground">"Numéro de TVA"</dt><dd class="font-mono text-xs">(vat_number.clone())</dd></div>
-                                <div><dt class="text-muted-foreground">"Registre européen (VIES)"</dt><dd>(standing.clone())</dd></div>
-                            </dl>
+                            facts(
+                                fact(term: "Raison sociale", (company_name.clone()))
+                                fact(term: "Numéro de TVA", <span class="font-mono text-xs">(vat_number.clone())</span>)
+                                fact(term: "Registre européen (VIES)", (standing.clone()))
+                            )
                         )
                     )
                 }
@@ -122,8 +123,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
-            </div>
-        </div>
+            )
+        )
     })
 }
 

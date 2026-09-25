@@ -26,7 +26,9 @@ use crate::{
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::{AdminConfig, AdminServices},
-    ui::{empty_state, page_header, pagination},
+    ui::{
+        empty_state, filter_bar, form_error, link, page_header, pagination, table_card, text_field,
+    },
 };
 
 pub const PAGE_SIZE: u32 = 25;
@@ -59,24 +61,26 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(
             title: "Produits",
-            <form method="get" class="flex items-center gap-2 text-sm">
+            filter_bar(
+                submit: "Rechercher",
                 input(attrs: topcoat::view::attributes! { type="search" name="q" placeholder="Nom ou référence" value=(query.q.clone().unwrap_or_default()) })
-                <label class="flex items-center gap-1 text-muted-foreground">
+                <label class="flex h-9 items-center gap-1.5 text-muted-foreground">
                     <input type="checkbox" name="archived" value="1" checked=(include_archived)> "Archivés"
                 </label>
-                <button type="submit" class="h-9 rounded-lg border border-border px-3">"Rechercher"</button>
-            </form>
+            )
             <a href=(href!(new)) class=(button_variants(ButtonVariant::Primary, Default::default()))>"Nouveau produit"</a>
         )
         if rows.is_empty() {
             empty_state(message: "Aucun produit.")
         } else {
-            table(
-                table_header(table_row(
-                    table_head("Référence") table_head("Nom") table_head("Marque") table_head("Catégorie") table_head("État")
-                ))
-                table_body(
-                    for row in &rows { product_row(row: row) }
+            table_card(
+                table(
+                    table_header(table_row(
+                        table_head("Référence") table_head("Nom") table_head("Marque") table_head("Catégorie") table_head("État")
+                    ))
+                    table_body(
+                        for row in &rows { product_row(row: row) }
+                    )
                 )
             )
             pagination(page: page, page_size: PAGE_SIZE, total: total as u64)
@@ -86,10 +90,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
 #[topcoat::view::component]
 async fn product_row(cx: &Cx, row: &ProductListRow) -> Result<impl View> {
-    let link = href!(product_id::show, product_id::ProductId(row.id.clone())).resolve(cx);
+    let target = href!(product_id::show, product_id::ProductId(row.id.clone())).resolve(cx);
     Ok(view! {
         table_row(
-            table_cell(<a href=(link) class="font-mono text-xs underline-offset-4 hover:underline">(row.sku.clone())</a>)
+            table_cell(link(href: target, class: "font-mono text-xs", (row.sku.clone())))
             table_cell((row.name.clone()))
             table_cell((row.brand_slug.clone()))
             table_cell(<span class="text-muted-foreground">(row.category_path.clone())</span>)
@@ -184,46 +188,28 @@ async fn new_product_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
         <div class="max-w-2xl">
             card(card_content(
                 <form method="post" action=(href!(create).resolve(cx)) class="grid gap-4 sm:grid-cols-2">
-                    field(name: "sku", label_text: "Référence (SKU)", attrs: topcoat::view::attributes! { required=(true) })
-                    field(name: "name", label_text: "Nom", attrs: topcoat::view::attributes! { required=(true) })
-                    field(name: "brand", label_text: "Marque", attrs: topcoat::view::attributes! { required=(true) })
+                    text_field(name: "sku", label_text: "Référence (SKU)", attrs: topcoat::view::attributes! { required=(true) })
+                    text_field(name: "name", label_text: "Nom", attrs: topcoat::view::attributes! { required=(true) })
+                    text_field(name: "brand", label_text: "Marque", attrs: topcoat::view::attributes! { required=(true) })
                     <div class="flex flex-col gap-1.5">
                         label(attrs: topcoat::view::attributes! { for="category_id" }, "Catégorie")
                         category_select(name: "category_id", options: &categories, selected: None, none_label: Some("— à ranger plus tard —"))
                     </div>
                     <div class="sm:col-span-2">
-                        field(name: "short_description", label_text: "Description courte", attrs: topcoat::view::attributes! {})
+                        text_field(name: "short_description", label_text: "Description courte", attrs: topcoat::view::attributes! {})
                     </div>
-                    field(name: "warranty_months", label_text: "Garantie (mois)", attrs: topcoat::view::attributes! { type="number" min="0" value="24" })
-                    field(name: "price_cents", label_text: "Prix TTC (centimes)", attrs: topcoat::view::attributes! { type="number" min="1" required=(true) })
-                    field(name: "vat_rate_bp", label_text: "TVA (points de base, 2000 = 20 %)", attrs: topcoat::view::attributes! { type="number" min="0" value="2000" })
-                    field(name: "eco_participation_cents", label_text: "Éco-participation (centimes)", attrs: topcoat::view::attributes! { type="number" min="0" value="0" })
+                    text_field(name: "warranty_months", label_text: "Garantie (mois)", attrs: topcoat::view::attributes! { type="number" min="0" value="24" })
+                    text_field(name: "price_cents", label_text: "Prix TTC (centimes)", attrs: topcoat::view::attributes! { type="number" min="1" required=(true) })
+                    text_field(name: "vat_rate_bp", label_text: "TVA (points de base, 2000 = 20 %)", attrs: topcoat::view::attributes! { type="number" min="0" value="2000" })
+                    text_field(name: "eco_participation_cents", label_text: "Éco-participation (centimes)", attrs: topcoat::view::attributes! { type="number" min="0" value="0" })
                     if let Some(error) = &error {
-                        <p role="alert" class="text-sm text-destructive sm:col-span-2">(error.clone())</p>
+                        form_error(class: "sm:col-span-2", (error.clone()))
                     }
                     <div class="sm:col-span-2">
                         button(attrs: topcoat::view::attributes! { type="submit" }, "Créer")
                     </div>
                 </form>
             ))
-        </div>
-    })
-}
-
-/// A labelled input; `attrs` carries type/required/value overrides.
-#[topcoat::view::component]
-pub async fn field(
-    cx: &Cx,
-    name: &str,
-    label_text: &str,
-    mut attrs: topcoat::view::Attributes,
-) -> Result<impl View> {
-    attrs.insert(cx, "id", name.to_owned());
-    attrs.insert(cx, "name", name.to_owned());
-    Ok(view! {
-        <div class="flex flex-col gap-1.5">
-            label(attrs: topcoat::view::attributes! { for=(name) }, (label_text))
-            input(attrs: attrs)
         </div>
     })
 }

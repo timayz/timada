@@ -16,6 +16,10 @@ pub enum BadgeVariant {
     Secondary,
     /// A hairline-bordered badge on the page background.
     Outline,
+    /// A tinted badge for something that came out right.
+    Success,
+    /// A tinted badge for something in progress.
+    Info,
     /// A destructive-filled badge for errors and warnings.
     Destructive,
 }
@@ -27,11 +31,19 @@ impl BadgeVariant {
     /// transparent one from [`BASE`]: with two border-color classes on the
     /// same element, stylesheet order (not class order) would decide the
     /// winner.
+    ///
+    /// `Success` and `Info` tint rather than fill. A status badge is read at
+    /// 12px, and a fill light enough to look like a status cannot carry text
+    /// that small; the color says which status it is, the text stays legible.
+    /// The tint is a tenth of the color itself, which is the strength the
+    /// theme's accent lightness is chosen against.
     fn classes(self) -> StaticClass {
         match self {
             Self::Primary => class!("border-transparent bg-primary text-primary-foreground"),
-            Self::Secondary => class!("border-transparent bg-foreground/5 text-foreground"),
+            Self::Secondary => class!("border-transparent bg-secondary text-secondary-foreground"),
             Self::Outline => class!("border-border text-foreground"),
+            Self::Success => class!("border-transparent bg-success/10 text-success"),
+            Self::Info => class!("border-transparent bg-info/10 text-info"),
             Self::Destructive => {
                 class!("border-transparent bg-destructive text-destructive-foreground")
             }
@@ -44,8 +56,8 @@ impl BadgeVariant {
 /// Every badge carries a border (colored per variant) so that the `Outline`
 /// variant, which only recolors it, does not change the badge's dimensions.
 const BASE: StaticClass = class!(
-    "inline-flex w-fit shrink-0 items-center justify-center gap-1 rounded-md \
-     border px-2 py-0.5 text-xs font-medium whitespace-nowrap",
+    "inline-flex w-fit shrink-0 items-center justify-center gap-1 rounded-full \
+     border px-2 py-0.5 text-xs font-medium whitespace-nowrap [&>svg]:size-3",
 );
 
 /// Builds the full class list for a badge of the given `variant`.

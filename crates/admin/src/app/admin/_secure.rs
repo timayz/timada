@@ -24,7 +24,7 @@ pub mod vat;
 
 use topcoat::{
     Result,
-    context::{Cx, app_context, try_app_context},
+    context::{Cx, app_context},
     router::{
         Body, Method, Next, StatusCode,
         content::Html,
@@ -40,7 +40,8 @@ use crate::{
         CurrentAdmin, OWN_PASSWORD, Section, current_admin,
         journal::{self as records, Outcome},
     },
-    config::{AdminConfig, AdminServices, Stylesheet},
+    config::{AdminConfig, AdminServices},
+    ui::{stylesheet_url, theme},
 };
 
 /// How a request that reached its page went. A redirect — how a page says
@@ -63,27 +64,37 @@ fn how_it_went(answered: &Result<Response>) -> (Outcome, u16) {
 /// layout's error boundary — that is what makes a refused write safe: no
 /// page ran — so the refusal is a page of its own, with the way back to
 /// where the operator's role works.
-fn refusal(cx: &Cx, config: &AdminConfig, home: &str) -> Result<Response> {
-    // Outside a view an asset is resolved by hand; without a bundle the page
-    // goes unstyled rather than not at all.
-    let stylesheet = match &config.stylesheet {
-        Stylesheet::Bundled => try_app_context::<topcoat::asset::AssetConfig>(cx)
-            .map(|assets| assets.resolve(topcoat::tailwind::stylesheet!()))
-            .unwrap_or_default(),
-        Stylesheet::Url(url) => url.clone(),
-    };
+///
+/// Written out rather than built from [`crate::ui::document`]: `view!` expands
+/// against bindings that `#[component]` and `#[page]` introduce, so it cannot
+/// be used in a plain function, and a component cannot be invoked by hand
+/// either — its child is an inert scope only the macro can build. What the
+/// shell and this page must agree on is therefore shared as values instead: the
+/// stylesheet comes from the same lookup, and the scheme the operator chose is
+/// carried on `<html>` and declared in the head. Otherwise a refusal would be
+/// the one page in the back office that flashes white at somebody working in
+/// the dark.
+fn refusal(cx: &Cx, home: &str) -> Result<Response> {
+    let stylesheet = stylesheet_url(cx);
+    let scheme = theme::chosen(cx);
+    let chosen = scheme
+        .html_class()
+        .map(|class| format!(" {class}"))
+        .unwrap_or_default();
+    let declared = scheme.color_scheme();
     let page = format!(
         "<!DOCTYPE html>\
-         <html lang=\"fr\" class=\"h-full bg-background text-foreground\">\
+         <html lang=\"fr\" class=\"h-full bg-background text-foreground{chosen}\">\
          <head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <meta name=\"color-scheme\" content=\"{declared}\">\
          <title>Accès refusé — Timada admin</title>\
          <link rel=\"stylesheet\" href=\"{stylesheet}\"></head>\
-         <body class=\"min-h-full\"><main class=\"mx-auto max-w-6xl px-4 py-16 text-center\">\
+         <body class=\"min-h-full\"><main class=\"mx-auto max-w-2xl px-4 py-16 text-center\">\
          <h1 class=\"text-2xl font-semibold\">Accès refusé</h1>\
          <p class=\"mt-2 text-muted-foreground\">Votre rôle ne donne pas accès à cette page \
          ni à cette action. Le propriétaire de la boutique peut le changer.</p>\
-         <p class=\"mt-6\"><a class=\"underline underline-offset-4\" href=\"{home}\">Retour à mon espace</a></p>\
+         <p class=\"mt-6\"><a class=\"text-primary underline underline-offset-4\" href=\"{home}\">Retour à mon espace</a></p>\
          </main></body></html>"
     );
     (StatusCode::FORBIDDEN, Html(page)).into_response(cx)
@@ -148,7 +159,7 @@ async fn require_admin(cx: &Cx, body: Body, next: Next<'_>) -> Result<Response> 
                     %path,
                     "refused: not this role's"
                 );
-                return refusal(cx, config, &section_link(cx, admin.role.home()));
+                return refusal(cx, &section_link(cx, admin.role.home()));
             }
             let cx = cx.with(CurrentAdmin(admin.clone()));
             let answered = next.run(&cx, body).await;

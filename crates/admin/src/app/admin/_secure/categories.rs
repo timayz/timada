@@ -23,10 +23,11 @@ use crate::{
         card::{card, card_content, card_header, card_title},
         input::input,
         label::label,
+        select::select,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
-    ui::{empty_state, page_header},
+    ui::{detail_grid, detail_main, empty_state, form_error, link, page_header, table_card},
 };
 
 /// One `<option>` of a category picker: the id and the name, indented by depth.
@@ -67,14 +68,15 @@ pub async fn category_select(
     #[default] none_label: Option<&str>,
 ) -> Result<impl View> {
     Ok(view! {
-        <select id=(name) name=(name) class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs">
+        select(
+            attrs: topcoat::view::attributes! { id=(name) name=(name) class="w-full" },
             if let Some(none_label) = none_label {
                 <option value="" selected=(selected.is_none())>(none_label)</option>
             }
             for (id, option_label) in options {
                 <option value=(id.clone()) selected=(selected == Some(id.as_str()))>(option_label.clone())</option>
             }
-        </select>
+        )
     })
 }
 
@@ -173,33 +175,35 @@ async fn categories_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
 
     Ok(view! {
         page_header(title: "Catégories")
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="lg:col-span-2">
+        detail_grid(
+            detail_main(
                 if lines.is_empty() {
                     empty_state(message: "Aucune catégorie. Ouvrez la première : les produits s'y rangent depuis leur fiche.")
                 } else {
-                    table(
-                        table_header(table_row(
-                            table_head("Catégorie") table_head("Adresse")
-                            table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Produits")
-                        ))
-                        table_body(
-                            for line in &lines {
-                                table_row(
-                                    table_cell(
-                                        <span style=(format!("padding-left:{}rem", line.depth as f32 * 1.25))>
-                                            <a href=(line.link.clone()) class="underline-offset-4 hover:underline">(line.name.clone())</a>
-                                            if line.archived { <span class="ml-2 text-xs text-muted-foreground">"archivée"</span> }
-                                        </span>
+                    table_card(
+                        table(
+                            table_header(table_row(
+                                table_head("Catégorie") table_head("Adresse")
+                                table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Produits")
+                            ))
+                            table_body(
+                                for line in &lines {
+                                    table_row(
+                                        table_cell(
+                                            <span style=(format!("padding-left:{}rem", line.depth as f32 * 1.25))>
+                                                link(href: line.link.clone(), (line.name.clone()))
+                                                if line.archived { <span class="ml-2 text-xs text-muted-foreground">"archivée"</span> }
+                                            </span>
+                                        )
+                                        table_cell(<span class="font-mono text-xs text-muted-foreground">(line.slug.clone())</span>)
+                                        table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (line.products.to_string()))
                                     )
-                                    table_cell(<span class="font-mono text-xs text-muted-foreground">(line.slug.clone())</span>)
-                                    table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (line.products.to_string()))
-                                )
-                            }
+                                }
+                            )
                         )
                     )
                 }
-            </div>
+            )
             card(
                 card_header(card_title("Nouvelle catégorie"))
                 card_content(
@@ -217,12 +221,12 @@ async fn categories_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                             category_select(name: "parent_id", options: &parents, selected: None, none_label: Some("— la racine —"))
                         </div>
                         if let Some(error) = &error {
-                            <p role="alert" class="text-sm text-destructive">(error.clone())</p>
+                            form_error((error.clone()))
                         }
                         <div>button(attrs: topcoat::view::attributes! { type="submit" }, "Ouvrir la catégorie")</div>
                     </form>
                 )
             )
-        </div>
+        )
     })
 }

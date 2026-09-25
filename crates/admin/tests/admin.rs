@@ -156,13 +156,32 @@ fn location(response: &Response) -> String {
 
 /// The `name=value` pair of the session cookie set by a login response.
 fn session_cookie(response: &Response) -> Option<String> {
+    set_cookie(response, "__Host-timada_admin")
+}
+
+/// The `name=value` pair of a named cookie in a response's `Set-Cookie`
+/// headers, and `None` when the response sets no such cookie.
+fn set_cookie(response: &Response, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
     response
         .headers()
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .find(|v| v.contains("timada_admin"))
+        .find(|v| v.starts_with(&prefix))
         .and_then(|v| v.split(';').next())
+        .map(str::to_owned)
+}
+
+/// The full `Set-Cookie` header for a named cookie, attributes included.
+fn set_cookie_header(response: &Response, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with(&prefix))
         .map(str::to_owned)
 }
 
@@ -248,6 +267,141 @@ async fn anonymous_requests_are_sent_to_login() -> anyhow::Result<()> {
     let body = text(response).await?;
     assert!(body.contains("Connexion"));
     assert!(body.contains("href=\"/dev.css\""));
+    Ok(())
+}
+
+/// The colour scheme is three states with no JavaScript: the operating
+/// system's, or light, or dark. What is asserted is the `color-scheme` the
+/// document declares, not the class it carries — a declaration to the browser
+/// is a contract that outlives any restyle, and this suite deliberately reads
+/// no CSS classes at all.
+#[tokio::test]
+async fn the_operator_chooses_a_colour_scheme() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+
+    // Nobody has chosen, so the document leaves it to the operating system.
+    let body = text(h.router.handle(get("/admin/login", None)).await).await?;
+    assert!(
+        body.contains("name=\"color-scheme\" content=\"light dark\""),
+        "{body}"
+    );
+
+    // The switch is on the login page, before any session: somebody working at
+    // night meets the shop there first.
+    let response = h
+        .router
+        .handle(post(
+            "/admin/theme",
+            "scheme=dark&next=%2Fadmin%2Flogin",
+            None,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/admin/login");
+    let chosen = set_cookie(&response, "timada_admin_theme")
+        .ok_or_else(|| anyhow::anyhow!("no theme cookie"))?;
+    assert_eq!(chosen, "timada_admin_theme=dark");
+    // Scoped to the admin's mount: the shop out front keeps its own skin.
+    let header = set_cookie_header(&response, "timada_admin_theme").unwrap_or_default();
+    assert!(header.contains("Path=/admin"), "{header}");
+
+    // And the document follows it.
+    let body = text(h.router.handle(get("/admin/login", Some(&chosen))).await).await?;
+    assert!(
+        body.contains("name=\"color-scheme\" content=\"dark\""),
+        "{body}"
+    );
+
+    // Going back to the system's preference forgets the choice rather than
+    // recording a third value.
+    let response = h
+        .router
+        .handle(post("/admin/theme", "scheme=system", Some(&chosen)))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/admin");
+    let header = set_cookie_header(&response, "timada_admin_theme").unwrap_or_default();
+    assert!(
+        header.contains("Max-Age=0") || header.contains("Expires="),
+        "{header}"
+    );
+
+    // A value nobody offered is no choice at all, not an error.
+    let response = h
+        .router
+        .handle(post(
+            "/admin/theme",
+            "scheme=neon&next=%2Fadmin%2Flogin",
+            None,
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let body = text(h.router.handle(get("/admin/login", None)).await).await?;
+    assert!(
+        body.contains("name=\"color-scheme\" content=\"light dark\""),
+        "{body}"
+    );
+
+    // An off-site `next` is refused the way the login form refuses one.
+    let response = h
+        .router
+        .handle(post(
+            "/admin/theme",
+            "scheme=light&next=%2F%2Fevil.example%2F",
+            None,
+        ))
+        .await;
+    assert_eq!(location(&response), "/admin");
+    Ok(())
+}
+
+/// Folding the rail is a round trip, because the labels stop being rendered
+/// from `md` up and that is markup, not a class. What is asserted is the
+/// cookie and the redirect — the width itself is a class, and this suite reads
+/// none.
+#[tokio::test]
+async fn the_operator_folds_the_rail_away() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let session = sign_in(&h, "admin").await?;
+
+    // Open by default, so the labels are there to read.
+    let body = text(h.router.handle(get("/admin/orders", Some(&session))).await).await?;
+    assert!(body.contains("Replier le menu"), "{body}");
+
+    let response = h
+        .router
+        .handle(post(
+            "/admin/nav",
+            "rail=folded&next=%2Fadmin%2Forders",
+            Some(&session),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response), "/admin/orders");
+    let folded = set_cookie(&response, "timada_admin_rail")
+        .ok_or_else(|| anyhow::anyhow!("no rail cookie"))?;
+    assert_eq!(folded, "timada_admin_rail=folded");
+
+    // Folded, every label is still written out — the drawer below `md` shows
+    // them, and they are what names each entry for a screen reader — and the
+    // toggle now offers the way back.
+    let cookies = format!("{session}; {folded}");
+    let body = text(h.router.handle(get("/admin/orders", Some(&cookies))).await).await?;
+    assert!(body.contains("Déplier le menu"), "{body}");
+    for label in ["Commandes", "Factures", "Équipe", "Se déconnecter"] {
+        assert!(body.contains(label), "{label} missing from a folded rail");
+    }
+
+    // Unfolding forgets the cookie, being the default.
+    let response = h
+        .router
+        .handle(post("/admin/nav", "rail=open", Some(&cookies)))
+        .await;
+    let header = set_cookie_header(&response, "timada_admin_rail").unwrap_or_default();
+    assert!(
+        header.contains("Max-Age=0") || header.contains("Expires="),
+        "{header}"
+    );
     Ok(())
 }
 

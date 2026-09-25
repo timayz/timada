@@ -22,6 +22,7 @@ use crate::{
         categories::{category_options, category_select},
         families::family_id::{FamilyId, show as show_family},
     },
+    auth::Section,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -30,7 +31,7 @@ use crate::{
         textarea::textarea,
     },
     config::{AdminConfig, AdminServices},
-    ui::{money, page_header},
+    ui::{detail_grid, detail_main, money, page_header},
 };
 
 path_param!(pub product_id: String, error = not_found);
@@ -124,6 +125,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
+            parent: Section::Products,
             title: &product.name,
             if product.archived { <span class="text-sm text-muted-foreground">"Archivé"</span> }
         )
@@ -132,8 +134,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             " · garantie " (product.warranty_months.to_string()) " mois"
         </p>
 
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="flex flex-col gap-6 lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Descriptif"))
                     card_content(
@@ -169,8 +171,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         </form>
                     )
                 )
-            </div>
-            <div class="flex flex-col gap-6">
+            )
+            detail_main(
                 card(
                     card_header(card_title("Prix"))
                     card_content(
@@ -261,8 +263,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         button(variant: ButtonVariant::Destructive, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Archiver le produit")
                     </form>
                 }
-            </div>
-        </div>
+            )
+        )
     })
 }
 

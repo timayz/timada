@@ -16,7 +16,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::products::{field, product_id as product_page};
+use super::products::product_id as product_page;
 use crate::{
     components::{
         button::{ButtonVariant, button, button_variants},
@@ -25,7 +25,10 @@ use crate::{
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
-    ui::{empty_state, page_header, pagination},
+    ui::{
+        empty_state, field, filter_bar, form_error, link, page_header, pagination, table_card,
+        text_field,
+    },
 };
 
 pub const PAGE_SIZE: u32 = 25;
@@ -115,26 +118,31 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(
             title: "Stock",
-            <form method="get" class="flex items-center gap-2 text-sm">
-                <label for="below" class="text-muted-foreground">"Disponible inférieur à"</label>
-                input(attrs: topcoat::view::attributes! { id="below" type="number" name="below" min="1" class="w-24" value=(query.below.map(|b| b.to_string()).unwrap_or_default()) })
-                <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
-            </form>
+            filter_bar(
+                field(
+                    label: "Disponible inférieur à",
+                    control: "below",
+                    class: "w-24",
+                    input(attrs: topcoat::view::attributes! { id="below" type="number" name="below" min="1" value=(query.below.map(|b| b.to_string()).unwrap_or_default()) })
+                )
+            )
             <a href=(href!(new)) class=(button_variants(ButtonVariant::Primary, Default::default()))>"Suivre un produit"</a>
         )
         if lines.is_empty() {
             empty_state(message: "Aucun article en stock suivi.")
         } else {
-            table(
-                table_header(table_row(
-                    table_head("Produit") table_head("Emplacement")
-                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "En stock")
-                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Réservé")
-                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Disponible")
-                    table_head("Réception")
-                ))
-                table_body(
-                    for line in &lines { stock_row(line: line) }
+            table_card(
+                table(
+                    table_header(table_row(
+                        table_head("Produit") table_head("Emplacement")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "En stock")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Réservé")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Disponible")
+                        table_head("Réception")
+                    ))
+                    table_body(
+                        for line in &lines { stock_row(line: line) }
+                    )
                 )
             )
             pagination(page: page, page_size: PAGE_SIZE, total: total as u64)
@@ -149,7 +157,7 @@ async fn stock_row(cx: &Cx, line: &StockLine) -> Result<impl View> {
     Ok(view! {
         table_row(
             table_cell(
-                <a href=(line.product_link.clone()) class="underline-offset-4 hover:underline">(line.product_name.clone())</a>
+                link(href: line.product_link.clone(), (line.product_name.clone()))
                 <span class="ml-2 font-mono text-xs text-muted-foreground">(line.sku.clone())</span>
             )
             table_cell((line.location.clone()))
@@ -258,11 +266,11 @@ async fn new_stock_item_form(cx: &Cx, error: Option<String>) -> Result<impl View
         <div class="max-w-2xl">
             card(card_content(
                 <form method="post" action=(href!(create).resolve(cx)) class="grid gap-4 sm:grid-cols-2">
-                    field(name: "sku", label_text: "Référence (SKU)", attrs: topcoat::view::attributes! { required=(true) autocomplete="off" })
-                    field(name: "store_id", label_text: "Boutique (vide = entrepôt)", attrs: topcoat::view::attributes! {})
-                    field(name: "quantity", label_text: "Quantité reçue", attrs: topcoat::view::attributes! { type="number" min="0" value="0" })
+                    text_field(name: "sku", label_text: "Référence (SKU)", attrs: topcoat::view::attributes! { required=(true) autocomplete="off" })
+                    text_field(name: "store_id", label_text: "Boutique (vide = entrepôt)", attrs: topcoat::view::attributes! {})
+                    text_field(name: "quantity", label_text: "Quantité reçue", attrs: topcoat::view::attributes! { type="number" min="0" value="0" })
                     if let Some(error) = &error {
-                        <p role="alert" class="text-sm text-destructive sm:col-span-2">(error.clone())</p>
+                        form_error(class: "sm:col-span-2", (error.clone()))
                     }
                     <div class="sm:col-span-2">
                         button(attrs: topcoat::view::attributes! { type="submit" }, "Suivre")

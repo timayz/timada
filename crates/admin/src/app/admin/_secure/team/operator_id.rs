@@ -30,7 +30,7 @@ use crate::{
         label::label,
     },
     config::AdminServices,
-    ui::page_header,
+    ui::{detail_grid, form_error, link, page_header},
 };
 
 path_param!(pub operator_id: String, error = not_found);
@@ -133,12 +133,12 @@ async fn operator_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
         page_header(title: &operator.email)
         <p class="-mt-4 mb-6 text-sm text-muted-foreground">(operator.role.label()) " · " (standing)</p>
         if let Some(error) = &error {
-            <p role="alert" class="mb-6 text-sm text-destructive">(error.clone())</p>
+            form_error(class: "mb-6", (error.clone()))
         }
         if yourself {
             <p class="text-sm text-muted-foreground">"C'est vous. Votre rôle et votre accès se changent par un autre propriétaire ; votre mot de passe, depuis « Mon mot de passe »."</p>
         } else {
-            <div class="grid gap-6 lg:grid-cols-3">
+            detail_grid(
                 card(
                     card_header(card_title("Rôle"))
                     card_content(
@@ -180,8 +180,8 @@ async fn operator_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                         }
                     )
                 )
-            </div>
+            )
         }
-        <p class="mt-6 text-sm"><a href=(back) class="underline-offset-4 hover:underline">"Retour à l'équipe"</a></p>
+        <p class="mt-6 text-sm">link(href: back, "Retour à l'équipe")</p>
     })
 }

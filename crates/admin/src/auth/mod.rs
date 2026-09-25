@@ -13,7 +13,7 @@ use topcoat::session;
 
 use crate::config::AdminServices;
 
-pub use role::{OWN_PASSWORD, Role, Section};
+pub use role::{Group, OWN_PASSWORD, Role, Section};
 pub use store::{AdminUser, create_admin, create_operator};
 
 /// The admin authenticated for this request, attached by the `_secure` layer.

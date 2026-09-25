@@ -20,7 +20,7 @@ use crate::{
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
-    ui::{money, page_header, vat_rate},
+    ui::{empty_state, money, page_header, vat_rate},
 };
 
 #[query_params(error = bad_request)]
@@ -119,7 +119,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             "D'après les factures émises et les avoirs du trimestre (dates UTC). Un avoir sur une facture d'un trimestre antérieur corrige ce trimestre-là dans la déclaration du guichet unique."
         </p>
         if empty {
-            <p class="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">"Aucune facture émise sur ce trimestre."</p>
+            empty_state(message: "Aucune facture émise sur ce trimestre.")
         } else {
             <div class="flex flex-col gap-6">
                 card(

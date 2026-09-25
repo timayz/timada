@@ -28,14 +28,16 @@ use topcoat::{
 use super::return_status_badge;
 use crate::{
     app::admin::_secure::{customers::customer_id, orders::order_id},
+    auth::Section,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
         input::input,
+        select::select,
         separator::separator,
     },
     config::{AdminConfig, AdminServices},
-    ui::{date, money, page_header},
+    ui::{date, detail_grid, detail_main, fact, facts, form_error, link, money, page_header},
 };
 
 path_param!(pub return_id: String, error = not_found);
@@ -279,16 +281,17 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
+            parent: Section::Returns,
             title: &title,
             return_status_badge(status: request.status)
         )
         <p class="-mt-4 mb-6 font-mono text-xs text-muted-foreground">(id.clone()) " · demandé le " (date(request.requested_at))</p>
         if let Some(error) = error {
-            <p role="alert" class="mb-4 text-sm text-destructive">(error)</p>
+            form_error(class: "mb-4", (error))
         }
 
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="flex flex-col gap-6 lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Articles"))
                     card_content(
@@ -343,10 +346,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                 </fieldset>
                                 <div class="flex flex-col gap-1">
                                     <label for="refund_method" class="text-muted-foreground">"Remboursement — ou à défaut de stock pour le remplacement"</label>
-                                    <select id="refund_method" name="refund_method" class="h-9 rounded-lg border border-border bg-background px-3">
+                                    select(
+                                        attrs: topcoat::view::attributes! { id="refund_method" name="refund_method" },
                                         <option value="original" selected=(true)>"Moyen de paiement d'origine"</option>
                                         <option value="credit">"Avoir"</option>
-                                    </select>
+                                    )
                                 </div>
                                 <div>
                                     button(attrs: topcoat::view::attributes! { type="submit" }, "Valider la réception")
@@ -355,9 +359,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         )
                     )
                 }
-            </div>
+            )
 
-            <div class="flex flex-col gap-6">
+            detail_main(
                 if let Some(replacement) = &replacement {
                     card(
                         card_header(card_title("Remplacement"))
@@ -388,11 +392,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             <div class="flex flex-col gap-2 text-sm">
                                 <p class="font-mono text-xs">(label.tracking.clone())</p>
                                 <p>(label.cost.clone())</p>
-                                if let Some((link, name)) = &label.download {
-                                    <a href=(link.clone()) class="underline underline-offset-4">"Télécharger " (name.clone())</a>
+                                if let Some((file, name)) = &label.download {
+                                    <a href=(file.clone()) class="underline underline-offset-4">"Télécharger " (name.clone())</a>
                                 }
-                                if let Some(link) = &label.link {
-                                    <a href=(link.clone()) rel="noopener noreferrer" class="break-all underline underline-offset-4">(link.clone())</a>
+                                if let Some(carrier) = &label.link {
+                                    <a href=(carrier.clone()) rel="noopener noreferrer" class="break-all underline underline-offset-4">(carrier.clone())</a>
                                 }
                             </div>
                         )
@@ -422,28 +426,28 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 card(
                     card_header(card_title("Demande"))
                     card_content(
-                        <dl class="flex flex-col gap-2 text-sm">
-                            <div><dt class="text-muted-foreground">"Commande"</dt><dd><a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label)</a></dd></div>
-                            <div><dt class="text-muted-foreground">"Client"</dt><dd><a href=(customer_link) class="font-mono text-xs underline-offset-4 hover:underline">(request.customer_id.clone())</a></dd></div>
+                        facts(
+                            fact(term: "Commande", link(href: order_link, class: "font-mono text-xs", (order_label)))
+                            fact(term: "Client", link(href: customer_link, class: "font-mono text-xs", (request.customer_id.clone())))
                             if let Some(ground) = ground {
-                                <div><dt class="text-muted-foreground">"Nature du retour"</dt><dd>(ground)</dd></div>
+                                fact(term: "Nature du retour", (ground))
                             }
-                            <div><dt class="text-muted-foreground">"Motif"</dt><dd>(request.reason.clone())</dd></div>
+                            fact(term: "Motif", (request.reason.clone()))
                             if let Some(reason) = &request.refused_reason {
-                                <div><dt class="text-muted-foreground">"Motif du refus"</dt><dd>(reason.clone())</dd></div>
+                                fact(term: "Motif du refus", (reason.clone()))
                             }
                             if let Some(method) = refund_method {
-                                <div><dt class="text-muted-foreground">"Remboursement"</dt><dd>(method)</dd></div>
-                                <div><dt class="text-muted-foreground">"Sur le paiement"</dt><dd class="tabular-nums">(money(&request.money))</dd></div>
-                                <div><dt class="text-muted-foreground">"En avoir"</dt><dd class="tabular-nums">(money(&request.credit))</dd></div>
+                                fact(term: "Remboursement", (method))
+                                fact(term: "Sur le paiement", class: "tabular-nums", (money(&request.money)))
+                                fact(term: "En avoir", class: "tabular-nums", (money(&request.credit)))
                             }
                             if let Some(fee) = &fee_deducted {
-                                <div><dt class="text-muted-foreground">"Étiquette déduite"</dt><dd class="tabular-nums">(fee.clone())</dd></div>
+                                fact(term: "Étiquette déduite", class: "tabular-nums", (fee.clone()))
                             }
                             if let Some(code) = &voucher {
-                                <div><dt class="text-muted-foreground">"Code de l'avoir"</dt><dd class="font-mono text-xs">(code.clone())</dd></div>
+                                fact(term: "Code de l'avoir", class: "font-mono text-xs", (code.clone()))
                             }
-                        </dl>
+                        )
                     )
                 )
                 if request.status == ReturnStatus::Requested {
@@ -470,8 +474,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         )
                     )
                 }
-            </div>
-        </div>
+            )
+        )
     })
 }
 

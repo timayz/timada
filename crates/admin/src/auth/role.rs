@@ -114,6 +114,56 @@ impl Role {
 /// The page where an operator changes their own password.
 pub const OWN_PASSWORD: &str = "password";
 
+/// The heading a section sits under in the navigation.
+///
+/// Seventeen entries in a 256px rail have to be divided, and the division
+/// mirrors [`Role::opens`] so that no role is ever shown a heading with
+/// nothing under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Group {
+    /// What customers ordered, and what they sent back.
+    Sales,
+    /// What is for sale, and how much of it there is.
+    Catalogue,
+    /// The people who buy, and everything they say.
+    Customers,
+    /// The books.
+    Books,
+    /// The owner's own: the team, and what the team did. Its entries are not
+    /// [`Section`]s — no role *opens* them, they are the owner's by default —
+    /// so the navigation supplies them itself.
+    Administration,
+}
+
+impl Group {
+    /// In the order the navigation shows them.
+    pub const ALL: [Group; 5] = [
+        Group::Sales,
+        Group::Catalogue,
+        Group::Customers,
+        Group::Books,
+        Group::Administration,
+    ];
+
+    /// As the navigation heads it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::Sales => "Ventes",
+            Group::Catalogue => "Catalogue",
+            Group::Customers => "Clients",
+            Group::Books => "Comptabilité",
+            Group::Administration => "Administration",
+        }
+    }
+
+    /// The sections under this heading, in the order they are shown.
+    pub fn sections(self) -> impl Iterator<Item = Section> {
+        Section::ALL
+            .into_iter()
+            .filter(move |section| section.group() == self)
+    }
+}
+
 /// A section of the admin: the first URL segment under the mount.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Section {
@@ -192,6 +242,22 @@ impl Section {
             Section::Reviews => "Avis",
             Section::Questions => "Questions",
             Section::Emails => "E-mails",
+        }
+    }
+
+    /// The navigation heading this section sits under.
+    pub fn group(self) -> Group {
+        match self {
+            Section::Orders | Section::Returns => Group::Sales,
+            Section::Products
+            | Section::Categories
+            | Section::Families
+            | Section::Inventory
+            | Section::Promotions => Group::Catalogue,
+            Section::Customers | Section::Reviews | Section::Questions | Section::Emails => {
+                Group::Customers
+            }
+            Section::Invoices | Section::Refunds | Section::Disputes | Section::Vat => Group::Books,
         }
     }
 

@@ -7,12 +7,15 @@ use topcoat::{
 ///
 /// The card is a column of sections separated by a uniform gap. It carries
 /// vertical padding only; each section brings its own horizontal padding, so
-/// full-bleed content such as an image can span the card's width. The card
-/// casts the theme's raised-surface shadow and sets its own background and
-/// text color, so it reads as a card on any ancestor.
+/// full-bleed content such as an image can span the card's width.
+///
+/// The surface is `--card`, a shade lighter than the page: what lifts a card
+/// is the step in value, and the shadow only settles it. On a page painted in
+/// `--background` the two are never the same color, which is why the card
+/// reads as a card on any ancestor.
 const CARD: StaticClass = class!(
-    "flex flex-col gap-5 rounded-xl border border-border bg-background py-6 \
-     text-foreground shadow-sm",
+    "flex flex-col gap-6 rounded-xl border border-border bg-card py-6 \
+     text-card-foreground shadow-sm",
 );
 
 /// A card component: a bordered, raised surface grouping related content.

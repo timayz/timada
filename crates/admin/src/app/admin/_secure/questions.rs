@@ -26,10 +26,11 @@ use crate::{
         button::{ButtonVariant, button},
         card::{card, card_content},
         input::input,
+        select::select,
         textarea::textarea,
     },
     config::AdminServices,
-    ui::{date, empty_state, page_header, pagination},
+    ui::{date, empty_state, field, filter_bar, form_error, link, page_header, pagination},
 };
 
 pub const PAGE_SIZE: u32 = 25;
@@ -150,18 +151,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(
             title: "Questions",
-            <form method="get" class="flex items-center gap-2 text-sm">
-                <label for="status" class="text-muted-foreground">"Statut"</label>
-                <select id="status" name="status" class="h-9 rounded-lg border border-border bg-background px-3">
-                    for (value, label) in [("review", "À modérer"), ("unanswered", "Sans réponse"), ("answered", "Répondues"), ("rejected", "Refusées"), ("all", "Toutes")] {
-                        <option value=(value) selected=(selected == value)>(label)</option>
-                    }
-                </select>
-                <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
-            </form>
+            filter_bar(
+                field(
+                    label: "Statut",
+                    control: "status",
+                    select(
+                        attrs: topcoat::view::attributes! { id="status" name="status" },
+                        for (value, label) in [("review", "À modérer"), ("unanswered", "Sans réponse"), ("answered", "Répondues"), ("rejected", "Refusées"), ("all", "Toutes")] {
+                            <option value=(value) selected=(selected == value)>(label)</option>
+                        }
+                    )
+                )
+            )
         )
         if let Some(error) = error {
-            <p role="alert" class="mb-4 text-sm text-destructive">(error)</p>
+            form_error(class: "mb-4", (error))
         }
         if cards.is_empty() {
             empty_state(message: "Aucune question dans cette file.")
@@ -185,7 +189,7 @@ fn question_card(
         ("pending", _) => (BadgeVariant::Secondary, "À modérer"),
         ("rejected", _) => (BadgeVariant::Destructive, "Refusée"),
         (_, 0) => (BadgeVariant::Outline, "Publiée, sans réponse"),
-        _ => (BadgeVariant::Primary, "Répondue"),
+        _ => (BadgeVariant::Success, "Répondue"),
     };
     QuestionCard {
         product_name: products
@@ -239,7 +243,7 @@ async fn question_item(cx: &Cx, question: &QuestionCard) -> Result<impl View> {
                     <span class="text-muted-foreground">(question.asked.clone())</span>
                 </div>
                 <p>
-                    <a href=(question.product_link.clone()) class="underline-offset-4 hover:underline">(question.product_name.clone())</a>
+                    link(href: question.product_link.clone(), (question.product_name.clone()))
                     <span class="text-muted-foreground">" · "</span>
                     <a href=(question.customer_link.clone()) class="text-muted-foreground underline-offset-4 hover:underline">(question.customer_label.clone())</a>
                 </p>

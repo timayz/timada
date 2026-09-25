@@ -15,9 +15,12 @@ use crate::{
         journal::{JournalEntry, JournalFilter, Outcome, SIGN_IN, count_journal, list_journal},
         team::list_operators,
     },
-    components::table::{table, table_body, table_cell, table_head, table_header, table_row},
+    components::{
+        select::select,
+        table::{table, table_body, table_cell, table_head, table_header, table_row},
+    },
     config::AdminServices,
-    ui::{empty_state, page_header, pagination},
+    ui::{empty_state, field, filter_bar, page_header, pagination, table_card},
 };
 
 pub const PAGE_SIZE: u32 = 50;
@@ -112,48 +115,57 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(title: "Journal")
         <p class="-mt-4 mb-6 text-sm text-muted-foreground">"Ce que les opérateurs ont fait et tenté : chaque écriture, chaque refus, chaque connexion. Heures UTC. Le contenu des formulaires n'est jamais conservé."</p>
-        <form method="get" action=(here) class="mb-6 flex flex-wrap items-end gap-3 text-sm">
-            <label class="flex flex-col gap-1.5" for="operateur">"Opérateur"
-                <select id="operateur" name="operateur" class="h-9 rounded-md border border-input bg-background px-3 shadow-xs">
+        filter_bar(
+            action: here,
+            class: "mb-6",
+            field(
+                label: "Opérateur",
+                control: "operateur",
+                select(
+                    attrs: topcoat::view::attributes! { id="operateur" name="operateur" },
                     <option value="">"Tous"</option>
                     for (id, email, chosen) in &operators {
                         <option value=(id.clone()) selected=(*chosen)>(email.clone())</option>
                     }
-                </select>
-            </label>
-            <label class="flex flex-col gap-1.5" for="issue">"Issue"
-                <select id="issue" name="issue" class="h-9 rounded-md border border-input bg-background px-3 shadow-xs">
+                )
+            )
+            field(
+                label: "Issue",
+                control: "issue",
+                select(
+                    attrs: topcoat::view::attributes! { id="issue" name="issue" },
                     <option value="">"Toutes"</option>
                     for (value, label, chosen) in &outcomes {
                         <option value=(*value) selected=(*chosen)>(*label)</option>
                     }
-                </select>
-            </label>
-            <button type="submit" class="h-9 rounded-md border border-input px-3 hover:bg-foreground/5">"Filtrer"</button>
-        </form>
+                )
+            )
+        )
         if lines.is_empty() {
             empty_state(message: "Rien à montrer pour ces filtres.")
         } else {
-            table(
-                table_header(table_row(
-                    table_head("Quand") table_head("Opérateur") table_head("Rôle") table_head("Où")
-                    table_head("Action") table_head("Sur") table_head("Issue")
-                ))
-                table_body(
-                    for line in &lines {
-                        table_row(
-                            table_cell(<span class="tabular-nums">(line.when.clone())</span>)
-                            table_cell((line.who.clone()))
-                            table_cell(<span class="text-muted-foreground">(line.role)</span>)
-                            table_cell((line.place.clone()))
-                            table_cell(<span class="font-mono text-xs">(line.action.clone())</span>)
-                            table_cell(<span class="font-mono text-xs">(line.target.clone())</span>)
-                            table_cell(
-                                <span class=(if line.refused { "text-destructive" } else { "" })>(line.outcome)</span>
-                                <span class="ml-2 text-xs text-muted-foreground tabular-nums">(line.status.to_string())</span>
+            table_card(
+                table(
+                    table_header(table_row(
+                        table_head("Quand") table_head("Opérateur") table_head("Rôle") table_head("Où")
+                        table_head("Action") table_head("Sur") table_head("Issue")
+                    ))
+                    table_body(
+                        for line in &lines {
+                            table_row(
+                                table_cell(<span class="tabular-nums">(line.when.clone())</span>)
+                                table_cell((line.who.clone()))
+                                table_cell(<span class="text-muted-foreground">(line.role)</span>)
+                                table_cell((line.place.clone()))
+                                table_cell(<span class="font-mono text-xs">(line.action.clone())</span>)
+                                table_cell(<span class="font-mono text-xs">(line.target.clone())</span>)
+                                table_cell(
+                                    <span class=(if line.refused { "text-destructive" } else { "" })>(line.outcome)</span>
+                                    <span class="ml-2 text-xs text-muted-foreground tabular-nums">(line.status.to_string())</span>
+                                )
                             )
-                        )
-                    }
+                        }
+                    )
                 )
             )
             pagination(page: page_number, page_size: PAGE_SIZE, total: total)

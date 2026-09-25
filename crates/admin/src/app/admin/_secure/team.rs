@@ -23,21 +23,23 @@ use crate::{
         card::{card, card_content, card_header, card_title},
         input::input,
         label::label,
+        select::select,
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
-    ui::{date, page_header},
+    ui::{date, detail_grid, detail_main, form_error, link, page_header, table_card},
 };
 
 /// A `<select name="role">` over the roles, `selected` chosen.
 #[component]
 pub async fn role_select(selected: Role) -> Result<impl View> {
     Ok(view! {
-        <select id="role" name="role" class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs">
+        select(
+            attrs: topcoat::view::attributes! { id="role" name="role" class="w-full" },
             for role in Role::ALL {
                 <option value=(role.as_str()) selected=(role == selected)>(role.label())</option>
             }
-        </select>
+        )
     })
 }
 
@@ -111,24 +113,26 @@ async fn team_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
 
     Ok(view! {
         page_header(title: "Équipe")
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="lg:col-span-2">
-                table(
-                    table_header(table_row(
-                        table_head("Opérateur") table_head("Rôle") table_head("Accès") table_head("Depuis le")
-                    ))
-                    table_body(
-                        for line in &lines {
-                            table_row(
-                                table_cell(<a href=(line.link.clone()) class="underline-offset-4 hover:underline">(line.email.clone())</a>)
-                                table_cell((line.role))
-                                table_cell(<span class="text-muted-foreground">(line.standing)</span>)
-                                table_cell((line.since.clone()))
-                            )
-                        }
+        detail_grid(
+            detail_main(
+                table_card(
+                    table(
+                        table_header(table_row(
+                            table_head("Opérateur") table_head("Rôle") table_head("Accès") table_head("Depuis le")
+                        ))
+                        table_body(
+                            for line in &lines {
+                                table_row(
+                                    table_cell(link(href: line.link.clone(), (line.email.clone())))
+                                    table_cell((line.role))
+                                    table_cell(<span class="text-muted-foreground">(line.standing)</span>)
+                                    table_cell((line.since.clone()))
+                                )
+                            }
+                        )
                     )
                 )
-            </div>
+            )
             card(
                 card_header(card_title("Ajouter un opérateur"))
                 card_content(
@@ -147,12 +151,12 @@ async fn team_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                             <p id="temporary-hint" class="text-xs text-muted-foreground">(hint)</p>
                         </div>
                         if let Some(error) = &error {
-                            <p role="alert" class="text-sm text-destructive">(error.clone())</p>
+                            form_error((error.clone()))
                         }
                         <div>button(attrs: topcoat::view::attributes! { type="submit" }, "Ajouter")</div>
                     </form>
                 )
             )
-        </div>
+        )
     })
 }
