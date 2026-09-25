@@ -64,32 +64,37 @@ fn how_it_went(answered: &Result<Response>) -> (Outcome, u16) {
 /// layout's error boundary — that is what makes a refused write safe: no
 /// page ran — so the refusal is a page of its own, with the way back to
 /// where the operator's role works.
+///
+/// Written out rather than built from [`crate::ui::document`]: `view!` expands
+/// against bindings that `#[component]` and `#[page]` introduce, so it cannot
+/// be used in a plain function, and a component cannot be invoked by hand
+/// either — its child is an inert scope only the macro can build. What the
+/// shell and this page must agree on is therefore shared as values instead: the
+/// stylesheet comes from the same lookup, and the scheme the operator chose is
+/// carried on `<html>` and declared in the head. Otherwise a refusal would be
+/// the one page in the back office that flashes white at somebody working in
+/// the dark.
 fn refusal(cx: &Cx, home: &str) -> Result<Response> {
-    // Hand-written, because a layer has no view to render into. It still has to
-    // be the same document the shell builds: the stylesheet comes from the same
-    // lookup, and the scheme the operator chose is carried on `<html>` and
-    // declared in the head — otherwise a refusal is the one page in the back
-    // office that flashes white at somebody working in the dark.
     let stylesheet = stylesheet_url(cx);
     let scheme = theme::chosen(cx);
-    let dark = scheme
+    let chosen = scheme
         .html_class()
-        .map(|c| format!(" {c}"))
+        .map(|class| format!(" {class}"))
         .unwrap_or_default();
     let declared = scheme.color_scheme();
     let page = format!(
         "<!DOCTYPE html>\
-         <html lang=\"fr\" class=\"h-full bg-background text-foreground{dark}\">\
+         <html lang=\"fr\" class=\"h-full bg-background text-foreground{chosen}\">\
          <head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
          <meta name=\"color-scheme\" content=\"{declared}\">\
          <title>Accès refusé — Timada admin</title>\
          <link rel=\"stylesheet\" href=\"{stylesheet}\"></head>\
-         <body class=\"min-h-full\"><main class=\"mx-auto max-w-6xl px-4 py-16 text-center\">\
+         <body class=\"min-h-full\"><main class=\"mx-auto max-w-2xl px-4 py-16 text-center\">\
          <h1 class=\"text-2xl font-semibold\">Accès refusé</h1>\
          <p class=\"mt-2 text-muted-foreground\">Votre rôle ne donne pas accès à cette page \
          ni à cette action. Le propriétaire de la boutique peut le changer.</p>\
-         <p class=\"mt-6\"><a class=\"underline underline-offset-4\" href=\"{home}\">Retour à mon espace</a></p>\
+         <p class=\"mt-6\"><a class=\"text-primary underline underline-offset-4\" href=\"{home}\">Retour à mon espace</a></p>\
          </main></body></html>"
     );
     (StatusCode::FORBIDDEN, Html(page)).into_response(cx)
