@@ -19,6 +19,7 @@ use topcoat::{
 use super::code_value;
 use crate::{
     app::admin::_secure::orders::order_id,
+    auth::Section,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -84,6 +85,7 @@ async fn discount_detail(id: &str, discount: &DiscountView) -> Result<impl View>
         .map_or_else(|| "Sans limite".to_owned(), date);
     Ok(view! {
         page_header(
+            parent: Section::Promotions,
             title: &discount.code,
             <span class="text-sm text-muted-foreground">(if discount.active { "Code promo · actif" } else { "Code promo · inactif" })</span>
         )
@@ -157,6 +159,7 @@ async fn voucher_detail(cx: &Cx, id: &str, voucher: &VoucherView) -> Result<impl
         .collect();
     Ok(view! {
         page_header(
+            parent: Section::Promotions,
             title: &voucher.code,
             <span class="text-sm text-muted-foreground">(kind) " · " (state)</span>
         )

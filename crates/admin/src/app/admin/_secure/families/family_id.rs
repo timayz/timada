@@ -19,6 +19,7 @@ use topcoat::{
 use super::{option_lines, refusal};
 use crate::{
     app::admin::_secure::products::product_id::{ProductId, show as show_product},
+    auth::Section,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -129,6 +130,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
+            parent: Section::Families,
             title: &family.name,
             if family.dissolved { <span class="text-sm text-muted-foreground">"Dissoute"</span> }
         )

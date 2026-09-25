@@ -13,6 +13,7 @@ use topcoat::{
 
 use super::outbox_status_badge;
 use crate::{
+    auth::Section,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -54,6 +55,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
+            parent: Section::Emails,
             title: &message.subject,
             outbox_status_badge(status: status)
         )

@@ -510,12 +510,53 @@ async fn nav_link(
 }
 
 #[component]
-pub async fn page_header(title: &str, #[default] child: Child<'_>) -> Result<impl View> {
+pub async fn page_header(
+    title: &str,
+    /// The section this page sits inside, for a page that is not that section's
+    /// own index. Given, a trail leads back to it.
+    #[default]
+    #[into]
+    parent: Option<Section>,
+    #[default] child: Child<'_>,
+) -> Result<impl View> {
     Ok(view! {
-        <div class="mb-6 flex flex-wrap items-center justify-between gap-4">
-            <h1 class="text-2xl font-semibold tracking-tight">(title)</h1>
-            <div class="flex items-center gap-2">(child)</div>
+        <div class="mb-6 flex flex-col gap-1">
+            if let Some(parent) = parent { breadcrumbs(parent: parent, (title)) }
+            <div class="flex flex-wrap items-center justify-between gap-4">
+                <h1 class="text-2xl font-semibold tracking-tight">(title)</h1>
+                <div class="flex items-center gap-2">(child)</div>
+            </div>
         </div>
+    })
+}
+
+/// The trail back to the section a record belongs to.
+///
+/// Takes the [`Section`] rather than a link and a label, so the two cannot
+/// drift apart and a page cannot point its crumb somewhere the operator's role
+/// does not open: a page inside a section is a page the role opens, by
+/// construction — the auth layer refused it otherwise.
+///
+/// The current page is the last crumb and is text, not a link: a link to where
+/// you already are is a link nobody wants, and `aria-current="page"` is how a
+/// screen reader is told the trail ends here.
+#[component]
+async fn breadcrumbs(cx: &Cx, parent: Section, child: Child<'_>) -> Result<impl View> {
+    let up = crate::app::admin::_secure::section_link(cx, parent);
+    Ok(view! {
+        <nav aria-label="Fil d'Ariane" class="text-sm text-muted-foreground">
+            <ol class="flex flex-wrap items-center gap-1">
+                <li>
+                    <a href=(up) class="underline-offset-4 hover:underline hover:text-foreground">
+                        (parent.label())
+                    </a>
+                </li>
+                <li aria-hidden="true" class="flex items-center">
+                    icon(data: icons::CHEVRON_RIGHT, attrs: attributes! { class="size-3.5" })
+                </li>
+                <li aria-current="page" class="truncate text-foreground">(child)</li>
+            </ol>
+        </nav>
     })
 }
 

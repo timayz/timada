@@ -23,6 +23,7 @@ use crate::{
         customers::customer_id,
         orders::order_id::{self, address_lines},
     },
+    auth::Section,
     components::{
         button::{ButtonSize, ButtonVariant, button_variants},
         card::{card, card_content, card_header, card_title},
@@ -183,6 +184,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
+            parent: Section::Invoices,
             title: &title,
             invoice_status_badge(status: invoice.status)
             if invoice.invoice_number.is_some() {

@@ -22,6 +22,7 @@ use crate::{
         categories::{category_options, category_select},
         families::family_id::{FamilyId, show as show_family},
     },
+    auth::Section,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -124,6 +125,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
+            parent: Section::Products,
             title: &product.name,
             if product.archived { <span class="text-sm text-muted-foreground">"Archivé"</span> }
         )

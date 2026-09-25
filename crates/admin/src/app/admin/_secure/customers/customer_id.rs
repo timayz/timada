@@ -13,6 +13,7 @@ use topcoat::{
 
 use crate::{
     app::admin::_secure::orders::order_id::{OrderId, show as order_show},
+    auth::Section,
     components::card::{card, card_content, card_header, card_title},
     config::AdminServices,
     ui::{date, detail_grid, detail_main, detail_side, fact, facts, link, money, page_header},
@@ -56,7 +57,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         });
 
     Ok(view! {
-        page_header(title: &title)
+        page_header(parent: Section::Customers, title: &title)
         <p class="-mt-4 mb-6 text-sm text-muted-foreground">(standing) (book.email.clone()) " · " <span class="font-mono text-xs">(id.clone())</span></p>
 
         detail_grid(

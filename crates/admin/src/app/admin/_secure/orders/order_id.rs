@@ -23,6 +23,7 @@ use crate::{
     app::admin::_secure::{
         disputes::dispute_status_badge, invoices::invoice_id, returns::return_id,
     },
+    auth::Section,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -241,6 +242,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
+            parent: Section::Orders,
             title: &title,
             order_status_badge(status: order.status)
         )

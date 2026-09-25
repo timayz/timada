@@ -28,6 +28,7 @@ use topcoat::{
 use super::return_status_badge;
 use crate::{
     app::admin::_secure::{customers::customer_id, orders::order_id},
+    auth::Section,
     components::{
         button::{ButtonVariant, button},
         card::{card, card_content, card_header, card_title},
@@ -280,6 +281,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         page_header(
+            parent: Section::Returns,
             title: &title,
             return_status_badge(status: request.status)
         )
