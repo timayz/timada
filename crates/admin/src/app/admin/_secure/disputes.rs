@@ -23,7 +23,7 @@ use crate::{
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
-    ui::{date, empty_state, money, page_header, pagination},
+    ui::{date, empty_state, field, filter_bar, link, money, page_header, pagination, table_card},
 };
 
 pub const PAGE_SIZE: u32 = 25;
@@ -110,31 +110,35 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(
             title: "Litiges",
-            <form method="get" class="flex items-center gap-2 text-sm">
-                <label for="status" class="text-muted-foreground">"État"</label>
-                select(
-                    attrs: topcoat::view::attributes! { id="status" name="status" },
-                    for (value, wording) in [("open", "En cours"), ("won", "Gagnés"), ("lost", "Perdus"), ("all", "Tous")] {
-                        <option value=(value) selected=(chosen == value)>(wording)</option>
-                    }
+            filter_bar(
+                field(
+                    label: "État",
+                    control: "status",
+                    select(
+                        attrs: topcoat::view::attributes! { id="status" name="status" },
+                        for (value, wording) in [("open", "En cours"), ("won", "Gagnés"), ("lost", "Perdus"), ("all", "Tous")] {
+                            <option value=(value) selected=(chosen == value)>(wording)</option>
+                        }
+                    )
                 )
-                <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
-            </form>
+            )
         )
         <p class="mb-4 text-sm text-muted-foreground">(summary) " Les justificatifs se transmettent depuis l'espace du prestataire de paiement."</p>
         if lines.is_empty() {
             empty_state(message: empty)
         } else {
-            table(
-                table_header(table_row(
-                    table_head("Ouvert le") table_head("Commande") table_head("Référence") table_head("Motif")
-                    table_head("Réponse avant le") table_head("État")
-                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Montant")
-                ))
-                table_body(
-                    for line in &lines {
-                        dispute_row(line: line)
-                    }
+            table_card(
+                table(
+                    table_header(table_row(
+                        table_head("Ouvert le") table_head("Commande") table_head("Référence") table_head("Motif")
+                        table_head("Réponse avant le") table_head("État")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Montant")
+                    ))
+                    table_body(
+                        for line in &lines {
+                            dispute_row(line: line)
+                        }
+                    )
                 )
             )
             pagination(page: page, page_size: PAGE_SIZE, total: total as u64)
@@ -157,7 +161,7 @@ async fn dispute_row(line: &DisputeLine) -> Result<impl View> {
     Ok(view! {
         table_row(
             table_cell((line.opened_on.clone()))
-            table_cell(<a href=(line.order_link.clone()) class="font-mono text-xs underline-offset-4 hover:underline">(line.order_name.clone())</a>)
+            table_cell(link(href: line.order_link.clone(), class: "font-mono text-xs", (line.order_name.clone())))
             table_cell(<span class="font-mono text-xs">(line.reference.clone())</span>)
             table_cell((line.reason.clone()))
             table_cell(

@@ -23,7 +23,7 @@ use crate::{
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
-    ui::{date, empty_state, money, page_header, pagination},
+    ui::{date, empty_state, field, filter_bar, link, money, page_header, pagination, table_card},
 };
 
 pub const PAGE_SIZE: u32 = 25;
@@ -87,31 +87,35 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(
             title: "Retours",
-            <form method="get" class="flex items-center gap-2 text-sm">
-                <label for="status" class="text-muted-foreground">"Statut"</label>
-                select(
-                    attrs: topcoat::view::attributes! { id="status" name="status" },
-                    for (value, label) in [("requested", "À examiner"), ("approved", "Colis attendus"), ("received", "En traitement"), ("completed", "Traités"), ("refused", "Refusés"), ("cancelled", "Annulés"), ("all", "Tous")] {
-                        <option value=(value) selected=(selected == value)>(label)</option>
-                    }
+            filter_bar(
+                field(
+                    label: "Statut",
+                    control: "status",
+                    select(
+                        attrs: topcoat::view::attributes! { id="status" name="status" },
+                        for (value, label) in [("requested", "À examiner"), ("approved", "Colis attendus"), ("received", "En traitement"), ("completed", "Traités"), ("refused", "Refusés"), ("cancelled", "Annulés"), ("all", "Tous")] {
+                            <option value=(value) selected=(selected == value)>(label)</option>
+                        }
+                    )
                 )
-                <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
-            </form>
+            )
         )
         if rows.is_empty() {
             empty_state(message: "Aucun retour dans cette file.")
         } else {
-            table(
-                table_header(table_row(
-                    table_head("Date") table_head("Retour") table_head("Commande") table_head("Motif")
-                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Articles")
-                    table_head("Statut")
-                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Rendu au client")
-                ))
-                table_body(
-                    for row in &rows {
-                        return_row(row: row, order_numbers: &order_numbers)
-                    }
+            table_card(
+                table(
+                    table_header(table_row(
+                        table_head("Date") table_head("Retour") table_head("Commande") table_head("Motif")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Articles")
+                        table_head("Statut")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Rendu au client")
+                    ))
+                    table_body(
+                        for row in &rows {
+                            return_row(row: row, order_numbers: &order_numbers)
+                        }
+                    )
                 )
             )
             pagination(page: page, page_size: PAGE_SIZE, total: total as u64)
@@ -125,7 +129,7 @@ async fn return_row(
     row: &ReturnListRow,
     order_numbers: &HashMap<String, String>,
 ) -> Result<impl View> {
-    let link = href!(return_id::show, return_id::ReturnId(row.return_id.clone())).resolve(cx);
+    let target = href!(return_id::show, return_id::ReturnId(row.return_id.clone())).resolve(cx);
     let order_link = href!(order_id::show, order_id::OrderId(row.order_id.clone())).resolve(cx);
     let order_label = order_numbers
         .get(&row.order_id)
@@ -139,8 +143,8 @@ async fn return_row(
     Ok(view! {
         table_row(
             table_cell((date(row.requested_at.max(0) as u64)))
-            table_cell(<a href=(link) class="font-mono text-xs underline-offset-4 hover:underline">(row.rma_number.clone())</a>)
-            table_cell(<a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label)</a>)
+            table_cell(link(href: target, class: "font-mono text-xs", (row.rma_number.clone())))
+            table_cell(link(href: order_link, class: "font-mono text-xs", (order_label)))
             table_cell((row.reason.clone()))
             table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (row.units.to_string()))
             table_cell(return_status_badge(status: status))

@@ -18,7 +18,7 @@ use crate::{
         card::{card, card_content, card_header, card_title},
     },
     config::AdminServices,
-    ui::{date, page_header},
+    ui::{date, detail_grid, detail_main, detail_side, fact, facts, page_header},
 };
 
 path_param!(pub message_id: String, error = not_found);
@@ -59,30 +59,30 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         )
         <p class="-mt-4 mb-6 font-mono text-xs text-muted-foreground">(id.clone()) " · " (message.kind.clone())</p>
 
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Message"))
                     card_content(
                         <pre class="whitespace-pre-wrap font-sans text-sm">(message.body.clone())</pre>
                     )
                 )
-            </div>
-            <div class="flex flex-col gap-6">
+            )
+            detail_side(
                 card(
                     card_header(card_title("Envoi"))
                     card_content(
-                        <dl class="flex flex-col gap-2 text-sm">
-                            <div><dt class="text-muted-foreground">"De"</dt><dd>(message.sender.clone())</dd></div>
-                            <div><dt class="text-muted-foreground">"À"</dt><dd>(message.recipient.clone())</dd></div>
-                            <div><dt class="text-muted-foreground">"Créé le"</dt><dd>(date(message.created_at.max(0) as u64))</dd></div>
-                            <div><dt class="text-muted-foreground">"Envoyé le"</dt><dd>(sent)</dd></div>
-                            <div><dt class="text-muted-foreground">"Essais"</dt><dd class="tabular-nums">(message.attempts.to_string())</dd></div>
+                        facts(
+                            fact(term: "De", (message.sender.clone()))
+                            fact(term: "À", (message.recipient.clone()))
+                            fact(term: "Créé le", (date(message.created_at.max(0) as u64)))
+                            fact(term: "Envoyé le", (sent))
+                            fact(term: "Essais", class: "tabular-nums", (message.attempts.to_string()))
                             if let Some(waiting) = &waiting {
-                                <div><dt class="text-muted-foreground">"Prochain essai"</dt><dd>(waiting.clone())</dd></div>
+                                fact(term: "Prochain essai", (waiting.clone()))
                             }
                             if message.html_body.is_some() {
-                                <div><dt class="text-muted-foreground">"Format"</dt><dd>"Texte et HTML"</dd></div>
+                                fact(term: "Format", "Texte et HTML")
                             }
                             if !attachments.is_empty() {
                                 <div>
@@ -91,9 +91,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                 </div>
                             }
                             if let Some(error) = &message.last_error {
-                                <div><dt class="text-muted-foreground">"Dernière erreur"</dt><dd class="text-destructive">(error.clone())</dd></div>
+                                fact(term: "Dernière erreur", class: "text-destructive", (error.clone()))
                             }
-                        </dl>
+                        )
                     )
                 )
                 if status == OutboxStatus::Failed {
@@ -106,8 +106,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         )
                     )
                 }
-            </div>
-        </div>
+            )
+        )
     })
 }
 

@@ -248,28 +248,30 @@ pub async fn to_ship(cx: &Cx) -> Result<impl View> {
             <p class="-mt-4 mb-6 text-sm">(held.clone()) " " <a href=(href!(super::disputes::index)) class="underline underline-offset-4">"Voir les litiges"</a></p>
         }
         if !lines.is_empty() {
-            table(
-                table_header(table_row(
-                    table_head("Payée le") table_head("Attente") table_head("Commande") table_head("Destinataire")
-                    table_head("Livraison")
-                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Articles")
-                    table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Total")
-                ))
-                table_body(
-                    for line in &lines {
-                        table_row(
-                            table_cell((line.paid_on.clone()))
-                            table_cell(
-                                <span class="tabular-nums">(line.waiting.clone())</span>
-                                if line.late { " " badge(variant: BadgeVariant::Destructive, "En retard") }
+            table_card(
+                table(
+                    table_header(table_row(
+                        table_head("Payée le") table_head("Attente") table_head("Commande") table_head("Destinataire")
+                        table_head("Livraison")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Articles")
+                        table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Total")
+                    ))
+                    table_body(
+                        for line in &lines {
+                            table_row(
+                                table_cell((line.paid_on.clone()))
+                                table_cell(
+                                    <span class="tabular-nums">(line.waiting.clone())</span>
+                                    if line.late { " " badge(variant: BadgeVariant::Destructive, "En retard") }
+                                )
+                                table_cell(link(href: line.link.clone(), class: "font-mono text-xs", (line.label.clone())))
+                                table_cell((line.recipient.clone()))
+                                table_cell((line.delivery.clone()))
+                                table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (line.units.clone()))
+                                table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (line.total.clone()))
                             )
-                            table_cell(<a href=(line.link.clone()) class="font-mono text-xs underline-offset-4 hover:underline">(line.label.clone())</a>)
-                            table_cell((line.recipient.clone()))
-                            table_cell((line.delivery.clone()))
-                            table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (line.units.clone()))
-                            table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (line.total.clone()))
-                        )
-                    }
+                        }
+                    )
                 )
             )
             pagination(page: page, page_size: PAGE_SIZE, total: waiting as u64)

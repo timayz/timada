@@ -29,7 +29,7 @@ use crate::{
         textarea::textarea,
     },
     config::AdminServices,
-    ui::page_header,
+    ui::{detail_grid, detail_main, form_error, link, page_header},
 };
 
 path_param!(pub family_id: String, error = not_found);
@@ -137,10 +137,10 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             " · " (lines.len().to_string()) " variante(s) — chacune reste un produit, avec sa référence, son prix, son stock et sa page"
         </p>
         if let Some(error) = &error {
-            <p role="alert" class="mb-4 text-sm text-destructive">(error.clone())</p>
+            form_error(class: "mb-4", (error.clone()))
         }
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="flex flex-col gap-6 lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Variantes"))
                     card_content(
@@ -157,7 +157,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                     for line in &lines {
                                         table_row(
                                             table_cell(
-                                                <a href=(line.link.clone()) class="underline-offset-4 hover:underline">(line.name.clone())</a>
+                                                link(href: line.link.clone(), (line.name.clone()))
                                                 <span class="ml-2 font-mono text-xs text-muted-foreground">(line.sku.clone())</span>
                                                 if line.archived { <span class="ml-2 text-xs text-muted-foreground">"archivé"</span> }
                                                 if !line.complete { <span class="ml-2 text-xs text-destructive">"à compléter"</span> }
@@ -198,8 +198,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
-            </div>
-            <div class="flex flex-col gap-6">
+            )
+            detail_main(
                 if open {
                     card(
                         card_header(card_title("Famille"))
@@ -232,8 +232,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         )
                     )
                 }
-            </div>
-        </div>
+            )
+        )
     })
 }
 

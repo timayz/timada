@@ -8,11 +8,15 @@
 
 use topcoat::{
     Result,
-    view::{Child, View, attributes, class, component, view},
+    context::Cx,
+    view::{Attributes, Child, View, attributes, class, component, view},
 };
 
 use crate::{
-    components::button::{ButtonSize, ButtonVariant, button_variants},
+    components::{
+        button::{ButtonSize, ButtonVariant, button_variants},
+        input::input,
+    },
     ui::{icon, icons},
 };
 
@@ -47,11 +51,19 @@ pub async fn facts(#[default] child: Child<'_>) -> Result<impl View> {
 }
 
 /// One fact: its term, and whatever is known about it.
+///
+/// `class` belongs to the value, which is often an id and wants a monospace.
 #[component]
-pub async fn fact(term: &str, #[default] child: Child<'_>) -> Result<impl View> {
+pub async fn fact(
+    term: &str,
+    #[default]
+    #[into]
+    class: String,
+    #[default] child: Child<'_>,
+) -> Result<impl View> {
     Ok(view! {
         <dt class="text-muted-foreground">(term)</dt>
-        <dd>(child)</dd>
+        <dd class=((!class.is_empty()).then_some(class))>(child)</dd>
     })
 }
 
@@ -61,15 +73,32 @@ pub async fn fact(term: &str, #[default] child: Child<'_>) -> Result<impl View> 
 /// Wrapping, because a filter bar with four fields does not fit a phone, and
 /// `items-end` so a labelled field and a bare control sit on the same line.
 #[component]
-pub async fn filter_bar(#[default] child: Child<'_>) -> Result<impl View> {
+pub async fn filter_bar(
+    /// What the button says. "Filtrer" narrows a list; a bar that is only a
+    /// search box says "Rechercher" instead.
+    #[default("Filtrer")]
+    submit: &str,
+    /// Where the form goes, when it is not the page it is on.
+    #[default]
+    #[into]
+    action: String,
+    #[default]
+    #[into]
+    class: String,
+    #[default] child: Child<'_>,
+) -> Result<impl View> {
     Ok(view! {
-        <form method="get" class="flex flex-wrap items-end gap-2 text-sm">
+        <form
+            method="get"
+            action=((!action.is_empty()).then_some(action))
+            class=(class!("flex flex-wrap items-end gap-2 text-sm", class))
+        >
             (child)
             <button
                 type="submit"
                 class=(button_variants(ButtonVariant::Outline, ButtonSize::Md))
             >
-                "Filtrer"
+                (submit)
             </button>
         </form>
     })
@@ -99,6 +128,29 @@ pub async fn field(
     })
 }
 
+/// A labelled text input, which is most of what a form is.
+///
+/// The `name` is the id too, so the label always points at its control and
+/// nobody has to keep the two in step. `attrs` carries the type, the value and
+/// whatever else the input needs.
+///
+/// This lived in `products` and was reached for from two other files, where it
+/// collided with [`field`]. It is the same idea one step more specific: a
+/// [`field`] whose child is always an input.
+#[component]
+pub async fn text_field(
+    cx: &Cx,
+    name: &str,
+    label_text: &str,
+    #[default] mut attrs: Attributes,
+) -> Result<impl View> {
+    attrs.insert(cx, "id", name.to_owned());
+    attrs.insert(cx, "name", name.to_owned());
+    Ok(view! {
+        field(label: label_text, control: name, input(attrs: attrs))
+    })
+}
+
 /// A list page's table, on a card.
 ///
 /// The table keeps its own scroll container; this is the surface it sits on.
@@ -113,13 +165,27 @@ pub async fn table_card(#[default] child: Child<'_>) -> Result<impl View> {
     })
 }
 
-/// What went wrong with a form, in the operator's language.
+/// What went wrong, in the operator's language.
+///
+/// Takes children rather than a string: half the messages in the back office
+/// are a count and a sentence about it, and one of those is not a `&str`.
+///
+/// `items-start` and not `items-center`: several of these run to two lines, and
+/// a centred glyph beside a paragraph floats in the middle of it.
 #[component]
-pub async fn form_error(message: &str) -> Result<impl View> {
+pub async fn form_error(
+    #[default]
+    #[into]
+    class: String,
+    #[default] child: Child<'_>,
+) -> Result<impl View> {
     Ok(view! {
-        <p role="alert" class="flex items-center gap-2 text-sm text-destructive">
-            icon(data: icons::CIRCLE_ALERT, attrs: attributes! { class="size-4" })
-            (message)
+        <p
+            role="alert"
+            class=(class!("flex items-start gap-2 text-sm text-destructive", class))
+        >
+            icon(data: icons::CIRCLE_ALERT, attrs: attributes! { class="mt-0.5 size-4" })
+            <span>(child)</span>
         </p>
     })
 }

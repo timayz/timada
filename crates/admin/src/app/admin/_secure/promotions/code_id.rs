@@ -25,7 +25,7 @@ use crate::{
         input::input,
     },
     config::AdminServices,
-    ui::{date, money, page_header},
+    ui::{date, detail_grid, detail_main, link, money, page_header},
 };
 
 path_param!(pub code_id: String, error = not_found);
@@ -87,8 +87,8 @@ async fn discount_detail(id: &str, discount: &DiscountView) -> Result<impl View>
             title: &discount.code,
             <span class="text-sm text-muted-foreground">(if discount.active { "Code promo · actif" } else { "Code promo · inactif" })</span>
         )
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Règle"))
                     card_content(
@@ -99,7 +99,7 @@ async fn discount_detail(id: &str, discount: &DiscountView) -> Result<impl View>
                         </dl>
                     )
                 )
-            </div>
+            )
             if discount.active {
                 card(
                     card_header(card_title("Actions"))
@@ -110,7 +110,7 @@ async fn discount_detail(id: &str, discount: &DiscountView) -> Result<impl View>
                     )
                 )
             }
-        </div>
+        )
     })
 }
 
@@ -160,8 +160,8 @@ async fn voucher_detail(cx: &Cx, id: &str, voucher: &VoucherView) -> Result<impl
             title: &voucher.code,
             <span class="text-sm text-muted-foreground">(kind) " · " (state)</span>
         )
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="flex flex-col gap-6 lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Solde"))
                     card_content(
@@ -184,9 +184,9 @@ async fn voucher_detail(cx: &Cx, id: &str, voucher: &VoucherView) -> Result<impl
                         } else {
                             <table class="w-full text-sm">
                                 <tbody>
-                                    for (link, order, amount) in &redemptions {
+                                    for (target, order, amount) in &redemptions {
                                         <tr class="border-b border-border last:border-0">
-                                            <td class="py-2"><a href=(link.clone()) class="font-mono text-xs underline-offset-4 hover:underline">(order.clone())</a></td>
+                                            <td class="py-2">link(href: target.clone(), class: "font-mono text-xs", (order.clone()))</td>
                                             <td class="py-2 text-right tabular-nums">(amount.clone())</td>
                                         </tr>
                                     }
@@ -195,7 +195,7 @@ async fn voucher_detail(cx: &Cx, id: &str, voucher: &VoucherView) -> Result<impl
                         }
                     )
                 )
-            </div>
+            )
             if !voucher.cancelled {
                 card(
                     card_header(card_title("Actions"))
@@ -207,7 +207,7 @@ async fn voucher_detail(cx: &Cx, id: &str, voucher: &VoucherView) -> Result<impl
                     )
                 )
             }
-        </div>
+        )
     })
 }
 

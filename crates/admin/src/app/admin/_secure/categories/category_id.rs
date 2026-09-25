@@ -26,7 +26,7 @@ use crate::{
         textarea::textarea,
     },
     config::AdminServices,
-    ui::page_header,
+    ui::{detail_grid, detail_main, detail_side, form_error, page_header},
 };
 
 path_param!(pub category_id: String, error = not_found);
@@ -85,10 +85,10 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             " · " (products.to_string()) " produit(s) en vente, sous-catégories comprises"
         </p>
         if let Some(error) = &error {
-            <p role="alert" class="mb-4 text-sm text-destructive">(error.clone())</p>
+            form_error(class: "mb-4", (error.clone()))
         }
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Catégorie"))
                     card_content(
@@ -119,8 +119,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         </form>
                     )
                 )
-            </div>
-            <div class="flex flex-col gap-6">
+            )
+            detail_side(
             if !category.archived {
                 card(
                     card_header(card_title("Filtres de la fiche technique"))
@@ -155,8 +155,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     )
                 )
             }
-            </div>
-        </div>
+            )
+        )
     })
 }
 

@@ -30,7 +30,7 @@ use crate::{
         textarea::textarea,
     },
     config::{AdminConfig, AdminServices},
-    ui::{money, page_header},
+    ui::{detail_grid, detail_main, money, page_header},
 };
 
 path_param!(pub product_id: String, error = not_found);
@@ -132,8 +132,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             " · garantie " (product.warranty_months.to_string()) " mois"
         </p>
 
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="flex flex-col gap-6 lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Descriptif"))
                     card_content(
@@ -169,8 +169,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         </form>
                     )
                 )
-            </div>
-            <div class="flex flex-col gap-6">
+            )
+            detail_main(
                 card(
                     card_header(card_title("Prix"))
                     card_content(
@@ -261,8 +261,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         button(variant: ButtonVariant::Destructive, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Archiver le produit")
                     </form>
                 }
-            </div>
-        </div>
+            )
+        )
     })
 }
 

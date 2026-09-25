@@ -23,9 +23,12 @@ use crate::{
         customers::customer_id,
         orders::order_id::{self, address_lines},
     },
-    components::card::{card, card_content, card_header, card_title},
+    components::{
+        button::{ButtonSize, ButtonVariant, button_variants},
+        card::{card, card_content, card_header, card_title},
+    },
     config::{AdminConfig, AdminServices},
-    ui::{date, money, page_header, vat_rate},
+    ui::{date, detail_grid, detail_main, fact, facts, link, money, page_header, vat_rate},
 };
 
 pub mod credit_notes;
@@ -183,16 +186,16 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             title: &title,
             invoice_status_badge(status: invoice.status)
             if invoice.invoice_number.is_some() {
-                <a href=(href!(print, InvoiceId(id.clone()))) class="h-9 rounded-lg border border-border px-3 text-sm leading-9">"Version imprimable"</a>
-                if let Some(link) = &pdf_link {
-                    <a href=(link.clone()) class="h-9 rounded-lg border border-border px-3 text-sm leading-9">"Télécharger le PDF"</a>
+                <a href=(href!(print, InvoiceId(id.clone()))) class=(button_variants(ButtonVariant::Outline, ButtonSize::Md))>"Version imprimable"</a>
+                if let Some(pdf) = &pdf_link {
+                    <a href=(pdf.clone()) class=(button_variants(ButtonVariant::Outline, ButtonSize::Md))>"Télécharger le PDF"</a>
                 }
             }
         )
         <p class="-mt-4 mb-6 font-mono text-xs text-muted-foreground">(id.clone())</p>
 
-        <div class="grid gap-6 lg:grid-cols-3">
-            <div class="flex flex-col gap-6 lg:col-span-2">
+        detail_grid(
+            detail_main(
                 card(
                     card_header(card_title("Lignes"))
                     card_content(
@@ -300,19 +303,19 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         )
                     )
                 }
-            </div>
+            )
 
-            <div class="flex flex-col gap-6">
+            detail_main(
                 if has_archive {
                     card(
                         card_header(card_title("Archive"))
                         card_content(
                             match &archived {
                                 Some((archived_on, sha256, size, reconstituted)) => {
-                                    <dl class="flex flex-col gap-2 text-sm">
-                                        <div><dt class="text-muted-foreground">"Archivée le"</dt><dd>(archived_on.clone()) " · " (size.clone())</dd></div>
-                                        <div><dt class="text-muted-foreground">"Empreinte SHA-256"</dt><dd class="break-all font-mono text-xs">(sha256.clone())</dd></div>
-                                    </dl>
+                                    facts(
+                                        fact(term: "Archivée le", (archived_on.clone()) " · " (size.clone()))
+                                        fact(term: "Empreinte SHA-256", class: "break-all font-mono text-xs", (sha256.clone()))
+                                    )
                                     if *reconstituted {
                                         <p class="mt-2 text-sm text-muted-foreground">"Reconstituée : archivée longtemps après son émission, avec l'émetteur et la mise en page du jour de l'archivage. Figée depuis."</p>
                                     }
@@ -343,17 +346,17 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 card(
                     card_header(card_title("Références"))
                     card_content(
-                        <dl class="flex flex-col gap-2 text-sm">
-                            <div><dt class="text-muted-foreground">"Commande"</dt><dd><a href=(order_link) class="font-mono text-xs underline-offset-4 hover:underline">(order_label)</a></dd></div>
-                            <div><dt class="text-muted-foreground">"Client"</dt><dd><a href=(customer_link) class="font-mono text-xs underline-offset-4 hover:underline">(invoice.customer_id.clone())</a></dd></div>
+                        facts(
+                            fact(term: "Commande", link(href: order_link, class: "font-mono text-xs", (order_label)))
+                            fact(term: "Client", link(href: customer_link, class: "font-mono text-xs", (invoice.customer_id.clone())))
                             if let Some(reason) = &invoice.voided_reason {
-                                <div><dt class="text-muted-foreground">"Motif d'annulation"</dt><dd>(reason.clone())</dd></div>
+                                fact(term: "Motif d'annulation", (reason.clone()))
                             }
-                        </dl>
+                        )
                     )
                 )
-            </div>
-        </div>
+            )
+        )
     })
 }
 
@@ -407,7 +410,7 @@ pub async fn print(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         <div class="mb-6 flex items-center gap-3 text-sm print:hidden">
-            <button type="button" onclick="window.print()" class="h-9 rounded-lg border border-border px-3">"Imprimer ou enregistrer en PDF"</button>
+            <button type="button" onclick="window.print()" class=(button_variants(ButtonVariant::Outline, ButtonSize::Md))>"Imprimer ou enregistrer en PDF"</button>
             <a href=(back) class="text-muted-foreground underline-offset-4 hover:underline">"Retour à la facture"</a>
         </div>
         <article class="mx-auto max-w-3xl text-sm">

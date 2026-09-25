@@ -67,7 +67,7 @@ async fn login_form(next: Option<String>, error: Option<&str>) -> Result<impl Vi
                             label(attrs: topcoat::view::attributes! { for="password" }, "Mot de passe")
                             input(attrs: topcoat::view::attributes! { id="password" name="password" type="password" required=(true) autocomplete="current-password" })
                         </div>
-                        if let Some(error) = error { form_error(message: error) }
+                        if let Some(error) = error { form_error((error)) }
                         button(attrs: topcoat::view::attributes! { type="submit" }, "Se connecter")
                     </form>
                 )

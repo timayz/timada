@@ -27,7 +27,7 @@ use crate::{
         select::select,
     },
     config::AdminServices,
-    ui::{date, empty_state, page_header, pagination},
+    ui::{date, empty_state, field, filter_bar, link, page_header, pagination},
 };
 
 pub const PAGE_SIZE: u32 = 25;
@@ -116,16 +116,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(
             title: "Avis clients",
-            <form method="get" class="flex items-center gap-2 text-sm">
-                <label for="status" class="text-muted-foreground">"Statut"</label>
-                select(
-                    attrs: topcoat::view::attributes! { id="status" name="status" },
-                    for (value, label) in [("pending", "En attente"), ("published", "Publiés"), ("rejected", "Refusés"), ("all", "Tous")] {
-                        <option value=(value) selected=(selected == value)>(label)</option>
-                    }
+            filter_bar(
+                field(
+                    label: "Statut",
+                    control: "status",
+                    select(
+                        attrs: topcoat::view::attributes! { id="status" name="status" },
+                        for (value, label) in [("pending", "En attente"), ("published", "Publiés"), ("rejected", "Refusés"), ("all", "Tous")] {
+                            <option value=(value) selected=(selected == value)>(label)</option>
+                        }
+                    )
                 )
-                <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
-            </form>
+            )
         )
         if cards.is_empty() {
             empty_state(message: "Aucun avis dans cette file.")
@@ -191,7 +193,7 @@ async fn review_item(cx: &Cx, review: &ReviewCard) -> Result<impl View> {
                     <span class="text-muted-foreground">(review.written.clone())</span>
                 </div>
                 <p>
-                    <a href=(review.product_link.clone()) class="underline-offset-4 hover:underline">(review.product_name.clone())</a>
+                    link(href: review.product_link.clone(), (review.product_name.clone()))
                     <span class="text-muted-foreground">" · "</span>
                     <a href=(review.customer_link.clone()) class="text-muted-foreground underline-offset-4 hover:underline">(review.customer_label.clone())</a>
                 </p>

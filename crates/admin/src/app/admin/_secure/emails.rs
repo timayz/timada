@@ -18,7 +18,7 @@ use crate::{
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::AdminServices,
-    ui::{date, empty_state, page_header, pagination},
+    ui::{date, empty_state, field, filter_bar, link, page_header, pagination, table_card},
 };
 
 pub const PAGE_SIZE: u32 = 25;
@@ -64,30 +64,34 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(
             title: "E-mails",
-            <form method="get" class="flex items-center gap-2 text-sm">
-                <label for="status" class="text-muted-foreground">"Statut"</label>
-                select(
-                    attrs: topcoat::view::attributes! { id="status" name="status" },
-                    <option value="" selected=(status.is_none())>"Tous"</option>
-                    for (value, label) in [("pending", "En attente"), ("sent", "Envoyés"), ("failed", "En échec")] {
-                        <option value=(value) selected=(query.status.as_deref() == Some(value))>(label)</option>
-                    }
+            filter_bar(
+                field(
+                    label: "Statut",
+                    control: "status",
+                    select(
+                        attrs: topcoat::view::attributes! { id="status" name="status" },
+                        <option value="" selected=(status.is_none())>"Tous"</option>
+                        for (value, label) in [("pending", "En attente"), ("sent", "Envoyés"), ("failed", "En échec")] {
+                            <option value=(value) selected=(query.status.as_deref() == Some(value))>(label)</option>
+                        }
+                    )
                 )
-                <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
-            </form>
+            )
         )
         if rows.is_empty() {
             empty_state(message: "Aucun e-mail.")
         } else {
-            table(
-                table_header(table_row(
-                    table_head("Date") table_head("Destinataire") table_head("Objet")
-                    table_head("Statut") table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Essais")
-                ))
-                table_body(
-                    for row in &rows {
-                        email_row(row: row)
-                    }
+            table_card(
+                table(
+                    table_header(table_row(
+                        table_head("Date") table_head("Destinataire") table_head("Objet")
+                        table_head("Statut") table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Essais")
+                    ))
+                    table_body(
+                        for row in &rows {
+                            email_row(row: row)
+                        }
+                    )
                 )
             )
             pagination(page: page, page_size: PAGE_SIZE, total: total as u64)
@@ -97,7 +101,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
 #[component]
 async fn email_row(cx: &Cx, row: &OutboxRow) -> Result<impl View> {
-    let link = href!(
+    let target = href!(
         message_id::show,
         message_id::MessageId(row.message_id.clone())
     )
@@ -106,7 +110,7 @@ async fn email_row(cx: &Cx, row: &OutboxRow) -> Result<impl View> {
         table_row(
             table_cell((date(row.created_at.max(0) as u64)))
             table_cell((row.recipient.clone()))
-            table_cell(<a href=(link) class="underline-offset-4 hover:underline">(row.subject.clone())</a>)
+            table_cell(link(href: target, (row.subject.clone())))
             table_cell(outbox_status_badge(status: row.status()))
             table_cell(attrs: topcoat::view::attributes! { class="text-right tabular-nums" }, (row.attempts.to_string()))
         )

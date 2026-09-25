@@ -21,7 +21,7 @@ use crate::{
         label::label,
     },
     config::AdminServices,
-    ui::page_header,
+    ui::{form_error, page_header},
 };
 
 #[page]
@@ -95,7 +95,7 @@ async fn password_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                             input(attrs: topcoat::view::attributes! { id="confirm" name="confirm" type="password" required=(true) autocomplete="new-password" })
                         </div>
                         if let Some(error) = &error {
-                            <p role="alert" class="text-sm text-destructive">(error.clone())</p>
+                            form_error((error.clone()))
                         }
                         <div>button(attrs: topcoat::view::attributes! { type="submit" }, "Enregistrer")</div>
                     </form>

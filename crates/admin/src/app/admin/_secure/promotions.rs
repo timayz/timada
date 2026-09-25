@@ -15,7 +15,6 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::products::field;
 use crate::{
     components::{
         button::{ButtonVariant, button, button_variants},
@@ -24,7 +23,10 @@ use crate::{
         table::{table, table_body, table_cell, table_head, table_header, table_row},
     },
     config::{AdminConfig, AdminServices},
-    ui::{date, empty_state, money, page_header, pagination},
+    ui::{
+        date, empty_state, field, filter_bar, form_error, link, money, page_header, pagination,
+        table_card, text_field,
+    },
 };
 
 pub const PAGE_SIZE: u32 = 25;
@@ -55,28 +57,32 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         page_header(
             title: "Promotions",
-            <form method="get" class="flex items-center gap-2 text-sm">
-                <label for="kind" class="text-muted-foreground">"Type"</label>
-                select(
-                    attrs: topcoat::view::attributes! { id="kind" name="kind" },
-                    <option value="" selected=(kind.is_none())>"Tous"</option>
-                    <option value=(DISCOUNT) selected=(kind.as_deref() == Some(DISCOUNT))>"Codes promo"</option>
-                    <option value=(VOUCHER) selected=(kind.as_deref() == Some(VOUCHER))>"Bons d'achat"</option>
+            filter_bar(
+                field(
+                    label: "Type",
+                    control: "kind",
+                    select(
+                        attrs: topcoat::view::attributes! { id="kind" name="kind" },
+                        <option value="" selected=(kind.is_none())>"Tous"</option>
+                        <option value=(DISCOUNT) selected=(kind.as_deref() == Some(DISCOUNT))>"Codes promo"</option>
+                        <option value=(VOUCHER) selected=(kind.as_deref() == Some(VOUCHER))>"Bons d'achat"</option>
+                    )
                 )
-                <button type="submit" class="h-9 rounded-lg border border-border px-3">"Filtrer"</button>
-            </form>
+            )
             <a href=(href!(new_discount)) class=(button_variants(ButtonVariant::Primary, Default::default()))>"Nouveau code promo"</a>
             <a href=(href!(new_voucher)) class=(button_variants(ButtonVariant::Outline, Default::default()))>"Nouveau bon d'achat"</a>
         )
         if rows.is_empty() {
             empty_state(message: "Aucun code.")
         } else {
-            table(
-                table_header(table_row(
-                    table_head("Code") table_head("Type") table_head("Valeur") table_head("Créé le") table_head("État")
-                ))
-                table_body(
-                    for row in &rows { code_row(row: row) }
+            table_card(
+                table(
+                    table_header(table_row(
+                        table_head("Code") table_head("Type") table_head("Valeur") table_head("Créé le") table_head("État")
+                    ))
+                    table_body(
+                        for row in &rows { code_row(row: row) }
+                    )
                 )
             )
             pagination(page: page, page_size: PAGE_SIZE, total: total as u64)
@@ -96,7 +102,7 @@ pub fn code_value(percent_bp: Option<i64>, amount: Option<Money>) -> String {
 
 #[topcoat::view::component]
 async fn code_row(cx: &Cx, row: &CodeListRow) -> Result<impl View> {
-    let link = href!(code_id::show, code_id::CodeId(row.id.clone())).resolve(cx);
+    let target = href!(code_id::show, code_id::CodeId(row.id.clone())).resolve(cx);
     let amount = row
         .amount_minor
         .zip(row.currency.as_ref())
@@ -109,7 +115,7 @@ async fn code_row(cx: &Cx, row: &CodeListRow) -> Result<impl View> {
     };
     Ok(view! {
         table_row(
-            table_cell(<a href=(link) class="font-mono text-xs underline-offset-4 hover:underline">(row.code.clone())</a>)
+            table_cell(link(href: target, class: "font-mono text-xs", (row.code.clone())))
             table_cell((kind))
             table_cell(attrs: topcoat::view::attributes! { class="tabular-nums" }, (value))
             table_cell((date(row.created_at as u64)))
@@ -247,7 +253,7 @@ async fn new_discount_form(cx: &Cx, error: Option<String>) -> Result<impl View> 
         <div class="max-w-2xl">
             card(card_content(
                 <form method="post" action=(href!(create_discount).resolve(cx)) class="grid gap-4 sm:grid-cols-2">
-                    field(name: "code", label_text: "Code", attrs: topcoat::view::attributes! { required=(true) autocomplete="off" })
+                    text_field(name: "code", label_text: "Code", attrs: topcoat::view::attributes! { required=(true) autocomplete="off" })
                     <div class="flex flex-col gap-1.5">
                         <label for="kind" class="text-sm font-medium">"Type de remise"</label>
                         select(
@@ -256,12 +262,12 @@ async fn new_discount_form(cx: &Cx, error: Option<String>) -> Result<impl View> 
                             <option value="fixed">"Montant fixe (centimes)"</option>
                         )
                     </div>
-                    field(name: "value", label_text: "Valeur", attrs: topcoat::view::attributes! { type="number" min="1" required=(true) })
+                    text_field(name: "value", label_text: "Valeur", attrs: topcoat::view::attributes! { type="number" min="1" required=(true) })
                     currency_select(hint: "D'un montant fixe : il ne vaut que sur un panier dans cette devise. Un pourcentage vaut partout.")
-                    field(name: "max_redemptions", label_text: "Utilisations maximum (vide = illimité)", attrs: topcoat::view::attributes! { type="number" min="1" })
-                    field(name: "valid_days", label_text: "Durée de validité en jours (vide = sans limite)", attrs: topcoat::view::attributes! { type="number" min="1" })
+                    text_field(name: "max_redemptions", label_text: "Utilisations maximum (vide = illimité)", attrs: topcoat::view::attributes! { type="number" min="1" })
+                    text_field(name: "valid_days", label_text: "Durée de validité en jours (vide = sans limite)", attrs: topcoat::view::attributes! { type="number" min="1" })
                     if let Some(error) = &error {
-                        <p role="alert" class="text-sm text-destructive sm:col-span-2">(error.clone())</p>
+                        form_error(class: "sm:col-span-2", (error.clone()))
                     }
                     <div class="sm:col-span-2">
                         button(attrs: topcoat::view::attributes! { type="submit" }, "Créer")
@@ -334,13 +340,13 @@ async fn new_voucher_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
         <div class="max-w-2xl">
             card(card_content(
                 <form method="post" action=(href!(create_voucher).resolve(cx)) class="grid gap-4 sm:grid-cols-2">
-                    field(name: "code", label_text: "Code", attrs: topcoat::view::attributes! { required=(true) autocomplete="off" })
-                    field(name: "value_cents", label_text: "Valeur (centimes)", attrs: topcoat::view::attributes! { type="number" min="1" required=(true) })
+                    text_field(name: "code", label_text: "Code", attrs: topcoat::view::attributes! { required=(true) autocomplete="off" })
+                    text_field(name: "value_cents", label_text: "Valeur (centimes)", attrs: topcoat::view::attributes! { type="number" min="1" required=(true) })
                     currency_select(hint: "Le bon vaut dans cette devise et ne se dépense que sur un panier qui y est.")
-                    field(name: "customer_id", label_text: "Client (identifiant, vide = au porteur)", attrs: topcoat::view::attributes! {})
-                    field(name: "valid_days", label_text: "Durée de validité en jours (vide = sans limite)", attrs: topcoat::view::attributes! { type="number" min="1" })
+                    text_field(name: "customer_id", label_text: "Client (identifiant, vide = au porteur)", attrs: topcoat::view::attributes! {})
+                    text_field(name: "valid_days", label_text: "Durée de validité en jours (vide = sans limite)", attrs: topcoat::view::attributes! { type="number" min="1" })
                     if let Some(error) = &error {
-                        <p role="alert" class="text-sm text-destructive sm:col-span-2">(error.clone())</p>
+                        form_error(class: "sm:col-span-2", (error.clone()))
                     }
                     <div class="sm:col-span-2">
                         button(attrs: topcoat::view::attributes! { type="submit" }, "Émettre")
