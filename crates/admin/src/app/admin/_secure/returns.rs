@@ -54,7 +54,7 @@ pub async fn return_status_badge(status: ReturnStatus) -> Result<impl View> {
         ReturnStatus::Refused => (BadgeVariant::Destructive, "Refusé"),
         ReturnStatus::Cancelled => (BadgeVariant::Outline, "Annulé par le client"),
         ReturnStatus::Received => (BadgeVariant::Secondary, "Reçu, en traitement"),
-        ReturnStatus::Completed => (BadgeVariant::Primary, "Traité"),
+        ReturnStatus::Completed => (BadgeVariant::Success, "Traité"),
     };
     Ok(view! { badge(variant: variant, (label)) })
 }

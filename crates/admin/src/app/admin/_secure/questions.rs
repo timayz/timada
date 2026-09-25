@@ -185,7 +185,7 @@ fn question_card(
         ("pending", _) => (BadgeVariant::Secondary, "À modérer"),
         ("rejected", _) => (BadgeVariant::Destructive, "Refusée"),
         (_, 0) => (BadgeVariant::Outline, "Publiée, sans réponse"),
-        _ => (BadgeVariant::Primary, "Répondue"),
+        _ => (BadgeVariant::Success, "Répondue"),
     };
     QuestionCard {
         product_name: products

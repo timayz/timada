@@ -48,7 +48,7 @@ fn parse_status(status: Option<&str>) -> Option<InvoiceStatus> {
 pub async fn invoice_status_badge(status: InvoiceStatus) -> Result<impl View> {
     let (variant, label) = match status {
         InvoiceStatus::Draft => (BadgeVariant::Secondary, "Brouillon"),
-        InvoiceStatus::Issued => (BadgeVariant::Primary, "Émise"),
+        InvoiceStatus::Issued => (BadgeVariant::Success, "Émise"),
         InvoiceStatus::Voided => (BadgeVariant::Destructive, "Annulée"),
     };
     Ok(view! { badge(variant: variant, (label)) })

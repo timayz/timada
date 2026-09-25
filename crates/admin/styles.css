@@ -1,26 +1,55 @@
-/* Neutral, the built-in Topcoat theme.
+/* Katalyst, ported onto topcoat's token set.
 
-   The theme is a small set of design tokens. Components refer to tokens only,
-   never to raw colors, so a project restyles itself by editing the values in
-   `:root` and `.dark` below.
+   A theme is a set of design tokens. Components refer to tokens only, never to
+   raw colors, so the admin restyles itself by editing the values in `:root`
+   and the dark palette below.
 
-     --background              the page background
-     --foreground              text and iconography on the background
-     --muted-foreground        secondary text: captions, descriptions, placeholders
-     --primary                 the emphasis color: primary actions, selection, highlights
-     --primary-foreground      text on a primary-filled surface
-     --destructive             destructive actions and error states
-     --destructive-foreground  text on a destructive-filled surface
-     --border                  hairline borders and dividers
-     --ring                    the focus ring
-     --shadow-xs               a subtle shadow for controls: buttons, inputs
-     --shadow-sm               a shadow for raised surfaces: cards, menus
+     --background / --foreground           the page, and the text on it
+     --card / --card-foreground            a raised surface: cards, table shells
+     --popover / --popover-foreground      a surface that floats over the page
+     --primary / --primary-foreground      the emphasis: fills, and links
+     --secondary / --secondary-foreground  a quiet fill: secondary actions
+     --muted / --muted-foreground          a quiet surface, and secondary text
+     --accent / --accent-foreground        where a hover settles
+     --success / --info                    tinted statuses, read as text
+     --destructive / --destructive-fg      errors, as text and as a fill
+     --border / --input                    hairlines, and a control's edge
+     --ring                                the focus indicator
+     --shadow-xs / --shadow-sm             controls, and raised surfaces
+     --sidebar-*                           the rail's own skin
 
-   Interactive states (hover, press) have no tokens of their own: components
-   derive them by applying the fill or foreground color at reduced opacity,
-   which adapts to both color schemes automatically.
+   Interactive states have no tokens of their own: components derive them by
+   applying a fill or a foreground at reduced opacity, which adapts to both
+   color schemes on its own.
 
-   The Geist font is not bundled here; provide it with topcoat-font. */
+   Katalyst's hue and chroma are kept everywhere, and so is its lightness
+   except where a pair this admin leans on does not clear 4.5:1. Every figure
+   below is measured, not estimated:
+
+     --primary            .58 -> .50   white on it was 3.70:1, now 4.99:1
+     --muted-foreground  .556 -> .53   4.21:1 on a `bg-muted` panel, now 4.70:1
+     --destructive       .636 -> .55   3.78:1 as error text, now 5.40:1
+     --success           .721 -> .50   2.30:1 as badge text, now 5.21:1
+     --info              .623 -> .54   3.76:1 as badge text, now 5.29:1
+     --ring          grey .708 -> the primary cyan; grey was 2.48:1 on the page
+
+   The dark palette is Katalyst's own, bar three points. White on its dark
+   `--primary` is 3.43:1 and on its `--destructive` 2.77:1, so both fills carry
+   the page's own ink instead, at 5.96:1 and 6.84:1. And a status badge tints
+   its own color behind its own text, which its dark `--primary` (.60 -> .62)
+   and `--info` (.623 -> .66) were a fraction short of carrying.
+
+   The lightness of the four accent colors is set so each one clears 4.5:1
+   against a ten-percent tint of itself — which is what a status badge is. That
+   makes `bg-<accent>/10 text-<accent>` a safe pairing for every one of them,
+   in both schemes, without a second token per accent.
+
+   At .50 the primary clears 4.5:1 as a fill under white, as text on the page,
+   and against its own tint, so `text-primary` is a link color as well as a
+   fill and the theme needs no separate one.
+
+   No webfont. Katalyst loads none either, and the system stack costs nothing
+   to fetch and never flashes. */
 
 @import "tailwindcss";
 
@@ -28,58 +57,230 @@
    file is installed at the project root, so `./src` is the crate's source. */
 @source "./src/**/*.rs";
 
-/* Dark mode is opted into by putting the `dark` class on an ancestor,
-   typically <html>. */
-@custom-variant dark (&:is(.dark *));
+/* `dark:` holds when the operator asked for dark — the `dark` class on
+   <html> — and when the operating system asks for it and the operator has not
+   overruled it with `light`. */
+@custom-variant dark {
+  &:where(.dark, .dark *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:not(.light, .light *)) {
+      @slot;
+    }
+  }
+}
 
-/* Expose the tokens as Tailwind utilities (`bg-background`, `text-primary`,
-   `border-border`, ...). The indirection through plain variables on `:root`
-   and `.dark` is what lets the values swap when the color scheme changes. */
+/* Expose the tokens as Tailwind utilities (`bg-card`, `text-muted-foreground`,
+   `border-input`, ...). The indirection through plain variables on `:root` and
+   the dark palette is what lets the values swap with the color scheme. */
 @theme inline {
-  --font-sans: "Geist", sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  /* The radius rhythm: `md` for controls, `lg` for nav items, `xl` for cards,
+     `2xl` for tiles. Badges and avatars are `full`. */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --color-muted-foreground: var(--muted-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-info: var(--info);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
+  --color-input: var(--input);
   --color-ring: var(--ring);
+
+  /* The rail keeps its own skin, dark under either color scheme, so the
+     navigation stays the one fixed landmark of the back office. */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-foreground-muted: var(--sidebar-foreground-muted);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-icon: var(--sidebar-icon);
+  --color-sidebar-icon-muted: var(--sidebar-icon-muted);
+  --color-sidebar-icon-active: var(--sidebar-icon-active);
+
   --shadow-xs: var(--shadow-xs);
   --shadow-sm: var(--shadow-sm);
 }
 
 :root {
-  --background: oklch(0.995 0.003 260);
-  --foreground: oklch(0.24 0.012 260);
-  --muted-foreground: oklch(0.51 0.014 260);
-  --primary: oklch(0.21 0.02 260);
-  --primary-foreground: oklch(0.985 0.003 260);
-  --destructive: oklch(0.55 0.2 27);
-  --destructive-foreground: oklch(0.99 0.012 27);
-  --border: oklch(0.9 0.008 260);
-  --ring: oklch(0.32 0.02 260);
-  --shadow-xs: 0 1px 2px oklch(0.24 0.02 260 / 12%);
+  color-scheme: light;
+  --radius: 0.625rem;
+
+  --background: oklch(0.985 0.002 247.839);
+  --foreground: oklch(0.145 0 0);
+  /* Pure white against an off-white page: a card lifts by value, not by
+     shadow. That is the whole trick of the look. */
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.5 0.14 213);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.96 0.02 264.38);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.96 0.01 264.38);
+  --muted-foreground: oklch(0.53 0 0);
+  --accent: oklch(0.96 0.02 264.38);
+  --accent-foreground: oklch(0.205 0 0);
+  /* Tinted badges (`bg-success/12 text-success`), so these are chosen as text
+     colors: a fill light enough to read as a status cannot carry 12px. */
+  --success: oklch(0.5 0.192 149.49);
+  --info: oklch(0.54 0.214 259.815);
+  --destructive: oklch(0.55 0.2082 25.38);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.5 0.14 213);
+  --shadow-xs: 0 1px 2px oklch(0.145 0 0 / 8%);
   --shadow-sm:
-    0 1px 2px oklch(0.24 0.02 260 / 10%),
-    0 2px 8px -2px oklch(0.24 0.02 260 / 9%);
+    0 1px 2px oklch(0.145 0 0 / 8%),
+    0 2px 8px -2px oklch(0.145 0 0 / 6%);
+
+  /* The rail is dark in the light theme too — Katalyst leads with it, and it
+     is what tells the operator where the chrome ends and the work begins. */
+  --sidebar: oklch(0.2 0 0);
+  --sidebar-muted: oklch(0.26 0 0);
+  --sidebar-foreground: oklch(0.88 0 0);
+  --sidebar-foreground-muted: oklch(0.66 0 0);
+  --sidebar-border: oklch(0.3 0 0);
+  --sidebar-hover: oklch(0.26 0 0);
+  --sidebar-active: oklch(0.32 0 0);
+  --sidebar-icon: oklch(0.72 0 0);
+  --sidebar-icon-muted: oklch(0.55 0 0);
+  --sidebar-icon-active: oklch(0.92 0 0);
 }
 
+/* The dark palette is declared twice: once for the operator who asked for it,
+   and once for the one who asked for nothing and whose system does the asking.
+   `light-dark()` would say it once, but it accepts colors only, and the two
+   shadows are not colors. The blocks must stay identical; `tests/styles.rs`
+   reads this file and fails if they drift.
+
+   There is no specificity hazard. `:root:not(.light)` is (0,2,0) and outranks
+   `.dark` at (0,1,0), but the media block holds nothing but dark values, so
+   where both match they agree. */
 .dark {
-  --background: oklch(0.17 0.012 260);
-  --foreground: oklch(0.93 0.006 260);
-  --muted-foreground: oklch(0.68 0.012 260);
-  --primary: oklch(0.92 0.008 260);
-  --primary-foreground: oklch(0.21 0.015 260);
-  --destructive: oklch(0.66 0.18 25);
-  --destructive-foreground: oklch(0.14 0.02 25);
-  --border: oklch(0.3 0.012 260);
-  --ring: oklch(0.6 0.02 260);
-  --shadow-xs: 0 1px 2px oklch(0 0 0 / 35%);
+  /* dark:palette */
+  color-scheme: dark;
+
+  --background: oklch(0.145 0.01 264.38);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0.01 264.38);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0.01 264.38);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.62 0.14 213);
+  /* The page's own ink, not white: white on this cyan is 3.4:1. */
+  --primary-foreground: oklch(0.145 0.01 264.38);
+  --secondary: oklch(0.269 0.02 264.38);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0.02 264.38);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0.02 264.38);
+  --accent-foreground: oklch(0.985 0 0);
+  --success: oklch(0.7205 0.192 149.49);
+  --info: oklch(0.66 0.214 259.815);
+  --destructive: oklch(0.704 0.191 22.216);
+  /* Same reason as the primary: 2.8:1 under white, 6.8:1 under the page ink. */
+  --destructive-foreground: oklch(0.145 0.01 264.38);
+  /* Translucent white, not a solid grey: it is what keeps a dark panel from
+     reading as a box drawn on the page. */
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.62 0.14 213);
+  --shadow-xs: 0 1px 2px oklch(0 0 0 / 40%);
   --shadow-sm:
-    0 1px 2px oklch(0 0 0 / 35%),
-    0 2px 8px -2px oklch(0 0 0 / 30%);
+    0 1px 2px oklch(0 0 0 / 40%),
+    0 2px 8px -2px oklch(0 0 0 / 35%);
+
+  /* The rail sinks one step under the dark page, keeping the same skin. */
+  --sidebar: oklch(0.18 0 0);
+  --sidebar-muted: oklch(0.24 0 0);
+  --sidebar-foreground: oklch(0.9 0 0);
+  --sidebar-foreground-muted: oklch(0.68 0 0);
+  --sidebar-border: oklch(0.26 0 0);
+  --sidebar-hover: oklch(0.24 0 0);
+  --sidebar-active: oklch(0.3 0 0);
+  --sidebar-icon: oklch(0.74 0 0);
+  --sidebar-icon-muted: oklch(0.58 0 0);
+  --sidebar-icon-active: oklch(0.98 0 0);
+  /* dark:palette:end */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    /* dark:palette */
+    color-scheme: dark;
+
+    --background: oklch(0.145 0.01 264.38);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0.01 264.38);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0.01 264.38);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.62 0.14 213);
+    /* The page's own ink, not white: white on this cyan is 3.4:1. */
+    --primary-foreground: oklch(0.145 0.01 264.38);
+    --secondary: oklch(0.269 0.02 264.38);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0.02 264.38);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0.02 264.38);
+    --accent-foreground: oklch(0.985 0 0);
+    --success: oklch(0.7205 0.192 149.49);
+    --info: oklch(0.66 0.214 259.815);
+    --destructive: oklch(0.704 0.191 22.216);
+    /* Same reason as the primary: 2.8:1 under white, 6.8:1 under the page ink. */
+    --destructive-foreground: oklch(0.145 0.01 264.38);
+    /* Translucent white, not a solid grey: it is what keeps a dark panel from
+       reading as a box drawn on the page. */
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.62 0.14 213);
+    --shadow-xs: 0 1px 2px oklch(0 0 0 / 40%);
+    --shadow-sm:
+      0 1px 2px oklch(0 0 0 / 40%),
+      0 2px 8px -2px oklch(0 0 0 / 35%);
+
+    /* The rail sinks one step under the dark page, keeping the same skin. */
+    --sidebar: oklch(0.18 0 0);
+    --sidebar-muted: oklch(0.24 0 0);
+    --sidebar-foreground: oklch(0.9 0 0);
+    --sidebar-foreground-muted: oklch(0.68 0 0);
+    --sidebar-border: oklch(0.26 0 0);
+    --sidebar-hover: oklch(0.24 0 0);
+    --sidebar-active: oklch(0.3 0 0);
+    --sidebar-icon: oklch(0.74 0 0);
+    --sidebar-icon-muted: oklch(0.58 0 0);
+    --sidebar-icon-active: oklch(0.98 0 0);
+    /* dark:palette:end */
+  }
 }
 
 @layer base {

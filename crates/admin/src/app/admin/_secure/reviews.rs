@@ -67,7 +67,7 @@ struct ReviewCard {
 
 fn status_badge(status: &str) -> (BadgeVariant, &'static str) {
     match status {
-        "published" => (BadgeVariant::Primary, "Publié"),
+        "published" => (BadgeVariant::Success, "Publié"),
         "rejected" => (BadgeVariant::Destructive, "Refusé"),
         _ => (BadgeVariant::Secondary, "En attente"),
     }

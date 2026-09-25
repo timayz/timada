@@ -41,7 +41,7 @@ fn parse_status(status: Option<&str>) -> Option<OutboxStatus> {
 pub async fn outbox_status_badge(status: OutboxStatus) -> Result<impl View> {
     let (variant, label) = match status {
         OutboxStatus::Pending => (BadgeVariant::Secondary, "En attente"),
-        OutboxStatus::Sent => (BadgeVariant::Primary, "Envoyé"),
+        OutboxStatus::Sent => (BadgeVariant::Success, "Envoyé"),
         OutboxStatus::Failed => (BadgeVariant::Destructive, "Échec"),
     };
     Ok(view! { badge(variant: variant, (label)) })

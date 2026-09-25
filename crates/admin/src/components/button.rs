@@ -27,9 +27,11 @@ impl ButtonVariant {
     ///
     /// Hover and press states apply the fill or foreground color at reduced
     /// opacity, so they hold up in both color schemes without `dark:`
-    /// overrides. Every variant with a resting fill or border casts the
-    /// theme's control shadow; `Ghost` is flat until hovered, so it casts
-    /// none.
+    /// overrides — except `Outline`, whose whole point is its edge: on a dark
+    /// page a hairline over the page color disappears, so it takes a tinted
+    /// fill and the control border instead. Every variant with a resting fill
+    /// or border casts the theme's control shadow; `Ghost` is flat until
+    /// hovered, so it casts none.
     ///
     /// Each variant sets its own border color rather than inheriting a
     /// transparent one from [`BASE`]: with two border-color classes on the
@@ -42,15 +44,17 @@ impl ButtonVariant {
                  hover:bg-primary/90 active:bg-primary/80",
             ),
             Self::Secondary => class!(
-                "border-transparent bg-foreground/5 text-foreground shadow-xs \
-                 hover:bg-foreground/10 active:bg-foreground/15",
+                "border-transparent bg-secondary text-secondary-foreground shadow-xs \
+                 hover:bg-secondary/80 active:bg-secondary/70",
             ),
             Self::Outline => class!(
-                "border-border text-foreground shadow-xs hover:bg-foreground/5 \
-                 active:bg-foreground/10",
+                "border-border bg-background text-foreground shadow-xs \
+                 hover:bg-accent hover:text-accent-foreground \
+                 dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
             ),
             Self::Ghost => class!(
-                "border-transparent text-foreground hover:bg-foreground/5 active:bg-foreground/10",
+                "border-transparent text-foreground hover:bg-accent \
+                 hover:text-accent-foreground active:bg-accent/70",
             ),
             Self::Destructive => class!(
                 "border-transparent bg-destructive text-destructive-foreground shadow-xs \
@@ -85,9 +89,9 @@ impl ButtonSize {
     fn classes(self) -> StaticClass {
         match self {
             Self::Sm => class!("h-8 gap-1.5 rounded-md px-3 text-xs"),
-            Self::Md => class!("h-9 gap-2 rounded-lg px-4 text-sm"),
-            Self::Lg => class!("h-10 gap-2 rounded-lg px-5 text-base"),
-            Self::Icon => class!("size-9 rounded-lg text-base"),
+            Self::Md => class!("h-9 gap-2 rounded-md px-4 text-sm"),
+            Self::Lg => class!("h-10 gap-2 rounded-md px-5 text-base"),
+            Self::Icon => class!("size-9 rounded-md text-base"),
         }
     }
 }
@@ -96,11 +100,20 @@ impl ButtonSize {
 ///
 /// Every button carries a border (colored per variant) so that the `Outline`
 /// variant, which only recolors it, does not change the button's dimensions.
+///
+/// Focus recolors that border to the ring and lays a translucent halo outside
+/// it. The border is the indicator and it is full strength; the halo is what
+/// makes it carry across a busy toolbar.
+///
+/// The transition names its properties rather than using `transition-colors`,
+/// which does not cover the ring: the ring is a box shadow, and a halo that
+/// appears instantly while the fill fades reads as two separate events.
 const BASE: StaticClass = class!(
     "inline-flex shrink-0 items-center justify-center border \
-     font-medium whitespace-nowrap transition-colors outline-none select-none \
-     focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 \
-     focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
+     font-medium whitespace-nowrap outline-none select-none \
+     transition-[color,background-color,border-color,box-shadow] \
+     focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 \
+     disabled:pointer-events-none disabled:opacity-50 [&>svg]:shrink-0",
 );
 
 /// Builds the full class list for a button of the given `variant` and `size`.

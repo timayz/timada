@@ -144,7 +144,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 pub async fn dispute_status_badge(status: DisputeStatus) -> Result<impl View> {
     let (variant, wording) = match status {
         DisputeStatus::Open => (BadgeVariant::Destructive, "En cours"),
-        DisputeStatus::Won => (BadgeVariant::Secondary, "Gagné"),
+        DisputeStatus::Won => (BadgeVariant::Success, "Gagné"),
         DisputeStatus::Lost => (BadgeVariant::Outline, "Perdu"),
     };
     Ok(view! { badge(variant: variant, (wording)) })
