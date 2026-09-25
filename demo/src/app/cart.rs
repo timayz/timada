@@ -408,6 +408,7 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
             }
             match &cart {
                 Some(cart) => {
+                    <div class="table-scroll">
                     <table>
                         <caption class="muted">"Articles dans votre panier"</caption>
                         <thead>
@@ -423,40 +424,44 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                             for line in &cart.lines { cart_row(line: line) }
                         </tbody>
                     </table>
-                    <table class="totals">
-                        <tbody>
-                            promo_totals(subtotal: money(&cart.subtotal), promo: &promo)
-                        </tbody>
-                    </table>
-                    <form method="post" action=(href!(apply_promo))>
-                        <label for="code">"Code promo ou bon d'achat"</label>
-                        " "
-                        <input id="code" name="code" required=(true) autocomplete="off" value=(cart.promo_code.clone().unwrap_or_default())>
-                        " "
-                        <button type="submit">"Appliquer"</button>
-                    </form>
-                    if let Some(code) = &cart.promo_code {
-                        <form method="post" action=(href!(remove_promo)) class="inline">
-                            <button type="submit" class="link">"Retirer le code " <span class="muted">(code.clone())</span></button>
+                    </div>
+                    <section class="panel">
+                        <table class="totals">
+                            <tbody>
+                                promo_totals(subtotal: money(&cart.subtotal), promo: &promo)
+                            </tbody>
+                        </table>
+                        <p class="actions">
+                            <a class="button" href=(href!(checkout::show))>"Passer commande"</a>
+                            <a href=(href!(catalog::home))>"Continuer mes achats \u{203A}"</a>
+                        </p>
+                    </section>
+                    <section class="panel">
+                        <h2>"Code promo ou bon d\u{2019}achat"</h2>
+                        <form method="post" action=(href!(apply_promo)) class="inline">
+                            <label for="code" class="muted">"Votre code"</label>
+                            <input id="code" name="code" required=(true) autocomplete="off" value=(cart.promo_code.clone().unwrap_or_default())>
+                            <button type="submit">"Appliquer"</button>
                         </form>
-                    }
-                    promo_notice(promo: &promo)
-                    if signed_in {
-                        <form method="post" action=(href!(save))>
-                            <label for="cart-name">"Sauvegarder ce panier pour plus tard"</label>
-                            " "
-                            <input id="cart-name" name="name" required=(true) maxlength="80" placeholder="Nom du panier" autocomplete="off">
-                            " "
-                            <button type="submit">"Sauvegarder"</button>
-                        </form>
-                    } else {
-                        <p class="muted"><a href=(login_link.clone())>"Connectez-vous"</a> " pour sauvegarder ce panier."</p>
-                    }
-                    <p>
-                        <a href=(href!(checkout::show))><strong>"Passer commande"</strong></a>
-                        " · "
-                        <a href=(href!(catalog::home))>"Continuer mes achats"</a>
-                    </p>
+                        if let Some(code) = &cart.promo_code {
+                            <form method="post" action=(href!(remove_promo)) class="inline">
+                                <button type="submit" class="link">"Retirer le code " <span class="muted">(code.clone())</span></button>
+                            </form>
+                        }
+                        promo_notice(promo: &promo)
+                    </section>
+                    <section class="panel">
+                        <h2>"Garder ce panier"</h2>
+                        if signed_in {
+                            <form method="post" action=(href!(save)) class="inline">
+                                <label for="cart-name" class="muted">"Sauvegarder pour plus tard"</label>
+                                <input id="cart-name" name="name" required=(true) maxlength="80" placeholder="Nom du panier" autocomplete="off">
+                                <button type="submit">"Sauvegarder"</button>
+                            </form>
+                        } else {
+                            <p class="muted"><a href=(login_link.clone())>"Connectez-vous"</a> " pour sauvegarder ce panier."</p>
+                        }
+                    </section>
                 }
                 None => {
                     <p class="muted">"Votre panier est vide."</p>
@@ -527,7 +532,7 @@ async fn cart_row(cx: &Cx, line: &CartLine) -> Result<impl View> {
             <td class="num">(money(&line.unit_price))</td>
             <td>
                 <form method="post" action=(quantity_action) class="inline">
-                    <label for=(field.clone()) class="muted">"Quantité de " (line.name.clone())</label>
+                    <label for=(field.clone()) class="vh">"Quantité de " (line.name.clone())</label>
                     <input id=(field) name="quantity" type="number" min="1" value=(line.quantity.to_string()) required=(true)>
                     " "
                     <button type="submit">"Mettre à jour"</button>
@@ -536,7 +541,7 @@ async fn cart_row(cx: &Cx, line: &CartLine) -> Result<impl View> {
             <td class="num">(money(&total))</td>
             <td>
                 <form method="post" action=(remove_action) class="inline">
-                    <button type="submit" class="link">"Supprimer " <span class="muted">(line.name.clone())</span></button>
+                    <button type="submit" class="link">"Supprimer " <span class="vh">(line.name.clone())</span></button>
                 </form>
             </td>
         </tr>

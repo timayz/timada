@@ -258,6 +258,56 @@ pub async fn load_listing(cx: &Cx, base: String, scope: Scope) -> Result<Listing
     })
 }
 
+/// The newest arrivals, for the front page's rail. Deliberately blind to the
+/// query string: this is an editorial strip, not a listing a shopper filters.
+pub async fn load_highlights(cx: &Cx, limit: u32) -> Result<Vec<ListingRow>> {
+    let store = app_context::<Store>(cx);
+    let currency = crate::currency::shopper_currency(cx).await?;
+    let found = search_listing(
+        &store.db,
+        &ListingQuery {
+            currency: Some(currency),
+            sort: ListingSort::Newest,
+            limit,
+            ..ListingQuery::default()
+        },
+    )
+    .await?;
+    Ok(found.rows)
+}
+
+/// A product in a rail. `<h3>`, not `<h2>`: the cards of the listing below
+/// are counted by their `<h2>` and this strip must not join that count.
+#[component]
+pub async fn highlight_card(cx: &Cx, row: &ListingRow) -> Result<impl View> {
+    let link = href!(
+        catalog::product_page,
+        catalog::ProductId(row.product_id.clone())
+    )
+    .resolve(cx);
+    let price = money(&Money::new(row.price_minor, &row.currency));
+    let price = if row.price_varies {
+        format!("à partir de {price}")
+    } else {
+        price
+    };
+    let title = row.title().to_owned();
+    let brand = row.brand_name.clone();
+    let alt = row.thumbnail_alt.clone().unwrap_or_default();
+    let picture = row.thumbnail_url.clone();
+    Ok(view! {
+        <li class="tile highlight">
+            if let Some(url) = &picture {
+                <img src=(url.clone()) alt=(alt) width="320" height="320" loading="lazy" decoding="async">
+            }
+            <p class="eyebrow">"Nouveau"</p>
+            <h3><a href=(link)>(title)</a></h3>
+            <p class="muted">(brand)</p>
+            <p class="price">(price)</p>
+        </li>
+    })
+}
+
 fn rating_label(row: &ListingRow) -> Option<String> {
     row.rating_avg.map(|average| {
         format!(
@@ -296,14 +346,16 @@ async fn product_card(cx: &Cx, row: &ListingRow) -> Result<impl View> {
             </a>
             <h2><a href=(link)>(title)</a></h2>
             <p class="muted">(row.brand_name.clone())</p>
-            if let Some(versions) = &versions { <p class="muted">(versions.clone())</p> }
-            if let Some(rating) = &rating { <p>(rating.clone())</p> }
+            if let Some(rating) = &rating { <p class="muted">(rating.clone())</p> }
             <p class="price">(price)</p>
-            if row.available > 0 {
-                <p class="in-stock">"En stock"</p>
-            } else {
-                <p class="muted">"Rupture"</p>
-            }
+            <p class="marks">
+                if row.available > 0 {
+                    <span class="badge ok">"En stock"</span>
+                } else {
+                    <span class="badge">"Rupture"</span>
+                }
+                if let Some(versions) = &versions { <span class="badge">(versions.clone())</span> }
+            </p>
         </li>
     })
 }
@@ -395,6 +447,8 @@ pub async fn listing_view(listing: &Listing) -> Result<impl View> {
 
     Ok(view! {
         <div class="listing">
+            <details class="filter-panel" open=(true)>
+            <summary>"Affiner la recherche"</summary>
             <form method="get" action=(base.clone()) class="filters" aria-label="Filtrer les produits">
                 <label>"Rechercher"
                     <input type="search" name="q" value=(filters.q.clone().unwrap_or_default())>
@@ -459,6 +513,7 @@ pub async fn listing_view(listing: &Listing) -> Result<impl View> {
                 <button type="submit">"Filtrer"</button>
                 if narrowed { <a href=(base.clone())>"Tout afficher"</a> }
             </form>
+            </details>
             <section aria-label="Produits">
                 <p role="status" class="muted">(summary)</p>
                 if !found.rows.is_empty() {

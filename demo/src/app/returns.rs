@@ -231,6 +231,7 @@ async fn return_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
                 Some(until) if anything_left => {
                     <p class="muted">"Vous pouvez demander un retour jusqu'au " (until.clone()) ". Les frais de port ne sont pas remboursés."</p>
                     <form method="post" action=(action.clone())>
+                        <div class="table-scroll">
                         <table>
                             <caption class="muted">"Articles à retourner"</caption>
                             <thead>
@@ -255,6 +256,7 @@ async fn return_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
                                 }
                             </tbody>
                         </table>
+                        </div>
                         <p>
                             <label for="ground">"Motif du retour"</label>
                             <select id="ground" name="ground" required=(true) aria-describedby="label-cost">
@@ -422,6 +424,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             if let Some(reason) = &request.refused_reason {
                 <p role="status" class="notice">"Demande refusée : " (reason.clone())</p>
             }
+            <div class="table-scroll">
             <table>
                 <caption class="muted">"Articles du retour"</caption>
                 <thead>
@@ -441,6 +444,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                     }
                 </tbody>
             </table>
+            </div>
             if request.status == ReturnStatus::Approved {
                 <div class="card">
                     <h2>"Envoyer votre colis"</h2>

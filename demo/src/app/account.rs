@@ -179,14 +179,35 @@ pub async fn overview(cx: &Cx) -> Result<impl View> {
             title: "Mon compte",
             <h1>"Mon compte"</h1>
             <p>(book.first_name.clone()) " " (book.last_name.clone()) " · " (book.email.clone())</p>
-            <ul>
-                <li><a href=(href!(orders))>"Historique de mes commandes"</a></li>
-                <li><a href=(href!(addresses))>"Mes adresses"</a></li>
-                <li><a href=(href!(saved_carts))>"Mes paniers sauvegardés"</a></li>
-                <li><a href=(href!(alerts))>"Mes alertes de disponibilité"</a></li>
-                <li><a href=(href!(super::company::show))>"Compte professionnel (entreprise, numéro de TVA)"</a></li>
-                <li><a href=(href!(email))>"Modifier mon adresse email"</a></li>
-                <li><a href=(href!(password))>"Modifier mon mot de passe"</a></li>
+            <ul class="cards">
+                <li class="card link-tile">
+                    <p><a href=(href!(orders))>"Historique de mes commandes"</a></p>
+                    <p class="muted">"Suivi, factures, avoirs et retours."</p>
+                </li>
+                <li class="card link-tile">
+                    <p><a href=(href!(addresses))>"Mes adresses"</a></p>
+                    <p class="muted">"Livraison et facturation."</p>
+                </li>
+                <li class="card link-tile">
+                    <p><a href=(href!(saved_carts))>"Mes paniers sauvegardés"</a></p>
+                    <p class="muted">"Reprenez une sélection mise de côté."</p>
+                </li>
+                <li class="card link-tile">
+                    <p><a href=(href!(alerts))>"Mes alertes de disponibilité"</a></p>
+                    <p class="muted">"On vous prévient dès le retour en stock."</p>
+                </li>
+                <li class="card link-tile">
+                    <p><a href=(href!(super::company::show))>"Compte professionnel (entreprise, numéro de TVA)"</a></p>
+                    <p class="muted">"Facturation hors taxes dans l\u{2019}Union européenne."</p>
+                </li>
+                <li class="card link-tile">
+                    <p><a href=(href!(email))>"Modifier mon adresse email"</a></p>
+                    <p class="muted">"Votre identifiant de connexion."</p>
+                </li>
+                <li class="card link-tile">
+                    <p><a href=(href!(password))>"Modifier mon mot de passe"</a></p>
+                    <p class="muted">"Les autres sessions seront fermées."</p>
+                </li>
             </ul>
         )
     })
@@ -388,6 +409,7 @@ async fn saved_carts_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
             if listed.is_empty() {
                 <p class="muted">"Aucun panier sauvegardé. Depuis votre panier, donnez-lui un nom pour le retrouver ici."</p>
             } else {
+                <div class="table-scroll">
                 <table>
                     <caption class="muted">"Du plus récent au plus ancien. Les prix sont ceux du jour où les articles ont été ajoutés."</caption>
                     <thead>
@@ -419,6 +441,7 @@ async fn saved_carts_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                         }
                     </tbody>
                 </table>
+                </div>
             }
             <p><a href=(href!(overview))>"Retour à mon compte"</a></p>
         )
@@ -468,6 +491,7 @@ pub async fn alerts(cx: &Cx) -> Result<impl View> {
             if listed.is_empty() {
                 <p class="muted">"Aucune alerte. Sur la fiche d'un produit en rupture, demandez à être alerté de son retour en stock."</p>
             } else {
+                <div class="table-scroll">
                 <table>
                     <caption class="muted">"Les produits de nouveau disponibles en premier"</caption>
                     <thead>
@@ -497,6 +521,7 @@ pub async fn alerts(cx: &Cx) -> Result<impl View> {
                         }
                     </tbody>
                 </table>
+                </div>
             }
             <p><a href=(href!(overview))>"Retour à mon compte"</a></p>
         )
@@ -883,6 +908,7 @@ pub async fn orders(cx: &Cx) -> Result<impl View> {
             if listed.is_empty() {
                 <p class="muted">"Vous n'avez pas encore passé de commande."</p>
             } else {
+                <div class="table-scroll">
                 <table>
                     <caption class="muted">"Vos commandes, de la plus récente à la plus ancienne"</caption>
                     <thead>
@@ -904,6 +930,7 @@ pub async fn orders(cx: &Cx) -> Result<impl View> {
                         }
                     </tbody>
                 </table>
+                </div>
             }
         )
     })
@@ -1171,6 +1198,7 @@ async fn order_view(
                 </p>
             }
             if let Some(reason) = &order.cancelled_reason { <p>"Motif d'annulation : " (timada_order::cancellation_reason_label(reason).to_owned())</p> }
+            <div class="table-scroll">
             <table>
                 <caption class="muted">"Articles commandés"</caption>
                 <thead>
@@ -1192,6 +1220,7 @@ async fn order_view(
                     }
                 </tbody>
             </table>
+            </div>
             <table class="totals">
                 <tbody>
                     <tr><td>"Sous-total"</td><td class="num">(money(&order.subtotal))</td></tr>
@@ -1224,6 +1253,7 @@ async fn order_view(
                 <p role="status" class="notice">"Remboursement en cours : " <strong>(pending.clone())</strong></p>
             }
             if !credit_notes.is_empty() {
+                <div class="table-scroll">
                 <table>
                     <caption class="muted">"Avoirs émis pour cette commande"</caption>
                     <thead>
@@ -1245,8 +1275,10 @@ async fn order_view(
                         }
                     </tbody>
                 </table>
+                </div>
             }
             if !order_returns.is_empty() {
+                <div class="table-scroll">
                 <table>
                     <caption class="muted">"Retours de cette commande"</caption>
                     <thead>
@@ -1266,6 +1298,7 @@ async fn order_view(
                         }
                     </tbody>
                 </table>
+                </div>
             }
             if let Some(link) = &new_return {
                 <p><a href=(link.clone())>"Retourner des articles"</a></p>

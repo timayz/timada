@@ -1786,9 +1786,9 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
     let id = timada_catalog::product_id;
     let page_of = |sku: &str| format!("/p/{}", id(sku));
 
-    // A listing shows a family once: 30 products, 7 of them in 2 families.
+    // A listing shows a family once: 54 products, 9 of them in 2 families.
     let home = text(browser.get("/").await).await?;
-    assert!(home.contains(">25 produits<"), "{home}");
+    assert!(home.contains(">49 produits<"), "{home}");
     let sony = text(browser.get("/recherche?q=sony").await).await?;
     assert_eq!(listed(&sony), ["Sony WH-1000XM5"], "{sony}");
     assert!(sony.contains("3 versions"), "{sony}");
@@ -1947,7 +1947,7 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
 
     // The plain listing: paged, each page with an address of its own to index.
     let home = text(browser.get("/").await).await?;
-    assert!(home.contains(">25 produits<"), "{home}");
+    assert!(home.contains(">49 produits<"), "{home}");
     assert_eq!(listed(&home).len(), 24);
     assert!(
         home.contains("<link rel=\"canonical\" href=\"http://127.0.0.1:3000/\">"),
@@ -1958,7 +1958,6 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
         "{home}"
     );
     assert!(!home.contains("name=\"robots\""), "{home}");
-    assert!(home.contains("<img src=\"/media/demo/jbl-flip6.svg\" alt=\"JBL Flip 6\" width=\"240\" height=\"240\" loading=\"lazy\""), "{home}");
     let last = text(browser.get("/?page=7").await).await?;
     assert_eq!(listed(&last).len(), 1, "a page past the end is the last");
     assert!(
@@ -1978,6 +1977,7 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
     assert_eq!(
         listed(&logitech),
         [
+            "Logitech C920 HD Pro",
             "Logitech G502 X",
             "Logitech MX Master 3S",
             "Logitech MX Keys S",
@@ -1994,7 +1994,7 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
         "{logitech}"
     );
     // The other brands still say what they would add.
-    assert!(logitech.contains("Corsair (3)"), "{logitech}");
+    assert!(logitech.contains("Corsair (4)"), "{logitech}");
     assert!(logitech.contains("Tout afficher"), "{logitech}");
     let two_brands = text(browser.get("/?marque=jbl&marque=sony&note=4").await).await?;
     assert_eq!(listed(&two_brands).len(), 3, "{two_brands}");
@@ -2010,8 +2010,15 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
             "Logitech G502 X",
             "Philips Hue Go",
             "Crucial P3 Plus 1 To",
+            "Logitech C920 HD Pro",
             "Corsair M65 RGB Ultra",
-            "Corsair K55 Core"
+            "Manette Xbox sans fil",
+            "Kingston Fury Beast 16 Go",
+            "8BitDo Ultimate 2 Bluetooth",
+            "Corsair K55 Core",
+            "Philips Hue White and Color E27",
+            "Trust Tyro",
+            "Xiaomi Smart LED Bulb"
         ]
     );
 
@@ -2048,12 +2055,13 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
 
     // A branch of the tree, a brand.
     let components = text(browser.get("/c/composants").await).await?;
-    assert!(components.contains(">6 produits<"), "{components}");
+    assert!(components.contains(">12 produits<"), "{components}");
     assert!(components.contains("href=\"/c/ssd\""), "{components}");
-    assert!(components.contains("placeholder=\"74\""), "{components}");
+    assert!(components.contains("placeholder=\"59\""), "{components}");
     assert!(components.contains("placeholder=\"660\""), "{components}");
     let jbl = text(browser.get("/marque/jbl").await).await?;
     assert_eq!(listed(&jbl), ["JBL Charge 5", "JBL Flip 6"]);
+    assert!(jbl.contains("<img src=\"/media/demo/jbl-flip6.svg\" alt=\"JBL Flip 6\" width=\"240\" height=\"240\" loading=\"lazy\""), "{jbl}");
     assert!(!jbl.contains("<legend>Marque</legend>"), "{jbl}");
     assert!(jbl.contains("Rupture"), "{jbl}");
     assert!(jbl.contains("5,0 / 5 (1 avis)"), "{jbl}");
@@ -2124,7 +2132,7 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
         sitemap.contains("<loc>http://127.0.0.1:3000/c/carte-graphique</loc>"),
         "{sitemap}"
     );
-    assert_eq!(sitemap.matches("/p/").count(), 25, "{sitemap}");
+    assert_eq!(sitemap.matches("/p/").count(), 49, "{sitemap}");
     assert!(sitemap.contains("<lastmod>"), "{sitemap}");
     let robots = text(browser.get("/robots.txt").await).await?;
     assert!(robots.contains("Disallow: /checkout"), "{robots}");

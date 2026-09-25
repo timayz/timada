@@ -48,42 +48,11 @@ pub fn absolute(path: &str) -> String {
     format!("{}{path}", mailer_config().base_url.trim_end_matches('/'))
 }
 
-const STYLES: &str = "\
-body{font-family:system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a1a}\
-header{display:flex;flex-wrap:wrap;gap:.5rem 1.25rem;align-items:baseline;border-bottom:1px solid #ddd;padding-bottom:.5rem}\
-header nav{display:flex;flex-wrap:wrap;gap:1rem;margin-left:auto;align-items:baseline}\
-a{color:#0b5fa5}ul{padding-left:1.2rem}.price{font-size:1.5rem;font-weight:600}.muted{color:#595959}\
-table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:.5rem;border-bottom:1px solid #e5e5e5;vertical-align:top}\
-td.num,th.num{text-align:right;white-space:nowrap}\
-.version{display:inline-block;padding:.2rem .6rem;border:1px solid #767676;border-radius:.3rem;text-decoration:none}.version.current{border-color:#0b5fa5;box-shadow:inset 0 0 0 1px #0b5fa5;font-weight:600}.version.off{color:#595959;border-style:dashed}\
-form.inline{display:inline}form.stack{display:grid;gap:.75rem;max-width:28rem}\
-label{display:grid;gap:.25rem;font-weight:500}label.choice{display:flex;gap:.5rem;align-items:baseline;font-weight:400}\
-input,select,button{font:inherit;padding:.45rem .6rem;border:1px solid #767676;border-radius:.3rem}\
-input[type=number]{width:5rem}input[type=radio]{padding:0}\
-button{background:#0b5fa5;border-color:#0b5fa5;color:#fff;cursor:pointer}\
-button.link{background:none;border:none;color:#0b5fa5;padding:0;text-decoration:underline}\
-:focus-visible{outline:3px solid #ffbf47;outline-offset:2px}\
-fieldset{border:1px solid #ddd;border-radius:.3rem;margin:0 0 1rem;padding:.75rem 1rem}legend{font-weight:600;padding:0 .25rem}\
-.error{color:#b00020;font-weight:500}.notice{background:#eef6ee;border:1px solid #b7d8b7;padding:.5rem .75rem;border-radius:.3rem}\
-nav.crumbs ol{display:flex;flex-wrap:wrap;gap:.25rem .5rem;list-style:none;padding:0;margin:0 0 1rem;color:#595959}\
-nav.crumbs li+li::before{content:'\\203A';margin-right:.5rem}\
-ul.tags{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;padding:0}ul.tags a{display:inline-block;border:1px solid #767676;border-radius:1rem;padding:.2rem .75rem;text-decoration:none}\
-.listing{display:grid;gap:1.5rem;grid-template-columns:minmax(0,1fr)}\
-@media(min-width:48rem){.listing{grid-template-columns:15rem minmax(0,1fr)}}\
-form.filters{display:grid;gap:.75rem;align-content:start}form.filters fieldset{display:grid;gap:.35rem;border:1px solid #ddd;border-radius:.3rem}\
-form.filters input[type=number],form.filters input[type=search],form.filters select{width:100%;box-sizing:border-box}\
-ul.products{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(12rem,1fr));list-style:none;padding:0;margin:0}\
-li.product{border:1px solid #ddd;border-radius:.3rem;padding:.75rem;display:grid;gap:.25rem;align-content:start}\
-li.product h2{font-size:1rem;margin:0}li.product p{margin:0}li.product .price{font-size:1.15rem}\
-li.product .thumb{display:block;aspect-ratio:1;background:#f4f4f4;border-radius:.2rem;overflow:hidden}\
-li.product img{width:100%;height:100%;object-fit:contain;display:block}\
-li.product .no-image{display:grid;place-items:center;height:100%;color:#595959;font-size:.85rem}\
-table.sheet th[scope=colgroup]{background:#f4f4f4}table.sheet th[scope=row]{font-weight:400;color:#595959;width:40%}\
-.in-stock{color:#176b2c;font-weight:500}\
-nav.pager{display:flex;gap:1rem;align-items:baseline;margin-top:1rem}\
-.cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}\
-.card{border:1px solid #ddd;border-radius:.3rem;padding:.75rem 1rem}.card address{font-style:normal}\
-.totals{margin-left:auto;max-width:22rem}.totals td{border:none;padding:.2rem .5rem}.totals tr.total td{font-weight:700;border-top:1px solid #ccc}";
+/// The palette, shared with the print-only invoice sheet. Both are written
+/// as CSS files and inlined: `asset!()` would panic wherever the router runs
+/// without an asset bundle, which is every test and a bare `cargo run`.
+pub(super) const TOKENS: &str = include_str!("tokens.css");
+const STOREFRONT: &str = include_str!("storefront.css");
 
 /// The `<html>` shell: header with the cart and account links, then the page.
 /// `refresh` reloads the page after that many seconds (pages waiting on a
@@ -164,29 +133,11 @@ pub async fn document(
                 if let Some(json_ld) = json_ld {
                     <script type="application/ld+json">(json_ld)</script>
                 }
-                <style>(STYLES)</style>
+                <style>(Unescaped::new_unchecked(TOKENS))(Unescaped::new_unchecked(STOREFRONT))</style>
             </head>
             <body>
-                <header>
+                <header class="globalnav">
                     <a href=(href!(catalog::home))><strong>"Timada demo"</strong></a>
-                    <form method="get" action=(href!(catalog::search)) role="search" class="inline">
-                        <input type="search" name="q" aria-label="Rechercher un produit" placeholder="Rechercher…" size="18">
-                        <button type="submit">"Chercher"</button>
-                    </form>
-                    if !currencies.is_empty() {
-                        <form method="post" action=(href!(currency::switch)) class="inline">
-                            <input type="hidden" name="next" value=(here.clone())>
-                            <label for="currency" class="muted">"Devise"</label>
-                            " "
-                            <select id="currency" name="currency">
-                                for (code, written, current) in &currencies {
-                                    <option value=(code.clone()) selected=(*current)>(written.clone())</option>
-                                }
-                            </select>
-                            " "
-                            <button type="submit">"Changer"</button>
-                        </form>
-                    }
                     <nav aria-label="Principal">
                         <a href=(href!(cart::show))>"Panier (" (cart_count.to_string()) ")"</a>
                         match &account {
@@ -201,12 +152,92 @@ pub async fn document(
                                 <a href=(href!(account::register))>"Créer un compte"</a>
                             }
                         }
-                        <a href="/admin" class="muted">"Administration"</a>
+                        <a href="/admin">"Administration"</a>
                     </nav>
                 </header>
-                <main>(child)</main>
+                <nav class="shopnav" aria-label="Boutique">
+                    <span class="shopname">"Boutique"</span>
+                    <form method="get" action=(href!(catalog::search)) role="search" class="inline">
+                        <input type="search" name="q" aria-label="Rechercher un produit" placeholder="Rechercher…" size="18">
+                        <button type="submit">"Chercher"</button>
+                    </form>
+                    if !currencies.is_empty() {
+                        <form method="post" action=(href!(currency::switch)) class="inline">
+                            <input type="hidden" name="next" value=(here.clone())>
+                            <label for="currency" class="muted">"Devise"</label>
+                            <select id="currency" name="currency">
+                                for (code, written, current) in &currencies {
+                                    <option value=(code.clone()) selected=(*current)>(written.clone())</option>
+                                }
+                            </select>
+                            <button type="submit">"Changer"</button>
+                        </form>
+                    }
+                </nav>
+                <main><div class="page">(child)</div></main>
+                site_footer()
             </body>
         </html>
+    })
+}
+
+/// The foot of every page: where else to go, and what this shop is not.
+/// Deliberately free of any amount — a test reads everything after `<main>`
+/// and refuses to find a currency there.
+#[component]
+pub async fn site_footer() -> Result<impl View> {
+    Ok(view! {
+        <footer class="sitefooter">
+            <p>
+                "Boutique de démonstration. Le catalogue, les prix et les stocks sont \
+                 fictifs : aucune commande n'est expédiée et aucun paiement réel n'est \
+                 encaissé."
+            </p>
+            <p>"Timada est une bibliothèque libre. Cette vitrine en est l'exemple d'intégration."</p>
+            <nav aria-label="Pied de page">
+                <div>
+                    <h2>"La boutique"</h2>
+                    <ul>
+                        <li><a href=(href!(catalog::home))>"Catalogue"</a></li>
+                        <li><a href=(href!(catalog::search))>"Rechercher un produit"</a></li>
+                        <li><a href=(href!(cart::show))>"Panier"</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h2>"Votre compte"</h2>
+                    <ul>
+                        <li><a href=(href!(account::overview))>"Vue d\u{2019}ensemble"</a></li>
+                        <li><a href=(href!(account::orders))>"Commandes"</a></li>
+                        <li><a href=(href!(account::addresses))>"Adresses"</a></li>
+                        <li><a href=(href!(account::saved_carts))>"Paniers enregistrés"</a></li>
+                        <li><a href=(href!(account::alerts))>"Alertes de stock"</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h2>"Aide et services"</h2>
+                    <ul>
+                        <li><a href=(href!(account::orders))>"Suivre une commande"</a></li>
+                        <li><a href=(href!(company::show))>"Informations entreprise"</a></li>
+                        <li><a href=(href!(forgot::forgot))>"Mot de passe oublié"</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h2>"Accès"</h2>
+                    <ul>
+                        <li><a href=(href!(account::login))>"Se connecter"</a></li>
+                        <li><a href=(href!(account::register))>"Créer un compte"</a></li>
+                        <li><a href="/admin">"Administration"</a></li>
+                    </ul>
+                </div>
+            </nav>
+            <p class="legal">
+                "Copyright © 2026 Timada. Tous droits réservés."
+                " "
+                <a href="/sitemap.xml">"Plan du site"</a>
+                " "
+                "France"
+            </p>
+        </footer>
     })
 }
 
