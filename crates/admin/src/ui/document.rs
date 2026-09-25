@@ -2,7 +2,7 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::href,
-    view::{Child, View, component, view},
+    view::{Child, View, attributes, component, view},
 };
 
 use crate::{
@@ -12,6 +12,7 @@ use crate::{
     },
     auth::{Role, Section, signed_in_admin},
     config::{AdminConfig, Stylesheet},
+    ui::{icon, icons},
 };
 
 /// The `<html>` shell: stylesheet, header with navigation, and the page body.
@@ -138,10 +139,17 @@ pub async fn page_header(title: &str, #[default] child: Child<'_>) -> Result<imp
     })
 }
 
+/// What a list says when it has nothing to list.
+///
+/// The icon is decorative — the sentence already says what is missing — so it
+/// carries no label and stays out of the reading order.
 #[component]
 pub async fn empty_state(message: &str) -> Result<impl View> {
     Ok(view! {
-        <p class="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">(message)</p>
+        <div class="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border p-10 text-center">
+            icon(data: icons::INBOX, attrs: attributes! { class="size-6 text-muted-foreground" })
+            <p class="text-sm text-muted-foreground">(message)</p>
+        </div>
     })
 }
 
@@ -166,8 +174,18 @@ pub async fn pagination(cx: &Cx, page: u32, page_size: u32, total: u64) -> Resul
         <nav aria-label="Pagination" class="mt-4 flex items-center justify-between text-sm text-muted-foreground">
             <span>"Page " (page.to_string()) " / " (pages.to_string()) " · " (total.to_string()) " au total"</span>
             <span class="flex gap-3">
-                if page > 1 { <a href=(with_page(page - 1)) class="underline-offset-4 hover:underline">"Précédente"</a> }
-                if page < pages { <a href=(with_page(page + 1)) class="underline-offset-4 hover:underline">"Suivante"</a> }
+                if page > 1 {
+                    <a href=(with_page(page - 1)) class="inline-flex items-center gap-1 underline-offset-4 hover:underline">
+                        icon(data: icons::CHEVRON_LEFT, attrs: attributes! { class="size-4" })
+                        "Précédente"
+                    </a>
+                }
+                if page < pages {
+                    <a href=(with_page(page + 1)) class="inline-flex items-center gap-1 underline-offset-4 hover:underline">
+                        "Suivante"
+                        icon(data: icons::CHEVRON_RIGHT, attrs: attributes! { class="size-4" })
+                    </a>
+                }
             </span>
         </nav>
     })

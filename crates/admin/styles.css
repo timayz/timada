@@ -54,8 +54,13 @@
 @import "tailwindcss";
 
 /* Scan the project's Rust sources for the Tailwind classes they use. This
-   file is installed at the project root, so `./src` is the crate's source. */
+   file is installed at the project root, so `./src` is the crate's source.
+
+   The icon catalogue is excluded: it is SVG path data, not class names, and
+   scanning a few kilobytes of coordinates for utilities that are not there is
+   work with nothing at the end of it. */
 @source "./src/**/*.rs";
+@source not "./src/ui/icons.rs";
 
 /* `dark:` holds when the operator asked for dark — the `dark` class on
    <html> — and when the operating system asks for it and the operator has not

@@ -28,7 +28,18 @@ timada-promotion.workspace = true
 timada-shipping.workspace = true
 timada-tax.workspace = true
 evento.workspace = true
-topcoat = { workspace = true, features = ["router", "view", "cookie", "session", "asset", "tower", "tailwind", "discover", "multipart"] }
+topcoat = { workspace = true, features = [
+    "router",
+    "view",
+    "cookie",
+    "session",
+    "asset",
+    "tower",
+    "tailwind",
+    "discover",
+    "multipart",
+    "icon",
+] }
 inventory = "0.3"
 sqlx.workspace = true
 sqlx_migrator.workspace = true
