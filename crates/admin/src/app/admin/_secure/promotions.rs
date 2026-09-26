@@ -240,7 +240,7 @@ async fn save_discount(
         code: form.code,
         kind,
         max_redemptions,
-        valid_until: days_from_now(valid_days)?,
+        valid_until: days_from_now(valid_days).map_err(topcoat::Error::from_anyhow)?,
     })
     .await;
     Ok(created.map_err(|err| err.to_string()))
@@ -327,7 +327,7 @@ async fn save_voucher(
         customer_id,
         value: Money::new(form.value_cents, currency),
         kind: VoucherKind::GiftVoucher,
-        expires_at: days_from_now(valid_days)?,
+        expires_at: days_from_now(valid_days).map_err(topcoat::Error::from_anyhow)?,
     })
     .await;
     Ok(issued.map_err(|err| err.to_string()))

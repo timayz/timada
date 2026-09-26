@@ -40,7 +40,8 @@ async fn own_invoice(cx: &Cx) -> Result<(String, InvoiceDocument)> {
     let order_id = param::<OrderId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     load_order_details(&store.executor, &order_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|order| order.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
     let document = load_invoice_document(
@@ -49,7 +50,8 @@ async fn own_invoice(cx: &Cx) -> Result<(String, InvoiceDocument)> {
         &invoice_issuer(),
         &invoice_id(&order_id),
     )
-    .await?
+    .await
+    .map_err(topcoat::Error::from_anyhow)?
     .ok_or_not_found()?;
     Ok((order_id, document))
 }
@@ -89,7 +91,8 @@ pub async fn pdf(cx: &Cx) -> Result<PdfDownload> {
         &ArchivePolicy::default(),
     )
     .await
-    .map_err(anyhow::Error::from)?
+    .map_err(anyhow::Error::from)
+    .map_err(topcoat::Error::from_anyhow)?
     .ok_or_not_found()?;
     Ok(PdfDownload {
         file_name: invoice_pdf_file_name(&document),
@@ -108,11 +111,13 @@ pub async fn credit_note_pdf(cx: &Cx) -> Result<PdfDownload> {
     let note_id = param::<CreditNoteId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     load_order_details(&store.executor, &order_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|order| order.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
     let document = load_credit_note_document(&store.executor, &invoice_issuer(), &note_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|document| document.order_id == order_id)
         .ok_or_not_found()?;
     let (_, bytes) = archive_credit_note(
@@ -124,7 +129,8 @@ pub async fn credit_note_pdf(cx: &Cx) -> Result<PdfDownload> {
         &ArchivePolicy::default(),
     )
     .await
-    .map_err(anyhow::Error::from)?
+    .map_err(anyhow::Error::from)
+    .map_err(topcoat::Error::from_anyhow)?
     .ok_or_not_found()?;
     Ok(PdfDownload {
         file_name: credit_note_pdf_file_name(&document),

@@ -13,12 +13,16 @@ use topcoat::{
 /// own, and in the dark scheme it is a translucent white over a tinted fill.
 /// Focus recolors that border to the ring and lays a translucent halo outside
 /// it, so the indicator itself is full strength.
+///
+/// `aria-invalid="true"` recolors that border and halo to `--destructive`, so a
+/// rejected field is marked where the operator is already looking.
 const INPUT: StaticClass = class!(
     "h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 \
      text-sm shadow-xs transition-[color,border-color,box-shadow] outline-none \
      placeholder:text-muted-foreground dark:bg-input/30 \
      file:mr-3 file:h-full file:border-0 file:bg-transparent file:text-sm file:font-medium \
      focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 \
+     aria-invalid:border-destructive aria-invalid:focus-visible:ring-destructive/50 \
      disabled:pointer-events-none disabled:opacity-50",
 );
 

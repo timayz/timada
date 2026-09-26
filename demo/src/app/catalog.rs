@@ -287,10 +287,13 @@ pub async fn submit_review(cx: &Cx, Form(form): Form<ReviewForm>) -> Result<impl
     let id = param::<ProductId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     load_product_page(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
 
-    let order_id = purchase_of(store, &account.customer_id, &id).await?;
+    let order_id = purchase_of(store, &account.customer_id, &id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let submitted = timada_review::Command(&store.executor)
         .submit_review(SubmitReview {
             product_id: id.clone(),
@@ -309,7 +312,7 @@ pub async fn submit_review(cx: &Cx, Form(form): Form<ReviewForm>) -> Result<impl
         Err(ReviewError::InvalidRating(_)) => "Choisissez une note de 1 à 5.",
         Err(ReviewError::Required(_)) => "Écrivez votre avis avant de l'envoyer.",
         Err(ReviewError::AlreadyReviewed) => "Vous avez déjà donné votre avis sur ce produit.",
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     Ok(view! { product_view(review_error: Some(error.to_owned()), question_error: None) })
 }
@@ -323,10 +326,15 @@ pub async fn request_alert(cx: &Cx) -> Result<impl View> {
     let id = param::<ProductId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     load_product_page(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
 
-    if available_stock(store, &id).await? == 0 {
+    if available_stock(store, &id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        == 0
+    {
         let requested = timada_inventory::Command(&store.executor)
             .request_back_in_stock_alert(RequestBackInStockAlert {
                 product_id: id.clone(),
@@ -336,7 +344,7 @@ pub async fn request_alert(cx: &Cx) -> Result<impl View> {
             .await;
         match requested {
             Ok(_) | Err(InventoryError::AlreadyRequested) => {}
-            Err(err) => return Err(anyhow::Error::from(err).into()),
+            Err(err) => return Err(err.into()),
         }
     }
     Err::<(), _>(see_other(href!(product_page, ProductId(id)).resolve(cx)).into())
@@ -355,7 +363,8 @@ pub async fn ask_question(cx: &Cx, Form(form): Form<QuestionForm>) -> Result<imp
     let id = param::<ProductId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     load_product_page(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
 
     let asked = timada_review::Command(&store.executor)
@@ -374,7 +383,7 @@ pub async fn ask_question(cx: &Cx, Form(form): Form<QuestionForm>) -> Result<imp
             return Err(see_other(back).into());
         }
         Err(ReviewError::Required(_)) => "Écrivez votre question avant de l'envoyer.",
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     Ok(view! { product_view(review_error: None, question_error: Some(error.to_owned())) })
 }
@@ -432,12 +441,16 @@ pub async fn submit_answer(cx: &Cx, Form(form): Form<AnswerForm>) -> Result<impl
     // The question must be about this article: this product, or another
     // version of it — their questions are shown here too.
     let product = load_product_page(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
-    let article = Article::of(store, &product).await?;
+    let article = Article::of(store, &product)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     reviews
         .load_question(&question)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|q| article.products.contains(&q.product_id))
         .ok_or_not_found()?;
 
@@ -455,7 +468,7 @@ pub async fn submit_answer(cx: &Cx, Form(form): Form<AnswerForm>) -> Result<impl
         Err(ReviewError::Required(_)) => "Écrivez votre réponse avant de l'envoyer.",
         Err(ReviewError::AlreadyAnswered) => "Vous avez déjà répondu à cette question.",
         Err(ReviewError::QuestionNotPublished) => "Cette question n'est pas ouverte aux réponses.",
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     Ok(view! { product_view(review_error: None, question_error: Some(error.to_owned())) })
 }
@@ -562,9 +575,12 @@ async fn versions_of(
         if variant.product_id == product.id {
             continue;
         }
-        let sibling = load_product_page(&store.executor, &variant.product_id).await?;
+        let sibling = load_product_page(&store.executor, &variant.product_id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
         let priced = load_product_price(&store.executor, price_id(&variant.product_id))
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .and_then(|price| price.price_in(currency));
         if sibling.is_some_and(|sibling| !sibling.archived) && priced.is_some() {
             on_sale.insert(variant.product_id.clone());
@@ -604,13 +620,15 @@ async fn product_view(
     let id = param::<ProductId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     let product = load_product_page(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     // What the product costs in the shopper's currency; `None` when it is
     // not sold in it (or not sold any more).
     let currency = crate::currency::shopper_currency(cx).await?;
     let price = load_product_price(&store.executor, price_id(&id))
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .and_then(|p| p.price_in(&currency));
     let not_in_currency = format!(
         "Ce produit n'est pas vendu en {}.",
@@ -636,9 +654,13 @@ async fn product_view(
             None => sheet.push((spec.group.clone(), vec![line])),
         }
     }
-    let article = Article::of(store, &product).await?;
+    let article = Article::of(store, &product)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let versions = versions_of(cx, &product, &article, &currency).await?;
-    let available = available_stock(store, &id).await?;
+    let available = available_stock(store, &id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let availability = if available > 0 {
         format!("En stock ({available} disponibles)")
     } else {
@@ -762,7 +784,7 @@ async fn product_view(
 
     let account = match current_account(cx).await {
         Ok(account) => account.clone(),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
 
     let asked = published_questions_of(
@@ -842,7 +864,8 @@ async fn product_view(
     let alert_pending = match &account {
         Some(account) if available == 0 => timada_inventory::Command(&store.executor)
             .load_alert(alert_id(&id, &account.customer_id))
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .is_some_and(|alert| alert.is_pending()),
         _ => false,
     };
@@ -865,8 +888,9 @@ async fn product_view(
                 .resolve(cx),
         ),
         Some(account) => {
-            let own =
-                load_review_details(&store.executor, review_id(&id, &account.customer_id)).await?;
+            let own = load_review_details(&store.executor, review_id(&id, &account.customer_id))
+                .await
+                .map_err(topcoat::Error::from_anyhow)?;
             match own.map(|r| (r.status, r.rejection_reason)) {
                 None => ReviewAccess::Write,
                 Some((ReviewStatus::Pending, _)) => ReviewAccess::Pending,

@@ -101,7 +101,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         (_, outcome) => (outcome, None),
     };
     let invoice = load_invoice(&services.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
 
     let title = match &invoice.invoice_number {
@@ -371,7 +372,8 @@ pub async fn print(cx: &Cx) -> Result<impl View> {
     let services = app_context::<AdminServices>(cx);
     let issuer = &app_context::<AdminConfig>(cx).invoice_issuer;
     let document = load_invoice_document(&services.executor, &services.db, issuer, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
 
     let title = format!("Facture {}", document.number);
@@ -512,7 +514,8 @@ pub async fn download(cx: &Cx) -> Result<PdfDownload> {
     let services = app_context::<AdminServices>(cx);
     let issuer = &app_context::<AdminConfig>(cx).invoice_issuer;
     let document = load_invoice_document(&services.executor, &services.db, issuer, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     // The archived file when the shop has an archive — filed now if need be —
     // so the operator downloads what the customer does.
@@ -525,14 +528,13 @@ pub async fn download(cx: &Cx) -> Result<PdfDownload> {
             &id,
             &timada_invoice::ArchivePolicy::default(),
         )
-        .await
-        .map_err(anyhow::Error::from)?
+        .await?
         .map(|(_, bytes)| bytes),
         None => None,
     };
     let bytes = match archived {
         Some(bytes) => bytes,
-        None => timada_invoice::render_invoice_pdf(&document).map_err(anyhow::Error::from)?,
+        None => timada_invoice::render_invoice_pdf(&document)?,
     };
     Ok(PdfDownload {
         file_name: timada_invoice::invoice_pdf_file_name(&document),
@@ -547,9 +549,9 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
     let id = param::<InvoiceId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
     let outcome = match &services.archive {
-        Some(archive) => timada_invoice::verify_archived(&services.db, archive.0.as_ref(), &id)
-            .await
-            .map_err(anyhow::Error::from)?,
+        Some(archive) => {
+            timada_invoice::verify_archived(&services.db, archive.0.as_ref(), &id).await?
+        }
         None => None,
     };
     let target = href!(show, InvoiceId(id))

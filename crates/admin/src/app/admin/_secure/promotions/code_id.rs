@@ -39,11 +39,15 @@ enum Code {
 async fn load(cx: &Cx) -> Result<(String, Code)> {
     let id = param::<CodeId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
-    if let Some(discount) = load_discount_details(&services.executor, &id).await? {
+    if let Some(discount) = load_discount_details(&services.executor, &id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+    {
         return Ok((id, Code::Discount(discount)));
     }
     let voucher = load_voucher_balance(&services.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     Ok((id, Code::Voucher(voucher)))
 }

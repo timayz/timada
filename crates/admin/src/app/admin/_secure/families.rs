@@ -111,7 +111,7 @@ pub async fn create(cx: &Cx, Form(form): Form<NewFamilyForm>) -> Result<impl Vie
         }
         Err(err) => match refusal(&err) {
             Some(message) => message,
-            None => return Err(anyhow::Error::from(err).into()),
+            None => return Err(err.into()),
         },
     };
     Ok(view! { families_view(error: Some(error)) })

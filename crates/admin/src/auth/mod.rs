@@ -27,7 +27,9 @@ pub async fn current_admin(cx: &Cx) -> topcoat::Result<Option<AdminUser>> {
         return Ok(None);
     };
     let services = app_context::<AdminServices>(cx);
-    Ok(store::find_by_session(&services.db, &token_hash).await?)
+    store::find_by_session(&services.db, &token_hash)
+        .await
+        .map_err(topcoat::Error::from_anyhow)
 }
 
 /// The admin attached by the `_secure` layer; `None` outside it.
@@ -77,7 +79,8 @@ pub async fn sign_in(cx: &Cx, email: &str, password: &str) -> topcoat::Result<Op
         &admin.id,
         started.expires_at,
     )
-    .await?;
+    .await
+    .map_err(topcoat::Error::from_anyhow)?;
     journal::record(
         &services.db,
         Some(&admin),
@@ -96,7 +99,9 @@ pub async fn sign_in(cx: &Cx, email: &str, password: &str) -> topcoat::Result<Op
 pub async fn sign_out(cx: &Cx) -> topcoat::Result<()> {
     let services = app_context::<AdminServices>(cx);
     if let Some(token_hash) = session::stop(cx).await? {
-        store::delete_session(&services.db, &token_hash).await?;
+        store::delete_session(&services.db, &token_hash)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
     }
     Ok(())
 }

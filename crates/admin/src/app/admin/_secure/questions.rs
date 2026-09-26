@@ -326,7 +326,7 @@ fn settled(cx: &Cx, outcome: std::result::Result<(), ReviewError>) -> Result<Str
             | ReviewError::QuestionNotPublished
             | ReviewError::AnswerNotPending,
         ) => "stale",
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     Ok(format!("{queue}?error={code}"))
 }

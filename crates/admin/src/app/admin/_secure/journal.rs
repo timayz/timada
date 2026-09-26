@@ -98,7 +98,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 (operator.id, operator.email, chosen)
             })
             .collect(),
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     let outcomes: Vec<(&'static str, &'static str, bool)> = Outcome::ALL
         .into_iter()

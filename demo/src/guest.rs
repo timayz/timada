@@ -105,7 +105,8 @@ pub async fn current_guest(cx: &Cx) -> topcoat::Result<Option<String>> {
     }
     // With an account, they sign in: the cookie is worth nothing any more.
     let guest = load_address_book(&store.executor, customer_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .is_some_and(|customer| customer.guest);
     Ok(guest.then(|| customer_id.to_owned()))
 }
@@ -121,7 +122,8 @@ pub struct Shopper {
 pub async fn current_shopper(cx: &Cx) -> topcoat::Result<Option<Shopper>> {
     let account = current_account(cx)
         .await
-        .map_err(|err| anyhow::anyhow!("{err:#}"))?;
+        .map_err(|err| anyhow::anyhow!("{err:#}"))
+        .map_err(topcoat::Error::from_anyhow)?;
     if let Some(account) = account.as_ref() {
         return Ok(Some(Shopper {
             customer_id: account.customer_id.clone(),
@@ -130,7 +132,8 @@ pub async fn current_shopper(cx: &Cx) -> topcoat::Result<Option<Shopper>> {
     }
     let guest = current_guest(cx)
         .await
-        .map_err(|err| anyhow::anyhow!("{err:#}"))?;
+        .map_err(|err| anyhow::anyhow!("{err:#}"))
+        .map_err(topcoat::Error::from_anyhow)?;
     Ok(guest.as_ref().map(|customer_id| Shopper {
         customer_id: customer_id.clone(),
         guest: true,
@@ -145,7 +148,7 @@ pub async fn require_shopper(cx: &Cx) -> topcoat::Result<Shopper> {
         None => Err(crate::auth::require_account(cx)
             .await
             .err()
-            .unwrap_or_else(|| anyhow::anyhow!("an account without a shopper").into())),
+            .unwrap_or_else(|| topcoat::Error::msg("an account without a shopper"))),
     }
 }
 

@@ -73,13 +73,13 @@ pub async fn document(
     let json_ld = head.json_ld.map(Unescaped::new_unchecked);
     let account = match current_account(cx).await {
         Ok(account) => account.clone(),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     let cart_count: u32 = match current_cart(cx).await {
         Ok(cart) => cart
             .as_ref()
             .map_or(0, |c| c.lines.iter().map(|l| l.quantity).sum()),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
 
     // The currencies to pick from, when the shop sells in more than one:

@@ -40,7 +40,8 @@ async fn load(cx: &Cx) -> Result<(String, ProductPageView)> {
     let id = param::<ProductId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
     let product = load_product_page(&services.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     Ok((id, product))
 }
@@ -53,7 +54,9 @@ fn back(cx: &Cx, id: &str) -> String {
 pub async fn show(cx: &Cx) -> Result<impl View> {
     let (id, product) = load(cx).await?;
     let services = app_context::<AdminServices>(cx);
-    let price = load_product_price(&services.executor, price_id(&id)).await?;
+    let price = load_product_price(&services.executor, price_id(&id))
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     // The shop's other currencies with what the product costs in each:
     // `(currency, price or "non vendu", cents for the field)`.
     let other_prices: Vec<(String, String, String)> = app_context::<AdminConfig>(cx)
@@ -79,7 +82,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         &services.executor,
         stock_item_id(&id, &StockLocation::Warehouse),
     )
-    .await?;
+    .await
+    .map_err(topcoat::Error::from_anyhow)?;
     let rating = timada_review::product_rating(&services.db, &id).await?;
     // Where the product is filed; the label it was created with until then.
     let filed_under = match &product.category_id {
@@ -98,7 +102,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let variant_of: Option<(String, String, String)> = match &product.family_id {
         Some(family_id) => timada_catalog::Command(&services.executor)
             .load_family(family_id)
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .map(|family| {
                 let standing = family.variant(&id).map_or_else(
                     || "à placer".to_owned(),
@@ -317,7 +322,8 @@ pub async fn change_price(cx: &Cx, Form(form): Form<PriceForm>) -> Result<impl V
 async fn listed_currency(cx: &Cx, product_id: &str) -> Result<String> {
     let services = app_context::<AdminServices>(cx);
     Ok(load_product_price(&services.executor, price_id(product_id))
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .map(|price| price.listed_currency().to_owned())
         .unwrap_or_else(|| app_context::<AdminConfig>(cx).currencies.base().to_owned()))
 }
@@ -435,7 +441,7 @@ pub async fn categorise(cx: &Cx, Form(form): Form<CategoriseForm>) -> Result<imp
             .await;
         match filed {
             Ok(_) | Err(CatalogError::CategoryArchived | CatalogError::CategoryNotFound) => {}
-            Err(err) => return Err(anyhow::Error::from(err).into()),
+            Err(err) => return Err(err.into()),
         }
     }
     Err::<(), _>(see_other(back(cx, &id)).into())

@@ -36,7 +36,7 @@ timada-tax.workspace = true
 timada-promotion.workspace = true
 timada-admin = { workspace = true, features = ["pdf"] }
 evento.workspace = true
-topcoat = { workspace = true, features = ["router", "view", "cookie", "session", "asset", "serve", "discover", "tower", "sitemap"] }
+topcoat = { workspace = true, features = ["anyhow", "router", "view", "cookie", "session", "asset", "serve", "discover", "tower", "sitemap"] }
 sqlx.workspace = true
 sqlx_migrator.workspace = true
 serde.workspace = true

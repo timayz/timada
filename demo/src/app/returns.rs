@@ -120,7 +120,8 @@ async fn own_order(cx: &Cx) -> Result<OrderDetailsView> {
     let id = param::<OrderId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     Ok(load_order_details(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|o| o.customer_id == shopper.customer_id)
         .ok_or_not_found()?)
 }
@@ -190,7 +191,7 @@ pub async fn request_return(
         Err(ReturnError::OrderNotShipped) => {
             "Seule une commande expédiée peut être retournée.".to_owned()
         }
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     Ok(view! { return_form(error: Some(error)) })
 }
@@ -199,8 +200,12 @@ pub async fn request_return(
 async fn return_form(cx: &Cx, error: Option<String>) -> Result<impl View> {
     let order = own_order(cx).await?;
     let store = app_context::<Store>(cx);
-    let deadline = return_deadline(&order)?.map(date);
-    let lines = returnable_lines(store, &order).await?;
+    let deadline = return_deadline(&order)
+        .map_err(topcoat::Error::from_anyhow)?
+        .map(date);
+    let lines = returnable_lines(store, &order)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let anything_left = lines.iter().any(|l| l.returnable > 0);
     // Owned: a view cannot borrow from a local.
     let numbered: Vec<(usize, ReturnableLine)> = lines.into_iter().enumerate().collect();
@@ -317,7 +322,8 @@ pub async fn label_file(cx: &Cx) -> Result<LabelDownload> {
     let id = param::<ReturnId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     load_return(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|request| request.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
     let file = load_return_label_file(&store.db, &id)
@@ -334,7 +340,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let id = param::<ReturnId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     let request = load_return(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|r| r.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
 
@@ -359,9 +366,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         None => None,
         Some(replacement) => {
             let parcel = match &replacement.shipment_id {
-                Some(shipment_id) => {
-                    timada_shipping::load_shipment(&store.executor, shipment_id).await?
-                }
+                Some(shipment_id) => timada_shipping::load_shipment(&store.executor, shipment_id)
+                    .await
+                    .map_err(topcoat::Error::from_anyhow)?,
                 None => None,
             };
             let what = replacement
@@ -498,7 +505,7 @@ pub async fn cancel(cx: &Cx) -> Result<impl View> {
         // Already received in the meantime: the slip says where it stands.
         Ok(()) | Err(ReturnError::WrongStatus { .. }) => {}
         Err(ReturnError::ReturnNotFound) => None::<()>.ok_or_not_found()?,
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     }
     Err::<(), _>(see_other(href!(show, ReturnId(id)).resolve(cx)).into())
 }

@@ -44,7 +44,7 @@ pub async fn show() -> Result<impl View> {
 fn acting(cx: &Cx) -> Result<String> {
     signed_in_admin(cx)
         .map(|admin| admin.id.clone())
-        .ok_or_else(|| anyhow::anyhow!("the team pages are behind the sign-in").into())
+        .ok_or_else(|| topcoat::Error::msg("the team pages are behind the sign-in"))
 }
 
 /// Back to the operator's page when done; the refusal, in words, otherwise.
@@ -52,7 +52,7 @@ fn outcome(cx: &Cx, id: String, done: std::result::Result<(), TeamError>) -> Res
     match done {
         Ok(()) => Err(see_other(href!(show, OperatorId(id)).resolve(cx)).into()),
         Err(TeamError::NotFound) => Err(topcoat::router::error::not_found().into()),
-        Err(TeamError::Server(err)) => Err(err.into()),
+        Err(TeamError::Server(err)) => Err(topcoat::Error::from_anyhow(err)),
         Err(refused) => Ok(refused.to_string()),
     }
 }
@@ -114,7 +114,7 @@ async fn operator_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
     let db = &app_context::<AdminServices>(cx).db;
     let operators = match list_operators(db).await {
         Ok(operators) => operators,
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     let operator = operators
         .into_iter()

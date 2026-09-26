@@ -76,7 +76,7 @@ pub async fn register_submit(cx: &Cx, Form(form): Form<RegisterForm>) -> Result<
             let target = safe_next(form.next).unwrap_or_else(|| href!(overview).resolve(cx));
             Err(see_other(target).into())
         }
-        Err(SignUpError::Server(err)) => Err(err.into()),
+        Err(SignUpError::Server(err)) => Err(topcoat::Error::from_anyhow(err)),
         Err(err) => Ok(view! { register_view(next: form.next, error: Some(err.to_string())) }),
     }
 }
@@ -167,7 +167,8 @@ async fn address_book(cx: &Cx) -> Result<AddressBookView> {
     let account = require_account(cx).await?;
     let store = app_context::<Store>(cx);
     Ok(load_address_book(&store.executor, &account.customer_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?)
 }
 
@@ -236,7 +237,7 @@ pub async fn change_email(cx: &Cx, Form(form): Form<EmailForm>) -> Result<impl V
     let changed = auth::change_email(store, &account, &form.email, &form.password).await;
     let error = match changed {
         Ok(_) => return Err(see_other(href!(overview).resolve(cx)).into()),
-        Err(ChangeEmailError::Server(err)) => return Err(err.into()),
+        Err(ChangeEmailError::Server(err)) => return Err(topcoat::Error::from_anyhow(err)),
         Err(refused) => refused.to_string(),
     };
     Ok(view! { email_form(error: Some(error)) })
@@ -290,7 +291,7 @@ pub async fn change_password(cx: &Cx, Form(form): Form<PasswordForm>) -> Result<
     } else {
         match auth::change_password(cx, &account, &form.current, &form.new).await {
             Ok(()) => return Err(see_other(href!(overview).resolve(cx)).into()),
-            Err(ChangePasswordError::Server(err)) => return Err(err.into()),
+            Err(ChangePasswordError::Server(err)) => return Err(topcoat::Error::from_anyhow(err)),
             Err(refused) => refused.to_string(),
         }
     };
@@ -340,7 +341,7 @@ pub async fn reopen_cart(cx: &Cx) -> Result<impl View> {
     let store = app_context::<Store>(cx);
     let busy = match crate::cart_session::current_cart(cx).await {
         Ok(cart) => cart.as_ref().is_some_and(|c| !c.lines.is_empty()),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     let error = if busy {
         "Votre panier actuel contient des articles : sauvegardez-le ou videz-le avant de reprendre un autre panier."
@@ -376,7 +377,7 @@ pub async fn discard_cart(cx: &Cx) -> Result<impl View> {
         | Err(timada_cart::CartError::NotSaved | timada_cart::CartError::CartAlreadyCheckedOut) => {
         }
         Err(timada_cart::CartError::CartNotFound) => None::<()>.ok_or_not_found()?,
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     }
     Err::<(), _>(see_other(href!(saved_carts).resolve(cx)).into())
 }
@@ -543,7 +544,7 @@ pub async fn cancel_alert(cx: &Cx) -> Result<impl View> {
     match cancelled {
         // No such alert: nothing to cancel, the list says so.
         Ok(()) | Err(timada_inventory::InventoryError::AlertNotFound) => {}
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     }
     Err::<(), _>(see_other(href!(alerts).resolve(cx)).into())
 }
@@ -675,7 +676,7 @@ fn address_outcome<T>(
         Err(CustomerError::CannotRemovePreferred) => Ok(Err(
             "Choisissez une autre adresse préférée avant de supprimer celle-ci.".to_owned(),
         )),
-        Err(err) => Err(anyhow::Error::from(err).into()),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -959,22 +960,28 @@ pub(super) async fn order_page(
 ) -> Result<impl View> {
     let store = app_context::<Store>(cx);
     let order = load_order_details(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|o| o.customer_id == customer_id)
         .ok_or_not_found()?;
 
     // What went back to the shopper, and the credit notes documenting it.
-    let payment =
-        timada_payment::load_payment(&store.executor, timada_payment::payment_id(&id)).await?;
+    let payment = timada_payment::load_payment(&store.executor, timada_payment::payment_id(&id))
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let refunded = payment
         .as_ref()
         .filter(|p| p.refunded.is_positive())
         .map(|p| money(&p.refunded));
     // Asked of the payment provider, not confirmed yet.
     let refund_pending = match &payment {
-        Some(p) => Some(p.pending_refunds().map_err(anyhow::Error::from)?)
-            .filter(|pending| pending.is_positive())
-            .map(|pending| money(&pending)),
+        Some(p) => Some(
+            p.pending_refunds()
+                .map_err(anyhow::Error::from)
+                .map_err(topcoat::Error::from_anyhow)?,
+        )
+        .filter(|pending| pending.is_positive())
+        .map(|pending| money(&pending)),
         None => None,
     };
     let credit_notes: Vec<CreditNoteLine> =
@@ -1006,7 +1013,8 @@ pub(super) async fn order_page(
         .collect();
     let invoice_link =
         timada_invoice::load_invoice(&store.executor, timada_invoice::invoice_id(&id))
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .filter(|invoice| invoice.status == timada_invoice::InvoiceStatus::Issued)
             .map(|_| {
                 (
@@ -1015,13 +1023,15 @@ pub(super) async fn order_page(
                 )
             });
     let new_return = returns::can_request_return(store, &order)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .then(|| href!(returns::new_return, OrderId(id.clone())).resolve(cx));
     let actions = OrderActions {
         invoice: invoice_link,
         new_return,
         cancel: can_be_called_off(store, &order)
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .then(|| href!(cancel_order, OrderId(id.clone())).resolve(cx)),
         // A captured payment goes back on its own once the order is cancelled.
         refunded_on_cancel: order.status == OrderStatus::Paid && order.total.is_positive(),
@@ -1079,18 +1089,23 @@ pub async fn cancel_order(cx: &Cx, Form(form): Form<CancelOrderForm>) -> Result<
     let id = param::<OrderId>(cx)?.clone();
     let store = app_context::<Store>(cx);
     let placed = load_order_details(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|o| o.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
     // Shipped in the meantime, or never confirmed: the page says where the
     // order stands, and a return is the way once it has arrived.
-    if form.confirm.as_deref() == Some("on") && can_be_called_off(store, &placed).await? {
+    if form.confirm.as_deref() == Some("on")
+        && can_be_called_off(store, &placed)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+    {
         match timada_order::Command(&store.executor)
             .cancel_order(&id, timada_order::CANCELLED_BY_CUSTOMER)
             .await
         {
             Ok(()) | Err(timada_order::OrderError::WrongStatus { .. }) => {}
-            Err(err) => return Err(anyhow::Error::from(err).into()),
+            Err(err) => return Err(err.into()),
         }
     }
     let back = super::guest::order_link(cx, &id).await?;

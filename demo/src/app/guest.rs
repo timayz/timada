@@ -70,7 +70,8 @@ impl GuestForm {
 async fn nothing_to_do_here(cx: &Cx) -> Result<()> {
     let signed_in = current_account(cx)
         .await
-        .map_err(|err| anyhow::anyhow!("{err:#}"))?
+        .map_err(|err| anyhow::anyhow!("{err:#}"))
+        .map_err(topcoat::Error::from_anyhow)?
         .is_some();
     if signed_in {
         return Err(see_other(href!(checkout::show).resolve(cx)).into());
@@ -78,7 +79,7 @@ async fn nothing_to_do_here(cx: &Cx) -> Result<()> {
     match current_cart(cx).await {
         Ok(Some(cart)) if !cart.lines.is_empty() => Ok(()),
         Ok(_) => Err(see_other(href!(cart::show).resolve(cx)).into()),
-        Err(err) => Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => Err(topcoat::Error::msg(format!("{err:#}"))),
     }
 }
 
@@ -88,9 +89,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     // Back from the checkout to correct something: what was said is shown.
     let store = app_context::<Store>(cx);
     let known = match current_guest(cx).await {
-        Ok(Some(customer_id)) => load_address_book(&store.executor, customer_id).await?,
+        Ok(Some(customer_id)) => load_address_book(&store.executor, customer_id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?,
         Ok(None) => None,
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     let (email, address) = match known {
         Some(book) => {
@@ -144,9 +147,11 @@ async fn register(
     let store = app_context::<Store>(cx);
     let customers = timada_customer::Command(&store.executor);
     let known = match current_guest(cx).await {
-        Ok(Some(customer_id)) => load_address_book(&store.executor, customer_id).await?,
+        Ok(Some(customer_id)) => load_address_book(&store.executor, customer_id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?,
         Ok(None) => None,
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     let same_person = |book: &timada_customer::AddressBookView| {
         book.email == form.email.trim().to_lowercase()
@@ -177,7 +182,7 @@ async fn register(
                 Err(CustomerError::Required(_)) => {
                     return Ok(Err("Indiquez votre prénom et votre nom.".to_owned()));
                 }
-                Err(err) => return Err(anyhow::Error::from(err).into()),
+                Err(err) => return Err(err.into()),
             }
         }
     };
@@ -189,11 +194,12 @@ async fn register(
             customers
                 .choose_preferred_delivery_address(&customer_id, address_id)
                 .await
-                .map_err(anyhow::Error::from)?;
+                .map_err(anyhow::Error::from)
+                .map_err(topcoat::Error::from_anyhow)?;
             Ok(Ok(customer_id))
         }
         Err(CustomerError::Address(err)) => Ok(Err(format!("Adresse incomplète : {err}."))),
-        Err(err) => Err(anyhow::Error::from(err).into()),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -269,10 +275,12 @@ pub async fn order(cx: &Cx) -> Result<impl View> {
             .then_some(())
             .ok_or_not_found()?;
         let order = load_order_details(&store.executor, &id)
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .ok_or_not_found()?;
         let still_a_guest = load_address_book(&store.executor, &order.customer_id)
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .is_some_and(|customer| customer.guest);
         if !still_a_guest {
             let theirs = href!(account::order_detail, checkout::OrderId(id)).resolve(cx);
@@ -317,7 +325,8 @@ pub async fn open_account(cx: &Cx, Form(form): Form<OpenAccountForm>) -> Result<
         .filter(|shopper| shopper.guest)
         .ok_or_not_found()?;
     load_order_details(&store.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|placed| placed.customer_id == shopper.customer_id)
         .ok_or_not_found()?;
 
@@ -336,7 +345,7 @@ pub async fn open_account(cx: &Cx, Form(form): Form<OpenAccountForm>) -> Result<
                  connectez-vous pour l'utiliser. Cette commande reste accessible par le lien de \
                  vos e-mails."
                 .to_owned(),
-            Err(SignUpError::Server(err)) => return Err(err.into()),
+            Err(SignUpError::Server(err)) => return Err(topcoat::Error::from_anyhow(err)),
             Err(refused) => refused.to_string(),
         }
     };

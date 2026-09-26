@@ -74,7 +74,7 @@ pub async fn create(cx: &Cx, Form(form): Form<NewOperatorForm>) -> Result<impl V
                     let theirs = href!(operator_id::show, operator_id::OperatorId(id)).resolve(cx);
                     return Err(see_other(theirs).into());
                 }
-                Err(TeamError::Server(err)) => return Err(err.into()),
+                Err(TeamError::Server(err)) => return Err(topcoat::Error::from_anyhow(err)),
                 Err(refused) => refused.to_string(),
             }
         }
@@ -87,7 +87,7 @@ async fn team_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
     let db = &app_context::<AdminServices>(cx).db;
     let operators = match list_operators(db).await {
         Ok(operators) => operators,
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     let lines: Vec<Line> = operators
         .into_iter()

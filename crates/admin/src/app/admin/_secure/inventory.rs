@@ -86,7 +86,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         // The list table lags behind the event store: the levels shown are
         // the item's own, so a receipt is visible as soon as it is recorded.
         let levels = load_stock_availability(&services.executor, &row.stock_item_id)
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .map(|s| {
                 (
                     i64::from(s.on_hand),
@@ -216,7 +217,8 @@ async fn track(cx: &Cx, form: NewStockItemForm) -> Result<std::result::Result<()
     let services = app_context::<AdminServices>(cx);
     let product_id = product_id(&form.sku.trim().to_uppercase());
     if load_product_page(&services.executor, &product_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .is_none()
     {
         return Ok(Err("Aucun produit avec cette référence.".into()));
