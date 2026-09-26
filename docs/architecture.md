@@ -327,6 +327,21 @@ the SMTP relay.
   (product, customer), alert (product, customer), discount / voucher (code),
   credit note (refund event id), return (RMA number), category (slug). Creating on a derived id
   with `evento::append(&id)` is an atomic create-unless-exists.
+- **A level is not a movement.** Stock normally arrives as movements —
+  `StockReceived`, `StockReturned` — but a stock-take and a supplier's feed
+  both know only a total, so `StockLevelSynced { available }` states one
+  outright. It sets *what can still be sold*, never `on_hand` directly: a
+  reservation in this context is only ever given back by a compensation, so
+  `reserved` counts everything ever sold and `on_hand` everything ever
+  received, and the fold is `on_hand = reserved + available`. Setting
+  `on_hand` to the reported total instead would bleed availability away one
+  sale at a time. `sync_stock_level` writes nothing when the level is already
+  that, so a feed polled every hour appends no event while nothing moves.
+  The level is a snapshot of a moment: sales in between lower what is left
+  (the safe direction), while a cancellation raises it although the supplier
+  may no longer hold the units — an overshoot bounded by the cancelled
+  quantity and undone by the next sync, so whatever feeds the levels should
+  ask again after a release.
 - **What the storefront lists is one table.** `listing_subscription` rewrites
   a product's row — and its full-text entry (SQLite FTS5, accents folded,
   prefixes matched) — with absolute values whenever the catalog, its price,

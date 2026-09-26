@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 use crate::{
     aggregator::{
         BackInStockAlertCancelled, BackInStockAlertRequested, BackInStockAlertTriggered,
-        StockReceived, StockReturned,
+        StockLevelSynced, StockReceived, StockReturned,
     },
     command::{load_stock_item, trigger_alert},
 };
@@ -28,6 +28,7 @@ pub fn back_in_stock_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(remove_on_alert_cancelled())
         .handler(trigger_on_stock_received())
         .handler(trigger_on_stock_returned())
+        .handler(trigger_on_stock_level_synced())
 }
 
 /// Ids of alerts for `product_id` that have not fired yet.
@@ -108,7 +109,30 @@ async fn trigger_if_back<E: Executor>(
         return Ok(());
     }
 
-    for alert_id in pending_alerts(&pool(ctx)?, &item.product_id).await? {
+    fire(ctx, &item.product_id).await
+}
+
+/// The same, for an absolute level: it carries no delta to subtract, so "was
+/// it out of stock before?" cannot be asked of it. `sync_stock_level` only
+/// writes when the level actually moved, and an alert that already fired is
+/// no longer pending, so firing whenever the item has units is bounded and
+/// never sends twice.
+async fn trigger_if_available<E: Executor>(
+    ctx: &Context<'_, E>,
+    stock_item_id: &str,
+) -> anyhow::Result<()> {
+    let Some(item) = load_stock_item(ctx.executor, stock_item_id).await? else {
+        anyhow::bail!("stock item {stock_item_id} missing for a level sync");
+    };
+    if !item.location.is_warehouse() || item.available() == 0 {
+        return Ok(());
+    }
+
+    fire(ctx, &item.product_id).await
+}
+
+async fn fire<E: Executor>(ctx: &Context<'_, E>, product_id: &str) -> anyhow::Result<()> {
+    for alert_id in pending_alerts(&pool(ctx)?, product_id).await? {
         trigger_alert(ctx.executor, alert_id).await?;
     }
     Ok(())
@@ -129,4 +153,13 @@ async fn trigger_on_stock_returned<E: Executor>(
     event: Event<StockReturned>,
 ) -> anyhow::Result<()> {
     trigger_if_back(ctx, &event.aggregate_id, event.data.quantity).await
+}
+
+/// A supplier restocking its own shelf brings the product back too.
+#[evento::subscription]
+async fn trigger_on_stock_level_synced<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<StockLevelSynced>,
+) -> anyhow::Result<()> {
+    trigger_if_available(ctx, &event.aggregate_id).await
 }

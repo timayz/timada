@@ -11,8 +11,8 @@ use sqlx::SqlitePool;
 
 use crate::{
     aggregator::{
-        StockItemRegistered, StockReceived, StockReservationRejected, StockReservationReleased,
-        StockReserved, StockReturned,
+        StockItemRegistered, StockLevelSynced, StockReceived, StockReservationRejected,
+        StockReservationReleased, StockReserved, StockReturned,
     },
     query::load_stock_availability,
 };
@@ -54,6 +54,7 @@ pub fn stock_list_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(refresh_on_stock_item_registered())
         .handler(refresh_on_stock_received())
         .handler(refresh_on_stock_returned())
+        .handler(refresh_on_stock_level_synced())
         .handler(refresh_on_stock_reserved())
         .handler(refresh_on_stock_reservation_released())
         .skip::<StockReservationRejected>()
@@ -134,6 +135,14 @@ async fn refresh_on_stock_received<E: Executor>(
 async fn refresh_on_stock_returned<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<StockReturned>,
+) -> anyhow::Result<()> {
+    refresh(ctx, &event.aggregate_id).await
+}
+
+#[evento::subscription]
+async fn refresh_on_stock_level_synced<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<StockLevelSynced>,
 ) -> anyhow::Result<()> {
     refresh(ctx, &event.aggregate_id).await
 }

@@ -140,6 +140,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Réservé")
                         table_head(attrs: topcoat::view::attributes! { class="text-right" }, "Disponible")
                         table_head("Réception")
+                        table_head("Niveau exact")
                     ))
                     table_body(
                         for line in &lines { stock_row(line: line) }
@@ -155,6 +156,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 async fn stock_row(cx: &Cx, line: &StockLine) -> Result<impl View> {
     let quantity_id = format!("quantity-{}", line.stock_item_id);
     let quantity_label = format!("Unités reçues pour {}", line.product_name);
+    let level_id = format!("available-{}", line.stock_item_id);
+    let level_label = format!("Unités disponibles pour {}", line.product_name);
     Ok(view! {
         table_row(
             table_cell(
@@ -172,6 +175,13 @@ async fn stock_row(cx: &Cx, line: &StockLine) -> Result<impl View> {
                     button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" }, "Recevoir")
                 </form>
             )
+            table_cell(
+                <form method="post" action=(href!(set_level).resolve(cx)) class="flex items-center gap-2">
+                    <input type="hidden" name="stock_item_id" value=(line.stock_item_id.clone())>
+                    input(attrs: topcoat::view::attributes! { id=(level_id) type="number" name="available" min="0" required=(true) class="w-20" value=(line.available.max(0).to_string()) aria-label=(level_label) })
+                    button(variant: ButtonVariant::Outline, attrs: topcoat::view::attributes! { type="submit" }, "Corriger")
+                </form>
+            )
         )
     })
 }
@@ -187,6 +197,24 @@ pub async fn receive_units(cx: &Cx, Form(form): Form<ReceiveForm>) -> Result<imp
     let services = app_context::<AdminServices>(cx);
     timada_inventory::Command(&services.executor)
         .receive_stock(&form.stock_item_id, form.quantity)
+        .await?;
+    Err::<(), _>(see_other(href!(index).resolve(cx)).into())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LevelForm {
+    stock_item_id: String,
+    available: u32,
+}
+
+/// Records what is actually there, whatever the receipts add up to: a
+/// stock-take, or a level a supplier's feed reports. What is already put
+/// aside for orders is left alone.
+#[page(POST "./level")]
+pub async fn set_level(cx: &Cx, Form(form): Form<LevelForm>) -> Result<impl View> {
+    let services = app_context::<AdminServices>(cx);
+    timada_inventory::Command(&services.executor)
+        .sync_stock_level(&form.stock_item_id, form.available)
         .await?;
     Err::<(), _>(see_other(href!(index).resolve(cx)).into())
 }

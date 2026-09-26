@@ -53,6 +53,7 @@ event timada-inventory/BackInStockAlert::BackInStockAlertCancelled unit
 event timada-inventory/BackInStockAlert::BackInStockAlertRequested { product_id: String, customer_id: String, email: String }
 event timada-inventory/BackInStockAlert::BackInStockAlertTriggered unit
 event timada-inventory/StockItem::StockItemRegistered { product_id: String, location: StockLocation }
+event timada-inventory/StockItem::StockLevelSynced { available: u32 }
 event timada-inventory/StockItem::StockReceived { quantity: u32 }
 event timada-inventory/StockItem::StockReservationRejected { order_id: String, requested: u32, available: u32 }
 event timada-inventory/StockItem::StockReservationReleased { order_id: String, quantity: u32 }

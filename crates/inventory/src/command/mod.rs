@@ -5,6 +5,7 @@ mod release_stock;
 mod request_back_in_stock_alert;
 mod reserve_stock;
 mod restock_return;
+mod sync_stock_level;
 mod trigger_back_in_stock_alert;
 
 use std::ops::Deref;
@@ -18,7 +19,7 @@ use evento::{Executor, Projection, metadata::Event};
 use crate::{
     aggregator::{
         BackInStockAlert, BackInStockAlertCancelled, BackInStockAlertRequested,
-        BackInStockAlertTriggered, StockItem, StockItemRegistered, StockReceived,
+        BackInStockAlertTriggered, StockItem, StockItemRegistered, StockLevelSynced, StockReceived,
         StockReservationRejected, StockReservationReleased, StockReserved, StockReturned,
     },
     error::InventoryError,
@@ -119,6 +120,7 @@ fn stock_item_projection<E: Executor>() -> Projection<E, StockItemState> {
         .handler(on_stock_item_registered())
         .handler(on_stock_received())
         .handler(on_stock_returned())
+        .handler(on_stock_level_synced())
         .handler(on_stock_reserved())
         .handler(on_stock_reservation_released())
         .skip::<StockReservationRejected>()
@@ -152,6 +154,20 @@ async fn on_stock_returned(
 ) -> anyhow::Result<()> {
     row.on_hand = row.on_hand.saturating_add(event.data.quantity);
     row.restocked_returns.push(event.data.return_id);
+    Ok(())
+}
+
+/// An absolute level says what can still be sold; what the shop already put
+/// aside stays put aside. Keeping `on_hand` as "everything accountable here,
+/// promises included" is what makes `available` come out right — a
+/// reservation is never given back except by a compensation, so folding the
+/// level into `on_hand` directly would bleed it away one sale at a time.
+#[evento::handler]
+async fn on_stock_level_synced(
+    event: Event<StockLevelSynced>,
+    row: &mut StockItemState,
+) -> anyhow::Result<()> {
+    row.on_hand = row.reserved.saturating_add(event.data.available);
     Ok(())
 }
 

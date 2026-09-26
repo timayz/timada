@@ -23,7 +23,9 @@ use evento::{
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use timada_inventory::{
     StockLocation,
-    aggregator::{StockReceived, StockReservationReleased, StockReserved, StockReturned},
+    aggregator::{
+        StockLevelSynced, StockReceived, StockReservationReleased, StockReserved, StockReturned,
+    },
     load_stock_availability, stock_item_id,
 };
 use timada_pricing::{
@@ -69,6 +71,7 @@ pub fn listing_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(on_currency_price_removed())
         .handler(on_stock_received())
         .handler(on_stock_returned())
+        .handler(on_stock_level_synced())
         .handler(on_stock_reserved())
         .handler(on_stock_released())
         .handler(on_review_published())
@@ -1002,6 +1005,15 @@ async fn on_stock_received<E: Executor>(
 async fn on_stock_returned<E: Executor>(
     ctx: &Context<'_, E>,
     event: Event<StockReturned>,
+) -> anyhow::Result<()> {
+    refresh_stocked(ctx, &event.aggregate_id, event.timestamp).await
+}
+
+/// A supplier's feed, or a stock-take, setting the level outright.
+#[evento::subscription]
+async fn on_stock_level_synced<E: Executor>(
+    ctx: &Context<'_, E>,
+    event: Event<StockLevelSynced>,
 ) -> anyhow::Result<()> {
     refresh_stocked(ctx, &event.aggregate_id, event.timestamp).await
 }

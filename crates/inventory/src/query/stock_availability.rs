@@ -5,7 +5,7 @@ use evento::{Executor, metadata::Event, projection::Projection};
 
 use crate::{
     aggregator::{
-        StockItem, StockItemRegistered, StockReceived, StockReservationRejected,
+        StockItem, StockItemRegistered, StockLevelSynced, StockReceived, StockReservationRejected,
         StockReservationReleased, StockReserved, StockReturned,
     },
     value_object::{Availability, StockLocation},
@@ -39,6 +39,7 @@ pub fn create_projection<E: Executor>() -> Projection<E, StockAvailabilityView> 
         .handler(on_stock_item_registered())
         .handler(on_stock_received())
         .handler(on_stock_returned())
+        .handler(on_stock_level_synced())
         .handler(on_stock_reserved())
         .handler(on_stock_reservation_released())
         .skip::<StockReservationRejected>()
@@ -80,6 +81,19 @@ async fn on_stock_returned(
     row: &mut StockAvailabilityView,
 ) -> anyhow::Result<()> {
     row.on_hand = row.on_hand.saturating_add(event.data.quantity);
+    row.refresh();
+    Ok(())
+}
+
+/// A supplier's feed, or a stock-take, saying what can still be sold. What
+/// is already put aside for orders is not theirs to move, so the level goes
+/// on top of `reserved` rather than replacing `on_hand` outright.
+#[evento::handler]
+async fn on_stock_level_synced(
+    event: Event<StockLevelSynced>,
+    row: &mut StockAvailabilityView,
+) -> anyhow::Result<()> {
+    row.on_hand = row.reserved.saturating_add(event.data.available);
     row.refresh();
     Ok(())
 }
