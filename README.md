@@ -105,6 +105,23 @@ cargo fmt --all --check
 cargo machete
 ```
 
+`demo/src/tests.rs` drives the storefront socket-free, through
+`Router::handle`. `e2e/` does the same pages in a real browser:
+
+```sh
+playwright test                 # builds and serves the demo on :3001, then drives it
+playwright test --headed        # watch it happen
+playwright test --ui            # pick and re-run tests
+```
+
+It seeds `data/demo.db` only when there is none, and stays read-only, so it is
+safe against the shop you are developing against. To drive a shop already
+running instead of letting it start one:
+
+```sh
+TIMADA_E2E_BASE_URL=http://127.0.0.1:3000 playwright test
+```
+
 After adding an event, a value type used by an event, or a snapshotted view:
 
 ```sh

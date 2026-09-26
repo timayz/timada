@@ -5,3 +5,6 @@
 *.db-shm
 .claude/settings.local.json
 .pwmcp-profiles
+/test-results
+/playwright-report
+/blob-report
