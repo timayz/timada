@@ -15,6 +15,19 @@ pub enum StockItem {
     /// return, which is what makes restocking safe to retry.
     StockReturned { return_id: String, quantity: u32 },
 
+    /// How many units can still be sold, as an absolute figure, set from
+    /// outside the shop's own receipts: a supplier's feed, or a stock-take.
+    /// What is already put aside for orders is untouched — `reserved` is a
+    /// promise the shop made, not something a supplier knows about.
+    ///
+    /// It is the level *at that moment*, and only the next one corrects it.
+    /// Sales in between lower what is left, which is the safe direction; a
+    /// cancellation in between raises it, which is not — the units go back
+    /// on sale although the supplier may no longer hold them. The overshoot
+    /// is bounded by the cancelled quantity and lasts until the next sync,
+    /// so whoever feeds these levels should ask again after a release.
+    StockLevelSynced { available: u32 },
+
     /// Units were put aside for an order.
     StockReserved { order_id: String, quantity: u32 },
 

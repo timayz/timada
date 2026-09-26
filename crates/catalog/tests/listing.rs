@@ -247,6 +247,21 @@ async fn a_row_follows_what_the_four_contexts_say() -> anyhow::Result<()> {
     assert_eq!(row.thumbnail_url.as_deref(), Some("/media/aoc-front.avif"));
     assert_eq!(row.thumbnail_alt.as_deref(), Some("AOC 24G de face"));
 
+    // A level set outright — a stock-take, or a supplier's feed — reaches the
+    // listing like a receipt does. The listing subscription is not strict, so
+    // nothing but this test would notice a missing handler.
+    timada_inventory::Command(&shop.executor)
+        .sync_stock_level(&item, 10)
+        .await?;
+    shop.sync().await?;
+    let synced = find().await?.ok_or_else(|| anyhow::anyhow!("not listed"))?;
+    assert_eq!(synced.available, 10);
+    // Back where it was, so what follows reads on the same shop.
+    timada_inventory::Command(&shop.executor)
+        .sync_stock_level(&item, 3)
+        .await?;
+    shop.sync().await?;
+
     // No price, no sale; archived, gone.
     timada_pricing::Command(&shop.executor)
         .withdraw_price(timada_pricing::price_id(&gamer))

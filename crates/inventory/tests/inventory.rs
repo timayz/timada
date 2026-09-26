@@ -196,3 +196,141 @@ async fn back_in_stock_alert_fires_on_restock() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn stock_levels_can_be_set_outright() -> anyhow::Result<()> {
+    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command(&executor);
+
+    let unknown = cmd.sync_stock_level("nowhere", 4).await;
+    assert!(matches!(unknown, Err(InventoryError::StockItemNotFound)));
+
+    let id = cmd
+        .register_stock_item(RegisterStockItem {
+            product_id: PRODUCT.into(),
+            location: StockLocation::Warehouse,
+        })
+        .await?;
+
+    // Ten arrived, three are promised to an order.
+    cmd.receive_stock(&id, 10).await?;
+    assert_eq!(
+        cmd.reserve_stock(&id, "order-1", 3).await?,
+        ReservationOutcome::Reserved
+    );
+
+    // The supplier says five can still be sold. The three put aside are not
+    // theirs to move, so `on_hand` accounts for them as well.
+    assert!(cmd.sync_stock_level(&id, 5).await?);
+    let synced = load_stock_availability(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("availability missing"))?;
+    assert_eq!(synced.available, 5);
+    assert_eq!(synced.reserved, 3);
+    assert_eq!(synced.on_hand, 8);
+    assert_eq!(synced.status, Availability::InStock);
+
+    // Saying the same thing again writes nothing: a feed polled every hour
+    // appends no event while nothing moves.
+    assert!(!cmd.sync_stock_level(&id, 5).await?);
+    let unchanged = load_stock_availability(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("availability missing"))?;
+    assert_eq!(unchanged, synced);
+
+    // A sale between two polls is conservative: `available` drops at once.
+    assert_eq!(
+        cmd.reserve_stock(&id, "order-2", 2).await?,
+        ReservationOutcome::Reserved
+    );
+    let sold = load_stock_availability(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("availability missing"))?;
+    assert_eq!(sold.available, 3);
+
+    // Out of stock at the supplier, with five units still promised: nothing
+    // left to sell, and no underflow.
+    assert!(cmd.sync_stock_level(&id, 0).await?);
+    let empty = load_stock_availability(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("availability missing"))?;
+    assert_eq!(empty.available, 0);
+    assert_eq!(empty.reserved, 5);
+    assert_eq!(empty.on_hand, 5);
+    assert_eq!(empty.status, Availability::OutOfStock);
+
+    // A cancellation gives the units back, which for a supplier-fed item
+    // overshoots: the supplier still holds nothing. The level is a snapshot
+    // of a moment, and only the next one can correct it — see the note on
+    // `StockLevelSynced`.
+    cmd.release_stock(&id, "order-1").await?;
+    let released = load_stock_availability(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("availability missing"))?;
+    assert_eq!(released.available, 3);
+    assert_eq!(released.reserved, 2);
+
+    // Which the next sync does.
+    assert!(cmd.sync_stock_level(&id, 0).await?);
+    let corrected = load_stock_availability(&executor, &id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("availability missing"))?;
+    assert_eq!(corrected.available, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn back_in_stock_alert_fires_on_a_synced_level() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command(&executor);
+
+    let warehouse = cmd
+        .register_stock_item(RegisterStockItem {
+            product_id: PRODUCT.into(),
+            location: StockLocation::Warehouse,
+        })
+        .await?;
+    let shop = cmd
+        .register_stock_item(RegisterStockItem {
+            product_id: PRODUCT.into(),
+            location: StockLocation::Store {
+                store_id: "lyon".into(),
+            },
+        })
+        .await?;
+    let alert = cmd
+        .request_back_in_stock_alert(RequestBackInStockAlert {
+            product_id: PRODUCT.into(),
+            customer_id: "customer-1".into(),
+            email: "jonathan@example.test".into(),
+        })
+        .await?;
+    let sync = || async {
+        back_in_stock_subscription()
+            .data(db.clone())
+            .run_once(&executor)
+            .await
+    };
+    sync().await?;
+    assert_eq!(pending_alerts(&db, PRODUCT).await?, vec![alert.clone()]);
+
+    // Shop stock is a shelf the web shop does not sell from: it fires nothing.
+    assert!(cmd.sync_stock_level(&shop, 4).await?);
+    sync().await?;
+    assert_eq!(pending_alerts(&db, PRODUCT).await?, vec![alert.clone()]);
+
+    // The warehouse coming back does.
+    assert!(cmd.sync_stock_level(&warehouse, 2).await?);
+    for _ in 0..2 {
+        sync().await?;
+    }
+    assert!(pending_alerts(&db, PRODUCT).await?.is_empty());
+    let state = cmd
+        .load_alert(&alert)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("alert missing"))?;
+    assert!(state.triggered);
+
+    Ok(())
+}

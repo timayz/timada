@@ -1420,6 +1420,29 @@ async fn stock_is_tracked_received_and_filtered() -> anyhow::Result<()> {
     )
     .await?;
     assert!(low.contains("AOC 23.8"));
+
+    // « Corriger » records what is actually there, whatever the receipts add
+    // up to, and leaves what is put aside alone.
+    timada_inventory::Command(&h.executor)
+        .reserve_stock(&rows[0].stock_item_id, "order-1", 2)
+        .await?;
+    let corrected = h
+        .router
+        .handle(post(
+            "/admin/inventory/level",
+            &format!("stock_item_id={}&available=5", rows[0].stock_item_id),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&corrected), "/admin/inventory");
+    let levels = timada_inventory::load_stock_availability(&h.executor, &rows[0].stock_item_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("availability missing"))?;
+    assert_eq!(
+        (levels.available, levels.reserved, levels.on_hand),
+        (5, 2, 7)
+    );
+
     Ok(())
 }
 
