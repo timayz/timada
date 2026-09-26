@@ -27,7 +27,8 @@ async fn own_credit_note(cx: &Cx) -> Result<(String, timada_invoice::CreditNoteV
     let note_id = param::<CreditNoteId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
     let note = timada_invoice::load_credit_note(&services.executor, &note_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|note| note.invoice_id == id)
         .ok_or_not_found()?;
     Ok((id, note))
@@ -42,7 +43,8 @@ pub async fn download(cx: &Cx) -> Result<PdfDownload> {
     let services = app_context::<AdminServices>(cx);
     let issuer = &app_context::<AdminConfig>(cx).invoice_issuer;
     let document = timada_invoice::load_credit_note_document(&services.executor, issuer, &note.id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     let archived = match &services.archive {
         Some(archive) => timada_invoice::archive_credit_note(
@@ -53,14 +55,13 @@ pub async fn download(cx: &Cx) -> Result<PdfDownload> {
             &note.id,
             &timada_invoice::ArchivePolicy::default(),
         )
-        .await
-        .map_err(anyhow::Error::from)?
+        .await?
         .map(|(_, bytes)| bytes),
         None => None,
     };
     let bytes = match archived {
         Some(bytes) => bytes,
-        None => timada_invoice::render_credit_note_pdf(&document).map_err(anyhow::Error::from)?,
+        None => timada_invoice::render_credit_note_pdf(&document)?,
     };
     Ok(PdfDownload {
         file_name: timada_invoice::credit_note_pdf_file_name(&document),
@@ -76,9 +77,7 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
     let services = app_context::<AdminServices>(cx);
     let outcome = match &services.archive {
         Some(archive) => {
-            timada_invoice::verify_archived(&services.db, archive.0.as_ref(), &note.id)
-                .await
-                .map_err(anyhow::Error::from)?
+            timada_invoice::verify_archived(&services.db, archive.0.as_ref(), &note.id).await?
         }
         None => None,
     };

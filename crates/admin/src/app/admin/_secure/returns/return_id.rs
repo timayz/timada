@@ -85,7 +85,8 @@ async fn load(cx: &Cx) -> Result<(String, ReturnView)> {
     let id = param::<ReturnId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
     let request = load_return(&services.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     Ok((id, request))
 }
@@ -112,7 +113,7 @@ fn settled(cx: &Cx, id: &str, outcome: std::result::Result<(), ReturnError>) -> 
             tracing::warn!(return_id = %id, %error, "return label provider failed");
             "carrier"
         }
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     Ok(format!("{}?error={code}", back(cx, id)))
 }
@@ -240,7 +241,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         Some(replacement) => {
             let parcel = match &replacement.shipment_id {
                 Some(shipment_id) => {
-                    timada_shipping::load_shipment(&services.executor, shipment_id).await?
+                    timada_shipping::load_shipment(&services.executor, shipment_id)
+                        .await
+                        .map_err(topcoat::Error::from_anyhow)?
                 }
                 None => None,
             };
@@ -687,7 +690,7 @@ pub async fn dispatch_replacement(cx: &Cx, Form(form): Form<DispatchForm>) -> Re
         Err(None | Some(timada_shipping::ShippingError::NotCreated)) => {
             format!("{}?error=parcel", back(cx, &id))
         }
-        Err(Some(err)) => return Err(anyhow::Error::from(err).into()),
+        Err(Some(err)) => return Err(err.into()),
     };
     Err::<(), _>(see_other(target).into())
 }

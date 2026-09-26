@@ -144,7 +144,7 @@ pub async fn create(cx: &Cx, Form(form): Form<NewCategoryForm>) -> Result<impl V
         }
         Err(err) => match refusal(&err) {
             Some(message) => message,
-            None => return Err(anyhow::Error::from(err).into()),
+            None => return Err(err.into()),
         },
     };
     Ok(view! { categories_view(error: Some(error)) })

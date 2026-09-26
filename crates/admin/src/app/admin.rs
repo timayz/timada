@@ -109,7 +109,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let section = match crate::auth::current_admin(cx).await {
         Ok(Some(admin)) => admin.role.home(),
         Ok(None) => crate::auth::Section::Orders,
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     Err::<(), _>(see_other(_secure::section_link(cx, section)).into())
 }

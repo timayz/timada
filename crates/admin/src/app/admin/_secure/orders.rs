@@ -142,7 +142,9 @@ async fn order_row(cx: &Cx, row: &OrderHistoryRow) -> Result<impl View> {
 /// Orders that started waiting before this moment are late.
 fn late_before(cx: &Cx) -> Result<u64> {
     let within = app_context::<AdminConfig>(cx).ship_within.as_secs();
-    Ok(timada_core::time::now_unix_secs()?.saturating_sub(within))
+    Ok(timada_core::time::now_unix_secs()
+        .map_err(topcoat::Error::from_anyhow)?
+        .saturating_sub(within))
 }
 
 #[query_params(error = bad_request)]
@@ -178,7 +180,7 @@ fn waiting_label(seconds: u64) -> String {
 pub async fn to_ship(cx: &Cx) -> Result<impl View> {
     let page = query::<ToShipQuery>(cx)?.page.unwrap_or(1).max(1);
     let services = app_context::<AdminServices>(cx);
-    let now = timada_core::time::now_unix_secs()?;
+    let now = timada_core::time::now_unix_secs().map_err(topcoat::Error::from_anyhow)?;
     let late_before = late_before(cx)?;
     let (waiting, late) = count_orders_to_ship(&services.db, late_before).await?;
     let rows: Vec<OrderToShipRow> =
@@ -187,7 +189,9 @@ pub async fn to_ship(cx: &Cx) -> Result<impl View> {
     // Where each parcel goes comes from the order itself: a page of them.
     let mut lines = Vec::with_capacity(rows.len());
     for row in rows {
-        let order = load_order_details(&services.executor, &row.order_id).await?;
+        let order = load_order_details(&services.executor, &row.order_id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
         let (recipient, delivery, units) = match &order {
             Some(order) => (
                 order.delivery_address.full_name(),

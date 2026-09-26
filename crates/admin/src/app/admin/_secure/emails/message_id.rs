@@ -29,13 +29,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let id = param::<MessageId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
     let message = load_outbox_message(&services.db, &id)
-        .await
-        .map_err(anyhow::Error::from)?
+        .await?
         .ok_or_not_found()?;
     let status = message.status();
     let attachments: Vec<String> = outbox_attachments(&services.db, &id)
-        .await
-        .map_err(anyhow::Error::from)?
+        .await?
         .into_iter()
         .map(|file| format!("{} ({} Ko)", file.file_name, (file.size + 1_023) / 1_024))
         .collect();
@@ -119,8 +117,6 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
 pub async fn retry_delivery(cx: &Cx) -> Result<impl View> {
     let id = param::<MessageId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
-    retry(&services.db, &id)
-        .await
-        .map_err(anyhow::Error::from)?;
+    retry(&services.db, &id).await?;
     Err::<(), _>(see_other(href!(show, MessageId(id)).resolve(cx)).into())
 }

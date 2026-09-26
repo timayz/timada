@@ -134,15 +134,21 @@ local `tailwindcss` binary to avoid the download. Without a bundle, pass
 `Stylesheet::Url(..)` to keep the admin usable (unstyled).
 
 The UI components in `src/components` are vendored from topcoat-ui and
-exported (`timada_admin::components`) for hosts that extend the admin.
+exported (`timada_admin::components`) for hosts that extend the admin. Most
+carry local edits for the Katalyst look, so `topcoat ui add --overwrite` would
+throw them away; `components.toml` records which registry version each was
+merged from. `select` is a local rewrite that keeps the browser's own dropdown
+rather than drawing a chevron, and is deliberately not tracked there. The
+`topcoat ui` subcommands need the registry in the dependency graph, so add
+topcoat's `ui` feature for the length of the operation and take it out after.
 
 ## Caveats
 
-- The host must not call `module_router!()`: topcoat 0.8.1's module
+- The host must not call `module_router!()`: topcoat 0.9.0's module
   discovery panics on module-derived handlers outside its root, and the
   admin's are. `Router::builder().discover()` and explicit-path pages are fine
   — the admin walks the inventory itself, filtered by its own root, so the
   host's `path_param!` segments and module-derived handlers don't affect it.
-- `Segment::new` is `#[doc(hidden)]` in topcoat 0.8.1; the crate pins that
+- `Segment::new` is `#[doc(hidden)]` in topcoat 0.9.0; the crate pins that
   exact version.
 - `AdminConfig::mount` is a single path segment.

@@ -114,7 +114,7 @@ async fn check_out(
     let (cart_id, cart_currency) = match current_cart(cx).await {
         Ok(Some(cart)) => (cart.id.clone(), cart.subtotal.currency.clone()),
         Ok(None) => return Err(back_to_cart().into()),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     // Never confirm a total the shopper has not seen: if a price moved since
     // the page was shown, show it again first.
@@ -127,7 +127,8 @@ async fn check_out(
         ));
     }
     let book = load_address_book(&store.executor, &shopper.customer_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
 
     let Some(delivery_address) = book
@@ -168,9 +169,11 @@ async fn check_out(
         &shopper.customer_id,
         &policy,
     )
-    .await?;
+    .await
+    .map_err(topcoat::Error::from_anyhow)?;
     let exempt = business_purchase(&store.executor, &zones, zone, &shopper.customer_id, &policy)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .is_some_and(|business| business.reverse_charge.is_some());
     if exempt != (form.regime == REVERSE_CHARGE_REGIME) {
         return refuse(if exempt {
@@ -213,7 +216,7 @@ async fn check_out(
             Err(back_to_cart().into())
         }
         Err(CartError::Address(err)) => refuse(&format!("Adresse incomplète : {err}.")),
-        Err(err) => Err(anyhow::Error::from(err).into()),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -249,7 +252,8 @@ async fn checkout_view(
     let handling_fee = installment_fee(store, &cart.subtotal.currency);
     let installments = handling_fee.is_some();
     let book = load_address_book(&store.executor, &shopper.customer_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     // A guest has no address book to manage: they say again who they are.
     let new_address = if shopper.guest {
@@ -284,7 +288,8 @@ async fn checkout_view(
         &shopper.customer_id,
         &ReverseChargePolicy::default(),
     )
-    .await?;
+    .await
+    .map_err(topcoat::Error::from_anyhow)?;
     let reverse_charge = business
         .as_ref()
         .filter(|business| business.reverse_charge.is_some())
@@ -298,8 +303,9 @@ async fn checkout_view(
         None => pricing_zone,
     };
 
-    let charged =
-        lines_charged_in_zone(&store.executor, &zones, pricing_zone, cart.lines.clone()).await?;
+    let charged = lines_charged_in_zone(&store.executor, &zones, pricing_zone, cart.lines.clone())
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let mut subtotal = timada_core::Money::zero(&cart.subtotal.currency);
     let mut lines = Vec::with_capacity(charged.len());
     for item in &charged {
@@ -310,7 +316,9 @@ async fn checkout_view(
             money(&item.line.unit_price),
         ));
     }
-    let promo = cart::promo_line_on(store, cart.promo_code.as_ref(), &subtotal).await?;
+    let promo = cart::promo_line_on(store, cart.promo_code.as_ref(), &subtotal)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let zone_notice = match pricing_zone.treatment {
         TaxTreatment::Export if reverse_charge.is_some() => reverse_charge.as_ref().map(|buyer| {
             format!(
@@ -514,7 +522,9 @@ enum PayStep {
 async fn own_order(cx: &Cx, id: &str) -> Result<Option<OrderDetailsView>> {
     let shopper = require_shopper(cx).await?;
     let store = app_context::<Store>(cx);
-    let order = load_order_details(&store.executor, id).await?;
+    let order = load_order_details(&store.executor, id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     if let Some(order) = &order {
         (order.customer_id == shopper.customer_id)
             .then_some(())
@@ -545,7 +555,8 @@ async fn pay_step(cx: &Cx, id: &str, order: Option<&OrderDetailsView>) -> Result
     let store = app_context::<Store>(cx);
     let payment_id = payment_id(id);
     let requested = load_payment(&store.executor, &payment_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .is_some_and(|p| p.status == PaymentStatus::Requested);
     if !requested {
         return Ok(PayStep::Processing);
@@ -578,7 +589,7 @@ async fn pay_step(cx: &Cx, id: &str, order: Option<&OrderDetailsView>) -> Result
         }),
         // Captured or declined while the page was loading: look again.
         Err(PaymentError::NotRequested) => Ok(PayStep::Processing),
-        Err(err) => Err(anyhow::Error::from(err).into()),
+        Err(err) => Err(err.into()),
     }
 }
 

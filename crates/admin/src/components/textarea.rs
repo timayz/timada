@@ -9,11 +9,15 @@ use topcoat::{
 /// `field-sizing-content` lets the control grow with its content, from the
 /// two-line minimum height; browsers without support keep the fixed minimum
 /// and scroll.
+///
+/// `aria-invalid="true"` recolors the border and focus halo to `--destructive`,
+/// the same way the input control marks a rejected value.
 const TEXTAREA: StaticClass = class!(
     "field-sizing-content min-h-16 w-full rounded-md border border-input \
      bg-background px-3 py-2 text-sm shadow-xs transition-[color,border-color,box-shadow] outline-none \
      placeholder:text-muted-foreground dark:bg-input/30 \
      focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 \
+     aria-invalid:border-destructive aria-invalid:focus-visible:ring-destructive/50 \
      disabled:pointer-events-none disabled:opacity-50",
 );
 

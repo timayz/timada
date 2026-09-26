@@ -70,10 +70,12 @@ async fn add_to_cart(
     form: &AddForm,
 ) -> Result<std::result::Result<(), String>> {
     let product = load_product_page(&store.executor, &form.product_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|p| !p.archived);
     let price = load_product_price(&store.executor, price_id(&form.product_id))
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|p| !p.withdrawn);
     let (Some(product), Some(price)) = (product, price) else {
         return Ok(Err(
@@ -95,10 +97,12 @@ async fn add_to_cart(
             .as_ref()
             .and_then(|c| c.lines.iter().find(|l| l.product_id == form.product_id))
             .map_or(0, |l| l.quantity),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     let wanted = in_cart.saturating_add(form.quantity);
-    let available = available_stock(store, &form.product_id).await?;
+    let available = available_stock(store, &form.product_id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     if wanted > available {
         return Ok(Err(format!(
             "Seulement {available} exemplaire(s) disponible(s) pour « {} ».",
@@ -138,7 +142,9 @@ pub struct QuantityForm {
 pub async fn change_quantity(cx: &Cx, Form(form): Form<QuantityForm>) -> Result<impl View> {
     let product_id = param::<ProductId>(cx)?.clone();
     let store = app_context::<Store>(cx);
-    let available = available_stock(store, &product_id).await?;
+    let available = available_stock(store, &product_id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let outcome = if form.quantity > available {
         Err(format!(
             "Seulement {available} exemplaire(s) disponible(s)."
@@ -183,7 +189,10 @@ pub struct PromoForm {
 #[page(POST "/cart/promo")]
 pub async fn apply_promo(cx: &Cx, Form(form): Form<PromoForm>) -> Result<impl View> {
     let store = app_context::<Store>(cx);
-    let outcome = match promo_problem(store, &form.code).await? {
+    let outcome = match promo_problem(store, &form.code)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+    {
         Some(problem) => Err(problem.to_owned()),
         None => {
             let cart_id = ensure_cart(cx).await?;
@@ -238,7 +247,7 @@ pub async fn save(cx: &Cx, Form(form): Form<SaveForm>) -> Result<impl View> {
         }
         Err(CartError::Required(_)) => "Donnez un nom à ce panier.",
         Err(CartError::EmptyCart) => "Votre panier est vide.",
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     Ok(view! { cart_view(error: Some(error.to_owned())) })
 }
@@ -349,7 +358,7 @@ fn user_facing(
         Err(CartError::Money(_)) => Ok(Err(
             "Ce produit n'est pas vendu dans la devise du panier.".into()
         )),
-        Err(err) => Err(anyhow::Error::from(err).into()),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -360,12 +369,14 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
         None => (None, Vec::new()),
     };
     let promo = match &cart {
-        Some(cart) => promo_line(app_context::<Store>(cx), cart).await?,
+        Some(cart) => promo_line(app_context::<Store>(cx), cart)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?,
         None => None,
     };
     let signed_in = match current_account(cx).await {
         Ok(account) => account.is_some(),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     let login_link = href!(account::login)
         .query([("next", href!(show).resolve(cx))])

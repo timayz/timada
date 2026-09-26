@@ -29,6 +29,7 @@ timada-shipping.workspace = true
 timada-tax.workspace = true
 evento.workspace = true
 topcoat = { workspace = true, features = [
+    "anyhow",
     "router",
     "view",
     "cookie",

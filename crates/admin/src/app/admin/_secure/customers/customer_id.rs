@@ -26,7 +26,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let id = param::<CustomerId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
     let book = load_address_book(&services.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     let orders = orders_of_customer(&services.db, &id).await?;
     let title = format!("{} {}", book.first_name, book.last_name);
@@ -37,7 +38,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     };
     // The business the customer buys as, and what the VAT registry last said.
     let company = load_company_identity(&services.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .filter(|company| company.is_company())
         .map(|company| {
             let standing = match &company.last_check {

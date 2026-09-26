@@ -50,7 +50,7 @@ pub async fn switch(cx: &Cx, Form(form): Form<SwitchForm>) -> Result<impl View> 
         let store = app_context::<Store>(cx);
         let cart = match current_cart(cx).await {
             Ok(cart) => cart.clone(),
-            Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+            Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
         };
         if let Some(cart) = cart {
             let carts = timada_cart::Command(&store.executor);
@@ -58,7 +58,8 @@ pub async fn switch(cx: &Cx, Form(form): Form<SwitchForm>) -> Result<impl View> 
                 carts
                     .remove_line(&cart.id, line.product_id.clone())
                     .await
-                    .map_err(anyhow::Error::from)?;
+                    .map_err(anyhow::Error::from)
+                    .map_err(topcoat::Error::from_anyhow)?;
             }
         }
     }

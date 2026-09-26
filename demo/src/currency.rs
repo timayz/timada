@@ -44,7 +44,7 @@ pub async fn cart_currency(cx: &Cx) -> topcoat::Result<Option<String>> {
             .as_ref()
             .and_then(|cart| cart.lines.first())
             .map(|line| line.unit_price.currency.clone())),
-        Err(err) => Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => Err(topcoat::Error::msg(format!("{err:#}"))),
     }
 }
 

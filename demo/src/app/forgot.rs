@@ -44,7 +44,9 @@ pub async fn forgot() -> Result<impl View> {
 #[page(POST "/password/forgot")]
 pub async fn send_link(cx: &Cx, Form(form): Form<ForgotForm>) -> Result<impl View> {
     let store = app_context::<Store>(cx);
-    auth::request_password_reset(store, &form.email).await?;
+    auth::request_password_reset(store, &form.email)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     Ok(view! { forgot_view(sent_to: Some(form.email.trim().to_owned())) })
 }
 
@@ -105,7 +107,10 @@ enum ResetStep {
 pub async fn reset(cx: &Cx) -> Result<impl View> {
     let store = app_context::<Store>(cx);
     let token = query::<ResetQuery>(cx)?.token.clone().unwrap_or_default();
-    let step = if auth::reset_link_is_valid(store, &token).await? {
+    let step = if auth::reset_link_is_valid(store, &token)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+    {
         ResetStep::Choose { token, error: None }
     } else {
         ResetStep::Expired
@@ -117,7 +122,10 @@ pub async fn reset(cx: &Cx) -> Result<impl View> {
 pub async fn choose(cx: &Cx, Form(form): Form<ResetForm>) -> Result<impl View> {
     let store = app_context::<Store>(cx);
     let step = if form.new != form.confirm {
-        if auth::reset_link_is_valid(store, &form.token).await? {
+        if auth::reset_link_is_valid(store, &form.token)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+        {
             ResetStep::Choose {
                 token: form.token,
                 error: Some("Les deux mots de passe ne sont pas identiques.".to_owned()),
@@ -129,7 +137,7 @@ pub async fn choose(cx: &Cx, Form(form): Form<ResetForm>) -> Result<impl View> {
         match auth::reset_password(store, &form.token, &form.new).await {
             Ok(()) => ResetStep::Done,
             Err(ResetPasswordError::InvalidLink) => ResetStep::Expired,
-            Err(ResetPasswordError::Server(err)) => return Err(err.into()),
+            Err(ResetPasswordError::Server(err)) => return Err(topcoat::Error::from_anyhow(err)),
             Err(refused) => ResetStep::Choose {
                 token: form.token,
                 error: Some(refused.to_string()),

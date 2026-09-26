@@ -56,7 +56,7 @@
             # topcoat-cli (`topcoat dev`, `topcoat asset bundle`, `topcoat ui`) is not in
             # nixpkgs; install it with cargo, pinned to the topcoat version the workspace uses.
             export PATH="$HOME/.cargo/bin:$PATH"
-            TOPCOAT_CLI_VERSION="0.8.1"
+            TOPCOAT_CLI_VERSION="0.9.0"
             if ! cargo install --list 2>/dev/null | grep -q "^topcoat-cli v$TOPCOAT_CLI_VERSION:"; then
               cargo install topcoat-cli --version "$TOPCOAT_CLI_VERSION" --locked
             fi

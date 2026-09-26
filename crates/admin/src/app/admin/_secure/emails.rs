@@ -54,12 +54,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page = query.page.unwrap_or(1).max(1);
     let status = parse_status(query.status.as_deref());
     let db = &app_context::<AdminServices>(cx).db;
-    let rows = list_outbox(db, status, PAGE_SIZE, (page - 1) * PAGE_SIZE)
-        .await
-        .map_err(anyhow::Error::from)?;
-    let total = count_outbox(db, status)
-        .await
-        .map_err(anyhow::Error::from)?;
+    let rows = list_outbox(db, status, PAGE_SIZE, (page - 1) * PAGE_SIZE).await?;
+    let total = count_outbox(db, status).await?;
 
     Ok(view! {
         page_header(

@@ -65,7 +65,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let chosen = asked.status.clone().unwrap_or_else(|| "open".to_owned());
     let status = parse_status(&chosen);
     let db = &app_context::<AdminServices>(cx).db;
-    let now = timada_core::time::now_unix_secs()? as i64;
+    let now = timada_core::time::now_unix_secs().map_err(topcoat::Error::from_anyhow)? as i64;
 
     let rows: Vec<DisputeRow> =
         list_disputes(db, status, PAGE_SIZE, (page - 1) * PAGE_SIZE).await?;

@@ -33,7 +33,10 @@ pub async fn current_cart(cx: &Cx) -> topcoat::Result<Option<CartDetailsView>> {
         return Ok(None);
     };
     let store = app_context::<Store>(cx);
-    let Some(cart) = load_cart_details(&store.executor, cookie.value_trimmed()).await? else {
+    let Some(cart) = load_cart_details(&store.executor, cookie.value_trimmed())
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+    else {
         return Ok(None);
     };
     // Checked out, parked in the saved carts, or deleted: not being filled.
@@ -44,7 +47,8 @@ pub async fn current_cart(cx: &Cx) -> topcoat::Result<Option<CartDetailsView>> {
     if let Some(owner) = &cart.customer_id {
         let account = current_account(cx)
             .await
-            .map_err(|err| anyhow::anyhow!("{err:#}"))?;
+            .map_err(|err| anyhow::anyhow!("{err:#}"))
+            .map_err(topcoat::Error::from_anyhow)?;
         if account.as_ref().map(|a| &a.customer_id) != Some(owner) {
             return Ok(None);
         }
@@ -64,14 +68,15 @@ pub async fn fresh_cart(cx: &Cx) -> topcoat::Result<Option<(CartDetailsView, Vec
     let cart = match current_cart(cx).await {
         Ok(Some(cart)) => cart.clone(),
         Ok(None) => return Ok(None),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     let store = app_context::<Store>(cx);
     let carts = timada_cart::Command(&store.executor);
     let mut notices = Vec::new();
     for line in &cart.lines {
         let listed = load_product_price(&store.executor, price_id(&line.product_id))
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .and_then(|price| price.price_in(&line.unit_price.currency))
             .map(|price| price.price_incl_tax);
         match listed {
@@ -79,7 +84,8 @@ pub async fn fresh_cart(cx: &Cx) -> topcoat::Result<Option<(CartDetailsView, Vec
                 let changed = carts
                     .reprice_line(&cart.id, &line.product_id, price.clone())
                     .await
-                    .map_err(anyhow::Error::from)?;
+                    .map_err(anyhow::Error::from)
+                    .map_err(topcoat::Error::from_anyhow)?;
                 if changed {
                     notices.push(format!(
                         "Le prix de {} est passé de {} à {}.",
@@ -94,7 +100,8 @@ pub async fn fresh_cart(cx: &Cx) -> topcoat::Result<Option<(CartDetailsView, Vec
                 carts
                     .remove_line(&cart.id, line.product_id.clone())
                     .await
-                    .map_err(anyhow::Error::from)?;
+                    .map_err(anyhow::Error::from)
+                    .map_err(topcoat::Error::from_anyhow)?;
                 notices.push(format!(
                     "{} n'est plus en vente et a été retiré de votre panier.",
                     line.name
@@ -107,7 +114,8 @@ pub async fn fresh_cart(cx: &Cx) -> topcoat::Result<Option<(CartDetailsView, Vec
     }
     // `current_cart` is memoized for the request: read the cart again.
     let cart = load_cart_details(&store.executor, &cart.id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .unwrap_or(cart);
     Ok(Some((cart, notices)))
 }
@@ -117,17 +125,18 @@ pub async fn ensure_cart(cx: &Cx) -> topcoat::Result<String> {
     match current_cart(cx).await {
         Ok(Some(cart)) => return Ok(cart.id.clone()),
         Ok(None) => {}
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     }
     let customer_id = match current_account(cx).await {
         Ok(account) => account.as_ref().map(|a| a.customer_id.clone()),
-        Err(err) => return Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => return Err(topcoat::Error::msg(format!("{err:#}"))),
     };
     let store = app_context::<Store>(cx);
     let id = timada_cart::Command(&store.executor)
         .open_cart(customer_id)
         .await
-        .map_err(anyhow::Error::from)?;
+        .map_err(anyhow::Error::from)
+        .map_err(topcoat::Error::from_anyhow)?;
     jar(cx)
         .override_max_age(Duration::days(CART_COOKIE_DAYS))
         .add(Cookie::new(CART_COOKIE, id.clone()));

@@ -67,7 +67,7 @@ pub async fn identify(cx: &Cx, Form(form): Form<CompanyForm>) -> Result<impl Vie
                 Err(CustomerError::Required(_)) => {
                     "Indiquez la raison sociale de l'entreprise.".to_owned()
                 }
-                Err(err) => return Err(anyhow::Error::from(err).into()),
+                Err(err) => return Err(err.into()),
             }
         }
     };
@@ -146,7 +146,8 @@ async fn company_view(
     let account = require_account(cx).await?;
     let store = app_context::<Store>(cx);
     let company = load_company_identity(&store.executor, &account.customer_id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     let (name, number) =
         typed.unwrap_or_else(|| (company.company_name.clone(), company.vat_number.clone()));

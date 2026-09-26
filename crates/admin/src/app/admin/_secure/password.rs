@@ -40,7 +40,9 @@ pub struct PasswordForm {
 pub async fn change(cx: &Cx, Form(form): Form<PasswordForm>) -> Result<impl View> {
     let services = app_context::<AdminServices>(cx);
     let Some(admin) = signed_in_admin(cx) else {
-        return Err(anyhow::anyhow!("the password page is behind the sign-in").into());
+        return Err(topcoat::Error::msg(
+            "the password page is behind the sign-in",
+        ));
     };
     let error = if form.new != form.confirm {
         "Les deux mots de passe ne sont pas identiques.".to_owned()
@@ -60,7 +62,7 @@ pub async fn change(cx: &Cx, Form(form): Form<PasswordForm>) -> Result<impl View
                 let home = super::section_link(cx, admin.role.home());
                 return Err(see_other(home).into());
             }
-            Err(TeamError::Server(err)) => return Err(err.into()),
+            Err(TeamError::Server(err)) => return Err(topcoat::Error::from_anyhow(err)),
             Err(refused) => refused.to_string(),
         }
     };

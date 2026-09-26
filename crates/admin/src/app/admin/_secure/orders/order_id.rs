@@ -82,7 +82,8 @@ async fn load(cx: &Cx) -> Result<(String, OrderDetailsView)> {
     let id = param::<OrderId>(cx)?.clone();
     let services = app_context::<AdminServices>(cx);
     let order = load_order_details(&services.executor, &id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?;
     Ok((id, order))
 }
@@ -95,10 +96,18 @@ fn back(cx: &Cx, id: &str) -> String {
 pub async fn show(cx: &Cx) -> Result<impl View> {
     let (id, order) = load(cx).await?;
     let services = app_context::<AdminServices>(cx);
-    let payment = timada_payment::load_payment(&services.executor, payment_id(&id)).await?;
-    let shipment = timada_shipping::load_shipment(&services.executor, shipment_id(&id)).await?;
-    let fulfillment = load_fulfillment(&services.executor, &id).await?;
-    let invoice = load_invoice(&services.executor, invoice_id_of(&id)).await?;
+    let payment = timada_payment::load_payment(&services.executor, payment_id(&id))
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let shipment = timada_shipping::load_shipment(&services.executor, shipment_id(&id))
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let fulfillment = load_fulfillment(&services.executor, &id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let invoice = load_invoice(&services.executor, invoice_id_of(&id))
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let invoice_link = invoice.map(|i| {
         let label = i
             .invoice_number
@@ -161,7 +170,8 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                 &dispute.dispute_id,
             )),
         )
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .map(|note| note.credit_note_number);
         disputes.push(DisputeLine {
             reference: dispute.dispute_id.clone(),
@@ -187,9 +197,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .filter(|p| p.status == PaymentStatus::Captured)
     {
         // Shown to who may refund; everybody reads what was refunded.
-        Some(p) if !disputed && moves_money => {
-            Some(p.refundable().map_err(anyhow::Error::from)?.minor).filter(|left| *left > 0)
-        }
+        Some(p) if !disputed && moves_money => Some(p.refundable()?.minor).filter(|left| *left > 0),
         _ => None,
     };
     // Refunds asked for that did not go back yet: `(id, amount, reason,
@@ -565,7 +573,7 @@ pub async fn refund(cx: &Cx, Form(form): Form<RefundForm>) -> Result<impl View> 
         Err(PaymentError::RefundExceedsCapture) => Some("exceeds"),
         Err(PaymentError::InvalidAmount) => Some("amount"),
         Err(PaymentError::NotCaptured | PaymentError::PaymentNotFound) => Some("state"),
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     let target = match refused {
         Some(code) => format!("{}?refund_error={code}", back(cx, &id)),
@@ -583,7 +591,7 @@ fn refund_outcome(cx: &Cx, id: &str, outcome: Result<(), PaymentError>) -> Resul
             | PaymentError::RefundNotFailed
             | PaymentError::RefundAlreadySettled,
         ) => Some("stale"),
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     let target = match refused {
         Some(code) => format!("{}?refund_error={code}", back(cx, id)),
@@ -636,7 +644,8 @@ async fn is_disputed(cx: &Cx, order_id: &str) -> Result<bool> {
     let services = app_context::<AdminServices>(cx);
     Ok(
         timada_payment::load_payment(&services.executor, payment_id(order_id))
-            .await?
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
             .is_some_and(|payment| payment.open_dispute().is_some()),
     )
 }
@@ -654,7 +663,8 @@ pub async fn credit_dispute(cx: &Cx, Form(form): Form<CreditDisputeForm>) -> Res
     let (id, _) = load(cx).await?;
     let services = app_context::<AdminServices>(cx);
     let lost = timada_payment::load_payment(&services.executor, payment_id(&id))
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .and_then(|payment| {
             payment
                 .disputes
@@ -685,7 +695,7 @@ pub async fn credit_dispute(cx: &Cx, Form(form): Form<CreditDisputeForm>) -> Res
             | timada_invoice::InvoiceError::InvoiceVoided
             | timada_invoice::InvoiceError::InvoiceNotFound,
         ) => format!("{}?refund_error=credit", back(cx, &id)),
-        Err(err) => return Err(anyhow::Error::from(err).into()),
+        Err(err) => return Err(err.into()),
     };
     Err::<(), _>(see_other(target).into())
 }
@@ -703,7 +713,7 @@ pub async fn pin_rate(cx: &Cx) -> Result<impl View> {
             .rate(
                 &base,
                 &order.total.currency,
-                timada_core::time::now_unix_secs()?,
+                timada_core::time::now_unix_secs().map_err(topcoat::Error::from_anyhow)?,
             )
             .await
             .map_err(|error| tracing::warn!(order_id = %id, %error, "no exchange rate"))
@@ -714,8 +724,7 @@ pub async fn pin_rate(cx: &Cx) -> Result<impl View> {
         Some(rate) => {
             timada_order::Command(&services.executor)
                 .pin_exchange_rate(&id, rate)
-                .await
-                .map_err(anyhow::Error::from)?;
+                .await?;
             back(cx, &id)
         }
         None if order.exchange_rate.is_some() => back(cx, &id),

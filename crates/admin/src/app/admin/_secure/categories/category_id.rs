@@ -192,7 +192,7 @@ pub async fn update(cx: &Cx, Form(form): Form<UpdateForm>) -> Result<impl View> 
             Some(message) => href!(show, CategoryId(category.id.clone()))
                 .query([("error", message)])
                 .resolve(cx),
-            None => return Err(anyhow::Error::from(err).into()),
+            None => return Err(err.into()),
         },
     };
     Err::<(), _>(see_other(target).into())
@@ -248,7 +248,7 @@ pub async fn define_facets(cx: &Cx, Form(form): Form<FacetsForm>) -> Result<impl
             Some(message) => href!(show, CategoryId(category.id.clone()))
                 .query([("error", message)])
                 .resolve(cx),
-            None => return Err(anyhow::Error::from(err).into()),
+            None => return Err(err.into()),
         },
     };
     Err::<(), _>(see_other(target).into())

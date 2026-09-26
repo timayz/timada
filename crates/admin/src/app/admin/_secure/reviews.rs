@@ -229,7 +229,7 @@ pub struct PublishForm {
 fn settled(result: std::result::Result<(), ReviewError>) -> Result<()> {
     match result {
         Ok(()) | Err(ReviewError::NotPending) => Ok(()),
-        Err(err) => Err(anyhow::Error::from(err).into()),
+        Err(err) => Err(err.into()),
     }
 }
 

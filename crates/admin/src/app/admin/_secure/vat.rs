@@ -36,7 +36,9 @@ fn asked_period(cx: &Cx) -> Result<VatPeriod> {
         .and_then(VatPeriod::parse);
     Ok(match asked {
         Some(period) => period,
-        None => VatPeriod::of(timada_core::time::now_unix_secs()?),
+        None => {
+            VatPeriod::of(timada_core::time::now_unix_secs().map_err(topcoat::Error::from_anyhow)?)
+        }
     })
 }
 

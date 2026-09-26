@@ -397,7 +397,9 @@ pub async fn current_account(cx: &Cx) -> topcoat::Result<Option<Account>> {
         return Ok(None);
     };
     let store = app_context::<Store>(cx);
-    Ok(store::find_by_session(&store.db, &token_hash).await?)
+    store::find_by_session(&store.db, &token_hash)
+        .await
+        .map_err(topcoat::Error::from_anyhow)
 }
 
 /// The signed-in shopper, or a redirect to the login page that comes back here.
@@ -410,7 +412,7 @@ pub async fn require_account(cx: &Cx) -> topcoat::Result<Account> {
                 .resolve(cx);
             Err(see_other(login).into())
         }
-        Err(err) => Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => Err(topcoat::Error::msg(format!("{err:#}"))),
     }
 }
 
@@ -424,7 +426,8 @@ pub async fn start_session(cx: &Cx, account: &Account) -> topcoat::Result<()> {
         &account.customer_id,
         started.expires_at,
     )
-    .await?;
+    .await
+    .map_err(topcoat::Error::from_anyhow)?;
     Ok(())
 }
 

@@ -45,7 +45,8 @@ async fn load(cx: &Cx) -> Result<FamilyState> {
     let services = app_context::<AdminServices>(cx);
     Ok(timada_catalog::Command(&services.executor)
         .load_family(id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .ok_or_not_found()?)
 }
 
@@ -56,7 +57,7 @@ fn back(cx: &Cx, id: &str, outcome: std::result::Result<(), CatalogError>) -> Re
         Ok(()) => Ok(page.resolve(cx)),
         Err(err) => match refusal(&err) {
             Some(message) => Ok(page.query([("error", message)]).resolve(cx)),
-            None => Err(anyhow::Error::from(err).into()),
+            None => Err(err.into()),
         },
     }
 }

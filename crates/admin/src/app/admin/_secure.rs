@@ -132,7 +132,7 @@ fn path_under_mount<'a>(path: &'a str, mount: &str) -> &'a str {
 #[layer]
 async fn require_admin(cx: &Cx, body: Body, next: Next<'_>) -> Result<Response> {
     match current_admin(cx).await {
-        Err(err) => Err(anyhow::anyhow!("{err:#}").into()),
+        Err(err) => Err(topcoat::Error::msg(format!("{err:#}"))),
         Ok(Some(admin)) => {
             let config = app_context::<AdminConfig>(cx);
             let db = &app_context::<AdminServices>(cx).db;
