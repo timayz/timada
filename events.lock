@@ -139,6 +139,14 @@ event timada-shipping/Shipment::ShipmentCreated { order_id: String, method: Deli
 event timada-shipping/Shipment::ShipmentDelivered unit
 event timada-shipping/Shipment::ShipmentDispatched { carrier: String, tracking_number: String }
 event timada-shipping/Shipment::ShipmentReplacesReturn { reference: String }
+event timada-sourcing/SourcedProduct::ProductSourced { supplier_id: String, product_id: String, external_item_id: String, external_sku: Option<String> }
+event timada-sourcing/SourcedProduct::SourcePriceLocked { reason: String }
+event timada-sourcing/SourcedProduct::SourcePriceUnlocked unit
+event timada-sourcing/SourcedProduct::SourcingStopped { reason: String }
+event timada-sourcing/Supplier::SupplierRegistered { slug: String, name: String, connector: String, currency: String }
+event timada-sourcing/Supplier::SupplierRenamed { name: String }
+event timada-sourcing/Supplier::SupplierResumed unit
+event timada-sourcing/Supplier::SupplierSuspended { reason: String }
 
 type timada-cart::DeliveryChoice { method_code: String, pickup_store_id: Option<String> }
 type timada-cart::PaymentMode enum { Card, Installments { count: u8 } }
@@ -194,3 +202,5 @@ view timada-promotion::VoucherView rev=0 { id: String, code: String, customer_id
 view timada-returns::ReturnView rev=2 { id: String, rma_number: String, order_id: String, customer_id: String, status: ReturnStatus, lines: Vec<ReturnLine>, reason: String, requested_at: u64, refused_reason: Option<String>, received: Vec<ReceivedLine>, received_at: Option<u64>, refund_method: Option<RefundMethod>, money: Money, credit: Money, voucher_code: Option<String>, completed_at: Option<u64>, replacement: Option<ReplacementView>, ground: Option<ReturnGround>, approved_at: Option<u64>, label: Option<ReturnLabelView>, label_fee_deducted: Option<Money> } with ReturnLabelView { carrier: String, tracking_number: String, url: Option<String>, file_name: Option<String>, fee: Money, issued_at: u64, with_approval: bool }; ReplacementView { lines: Vec<ReplacementLine>, status: ReplacementStatus, shipment_id: Option<String>, abandoned_reason: Option<String>, fallback_money: Money, fallback_credit: Money }; ReplacementStatus enum { Planned, Arranged, Abandoned }; ReturnStatus enum { Requested, Approved, Refused, Cancelled, Received, Completed }
 view timada-review::ReviewView rev=0 { id: String, product_id: String, customer_id: String, order_id: Option<String>, rating: u8, title: String, body: String, status: ReviewStatus, rejection_reason: Option<String> } with ReviewStatus enum { Pending, Published, Rejected }
 view timada-shipping::ShipmentView rev=2 { id: String, order_id: String, method: DeliveryMethod, destination: Address, lines: Vec<ShipmentLine>, status: ShipmentStatus, carrier: Option<String>, tracking_number: Option<String>, cancelled_reason: Option<String>, replaces_return: Option<String> } with ShipmentStatus enum { Created, Dispatched, Delivered, Cancelled }
+view timada-sourcing::SourcedProductView rev=0 { id: String, product_id: String, supplier_id: String, external_item_id: String, external_sku: Option<String>, active: bool, locked: bool, locked_reason: String, sourced_at: u64 }
+view timada-sourcing::SupplierView rev=0 { id: String, slug: String, name: String, connector: String, currency: String, suspended: bool, suspended_reason: String, registered_at: u64 }

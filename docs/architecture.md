@@ -33,6 +33,7 @@ Most contexts are leaves over `timada-core`. The ones that coordinate others:
 ```mermaid
 graph TD
     catalog --> pricing & inventory & review
+    sourcing --> pricing & tax
     customer --> tax
     order --> cart & customer & inventory & payment & pricing & promotion & shipping & tax
     invoice --> order & payment & tax
@@ -47,9 +48,12 @@ and `tax` depend on `core` only; `customer` also reads `tax`, a library
 without events, for VAT numbers. `catalog` reads three of
 them for one thing: the **listing** the storefront browses
 (`catalog_listing`) carries each product's price, deliverable stock and
-rating, so that filtering, sorting and paging are a single query. A leaf never learns about
-the context that consumes it: `payment` knows nothing of orders beyond an
-opaque `order_id`.
+rating, so that filtering, sorting and paging are a single query. `sourcing` reads `pricing` (it moves the selling price) and
+`tax` (a supplier's cost is quoted in the supplier's currency), and
+deliberately not `catalog`: it keys everything by product id, and the back
+office already has the catalogue to put names to them. A leaf never learns
+about the context that consumes it: `payment` knows nothing of orders beyond
+an opaque `order_id`.
 
 Contexts talk through **facts**, not calls into each other's internals:
 
@@ -232,7 +236,8 @@ for migrations in [
     timada_catalog::migrations(), timada_cart::migrations(), timada_inventory::migrations(),
     timada_review::migrations(), timada_customer::migrations(), timada_order::migrations(),
     timada_payment::migrations(), timada_invoice::migrations(), timada_promotion::migrations(),
-    timada_mailer::migrations(), timada_returns::migrations(), timada_admin::migrations(),
+    timada_mailer::migrations(), timada_returns::migrations(), timada_sourcing::migrations(),
+    timada_admin::migrations(),
 ] { migrator.add_migrations(migrations)?; }
 ```
 
@@ -248,6 +253,7 @@ pool as data unless noted:
 | inventory | `back_in_stock_subscription` | process | |
 | review | `product_summary_subscription`, `review_list_subscription`, `question_list_subscription` | read models | |
 | customer | `customer_list_subscription` | read model | |
+| sourcing | `sourcing_list_subscription` | read model | |
 | promotion | `code_list_subscription` | read model | |
 | payment | `refund_list_subscription` | read models (refunds made, refunds asked for) | |
 | payment | `refund_execution_subscription` | process: enqueues refunds for the provider | |
@@ -327,6 +333,25 @@ the SMTP relay.
   (product, customer), alert (product, customer), discount / voucher (code),
   credit note (refund event id), return (RMA number), category (slug). Creating on a derived id
   with `evento::append(&id)` is an atomic create-unless-exists.
+- **A supplier's word is not a fact.** `sourcing` says where each product is
+  bought (`ProductSourced`, one stream per product, so a product has one
+  supplier at a time by construction) and under which **connector key** —
+  a plain string, never an enum, because an enum nested in a stored event
+  could never gain the next marketplace. What the supplier *says* is not an
+  event: a feed polled every few hours across a real catalogue would append
+  hundreds of thousands a day and leave posterity none the wiser, so the last
+  word of each supplier lives in `sourcing_offer`, and the consequences that
+  matter are facts in the contexts that own them — the selling price in
+  `pricing`, the level on the shelf in `inventory`. The **markup rule** is
+  not an event either (`sourcing_rule`, narrowest scope wins: the product's,
+  else its supplier's, else the shop's): it is tuned whenever a margin
+  disappoints, and a shape written into `events.lock` could never be tuned
+  again. `Command::apply_offer` is where they meet — it converts the cost
+  through the `ExchangeRates` port (one leg only; a rate arrived at through a
+  third currency is quietly wrong every time), prices it, and moves the
+  selling price only inside two guardrails that both have to hold, relative
+  and absolute, in both directions. Anything else comes back as a verdict for
+  an operator. A price the operator locked is neither moved nor asked about.
 - **A level is not a movement.** Stock normally arrives as movements —
   `StockReceived`, `StockReturned` — but a stock-take and a supplier's feed
   both know only a total, so `StockLevelSynced { available }` states one

@@ -68,6 +68,27 @@ impl PinnedRate {
         ))
     }
 
+    /// `amount`, which must be in the base currency, in the rate's currency
+    /// — rounded half up to the hundredth. The way back from
+    /// [`PinnedRate::to_base`], for a cost quoted in the books' currency that
+    /// has to be read in the one a product is sold in.
+    pub fn from_base(&self, amount: &Money) -> Result<Money, RateError> {
+        if amount.currency != self.base || self.per_base_micros == 0 {
+            return Err(RateError::OtherCurrency {
+                amount: amount.currency.clone(),
+                expected: self.base.clone(),
+            });
+        }
+        let quote = u128::from(self.per_base_micros);
+        let magnitude = u128::from(amount.minor.unsigned_abs());
+        let rounded = (magnitude * quote * 2 + MICROS) / (MICROS * 2);
+        let minor = i64::try_from(rounded).unwrap_or(i64::MAX);
+        Ok(Money::new(
+            if amount.minor < 0 { -minor } else { minor },
+            &self.currency,
+        ))
+    }
+
     /// `1 EUR = 0,8538 GBP`: the quote, as a document prints it — four
     /// decimals, more when the rate needs them.
     pub fn quote(&self) -> String {
@@ -160,6 +181,27 @@ mod tests {
             as_of: 1_789_776_000,
             source: "ECB".into(),
         }
+    }
+
+    #[test]
+    fn an_amount_comes_back_from_the_books() -> Result<(), RateError> {
+        let rate = pounds();
+        // 127,66 € at 0,8538 → 108,99… £: the way back rounds the same way.
+        assert_eq!(
+            rate.from_base(&Money::eur(12_766))?,
+            Money::new(10_900, "GBP")
+        );
+        assert_eq!(
+            rate.from_base(&Money::eur(-12_766))?,
+            Money::new(-10_900, "GBP")
+        );
+        assert_eq!(rate.from_base(&Money::eur(0))?, Money::new(0, "GBP"));
+        // It takes the books' currency, not the sale's.
+        assert!(matches!(
+            rate.from_base(&Money::new(10_900, "GBP")),
+            Err(RateError::OtherCurrency { .. })
+        ));
+        Ok(())
     }
 
     #[test]
