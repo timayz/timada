@@ -32,6 +32,7 @@ timada-invoice = { workspace = true, features = ["pdf"] }
 timada-payment.workspace = true
 timada-mailer = { workspace = true, features = ["invoice-pdf"] }
 timada-returns.workspace = true
+timada-sourcing.workspace = true
 timada-tax.workspace = true
 timada-promotion.workspace = true
 timada-admin = { workspace = true, features = ["pdf"] }

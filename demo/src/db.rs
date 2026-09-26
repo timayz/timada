@@ -49,6 +49,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     all.extend(timada_promotion::migrations());
     all.extend(timada_mailer::migrations());
     all.extend(timada_returns::migrations());
+    all.extend(timada_sourcing::migrations());
     all.extend(timada_admin::migrations());
     all.extend(crate::auth::migrations());
     all
@@ -210,6 +211,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
+        timada_sourcing::sourcing_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
         timada_inventory::alert_list_subscription()
             .data(db.clone())
             .start(executor)
@@ -359,6 +364,10 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .run_once(executor)
             .await?;
         timada_inventory::stock_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_sourcing::sourcing_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;
