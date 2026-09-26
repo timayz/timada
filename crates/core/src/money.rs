@@ -101,6 +101,16 @@ impl Money {
         Money::new(minor as i64, &self.currency)
     }
 
+    /// The tax-inclusive amount of a pre-tax one, given a VAT rate in basis
+    /// points (2000 = 20 %). The way back from [`Money::excl_tax`]; rounds
+    /// to the nearest minor unit, so the round trip can differ by a cent.
+    pub fn incl_tax(&self, vat_rate_bp: u16) -> Money {
+        let rate = 10_000 + i128::from(vat_rate_bp);
+        let scaled = i128::from(self.minor) * rate;
+        let minor = (scaled + 5_000) / 10_000;
+        Money::new(minor as i64, &self.currency)
+    }
+
     /// Applies a percentage in basis points (1000 = 10 %), rounding to nearest.
     pub fn percent_bp(&self, bp: u16) -> Money {
         let scaled = i128::from(self.minor) * i128::from(bp);
@@ -118,6 +128,14 @@ mod tests {
         let total = Money::eur(11_995).checked_add(&Money::eur(170))?;
         assert_eq!(total, Money::eur(12_165));
         Ok(())
+    }
+
+    #[test]
+    fn adds_and_removes_vat() {
+        // 53,82 € HT at 20 % is 64,58 € TTC, and back again.
+        assert_eq!(Money::eur(5_382).incl_tax(2000), Money::eur(6_458));
+        assert_eq!(Money::eur(6_458).excl_tax(2000), Money::eur(5_382));
+        assert_eq!(Money::eur(1_000).incl_tax(0), Money::eur(1_000));
     }
 
     #[test]

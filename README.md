@@ -87,6 +87,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-invoice` | one invoice per order, legal numbering, credit notes, both as documents — and, with the `pdf` feature, as PDF files, archived unaltered when they are issued; the VAT of a quarter |
 | `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock, then a refund — or the same product sent again; prepaid return labels, by hand or through a carrier port |
 | `timada-review` | product reviews (moderated) and questions & answers |
+| `timada-sourcing` | where a product is bought: suppliers, the item each product is sourced as, the `SupplierConnector` port, and the markup rule that keeps the selling price in step with a supplier's cost |
 | `timada-mailer` | transactional e-mails (with attachments) through a SQL outbox and pluggable transports; feature `invoice-pdf` e-mails each issued invoice, and each credit note, as a PDF |
 | `timada-admin` | the mountable back-office over all of the above, its operators each with a role: owner, catalogue, customer service, accounting |
 
