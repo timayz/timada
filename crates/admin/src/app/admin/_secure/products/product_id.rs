@@ -21,6 +21,7 @@ use crate::{
     app::admin::_secure::{
         categories::{category_options, category_select},
         families::family_id::{FamilyId, show as show_family},
+        suppliers::supplier_href,
     },
     auth::Section,
     components::{
@@ -31,7 +32,7 @@ use crate::{
         textarea::textarea,
     },
     config::{AdminConfig, AdminServices},
-    ui::{detail_grid, detail_main, money, page_header},
+    ui::{date_time, detail_grid, detail_main, money, page_header},
 };
 
 path_param!(pub product_id: String, error = not_found);
@@ -96,6 +97,24 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         None => product.category_path.join(" > "),
     };
     let categories = category_options(cx, None).await?;
+    // Where the product is bought, what it last cost there, and the way to
+    // the supplier. Read from the list rather than the events: it is a card
+    // beside the price, not the page's subject.
+    let sourced = timada_sourcing::sourced_of_product(&services.db, &id).await?;
+    let offer = match &sourced {
+        Some(_) => timada_sourcing::offer_of_product(&services.db, &id).await?,
+        None => None,
+    };
+    let supplier = match &sourced {
+        Some(sourced) => {
+            timada_sourcing::supplier_by_id(&services.db, &sourced.supplier_id).await?
+        }
+        None => None,
+    };
+    let supplier_link = sourced
+        .as_ref()
+        .map(|sourced| supplier_href(cx, &sourced.supplier_id));
+
     // The family the product is a variant of: its name, where it stands in
     // it, and the way there. A product that says it joined a family where it
     // has no place yet shows « à placer ».
@@ -251,6 +270,62 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         )
                     )
                     card(
+                        card_header(card_title("Approvisionnement"))
+                        card_content(
+                            match (&sourced, &supplier) {
+                                (Some(sourced), Some(supplier)) => {
+                                    <p class="text-sm">
+                                        "Acheté chez "
+                                        <a href=(supplier_link.clone().unwrap_or_default()) class="underline underline-offset-4">(supplier.name.clone())</a>
+                                    </p>
+                                    <p class="text-xs text-muted-foreground font-mono">
+                                        (sourced.external_item_id.clone())
+                                        if let Some(sku) = &sourced.external_sku {
+                                            " · " (sku.clone())
+                                        }
+                                    </p>
+                                    if let Some(offer) = &offer {
+                                        <dl class="mt-3 flex flex-col gap-1 text-sm">
+                                            <div class="flex justify-between">
+                                                <dt class="text-muted-foreground">"Coût"</dt>
+                                                <dd class="tabular-nums">(money(&offer.cost))</dd>
+                                            </div>
+                                            if let Some(landed) = &offer.landed {
+                                                <div class="flex justify-between">
+                                                    <dt class="text-muted-foreground">"Rendu"</dt>
+                                                    <dd class="tabular-nums">(money(landed))</dd>
+                                                </div>
+                                            }
+                                            <div class="flex justify-between">
+                                                <dt class="text-muted-foreground">"Chez le fournisseur"</dt>
+                                                <dd class="tabular-nums">(offer.available.to_string())</dd>
+                                            </div>
+                                            <div class="flex justify-between">
+                                                <dt class="text-muted-foreground">"Relevé le"</dt>
+                                                <dd>(date_time(offer.fetched_at as u64))</dd>
+                                            </div>
+                                        </dl>
+                                    }
+                                    if sourced.locked {
+                                        <p class="mt-3 text-sm">"Prix verrouillé : la synchronisation n'y touche pas."</p>
+                                        <form method="post" action=(href!(unlock_price, ProductId(id.clone()))) class="mt-2">
+                                            button(variant: ButtonVariant::Secondary, attrs: topcoat::view::attributes! { type="submit" }, "Déverrouiller le prix")
+                                        </form>
+                                    } else {
+                                        <form method="post" action=(href!(lock_price, ProductId(id.clone()))) class="mt-3">
+                                            button(variant: ButtonVariant::Secondary, attrs: topcoat::view::attributes! { type="submit" }, "Verrouiller le prix")
+                                        </form>
+                                    }
+                                }
+                                _ => {
+                                    <p class="text-sm text-muted-foreground">
+                                        "Ce produit n'est acheté chez aucun fournisseur : son prix et son stock sont tenus à la main."
+                                    </p>
+                                }
+                            }
+                        )
+                    )
+                    card(
                         card_header(card_title("Famille"))
                         card_content(
                             if let Some((family_name, standing, link)) = &variant_of {
@@ -271,6 +346,31 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             )
         )
     })
+}
+
+/// Settles this product's price by hand: the sync leaves it alone, and stops
+/// asking about it.
+#[page(POST "./lock-price")]
+pub async fn lock_price(cx: &Cx) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    timada_sourcing::Command::new(&services.executor, services.db.clone())
+        .lock_source_price(
+            timada_sourcing::sourced_product_id(&id),
+            "verrouillé depuis la fiche produit".into(),
+        )
+        .await?;
+    Err::<(), _>(see_other(href!(show, ProductId(id)).resolve(cx)).into())
+}
+
+#[page(POST "./unlock-price")]
+pub async fn unlock_price(cx: &Cx) -> Result<impl View> {
+    let (id, _) = load(cx).await?;
+    let services = app_context::<AdminServices>(cx);
+    timada_sourcing::Command::new(&services.executor, services.db.clone())
+        .unlock_source_price(timada_sourcing::sourced_product_id(&id))
+        .await?;
+    Err::<(), _>(see_other(href!(show, ProductId(id)).resolve(cx)).into())
 }
 
 #[derive(Debug, Deserialize)]

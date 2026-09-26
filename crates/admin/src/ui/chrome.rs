@@ -9,7 +9,8 @@ use topcoat::{
 use crate::{
     app::admin::_secure::{
         categories, customers, disputes, emails, families, inventory, invoices, journal, orders,
-        password, products, promotions, questions, refunds, returns, reviews, team, vat,
+        password, products, promotions, questions, refunds, returns, reviews, sourcing, suppliers,
+        team, vat,
     },
     auth::{Group, Role, Section, signed_in_admin},
     config::{AdminConfig, Stylesheet},
@@ -62,6 +63,8 @@ pub async fn shell(cx: &Cx, child: Child<'_>) -> Result<impl View> {
         entry!(Categories, categories::index),
         entry!(Families, families::index),
         entry!(Inventory, inventory::index),
+        entry!(Suppliers, suppliers::index),
+        entry!(Sourcing, sourcing::index),
         entry!(Customers, customers::index),
         entry!(Promotions, promotions::index),
         entry!(Invoices, invoices::index),
@@ -365,6 +368,8 @@ const fn section_glyph(section: Section) -> IconData {
         Section::Categories => icons::FOLDER_TREE,
         Section::Families => icons::LAYERS,
         Section::Inventory => icons::WAREHOUSE,
+        Section::Suppliers => icons::TRUCK,
+        Section::Sourcing => icons::SCALE,
         Section::Customers => icons::USERS,
         Section::Promotions => icons::TICKET_PERCENT,
         Section::Invoices => icons::FILE_TEXT,

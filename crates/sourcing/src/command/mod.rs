@@ -2,6 +2,7 @@ mod apply_offer;
 mod edit_supplier;
 mod lock_source_price;
 mod register_supplier;
+mod settle_review;
 mod source_product;
 
 pub use apply_offer::Applied;

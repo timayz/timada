@@ -30,9 +30,12 @@ pub mod connector;
 mod error;
 mod migration;
 pub mod price;
+mod price_review;
+mod process;
 mod query;
 mod rule;
 mod sourcing_list;
+mod sync;
 
 pub use command::*;
 pub use connector::{
@@ -43,6 +46,9 @@ pub use connector::{
 pub use error::*;
 pub use migration::migrations;
 pub use price::{Quote, ReviewReason, Verdict};
+pub use price_review::*;
+pub use process::*;
 pub use query::*;
 pub use rule::*;
 pub use sourcing_list::*;
+pub use sync::*;

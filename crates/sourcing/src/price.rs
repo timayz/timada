@@ -64,6 +64,13 @@ impl ReviewReason {
         }
     }
 
+    /// Whether there is a price here for an operator to apply. The others
+    /// are things to see to — a product with nothing to price, a rate that
+    /// could not be had — not offers to accept.
+    pub fn proposes_a_price(self) -> bool {
+        matches!(self, Self::Jump | Self::Floor)
+    }
+
     /// How the back office words it.
     pub fn label(self) -> &'static str {
         match self {

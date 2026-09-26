@@ -60,6 +60,30 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
 /// rest of the EU with the VAT of the destination (one-stop shop). Everything
 /// the demo sells is at the standard rate; a shop with reduced-rate products
 /// maps them per country with `TaxZones::with_mapped_rate`.
+/// The supplier connectors this host plugs in. There is no marketplace
+/// adapter yet, so a supplier registered under `manual` is worked by hand —
+/// an operator types what it costs; the scripted one is what the seed and
+/// the tests source from, so the screens have something true to show.
+pub fn supplier_connectors() -> timada_sourcing::SupplierConnectors {
+    let demo = timada_sourcing::FakeConnector::new("demo");
+    // Built here rather than by the seed so that every instance answers the
+    // same thing: the worker holds one, the back office another, and a
+    // supplier that told them different stories would be no use to anybody.
+    for (sku, item, cost, available) in crate::seed_catalogue::SOURCED {
+        demo.stock(timada_sourcing::SupplierOffer {
+            item: timada_sourcing::SupplierItemRef::new(*item, None),
+            cost: timada_core::Money::new(*cost, "USD"),
+            shipping: timada_core::Money::new(200, "USD"),
+            available: *available,
+            title: Some(format!("{sku} (fournisseur)")),
+            url: Some(format!("https://example.test/item/{item}")),
+        });
+    }
+    timada_sourcing::SupplierConnectors::default()
+        .with(timada_sourcing::ManualConnector)
+        .with(demo)
+}
+
 pub fn tax_zones() -> timada_tax::TaxZones {
     timada_tax::TaxZones::france_with_eu_oss()
 }
@@ -101,8 +125,9 @@ pub fn installment_fees() -> timada_order::InstallmentHandlingFees {
 }
 
 /// Where the rate an order in pounds or francs goes to the books at comes
-/// from: the European Central Bank with `--features ecb` and `TIMADA_ECB=1`,
-/// a fixed table otherwise — good enough for a demo, not for a tax return.
+/// from — and the one a supplier's cost in dollars is read at. The European
+/// Central Bank with `--features ecb` and `TIMADA_ECB=1`, a fixed table
+/// otherwise: good enough for a demo, not for a tax return.
 pub fn exchange_rates() -> timada_tax::ExchangeRateSource {
     #[cfg(feature = "ecb")]
     if std::env::var("TIMADA_ECB").is_ok_and(|v| v == "1") {
@@ -117,7 +142,9 @@ pub fn exchange_rates() -> timada_tax::ExchangeRateSource {
     timada_tax::ExchangeRateSource::new(
         timada_tax::FixedRates::new("EUR", "cours de démonstration")
             .with("GBP", 853_800)
-            .with("CHF", 941_200),
+            .with("CHF", 941_200)
+            // What the demo's supplier quotes in.
+            .with("USD", 1_085_000),
     )
 }
 
@@ -212,6 +239,10 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .start(executor)
             .await?,
         timada_sourcing::sourcing_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
+        timada_sourcing::sourcing_poll_subscription()
             .data(db.clone())
             .start(executor)
             .await?,
@@ -368,6 +399,10 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .run_once(executor)
             .await?;
         timada_sourcing::sourcing_list_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_sourcing::sourcing_poll_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;

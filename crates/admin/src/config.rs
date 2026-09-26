@@ -68,6 +68,10 @@ pub struct AdminServices {
     /// currencies than its books': an order no rate could be had for when it
     /// was placed gets one from its page.
     pub exchange_rates: Option<timada_tax::ExchangeRateSource>,
+    /// The supplier connectors the host plugged in. Without them a supplier
+    /// can still be taken on and its products linked — an operator then
+    /// types what it costs — but nothing is asked of it by itself.
+    pub suppliers: Option<timada_sourcing::SupplierConnectors>,
 }
 
 impl AdminServices {
@@ -78,6 +82,7 @@ impl AdminServices {
             archive: None,
             return_labels: None,
             exchange_rates: None,
+            suppliers: None,
         }
     }
 
@@ -93,6 +98,11 @@ impl AdminServices {
 
     pub fn with_exchange_rates(mut self, rates: timada_tax::ExchangeRateSource) -> Self {
         self.exchange_rates = Some(rates);
+        self
+    }
+
+    pub fn with_suppliers(mut self, suppliers: timada_sourcing::SupplierConnectors) -> Self {
+        self.suppliers = Some(suppliers);
         self
     }
 }

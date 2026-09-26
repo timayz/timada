@@ -35,6 +35,7 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
     all.extend(timada_review::migrations());
     all.extend(timada_mailer::migrations());
     all.extend(timada_returns::migrations());
+    all.extend(timada_sourcing::migrations());
     let (executor, db) = timada_core::testing::memory_executor(all).await?;
     create_admin(&db, EMAIL, PASSWORD).await?;
 
@@ -69,7 +70,12 @@ async fn harness(mount: &str) -> anyhow::Result<Harness> {
             // Pounds are quoted; francs are not.
             .with_exchange_rates(timada_tax::ExchangeRateSource::new(
                 timada_tax::FixedRates::new("EUR", "BCE").with("GBP", 853_800),
-            )),
+            ))
+            .with_suppliers(
+                timada_sourcing::SupplierConnectors::default()
+                    .with(timada_sourcing::ManualConnector)
+                    .with(timada_sourcing::FakeConnector::new("fake")),
+            ),
     );
     Ok(Harness {
         router,
@@ -3650,5 +3656,239 @@ async fn an_order_without_its_exchange_rate_gets_one_from_its_page() -> anyhow::
         page.contains("Aucun cours de change n'a pu être obtenu"),
         "{page}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn suppliers_are_taken_on_and_prices_validated() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let (cookie, _) = operator(&h, "catalogue@timada.example", Role::Catalogue).await?;
+
+    // A supplier is taken on from the section itself.
+    let added = h
+        .router
+        .handle(post(
+            "/admin/suppliers/new",
+            "name=Shenzhen+Optics&slug=&connector=fake&currency=USD",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&added), "/admin/suppliers");
+    // The list is a read model, like every other section's: it follows.
+    timada_sourcing::sourcing_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let list = text(
+        h.router
+            .handle(get("/admin/suppliers", Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(
+        list.contains("Shenzhen Optics"),
+        "the supplier is not listed"
+    );
+
+    // A second one under the same name is refused, and says why.
+    let twice = text(
+        h.router
+            .handle(post(
+                "/admin/suppliers/new",
+                "name=Shenzhen+Optics&slug=&connector=fake&currency=USD",
+                Some(&cookie),
+            ))
+            .await,
+    )
+    .await?;
+    assert!(
+        twice.contains("shenzhen-optics"),
+        "a duplicate slug should say so"
+    );
+
+    // Its terms are its own once saved, and go back to the shop's when cleared.
+    let supplier = timada_sourcing::supplier_id("shenzhen-optics");
+    let page = format!("/admin/suppliers/{supplier}");
+    let saved = h
+        .router
+        .handle(post(
+            &format!("{page}/rule"),
+            "markup_bp=7000&min_margin_bp=3000&auto_move_bp=400&auto_move_cap_minor=800\
+             &round_step_minor=100&round_ends_minor=90&safety_stock=2&shipping_included=on",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&saved), format!("{page}?done=rule"));
+    let rule = timada_sourcing::resolve_rule(&h.db, &supplier, "nothing").await?;
+    assert_eq!(rule.markup_bp, 7_000);
+    assert_eq!(rule.safety_stock, 2);
+    // The checkbox was not ticked, so the éco-participation is absorbed.
+    assert!(!rule.eco_on_top);
+
+    // Suspending it is one click, and the page says so.
+    let suspended = h
+        .router
+        .handle(post(&format!("{page}/suspend"), "", Some(&cookie)))
+        .await;
+    assert_eq!(location(&suspended), format!("{page}?done=suspended"));
+    timada_sourcing::sourcing_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    let shown = text(
+        h.router
+            .handle(get(&format!("{page}?done=suspended"), Some(&cookie)))
+            .await,
+    )
+    .await?;
+    assert!(
+        shown.contains("Fournisseur suspendu."),
+        "no confirmation shown"
+    );
+    assert!(shown.contains("Reprendre"), "no way back from a suspension");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_queue_applies_or_refuses_a_price() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let (cookie, _) = operator(&h, "catalogue@timada.example", Role::Catalogue).await?;
+    let sourcing = timada_sourcing::Command::new(&h.executor, h.db.clone());
+    let connectors = timada_sourcing::SupplierConnectors::default()
+        .with(timada_sourcing::FakeConnector::new("fake"));
+    let supplier = sourcing
+        .register_supplier(
+            timada_sourcing::RegisterSupplier {
+                slug: "shenzhen-optics".into(),
+                name: "Shenzhen Optics".into(),
+                connector: "fake".into(),
+                currency: "EUR".into(),
+            },
+            &connectors,
+        )
+        .await?;
+    let product = timada_catalog::product_id("AOC-Q27G2");
+    timada_catalog::Command(&h.executor)
+        .create_product(timada_catalog::CreateProduct {
+            sku: "AOC-Q27G2".into(),
+            name: "AOC 27\" Gaming".into(),
+            brand: timada_catalog::Brand {
+                name: "AOC".into(),
+                slug: "aoc".into(),
+            },
+            category_path: vec!["Écrans".into()],
+            short_description: "Un écran".into(),
+            warranty_months: 24,
+        })
+        .await?;
+    timada_pricing::Command(&h.executor)
+        .list_price(timada_pricing::ListPrice {
+            product_id: product.clone(),
+            price_incl_tax: timada_core::Money::eur(22_990),
+            vat_rate_bp: 2000,
+            eco_participation: timada_core::Money::eur(0),
+        })
+        .await?;
+    sourcing
+        .source_product(timada_sourcing::SourceProduct {
+            product_id: product.clone(),
+            supplier_id: supplier.clone(),
+            external_item_id: "1005006100001".into(),
+            external_sku: None,
+        })
+        .await?;
+    timada_sourcing::sourcing_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    timada_catalog::product_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+
+    // A cost that would nearly double the price: the shop asks first.
+    let applied = sourcing
+        .apply_offer(
+            &product,
+            &timada_sourcing::SupplierOffer {
+                item: timada_sourcing::SupplierItemRef::new("1005006100001", None),
+                cost: timada_core::Money::eur(25_000),
+                shipping: timada_core::Money::eur(0),
+                available: 9,
+                title: None,
+                url: None,
+            },
+            &timada_tax::FixedRates::new("EUR", "test"),
+            "EUR",
+            timada_core::time::now_unix_secs()?,
+        )
+        .await?;
+    assert!(matches!(
+        applied.verdict,
+        timada_sourcing::Verdict::Review { .. }
+    ));
+
+    let queue = text(h.router.handle(get("/admin/sourcing", Some(&cookie))).await).await?;
+    assert!(queue.contains("AOC 27"), "the product is not in the queue");
+    assert!(
+        queue.contains("Écart trop important"),
+        "the queue does not say why"
+    );
+
+    let open =
+        timada_sourcing::list_reviews(&h.db, &timada_sourcing::ListReviews::open(50, 0)).await?;
+    assert_eq!(open.len(), 1);
+    let form = format!("review_id={}", open[0].review_id);
+
+    // Refusing it settles the matter, and locks the price so the same
+    // question is not put again.
+    let refused = h
+        .router
+        .handle(post("/admin/sourcing/reject", &form, Some(&cookie)))
+        .await;
+    assert_eq!(location(&refused), "/admin/sourcing");
+    assert_eq!(
+        timada_sourcing::count_reviews(&h.db, &timada_sourcing::ListReviews::open(50, 0)).await?,
+        0
+    );
+    assert!(
+        sourcing
+            .load_sourced_product(&product)
+            .await?
+            .is_some_and(|sourced| sourced.locked)
+    );
+    // And answering it again is harmless: it says so rather than pretending.
+    let again = h
+        .router
+        .handle(post("/admin/sourcing/reject", &form, Some(&cookie)))
+        .await;
+    assert_eq!(location(&again), "/admin/sourcing?error=stale");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sourcing_is_the_catalogues_business_not_everybodys() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    for (email, role, opens) in [
+        ("cat@timada.example", Role::Catalogue, true),
+        ("sup@timada.example", Role::Support, false),
+        ("acc@timada.example", Role::Accounting, false),
+    ] {
+        let (cookie, _) = operator(&h, email, role).await?;
+        for path in ["/admin/suppliers", "/admin/sourcing"] {
+            let response = h.router.handle(get(path, Some(&cookie))).await;
+            if opens {
+                assert_eq!(response.status(), 200, "{role:?} should open {path}");
+            } else {
+                assert_eq!(
+                    response.status(),
+                    StatusCode::FORBIDDEN,
+                    "{role:?} should not open {path}"
+                );
+            }
+        }
+    }
     Ok(())
 }
