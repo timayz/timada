@@ -20,8 +20,8 @@ binary, the database and the storefront.
 
 ## Try it
 
-The dev shell (`nix develop`, or direnv) provides Rust, Tailwind and the
-`topcoat` CLI.
+The dev shell (`nix develop`, or direnv) provides Rust, Tailwind, the
+`topcoat` CLI and Playwright.
 
 ```sh
 cargo run -p demo -- --seed     # sample catalogue, a customer, an order, the accounts below
