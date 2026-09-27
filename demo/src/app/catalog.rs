@@ -1,12 +1,15 @@
-//! `/` and `/p/{product_id}`: the catalogue and the product page, with its
-//! customer reviews, its questions & answers, and the forms to add to both.
+//! `/` and the product page, with its customer reviews, its questions &
+//! answers, and the forms to add to both. A product's address is the way
+//! down to it by slugs — `/informatique/composants/ssd/crucial-p3-plus-1-to` —
+//! served, like a category's, by [`browse`]; `/p/{product_id}`, the address
+//! from before (and the one an e-mail knows), moves visitors on for good.
 
 use std::collections::HashMap;
 
 use serde::Deserialize;
 use timada_catalog::{
-    brand_by_slug, category_lineage, category_tree, is_on_storefront, list_categories,
-    load_product_page,
+    brand_by_slug, category_by_slug, category_lineage, category_tree, is_on_storefront,
+    list_categories, load_product_page, product_by_slug, storefront_paths,
 };
 use timada_customer::customers_by_ids;
 use timada_inventory::{
@@ -23,8 +26,8 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{
-        content::Form, error::RouterErrorExt, error::see_other, href, page, path_param,
-        path_param as param, query_params, query_params as query,
+        content::Form, error::RouterErrorExt, error::redirect_permanent, error::see_other, href,
+        page, path_param, path_param as param, query_params, query_params as query, request::uri,
     },
     view::{View, component, view},
 };
@@ -50,8 +53,7 @@ async fn departments(cx: &Cx) -> Result<Vec<(String, String, String)>> {
             .into_iter()
             .map(|node| {
                 let picture = format!("/media/demo/{}.svg", node.category.slug);
-                let link =
-                    href!(category::show, category::CategorySlug(node.category.slug)).resolve(cx);
+                let link = href!(browse, Slugs(vec![node.category.slug])).resolve(cx);
                 (link, node.category.name, picture)
             })
             .collect(),
@@ -86,7 +88,7 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
         Vec::new()
     };
     // Every link is resolved before the view: it moves what it is handed.
-    let browse = href!(search).resolve(cx);
+    let browsing = href!(search).resolve(cx);
     let follow = href!(account::orders).resolve(cx);
     let basket = href!(cart::show).resolve(cx);
     let business = href!(company::show).resolve(cx);
@@ -98,7 +100,7 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
                 <h1>"Boutique."</h1>
                 <p>"Pour acheter vos produits préférés, c'est ici."</p>
                 <div class="actions">
-                    <a class="button" href=(browse.clone())>"Parcourir le catalogue"</a>
+                    <a class="button" href=(browsing.clone())>"Parcourir le catalogue"</a>
                     <a href=(follow.clone())>"Suivre une commande \u{203A}"</a>
                 </div>
             </div>
@@ -119,7 +121,7 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
             if !highlights.is_empty() {
                 <h2>"Les nouveautés."</h2>
                 <ul class="rail">
-                    for row in &highlights { highlight_card(row: row) }
+                    for (row, link) in &highlights { highlight_card(row: row, link: link) }
                 </ul>
             }
             if seeded {
@@ -143,7 +145,7 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
                     <p class="muted">"Renseignez votre numéro de TVA intracommunautaire pour être facturé hors taxes."</p>
                 </li>
                 <li class="card link-tile">
-                    <p><a href=(browse.clone())>"Besoin d\u{2019}un conseil ?"</a></p>
+                    <p><a href=(browsing.clone())>"Besoin d\u{2019}un conseil ?"</a></p>
                     <p class="muted">"Filtrez par marque, par prix, par note et par caractéristique technique."</p>
                 </li>
             </ul>
@@ -222,6 +224,87 @@ pub async fn brand(cx: &Cx) -> Result<impl View> {
 }
 
 path_param!(pub product_id: String, error = not_found);
+path_param!(pub *slugs: String, error = not_found);
+
+/// The addresses of products, by id: the way down to each by slugs. A
+/// product the catalogue's list does not know yet goes by its id, which
+/// leads to its address once it does.
+pub async fn product_links(cx: &Cx, ids: &[String]) -> Result<HashMap<String, String>> {
+    let store = app_context::<Store>(cx);
+    let mut links: HashMap<String, String> = storefront_paths(&store.db, ids)
+        .await?
+        .into_iter()
+        .map(|(id, segments)| (id, href!(browse, Slugs(segments)).resolve(cx)))
+        .collect();
+    for id in ids {
+        links
+            .entry(id.clone())
+            .or_insert_with(|| href!(product_page, ProductId(id.clone())).resolve(cx));
+    }
+    Ok(links)
+}
+
+/// The address of one product; see [`product_links`].
+pub async fn product_link(cx: &Cx, id: &str) -> Result<String> {
+    let mut links = product_links(cx, std::slice::from_ref(&id.to_owned())).await?;
+    Ok(links.remove(id).unwrap_or_default())
+}
+
+/// What an address leads to.
+enum Found {
+    Category(
+        timada_catalog::CategoryRow,
+        Vec<timada_catalog::CategoryRow>,
+    ),
+    Product(String),
+}
+
+/// Every address under the root that no other page claims: a category's or
+/// a product's, both going by their last word — a category's slug is unique,
+/// and so is a product's. The way down spelled otherwise (the product moved
+/// to another category, an empty segment) is sent on to the address as it
+/// stands, for good, its query string along.
+#[page("/{*slugs}")]
+pub async fn browse(cx: &Cx) -> Result<impl View> {
+    let asked: Vec<String> = param::<Slugs>(cx)?.to_vec();
+    let last = asked
+        .iter()
+        .rev()
+        .find(|segment| !segment.is_empty())
+        .cloned()
+        .ok_or_not_found()?;
+    let store = app_context::<Store>(cx);
+    let (found, canonical) = match category_by_slug(&store.db, &last).await? {
+        Some(category) => {
+            let lineage = category_lineage(&store.db, &category.id).await?;
+            is_on_storefront(&lineage).then_some(()).ok_or_not_found()?;
+            let path = category::path_of(&lineage);
+            (Found::Category(category, lineage), path)
+        }
+        None => {
+            let product = product_by_slug(&store.db, &last).await?.ok_or_not_found()?;
+            let path = storefront_paths(&store.db, std::slice::from_ref(&product.id))
+                .await?
+                .remove(&product.id)
+                .ok_or_not_found()?;
+            (Found::Product(product.id), path)
+        }
+    };
+    if canonical != asked {
+        let mut target = href!(browse, Slugs(canonical)).resolve(cx);
+        if let Some(query) = uri(cx).query() {
+            target.push('?');
+            target.push_str(query);
+        }
+        return Err(redirect_permanent(target).into());
+    }
+    Ok(view! {
+        match &found {
+            Found::Category(row, lineage) => { category::category_view(row: row, lineage: lineage) }
+            Found::Product(id) => { product_view(product_id: id, review_error: None, question_error: None) }
+        }
+    })
+}
 
 /// Reviews and questions are paged separately: `?avis=2`, `?questions=3`.
 const REVIEWS_PER_PAGE: u32 = 5;
@@ -268,9 +351,25 @@ fn pager(
     }
 }
 
+/// The address from before: on to the product's, for good, the query string
+/// (a page of reviews) along. Until the catalogue's list knows the product —
+/// it may trail the event store by a moment — the page is served here.
 #[page("/p/{product_id}")]
-pub async fn product_page() -> Result<impl View> {
-    Ok(view! { product_view(review_error: None, question_error: None) })
+pub async fn product_page(cx: &Cx) -> Result<impl View> {
+    let id = param::<ProductId>(cx)?.clone();
+    let store = app_context::<Store>(cx);
+    if let Some(segments) = storefront_paths(&store.db, std::slice::from_ref(&id))
+        .await?
+        .remove(&id)
+    {
+        let mut target = href!(browse, Slugs(segments)).resolve(cx);
+        if let Some(query) = uri(cx).query() {
+            target.push('?');
+            target.push_str(query);
+        }
+        return Err(redirect_permanent(target).into());
+    }
+    Ok(view! { product_view(product_id: &id, review_error: None, question_error: None) })
 }
 
 #[derive(Debug, Deserialize)]
@@ -306,7 +405,7 @@ pub async fn submit_review(cx: &Cx, Form(form): Form<ReviewForm>) -> Result<impl
         .await;
     let error = match submitted {
         Ok(_) => {
-            let back = format!("{}#avis", href!(product_page, ProductId(id)).resolve(cx));
+            let back = format!("{}#avis", product_link(cx, &id).await?);
             return Err(see_other(back).into());
         }
         Err(ReviewError::InvalidRating(_)) => "Choisissez une note de 1 à 5.",
@@ -314,7 +413,9 @@ pub async fn submit_review(cx: &Cx, Form(form): Form<ReviewForm>) -> Result<impl
         Err(ReviewError::AlreadyReviewed) => "Vous avez déjà donné votre avis sur ce produit.",
         Err(err) => return Err(err.into()),
     };
-    Ok(view! { product_view(review_error: Some(error.to_owned()), question_error: None) })
+    Ok(
+        view! { product_view(product_id: &id, review_error: Some(error.to_owned()), question_error: None) },
+    )
 }
 
 /// "M'alerter du retour en stock": a signed-in shopper asks to be told when
@@ -347,7 +448,7 @@ pub async fn request_alert(cx: &Cx) -> Result<impl View> {
             Err(err) => return Err(err.into()),
         }
     }
-    Err::<(), _>(see_other(href!(product_page, ProductId(id)).resolve(cx)).into())
+    Err::<(), _>(see_other(product_link(cx, &id).await?).into())
 }
 
 #[derive(Debug, Deserialize)]
@@ -376,16 +477,15 @@ pub async fn ask_question(cx: &Cx, Form(form): Form<QuestionForm>) -> Result<imp
         .await;
     let error = match asked {
         Ok(_) => {
-            let back = format!(
-                "{}#questions",
-                href!(product_page, ProductId(id)).resolve(cx)
-            );
+            let back = format!("{}#questions", product_link(cx, &id).await?);
             return Err(see_other(back).into());
         }
         Err(ReviewError::Required(_)) => "Écrivez votre question avant de l'envoyer.",
         Err(err) => return Err(err.into()),
     };
-    Ok(view! { product_view(review_error: None, question_error: Some(error.to_owned())) })
+    Ok(
+        view! { product_view(product_id: &id, review_error: None, question_error: Some(error.to_owned())) },
+    )
 }
 
 /// The shopper's order that contains the product, if any: it makes the
@@ -459,10 +559,7 @@ pub async fn submit_answer(cx: &Cx, Form(form): Form<AnswerForm>) -> Result<impl
         .await
     {
         Ok(_) => {
-            let back = format!(
-                "{}#questions",
-                href!(product_page, ProductId(id)).resolve(cx)
-            );
+            let back = format!("{}#questions", product_link(cx, &id).await?);
             return Err(see_other(back).into());
         }
         Err(ReviewError::Required(_)) => "Écrivez votre réponse avant de l'envoyer.",
@@ -470,7 +567,9 @@ pub async fn submit_answer(cx: &Cx, Form(form): Form<AnswerForm>) -> Result<impl
         Err(ReviewError::QuestionNotPublished) => "Cette question n'est pas ouverte aux réponses.",
         Err(err) => return Err(err.into()),
     };
-    Ok(view! { product_view(review_error: None, question_error: Some(error.to_owned())) })
+    Ok(
+        view! { product_view(product_id: &id, review_error: None, question_error: Some(error.to_owned())) },
+    )
 }
 
 /// One published question with its answers, ready to render.
@@ -586,6 +685,8 @@ async fn versions_of(
             on_sale.insert(variant.product_id.clone());
         }
     }
+    let siblings: Vec<String> = on_sale.iter().cloned().collect();
+    let links = product_links(cx, &siblings).await?;
     let versions = timada_catalog::variant_choices(family, &product.id, |id| on_sale.contains(id))
         .into_iter()
         .map(|choice| Version {
@@ -594,9 +695,7 @@ async fn versions_of(
                 .values
                 .into_iter()
                 .map(|value| VersionChoice {
-                    link: value
-                        .product_id
-                        .map(|id| href!(product_page, ProductId(id)).resolve(cx)),
+                    link: value.product_id.and_then(|id| links.get(&id).cloned()),
                     hint: if value.exact {
                         String::new()
                     } else {
@@ -614,10 +713,11 @@ async fn versions_of(
 #[component]
 async fn product_view(
     cx: &Cx,
+    product_id: &str,
     review_error: Option<String>,
     question_error: Option<String>,
 ) -> Result<impl View> {
-    let id = param::<ProductId>(cx)?.clone();
+    let id = product_id.to_owned();
     let store = app_context::<Store>(cx);
     let product = load_product_page(&store.executor, &id)
         .await
@@ -677,7 +777,7 @@ async fn product_view(
         )
     });
     // For search engines: the way down to the product, and what is on offer.
-    let here = href!(product_page, ProductId(id.clone())).resolve(cx);
+    let here = product_link(cx, &id).await?;
     let mut described = Vec::new();
     if !trail.is_empty() {
         let mut steps: Vec<Crumb> = trail
@@ -729,7 +829,7 @@ async fn product_view(
         query.avis.unwrap_or(1).max(1),
         query.questions.unwrap_or(1).max(1),
     );
-    let base = href!(product_page, ProductId(id.clone())).resolve(cx);
+    let base = here.clone();
     let reviews_pager = pager(
         &base,
         "avis",
@@ -872,19 +972,13 @@ async fn product_view(
     let alert_action = href!(request_alert, ProductId(id.clone())).resolve(cx);
     let signed_in = account.is_some();
     let login_link = href!(account::login)
-        .query([(
-            "next",
-            href!(product_page, ProductId(id.clone())).resolve(cx),
-        )])
+        .query([("next", here.clone())])
         .resolve(cx);
     let question_action = href!(ask_question, ProductId(id.clone())).resolve(cx);
     let access = match account {
         None => ReviewAccess::SignIn(
             href!(account::login)
-                .query([(
-                    "next",
-                    href!(product_page, ProductId(id.clone())).resolve(cx),
-                )])
+                .query([("next", here.clone())])
                 .resolve(cx),
         ),
         Some(account) => {

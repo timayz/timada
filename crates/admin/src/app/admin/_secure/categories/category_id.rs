@@ -58,6 +58,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .map(|c| c.name.as_str())
         .collect::<Vec<_>>()
         .join(" > ");
+    // Where the storefront shows it: the slugs of the way down.
+    let address = lineage
+        .iter()
+        .map(|c| format!("/{}", c.slug))
+        .collect::<String>();
     let products =
         count_products_in_categories(db, &category_subtree_ids(db, &category.id).await?).await?;
     // Anywhere but under itself.
@@ -83,7 +88,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             if category.archived { <span class="text-sm text-muted-foreground">"Archivée"</span> }
         )
         <p class="-mt-4 mb-6 text-sm text-muted-foreground">
-            (breadcrumb) " · " <span class="font-mono text-xs">"/c/" (category.slug.clone())</span>
+            (breadcrumb) " · " <span class="font-mono text-xs">(address)</span>
             " · " (products.to_string()) " produit(s) en vente, sous-catégories comprises"
         </p>
         if let Some(error) = &error {

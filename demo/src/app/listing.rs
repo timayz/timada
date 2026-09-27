@@ -6,6 +6,8 @@
 //! value that makes no sense is ignored rather than refused — these URLs get
 //! edited, shared and crawled.
 
+use std::collections::HashMap;
+
 use timada_catalog::{
     ListingPage, ListingQuery, ListingRow, ListingSort, SpecFilter, SpecKey, search_listing,
 };
@@ -13,7 +15,7 @@ use timada_core::Money;
 use topcoat::{
     Result,
     context::{Cx, app_context},
-    router::{href, request::uri},
+    router::request::uri,
     view::{View, component, view},
 };
 
@@ -194,6 +196,8 @@ pub struct Listing {
     pub pages: u32,
     /// A brand's own page has no brand filter.
     pub brand_scoped: bool,
+    /// The address of each product of the page, by id.
+    pub links: HashMap<String, String>,
 }
 
 impl Listing {
@@ -249,18 +253,26 @@ pub async fn load_listing(cx: &Cx, base: String, scope: Scope) -> Result<Listing
         filters.page = pages;
         found = search_listing(&store.db, &query_for(&filters)).await?;
     }
+    let ids: Vec<String> = found
+        .rows
+        .iter()
+        .map(|row| row.product_id.clone())
+        .collect();
+    let links = catalog::product_links(cx, &ids).await?;
     Ok(Listing {
         base,
         filters,
         found,
         pages,
         brand_scoped,
+        links,
     })
 }
 
-/// The newest arrivals, for the front page's rail. Deliberately blind to the
-/// query string: this is an editorial strip, not a listing a shopper filters.
-pub async fn load_highlights(cx: &Cx, limit: u32) -> Result<Vec<ListingRow>> {
+/// The newest arrivals, each with its address, for the front page's rail.
+/// Deliberately blind to the query string: this is an editorial strip, not
+/// a listing a shopper filters.
+pub async fn load_highlights(cx: &Cx, limit: u32) -> Result<Vec<(ListingRow, String)>> {
     let store = app_context::<Store>(cx);
     let currency = crate::currency::shopper_currency(cx).await?;
     let found = search_listing(
@@ -273,18 +285,27 @@ pub async fn load_highlights(cx: &Cx, limit: u32) -> Result<Vec<ListingRow>> {
         },
     )
     .await?;
-    Ok(found.rows)
+    let ids: Vec<String> = found
+        .rows
+        .iter()
+        .map(|row| row.product_id.clone())
+        .collect();
+    let mut links = catalog::product_links(cx, &ids).await?;
+    Ok(found
+        .rows
+        .into_iter()
+        .map(|row| {
+            let link = links.remove(&row.product_id).unwrap_or_default();
+            (row, link)
+        })
+        .collect())
 }
 
 /// A product in a rail. `<h3>`, not `<h2>`: the cards of the listing below
 /// are counted by their `<h2>` and this strip must not join that count.
 #[component]
-pub async fn highlight_card(cx: &Cx, row: &ListingRow) -> Result<impl View> {
-    let link = href!(
-        catalog::product_page,
-        catalog::ProductId(row.product_id.clone())
-    )
-    .resolve(cx);
+pub async fn highlight_card(row: &ListingRow, link: &str) -> Result<impl View> {
+    let link = link.to_owned();
     let price = money(&Money::new(row.price_minor, &row.currency));
     let price = if row.price_varies {
         format!("à partir de {price}")
@@ -318,13 +339,10 @@ fn rating_label(row: &ListingRow) -> Option<String> {
     })
 }
 
+/// `link` is the product's address, looked up for the whole page at once.
 #[component]
-async fn product_card(cx: &Cx, row: &ListingRow) -> Result<impl View> {
-    let link = href!(
-        catalog::product_page,
-        catalog::ProductId(row.product_id.clone())
-    )
-    .resolve(cx);
+async fn product_card(row: &ListingRow, link: &str) -> Result<impl View> {
+    let link = link.to_owned();
     let price = money(&Money::new(row.price_minor, &row.currency));
     // A family's card: the cheapest of its versions, and how many there are.
     let price = if row.price_varies {
@@ -374,6 +392,7 @@ pub async fn listing_view(listing: &Listing) -> Result<impl View> {
         found,
         pages,
         brand_scoped,
+        links,
     } = listing;
     let facets = &found.facets;
     let brands: Vec<(String, String, bool)> = facets
@@ -518,7 +537,7 @@ pub async fn listing_view(listing: &Listing) -> Result<impl View> {
                 <p role="status" class="muted">(summary)</p>
                 if !found.rows.is_empty() {
                     <ul class="products">
-                        for row in &found.rows { product_card(row: row) }
+                        for row in &found.rows { product_card(row: row, link: links.get(&row.product_id).map_or("", String::as_str)) }
                     </ul>
                 }
                 if *pages > 1 {

@@ -2516,7 +2516,7 @@ async fn categories_are_managed_and_products_filed_under_them() -> anyhow::Resul
         page.contains("Informatique &gt; Moniteurs") || page.contains("Informatique > Moniteurs"),
         "{page}"
     );
-    assert!(page.contains("/c/") && page.contains("ecrans"), "{page}");
+    assert!(page.contains("/informatique/ecrans"), "{page}");
     assert!(page.contains("Du bureau au jeu."), "{page}");
     let knot = h
         .router
