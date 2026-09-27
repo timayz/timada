@@ -25,6 +25,8 @@
 //! [`Verdict::Review`](price::Verdict::Review) for an operator to settle.
 
 pub mod aggregator;
+#[cfg(feature = "aliexpress")]
+pub mod aliexpress;
 mod command;
 pub mod connector;
 mod error;

@@ -55,11 +55,23 @@ Environment of the demo:
 | `TIMADA_ALERTS_TO` | `boutique@timada.example` | where the shop itself is written to — a payment being disputed, and what the bank decided |
 | `TIMADA_LINK_SECRET` | a secret of the moment | signs what stands in for the session of somebody ordering without an account: the link to the order in their e-mails, and their browser's cookie. Unset, the links sent so far stop working at each restart |
 | `TIMADA_ARCHIVE_DIR` | — | issued invoices and credit notes are archived as files under this directory instead of in the database |
+| `TIMADA_ALIEXPRESS_APP_KEY`, `_APP_SECRET`, `_ACCESS_TOKEN` | — | with `--features aliexpress`, a supplier registered under the connector key `aliexpress` is asked what its items cost and holds, and its dropshipping orders are placed through their API. **Never tried against the real thing** — see below |
 | `TIMADA_VIES`, `TIMADA_VAT_NUMBER` | — | with `--features vies` and `TIMADA_VIES=1`, business customers' VAT numbers are checked against the EU's VIES registry; the shop's own number gets each check its consultation number |
 | `TIMADA_ECB` | — | with `--features ecb` and `TIMADA_ECB=1`, an order in pounds or francs is pinned the European Central Bank's reference rate of the day (fixed demo rates otherwise): what its invoice states in euros, and what the VAT report counts |
 | `TIMADA_STRIPE_SECRET_KEY`, `TIMADA_STRIPE_PUBLISHABLE_KEY`, `TIMADA_STRIPE_WEBHOOK_SECRET` | — | with `--features stripe`, shoppers pay by card on the payment step and refunds go back through Stripe |
 
 The demo sells in euros, pounds and Swiss francs: the header's « Devise » switches, each product has a price *set* per currency (a few are not sold in francs), and delivery has its own fees in each.
+
+To source from AliExpress: build with `--features aliexpress`, set the three
+`TIMADA_ALIEXPRESS_*` variables, and register a supplier under the connector
+key `aliexpress` from « Fournisseurs ». Its items are then quoted on the sync
+pass, and « Commander chez le fournisseur » places dropshipping orders through
+their API. **That adapter has never been run against the real gateway**: its
+shape follows AliExpress's published parameters and its tests answer it from a
+local server, so expect to correct field names on the first real round trip.
+A supplier registered under `manual` needs none of this — an operator types
+what it costs and buys on the supplier's own site, and the tracking they paste
+in still reaches the customer's parcel.
 
 To pay for real (in Stripe's test mode): build with `--features stripe`, set the
 three keys, and let Stripe reach the webhook —

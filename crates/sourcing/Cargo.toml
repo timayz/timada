@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# The AliExpress dropshipping adapter over their TOP gateway. Never run
+# against the real API here: the shape follows their published parameters,
+# and the tests answer it from a local server.
+aliexpress = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:sha2", "dep:hmac", "dep:hex"]
+
 [dependencies]
 timada-core.workspace = true
 timada-pricing.workspace = true
@@ -20,6 +26,12 @@ tracing.workspace = true
 sqlx.workspace = true
 sqlx_migrator.workspace = true
 tokio.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
+hex = { version = "0.4", optional = true }
 
 [dev-dependencies]
 timada-core = { workspace = true, features = ["test-support"] }
