@@ -303,6 +303,7 @@ tokio::spawn(timada_sourcing::run_purchases(executor, pool, connectors, every));
 | `timada_order::InstallmentHandlingFees` | what paying in several times costs **per currency** (4,49 € by default; no fee in a currency = not offered in it) — to the checkout subscription, and to whatever page offers the payment modes |
 | `timada_tax::ExchangeRateSource` | where exchange rates come from (`FixedRates`, `EcbRates` with feature `ecb`, or the host's own `ExchangeRates`): with a `timada_core::ShopCurrencies`, to the checkout subscription — an order in another currency than the books' is pinned the rate of its day — and to `AdminServices::with_exchange_rates` |
 | `Arc<dyn timada_payment::PaymentProvider>` | who takes the money and gives it back; `ManualProvider` when there is none, `StripeProvider` (feature `stripe`), `FakeProvider` in tests. The storefront offers only the payment methods it `supports` |
+| `timada_sourcing::SupplierConnectors` (see above) | which adapter answers for each supplier. `ManualConnector` = worked by hand, `AliExpressConnector` (feature `aliexpress`), `FakeConnector` in tests and demos. A connector says what it `does`, and the workers ask nothing else of it |
 | `Arc<dyn timada_tax::VatNumberValidator>` | who says whether a business's VAT number is valid: `ViesValidator` (feature `vies`, the EU's registry — name the shop's own number and each check comes with its consultation number), `FormatValidator` (no registry: what reads well passes), `FakeValidator` in tests |
 | `timada_invoice::InvoiceArchive` | where issued invoices and credit notes are kept unaltered: `SqliteArchiveStore` (in the database, replicated with it), `DirectoryArchiveStore` (files, the host's to back up), or the host's own `ArchiveStore`. Handed to both archive subscriptions, to the mailer (the e-mailed file is the archived one) and to `AdminServices::with_archive` |
 | `timada_core::ShopCurrencies` | the currencies the shop sells in, the base one first (euros only by default; currencies that do not count in hundredths are refused) — to `AdminConfig::currencies` |
@@ -341,6 +342,23 @@ the SMTP relay.
   (product, customer), alert (product, customer), discount / voucher (code),
   credit note (refund event id), return (RMA number), category (slug). Creating on a derived id
   with `evento::append(&id)` is an atomic create-unless-exists.
+- **A marketplace is an adapter, and this one is untested.** `AliExpressConnector`
+  (feature `aliexpress`) is a thin client over their TOP gateway: signing is
+  HMAC-SHA256 over the parameters sorted by name and concatenated with nothing
+  between them — get the sort wrong and every call comes back a signature
+  error, which is why `sign` is public and tested on its own. Two of their
+  habits shape the code. A **business failure arrives with HTTP 200** and a
+  code in the body, so a status check alone would read "this item no longer
+  exists" as an empty catalogue; every answer is parsed for a fault first, and
+  their codes are mapped onto what a worker can do — throttled, unavailable,
+  gone, refused. And **"shipped" is a tracking number, not a status**: their
+  order may say the seller sent it with nothing to tell the customer, which
+  the adapter reports as still pending. Calling an order off is not in their
+  API at all — it is done on the platform — so `cancel` refuses plainly rather
+  than pretending, and the purchase worker flags it for an operator. It has
+  **never been run against the real API**: the tests answer it from a local
+  server, and the first round trip against a real app key belongs to whoever
+  has one.
 - **A supplier's word is not a fact.** `sourcing` says where each product is
   bought (`ProductSourced`, one stream per product, so a product has one
   supplier at a time by construction) and under which **connector key** —
@@ -671,6 +689,12 @@ the SMTP relay.
 
 ## What is deliberately not here yet
 
+- Dropshipping beyond one supplier per product: importing a supplier's listing
+  as a new product (with its media, its spec sheet and its SKUs as a family),
+  choosing automatically among several suppliers, multi-parcel shipments for an
+  order split across suppliers, returns to a supplier's own address, and the
+  purchase accounting — supplier invoices, a cost ledger, COGS. The AliExpress
+  adapter itself has never been run against the real gateway.
 - Payments beyond the card form: answering a dispute from the admin (the
   evidence goes through the provider's own dashboard), saved cards, instalments
   through a provider (Stripe takes cards only here), reconciliation with the

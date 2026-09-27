@@ -88,10 +88,57 @@ pub fn supplier_connectors_with_handle() -> (
             url: Some(format!("https://example.test/item/{item}")),
         });
     }
-    let connectors = timada_sourcing::SupplierConnectors::default()
+    let mut connectors = timada_sourcing::SupplierConnectors::default()
         .with(timada_sourcing::ManualConnector)
         .with(demo.clone());
+    if let Some(aliexpress) = aliexpress_connector() {
+        connectors = connectors.with(aliexpress);
+    }
     (connectors, demo)
+}
+
+/// AliExpress, when the shop has an app key and the feature is on. Registering
+/// a supplier under the connector key `aliexpress` then sources from it; a
+/// shop without one still works its suppliers by hand.
+#[cfg(feature = "aliexpress")]
+fn aliexpress_connector() -> Option<std::sync::Arc<timada_sourcing::aliexpress::AliExpressConnector>>
+{
+    let app_key = std::env::var("TIMADA_ALIEXPRESS_APP_KEY").ok()?;
+    let (Ok(app_secret), Ok(access_token)) = (
+        std::env::var("TIMADA_ALIEXPRESS_APP_SECRET"),
+        std::env::var("TIMADA_ALIEXPRESS_ACCESS_TOKEN"),
+    ) else {
+        tracing::error!(
+            "TIMADA_ALIEXPRESS_APP_KEY is set without its secret and access token: \
+             suppliers stay worked by hand"
+        );
+        return None;
+    };
+    let config =
+        timada_sourcing::aliexpress::AliExpressConfig::new(app_key, app_secret, access_token);
+    match timada_sourcing::aliexpress::AliExpressConnector::new(config) {
+        Ok(connector) => {
+            tracing::info!("AliExpress is plugged in, and has never been tried for real");
+            Some(std::sync::Arc::new(connector))
+        }
+        Err(error) => {
+            tracing::error!(%error, "AliExpress could not be set up");
+            None
+        }
+    }
+}
+
+/// Without the feature there is nothing to plug in — and a shop that set the
+/// variables expecting one should be told so rather than quietly ignored.
+#[cfg(not(feature = "aliexpress"))]
+fn aliexpress_connector() -> Option<timada_sourcing::ManualConnector> {
+    if std::env::var("TIMADA_ALIEXPRESS_APP_KEY").is_ok() {
+        tracing::warn!(
+            "TIMADA_ALIEXPRESS_APP_KEY is set but this binary was built without \
+             --features aliexpress"
+        );
+    }
+    None
 }
 
 /// When a purchase is placed with the supplier. `confirm` — an operator's
