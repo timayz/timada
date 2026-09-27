@@ -33,7 +33,7 @@ Most contexts are leaves over `timada-core`. The ones that coordinate others:
 ```mermaid
 graph TD
     catalog --> pricing & inventory & review
-    sourcing --> pricing & inventory & tax
+    sourcing --> pricing & inventory & order & shipping & tax
     customer --> tax
     order --> cart & customer & inventory & payment & pricing & promotion & shipping & tax
     invoice --> order & payment & tax
@@ -48,9 +48,11 @@ and `tax` depend on `core` only; `customer` also reads `tax`, a library
 without events, for VAT numbers. `catalog` reads three of
 them for one thing: the **listing** the storefront browses
 (`catalog_listing`) carries each product's price, deliverable stock and
-rating, so that filtering, sorting and paging are a single query. `sourcing` reads `pricing` (it moves the selling price), `inventory` (it
-says what the supplier still holds) and `tax` (a cost is quoted in the
-supplier's own currency), and deliberately not `catalog`: it keys everything by product id, and the back
+rating, so that filtering, sorting and paging are a single query. `sourcing` reads `pricing` (it moves the selling price), `inventory` (it says
+what the supplier still holds), `order` and `shipping` (a paid order is bought
+from the supplier, and its tracking dispatches the shop's own parcel) and
+`tax` (a cost is quoted in the supplier's own currency), and deliberately not
+`catalog`: it keys everything by product id, and the back
 office already has the catalogue to put names to them. A leaf never learns
 about the context that consumes it: `payment` knows nothing of orders beyond
 an opaque `order_id`.
@@ -255,6 +257,8 @@ pool as data unless noted:
 | customer | `customer_list_subscription` | read model | |
 | sourcing | `sourcing_list_subscription` | read model | |
 | sourcing | `sourcing_poll_subscription` | process ← sourcing, inventory | `SyncPolicy` (optional) |
+| sourcing | `purchase_list_subscription` | read model | |
+| sourcing | `sourcing_order_subscription` | process ← sourcing, order | `PurchaseMode` (optional) |
 | promotion | `code_list_subscription` | read model | |
 | payment | `refund_list_subscription` | read models (refunds made, refunds asked for) | |
 | payment | `refund_execution_subscription` | process: enqueues refunds for the provider | |
@@ -279,13 +283,14 @@ aggregate (a handler or a `.skip`), so a new event cannot be forgotten
 silently. A handler that keeps failing is retried forever — a missing
 `.data(..)` shows up as a test that hangs, not one that fails.
 
-**3. Background workers** — four loops to spawn:
+**3. Background workers** — five loops to spawn:
 
 ```rust
 tokio::spawn(timada_order::run_payment_timeouts(executor, pool, provider, timeout, every));
 tokio::spawn(timada_payment::run_provider_refunds(executor, pool, provider, every)); // any number of these
 tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any number of these
 tokio::spawn(timada_sourcing::run_offer_sync(executor, pool, connectors, rates, currencies, every)); // any number of these
+tokio::spawn(timada_sourcing::run_purchases(executor, pool, connectors, every));  // any number of these
 ```
 
 **4. Values the host provides** — plain structs, no events behind them:
@@ -361,6 +366,26 @@ the SMTP relay.
   be emptied. A price the operator locked is neither moved nor asked about.
   The supplier's level goes to the warehouse the same way, less the rule's
   `safety_stock`, so the shop is never the one taking the supplier's last one.
+- **What was sold is bought from the supplier.** When an order is paid
+  — `OrderPaid`, and `OrderSettled` for one a voucher covered entirely — the
+  lines the shop does not hold are written down as purchases, one per
+  supplier, id derived from `(order, supplier)`: a split order gets two by
+  construction, and a redelivery drafts nothing twice. Lines the shop *does*
+  hold are simply absent, so a half-dropship order ships those from the
+  warehouse as usual. **Placing a purchase is an operator's click** — it
+  spends the shop's money — unless the host says `PurchaseMode::OnPayment`;
+  `ByHand` never calls a connector at all, which is also what a supplier with
+  no adapter gets. The click only enqueues: a page never waits on somebody
+  else's API. When a supplier reports a carrier and a tracking number, and
+  every purchase of that order has shipped, the shop's own shipment is
+  dispatched — and the existing fulfillment saga turns that into
+  `OrderShipped` and the « expédié » e-mail, with no new order or mailer code.
+  `timada-shipping` holds **one shipment per order**, so a split order travels
+  under the tracking of whichever supplier finished it and the others are
+  shown on their purchases; multi-parcel is a shipping question. A supplier
+  that will not take the order records `SupplierOrderRefused` and **does not
+  cancel the customer's order**: what to do about that is an operator's call,
+  and `cancel_order` already compensates in full when they make it.
 - **A level is not a movement.** Stock normally arrives as movements —
   `StockReceived`, `StockReturned` — but a stock-take and a supplier's feed
   both know only a total, so `StockLevelSynced { available }` states one

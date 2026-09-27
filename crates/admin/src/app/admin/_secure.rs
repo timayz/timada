@@ -15,6 +15,7 @@ pub mod orders;
 pub mod password;
 pub mod products;
 pub mod promotions;
+pub mod purchasing;
 pub mod questions;
 pub mod refunds;
 pub mod returns;
@@ -113,6 +114,7 @@ pub fn section_link(cx: &Cx, section: Section) -> String {
         Section::Customers => href!(customers::index).resolve(cx),
         Section::Promotions => href!(promotions::index).resolve(cx),
         Section::Invoices => href!(invoices::index).resolve(cx),
+        Section::Purchasing => href!(purchasing::index).resolve(cx),
         Section::Returns => href!(returns::index).resolve(cx),
         Section::Refunds => href!(refunds::index).resolve(cx),
         Section::Disputes => href!(disputes::index).resolve(cx),

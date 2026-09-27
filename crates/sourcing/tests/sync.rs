@@ -409,59 +409,12 @@ async fn giving_up_a_supplier_takes_its_products_out_of_the_queue() -> anyhow::R
     Ok(())
 }
 
-/// The registry takes a connector by value, but a test wants to go on
-/// scripting the one it built: this hands out a shared handle instead.
-struct ScriptedConnector(std::sync::Arc<FakeConnector>);
-
-impl timada_sourcing::SupplierConnector for ScriptedConnector {
-    fn key(&self) -> &str {
-        self.0.key()
-    }
-
-    fn does(&self, task: timada_sourcing::ConnectorTask) -> bool {
-        self.0.does(task)
-    }
-
-    fn limits(&self) -> ConnectorLimits {
-        self.0.limits()
-    }
-
-    fn offers<'a>(
-        &'a self,
-        items: &'a [SupplierItemRef],
-    ) -> timada_sourcing::connector::ConnectorFuture<'a, Vec<SupplierOffer>> {
-        self.0.offers(items)
-    }
-
-    fn place<'a>(
-        &'a self,
-        order: &'a timada_sourcing::PlaceOrder<'a>,
-    ) -> timada_sourcing::connector::ConnectorFuture<'a, timada_sourcing::PlacedOrder> {
-        self.0.place(order)
-    }
-
-    fn standing<'a>(
-        &'a self,
-        external_order_id: &'a str,
-    ) -> timada_sourcing::connector::ConnectorFuture<'a, timada_sourcing::SupplierOrderStanding>
-    {
-        self.0.standing(external_order_id)
-    }
-
-    fn cancel<'a>(
-        &'a self,
-        external_order_id: &'a str,
-    ) -> timada_sourcing::connector::ConnectorFuture<'a, ()> {
-        self.0.cancel(external_order_id)
-    }
-}
-
 /// A shop whose supplier is the connector the test holds on to.
 async fn scripted_shop(scripted: std::sync::Arc<FakeConnector>) -> anyhow::Result<Shop> {
     let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
     let connectors = SupplierConnectors::default()
         .with(ManualConnector)
-        .with(ScriptedConnector(scripted));
+        .with(scripted);
     let cmd = Command::new(&executor, db.clone());
     let supplier = cmd
         .register_supplier(

@@ -252,6 +252,14 @@ async fn main() -> anyhow::Result<()> {
         db::shop_currencies(),
         std::time::Duration::from_secs(sourcing_every),
     ));
+    // What was sold is bought from the supplier, tracked, and its tracking
+    // number put on the customer's own parcel.
+    tokio::spawn(timada_sourcing::run_purchases(
+        executor.clone(),
+        pool.clone(),
+        db::supplier_connectors(),
+        std::time::Duration::from_secs(30),
+    ));
     tokio::spawn(timada_mailer::run_delivery(
         pool.clone(),
         mail_transport()?,

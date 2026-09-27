@@ -179,6 +179,77 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0007Purchase;
+
+sqlite_migration!(
+    M0007Purchase,
+    "sourcing",
+    "m0007_purchase",
+    vec_box![M0006PriceReview],
+    vec_box![
+        (
+            "CREATE TABLE sourcing_purchase (
+                purchase_id TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL,
+                supplier_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                external_order_id TEXT,
+                cost_minor INTEGER NOT NULL,
+                cost_currency TEXT NOT NULL,
+                charged_minor INTEGER,
+                units INTEGER NOT NULL,
+                carrier TEXT,
+                tracking_number TEXT,
+                note TEXT,
+                drafted_at INTEGER NOT NULL,
+                settled_at INTEGER
+            )",
+            "DROP TABLE sourcing_purchase"
+        ),
+        (
+            "CREATE INDEX sourcing_purchase_status ON sourcing_purchase (status, drafted_at)",
+            "DROP INDEX sourcing_purchase_status"
+        ),
+        (
+            "CREATE INDEX sourcing_purchase_order ON sourcing_purchase (order_id)",
+            "DROP INDEX sourcing_purchase_order"
+        )
+    ]
+);
+
+pub struct M0008PurchaseWork;
+
+// Placing, tracking and calling off, one row per thing to say to a supplier.
+// The row id carries the purchase, so it is also the connector's idempotency
+// key: a worker that died after the supplier answered buys nothing twice.
+sqlite_migration!(
+    M0008PurchaseWork,
+    "sourcing",
+    "m0008_purchase_work",
+    vec_box![M0007Purchase],
+    vec_box![
+        (
+            "CREATE TABLE sourcing_purchase_work (
+                work_id TEXT PRIMARY KEY,
+                purchase_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                next_attempt_at INTEGER NOT NULL DEFAULT 0,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                claimed_by TEXT,
+                claimed_until INTEGER,
+                last_error TEXT,
+                done_at INTEGER
+            )",
+            "DROP TABLE sourcing_purchase_work"
+        ),
+        (
+            "CREATE INDEX sourcing_purchase_work_due
+             ON sourcing_purchase_work (done_at, next_attempt_at)",
+            "DROP INDEX sourcing_purchase_work_due"
+        )
+    ]
+);
+
 /// Read-model and configuration migrations for this context, to register
 /// alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
@@ -188,6 +259,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
         M0003Rule,
         M0004Offer,
         M0005Poll,
-        M0006PriceReview
+        M0006PriceReview,
+        M0007Purchase,
+        M0008PurchaseWork
     ]
 }

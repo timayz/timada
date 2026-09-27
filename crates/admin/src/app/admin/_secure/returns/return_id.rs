@@ -127,6 +127,11 @@ struct Line {
     name: String,
     requested: String,
     unit_price: String,
+    /// Bought from a supplier rather than held: it never came off the shop's
+    /// own shelf, so putting it back on one would invent stock. The next
+    /// supplier sync would undo it, but the offer to do it should not be
+    /// there in the first place.
+    dropshipped: bool,
     /// `(accepted, restocked)` once received.
     outcome: Option<(String, &'static str)>,
 }
@@ -164,6 +169,13 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     )
     .resolve(cx);
 
+    let product_ids: Vec<String> = request
+        .lines
+        .iter()
+        .map(|line| line.product_id.clone())
+        .collect();
+    let sourced = timada_sourcing::sourced_products_by_ids(&services.db, &product_ids).await?;
+
     let lines: Vec<Line> = request
         .lines
         .iter()
@@ -176,6 +188,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             name: line.name.clone(),
             requested: line.quantity.to_string(),
             unit_price: money(&line.unit_price),
+            dropshipped: sourced.iter().any(|row| row.product_id == line.product_id),
             outcome: request
                 .received
                 .iter()
@@ -336,10 +349,16 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                                         <input type="hidden" name=(line.product_field.clone()) value=(line.product_id.clone())>
                                         <label for=(line.accepted_field.clone()) class="text-muted-foreground">"Repris"</label>
                                         input(attrs: topcoat::view::attributes! { id=(line.accepted_field.clone()) name=(line.accepted_field.clone()) type="number" min="0" max=(line.requested.clone()) value=(line.requested.clone()) required=(true) class="w-24" })
-                                        <label class="flex items-center gap-2">
-                                            <input type="checkbox" name=(line.restock_field.clone()) value="on" checked=(true)>
-                                            "Remettre en stock"
-                                        </label>
+                                        if line.dropshipped {
+                                            <span class="text-xs text-muted-foreground">
+                                                "Expédié par le fournisseur : rien à remettre en stock."
+                                            </span>
+                                        } else {
+                                            <label class="flex items-center gap-2">
+                                                <input type="checkbox" name=(line.restock_field.clone()) value="on" checked=(true)>
+                                                "Remettre en stock"
+                                            </label>
+                                        }
                                     </fieldset>
                                 }
                                 <fieldset class="flex flex-col gap-1">

@@ -4,10 +4,12 @@ mod lock_source_price;
 mod register_supplier;
 mod settle_review;
 mod source_product;
+mod supplier_order;
 
 pub use apply_offer::Applied;
 pub use register_supplier::RegisterSupplier;
 pub use source_product::SourceProduct;
+pub use supplier_order::DraftSupplierOrder;
 
 use evento::{Executor, Projection, metadata::Event};
 use sqlx::SqlitePool;
@@ -15,9 +17,12 @@ use sqlx::SqlitePool;
 use crate::{
     aggregator::{
         ProductSourced, SourcePriceLocked, SourcePriceUnlocked, SourcedProduct, SourcingStopped,
-        Supplier, SupplierRegistered, SupplierRenamed, SupplierResumed, SupplierSuspended,
+        Supplier, SupplierOrder, SupplierOrderCancelled, SupplierOrderDrafted, SupplierOrderPlaced,
+        SupplierOrderRecordedByHand, SupplierOrderRefused, SupplierOrderShipped,
+        SupplierRegistered, SupplierRenamed, SupplierResumed, SupplierSuspended,
     },
     error::SourcingError,
+    value_object::{SupplierOrderLine, SupplierOrderStatus},
 };
 
 /// Deterministic supplier id, from the slug it is known by — which is for
@@ -31,6 +36,12 @@ pub fn supplier_id(slug: &str) -> String {
 /// enforced by an index somewhere.
 pub fn sourced_product_id(product_id: &str) -> String {
     timada_core::id::derived(&[product_id], "sourced-product")
+}
+
+/// Deterministic purchase id: one per customer order and supplier. An order
+/// split across two suppliers therefore has two purchases by construction.
+pub fn supplier_order_id(order_id: &str, supplier_id: &str) -> String {
+    timada_core::id::derived(&[order_id, supplier_id], "supplier-order")
 }
 
 /// Sourcing needs the pool next to the executor: the pricing rule and the
@@ -74,6 +85,22 @@ impl<'a, E: Executor> Command<'a, E> {
         self.load_supplier(id)
             .await?
             .ok_or(SourcingError::SupplierNotFound)
+    }
+
+    pub async fn load_purchase(
+        &self,
+        id: impl Into<String>,
+    ) -> anyhow::Result<Option<SupplierOrderState>> {
+        purchase_projection().load(id).execute(self.executor).await
+    }
+
+    pub(crate) async fn require_purchase(
+        &self,
+        id: impl Into<String>,
+    ) -> Result<SupplierOrderState, SourcingError> {
+        self.load_purchase(id)
+            .await?
+            .ok_or(SourcingError::SupplierOrderNotFound)
     }
 
     pub(crate) async fn require_sourced(
@@ -215,5 +242,95 @@ async fn on_source_price_unlocked(
 ) -> anyhow::Result<()> {
     row.locked = false;
     row.locked_reason = String::new();
+    Ok(())
+}
+
+/// Write-side state of a purchase: enough to guard the commands.
+#[evento::projection(id = id)]
+#[evento::snapshot(none)]
+pub struct SupplierOrderState {
+    pub id: String,
+    pub order_id: String,
+    pub supplier_id: String,
+    pub lines: Vec<SupplierOrderLine>,
+    /// Where the supplier sends it: the customer's own address.
+    pub ship_to: timada_core::Address,
+    /// What it was expected to come to, at the costs last quoted.
+    pub cost: timada_core::Money,
+    pub status: SupplierOrderStatus,
+    /// What the supplier calls the order, once it has taken it.
+    pub external_order_id: Option<String>,
+}
+
+fn purchase_projection<E: Executor>() -> Projection<E, SupplierOrderState> {
+    Projection::new::<SupplierOrder>()
+        .handler(on_purchase_drafted())
+        .handler(on_purchase_placed())
+        .handler(on_purchase_by_hand())
+        .handler(on_purchase_refused())
+        .handler(on_purchase_shipped())
+        .handler(on_purchase_cancelled())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_purchase_drafted(
+    event: Event<SupplierOrderDrafted>,
+    row: &mut SupplierOrderState,
+) -> anyhow::Result<()> {
+    row.id = event.aggregate_id.to_owned();
+    row.order_id = event.data.order_id;
+    row.supplier_id = event.data.supplier_id;
+    row.lines = event.data.lines;
+    row.ship_to = event.data.ship_to;
+    row.cost = event.data.cost;
+    row.status = SupplierOrderStatus::Drafted;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_purchase_placed(
+    event: Event<SupplierOrderPlaced>,
+    row: &mut SupplierOrderState,
+) -> anyhow::Result<()> {
+    row.status = SupplierOrderStatus::Placed;
+    row.external_order_id = Some(event.data.external_order_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_purchase_by_hand(
+    event: Event<SupplierOrderRecordedByHand>,
+    row: &mut SupplierOrderState,
+) -> anyhow::Result<()> {
+    row.status = SupplierOrderStatus::Placed;
+    row.external_order_id = Some(event.data.external_order_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_purchase_refused(
+    _event: Event<SupplierOrderRefused>,
+    row: &mut SupplierOrderState,
+) -> anyhow::Result<()> {
+    row.status = SupplierOrderStatus::Refused;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_purchase_shipped(
+    _event: Event<SupplierOrderShipped>,
+    row: &mut SupplierOrderState,
+) -> anyhow::Result<()> {
+    row.status = SupplierOrderStatus::Shipped;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_purchase_cancelled(
+    _event: Event<SupplierOrderCancelled>,
+    row: &mut SupplierOrderState,
+) -> anyhow::Result<()> {
+    row.status = SupplierOrderStatus::Cancelled;
     Ok(())
 }

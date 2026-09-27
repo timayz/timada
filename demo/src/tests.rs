@@ -4008,3 +4008,93 @@ async fn a_voucher_is_spent_in_its_own_currency_only() -> anyhow::Result<()> {
     assert!(cart.contains("10,90 £"), "{cart}");
     Ok(())
 }
+
+/// The host's own wiring: a paid order for a product the shop does not hold
+/// becomes a purchase to place with its supplier, and the supplier's tracking
+/// ends up on the customer's parcel. The library's tests prove the chain; this
+/// one proves the subscriptions are actually registered in `db.rs`.
+#[tokio::test]
+async fn a_dropshipped_order_is_bought_from_its_supplier() -> anyhow::Result<()> {
+    let (router, store, product_id) = shop().await?;
+    let (connectors, supplier_side) = db::supplier_connectors_with_handle();
+    let sourcing = timada_sourcing::Command::new(&store.executor, store.db.clone());
+    let supplier = sourcing
+        .register_supplier(
+            timada_sourcing::RegisterSupplier {
+                slug: "test-optics".into(),
+                name: "Test Optics".into(),
+                connector: "demo".into(),
+                currency: "EUR".into(),
+            },
+            &connectors,
+        )
+        .await?;
+    sourcing
+        .source_product(timada_sourcing::SourceProduct {
+            product_id: product_id.clone(),
+            supplier_id: supplier.clone(),
+            external_item_id: "1005006100001".into(),
+            external_sku: None,
+        })
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+
+    let mut browser = Browser::new(&router);
+    browser.post("/register", REGISTER).await;
+    browser.post("/account/addresses/new", ADDRESS).await;
+    let order_id = order_again(&mut browser, &store, &product_id).await?;
+    timada_payment::Command(&store.executor)
+        .capture_payment(timada_payment::payment_id(&order_id), "psp-dropship".into())
+        .await?;
+    db::run_subscriptions_once(&store).await?;
+
+    // The purchase is written down, and waits for somebody to place it: this
+    // is the shop's money.
+    let purchases = timada_sourcing::purchases_for_order(&store.db, &order_id).await?;
+    assert_eq!(purchases.len(), 1, "no purchase drafted for a sourced line");
+    assert_eq!(
+        purchases[0].status,
+        timada_sourcing::SupplierOrderStatus::Drafted
+    );
+
+    // Placed, then the supplier ships: the customer's own parcel goes with it.
+    timada_sourcing::enqueue_place(&store.db, &purchases[0].purchase_id).await?;
+    let pass = timada_sourcing::work_purchases_with(
+        &store.executor,
+        &store.db,
+        &connectors,
+        &timada_sourcing::PurchasePolicy::without_delays(),
+    )
+    .await?;
+    assert_eq!(pass.placed, 1);
+    let external = sourcing
+        .load_purchase(&purchases[0].purchase_id)
+        .await?
+        .and_then(|state| state.external_order_id)
+        .ok_or_else(|| anyhow::anyhow!("nothing placed"))?;
+    supplier_side.mark_shipped(&external, "4PX", "4PX-778899");
+    timada_sourcing::work_purchases_with(
+        &store.executor,
+        &store.db,
+        &connectors,
+        &timada_sourcing::PurchasePolicy::without_delays(),
+    )
+    .await?;
+    db::run_subscriptions_once(&store).await?;
+
+    let shipment =
+        timada_shipping::load_shipment(&store.executor, timada_shipping::shipment_id(&order_id))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no shipment"))?;
+    assert_eq!(
+        shipment.tracking_number.as_deref(),
+        Some("4PX-778899"),
+        "the supplier's tracking should be on the customer's parcel"
+    );
+    let order = timada_order::load_order_details(&store.executor, &order_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no order"))?;
+    assert_eq!(order.status, timada_order::OrderStatus::Shipped);
+
+    Ok(())
+}

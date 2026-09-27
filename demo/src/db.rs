@@ -65,9 +65,18 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
 /// an operator types what it costs; the scripted one is what the seed and
 /// the tests source from, so the screens have something true to show.
 pub fn supplier_connectors() -> timada_sourcing::SupplierConnectors {
-    let demo = timada_sourcing::FakeConnector::new("demo");
-    // Built here rather than by the seed so that every instance answers the
-    // same thing: the worker holds one, the back office another, and a
+    supplier_connectors_with_handle().0
+}
+
+/// The same, keeping the scripted connector itself: the demo's tests make it
+/// ship, and nothing can once it is behind a trait object.
+pub fn supplier_connectors_with_handle() -> (
+    timada_sourcing::SupplierConnectors,
+    std::sync::Arc<timada_sourcing::FakeConnector>,
+) {
+    let demo = std::sync::Arc::new(timada_sourcing::FakeConnector::new("demo"));
+    // Stocked here rather than by the seed so that every instance answers the
+    // same thing: the workers hold one, the back office another, and a
     // supplier that told them different stories would be no use to anybody.
     for (sku, item, cost, available) in crate::seed_catalogue::SOURCED {
         demo.stock(timada_sourcing::SupplierOffer {
@@ -79,9 +88,26 @@ pub fn supplier_connectors() -> timada_sourcing::SupplierConnectors {
             url: Some(format!("https://example.test/item/{item}")),
         });
     }
-    timada_sourcing::SupplierConnectors::default()
+    let connectors = timada_sourcing::SupplierConnectors::default()
         .with(timada_sourcing::ManualConnector)
-        .with(demo)
+        .with(demo.clone());
+    (connectors, demo)
+}
+
+/// When a purchase is placed with the supplier. `confirm` — an operator's
+/// click from « À commander » — by default, because it is the shop's money
+/// going out; `auto` buys as soon as the order is paid, `manual` never calls a
+/// connector at all.
+pub fn purchase_mode() -> timada_sourcing::PurchaseMode {
+    match std::env::var("TIMADA_SOURCING_PURCHASE_MODE").as_deref() {
+        Ok("auto") => timada_sourcing::PurchaseMode::OnPayment,
+        Ok("manual") => timada_sourcing::PurchaseMode::ByHand,
+        Ok(other) if other != "confirm" => {
+            tracing::warn!(%other, "unknown purchase mode: operators confirm each purchase");
+            timada_sourcing::PurchaseMode::OnConfirmation
+        }
+        _ => timada_sourcing::PurchaseMode::OnConfirmation,
+    }
 }
 
 pub fn tax_zones() -> timada_tax::TaxZones {
@@ -246,6 +272,15 @@ pub async fn start_subscriptions(store: &Store) -> anyhow::Result<Vec<Subscripti
             .data(db.clone())
             .start(executor)
             .await?,
+        timada_sourcing::sourcing_order_subscription()
+            .data(db.clone())
+            .data(purchase_mode())
+            .start(executor)
+            .await?,
+        timada_sourcing::purchase_list_subscription()
+            .data(db.clone())
+            .start(executor)
+            .await?,
         timada_inventory::alert_list_subscription()
             .data(db.clone())
             .start(executor)
@@ -403,6 +438,15 @@ pub async fn run_subscriptions_once(store: &Store) -> anyhow::Result<()> {
             .run_once(executor)
             .await?;
         timada_sourcing::sourcing_poll_subscription()
+            .data(db.clone())
+            .run_once(executor)
+            .await?;
+        timada_sourcing::sourcing_order_subscription()
+            .data(db.clone())
+            .data(purchase_mode())
+            .run_once(executor)
+            .await?;
+        timada_sourcing::purchase_list_subscription()
             .data(db.clone())
             .run_once(executor)
             .await?;

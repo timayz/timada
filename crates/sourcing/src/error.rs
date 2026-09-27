@@ -16,6 +16,16 @@ pub enum SourcingError {
     ConnectorUnknown(String),
     #[error("connector `{key}` does not {task}")]
     ConnectorDoes { key: String, task: &'static str },
+    #[error("purchase order not found")]
+    SupplierOrderNotFound,
+    #[error("the purchase is no longer waiting to be ordered")]
+    SupplierOrderNotDraft,
+    #[error("the purchase has not been placed with the supplier")]
+    SupplierOrderNotPlaced,
+    #[error("the parcel is already on its way")]
+    SupplierOrderShipped,
+    #[error("nothing to order")]
+    NothingToOrder,
     #[error("there is no price here to apply")]
     NothingToApply,
     #[error("`{0}` is required")]

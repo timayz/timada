@@ -149,6 +149,11 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
     let rate_missing = order.exchange_rate.is_none() && order.total.currency != base_currency;
     // What the page offers is what the operator's role may do: the gate
     // refuses the rest anyway, a form that leads to a refusal helps nobody.
+    // What is being bought from suppliers for this order. Read-only here:
+    // customer service opens Orders and answers « où est ma commande ? » with
+    // it, without being able to spend the shop's money.
+    let purchases = timada_sourcing::purchases_for_order(&services.db, &id).await?;
+
     let role = crate::auth::signed_in_admin(cx).map(|admin| admin.role);
     let moves_money = role.is_some_and(|role| role.moves_money());
     let handles_orders = role.is_some_and(|role| role.handles_orders());
@@ -295,6 +300,28 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                         )
                     )
                 )
+                if !purchases.is_empty() {
+                    card(
+                        card_header(card_title("Achats fournisseur"))
+                        card_content(
+                            facts(
+                                for purchase in &purchases {
+                                    fact(
+                                        term: purchase.status.label(),
+                                        <a href=(href!(crate::app::admin::_secure::purchasing::purchase_id::show, crate::app::admin::_secure::purchasing::purchase_id::PurchaseId(purchase.purchase_id.clone())).resolve(cx)) class="underline underline-offset-4">
+                                            (format!("{} article(s)", purchase.units))
+                                        </a>
+                                        if let Some(tracking) = &purchase.tracking_number {
+                                            <span class="ml-2 font-mono text-xs">(tracking.clone())</span>
+                                        } else if let Some(external) = &purchase.external_order_id {
+                                            <span class="ml-2 font-mono text-xs text-muted-foreground">(external.clone())</span>
+                                        }
+                                    )
+                                }
+                            )
+                        )
+                    )
+                }
             )
 
             detail_main(
