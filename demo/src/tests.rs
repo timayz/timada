@@ -90,6 +90,19 @@ fn location(response: &Response) -> String {
         .to_owned()
 }
 
+/// The address of a product: the way down to it by slugs, from the
+/// catalogue's list. Its forms (reviews, questions, alerts) stay at
+/// `/p/{product_id}/…`.
+async fn page_of(store: &Store, product_id: impl Into<String>) -> anyhow::Result<String> {
+    let product_id = product_id.into();
+    let mut paths =
+        timada_catalog::storefront_paths(&store.db, std::slice::from_ref(&product_id)).await?;
+    let segments = paths
+        .remove(&product_id)
+        .ok_or_else(|| anyhow::anyhow!("no address for product {product_id}"))?;
+    Ok(format!("/{}", segments.join("/")))
+}
+
 /// A seeded shop: one product (5 in stock, 119,95 €), one shopper, one order.
 async fn shop() -> anyhow::Result<(Router, Store, String)> {
     shop_with(std::sync::Arc::new(timada_payment::ManualProvider)).await
@@ -145,7 +158,7 @@ async fn guest_cart_to_placed_order() -> anyhow::Result<()> {
     let mut browser = Browser::new(&router);
 
     // The product page offers the cart; adding issues the cart cookie.
-    let page = text(browser.get(&format!("/p/{product_id}")).await).await?;
+    let page = text(browser.get(&page_of(&store, &product_id).await?).await).await?;
     assert!(page.contains("Ajouter au panier"));
     let added = browser
         .post("/cart/add", &format!("product_id={product_id}&quantity=1"))
@@ -1195,7 +1208,8 @@ async fn cancelling_a_paid_order_refunds_it_with_a_credit_note() -> anyhow::Resu
 async fn reviews_wait_for_moderation_before_showing_on_the_product_page() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);
-    let product = format!("/p/{product_id}");
+    let product = page_of(&store, &product_id).await?;
+    let actions = format!("/p/{product_id}");
 
     // Guests are invited to sign in; posting sends them to the login page.
     let page = text(browser.get(&product).await).await?;
@@ -1203,7 +1217,7 @@ async fn reviews_wait_for_moderation_before_showing_on_the_product_page() -> any
     assert!(page.contains("Connectez-vous"), "{page}");
     let guest = browser
         .post(
-            &format!("{product}/reviews"),
+            &format!("{actions}/reviews"),
             "rating=5&title=Top&body=Super",
         )
         .await;
@@ -1215,14 +1229,14 @@ async fn reviews_wait_for_moderation_before_showing_on_the_product_page() -> any
 
     browser.post("/register", REGISTER).await;
     let empty = browser
-        .post(&format!("{product}/reviews"), "rating=5&title=Top&body=+")
+        .post(&format!("{actions}/reviews"), "rating=5&title=Top&body=+")
         .await;
     assert_eq!(empty.status(), StatusCode::OK);
     assert!(text(empty).await?.contains("Écrivez votre avis"));
 
     let sent = browser
         .post(
-            &format!("{product}/reviews"),
+            &format!("{actions}/reviews"),
             "rating=4&title=Tr%C3%A8s+bon+%C3%A9cran&body=Fluide+et+lumineux.",
         )
         .await;
@@ -1235,7 +1249,7 @@ async fn reviews_wait_for_moderation_before_showing_on_the_product_page() -> any
     assert!(!page.contains("Fluide et lumineux."), "{page}");
     let twice = browser
         .post(
-            &format!("{product}/reviews"),
+            &format!("{actions}/reviews"),
             "rating=1&title=Bis&body=Encore",
         )
         .await;
@@ -1261,14 +1275,15 @@ async fn reviews_wait_for_moderation_before_showing_on_the_product_page() -> any
 async fn questions_and_community_answers_go_through_moderation() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);
-    let product = format!("/p/{product_id}");
+    let product = page_of(&store, &product_id).await?;
+    let actions = format!("/p/{product_id}");
 
     let page = text(browser.get(&product).await).await?;
     assert!(page.contains("Aucune question pour le moment."), "{page}");
     assert!(page.contains("pour poser une question"), "{page}");
     let guest = browser
         .post(
-            &format!("{product}/questions"),
+            &format!("{actions}/questions"),
             "body=Compatible+G-SYNC+%3F",
         )
         .await;
@@ -1280,13 +1295,13 @@ async fn questions_and_community_answers_go_through_moderation() -> anyhow::Resu
 
     browser.post("/register", REGISTER).await;
     let empty = browser
-        .post(&format!("{product}/questions"), "body=+")
+        .post(&format!("{actions}/questions"), "body=+")
         .await;
     assert_eq!(empty.status(), StatusCode::OK);
     assert!(text(empty).await?.contains("Écrivez votre question"));
     let asked = browser
         .post(
-            &format!("{product}/questions"),
+            &format!("{actions}/questions"),
             "body=Compatible+G-SYNC+%3F",
         )
         .await;
@@ -1326,7 +1341,7 @@ async fn questions_and_community_answers_go_through_moderation() -> anyhow::Resu
             ),
         )
         .await;
-    let answers_uri = format!("{product}/questions/{question_id}/answers");
+    let answers_uri = format!("{actions}/questions/{question_id}/answers");
     let blank = helper.post(&answers_uri, "body=+").await;
     assert!(text(blank).await?.contains("Écrivez votre réponse"));
     let answered = helper
@@ -1376,7 +1391,8 @@ async fn questions_and_community_answers_go_through_moderation() -> anyhow::Resu
 async fn shoppers_are_told_when_a_product_is_back_in_stock() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);
-    let product = format!("/p/{product_id}");
+    let product = page_of(&store, &product_id).await?;
+    let actions = format!("/p/{product_id}");
     let inventory = timada_inventory::Command(&store.executor);
     let stock_item =
         timada_inventory::stock_item_id(&product_id, &timada_inventory::StockLocation::Warehouse);
@@ -1385,7 +1401,7 @@ async fn shoppers_are_told_when_a_product_is_back_in_stock() -> anyhow::Result<(
     let page = text(browser.get(&product).await).await?;
     assert!(!page.contains("retour en stock"), "{page}");
     browser.post("/register", REGISTER).await;
-    browser.post(&format!("{product}/alert"), "").await;
+    browser.post(&format!("{actions}/alert"), "").await;
     db::run_subscriptions_once(&store).await?;
     let none = text(browser.get("/account/alerts").await).await?;
     assert!(none.contains("Aucune alerte."), "{none}");
@@ -1407,10 +1423,10 @@ async fn shoppers_are_told_when_a_product_is_back_in_stock() -> anyhow::Result<(
         page.contains("alerter du retour en stock</button>"),
         "{page}"
     );
-    let asked = browser.post(&format!("{product}/alert"), "").await;
+    let asked = browser.post(&format!("{actions}/alert"), "").await;
     assert_eq!(location(&asked), product);
     // Asking twice is harmless.
-    let twice = browser.post(&format!("{product}/alert"), "").await;
+    let twice = browser.post(&format!("{actions}/alert"), "").await;
     assert_eq!(twice.status(), StatusCode::SEE_OTHER);
     db::run_subscriptions_once(&store).await?;
     let page = text(browser.get(&product).await).await?;
@@ -1434,7 +1450,7 @@ async fn shoppers_are_told_when_a_product_is_back_in_stock() -> anyhow::Result<(
         page.contains("alerter du retour en stock</button>"),
         "{page}"
     );
-    browser.post(&format!("{product}/alert"), "").await;
+    browser.post(&format!("{actions}/alert"), "").await;
     db::run_subscriptions_once(&store).await?;
     let waiting = text(browser.get("/account/alerts").await).await?;
     assert!(waiting.contains("Supprimer l"), "{waiting}");
@@ -1742,7 +1758,7 @@ async fn stripe_webhooks_are_verified_then_capture_the_payment() -> anyhow::Resu
 
 /// The order of the product links of a listing page.
 fn listed(page: &str) -> Vec<String> {
-    page.split("<h2><a href=\"/p/")
+    page.split("<h2><a href=\"")
         .skip(1)
         .filter_map(|rest| rest.split_once("\">"))
         .filter_map(|(_, rest)| rest.split_once("</a>"))
@@ -1784,7 +1800,8 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
     db::run_subscriptions_once(&store).await?;
     let mut browser = Browser::new(&router);
     let id = timada_catalog::product_id;
-    let page_of = |sku: &str| format!("/p/{}", id(sku));
+    let actions_of = |sku: &str| format!("/p/{}", id(sku));
+    let address = |sku: &str| page_of(&store, id(sku));
 
     // A listing shows a family once: 54 products, 9 of them in 2 families.
     let home = text(browser.get("/").await).await?;
@@ -1804,7 +1821,8 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
 
     // Reviews and questions are the article's: every version shows them all,
     // each marked with the version it is about.
-    let blue_page = page_of("SONY-XM5-BLU");
+    let blue_page = address("SONY-XM5-BLU").await?;
+    let blue_actions = actions_of("SONY-XM5-BLU");
     let reviewed = text(browser.get(&blue_page).await).await?;
     assert!(reviewed.contains("4,8 / 5 — 5 avis"), "{reviewed}");
     assert!(reviewed.contains(" · Version : Noir"), "{reviewed}");
@@ -1813,9 +1831,9 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
     // Asked about the silver one, answered from the blue one's page.
     let mut shopper = Browser::new(&router);
     shopper.post("/register", REGISTER).await;
-    let silver_page = page_of("SONY-XM5-ARG");
+    let silver_actions = actions_of("SONY-XM5-ARG");
     shopper
-        .post(&format!("{silver_page}/questions"), "body=Pliable+%3F")
+        .post(&format!("{silver_actions}/questions"), "body=Pliable+%3F")
         .await;
     db::run_subscriptions_once(&store).await?;
     let waiting = text(shopper.get(&blue_page).await).await?;
@@ -1857,7 +1875,7 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
         .await;
     let answered = helper
         .post(
-            &format!("{blue_page}/questions/{question_id}/answers"),
+            &format!("{blue_actions}/questions/{question_id}/answers"),
             "body=Oui%2C+%C3%A0+plat.",
         )
         .await;
@@ -1872,7 +1890,7 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
     assert_eq!(elsewhere.status(), StatusCode::NOT_FOUND);
 
     // One option: the colours, the current one marked, the others linked.
-    let black = text(browser.get(&page_of("SONY-XM5")).await).await?;
+    let black = text(browser.get(&address("SONY-XM5").await?).await).await?;
     assert!(
         black.contains("aria-label=\"Versions de cet article\""),
         "{black}"
@@ -1881,11 +1899,19 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
         versions(&black, "Couleur"),
         [
             ("Noir".to_owned(), None, true),
-            ("Argent".to_owned(), Some(page_of("SONY-XM5-ARG")), false),
-            ("Bleu nuit".to_owned(), Some(page_of("SONY-XM5-BLU")), false),
+            (
+                "Argent".to_owned(),
+                Some(address("SONY-XM5-ARG").await?),
+                false
+            ),
+            (
+                "Bleu nuit".to_owned(),
+                Some(address("SONY-XM5-BLU").await?),
+                false
+            ),
         ]
     );
-    let silver = text(browser.get(&page_of("SONY-XM5-ARG")).await).await?;
+    let silver = text(browser.get(&address("SONY-XM5-ARG").await?).await).await?;
     assert_eq!(
         versions(&silver, "Couleur")[1],
         ("Argent".to_owned(), None, true)
@@ -1894,13 +1920,21 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
     // Two options: from the 2 To without heatsink, « Avec » is not sold in
     // 2 To — it leads to the closest version and says so; 4 To only exists
     // with one.
-    let ssd = text(browser.get(&page_of("SAM-990P-2T")).await).await?;
+    let ssd = text(browser.get(&address("SAM-990P-2T").await?).await).await?;
     assert_eq!(
         versions(&ssd, "Capacité"),
         [
-            ("1 To".to_owned(), Some(page_of("SAM-990P-1T")), false),
+            (
+                "1 To".to_owned(),
+                Some(address("SAM-990P-1T").await?),
+                false
+            ),
             ("2 To".to_owned(), None, true),
-            ("4 To".to_owned(), Some(page_of("SAM-990P-4T-H")), false),
+            (
+                "4 To".to_owned(),
+                Some(address("SAM-990P-4T-H").await?),
+                false
+            ),
         ]
     );
     let heatsink = versions(&ssd, "Dissipateur");
@@ -1914,7 +1948,7 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
     timada_catalog::Command(&store.executor)
         .archive_product(id("SONY-XM5-BLU"))
         .await?;
-    let black = text(browser.get(&page_of("SONY-XM5")).await).await?;
+    let black = text(browser.get(&address("SONY-XM5").await?).await).await?;
     assert_eq!(
         versions(&black, "Couleur")[2],
         ("Bleu nuit".to_owned(), None, false)
@@ -1924,14 +1958,14 @@ async fn a_product_page_offers_the_other_versions_of_the_article() -> anyhow::Re
         .remove_currency_price(timada_pricing::price_id(&id("SONY-XM5-ARG")), "GBP")
         .await?;
     browser.post("/currency", "currency=GBP&next=%2F").await;
-    let black = text(browser.get(&page_of("SONY-XM5")).await).await?;
+    let black = text(browser.get(&address("SONY-XM5").await?).await).await?;
     assert!(
         versions(&black, "Couleur").is_empty(),
         "alone on sale in pounds: {black}"
     );
 
     // A product of no family offers nothing.
-    let lone = text(browser.get(&format!("/p/{lone_product}")).await).await?;
+    let lone = text(browser.get(&page_of(&store, &lone_product).await?).await).await?;
     assert!(!lone.contains("Versions de cet article"), "{lone}");
     Ok(())
 }
@@ -2054,9 +2088,12 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
     assert!(odd.contains("Aucun produit ne correspond."), "{odd}");
 
     // A branch of the tree, a brand.
-    let components = text(browser.get("/c/composants").await).await?;
+    let components = text(browser.get("/informatique/composants").await).await?;
     assert!(components.contains(">12 produits<"), "{components}");
-    assert!(components.contains("href=\"/c/ssd\""), "{components}");
+    assert!(
+        components.contains("href=\"/informatique/composants/ssd\""),
+        "{components}"
+    );
     assert!(components.contains("placeholder=\"59\""), "{components}");
     assert!(components.contains("placeholder=\"660\""), "{components}");
     let jbl = text(browser.get("/marque/jbl").await).await?;
@@ -2073,7 +2110,8 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
 
     // A category is filtered by the lines of the technical sheet its operator
     // picked, each value counted within the other picks.
-    let screens = text(browser.get("/c/ecran-pc").await).await?;
+    let screens = "/informatique/peripheriques/ecran-ordinateur/ecran-pc";
+    let screens = text(browser.get(screens).await).await?;
     assert!(screens.contains(">7 produits<"), "{screens}");
     for offered in [
         "<legend>Taille</legend>",
@@ -2093,7 +2131,7 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
     assert!(hz("75 Hz (1)") < hz("144 Hz (2)") && hz("144 Hz (2)") < hz("165 Hz (2)"));
     let fast_va = text(
         browser
-            .get("/c/ecran-pc?f_dalle-type=VA&f_dalle-frequence=144+Hz")
+            .get("/informatique/peripheriques/ecran-ordinateur/ecran-pc?f_dalle-type=VA&f_dalle-frequence=144+Hz")
             .await,
     )
     .await?;
@@ -2108,13 +2146,22 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
     );
     assert!(fast_va.contains("content=\"noindex,follow\""), "{fast_va}");
     // Above, nobody picked filters: the same parameter means nothing there.
-    let above = text(browser.get("/c/ecran-ordinateur?f_dalle-type=VA").await).await?;
+    let above = text(
+        browser
+            .get("/informatique/peripheriques/ecran-ordinateur?f_dalle-type=VA")
+            .await,
+    )
+    .await?;
     assert!(above.contains(">7 produits<"), "{above}");
     assert!(!above.contains("<legend>Taille</legend>"), "{above}");
     assert!(above.contains("rel=\"canonical\""), "{above}");
-    // The sheet itself is on the product's page.
-    let ssd = timada_catalog::product_id("CRU-P3-1T");
-    let sheet = text(browser.get(&format!("/p/{ssd}")).await).await?;
+    // The sheet itself is on the product's page — at the way down to it.
+    let ssd = "/informatique/composants/ssd/crucial-p3-plus-1-to";
+    assert_eq!(
+        page_of(&store, timada_catalog::product_id("CRU-P3-1T")).await?,
+        ssd
+    );
+    let sheet = text(browser.get(ssd).await).await?;
     assert!(
         sheet.contains("<h2 id=\"fiche-technique\">Fiche technique</h2>"),
         "{sheet}"
@@ -2129,11 +2176,17 @@ async fn a_full_catalogue_is_listed_filtered_searched_and_mapped() -> anyhow::Re
     assert_eq!(sitemap.status(), StatusCode::OK);
     let sitemap = text(sitemap).await?;
     assert!(
-        sitemap.contains("<loc>http://127.0.0.1:3000/c/carte-graphique</loc>"),
+        sitemap
+            .contains("<loc>http://127.0.0.1:3000/informatique/composants/carte-graphique</loc>"),
         "{sitemap}"
     );
-    assert_eq!(sitemap.matches("/p/").count(), 49, "{sitemap}");
-    assert!(sitemap.contains("<lastmod>"), "{sitemap}");
+    assert!(
+        sitemap.contains(&format!("<loc>http://127.0.0.1:3000{ssd}</loc>")),
+        "{sitemap}"
+    );
+    // Every product on sale, dated; none by its id.
+    assert_eq!(sitemap.matches("<lastmod>").count(), 49, "{sitemap}");
+    assert!(!sitemap.contains("/p/"), "{sitemap}");
     let robots = text(browser.get("/robots.txt").await).await?;
     assert!(robots.contains("Disallow: /checkout"), "{robots}");
     assert!(
@@ -2381,22 +2434,24 @@ async fn a_business_of_another_member_state_checks_out_without_vat() -> anyhow::
 async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);
+    // Addresses are the way down by slugs: a category's lineage, then — for
+    // a product — its name.
+    let screens = "/informatique/peripheriques/ecran-ordinateur/ecran-pc";
+    let product = page_of(&store, &product_id).await?;
+    assert_eq!(product, format!("{screens}/aoc-23-8-led-24g4xe"));
 
     // The top of the tree is the way in.
     let home = text(browser.get("/").await).await?;
-    assert!(home.contains("href=\"/c/informatique\""), "{home}");
-    assert!(!home.contains("href=\"/c/ecran-pc\""), "{home}");
+    assert!(home.contains("href=\"/informatique\""), "{home}");
+    assert!(!home.contains(&format!("href=\"{screens}\"")), "{home}");
 
     // A category shows what is under it, products of its subcategories included.
-    let department = text(browser.get("/c/informatique").await).await?;
+    let department = text(browser.get("/informatique").await).await?;
     assert!(
-        department.contains("href=\"/c/peripheriques\""),
+        department.contains("href=\"/informatique/peripheriques\""),
         "{department}"
     );
-    assert!(
-        department.contains(&format!("/p/{product_id}")),
-        "{department}"
-    );
+    assert!(department.contains(&product), "{department}");
     assert!(department.contains(">1 produit<"), "{department}");
     // Each way further down says how much it holds.
     assert!(
@@ -2405,39 +2460,75 @@ async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
     );
 
     // The trail links every step but the page itself.
-    let leaf = text(browser.get("/c/ecran-pc?page=9").await).await?;
+    let leaf = text(browser.get(&format!("{screens}?page=9")).await).await?;
     assert!(
         leaf.contains("aria-label=\"Fil d&#x27;Ariane\"")
             || leaf.contains("aria-label=\"Fil d'Ariane\""),
         "{leaf}"
     );
-    assert!(leaf.contains("<a href=\"/c/ecran-ordinateur\">"), "{leaf}");
+    assert!(
+        leaf.contains("<a href=\"/informatique/peripheriques/ecran-ordinateur\">"),
+        "{leaf}"
+    );
     assert!(
         leaf.contains("<li aria-current=\"page\">Écran PC</li>"),
         "{leaf}"
     );
-    assert!(leaf.contains(&format!("/p/{product_id}")), "{leaf}");
+    assert!(leaf.contains(&product), "{leaf}");
 
     // From a product, the way back up — its own category linked too — and
     // one address for the product, whatever page of its reviews is shown.
-    let product = text(browser.get(&format!("/p/{product_id}?avis=2")).await).await?;
+    let page = text(browser.get(&format!("{product}?avis=2")).await).await?;
     assert!(
-        product.contains(&format!(
-            "<link rel=\"canonical\" href=\"http://127.0.0.1:3000/p/{product_id}\">"
+        page.contains(&format!(
+            "<link rel=\"canonical\" href=\"http://127.0.0.1:3000{product}\">"
         )),
-        "{product}"
+        "{page}"
     );
-    assert!(product.contains("\"position\":6"), "{product}");
+    assert!(page.contains("\"position\":6"), "{page}");
     // …and what is on offer: the product, its price, that it can be had.
-    assert!(product.contains("\"@type\":\"Product\""), "{product}");
+    assert!(page.contains("\"@type\":\"Product\""), "{page}");
     assert!(
-        product.contains("\"price\":\"119.95\",\"priceCurrency\":\"EUR\",\"availability\":\"https://schema.org/InStock\""),
-        "{product}"
+        page.contains("\"price\":\"119.95\",\"priceCurrency\":\"EUR\",\"availability\":\"https://schema.org/InStock\""),
+        "{page}"
     );
     assert!(
-        product.contains("<a href=\"/c/ecran-pc\">Écran PC</a>"),
-        "{product}"
+        page.contains(&format!("<a href=\"{screens}\">Écran PC</a>")),
+        "{page}"
     );
+
+    // The addresses from before — by id, by a category's slug alone, the
+    // way down misspelled, a trailing slash — move on for good, the query
+    // string along.
+    for (asked, canonical) in [
+        (
+            format!("/p/{product_id}?avis=2"),
+            format!("{product}?avis=2"),
+        ),
+        ("/c/ecran-pc?page=2".to_owned(), format!("{screens}?page=2")),
+        (
+            "/informatique/aoc-23-8-led-24g4xe".to_owned(),
+            product.clone(),
+        ),
+        ("/ecran-pc".to_owned(), screens.to_owned()),
+        ("/informatique/".to_owned(), "/informatique".to_owned()),
+    ] {
+        let moved = browser.get(&asked).await;
+        assert_eq!(moved.status(), StatusCode::PERMANENT_REDIRECT, "{asked}");
+        assert_eq!(location(&moved), canonical, "{asked}");
+    }
+    for nowhere in [
+        "/nowhere",
+        "/informatique/nowhere",
+        "/p/nowhere",
+        "/c/nowhere",
+    ] {
+        assert_eq!(
+            browser.get(nowhere).await.status(),
+            StatusCode::NOT_FOUND,
+            "{nowhere}"
+        );
+    }
 
     // An archived branch leaves the shop with what is under it; the product
     // stays on sale, under the label it was created with.
@@ -2445,24 +2536,33 @@ async fn the_shop_is_browsed_by_category() -> anyhow::Result<()> {
         .archive_category(timada_catalog::category_id("peripheriques"))
         .await?;
     db::run_subscriptions_once(&store).await?;
-    for gone in ["/c/peripheriques", "/c/ecran-pc", "/c/nowhere"] {
+    for gone in [
+        "/informatique/peripheriques",
+        screens,
+        "/c/peripheriques",
+        "/ecran-pc",
+    ] {
         assert_eq!(
             browser.get(gone).await.status(),
             StatusCode::NOT_FOUND,
             "{gone}"
         );
     }
-    let department = text(browser.get("/c/informatique").await).await?;
-    assert!(!department.contains("/c/peripheriques"), "{department}");
-    // Still on sale: listed under what is left of its branch.
+    let department = text(browser.get("/informatique").await).await?;
     assert!(
-        department.contains(&format!("/p/{product_id}")),
+        !department.contains("href=\"/informatique/peripheriques\""),
         "{department}"
     );
-    let product = browser.get(&format!("/p/{product_id}")).await;
-    assert_eq!(product.status(), StatusCode::OK);
-    let product = text(product).await?;
-    assert!(!product.contains("/c/ecran-pc"), "{product}");
+    // Still on sale: listed under what is left of its branch, at the address
+    // it had — its category left the storefront, not the product.
+    assert!(department.contains(&product), "{department}");
+    let page = browser.get(&product).await;
+    assert_eq!(page.status(), StatusCode::OK);
+    let product = text(page).await?;
+    assert!(
+        !product.contains(&format!("<a href=\"{screens}\">")),
+        "{product}"
+    );
     assert!(
         product.contains("Informatique &gt; Périphériques")
             || product.contains("Informatique > Périphériques"),
@@ -3745,7 +3845,7 @@ async fn reviews_and_questions_are_paged_separately() -> anyhow::Result<()> {
     db::run_subscriptions_once(&store).await?;
 
     let mut browser = Browser::new(&router);
-    let product = format!("/p/{product_id}");
+    let product = page_of(&store, &product_id).await?;
     // Newest first, five a page.
     let first = text(browser.get(&product).await).await?;
     assert!(first.contains("Avis numéro 7."), "{first}");
@@ -3776,7 +3876,7 @@ async fn reviews_and_questions_are_paged_separately() -> anyhow::Result<()> {
 async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::Result<()> {
     let (router, store, product_id) = shop().await?;
     let mut browser = Browser::new(&router);
-    let product_uri = format!("/p/{product_id}");
+    let product_uri = page_of(&store, &product_id).await?;
 
     // Euros until told otherwise; the header offers the shop's currencies.
     let page = text(browser.get(&product_uri).await).await?;
@@ -3793,7 +3893,7 @@ async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::
     let switched = browser
         .post(
             "/currency",
-            &format!("currency=GBP&next=%2Fp%2F{product_id}"),
+            &format!("currency=GBP&next={}", product_uri.replace('/', "%2F")),
         )
         .await;
     assert_eq!(location(&switched), product_uri);
@@ -3898,7 +3998,7 @@ async fn a_shopper_picks_a_currency_and_is_shown_and_charged_in_it() -> anyhow::
     let back = browser
         .post(
             "/currency",
-            &format!("currency=EUR&next=%2Fp%2F{product_id}"),
+            &format!("currency=EUR&next={}", product_uri.replace('/', "%2F")),
         )
         .await;
     assert_eq!(location(&back), product_uri);

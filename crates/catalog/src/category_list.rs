@@ -214,7 +214,7 @@ pub async fn products_in_categories(
         return Ok(Vec::new());
     }
     let mut query = in_categories(
-        "SELECT id, sku, name, brand_slug, category_path, archived, category_id",
+        "SELECT id, sku, name, brand_slug, category_path, archived, category_id, slug",
         category_ids,
     );
     query.push(" ORDER BY name, id LIMIT ");

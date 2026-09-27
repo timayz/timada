@@ -590,6 +590,20 @@ the SMTP relay.
   `ProductCreated` is only the label from before — a shop with such history
   calls `timada_catalog::adopt_category_paths` once, which opens the
   categories those labels name and files the products.
+- **A storefront address is the way down by slugs.** A category is at the
+  slugs of its lineage (`/informatique/composants/ssd`), a product under its
+  category at its own slug (`/informatique/composants/ssd/crucial-p3-plus-1-to`):
+  its name slugified, the SKU appended when another product already spells
+  the same, kept on the product list read model (`catalog_product.slug`,
+  unique; `fill_product_slugs` gives older rows theirs at start-up — a
+  product is never renamed, so it never moves). One catch-all page in the
+  demo (`catalog::browse`) serves both, resolving the last segment; a
+  category's slug is unique, and so is a product's, so the way down spelled
+  otherwise — the product moved to another category, `/p/{product_id}` or
+  `/c/{slug}` from before, the address an e-mail knows — is sent on for good
+  (308, query string along). Links are built for a whole page at once
+  (`catalog::product_links` → `storefront_paths`). The forms of a product
+  page (reviews, questions, alerts) stay at `/p/{product_id}/…`.
 - **A variant is a product.** An article sold in several versions — colours,
   capacities, sizes — is several products, each with its SKU, price, stock,
   page and order lines: no other context knows about variants. A

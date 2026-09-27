@@ -284,6 +284,28 @@ sqlite_migration!(
     ]
 );
 
+pub struct M0009ProductSlugs;
+
+sqlite_migration!(
+    M0009ProductSlugs,
+    "catalog",
+    "m0009_product_slugs",
+    vec_box![M0008ListingFamilies],
+    vec_box![
+        // The last segment of a product's storefront address, from its name.
+        // Products from before get theirs at start-up
+        // (`fill_product_slugs`); the partial index leaves them room.
+        (
+            "ALTER TABLE catalog_product ADD COLUMN slug TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE catalog_product DROP COLUMN slug"
+        ),
+        (
+            "CREATE UNIQUE INDEX catalog_product_slug ON catalog_product (slug) WHERE slug <> ''",
+            "DROP INDEX catalog_product_slug"
+        )
+    ]
+);
+
 /// Read-model migrations for this context, to register alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
     vec_box![
@@ -294,6 +316,7 @@ pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
         M0005ListingSortName,
         M0006ListingPrices,
         M0007Families,
-        M0008ListingFamilies
+        M0008ListingFamilies,
+        M0009ProductSlugs
     ]
 }

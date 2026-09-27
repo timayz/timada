@@ -216,8 +216,10 @@ async fn main() -> anyhow::Result<()> {
             "products filed under the categories of their paths"
         );
     }
-    // Listing rows from before names had a sort key get theirs.
+    // Listing rows from before names had a sort key get theirs, and products
+    // from before addresses by slug get theirs.
     timada_catalog::fill_listing_sort_names(&store.db).await?;
+    timada_catalog::fill_product_slugs(&store.db).await?;
     let _subscriptions = db::start_subscriptions(&store).await?;
     // An order whose payment is never completed gives its stock back.
     let payment_timeout = env::var("TIMADA_PAYMENT_TIMEOUT_SECS")

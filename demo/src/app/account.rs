@@ -465,15 +465,12 @@ pub async fn alerts(cx: &Cx) -> Result<impl View> {
             .into_iter()
             .map(|p| (p.id, p.name))
             .collect();
+    let links = catalog::product_links(cx, &product_ids).await?;
     let listed: Vec<(String, String, String, Option<String>, String)> = rows
         .into_iter()
         .map(|row| {
             (
-                href!(
-                    catalog::product_page,
-                    catalog::ProductId(row.product_id.clone())
-                )
-                .resolve(cx),
+                links.get(&row.product_id).cloned().unwrap_or_default(),
                 names
                     .get(&row.product_id)
                     .cloned()

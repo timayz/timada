@@ -3,7 +3,7 @@
 
 use std::time::{Duration, UNIX_EPOCH};
 
-use timada_catalog::{category_tree, list_categories, listed_products};
+use timada_catalog::{category_tree, list_categories, listed_products, storefront_paths};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -13,7 +13,7 @@ use topcoat::{
     },
 };
 
-use super::{Crumb, absolute, catalog, category};
+use super::{Crumb, absolute, catalog};
 use crate::Store;
 
 /// A JSON string literal that is also safe inside a `<script>`: `<`, `>` and
@@ -129,13 +129,25 @@ pub fn json_ld_graph(parts: &[String]) -> String {
 pub async fn sitemap(cx: &Cx) -> Result<Sitemap> {
     let store = app_context::<Store>(cx);
     let mut urls = vec![SitemapUrl::new(absolute(&href!(catalog::home).resolve(cx)))];
+    // The tree comes flattened with each category's depth: the way down to
+    // one is the slugs kept at the depths above it.
     let tree = category_tree(list_categories(&store.db, false).await?, false);
-    for (_, shown) in tree.iter().flat_map(|node| node.flatten(0)) {
-        let page = href!(category::show, category::CategorySlug(shown.slug.clone())).resolve(cx);
+    let mut way: Vec<String> = Vec::new();
+    for (depth, shown) in tree.iter().flat_map(|node| node.flatten(0)) {
+        way.truncate(depth);
+        way.push(shown.slug.clone());
+        let page = href!(catalog::browse, catalog::Slugs(way.clone())).resolve(cx);
         urls.push(SitemapUrl::new(absolute(&page)));
     }
-    for (product_id, updated_at) in listed_products(&store.db).await? {
-        let page = href!(catalog::product_page, catalog::ProductId(product_id)).resolve(cx);
+    // A product the list does not know yet has no address to give.
+    let listed = listed_products(&store.db).await?;
+    let ids: Vec<String> = listed.iter().map(|(id, _)| id.clone()).collect();
+    let mut paths = storefront_paths(&store.db, &ids).await?;
+    for (product_id, updated_at) in listed {
+        let Some(segments) = paths.remove(&product_id) else {
+            continue;
+        };
+        let page = href!(catalog::browse, catalog::Slugs(segments)).resolve(cx);
         let changed = UNIX_EPOCH + Duration::from_secs(updated_at.max(0) as u64);
         urls.push(SitemapUrl::new(absolute(&page)).last_modified(changed));
     }

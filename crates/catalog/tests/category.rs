@@ -4,8 +4,9 @@ use timada_catalog::{
     Brand, CatalogError, Command, CreateCategory, CreateProduct, MAX_CATEGORY_DEPTH,
     adopt_category_paths, category_by_slug, category_id, category_lineage,
     category_list_subscription, category_subtree_ids, category_tree, count_products_in_categories,
-    is_on_storefront, list_categories, load_product_page, migrations, product_counts_by_category,
-    product_list_subscription, products_in_categories,
+    fill_product_slugs, is_on_storefront, list_categories, load_product_page, migrations,
+    product_by_slug, product_counts_by_category, product_list_subscription, products_by_ids,
+    products_in_categories, storefront_paths,
 };
 
 async fn sync<E: Executor + Clone + 'static>(executor: &E, db: &SqlitePool) -> anyhow::Result<()> {
@@ -416,5 +417,92 @@ async fn a_category_is_filtered_by_its_own_specs_or_its_parents() -> anyhow::Res
         cmd.define_category_facets(&screens, too_many).await,
         Err(CatalogError::TooManyFacets(_))
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_product_has_a_storefront_address_under_its_category() -> anyhow::Result<()> {
+    let (executor, db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command(&executor);
+    let computing = cmd.create_category(category("Informatique", None)).await?;
+    let screens = cmd
+        .create_category(category("Écrans PC", Some(&computing)))
+        .await?;
+    let filed = cmd
+        .create_product(CreateProduct {
+            name: "AOC 24\" Gaming 24G4XE".into(),
+            ..product("AOC-24G4XE", &[])
+        })
+        .await?;
+    // Listed before the twin is created: events of the same instant reach
+    // the list in no fixed order, and the first listed keeps the plain slug.
+    sync(&executor, &db).await?;
+    // The same name twice: the second one goes by its SKU as well.
+    let twin = cmd
+        .create_product(CreateProduct {
+            name: "AOC 24\" Gaming 24G4XE".into(),
+            ..product("AOC-24G4XE-B", &[])
+        })
+        .await?;
+    // A name without a letter or digit: the SKU alone.
+    let mute = cmd
+        .create_product(CreateProduct {
+            name: "→".into(),
+            ..product("SIGN-1", &[])
+        })
+        .await?;
+    sync(&executor, &db).await?;
+    cmd.categorise_product(&filed, &screens).await?;
+    sync(&executor, &db).await?;
+
+    let slugs: std::collections::HashMap<String, String> =
+        products_by_ids(&db, &[filed.clone(), twin.clone(), mute.clone()])
+            .await?
+            .into_iter()
+            .map(|p| (p.id, p.slug))
+            .collect();
+    assert_eq!(slugs[&filed], "aoc-24-gaming-24g4xe");
+    assert_eq!(slugs[&twin], "aoc-24-gaming-24g4xe-aoc-24g4xe-b");
+    assert_eq!(slugs[&mute], "sign-1");
+    assert_eq!(
+        product_by_slug(&db, "aoc-24-gaming-24g4xe")
+            .await?
+            .map(|p| p.id),
+        Some(filed.clone())
+    );
+    assert!(product_by_slug(&db, "").await?.is_none());
+
+    // The address: the way down to the category, then the product.
+    let paths = storefront_paths(&db, &[filed.clone(), twin.clone(), "nobody".into()]).await?;
+    assert_eq!(
+        paths[&filed],
+        ["informatique", "ecrans-pc", "aoc-24-gaming-24g4xe"]
+    );
+    assert_eq!(paths[&twin], ["aoc-24-gaming-24g4xe-aoc-24g4xe-b"]);
+    assert!(!paths.contains_key("nobody"));
+    // An archived category keeps the product's address where it was.
+    cmd.archive_category(&screens).await?;
+    sync(&executor, &db).await?;
+    let paths = storefront_paths(&db, std::slice::from_ref(&filed)).await?;
+    assert_eq!(
+        paths[&filed],
+        ["informatique", "ecrans-pc", "aoc-24-gaming-24g4xe"]
+    );
+
+    // Rows from before slugs are given theirs at start-up, the same way: a
+    // twin of the first name goes by its SKU too.
+    sqlx::query("UPDATE catalog_product SET slug = '' WHERE id = ?")
+        .bind(&twin)
+        .execute(&db)
+        .await?;
+    assert!(
+        storefront_paths(&db, std::slice::from_ref(&twin))
+            .await?
+            .is_empty()
+    );
+    assert_eq!(fill_product_slugs(&db).await?, 1);
+    assert_eq!(fill_product_slugs(&db).await?, 0);
+    let paths = storefront_paths(&db, std::slice::from_ref(&twin)).await?;
+    assert_eq!(paths[&twin], ["aoc-24-gaming-24g4xe-aoc-24g4xe-b"]);
     Ok(())
 }

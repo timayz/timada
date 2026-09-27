@@ -368,6 +368,14 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
         Some((cart, notices)) => (Some(cart).filter(|c| !c.lines.is_empty()), notices),
         None => (None, Vec::new()),
     };
+    // Where each line leads: the product's address.
+    let links = match &cart {
+        Some(cart) => {
+            let ids: Vec<String> = cart.lines.iter().map(|l| l.product_id.clone()).collect();
+            catalog::product_links(cx, &ids).await?
+        }
+        None => std::collections::HashMap::new(),
+    };
     let promo = match &cart {
         Some(cart) => promo_line(app_context::<Store>(cx), cart)
             .await
@@ -432,7 +440,7 @@ async fn cart_view(cx: &Cx, error: Option<String>) -> Result<impl View> {
                             </tr>
                         </thead>
                         <tbody>
-                            for line in &cart.lines { cart_row(line: line) }
+                            for line in &cart.lines { cart_row(line: line, link: links.get(&line.product_id).map_or("", String::as_str)) }
                         </tbody>
                     </table>
                     </div>
@@ -525,9 +533,10 @@ pub(super) async fn promo_notice(promo: &Option<PromoLine>) -> Result<impl View>
     })
 }
 
+/// `link` is the product's address, looked up for every line at once.
 #[component]
-async fn cart_row(cx: &Cx, line: &CartLine) -> Result<impl View> {
-    let product = href!(catalog::product_page, ProductId(line.product_id.clone())).resolve(cx);
+async fn cart_row(cx: &Cx, line: &CartLine, link: &str) -> Result<impl View> {
+    let product = link.to_owned();
     let quantity_action = href!(change_quantity, ProductId(line.product_id.clone())).resolve(cx);
     let remove_action = href!(remove, ProductId(line.product_id.clone())).resolve(cx);
     let field = format!("quantity-{}", line.product_id);
