@@ -59,10 +59,16 @@ impl Role {
             ),
             Role::Support => matches!(
                 section,
-                Orders | Returns | Reviews | Questions | Customers | Emails
+                Orders | Returns | Reviews | Questions | Customers | Emails | Purchasing
             ),
             // Orders too: that is where a payment is refunded from.
-            Role::Accounting => matches!(section, Orders | Invoices | Refunds | Disputes | Vat),
+            // Purchasing too: buying from a supplier spends the shop's money.
+            Role::Accounting => {
+                matches!(
+                    section,
+                    Orders | Invoices | Purchasing | Refunds | Disputes | Vat
+                )
+            }
         }
     }
 
@@ -177,6 +183,7 @@ pub enum Section {
     Customers,
     Promotions,
     Invoices,
+    Purchasing,
     Returns,
     Refunds,
     Disputes,
@@ -188,7 +195,7 @@ pub enum Section {
 
 impl Section {
     /// In the order the navigation shows them.
-    pub const ALL: [Section; 17] = [
+    pub const ALL: [Section; 18] = [
         Section::Orders,
         Section::Products,
         Section::Categories,
@@ -199,6 +206,7 @@ impl Section {
         Section::Customers,
         Section::Promotions,
         Section::Invoices,
+        Section::Purchasing,
         Section::Returns,
         Section::Refunds,
         Section::Disputes,
@@ -220,6 +228,7 @@ impl Section {
             Section::Customers => "customers",
             Section::Promotions => "promotions",
             Section::Invoices => "invoices",
+            Section::Purchasing => "purchasing",
             Section::Returns => "returns",
             Section::Refunds => "refunds",
             Section::Disputes => "disputes",
@@ -243,6 +252,7 @@ impl Section {
             Section::Customers => "Clients",
             Section::Promotions => "Promotions",
             Section::Invoices => "Factures",
+            Section::Purchasing => "Achats",
             Section::Returns => "Retours",
             Section::Refunds => "Remboursements",
             Section::Disputes => "Litiges",
@@ -267,7 +277,11 @@ impl Section {
             Section::Customers | Section::Reviews | Section::Questions | Section::Emails => {
                 Group::Customers
             }
-            Section::Invoices | Section::Refunds | Section::Disputes | Section::Vat => Group::Books,
+            Section::Invoices
+            | Section::Purchasing
+            | Section::Refunds
+            | Section::Disputes
+            | Section::Vat => Group::Books,
         }
     }
 

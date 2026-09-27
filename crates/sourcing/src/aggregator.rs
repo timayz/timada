@@ -1,3 +1,5 @@
+use crate::value_object::SupplierOrderLine;
+
 // The explicit name pins the on-disk identity: renaming the crate or the enum
 // must never orphan stored events.
 #[evento::aggregate(name = "timada-sourcing/Supplier")]
@@ -61,4 +63,48 @@ pub enum SourcedProduct {
     },
 
     SourcePriceUnlocked,
+}
+
+/// What the shop buys from one supplier for one of its own orders.
+///
+/// One per (customer order, supplier): an order whose lines come from two
+/// suppliers has two, which is how a split is structural here rather than a
+/// case anybody has to remember. Placing one is an operator's click, not a
+/// consequence of the customer paying — it spends the shop's money.
+#[evento::aggregate(name = "timada-sourcing/SupplierOrder")]
+pub enum SupplierOrder {
+    SupplierOrderDrafted {
+        order_id: String,
+        supplier_id: String,
+        lines: Vec<SupplierOrderLine>,
+        /// Where the supplier sends the parcel: the customer's own address.
+        ship_to: timada_core::Address,
+        /// What it was expected to come to, at the costs last quoted.
+        cost: timada_core::Money,
+    },
+
+    /// The supplier took it. `cost` is what it actually charged, which is not
+    /// always what was drafted.
+    SupplierOrderPlaced {
+        external_order_id: String,
+        cost: timada_core::Money,
+    },
+
+    /// Bought on the supplier's own site instead, and the reference typed in.
+    SupplierOrderRecordedByHand {
+        external_order_id: String,
+        note: String,
+    },
+
+    /// Out of stock, an address it does not serve. The shop's own order is
+    /// not cancelled by this: what to do about it is an operator's call.
+    SupplierOrderRefused { reason: String },
+
+    SupplierOrderShipped {
+        carrier: String,
+        tracking_number: String,
+    },
+
+    /// Called off — by the shop, or by the supplier after the fact.
+    SupplierOrderCancelled { reason: String },
 }

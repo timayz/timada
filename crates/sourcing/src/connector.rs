@@ -184,6 +184,45 @@ pub trait SupplierConnector: Send + Sync {
     fn cancel<'a>(&'a self, external_order_id: &'a str) -> ConnectorFuture<'a, ()>;
 }
 
+/// So a host — or a test — can keep a handle on the connector it registered
+/// and go on scripting it: the registry takes it by value, an `Arc` of it is
+/// itself a connector, and both point at the same thing.
+impl<T: SupplierConnector + ?Sized> SupplierConnector for Arc<T> {
+    fn key(&self) -> &str {
+        self.as_ref().key()
+    }
+
+    fn does(&self, task: ConnectorTask) -> bool {
+        self.as_ref().does(task)
+    }
+
+    fn limits(&self) -> ConnectorLimits {
+        self.as_ref().limits()
+    }
+
+    fn offers<'a>(
+        &'a self,
+        items: &'a [SupplierItemRef],
+    ) -> ConnectorFuture<'a, Vec<SupplierOffer>> {
+        self.as_ref().offers(items)
+    }
+
+    fn place<'a>(&'a self, order: &'a PlaceOrder<'a>) -> ConnectorFuture<'a, PlacedOrder> {
+        self.as_ref().place(order)
+    }
+
+    fn standing<'a>(
+        &'a self,
+        external_order_id: &'a str,
+    ) -> ConnectorFuture<'a, SupplierOrderStanding> {
+        self.as_ref().standing(external_order_id)
+    }
+
+    fn cancel<'a>(&'a self, external_order_id: &'a str) -> ConnectorFuture<'a, ()> {
+        self.as_ref().cancel(external_order_id)
+    }
+}
+
 /// The connectors a host plugged in, keyed by [`SupplierConnector::key`].
 /// Several from day one: a shop buying from two marketplaces is the ordinary
 /// case, not an extension.

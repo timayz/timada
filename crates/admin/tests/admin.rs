@@ -3892,3 +3892,139 @@ async fn sourcing_is_the_catalogues_business_not_everybodys() -> anyhow::Result<
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn purchases_are_ordered_by_whoever_may_spend() -> anyhow::Result<()> {
+    let h = harness("admin").await?;
+    let sourcing = timada_sourcing::Command::new(&h.executor, h.db.clone());
+    let connectors = timada_sourcing::SupplierConnectors::default()
+        .with(timada_sourcing::FakeConnector::new("fake"));
+    let supplier = sourcing
+        .register_supplier(
+            timada_sourcing::RegisterSupplier {
+                slug: "shenzhen-optics".into(),
+                name: "Shenzhen Optics".into(),
+                connector: "fake".into(),
+                currency: "EUR".into(),
+            },
+            &connectors,
+        )
+        .await?;
+    let product = timada_catalog::product_id("AOC-Q27G2");
+    sourcing
+        .source_product(timada_sourcing::SourceProduct {
+            product_id: product.clone(),
+            supplier_id: supplier.clone(),
+            external_item_id: "1005006100001".into(),
+            external_sku: None,
+        })
+        .await?;
+    let purchase = sourcing
+        .draft_supplier_order(timada_sourcing::DraftSupplierOrder {
+            order_id: "order-1".into(),
+            supplier_id: supplier.clone(),
+            lines: vec![timada_sourcing::SupplierOrderLine {
+                product_id: product.clone(),
+                external_item_id: "1005006100001".into(),
+                external_sku: None,
+                quantity: 2,
+                unit_cost: timada_core::Money::eur(4_000),
+            }],
+            ship_to: timada_core::Address {
+                first_name: "Jonathan".into(),
+                last_name: "Lapiquonne".into(),
+                line1: "1 rue de l'Entrepôt".into(),
+                postal_code: "31000".into(),
+                city: "Toulouse".into(),
+                country_code: "FR".into(),
+                ..timada_core::Address::default()
+            },
+        })
+        .await?;
+    // Both lists are read models: the purchases, and the suppliers whose
+    // names the queue puts to them.
+    timada_sourcing::purchase_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+    timada_sourcing::sourcing_list_subscription()
+        .data(h.db.clone())
+        .run_once(&h.executor)
+        .await?;
+
+    // Customer service sees what is being bought, and cannot buy it.
+    let (support, _) = operator(&h, "sup@timada.example", Role::Support).await?;
+    let queue = text(
+        h.router
+            .handle(get("/admin/purchasing", Some(&support)))
+            .await,
+    )
+    .await?;
+    assert!(
+        queue.contains("Shenzhen Optics"),
+        "the purchase is not listed"
+    );
+    let page = format!("/admin/purchasing/{purchase}");
+    let seen = text(h.router.handle(get(&page, Some(&support))).await).await?;
+    assert!(
+        !seen.contains("Commander chez le fournisseur"),
+        "support should not be offered the shop's chequebook"
+    );
+    let refused = h
+        .router
+        .handle(post(&format!("{page}/order"), "", Some(&support)))
+        .await;
+    assert_eq!(location(&refused), format!("{page}?error=forbidden"));
+
+    // Accounting may, and the click only enqueues: the page never waits on a
+    // supplier's API.
+    let (accounting, _) = operator(&h, "acc@timada.example", Role::Accounting).await?;
+    let shown = text(h.router.handle(get(&page, Some(&accounting))).await).await?;
+    assert!(
+        shown.contains("Commander chez le fournisseur"),
+        "accounting should be able to buy"
+    );
+    let ordered = h
+        .router
+        .handle(post(&format!("{page}/order"), "", Some(&accounting)))
+        .await;
+    assert_eq!(location(&ordered), page);
+    assert_eq!(
+        sourcing
+            .load_purchase(&purchase)
+            .await?
+            .map(|state| state.status),
+        Some(timada_sourcing::SupplierOrderStatus::Drafted),
+        "the click enqueues; the worker buys"
+    );
+
+    // Bought on the supplier's own site instead: the reference is typed in.
+    let by_hand = h
+        .router
+        .handle(post(
+            &format!("{page}/by-hand"),
+            "external_order_id=AE-42&note=achat+manuel",
+            Some(&accounting),
+        ))
+        .await;
+    assert_eq!(location(&by_hand), page);
+    assert_eq!(
+        sourcing
+            .load_purchase(&purchase)
+            .await?
+            .and_then(|state| state.external_order_id),
+        Some("AE-42".to_owned())
+    );
+
+    // The catalogue role has no business here at all.
+    let (catalogue, _) = operator(&h, "cat2@timada.example", Role::Catalogue).await?;
+    assert_eq!(
+        h.router
+            .handle(get("/admin/purchasing", Some(&catalogue)))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    Ok(())
+}

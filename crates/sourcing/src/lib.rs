@@ -32,10 +32,13 @@ mod migration;
 pub mod price;
 mod price_review;
 mod process;
+mod purchase_list;
+mod purchasing;
 mod query;
 mod rule;
 mod sourcing_list;
 mod sync;
+mod value_object;
 
 pub use command::*;
 pub use connector::{
@@ -48,7 +51,10 @@ pub use migration::migrations;
 pub use price::{Quote, ReviewReason, Verdict};
 pub use price_review::*;
 pub use process::*;
+pub use purchase_list::*;
+pub use purchasing::*;
 pub use query::*;
 pub use rule::*;
 pub use sourcing_list::*;
 pub use sync::*;
+pub use value_object::*;
