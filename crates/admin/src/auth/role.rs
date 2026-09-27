@@ -55,7 +55,7 @@ impl Role {
             Role::Owner => true,
             Role::Catalogue => matches!(
                 section,
-                Products | Families | Categories | Inventory | Promotions
+                Products | Families | Categories | Inventory | Suppliers | Sourcing | Promotions
             ),
             Role::Support => matches!(
                 section,
@@ -172,6 +172,8 @@ pub enum Section {
     Categories,
     Families,
     Inventory,
+    Suppliers,
+    Sourcing,
     Customers,
     Promotions,
     Invoices,
@@ -186,12 +188,14 @@ pub enum Section {
 
 impl Section {
     /// In the order the navigation shows them.
-    pub const ALL: [Section; 15] = [
+    pub const ALL: [Section; 17] = [
         Section::Orders,
         Section::Products,
         Section::Categories,
         Section::Families,
         Section::Inventory,
+        Section::Suppliers,
+        Section::Sourcing,
         Section::Customers,
         Section::Promotions,
         Section::Invoices,
@@ -211,6 +215,8 @@ impl Section {
             Section::Categories => "categories",
             Section::Families => "families",
             Section::Inventory => "inventory",
+            Section::Suppliers => "suppliers",
+            Section::Sourcing => "sourcing",
             Section::Customers => "customers",
             Section::Promotions => "promotions",
             Section::Invoices => "invoices",
@@ -232,6 +238,8 @@ impl Section {
             Section::Categories => "Catégories",
             Section::Families => "Familles",
             Section::Inventory => "Stock",
+            Section::Suppliers => "Fournisseurs",
+            Section::Sourcing => "Approvisionnement",
             Section::Customers => "Clients",
             Section::Promotions => "Promotions",
             Section::Invoices => "Factures",
@@ -253,6 +261,8 @@ impl Section {
             | Section::Categories
             | Section::Families
             | Section::Inventory
+            | Section::Suppliers
+            | Section::Sourcing
             | Section::Promotions => Group::Catalogue,
             Section::Customers | Section::Reviews | Section::Questions | Section::Emails => {
                 Group::Customers

@@ -184,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
             seed::run(&store).await?;
             seed_catalogue::run(&store).await?;
             seed_catalogue::run_families(&store).await?;
+            seed_catalogue::run_sourcing(&store).await?;
             db::run_subscriptions_once(&store).await?;
             tracing::info!("seeded; admin login is admin@timada.example / admin");
             tracing::info!(
@@ -236,6 +237,20 @@ async fn main() -> anyhow::Result<()> {
         pool.clone(),
         store.provider.clone(),
         std::time::Duration::from_secs(5),
+    ));
+    // The suppliers are asked what their items cost and how many they hold;
+    // prices follow inside their guardrails, and the rest goes to « À valider ».
+    let sourcing_every = env::var("TIMADA_SOURCING_SYNC_SECS")
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+        .unwrap_or(3_600);
+    tokio::spawn(timada_sourcing::run_offer_sync(
+        executor.clone(),
+        pool.clone(),
+        db::supplier_connectors(),
+        db::exchange_rates(),
+        db::shop_currencies(),
+        std::time::Duration::from_secs(sourcing_every),
     ));
     tokio::spawn(timada_mailer::run_delivery(
         pool.clone(),
@@ -297,7 +312,8 @@ fn router(store: Store, assets: AssetConfig, stylesheet: Stylesheet) -> Router {
         .build();
     let services = AdminServices::new(store.executor.clone(), store.db.clone())
         .with_archive(store.archive.clone())
-        .with_exchange_rates(db::exchange_rates());
+        .with_exchange_rates(db::exchange_rates())
+        .with_suppliers(db::supplier_connectors());
     let builder = Router::builder()
         .discover()
         .app_context(store)

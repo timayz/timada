@@ -19,6 +19,8 @@ pub mod questions;
 pub mod refunds;
 pub mod returns;
 pub mod reviews;
+pub mod sourcing;
+pub mod suppliers;
 pub mod team;
 pub mod vat;
 
@@ -116,6 +118,8 @@ pub fn section_link(cx: &Cx, section: Section) -> String {
         Section::Disputes => href!(disputes::index).resolve(cx),
         Section::Vat => href!(vat::index).resolve(cx),
         Section::Reviews => href!(reviews::index).resolve(cx),
+        Section::Suppliers => href!(suppliers::index).resolve(cx),
+        Section::Sourcing => href!(sourcing::index).resolve(cx),
         Section::Questions => href!(questions::index).resolve(cx),
         Section::Emails => href!(emails::index).resolve(cx),
     }

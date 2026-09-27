@@ -221,6 +221,22 @@ pub const TICKET_PERCENT: IconData = IconData::unescaped_unchecked(
     r#"<path d="M2 9a3 3 0 1 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 1 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" /> <path d="M9 9h.01" /> <path d="m15 9-6 6" /> <path d="M15 15h.01" />"#,
 );
 
+/// Fournisseurs.
+///
+/// Lucide `truck`.
+pub const TRUCK: IconData = IconData::unescaped_unchecked(
+    BOX,
+    r#"<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" /> <path d="M15 18H9" /> <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14" /> <circle cx="17" cy="18" r="2" /> <circle cx="7" cy="18" r="2" />"#,
+);
+
+/// Approvisionnement.
+///
+/// Lucide `scale`.
+pub const SCALE: IconData = IconData::unescaped_unchecked(
+    BOX,
+    r#"<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /> <path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /> <path d="M7 21h10" /> <path d="M12 3v18" /> <path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" />"#,
+);
+
 /// Équipe.
 ///
 /// Lucide `user-cog`.

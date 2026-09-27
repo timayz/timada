@@ -50,6 +50,7 @@ Environment of the demo:
 | `TIMADA_MAIL_FROM` | `Timada demo <no-reply@timada.example>` | |
 | `TIMADA_SMTP_URL` | — | with `--features smtp`, e-mails are sent instead of logged |
 | `TIMADA_PAYMENT_TIMEOUT_SECS` | `1800` | an unpaid order is cancelled and its stock released |
+| `TIMADA_SOURCING_SYNC_SECS` | `3600` | how often the suppliers are asked what their items cost and how many they hold |
 | `TIMADA_ALERTS_TO` | `boutique@timada.example` | where the shop itself is written to — a payment being disputed, and what the bank decided |
 | `TIMADA_LINK_SECRET` | a secret of the moment | signs what stands in for the session of somebody ordering without an account: the link to the order in their e-mails, and their browser's cookie. Unset, the links sent so far stop working at each restart |
 | `TIMADA_ARCHIVE_DIR` | — | issued invoices and credit notes are archived as files under this directory instead of in the database |
@@ -87,7 +88,7 @@ Bounded contexts live in `crates/`, one crate each, package `timada-<context>`.
 | `timada-invoice` | one invoice per order, legal numbering, credit notes, both as documents — and, with the `pdf` feature, as PDF files, archived unaltered when they are issued; the VAT of a quarter |
 | `timada-returns` | returns (RMA) of shipped orders: request, review, reception, restock, then a refund — or the same product sent again; prepaid return labels, by hand or through a carrier port |
 | `timada-review` | product reviews (moderated) and questions & answers |
-| `timada-sourcing` | where a product is bought: suppliers, the item each product is sourced as, the `SupplierConnector` port, and the markup rule that keeps the selling price in step with a supplier's cost |
+| `timada-sourcing` | where a product is bought: suppliers, the item each product is sourced as, the `SupplierConnector` port, the markup rule that keeps the selling price in step with a supplier's cost, and the worker that asks them — with a queue for what the guardrails hold back |
 | `timada-mailer` | transactional e-mails (with attachments) through a SQL outbox and pluggable transports; feature `invoice-pdf` e-mails each issued invoice, and each credit note, as a PDF |
 | `timada-admin` | the mountable back-office over all of the above, its operators each with a role: owner, catalogue, customer service, accounting |
 

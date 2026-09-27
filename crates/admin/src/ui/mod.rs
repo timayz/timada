@@ -17,7 +17,7 @@ pub mod rail;
 pub mod theme;
 
 pub use chrome::{empty_state, page_header, pagination, shell, stylesheet_url};
-pub use format::{date, money, order_status_badge, vat_rate};
+pub use format::{date, date_time, money, order_status_badge, vat_rate};
 pub use page::{
     detail_grid, detail_main, detail_side, fact, facts, field, filter_bar, form_error, link,
     table_card, text_field,

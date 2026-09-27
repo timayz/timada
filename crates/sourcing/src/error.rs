@@ -16,6 +16,8 @@ pub enum SourcingError {
     ConnectorUnknown(String),
     #[error("connector `{key}` does not {task}")]
     ConnectorDoes { key: String, task: &'static str },
+    #[error("there is no price here to apply")]
+    NothingToApply,
     #[error("`{0}` is required")]
     Required(&'static str),
     #[error("`{0}` is not a currency code")]

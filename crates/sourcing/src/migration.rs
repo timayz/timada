@@ -112,8 +112,82 @@ sqlite_migration!(
     )]
 );
 
+pub struct M0005Poll;
+
+// Which products are due to be asked about, and when. Claimed rows with a
+// lease, so any number of workers may run — the mailer outbox's shape.
+sqlite_migration!(
+    M0005Poll,
+    "sourcing",
+    "m0005_poll",
+    vec_box![M0004Offer],
+    vec_box![
+        (
+            "CREATE TABLE sourcing_poll (
+                product_id TEXT PRIMARY KEY,
+                supplier_id TEXT NOT NULL,
+                next_poll_at INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                claimed_by TEXT,
+                claimed_until INTEGER,
+                last_error TEXT,
+                last_polled_at INTEGER
+            )",
+            "DROP TABLE sourcing_poll"
+        ),
+        (
+            "CREATE INDEX sourcing_poll_due ON sourcing_poll (next_poll_at)",
+            "DROP INDEX sourcing_poll_due"
+        )
+    ]
+);
+
+pub struct M0006PriceReview;
+
+// What the guardrails would not let through by itself. The id derives from
+// the product and the reason, so a product polled forty times before anybody
+// looks is one row, refreshed — not forty.
+sqlite_migration!(
+    M0006PriceReview,
+    "sourcing",
+    "m0006_price_review",
+    vec_box![M0005Poll],
+    vec_box![
+        (
+            "CREATE TABLE sourcing_price_review (
+                review_id TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL,
+                supplier_id TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                current_minor INTEGER,
+                proposed_minor INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                cost_minor INTEGER NOT NULL,
+                cost_currency TEXT NOT NULL,
+                margin_bp INTEGER NOT NULL,
+                raised_at INTEGER NOT NULL,
+                settled_at INTEGER,
+                settled_as TEXT
+            )",
+            "DROP TABLE sourcing_price_review"
+        ),
+        (
+            "CREATE INDEX sourcing_price_review_open
+             ON sourcing_price_review (settled_at, raised_at)",
+            "DROP INDEX sourcing_price_review_open"
+        )
+    ]
+);
+
 /// Read-model and configuration migrations for this context, to register
 /// alongside evento's.
 pub fn migrations() -> Vec<Box<dyn Migration<Sqlite>>> {
-    vec_box![M0001Supplier, M0002SourcedProduct, M0003Rule, M0004Offer]
+    vec_box![
+        M0001Supplier,
+        M0002SourcedProduct,
+        M0003Rule,
+        M0004Offer,
+        M0005Poll,
+        M0006PriceReview
+    ]
 }

@@ -490,3 +490,67 @@ pub async fn run_families(store: &Store) -> anyhow::Result<()> {
     tracing::info!(families = FAMILIES.len(), "product families seeded");
     Ok(())
 }
+
+/// Three of the catalogue's products are bought from a supplier rather than
+/// held: `--seed` then shows a populated « Fournisseurs » and, after the
+/// first sync pass, real costs on their pages.
+///
+/// The scripted connector's catalogue is built in [`crate::db::supplier_connectors`],
+/// so every instance of it answers the same thing — the worker's and the
+/// admin's alike.
+pub async fn run_sourcing(store: &Store) -> anyhow::Result<()> {
+    let sourcing = timada_sourcing::Command::new(&store.executor, store.db.clone());
+    let connectors = crate::db::supplier_connectors();
+    let supplier = match sourcing
+        .register_supplier(
+            timada_sourcing::RegisterSupplier {
+                slug: SUPPLIER_SLUG.into(),
+                name: "Shenzhen Optics".into(),
+                connector: "demo".into(),
+                currency: "USD".into(),
+            },
+            &connectors,
+        )
+        .await
+    {
+        Ok(id) => id,
+        // Seeded before: its products are linked already.
+        Err(timada_sourcing::SourcingError::AlreadyRegistered(slug)) => {
+            timada_sourcing::supplier_id(&slug)
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    for (sku, item, _, _) in SOURCED {
+        sourcing
+            .source_product(timada_sourcing::SourceProduct {
+                product_id: timada_catalog::product_id(sku),
+                supplier_id: supplier.clone(),
+                external_item_id: (*item).to_owned(),
+                external_sku: None,
+            })
+            .await?;
+    }
+    tracing::info!(products = SOURCED.len(), "sourcing seeded");
+    Ok(())
+}
+
+/// The supplier the demo buys from, and what it calls the items.
+pub const SUPPLIER_SLUG: &str = "shenzhen-optics";
+
+/// `(the shop's SKU, the supplier's item id, one unit in US cents, units held)`.
+///
+/// The three costs are chosen so that a first sync shows everything that can
+/// happen to a price under the built-in rule. The screen's lands a euro above
+/// what it sells for and is applied outright — and because the demo also
+/// prices it in pounds and francs, that raises the « prix en devise à
+/// revoir » notice, since a price per currency is a decision and never a
+/// conversion. The mouse's is far enough below to want an operator's eye and
+/// waits in « À valider ». The SSD's comes out at exactly what it already
+/// sells for, so nothing is written at all — and its supplier has none left,
+/// which takes it off sale.
+pub const SOURCED: &[(&str, &str, i64, u32)] = &[
+    ("AOC-Q27G2", "1005006100001", 12_800, 12),
+    ("COR-M65", "1005006100002", 2_500, 6),
+    ("CRU-P3-1T", "1005006100003", 4_033, 0),
+];

@@ -6,7 +6,7 @@ use topcoat::{
 
 use crate::components::badge::{BadgeVariant, badge};
 
-pub use timada_core::format::{date, money, vat_rate};
+pub use timada_core::format::{date, date_time, money, vat_rate};
 
 /// Where an order stands, as a badge.
 ///

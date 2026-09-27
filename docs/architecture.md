@@ -33,7 +33,7 @@ Most contexts are leaves over `timada-core`. The ones that coordinate others:
 ```mermaid
 graph TD
     catalog --> pricing & inventory & review
-    sourcing --> pricing & tax
+    sourcing --> pricing & inventory & tax
     customer --> tax
     order --> cart & customer & inventory & payment & pricing & promotion & shipping & tax
     invoice --> order & payment & tax
@@ -48,9 +48,9 @@ and `tax` depend on `core` only; `customer` also reads `tax`, a library
 without events, for VAT numbers. `catalog` reads three of
 them for one thing: the **listing** the storefront browses
 (`catalog_listing`) carries each product's price, deliverable stock and
-rating, so that filtering, sorting and paging are a single query. `sourcing` reads `pricing` (it moves the selling price) and
-`tax` (a supplier's cost is quoted in the supplier's currency), and
-deliberately not `catalog`: it keys everything by product id, and the back
+rating, so that filtering, sorting and paging are a single query. `sourcing` reads `pricing` (it moves the selling price), `inventory` (it
+says what the supplier still holds) and `tax` (a cost is quoted in the
+supplier's own currency), and deliberately not `catalog`: it keys everything by product id, and the back
 office already has the catalogue to put names to them. A leaf never learns
 about the context that consumes it: `payment` knows nothing of orders beyond
 an opaque `order_id`.
@@ -254,6 +254,7 @@ pool as data unless noted:
 | review | `product_summary_subscription`, `review_list_subscription`, `question_list_subscription` | read models | |
 | customer | `customer_list_subscription` | read model | |
 | sourcing | `sourcing_list_subscription` | read model | |
+| sourcing | `sourcing_poll_subscription` | process ← sourcing, inventory | `SyncPolicy` (optional) |
 | promotion | `code_list_subscription` | read model | |
 | payment | `refund_list_subscription` | read models (refunds made, refunds asked for) | |
 | payment | `refund_execution_subscription` | process: enqueues refunds for the provider | |
@@ -278,18 +279,20 @@ aggregate (a handler or a `.skip`), so a new event cannot be forgotten
 silently. A handler that keeps failing is retried forever — a missing
 `.data(..)` shows up as a test that hangs, not one that fails.
 
-**3. Background workers** — three loops to spawn:
+**3. Background workers** — four loops to spawn:
 
 ```rust
 tokio::spawn(timada_order::run_payment_timeouts(executor, pool, provider, timeout, every));
 tokio::spawn(timada_payment::run_provider_refunds(executor, pool, provider, every)); // any number of these
 tokio::spawn(timada_mailer::run_delivery(pool, transport, every));   // any number of these
+tokio::spawn(timada_sourcing::run_offer_sync(executor, pool, connectors, rates, currencies, every)); // any number of these
 ```
 
 **4. Values the host provides** — plain structs, no events behind them:
 
 | Value | For |
 |---|---|
+| `timada_sourcing::SupplierConnectors` | which adapter answers for each supplier (`manual` = worked by hand) — to the sync worker, and to the back office's `AdminServices::with_suppliers` |
 | `timada_tax::TaxZones` | where the shop delivers, how each zone is taxed, which delivery methods serve it. `default()` = France + overseas exports; `france_with_eu_oss()` adds the 26 other member states at their own VAT, reduced rates mapped by the host with `with_mapped_rate(zone, listed_bp, destination_bp)` |
 | `timada_shipping::DeliveryFees` | what each delivery method costs **per currency** (the built-in euro fees by default; a method without a fee in a currency is not offered to a cart in it) — to the checkout subscription, and to whatever page offers delivery methods |
 | `timada_order::InstallmentHandlingFees` | what paying in several times costs **per currency** (4,49 € by default; no fee in a currency = not offered in it) — to the checkout subscription, and to whatever page offers the payment modes |
@@ -350,8 +353,14 @@ the SMTP relay.
   through the `ExchangeRates` port (one leg only; a rate arrived at through a
   third currency is quietly wrong every time), prices it, and moves the
   selling price only inside two guardrails that both have to hold, relative
-  and absolute, in both directions. Anything else comes back as a verdict for
-  an operator. A price the operator locked is neither moved nor asked about.
+  and absolute, in both directions. Anything else lands in `sourcing_price_review`
+  — « À valider » in the back office — under an id derived from the product
+  and the reason, so a product polled forty times before anybody looks is one
+  row, refreshed. Approving it applies the price; refusing it **locks** the
+  price, so the same question is not put again in six hours and the queue can
+  be emptied. A price the operator locked is neither moved nor asked about.
+  The supplier's level goes to the warehouse the same way, less the rule's
+  `safety_stock`, so the shop is never the one taking the supplier's last one.
 - **A level is not a movement.** Stock normally arrives as movements —
   `StockReceived`, `StockReturned` — but a stock-take and a supplier's feed
   both know only a total, so `StockLevelSynced { available }` states one
