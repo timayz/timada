@@ -288,6 +288,62 @@ async fn products_take_their_place_in_one_family() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn a_product_joins_a_family_before_taking_its_place() -> anyhow::Result<()> {
+    let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
+    let cmd = Command(&executor);
+    let id = cmd.create_family(family("Baladeur NW-A")).await?;
+    let black = cmd.create_product(product("NWA-N")).await?;
+    let silver = cmd.create_product(product("NWA-A")).await?;
+
+    // Joined — once —, the family knowing no place for it yet.
+    assert!(cmd.join_family(&id, &black).await?);
+    assert!(!cmd.join_family(&id, &black).await?);
+    let page = load_product_page(&executor, &black)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no page"))?;
+    assert_eq!(page.family_id.as_deref(), Some(id.as_str()));
+    let state = cmd.load_family(&id).await?.unwrap_or_default();
+    assert!(state.variant(&black).is_none());
+
+    // One family at a time, from the claim on.
+    let other = cmd.create_family(family("Autre")).await?;
+    assert!(matches!(
+        cmd.join_family(&other, &black).await,
+        Err(CatalogError::ProductInAnotherFamily)
+    ));
+
+    // Placed once the options are said; a claim without a place is undone
+    // by leaving, like any other.
+    cmd.define_family_options(&id, colours_and_capacities())
+        .await?;
+    assert!(cmd.place_variant(&id, &black, at("Noir", "64 Go")).await?);
+    let state = cmd.load_family(&id).await?.unwrap_or_default();
+    assert_eq!(
+        state.variant(&black).map(|variant| variant.values.clone()),
+        Some(at("Noir", "64 Go"))
+    );
+    assert!(cmd.join_family(&id, &silver).await?);
+    assert!(cmd.remove_variant(&id, &silver).await?);
+    let page = load_product_page(&executor, &silver)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no page"))?;
+    assert_eq!(page.family_id, None);
+
+    // Neither a dissolved family nor an archived product.
+    cmd.dissolve_family(&other).await?;
+    assert!(matches!(
+        cmd.join_family(&other, &silver).await,
+        Err(CatalogError::FamilyDissolved)
+    ));
+    cmd.archive_product(&silver).await?;
+    assert!(matches!(
+        cmd.join_family(&id, &silver).await,
+        Err(CatalogError::ProductArchived)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_product_page_leads_to_the_closest_sibling() -> anyhow::Result<()> {
     let (executor, _db) = timada_core::testing::memory_executor(migrations()).await?;
     let cmd = Command(&executor);

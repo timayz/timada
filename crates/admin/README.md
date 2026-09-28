@@ -1,7 +1,7 @@
 # timada-admin
 
 A [topcoat](https://github.com/tokio-rs/topcoat) admin for the timada contexts
-(orders, products, categories, families, stock, customers, promotions, invoices, VAT, refunds, returns,
+(orders, products and their versions, categories, stock, customers, promotions, invoices, VAT, refunds, returns,
 reviews, questions, e-mails) that you mount into your own app — a topcoat app or any tower/axum
 app.
 
@@ -98,12 +98,17 @@ list of its own goes by its parent's. Products are filed from their own page,
 or when they are created; the same page edits their technical sheet
 (`Groupe | Libellé | Valeur`, a line each).
 
-The families section gathers the products that are one article in several
-versions: a family says what tells them apart (`Couleur : Noir, Argent`, a
-line per option, the values in the order shoppers see them) and products take
-their place in it by reference (SKU). Each version stays a product — priced,
-stocked and edited from its own page, which shows its family and lets it leave.
-A value a variant stands on cannot be removed; a family dissolves once empty.
+A product's page also keeps the versions it is sold in. There is no section
+for that, and nothing to set up across products: the operator declines the
+product under a common name (the one the listing shows) and says what tells
+the versions apart (`Couleur : Noir, Argent`, a line per option, the values in
+the order shoppers see them), then adds versions right there — each a new
+product born from this one, with its brand, category, texts, technical sheet
+and listed price copied, its stock its own — and moves or removes any of them
+from the same table. Every version's page shows the same card. A value a
+version stands on cannot be removed; the last version out ends the
+declination. (In the catalog this is the `ProductFamily` aggregate; the admin
+never names it.)
 
 Reviews wait in the reviews section until an operator publishes or rejects
 them; only published ones reach the storefront and the product rating. Product
