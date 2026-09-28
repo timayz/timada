@@ -9,7 +9,7 @@
 pub enum Role {
     /// Everything, the team included.
     Owner,
-    /// What is sold: products, families, categories, prices, stock, promotions.
+    /// What is sold: products (and their families), categories, prices, stock, promotions.
     Catalogue,
     /// Who buys: orders, returns, reviews, questions, customers, e-mails.
     Support,
@@ -55,7 +55,7 @@ impl Role {
             Role::Owner => true,
             Role::Catalogue => matches!(
                 section,
-                Products | Families | Categories | Inventory | Suppliers | Sourcing | Promotions
+                Products | Categories | Inventory | Suppliers | Sourcing | Promotions
             ),
             Role::Support => matches!(
                 section,
@@ -176,7 +176,6 @@ pub enum Section {
     Orders,
     Products,
     Categories,
-    Families,
     Inventory,
     Suppliers,
     Sourcing,
@@ -195,11 +194,10 @@ pub enum Section {
 
 impl Section {
     /// In the order the navigation shows them.
-    pub const ALL: [Section; 18] = [
+    pub const ALL: [Section; 17] = [
         Section::Orders,
         Section::Products,
         Section::Categories,
-        Section::Families,
         Section::Inventory,
         Section::Suppliers,
         Section::Sourcing,
@@ -221,7 +219,6 @@ impl Section {
             Section::Orders => "orders",
             Section::Products => "products",
             Section::Categories => "categories",
-            Section::Families => "families",
             Section::Inventory => "inventory",
             Section::Suppliers => "suppliers",
             Section::Sourcing => "sourcing",
@@ -245,7 +242,6 @@ impl Section {
             Section::Orders => "Commandes",
             Section::Products => "Produits",
             Section::Categories => "Catégories",
-            Section::Families => "Familles",
             Section::Inventory => "Stock",
             Section::Suppliers => "Fournisseurs",
             Section::Sourcing => "Approvisionnement",
@@ -269,7 +265,6 @@ impl Section {
             Section::Orders | Section::Returns => Group::Sales,
             Section::Products
             | Section::Categories
-            | Section::Families
             | Section::Inventory
             | Section::Suppliers
             | Section::Sourcing

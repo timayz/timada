@@ -1,8 +1,12 @@
-//! `/{mount}/products/{product_id}`: content, price, stock and the editing actions.
+//! `/{mount}/products/{product_id}`: content, price, stock and the editing
+//! actions — the versions the product is sold in among them, in [`versions`].
+
+pub mod versions;
 
 use serde::Deserialize;
 use timada_catalog::{
-    CatalogError, DescribeProduct, ProductPageView, Spec, category_lineage, load_product_page,
+    CatalogError, DescribeProduct, FamilyState, ProductPageView, Spec, category_lineage,
+    load_product_page,
 };
 use timada_core::Money;
 use timada_inventory::{StockLocation, stock_item_id};
@@ -12,7 +16,7 @@ use topcoat::{
     context::{Cx, app_context},
     router::{
         content::Form, error::RouterErrorExt, error::see_other, href, page, path_param,
-        path_param as param,
+        path_param as param, query_params, query_params as query,
     },
     view::{View, view},
 };
@@ -20,7 +24,6 @@ use topcoat::{
 use crate::{
     app::admin::_secure::{
         categories::{category_options, category_select},
-        families::family_id::{FamilyId, show as show_family},
         suppliers::supplier_href,
     },
     auth::Section,
@@ -32,10 +35,18 @@ use crate::{
         textarea::textarea,
     },
     config::{AdminConfig, AdminServices},
-    ui::{date_time, detail_grid, detail_main, money, page_header},
+    ui::{date_time, detail_grid, detail_main, form_error, money, page_header},
 };
 
+use self::versions::versions_card;
+
 path_param!(pub product_id: String, error = not_found);
+
+#[query_params(error = bad_request)]
+struct ShowQuery {
+    /// What the catalog refused the versions' forms, said on the way back.
+    error: Option<String>,
+}
 
 async fn load(cx: &Cx) -> Result<(String, ProductPageView)> {
     let id = param::<ProductId>(cx)?.clone();
@@ -115,31 +126,17 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .map(|sourced| supplier_href(cx, &sourced.supplier_id));
 
-    // The family the product is a variant of: its name, where it stands in
-    // it, and the way there. A product that says it joined a family where it
-    // has no place yet shows « à placer ».
-    let variant_of: Option<(String, String, String)> = match &product.family_id {
+    // The versions the product is sold in, from the events: what was just
+    // saved shows at once. A family over is none.
+    let versions: Option<FamilyState> = match &product.family_id {
         Some(family_id) => timada_catalog::Command(&services.executor)
             .load_family(family_id)
             .await
             .map_err(topcoat::Error::from_anyhow)?
-            .map(|family| {
-                let standing = family.variant(&id).map_or_else(
-                    || "à placer".to_owned(),
-                    |variant| {
-                        variant
-                            .values
-                            .iter()
-                            .map(|placed| format!("{} : {}", placed.option, placed.value))
-                            .collect::<Vec<_>>()
-                            .join(" · ")
-                    },
-                );
-                let link = href!(show_family, FamilyId(family.id.clone())).resolve(cx);
-                (family.name, standing, link)
-            }),
+            .filter(|family| !family.dissolved),
         None => None,
     };
+    let error = query::<ShowQuery>(cx)?.error.clone();
     let sheet = product
         .specs
         .iter()
@@ -157,6 +154,9 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
             (product.brand.name.clone()) " · " (product.sku.clone()) " · " (filed_under)
             " · garantie " (product.warranty_months.to_string()) " mois"
         </p>
+        if let Some(error) = &error {
+            form_error(class: "mb-4", (error.clone()))
+        }
 
         detail_grid(
             detail_main(
@@ -325,20 +325,7 @@ pub async fn show(cx: &Cx) -> Result<impl View> {
                             }
                         )
                     )
-                    card(
-                        card_header(card_title("Famille"))
-                        card_content(
-                            if let Some((family_name, standing, link)) = &variant_of {
-                                <p class="text-sm">"Variante de " <a href=(link.clone()) class="underline underline-offset-4">(family_name.clone())</a></p>
-                                <p class="mb-3 text-sm text-muted-foreground">(standing.clone())</p>
-                                <form method="post" action=(href!(leave_family, ProductId(id.clone())))>
-                                    button(variant: ButtonVariant::Secondary, attrs: topcoat::view::attributes! { type="submit" }, "Retirer de la famille")
-                                </form>
-                            } else {
-                                <p class="text-sm text-muted-foreground">"Ce produit n'est la variante d'aucune famille. Il se place depuis la section Familles, par sa référence."</p>
-                            }
-                        )
-                    )
+                    versions_card(product: &product, family: versions.as_ref())
                     <form method="post" action=(href!(archive, ProductId(id.clone())))>
                         button(variant: ButtonVariant::Destructive, attrs: topcoat::view::attributes! { type="submit" class="w-full" }, "Archiver le produit")
                     </form>
@@ -513,20 +500,6 @@ pub async fn archive(cx: &Cx) -> Result<impl View> {
 #[derive(Debug, Deserialize)]
 pub struct CategoriseForm {
     category_id: String,
-}
-
-/// Takes the product out of the family it says it is in — also when the
-/// family never recorded its place.
-#[page(POST "./leave-family")]
-pub async fn leave_family(cx: &Cx) -> Result<impl View> {
-    let (id, product) = load(cx).await?;
-    let services = app_context::<AdminServices>(cx);
-    if let Some(family_id) = &product.family_id {
-        timada_catalog::Command(&services.executor)
-            .remove_variant(family_id, &id)
-            .await?;
-    }
-    Err::<(), _>(see_other(back(cx, &id)).into())
 }
 
 /// Files the product under a category; a category archived in the meantime

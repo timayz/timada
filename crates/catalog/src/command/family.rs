@@ -9,7 +9,7 @@ use crate::{
     value_object::{FamilyOption, OptionValue},
 };
 
-use super::{FamilyState, family_id};
+use super::family_id;
 
 /// How many options tell the variants of a family apart.
 pub const MAX_FAMILY_OPTIONS: usize = 3;
@@ -52,36 +52,6 @@ fn tidy_options(options: Vec<FamilyOption>) -> Result<Vec<FamilyOption>, Catalog
         return Err(CatalogError::TooManyOptions(MAX_FAMILY_OPTIONS));
     }
     Ok(kept)
-}
-
-/// The place `values` describe in `family`: one offered value per option, in
-/// the options' order; anything said about another option is dropped.
-fn place_in(
-    family: &FamilyState,
-    values: &[OptionValue],
-) -> Result<Vec<OptionValue>, CatalogError> {
-    if family.options.is_empty() {
-        return Err(CatalogError::Required("options"));
-    }
-    family
-        .options
-        .iter()
-        .map(|option| {
-            let value = values
-                .iter()
-                .find(|given| given.option.trim() == option.name)
-                .map(|given| given.value.trim())
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| CatalogError::MissingOptionValue(option.name.clone()))?;
-            if !option.values.iter().any(|offered| offered == value) {
-                return Err(CatalogError::UnknownOptionValue {
-                    option: option.name.clone(),
-                    value: value.to_owned(),
-                });
-            }
-            Ok(OptionValue::new(&option.name, value))
-        })
-        .collect()
 }
 
 impl<E: Executor> super::Command<'_, E> {
@@ -177,6 +147,32 @@ impl<E: Executor> super::Command<'_, E> {
         Ok(())
     }
 
+    /// Makes a product say which family it is in, its place in it still to
+    /// be chosen with [`Self::place_variant`] — the way a product page joins
+    /// a family whose options it will only then be shown. Returns whether
+    /// anything changed.
+    pub async fn join_family(
+        &self,
+        id: impl Into<String>,
+        product_id: impl Into<String>,
+    ) -> Result<bool, CatalogError> {
+        let family = self.load_open_family(id).await?;
+        let product = self.load_active(product_id).await?;
+        match product.family_id.as_deref() {
+            Some(here) if here == family.id => return Ok(false),
+            Some(_) => return Err(CatalogError::ProductInAnotherFamily),
+            None => {}
+        }
+        product
+            .write()?
+            .event(&ProductJoinedFamily {
+                family_id: family.id.clone(),
+            })
+            .commit(self.0)
+            .await?;
+        Ok(true)
+    }
+
     /// Makes a product a variant of the family, standing at `values` — or
     /// moves a variant there. Returns whether anything changed.
     ///
@@ -192,7 +188,7 @@ impl<E: Executor> super::Command<'_, E> {
     ) -> Result<bool, CatalogError> {
         let family = self.load_open_family(id).await?;
         let product = self.load_active(product_id).await?;
-        let values = place_in(&family, &values)?;
+        let values = family.place(&values)?;
         if product
             .family_id
             .as_ref()
@@ -200,11 +196,10 @@ impl<E: Executor> super::Command<'_, E> {
         {
             return Err(CatalogError::ProductInAnotherFamily);
         }
-        let taken = family
-            .variants
-            .iter()
-            .any(|variant| variant.product_id != product.id && variant.values == values);
-        if taken {
+        if family
+            .taken_by(&values)
+            .is_some_and(|variant| variant.product_id != product.id)
+        {
             return Err(CatalogError::VariantPlaceTaken);
         }
         let already_there = family

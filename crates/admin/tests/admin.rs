@@ -921,20 +921,26 @@ async fn what_operators_do_and_try_is_written_down() -> anyhow::Result<()> {
     // Reading leaves no trace; writing does, with how it went.
     let before = count_journal(&h.db, &everything).await?;
     h.router.handle(get("/admin/orders", Some(&owner))).await;
-    h.router.handle(get("/admin/families", Some(&owner))).await;
+    h.router
+        .handle(get("/admin/categories", Some(&owner)))
+        .await;
     assert_eq!(count_journal(&h.db, &everything).await?, before);
     let opened = h
         .router
         .handle(post(
-            "/admin/families/new",
-            "name=Casque+Aria&slug=",
+            "/admin/categories/new",
+            "name=Casques&slug=&parent_id=",
             Some(&owner),
         ))
         .await;
     assert_eq!(opened.status(), StatusCode::SEE_OTHER);
     let refused_by_the_page = h
         .router
-        .handle(post("/admin/families/new", "name=+&slug=", Some(&owner)))
+        .handle(post(
+            "/admin/categories/new",
+            "name=+&slug=&parent_id=",
+            Some(&owner),
+        ))
         .await;
     assert_eq!(refused_by_the_page.status(), StatusCode::OK);
     let rows = list_journal(&h.db, &everything).await?;
@@ -945,7 +951,7 @@ async fn what_operators_do_and_try_is_written_down() -> anyhow::Result<()> {
             rows[1].status,
             rows[1].method.as_str()
         ),
-        ("families/new", Outcome::Passed, 303, "POST")
+        ("categories/new", Outcome::Passed, 303, "POST")
     );
     assert_eq!((rows[0].outcome, rows[0].status), (Outcome::Passed, 200));
     assert_eq!(rows[0].role, Some(Role::Owner));
@@ -1039,7 +1045,7 @@ async fn what_operators_do_and_try_is_written_down() -> anyhow::Result<()> {
         "Connexion",
         "Refusé",
         "POST refund",
-        "Familles",
+        "Catégories",
         "Équipe",
     ] {
         assert!(page.contains(shown), "{shown}: {page}");
@@ -2613,7 +2619,7 @@ async fn categories_are_managed_and_products_filed_under_them() -> anyhow::Resul
 }
 
 #[tokio::test]
-async fn a_family_gathers_the_versions_of_an_article() -> anyhow::Result<()> {
+async fn a_product_keeps_its_own_versions() -> anyhow::Result<()> {
     let h = harness("admin").await?;
     let cookie = sign_in(&h, "admin").await?;
     let sync = || async {
@@ -2627,115 +2633,168 @@ async fn a_family_gathers_the_versions_of_an_article() -> anyhow::Result<()> {
             .await
     };
     let catalog = timada_catalog::Command(&h.executor);
-    let mut players = Vec::new();
-    for (sku, name) in [("NWA-N", "Baladeur noir"), ("NWA-A", "Baladeur argent")] {
-        let id = catalog
-            .create_product(timada_catalog::CreateProduct {
-                sku: sku.into(),
-                name: name.into(),
-                brand: timada_catalog::Brand {
-                    name: "Sony".into(),
-                    slug: "sony".into(),
-                },
-                category_path: vec!["Audio".into()],
-                short_description: String::new(),
-                warranty_months: 24,
-            })
-            .await?;
-        players.push(id);
-    }
+    let black_id = catalog
+        .create_product(timada_catalog::CreateProduct {
+            sku: "NWA-N".into(),
+            name: "Baladeur noir".into(),
+            brand: timada_catalog::Brand {
+                name: "Sony".into(),
+                slug: "sony".into(),
+            },
+            category_path: vec!["Audio".into()],
+            short_description: "Le baladeur".into(),
+            warranty_months: 24,
+        })
+        .await?;
+    catalog
+        .describe_product(
+            &black_id,
+            timada_catalog::DescribeProduct {
+                long_description: "Un son pur.".into(),
+                key_features: vec!["Hi-Res".into()],
+            },
+        )
+        .await?;
+    timada_pricing::Command(&h.executor)
+        .list_price(timada_pricing::ListPrice {
+            product_id: black_id.clone(),
+            price_incl_tax: timada_core::Money::new(29_900, "EUR"),
+            vat_rate_bp: 2000,
+            eco_participation: timada_core::Money::new(20, "EUR"),
+        })
+        .await?;
     sync().await?;
+    let black = format!("/admin/products/{black_id}");
+    let shown = |page: &str| {
+        let page = page.to_owned();
+        let cookie = cookie.clone();
+        let h = &h;
+        async move { text(h.router.handle(get(&page, Some(&cookie))).await).await }
+    };
 
-    let empty = text(h.router.handle(get("/admin/families", Some(&cookie))).await).await?;
-    assert!(empty.contains("Aucune famille."), "{empty}");
-    assert!(empty.contains(">Familles<"), "{empty}");
-
-    let created = h
+    // Sold in one version, nothing else in the navigation: the product is
+    // declined from its own page, under a common name.
+    let page = shown(&black).await?;
+    assert!(!page.contains(">Familles<"), "{page}");
+    assert!(page.contains("une version"), "{page}");
+    assert!(page.contains("value=\"Baladeur noir\""), "{page}");
+    let declined = h
         .router
         .handle(post(
-            "/admin/families/new",
-            "name=Baladeur+NW-A&slug=",
+            &format!("{black}/versions/define"),
+            "name=Baladeur+NW-A&options=Couleur+%3A+Noir%2C+Argent%0D%0ACapacit%C3%A9+%3A+64+Go%2C+128+Go",
             Some(&cookie),
         ))
         .await;
-    let family = timada_catalog::family_id("baladeur-nw-a");
-    let page = format!("/admin/families/{family}");
-    assert_eq!(location(&created), page);
-    let taken = h
-        .router
-        .handle(post(
-            "/admin/families/new",
-            "name=Autre&slug=baladeur-nw-a",
-            Some(&cookie),
-        ))
-        .await;
-    assert!(text(taken).await?.contains("déjà celui d"));
+    assert_eq!(location(&declined), black);
+    let page = shown(&black).await?;
+    assert!(page.contains("Couleur : Noir, Argent"), "{page}");
+    assert!(page.contains("64 Go, 128 Go"), "{page}");
+    assert!(page.contains("value=\"Baladeur NW-A\""), "{page}");
+    assert!(page.contains("À placer"), "{page}");
+    assert!(page.contains("0 version(s)"), "{page}");
 
-    // Nothing to stand on before the options are said.
-    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
-    assert!(
-        shown.contains("Dites d&#39;abord") || shown.contains("Dites d'abord"),
-        "{shown}"
-    );
-    let defined = h
-        .router
-        .handle(post(
-            &format!("{page}/options"),
-            "options=Couleur+%3A+Noir%2C+Argent%0D%0ACapacit%C3%A9+%3A+64+Go",
-            Some(&cookie),
-        ))
-        .await;
-    assert_eq!(location(&defined), page);
-    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
-    assert!(shown.contains("Couleur : Noir, Argent"), "{shown}");
-    assert!(shown.contains("name=\"value_1\""), "{shown}");
-
-    // Placed by reference; what the catalog refuses comes back as a message.
-    let placed = h
-        .router
-        .handle(post(
-            &format!("{page}/place"),
-            "sku=NWA-N&value_0=Noir&value_1=64+Go",
-            Some(&cookie),
-        ))
-        .await;
-    assert_eq!(location(&placed), page);
+    // Placed; what the catalog refuses comes back as a message.
     for (form, told) in [
-        ("sku=NWA-A&value_0=Noir&value_1=64+Go", "occupe"),
-        ("sku=NOPE&value_0=Argent&value_1=64+Go", "Aucun produit"),
-        ("sku=NWA-A&value_0=Rose&value_1=64+Go", "pas une valeur"),
-        ("sku=NWA-A&value_0=Argent", "Choisissez une valeur"),
+        ("value_0=Rose&value_1=64+Go", "pas une valeur"),
+        ("value_0=Noir", "Choisissez une valeur"),
     ] {
         let refused = h
             .router
-            .handle(post(&format!("{page}/place"), form, Some(&cookie)))
+            .handle(post(
+                &format!("{black}/versions/place"),
+                &format!("product_id={black_id}&{form}"),
+                Some(&cookie),
+            ))
             .await;
         let back = location(&refused);
         assert!(
-            back.starts_with(&format!("{page}?error=")),
+            back.starts_with(&format!("{black}?error=")),
             "{form}: {back}"
         );
-        let shown = text(h.router.handle(get(&back, Some(&cookie))).await).await?;
-        assert!(shown.contains(told), "{form}: {shown}");
+        assert!(shown(&back).await?.contains(told), "{form}");
     }
     h.router
         .handle(post(
-            &format!("{page}/place"),
-            "sku=NWA-A&value_0=Argent&value_1=64+Go",
+            &format!("{black}/versions/place"),
+            &format!("product_id={black_id}&value_0=Noir&value_1=64+Go"),
             Some(&cookie),
         ))
         .await;
-    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
-    assert!(shown.contains("Baladeur noir"), "{shown}");
-    assert!(shown.contains("Baladeur argent"), "{shown}");
-    assert!(shown.contains("2 variante(s)"), "{shown}");
+    let page = shown(&black).await?;
+    assert!(!page.contains("À placer"), "{page}");
+    assert!(page.contains("1 version(s)"), "{page}");
+    assert!(page.contains("value=\"Noir\" selected"), "{page}");
 
-    // A value a variant stands on stays.
+    // A version is added here: a product born from this one, placed at
+    // once; a taken place, a taken reference are refused.
+    let occupied = h
+        .router
+        .handle(post(
+            &format!("{black}/versions/add"),
+            "sku=NWA-A&name=Baladeur+argent&value_0=Noir&value_1=64+Go",
+            Some(&cookie),
+        ))
+        .await;
+    assert!(shown(&location(&occupied)).await?.contains("occupe"));
+    let added = h
+        .router
+        .handle(post(
+            &format!("{black}/versions/add"),
+            "sku=NWA-A&name=Baladeur+argent&value_0=Argent&value_1=64+Go",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&added), black);
+    let twice = h
+        .router
+        .handle(post(
+            &format!("{black}/versions/add"),
+            "sku=NWA-A&name=Encore&value_0=Argent&value_1=128+Go",
+            Some(&cookie),
+        ))
+        .await;
+    assert!(shown(&location(&twice)).await?.contains("déjà celle d"));
+    let silver_id = timada_catalog::product_id("NWA-A");
+    let silver = format!("/admin/products/{silver_id}");
+    sync().await?;
+    let page = shown(&black).await?;
+    assert!(page.contains("2 version(s)"), "{page}");
+    assert!(page.contains("Baladeur argent"), "{page}");
+    assert!(page.contains(&format!("href=\"{silver}\"")), "{page}");
+    let born = timada_catalog::load_product_page(&h.executor, &silver_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no silver"))?;
+    assert_eq!(born.brand.name, "Sony");
+    assert_eq!(born.short_description, "Le baladeur");
+    assert_eq!(born.long_description, "Un son pur.");
+    assert_eq!(born.key_features, ["Hi-Res"]);
+    let priced =
+        timada_pricing::load_product_price(&h.executor, timada_pricing::price_id(&silver_id))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no price"))?;
+    assert_eq!(priced.price_incl_tax.minor, 29_900);
+    assert_eq!(priced.vat_rate_bp, 2000);
+
+    // The other version's page keeps the same versions — and either page
+    // moves any of them, renames the article, or narrows nothing in use.
+    let page = shown(&silver).await?;
+    assert!(page.contains("2 version(s)"), "{page}");
+    assert!(page.contains("Baladeur noir"), "{page}");
+    let moved = h
+        .router
+        .handle(post(
+            &format!("{silver}/versions/place"),
+            &format!("product_id={black_id}&value_0=Noir&value_1=64+Go"),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&moved), silver);
     let narrowed = h
         .router
         .handle(post(
-            &format!("{page}/options"),
-            "options=Couleur+%3A+Noir%0D%0ACapacit%C3%A9+%3A+64+Go",
+            &format!("{black}/versions/define"),
+            "name=Baladeur+NW-A&options=Couleur+%3A+Noir%0D%0ACapacit%C3%A9+%3A+64+Go",
             Some(&cookie),
         ))
         .await;
@@ -2744,63 +2803,67 @@ async fn a_family_gathers_the_versions_of_an_article() -> anyhow::Result<()> {
         "{}",
         location(&narrowed)
     );
-
-    sync().await?;
-    let list = text(h.router.handle(get("/admin/families", Some(&cookie))).await).await?;
-    assert!(list.contains("Baladeur NW-A"), "{list}");
-    assert!(list.contains("Couleur, Capacité"), "{list}");
-
-    // The product's own page says where it stands, and lets it leave.
-    let silver = &players[1];
-    let product_page = text(
-        h.router
-            .handle(get(&format!("/admin/products/{silver}"), Some(&cookie)))
-            .await,
-    )
-    .await?;
-    assert!(product_page.contains("Variante de"), "{product_page}");
-    assert!(
-        product_page.contains("Couleur : Argent · Capacité : 64 Go"),
-        "{product_page}"
-    );
-    let left = h
+    let renamed = h
         .router
         .handle(post(
-            &format!("/admin/products/{silver}/leave-family"),
-            "",
+            &format!("{black}/versions/define"),
+            "name=Baladeur+NW-A+II&options=Couleur+%3A+Noir%2C+Argent%0D%0ACapacit%C3%A9+%3A+64+Go%2C+128+Go",
             Some(&cookie),
         ))
         .await;
-    assert_eq!(location(&left), format!("/admin/products/{silver}"));
-    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
-    assert!(shown.contains("1 variante(s)"), "{shown}");
+    assert_eq!(location(&renamed), black);
+    assert!(shown(&silver).await?.contains("value=\"Baladeur NW-A II\""));
 
-    // Dissolved only once empty.
-    let kept = h
+    // Removed from here, a version is a product on its own again; the last
+    // one out ends the declination, and the product can be declined anew.
+    let removed = h
         .router
-        .handle(post(&format!("{page}/dissolve"), "", Some(&cookie)))
+        .handle(post(
+            &format!("{black}/versions/remove"),
+            &format!("product_id={silver_id}"),
+            Some(&cookie),
+        ))
         .await;
-    assert!(location(&kept).contains("error="), "{}", location(&kept));
+    assert_eq!(location(&removed), black);
+    assert!(shown(&silver).await?.contains("une version"));
+    assert!(shown(&black).await?.contains("1 version(s)"));
     h.router
         .handle(post(
-            &format!("{page}/remove"),
-            &format!("product_id={}", players[0]),
+            &format!("{black}/versions/remove"),
+            &format!("product_id={black_id}"),
             Some(&cookie),
         ))
         .await;
-    let dissolved = h
+    assert!(shown(&black).await?.contains("une version"));
+    sync().await?;
+    let family = timada_catalog::family_id("baladeur-nw-a");
+    let ended = timada_catalog::family_by_id(&h.db, &family).await?;
+    assert!(ended.as_ref().is_some_and(|row| row.dissolved), "{ended:?}");
+    // The word is taken by the family over: the reference tells them apart.
+    let again = h
         .router
-        .handle(post(&format!("{page}/dissolve"), "", Some(&cookie)))
+        .handle(post(
+            &format!("{black}/versions/define"),
+            "name=Baladeur+NW-A&options=Couleur+%3A+Noir",
+            Some(&cookie),
+        ))
         .await;
-    assert_eq!(location(&dissolved), page);
-    let shown = text(h.router.handle(get(&page, Some(&cookie))).await).await?;
-    assert!(shown.contains("Dissoute"), "{shown}");
+    assert_eq!(location(&again), black);
+    let reopened = catalog
+        .load_family(timada_catalog::family_id("baladeur-nw-a-nwa-n"))
+        .await?;
+    assert!(reopened.is_some_and(|f| !f.dissolved && f.variants.is_empty()));
 
-    let missing = h
+    // A form for a product not declined comes from a stale page.
+    let stale = h
         .router
-        .handle(get("/admin/families/nope", Some(&cookie)))
+        .handle(post(
+            &format!("{silver}/versions/add"),
+            "sku=X&name=X&value_0=Noir",
+            Some(&cookie),
+        ))
         .await;
-    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert!(shown(&location(&stale)).await?.contains("plus décliné"));
     Ok(())
 }
 

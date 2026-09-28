@@ -310,6 +310,39 @@ impl FamilyState {
                 .is_some_and(|value| option.values.iter().any(|offered| offered == value))
         })
     }
+
+    /// The place `values` describe: one offered value per option, in the
+    /// options' order; anything said about another option is dropped. What
+    /// [`Command::place_variant`] checks, for a caller that wants to know
+    /// before doing anything else.
+    pub fn place(&self, values: &[OptionValue]) -> Result<Vec<OptionValue>, CatalogError> {
+        if self.options.is_empty() {
+            return Err(CatalogError::Required("options"));
+        }
+        self.options
+            .iter()
+            .map(|option| {
+                let value = values
+                    .iter()
+                    .find(|given| given.option.trim() == option.name)
+                    .map(|given| given.value.trim())
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| CatalogError::MissingOptionValue(option.name.clone()))?;
+                if !option.values.iter().any(|offered| offered == value) {
+                    return Err(CatalogError::UnknownOptionValue {
+                        option: option.name.clone(),
+                        value: value.to_owned(),
+                    });
+                }
+                Ok(OptionValue::new(&option.name, value))
+            })
+            .collect()
+    }
+
+    /// The variant standing at `place`, as [`Self::place`] gives it.
+    pub fn taken_by(&self, place: &[OptionValue]) -> Option<&FamilyVariant> {
+        self.variants.iter().find(|variant| variant.values == place)
+    }
 }
 
 // Every event is folded, so the version `write()` relies on is exact.
