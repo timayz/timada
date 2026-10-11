@@ -17,7 +17,19 @@ pub struct Config {
     /// an Accord cluster over TCP.
     #[serde(default)]
     pub cluster: Option<ClusterConfig>,
+    #[serde(default)]
+    pub evento: EventoConfig,
     pub monitoring: MonitoringConfig,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct EventoConfig {
+    /// Routing key stamped on every new aggregate written by this node and
+    /// inherited by its subscriptions, e.g. a region such as `eu-west-1`.
+    /// Subscriptions that must see every region call `.any_routing_key()`.
+    /// Absent: no routing key.
+    #[serde(default)]
+    pub routing_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

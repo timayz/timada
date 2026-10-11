@@ -23,6 +23,13 @@ max_connections = 3
 # # Bind address for inbound peer traffic; defaults to peers[node_id].
 # listen = "0.0.0.0:7000"
 
+# Routing key stamped on every new aggregate this node writes and inherited by
+# its subscriptions; name it after the region, e.g. "eu-west-1" or "us-east-3".
+# Subscriptions that must process every region call `.any_routing_key()`.
+# Omit the section (or the key) for no routing key.
+# [evento]
+# routing_key = "eu-west-1"
+
 [monitoring]
 log_level = "info,sqlx=warn"
 log_json = false

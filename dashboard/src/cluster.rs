@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use evento::Evento;
 use evento_accord::{
     AccordExecutor, DataStore, ExecutorDataStore, HybridLogicalClock, InMemoryNetwork, Journal,
     MessageSink, Node, NodeId, StaticTopology, TcpTransport, Topology,
@@ -24,8 +25,9 @@ use crate::config::ClusterConfig;
 
 /// Accord over a read/write pair of SQLite pools: reads and subscription
 /// polling on the read pool, writes, replication and acknowledgements on the
-/// single-connection write pool.
-pub type Executor = AccordExecutor<RwSqlite>;
+/// single-connection write pool. Type-erased by [`Evento`], which also carries
+/// the node's default routing key.
+pub type Executor = Evento;
 
 /// Stability margin subtracted from DB time to form the subscription watermark
 /// (default 1s). Single-host SQLite, so it only needs to exceed the worst-case
@@ -34,8 +36,11 @@ pub type Executor = AccordExecutor<RwSqlite>;
 const STABLE_MARGIN: Duration = Duration::from_millis(100);
 
 /// Builds the executor over the two pools. Single node when `cluster` is `None`.
+/// `routing_key` (a region name, typically) is stamped on every new aggregate
+/// this node writes.
 pub async fn build(
     cluster: Option<&ClusterConfig>,
+    routing_key: Option<&str>,
     read_pool: SqlitePool,
     write_pool: SqlitePool,
 ) -> Result<Executor> {
@@ -57,7 +62,12 @@ pub async fn build(
     };
     node.start_recovery();
 
-    Ok(AccordExecutor::new(node, rw))
+    let mut executor = Evento::new(AccordExecutor::<RwSqlite>::new(node, rw));
+    if let Some(key) = routing_key {
+        tracing::info!(routing_key = key, "evento: default routing key");
+        executor = executor.default_routing_key(key);
+    }
+    Ok(executor)
 }
 
 fn single_node(store: Arc<dyn DataStore>, journal: Arc<dyn Journal>) -> Node {
