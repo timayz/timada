@@ -1,0 +1,17 @@
+[package]
+name = "timada-identity"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+evento.workspace = true
+bitcode.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+sqlx.workspace = true

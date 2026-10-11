@@ -2799,6 +2799,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-identity"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "time"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
