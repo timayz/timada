@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::config::Config;
 use crate::db::{self, ReadPool, WritePool};
-use crate::{app, cluster};
+use crate::{app, auth, cluster};
 
 pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> Result<()> {
     let host = host.unwrap_or_else(|| config.server.host.clone());
@@ -21,6 +21,12 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     )
     .await?;
 
+    // Sign-in providers are resolved through discovery now, so a bad issuer
+    // or network stops the server with the provider's name instead of
+    // failing a sign-in later.
+    let providers = auth::oidc::Providers::discover(&config.auth, &config.server.url).await?;
+    let webauthn = auth::webauthn::build(&config.auth, &config.server.url)?;
+
     // Subscriptions start here, before the router takes requests. Keep each
     // handle and `shutdown()` them after `topcoat::serve` returns.
 
@@ -28,6 +34,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         executor,
         ReadPool(read_pool.clone()),
         WritePool(write_pool.clone()),
+        providers,
+        webauthn,
         config,
     );
 

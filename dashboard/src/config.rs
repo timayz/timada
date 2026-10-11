@@ -4,6 +4,7 @@
 //! the TOML file given with `--config` / `TIMADA_CONFIG`, then the defaults
 //! set in [`Config::load`]. `config/default.toml` documents the full shape.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use config::{ConfigError, Environment, File};
@@ -17,7 +18,39 @@ pub struct Config {
     /// an Accord cluster over TCP.
     #[serde(default)]
     pub cluster: Option<ClusterConfig>,
+    pub auth: AuthConfig,
     pub monitoring: MonitoringConfig,
+}
+
+/// Sign-in settings. The relying-party id and origin for passkeys and the
+/// OIDC redirect URIs derive from `server.url`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct AuthConfig {
+    /// Encrypts the cookies that carry sign-in attempts still in progress
+    /// (OIDC state and PKCE verifier, passkey challenges). Fed to the cookie
+    /// crate's `Key::derive_from`, which needs at least 32 bytes. Sessions are
+    /// not affected by a rotation: only in-flight sign-ins are interrupted.
+    pub secret_key: String,
+    /// How long a signed-in session stays valid, in seconds.
+    pub session_lifetime_secs: u64,
+    /// Relying-party name the browser shows when creating a passkey.
+    pub rp_name: String,
+    /// Sign-in providers keyed by the name used in URLs
+    /// (`/auth/oauth2/<name>`). Sorted so the login page is stable.
+    #[serde(default)]
+    pub providers: BTreeMap<String, ProviderConfig>,
+}
+
+/// One OpenID Connect provider. Endpoints come from the issuer's discovery
+/// document at startup.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ProviderConfig {
+    /// Button label, e.g. `Google`.
+    pub label: String,
+    /// Issuer URL, e.g. `https://accounts.google.com`.
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -74,6 +107,8 @@ impl Config {
             .set_default("server.port", 3000)?
             .set_default("database.url", "sqlite:data/timada.db")?
             .set_default("database.max_connections", 3)?
+            .set_default("auth.session_lifetime_secs", 14 * 24 * 60 * 60)?
+            .set_default("auth.rp_name", "Timada")?
             .set_default("monitoring.log_level", "info,sqlx=warn")?
             .set_default("monitoring.log_json", false)?
             .set_default("monitoring.log_target", true)?
@@ -91,8 +126,39 @@ impl Config {
         if let Some(cluster) = &config.cluster {
             cluster.validate()?;
         }
+        config.auth.validate()?;
 
         Ok(config)
+    }
+}
+
+impl AuthConfig {
+    /// The cookie crate panics on a short key, so reject it here with a
+    /// readable message. Provider names become URL segments.
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.secret_key.len() < 32 {
+            return Err(ConfigError::Message(
+                "auth.secret_key must be at least 32 characters (set TIMADA__AUTH__SECRET_KEY)"
+                    .into(),
+            ));
+        }
+        if self.session_lifetime_secs == 0 {
+            return Err(ConfigError::Message(
+                "auth.session_lifetime_secs must be greater than 0".into(),
+            ));
+        }
+        for name in self.providers.keys() {
+            let valid = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+            if !valid {
+                return Err(ConfigError::Message(format!(
+                    "auth.providers.{name}: provider names use lowercase letters, digits, - and _"
+                )));
+            }
+        }
+        Ok(())
     }
 }
 

@@ -4,5 +4,16 @@
 [database]
 url = "sqlite:data/timada.db"
 
+[auth]
+# Development only. Production deployments set TIMADA__AUTH__SECRET_KEY.
+secret_key = "dev-only-secret-key-change-me-before-deploying-anywhere"
+# Sign-in providers for local testing; keep the client secret out of this file:
+# TIMADA__AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET=... make dev
+# [auth.providers.google]
+# label = "Google"
+# issuer = "https://accounts.google.com"
+# client_id = ""
+# client_secret = ""
+
 [monitoring]
 log_level = "info,timada_dashboard=debug"
