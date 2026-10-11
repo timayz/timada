@@ -14,15 +14,11 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal"] }
 topcoat = { version = "=0.10.0", features = ["tailwind", "anyhow"] }
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.19", features = ["sqlite"] }
-evento = { version = "=2.0.0-alpha.31", features = ["sqlite"] }
-evento-sql = { version = "=2.0.0-alpha.31", features = ["sqlite", "accord"] }
-evento-sql-migrator = { version = "=2.0.0-alpha.31", features = ["sqlite", "accord"] }
-# Cargo.lock pins tokio-util to 0.7.19: 0.7.20 added `Encoder<&[u8]>` for
-# `LengthDelimitedCodec`, which makes `framed.flush()` in evento-accord
-# 2.0.0-alpha.31 (`src/tcp.rs:419`) ambiguous and fail to compile. Drop the pin
-# (`cargo update -p tokio-util`) once evento ships the fix.
-evento-accord = "=2.0.0-alpha.31"
-evento-lock = "=2.0.0-alpha.31"
+evento = { version = "=2.0.0-alpha.32", features = ["sqlite"] }
+evento-sql = { version = "=2.0.0-alpha.32", features = ["sqlite", "accord"] }
+evento-sql-migrator = { version = "=2.0.0-alpha.32", features = ["sqlite", "accord"] }
+evento-accord = "=2.0.0-alpha.32"
+evento-lock = "=2.0.0-alpha.32"
 serde = { version = "1.0", features = ["derive"] }
 anyhow = "1.0"
 thiserror = "2.0"
