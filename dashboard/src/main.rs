@@ -1,8 +1,10 @@
 mod app;
+mod auth;
 mod cli;
 mod cluster;
 mod config;
 mod db;
+mod ui;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

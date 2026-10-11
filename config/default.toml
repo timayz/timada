@@ -18,6 +18,28 @@ url = "sqlite:data/timada.db"
 # Pool size for `serve`; sqlx-sqlite runs one OS thread per open connection.
 max_connections = 3
 
+[auth]
+# Protects sign-in attempts that are still in progress (the state carried in
+# the browser between the first and last step). At least 32 characters; set it
+# through TIMADA__AUTH__SECRET_KEY in production rather than in this file.
+# Rotating it only interrupts sign-ins in progress.
+# secret_key = ""
+# How long a signed-in session stays valid, in seconds (14 days).
+session_lifetime_secs = 1209600
+# Name the browser shows when someone creates a passkey for this site.
+rp_name = "Timada"
+
+# Sign-in providers (OpenID Connect). One table per provider; the table key is
+# the name used in URLs (/auth/oauth2/<name>): lowercase letters, digits, - and _.
+# Register "<server.url>/auth/oauth2/<name>/callback" as the redirect URI at the
+# provider. A provider defined only through environment variables needs all
+# four keys set (TIMADA__AUTH__PROVIDERS__GOOGLE__LABEL and so on).
+# [auth.providers.google]
+# label = "Google"
+# issuer = "https://accounts.google.com"
+# client_id = ""
+# client_secret = ""   # or TIMADA__AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET
+
 # Multi-node cluster. Omit the whole section to run a single node (no extra
 # ports). Writes need a majority of nodes, so a 3-node cluster keeps working
 # with one node down. `node_id` is this node's index into `peers`.

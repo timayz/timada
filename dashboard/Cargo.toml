@@ -19,6 +19,14 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
 config.workspace = true
+timada-identity = { path = "../crates/identity" }
+openidconnect.workspace = true
+webauthn-rs.workspace = true
+webauthn-rs-proto.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+ulid.workspace = true
+uuid.workspace = true
 
 [build-dependencies]
 topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind"] }

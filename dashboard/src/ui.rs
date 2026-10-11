@@ -1,0 +1,74 @@
+//! Shared page furniture.
+
+use topcoat::{
+    Result,
+    asset::asset,
+    tailwind,
+    view::{Child, View, component, view},
+};
+
+/// The HTML document every page renders into.
+#[component]
+pub async fn document(title: &str, #[default] child: Child<'_>) -> Result<impl View> {
+    Ok(view! {
+        <!DOCTYPE html>
+        <html lang="en">
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>(title)</title>
+                <link rel="stylesheet" href=(tailwind::stylesheet!())>
+                <script type="module" src=(asset!("./app/auth/auth.js"))></script>
+                topcoat::dev::script()
+            </head>
+            <body class="min-h-screen bg-neutral-50 text-neutral-900">
+                <main class="mx-auto max-w-3xl p-8">
+                    (child)
+                </main>
+            </body>
+        </html>
+    })
+}
+
+/// A notice above a page's content: `error` codes from a redirect, or a
+/// confirmation message.
+#[component]
+pub async fn notice(
+    #[default] error: Option<&str>,
+    #[default] message: Option<&str>,
+) -> Result<impl View> {
+    Ok(view! {
+        if let Some(error) = error {
+            <p role="alert" class="mb-4 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+                (describe_error(error))
+            </p>
+        }
+        if let Some(message) = message {
+            <p role="status" class="mb-4 rounded border border-green-300 bg-green-50 p-3 text-sm text-green-800">
+                (message)
+            </p>
+        }
+        <p role="alert" data-auth-error="" class="mb-4 hidden rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"></p>
+    })
+}
+
+/// Error codes travel in the query string; the wording lives here.
+pub fn describe_error(code: &str) -> &'static str {
+    match code {
+        "not_registered" => "This account is not registered here yet.",
+        "already_registered" => "This account is already registered. Sign in instead.",
+        "already_linked" => "This account is already linked to another user.",
+        "session_changed" => {
+            "Your session changed while this step was in progress. Please try again."
+        }
+        "signed_in" => "You are already signed in.",
+        "sign_in_required" => "Please sign in first.",
+        "last_method" => "You cannot remove your only way to sign in.",
+        "too_many_passkeys" => "This account has reached its passkey limit.",
+        "expired" => "This sign-in attempt expired. Please start again.",
+        "provider" => "The sign-in provider returned an error.",
+        "unknown_provider" => "Unknown sign-in provider.",
+        "not_allowed" => "You are not allowed to do that.",
+        _ => "Something went wrong. Please try again.",
+    }
+}
