@@ -25,17 +25,8 @@ impl<E: Executor> super::Command<E> {
             return Err(IdentityError::LastSignInMethod);
         }
 
-        if let Some(index) = self.load_oauth2_account(provider, provider_user_id).await? {
-            if index.user_id != user_id {
-                return Err(IdentityError::Forbidden);
-            }
-            index
-                .write()?
-                .routing_key_opt(routing_key.clone())
-                .event(&Unlinked)
-                .commit(&self.0)
-                .await?;
-        }
+        self.unlink_oauth2_index(user_id, provider, provider_user_id, routing_key.clone())
+            .await?;
 
         self.append_user(user_id, routing_key, |user, builder| {
             if !user.has_oauth2_account(provider, provider_user_id) {
@@ -51,6 +42,32 @@ impl<E: Executor> super::Command<E> {
             Ok(())
         })
         .await?;
+        Ok(())
+    }
+}
+
+impl<E: Executor> super::Command<E> {
+    /// Frees the index entry of a provider identity owned by `user_id`, so it
+    /// can be registered or linked again. A missing or already freed entry is
+    /// fine; one owned by someone else is `Forbidden`.
+    pub(crate) async fn unlink_oauth2_index(
+        &self,
+        user_id: &str,
+        provider: &str,
+        provider_user_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), IdentityError> {
+        if let Some(index) = self.load_oauth2_account(provider, provider_user_id).await? {
+            if index.user_id != user_id {
+                return Err(IdentityError::Forbidden);
+            }
+            index
+                .write()?
+                .routing_key_opt(routing_key)
+                .event(&Unlinked)
+                .commit(&self.0)
+                .await?;
+        }
         Ok(())
     }
 }

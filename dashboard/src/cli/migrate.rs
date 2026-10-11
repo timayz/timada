@@ -25,9 +25,7 @@ pub async fn migrate(config: Config) -> Result<()> {
         .execute(&mut *conn)
         .await?;
 
-    db::migrator::<sqlx::Sqlite>()?
-        .run(&mut *conn, &Plan::apply_all())
-        .await?;
+    db::migrator()?.run(&mut *conn, &Plan::apply_all()).await?;
     drop(conn);
     pool.close().await;
 

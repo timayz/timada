@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
-use sqlx_migrator::Migrator;
+use sqlx_migrator::{Info, Migrator};
 
 /// The read-only pool, as registered in topcoat's app context:
 /// `let db: &ReadPool = app_context(cx);` then use it as a `SqlitePool`.
@@ -135,17 +135,9 @@ pub fn prepare_database_dir(database_url: &str) -> Result<()> {
 }
 
 /// evento's schema (events, snapshots, subscribers, Accord journal) followed by
-/// the application's own migrations. Add those with `add_migrations` here.
-pub fn migrator<DB: sqlx::Database>() -> Result<Migrator<DB>, sqlx_migrator::Error>
-where
-    evento_sql_migrator::InitMigration: sqlx_migrator::Migration<DB>,
-    evento_sql_migrator::M0002: sqlx_migrator::Migration<DB>,
-    evento_sql_migrator::M0003: sqlx_migrator::Migration<DB>,
-    evento_sql_migrator::M0004: sqlx_migrator::Migration<DB>,
-    evento_sql_migrator::M0005: sqlx_migrator::Migration<DB>,
-    evento_sql_migrator::M0006: sqlx_migrator::Migration<DB>,
-    evento_sql_migrator::M0007: sqlx_migrator::Migration<DB>,
-    evento_sql_migrator::AccordMigration: sqlx_migrator::Migration<DB>,
-{
-    evento_sql_migrator::new::<DB>()
+/// the bounded contexts' read models.
+pub fn migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
+    let mut migrator = evento_sql_migrator::new::<sqlx::Sqlite>()?;
+    migrator.add_migrations(timada_identity::migrations())?;
+    Ok(migrator)
 }

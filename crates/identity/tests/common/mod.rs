@@ -3,6 +3,7 @@
 use evento::Executor;
 use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx_migrator::Info;
 use timada_identity::{
     Command, CompleteOAuth2, LoginContext, OAuth2Mode, RegisterPasskey, RegistrationMode,
     SignInPasskey, VerifiedPasskey,
@@ -10,6 +11,12 @@ use timada_identity::{
 
 /// A fresh in-memory event store, as in evento's `bank-axum-sqlite` example.
 pub async fn executor() -> evento::Sqlite {
+    executor_with_pool().await.0
+}
+
+/// The store plus the pool it runs on, with the read-model schema applied,
+/// for tests that drive the subscription.
+pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
     let options = SqliteConnectOptions::new()
         .filename(":memory:")
         .create_if_missing(true);
@@ -19,13 +26,16 @@ pub async fn executor() -> evento::Sqlite {
         .await
         .unwrap();
     let mut conn = pool.acquire().await.unwrap();
-    evento::sql_migrator::new::<sqlx::Sqlite>()
-        .unwrap()
+    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
+    migrator
+        .add_migrations(timada_identity::migrations())
+        .unwrap();
+    migrator
         .run(&mut *conn, &evento::migrator::Plan::apply_all())
         .await
         .unwrap();
     drop(conn);
-    pool.into()
+    (pool.clone().into(), pool)
 }
 
 pub async fn command() -> Command<evento::Sqlite> {

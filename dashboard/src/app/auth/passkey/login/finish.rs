@@ -49,7 +49,10 @@ pub async fn finish(cx: &Cx, Json(credential): Json<PublicKeyCredential>) -> Res
         .await
         .map_err(topcoat::Error::from_anyhow)?
     else {
-        return Err(unauthorized().into());
+        // Removed, or its account deleted: "not registered" is the honest answer.
+        return Err(into_error(
+            timada_identity::IdentityError::UnknownCredential,
+        ));
     };
     let mut passkey =
         passkey_from_json(&stored.passkey_json).map_err(topcoat::Error::from_anyhow)?;
