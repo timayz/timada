@@ -6,6 +6,7 @@ pub mod login;
 pub mod logout;
 pub mod oauth2;
 pub mod passkey;
+pub mod sessions;
 
 use timada_identity::IdentityError;
 use topcoat::{context::Cx, router::href};
@@ -52,4 +53,23 @@ pub fn account_url(cx: &Cx, error: Option<&str>, message: Option<&str>) -> Strin
 
 pub fn home_url(cx: &Cx) -> String {
     href!(crate::app::home).resolve(cx)
+}
+
+pub fn home_url_with_message(cx: &Cx, message: &str) -> String {
+    href!(crate::app::home)
+        .query(Flash {
+            error: None,
+            message: Some(message),
+        })
+        .resolve(cx)
+}
+
+/// Where a sign-in lands: home, with a notice when the browser was signed in
+/// as someone else before.
+pub fn signed_in_url(cx: &Cx, label: &str, switched: bool) -> String {
+    if switched {
+        home_url_with_message(cx, &format!("You are now signed in as {label}."))
+    } else {
+        home_url(cx)
+    }
 }

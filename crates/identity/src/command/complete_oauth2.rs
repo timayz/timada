@@ -5,6 +5,7 @@ use crate::aggregator::{OAuth2AccountLinked, Registered, SignedIn};
 use crate::error::IdentityError;
 use crate::value_object::{LoginContext, OAuth2Mode, ProviderIdentity, SignInMethod};
 
+use super::UserState;
 use super::sign_in::SignInFacts;
 
 /// A verified OIDC callback.
@@ -21,17 +22,24 @@ pub struct CompleteOAuth2 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OAuth2Outcome {
     pub user_id: String,
+    /// Display name of that user, for the "signed in as" notice.
+    pub label: String,
     /// A new user was registered.
     pub created: bool,
     /// The identity was linked to an existing user; no sign-in happened.
     pub linked: bool,
+    /// The browser was signed in as this other user when it signed in; the
+    /// web layer replaces that session.
+    pub switched_from: Option<String>,
 }
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Decides what a verified provider identity means for the current
-    /// browser, exactly as oauth2-passkey does: by mode, by whether a session
-    /// exists, and by whether the identity is already registered.
+    /// browser: by mode, by whether a session exists, and by whether the
+    /// identity is already registered. Signing in to a registered identity
+    /// while signed in as someone else switches accounts; creating an account
+    /// while signed in is refused.
     pub async fn complete_oauth2(
         &self,
         cmd: CompleteOAuth2,
@@ -54,37 +62,49 @@ impl<E: Executor> super::Command<E> {
                 {
                     return Err(IdentityError::AlreadyLinkedToOtherUser);
                 }
-                self.link_oauth2(user_id, &cmd.identity, routing_key)
+                let user = self
+                    .link_oauth2(user_id, &cmd.identity, routing_key)
                     .await?;
                 Ok(OAuth2Outcome {
                     user_id: user_id.to_owned(),
+                    label: user.label,
                     created: false,
                     linked: true,
+                    switched_from: None,
                 })
             }
-            (OAuth2Mode::Login | OAuth2Mode::CreateUserOrLogin, None, Some(existing)) => {
-                self.record_sign_in(&existing.user_id, facts, routing_key)
+            (OAuth2Mode::AddToUser, None, _) => Err(IdentityError::Unauthorized),
+            (OAuth2Mode::Login | OAuth2Mode::CreateUserOrLogin, session_user, Some(existing)) => {
+                let user = self
+                    .record_sign_in(&existing.user_id, facts, routing_key)
                     .await?;
                 Ok(OAuth2Outcome {
+                    switched_from: session_user
+                        .filter(|me| *me != existing.user_id)
+                        .map(str::to_owned),
                     user_id: existing.user_id,
+                    label: user.label,
                     created: false,
                     linked: false,
                 })
             }
-            (OAuth2Mode::Login, None, None) => Err(IdentityError::NotRegistered),
+            (OAuth2Mode::Login, _, None) => Err(IdentityError::NotRegistered),
+            (OAuth2Mode::CreateUser, _, Some(_)) => Err(IdentityError::AlreadyRegistered),
+            (OAuth2Mode::CreateUser | OAuth2Mode::CreateUserOrLogin, Some(_), None) => {
+                Err(IdentityError::UnexpectedlyAuthorized)
+            }
             (OAuth2Mode::CreateUser | OAuth2Mode::CreateUserOrLogin, None, None) => {
                 let user_id = self
                     .register_oauth2(&cmd.identity, &cmd.context, routing_key)
                     .await?;
                 Ok(OAuth2Outcome {
                     user_id,
+                    label: cmd.identity.label(),
                     created: true,
                     linked: false,
+                    switched_from: None,
                 })
             }
-            (OAuth2Mode::CreateUser, None, Some(_)) => Err(IdentityError::AlreadyRegistered),
-            (OAuth2Mode::AddToUser, None, _) => Err(IdentityError::Unauthorized),
-            (_, Some(_), _) => Err(IdentityError::UnexpectedlyAuthorized),
         }
     }
 }
@@ -151,10 +171,10 @@ impl<E: Executor> super::Command<E> {
         user_id: &str,
         identity: &ProviderIdentity,
         routing_key: Option<String>,
-    ) -> Result<(), IdentityError> {
-        if self.load_user(user_id).await?.is_none() {
+    ) -> Result<UserState, IdentityError> {
+        let Some(user) = self.load_user(user_id).await? else {
             return Err(IdentityError::UserNotFound);
-        }
+        };
         self.link_oauth2_index(identity, user_id, routing_key.clone())
             .await?;
         let result = self
@@ -173,8 +193,9 @@ impl<E: Executor> super::Command<E> {
             })
             .await;
         match result {
+            Ok(user) => Ok(user),
             // Already listed on the user: idempotent.
-            Ok(_) | Err(IdentityError::InvalidState) => Ok(()),
+            Err(IdentityError::InvalidState) => Ok(user),
             Err(IdentityError::Write(WriteError::InvalidOriginalVersion)) => {
                 Err(IdentityError::InvalidState)
             }

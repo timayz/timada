@@ -6,7 +6,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::auth::{oidc::Providers, require_user};
+use crate::auth::{oidc::Providers, require_user, webauthn::authenticator_name};
 use crate::ui::{document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -93,6 +93,9 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
                                 <label class="sr-only" for=(format!("passkey-{}", passkey.credential_id))>"Passkey name"</label>
                                 <input id=(format!("passkey-{}", passkey.credential_id)) class="rounded border border-neutral-300 px-2 py-1" type="text" name="name" value=(&passkey.name) maxlength="64" required="">
                                 <button class="underline">"Rename"</button>
+                                if let Some(authenticator) = authenticator_name(&passkey.aaguid) {
+                                    <span class="text-neutral-500">(authenticator)</span>
+                                }
                             </form>
                             <form method="post" action=(href!(super::passkey::remove::remove))>
                                 <input type="hidden" name="credential_id" value=(&passkey.credential_id)>
@@ -118,6 +121,15 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
                         </button>
                     </div>
                 </div>
+            </section>
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"Sessions"</h2>
+                <p class="mb-3 text-sm text-neutral-600">"Lost a device, or signed in on a shared computer? Every other browser is signed out; this one stays."</p>
+                <form method="post" action=(href!(super::sessions::revoke::revoke))>
+                    <input type="hidden" name="user_id" value=(user_id)>
+                    <button class="rounded border border-red-700 px-3 py-1 text-sm text-red-700 hover:bg-red-50">"Sign out everywhere else"</button>
+                </form>
             </section>
 
             <section class="rounded border border-neutral-200 bg-white p-4">

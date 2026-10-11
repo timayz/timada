@@ -5,7 +5,7 @@
 //! set in [`Config::load`]. `config/default.toml` documents the full shape.
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use config::{ConfigError, Environment, File};
 use serde::Deserialize;
@@ -65,6 +65,11 @@ pub struct ServerConfig {
     /// `.any_routing_key()`). Absent: no routing key.
     #[serde(default)]
     pub region: Option<String>,
+    /// Reverse proxies allowed to report the client's address through
+    /// `X-Forwarded-For`, as IP addresses or CIDR networks. Empty: the
+    /// connection's peer address is the client.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -126,9 +131,27 @@ impl Config {
         if let Some(cluster) = &config.cluster {
             cluster.validate()?;
         }
+        config.server.validate()?;
         config.auth.validate()?;
 
         Ok(config)
+    }
+}
+
+impl ServerConfig {
+    /// The router panics on an unparsable proxy entry, so reject it here with
+    /// the offending value.
+    fn validate(&self) -> Result<(), ConfigError> {
+        for entry in &self.trusted_proxies {
+            let valid =
+                entry.parse::<IpAddr>().is_ok() || entry.parse::<topcoat::router::IpNet>().is_ok();
+            if !valid {
+                return Err(ConfigError::Message(format!(
+                    "server.trusted_proxies: '{entry}' is not an IP address or a CIDR network"
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -181,5 +204,36 @@ impl ClusterConfig {
 
     pub fn listen_addr(&self) -> SocketAddr {
         self.listen.unwrap_or(self.peers[self.node_id as usize])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(trusted_proxies: &[&str]) -> ServerConfig {
+        ServerConfig {
+            url: "https://timada.localhost".into(),
+            host: "0.0.0.0".into(),
+            port: 3000,
+            region: None,
+            trusted_proxies: trusted_proxies.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn trusted_proxies_accept_addresses_and_networks() {
+        assert!(server(&[]).validate().is_ok());
+        assert!(
+            server(&["127.0.0.1", "172.16.0.0/12", "fd00::/8", "::1"])
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn trusted_proxies_reject_garbage_with_the_value() {
+        let err = server(&["10.0.0.0/8", "traefik"]).validate().unwrap_err();
+        assert!(err.to_string().contains("'traefik'"), "{err}");
     }
 }
