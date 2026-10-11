@@ -1,4 +1,4 @@
-.PHONY: dev lint fmt fmt-fix test check machete 
+.PHONY: dev lint fmt fmt-check test check machete
 
 start: up dev
 
@@ -18,9 +18,11 @@ stop:
 down:
 	DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose down -v --rmi local --remove-orphans
 
-# Watch and run server on code changes
+# Build, serve, rebuild on change and live-reload. `topcoat dev` passes no
+# arguments to the binary, so the config path travels through the environment
+# and `serve` is the default subcommand.
 dev:
-	cargo watch -x "run -p timada-dashboard -- --config config/dev.local.toml serve"
+	TIMADA_CONFIG=config/dev.local.toml topcoat dev -p timada-dashboard
 
 reset:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml reset
@@ -63,6 +65,6 @@ machete:
 	fi
 
 # Run all checks: format, lint, machete, and test (CI-ready)
-check: test lint fmt-fix machete
+check: test lint fmt-check machete
 	@echo "✓ All checks passed!"
 

@@ -1,0 +1,8 @@
+# Development overrides used by `make dev`, `make migrate` and `make reset`.
+# Everything not set here comes from the built-in defaults (see default.toml).
+
+[database]
+url = "sqlite:data/timada.db"
+
+[monitoring]
+log_level = "debug,sqlx=info,evento_accord=info"

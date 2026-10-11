@@ -5,3 +5,23 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+tokio.workspace = true
+topcoat.workspace = true
+sqlx.workspace = true
+sqlx_migrator.workspace = true
+evento.workspace = true
+evento-sql.workspace = true
+evento-sql-migrator.workspace = true
+evento-accord.workspace = true
+serde.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+config.workspace = true
+
+[build-dependencies]
+topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind"] }
+
+[dev-dependencies]
+evento-lock.workspace = true
