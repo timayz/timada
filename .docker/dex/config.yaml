@@ -1,0 +1,33 @@
+# Dex, an OpenID Connect provider for the end-to-end tests (`make e2e`) and
+# for trying the OIDC sign-in locally without a Google client. Everything in
+# this file is a test fixture: the password is "password", the client secret
+# is public. Never point a real deployment at it.
+#
+# The issuer is reachable under the same name from the browser and from the
+# dashboard process running on the host (compose publishes port 5556), which
+# OIDC requires: the `iss` claim must match the URL that was discovered.
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: timada
+    secret: timada-e2e-client-secret
+    name: Timada
+    redirectURIs:
+      - https://timada.localhost/auth/oauth2/dex/callback
+
+enablePasswordDB: true
+staticPasswords:
+  - email: admin@example.com
+    # bcrypt of "password"
+    hash: "$2y$10$4ibxJ41zLG5OqqUvmjnc.u3ZquwZNj7Q0OhhtchaCPLVHtmxXOqPO"
+    username: Dex User
+    userID: 08a8684b-db88-4b73-90a9-3cd1661f5466

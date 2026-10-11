@@ -51,6 +51,20 @@ services:
       retries: 3
       start_period: 10s
 
+  # Dex - OpenID Connect provider for `make e2e` and local OIDC sign-in
+  # (user admin@example.com / password). Issuer: http://localhost:5556/dex
+  dex:
+    image: ghcr.io/dexidp/dex:v2.46.0
+    container_name: timada-dex
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports:
+      - "5556:5556"
+    volumes:
+      - ".docker/dex/config.yaml:/etc/dex/config.yaml:ro"
+    networks:
+      - timada-network
+    restart: unless-stopped
+
 networks:
   timada-network:
     driver: bridge

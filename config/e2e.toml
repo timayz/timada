@@ -13,5 +13,12 @@ url = "sqlite:data/e2e.db"
 [auth]
 secret_key = "e2e-only-secret-key-never-used-outside-the-test-suite"
 
+# The dex container from compose.yml; see .docker/dex/config.yaml.
+[auth.providers.dex]
+label = "Dex"
+issuer = "http://localhost:5556/dex"
+client_id = "timada"
+client_secret = "timada-e2e-client-secret"
+
 [monitoring]
 log_level = "info,timada_dashboard=debug"
