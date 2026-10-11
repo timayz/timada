@@ -10,3 +10,4 @@
 /blob-report
 /node_modules
 /.docker/traefik/certs
+*.local.toml
