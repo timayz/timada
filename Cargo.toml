@@ -1,0 +1,30 @@
+[workspace]
+members = [
+	"crates/*",
+	"dashboard"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+authors = ["timada team"]
+
+[workspace.dependencies]
+
+[profile.release]
+codegen-units = 1
+panic = "abort"
+lto = true
+strip = true
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package.'*']
+opt-level = 3
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
