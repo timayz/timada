@@ -1,6 +1,5 @@
 //! The topcoat router. This module maps to `/`; child modules add paths.
 
-use sqlx::SqlitePool;
 use topcoat::{
     Result,
     asset::{AssetBundle, RouterBuilderAssetExt},
@@ -12,8 +11,14 @@ use topcoat::{
 
 use crate::cluster::Executor;
 use crate::config::Config;
+use crate::db::{ReadPool, WritePool};
 
-pub fn router(executor: Executor, pool: SqlitePool, config: Config) -> Router {
+pub fn router(
+    executor: Executor,
+    read_pool: ReadPool,
+    write_pool: WritePool,
+    config: Config,
+) -> Router {
     // The bundle sits next to the binary; `topcoat dev` writes it after every
     // build. A bare `cargo run` has none, and rendering an asset without it
     // panics with a less helpful message than this one.
@@ -24,7 +29,8 @@ pub fn router(executor: Executor, pool: SqlitePool, config: Config) -> Router {
     module_router!()
         .discover()
         .app_context(executor)
-        .app_context(pool)
+        .app_context(read_pool)
+        .app_context(write_pool)
         .app_context(config)
         .assets(assets)
         .runtime()

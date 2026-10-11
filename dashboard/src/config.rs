@@ -22,6 +22,8 @@ pub struct Config {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ServerConfig {
+    /// Public base URL, logged at startup so it can be opened from the terminal.
+    pub url: String,
     pub host: String,
     pub port: u16,
 }
@@ -59,6 +61,7 @@ pub struct MonitoringConfig {
 impl Config {
     pub fn load(path: Option<&str>) -> Result<Self, ConfigError> {
         let mut builder = config::Config::builder()
+            .set_default("server.url", "https://timada.localhost")?
             // Traefik reaches the dev server through host.docker.internal, which
             // is not the loopback interface.
             .set_default("server.host", "0.0.0.0")?

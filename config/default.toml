@@ -3,6 +3,8 @@
 # environment variables override both (e.g. TIMADA__SERVER__PORT=3100).
 
 [server]
+# Public base URL (behind Traefik), logged when `serve` is ready.
+url = "https://timada.localhost"
 host = "0.0.0.0"
 port = 3000
 
