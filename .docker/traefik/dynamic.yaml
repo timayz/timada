@@ -10,7 +10,7 @@ tls:
 
 http:
   routers:
-    imkitchen-dev:
+    timada-dev:
       rule: "Host(`timada.localhost`)"
       tls: true
       service: timada-dev
