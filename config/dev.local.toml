@@ -5,4 +5,4 @@
 url = "sqlite:data/timada.db"
 
 [monitoring]
-log_level = "debug,sqlx=info,evento_accord=info"
+log_level = "info,timada_dashboard=debug"

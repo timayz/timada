@@ -7,6 +7,10 @@
 url = "https://timada.localhost"
 host = "0.0.0.0"
 port = 3000
+# Region this node serves, e.g. "eu-west-1" or "us-east-3". Data created here
+# is tagged with it, so background processing can be scoped per region. Omit
+# for a single-region deployment.
+# region = "eu-west-1"
 
 [database]
 # sqlx DSN. The file holds events, projections and the consensus journal.
@@ -14,21 +18,14 @@ url = "sqlite:data/timada.db"
 # Pool size for `serve`; sqlx-sqlite runs one OS thread per open connection.
 max_connections = 3
 
-# Accord consensus cluster. Omit the whole section to run a single node (no
-# ports, in-memory transport). Writes need a majority quorum, so a 3-node
-# cluster tolerates one node down. `node_id` indexes `peers`.
+# Multi-node cluster. Omit the whole section to run a single node (no extra
+# ports). Writes need a majority of nodes, so a 3-node cluster keeps working
+# with one node down. `node_id` is this node's index into `peers`.
 # [cluster]
 # node_id = 0
 # peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
 # # Bind address for inbound peer traffic; defaults to peers[node_id].
 # listen = "0.0.0.0:7000"
-
-# Routing key stamped on every new aggregate this node writes and inherited by
-# its subscriptions; name it after the region, e.g. "eu-west-1" or "us-east-3".
-# Subscriptions that must process every region call `.any_routing_key()`.
-# Omit the section (or the key) for no routing key.
-# [evento]
-# routing_key = "eu-west-1"
 
 [monitoring]
 log_level = "info,sqlx=warn"

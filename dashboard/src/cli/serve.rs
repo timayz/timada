@@ -15,7 +15,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         db::create_read_pool(&config.database.url, config.database.max_connections).await?;
     let executor = cluster::build(
         config.cluster.as_ref(),
-        config.evento.routing_key.as_deref(),
+        config.server.region.as_deref(),
         read_pool.clone(),
         write_pool.clone(),
     )

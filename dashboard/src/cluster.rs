@@ -36,11 +36,11 @@ pub type Executor = Evento;
 const STABLE_MARGIN: Duration = Duration::from_millis(100);
 
 /// Builds the executor over the two pools. Single node when `cluster` is `None`.
-/// `routing_key` (a region name, typically) is stamped on every new aggregate
-/// this node writes.
+/// `region`, when set, is the default routing key stamped on every new
+/// aggregate this node writes.
 pub async fn build(
     cluster: Option<&ClusterConfig>,
-    routing_key: Option<&str>,
+    region: Option<&str>,
     read_pool: SqlitePool,
     write_pool: SqlitePool,
 ) -> Result<Executor> {
@@ -63,9 +63,9 @@ pub async fn build(
     node.start_recovery();
 
     let mut executor = Evento::new(AccordExecutor::<RwSqlite>::new(node, rw));
-    if let Some(key) = routing_key {
-        tracing::info!(routing_key = key, "evento: default routing key");
-        executor = executor.default_routing_key(key);
+    if let Some(region) = region {
+        tracing::info!(region, "evento: default routing key");
+        executor = executor.default_routing_key(region);
     }
     Ok(executor)
 }
