@@ -1,7 +1,7 @@
 [workspace]
 members = [
 	"crates/*",
-	"dashboard/*",
+	"dashboard"
 ]
 resolver = "2"
 
@@ -10,16 +10,6 @@ edition = "2024"
 authors = ["timada team"]
 
 [workspace.dependencies]
-
-[package]
-name = "timada"
-version = "0.1.0"
-edition.workspace = true
-
-[package.metadata.cargo-machete]
-ignored = []
-
-[package.metadata.cargo-machete.renamed]
 
 [profile.release]
 codegen-units = 1

@@ -9,10 +9,10 @@
     "test:e2e": "playwright test tests/e2e",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
-    "test:debug": "playwright test --debug",
+    "test:debug": "playwright test --debug"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.8.3",
+    "@axe-core/playwright": "^4.8.3"
   },
   "engines": {
     "node": ">=18.0.0"

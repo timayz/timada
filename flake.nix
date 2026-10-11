@@ -61,7 +61,7 @@
         androidSdk = androidComposition.androidsdk;
         androidHome = "${androidSdk}/libexec/android-sdk";
         androidAapt2BuildTools = "37.0.0";
-        avdName = "imkitchen-api34";
+        avdName = "timada-api34";
       in
       {
         devShells.default = with pkgs; mkShell {

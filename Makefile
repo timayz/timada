@@ -1,14 +1,6 @@
-.PHONY: css css-watch dev lint fmt fmt-fix test check machete 
+.PHONY: dev lint fmt fmt-fix test check machete 
 
 start: up dev
-
-# Build CSS once
-css:
-	tailwindcss -i tailwind.css -o static/css/main.css --minify
-
-# Watch CSS for changes
-css-watch:
-	tailwindcss -i tailwind.css -o static/css/main.css --watch
 
 cert:
 	mkdir -p .docker/traefik/certs
@@ -28,16 +20,13 @@ down:
 
 # Watch and run server on code changes
 dev:
-	cargo watch -x "run -- --config config/dev.local.toml serve"
+	cargo watch -x "run -p timada-dashboard -- --config config/dev.local.toml serve"
 
 reset:
-	cargo run -- --config config/dev.local.toml reset
+	cargo run -p timada-dashboard -- --config config/dev.local.toml reset
 
 migrate:
-	cargo run -- --config config/dev.local.toml migrate
-
-clean:
-	cargo clean -p timada
+	cargo run -p timada-dashboard -- --config config/dev.local.toml migrate
 
 # Run Clippy linter for code quality
 lint:
