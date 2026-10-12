@@ -79,6 +79,8 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_email" => "Please enter a valid e-mail address.",
         "weak_password" => "The password must be between 8 and 128 characters.",
         "password_mismatch" => "The two passwords do not match.",
+        "wrong_password" => "The current password is wrong.",
+        "email_set" => "This account already has an e-mail address.",
         "mail_failed" => "The e-mail could not be sent. Please try again in a moment.",
         _ => "Something went wrong. Please try again.",
     }
