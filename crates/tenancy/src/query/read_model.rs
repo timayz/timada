@@ -11,8 +11,12 @@ use evento::{
 };
 use sqlx::SqlitePool;
 
+use crate::aggregator::api_key::ApiKey;
 use crate::aggregator::{Invitation, Tenant};
-use crate::command::{InvitationState, TenantState, invitation_projection, tenant_projection};
+use crate::command::{
+    ApiKeyState, InvitationState, TenantState, api_key_projection, invitation_projection,
+    tenant_projection,
+};
 use crate::value_object::group_of;
 
 /// The cursor identity of the read-model subscription. One per node.
@@ -26,6 +30,7 @@ pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBui
         .data(pool)
         .handler(on_tenant_event())
         .handler(on_invitation_event())
+        .handler(on_api_key_event())
         .any_routing_key()
 }
 
@@ -121,6 +126,43 @@ async fn upsert_invitation(pool: &SqlitePool, invitation: &InvitationState) -> a
     .bind(invitation.accepted_by.as_deref())
     .bind(invitation.accepted_at.map(|at| at as i64))
     .bind(invitation.revoked)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[evento::subscription_all]
+async fn on_api_key_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<ApiKey>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let Some(key) = api_key_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_api_key(&pool, &key).await
+}
+
+async fn upsert_api_key(pool: &SqlitePool, key: &ApiKeyState) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO tenancy_api_keys (id, tenant_id, label, hint, created_by, created_at,
+            revoked_by, revoked_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT (id) DO UPDATE SET
+            revoked_by = excluded.revoked_by, revoked_at = excluded.revoked_at",
+    )
+    .bind(&key.id)
+    .bind(&key.tenant_id)
+    .bind(&key.label)
+    .bind(&key.hint)
+    .bind(&key.created_by)
+    .bind(key.created_at as i64)
+    .bind(key.revoked_by.as_deref())
+    .bind(key.revoked_at.map(|at| at as i64))
     .execute(pool)
     .await?;
     Ok(())
