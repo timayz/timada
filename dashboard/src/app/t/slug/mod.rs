@@ -4,14 +4,15 @@
 
 pub mod api_keys;
 pub mod members;
+pub mod products;
 pub mod rename;
 pub mod roles;
 
 use std::sync::Arc;
 
 use timada_tenancy::{
-    PERMISSION_API_KEYS_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ROLES_MANAGE,
-    PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
+    PERMISSION_API_KEYS_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_PRODUCTS_READ,
+    PERMISSION_ROLES_MANAGE, PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
 };
 use topcoat::{
     Result,
@@ -41,7 +42,6 @@ pub struct TenantAccess {
     /// The role the signed-in user holds in it.
     pub role: String,
     /// The tenant's event store, open while it is not suspended.
-    #[allow(dead_code)]
     executor: Option<Executor>,
 }
 
@@ -67,9 +67,8 @@ impl TenantAccess {
         }
     }
 
-    /// The tenant's executor, or 403 while the tenant is suspended. Nothing
-    /// tenant-scoped exists to write yet; the first commerce context uses it.
-    #[allow(dead_code)]
+    /// The tenant's executor, or 403 while the tenant is suspended: every
+    /// write to the tenant's own data (its catalog) goes through it.
     pub fn executor(&self) -> Result<&Executor> {
         self.executor.as_ref().ok_or_else(|| forbidden().into())
     }
@@ -133,6 +132,7 @@ pub fn tenant_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str
 
 /// The navigation every tenant page shares: the sections the member may see.
 pub struct TenantNav {
+    pub products: bool,
     pub members: bool,
     pub roles: bool,
     pub api_keys: bool,
@@ -141,6 +141,7 @@ pub struct TenantNav {
 impl TenantNav {
     pub async fn of(cx: &Cx, access: &TenantAccess) -> Result<Self> {
         Ok(Self {
+            products: access.can(cx, PERMISSION_PRODUCTS_READ).await?,
             members: access.can(cx, PERMISSION_MEMBERS_READ).await?,
             roles: access.can(cx, PERMISSION_ROLES_MANAGE).await?,
             api_keys: access.can(cx, PERMISSION_API_KEYS_MANAGE).await?,
@@ -167,6 +168,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     if tenant.is_suspended() { " " <span class="rounded bg-amber-100 px-2 text-sm font-normal text-amber-800">"suspended"</span> }
                 </h1>
                 <nav class="flex items-center gap-4 text-sm">
+                    if nav.products {
+                        <a class="underline" href=(href!(products::index, Slug(tenant.slug.clone())))>"Products"</a>
+                    }
                     if nav.members {
                         <a class="underline" href=(href!(members::index, Slug(tenant.slug.clone())))>"Members"</a>
                     }
