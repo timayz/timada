@@ -14,7 +14,7 @@ fi
 
 export TIMADA_CONFIG=config/e2e.toml
 topcoat asset bundle -p timada-dashboard
-cargo build -q -p timada-dashboard
+cargo build -q -p timada-dashboard -p storefront-example   # the storefront spec spawns the example
 ./target/debug/timada-dashboard reset   # also removes the tenant databases
 ./target/debug/timada-dashboard serve &
 server=$!

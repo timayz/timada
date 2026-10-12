@@ -38,5 +38,6 @@ topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind
 
 [dev-dependencies]
 evento-lock.workspace = true
+timada-storefront = { path = "../crates/storefront" }
 ulid.workspace = true
 rcgen.workspace = true
