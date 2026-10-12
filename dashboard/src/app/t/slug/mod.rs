@@ -198,7 +198,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dt class="text-neutral-500">"Database"</dt>
                     <dd data-tenant-status=(if matches!(status, TenantStatus::Running { .. }) { "running" } else { "stopped" })>
                         (match status {
-                            TenantStatus::Running { since } => format!("Running since {}", format_time(unix_seconds(since))),
+                            TenantStatus::Running { since, leases } => {
+                                let since = format_time(unix_seconds(since));
+                                match leases {
+                                    0 => format!("Running since {since}"),
+                                    1 => format!("Running since {since} · 1 store connection"),
+                                    n => format!("Running since {since} · {n} store connections"),
+                                }
+                            }
                             TenantStatus::Stopped => "Stopped".to_owned(),
                         })
                     </dd>

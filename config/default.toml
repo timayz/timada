@@ -71,6 +71,20 @@ idle_timeout_secs = 300
 # closed. Each open database may hold three connections (one OS thread each).
 max_open = 64
 
+# The store API: where a merchant's storefront connects with one of the
+# tenant's API keys (created on /t/<slug>/api-keys) to read and write that
+# tenant's events. A connected storefront keeps its tenant's database open.
+# Omit the whole section to not expose it on this node.
+# [store_api]
+# listen = "0.0.0.0:4321"
+# # Address shown on the API keys page for storefronts to connect to.
+# public_addr = "timada.localhost:4321"
+# # PEM files; with both set, connections are encrypted. Without them a key
+# # travels in clear text: only on a private network or behind a proxy that
+# # terminates TLS.
+# tls_cert = "/etc/timada/store-api.crt"
+# tls_key = "/etc/timada/store-api.key"
+
 # Multi-node cluster. Omit the whole section to run a single node: it then
 # talks to itself over a loopback port chosen by the system. Writes need a
 # majority of nodes, so a 3-node cluster keeps working with one node down.

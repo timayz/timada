@@ -29,6 +29,8 @@ base64.workspace = true
 uuid.workspace = true
 ciborium.workspace = true
 casbin.workspace = true
+async-trait.workspace = true
+tokio-rustls.workspace = true
 
 [build-dependencies]
 topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind"] }
@@ -36,3 +38,4 @@ topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind
 [dev-dependencies]
 evento-lock.workspace = true
 ulid.workspace = true
+rcgen.workspace = true
