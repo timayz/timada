@@ -43,6 +43,8 @@ pub async fn start(cx: &Cx, Form(form): Form<StartForm>) -> Result<SeeOther> {
         return Err(bad_request("unknown mode").into());
     };
 
+    // Login modes run whatever the session: signing in to another account
+    // switches, and the domain refuses creating one while signed in.
     let user = current_user(cx).await;
     let bound_user_id = match (mode, user) {
         (OAuth2Mode::AddToUser, Some(user))
@@ -56,8 +58,7 @@ pub async fn start(cx: &Cx, Form(form): Form<StartForm>) -> Result<SeeOther> {
         (OAuth2Mode::AddToUser, None) => {
             return Ok(see_other(login_url(cx, Some("sign_in_required"))));
         }
-        (_, Some(_)) => return Ok(see_other(account_url(cx, Some("signed_in"), None))),
-        (_, None) => None,
+        (_, _) => None,
     };
 
     let authorization = providers.authorize(provider);

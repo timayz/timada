@@ -1,3 +1,4 @@
+use timada_identity::SignInPasskey;
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -9,11 +10,11 @@ use topcoat::{
 };
 use webauthn_rs::prelude::{DiscoverableKey, PublicKeyCredential, Webauthn};
 
-use crate::app::auth::home_url;
 use crate::app::auth::passkey::{Done, into_error};
+use crate::app::auth::signed_in_url;
 use crate::auth::{
     cookies::{is_fresh, passkey_login_flow},
-    identity, login_context, now, start_session,
+    current_user, identity, login_context, now, sign_in_as,
     webauthn::{passkey_from_json, passkey_to_json},
 };
 
@@ -64,20 +65,21 @@ pub async fn finish(cx: &Cx, Json(credential): Json<PublicKeyCredential>) -> Res
         })?;
     let updated = passkey.update_credential(&result) == Some(true);
 
-    let user_id = identity(cx)
-        .sign_in_passkey(
-            &credential_id,
-            if updated {
+    let outcome = identity(cx)
+        .sign_in_passkey(SignInPasskey {
+            credential_id,
+            updated_passkey_json: if updated {
                 Some(passkey_to_json(&passkey).map_err(topcoat::Error::from_anyhow)?)
             } else {
                 None
             },
-            login_context(cx),
-        )
+            session_user_id: current_user(cx).await.map(|u| u.id.clone()),
+            context: login_context(cx),
+        })
         .await
         .map_err(into_error)?;
-    start_session(cx, &user_id).await?;
+    sign_in_as(cx, &outcome.user_id).await?;
     Ok(Json(Done {
-        location: home_url(cx),
+        location: signed_in_url(cx, &outcome.label, outcome.switched_from.is_some()),
     }))
 }

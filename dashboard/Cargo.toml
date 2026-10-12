@@ -27,6 +27,7 @@ serde_json.workspace = true
 base64.workspace = true
 ulid.workspace = true
 uuid.workspace = true
+ciborium.workspace = true
 
 [build-dependencies]
 topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind"] }

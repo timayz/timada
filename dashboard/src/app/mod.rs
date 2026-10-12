@@ -9,7 +9,9 @@ use topcoat::{
     asset::{AssetBundle, RouterBuilderAssetExt},
     context::Cx,
     cookie::{Key, RouterBuilderCookieExt},
-    router::{Router, RouterBuilderDiscoverExt, href, module_router, page},
+    router::{
+        Router, RouterBuilderDiscoverExt, TrustedProxies, href, module_router, page, query_params,
+    },
     runtime::RouterBuilderRuntimeExt,
     session::{RouterBuilderSessionExt, SessionConfig},
     view::{View, view},
@@ -20,7 +22,7 @@ use crate::auth::oidc::Providers;
 use crate::cluster::Executor;
 use crate::config::Config;
 use crate::db::{ReadPool, WritePool};
-use crate::ui::document;
+use crate::ui::{document, notice};
 
 pub fn router(
     executor: Executor,
@@ -41,6 +43,8 @@ pub fn router(
         .discover()
         // Absolute URLs (the OIDC redirect URI) follow the public address.
         .base_url(config.server.url.as_str())
+        // Validated by `Config::load`; `networks` panics on a bad entry.
+        .trusted_proxies(TrustedProxies::new().networks(config.server.trusted_proxies.iter()))
         .cookies()
         .sessions(
             SessionConfig::builder()
@@ -60,9 +64,16 @@ pub fn router(
         .build()
 }
 
+#[topcoat::router::query_params(error = bad_request)]
+struct HomeQuery {
+    /// A confirmation from a redirect, e.g. after switching accounts.
+    message: Option<String>,
+}
+
 #[page]
 pub async fn home(cx: &Cx) -> Result<impl View> {
     let user = crate::auth::require_user(cx).await?;
+    let query = query_params::<HomeQuery>(cx)?;
     Ok(view! {
         document(
             title: "Timada dashboard",
@@ -76,6 +87,7 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
                     </form>
                 </nav>
             </header>
+            notice(message: query.message.as_deref())
             <p class="text-neutral-600">"Nothing to see yet."</p>
         )
     })

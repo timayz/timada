@@ -43,11 +43,13 @@ async fn sign_in_updates_the_credential_when_asked() {
     .await
     .unwrap();
 
-    let user_id = cmd
-        .sign_in_passkey("cred-1", Some("{\"counter\":1}".to_owned()), context())
+    let outcome = cmd
+        .sign_in_passkey(sign_in_passkey("cred-1", Some("{\"counter\":1}"), None))
         .await
         .unwrap();
-    assert_eq!(user_id, bound);
+    assert_eq!(outcome.user_id, bound);
+    assert_eq!(outcome.label, "Alice");
+    assert_eq!(outcome.switched_from, None);
     assert_eq!(
         cmd.load_passkey("cred-1")
             .await
@@ -56,7 +58,7 @@ async fn sign_in_updates_the_credential_when_asked() {
             .passkey_json,
         "{\"counter\":1}"
     );
-    cmd.sign_in_passkey("cred-1", None, context())
+    cmd.sign_in_passkey(sign_in_passkey("cred-1", None, None))
         .await
         .unwrap();
     assert_eq!(
@@ -65,7 +67,7 @@ async fn sign_in_updates_the_credential_when_asked() {
     );
 
     let err = cmd
-        .sign_in_passkey("unknown", None, context())
+        .sign_in_passkey(sign_in_passkey("unknown", None, None))
         .await
         .unwrap_err();
     assert!(matches!(err, IdentityError::UnknownCredential), "{err}");
@@ -224,7 +226,7 @@ async fn rename_and_remove_respect_ownership_and_the_last_method() {
     assert_eq!(user.passkeys.len(), 1);
     assert!(cmd.load_passkey("cred-1").await.unwrap().is_none());
     let err = cmd
-        .sign_in_passkey("cred-1", None, context())
+        .sign_in_passkey(sign_in_passkey("cred-1", None, None))
         .await
         .unwrap_err();
     assert!(matches!(err, IdentityError::UnknownCredential), "{err}");
@@ -276,4 +278,32 @@ async fn passkeys_per_user_are_capped() {
         .await
         .unwrap_err();
     assert!(matches!(err, IdentityError::TooManyPasskeys), "{err}");
+}
+
+#[tokio::test]
+async fn signing_in_with_another_users_passkey_switches_accounts() {
+    let cmd = command().await;
+    let alice = new_id();
+    cmd.register_passkey(register_passkey(
+        RegistrationMode::CreateUser,
+        None,
+        &alice,
+        "cred-alice",
+    ))
+    .await
+    .unwrap();
+    let bob = register_via_oauth2(&cmd, "google", "bob").await;
+
+    let outcome = cmd
+        .sign_in_passkey(sign_in_passkey("cred-alice", None, Some(&bob)))
+        .await
+        .unwrap();
+    assert_eq!(outcome.user_id, alice);
+    assert_eq!(outcome.switched_from.as_deref(), Some(bob.as_str()));
+
+    let outcome = cmd
+        .sign_in_passkey(sign_in_passkey("cred-alice", None, Some(&alice)))
+        .await
+        .unwrap();
+    assert_eq!(outcome.switched_from, None, "own passkey: plain re-sign-in");
 }

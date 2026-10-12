@@ -7,25 +7,45 @@ use crate::value_object::{LoginContext, SignInMethod};
 
 use super::sign_in::SignInFacts;
 
+/// A verified passkey assertion.
+#[derive(Debug, Clone)]
+pub struct SignInPasskey {
+    /// Base64url credential id of the key that signed.
+    pub credential_id: String,
+    /// The credential re-serialized after the ceremony when its counter or
+    /// backup flags changed.
+    pub updated_passkey_json: Option<String>,
+    /// The user the browser is signed in as, if any. Signing in with another
+    /// user's passkey switches accounts.
+    pub session_user_id: Option<String>,
+    pub context: LoginContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasskeySignIn {
+    pub user_id: String,
+    /// Display name of that user, for the "signed in as" notice.
+    pub label: String,
+    /// The browser was signed in as this other user; the web layer replaces
+    /// that session.
+    pub switched_from: Option<String>,
+}
+
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Records a verified assertion. `updated_passkey_json` is the credential
-    /// re-serialized after the ceremony when its counter or backup flags
-    /// changed. Returns the user id to start a session for.
+    /// Records a verified assertion. Returns the user to start a session for.
     pub async fn sign_in_passkey(
         &self,
-        credential_id: &str,
-        updated_passkey_json: Option<String>,
-        context: LoginContext,
+        cmd: SignInPasskey,
         routing_key: Option<String>,
-    ) -> Result<String, IdentityError> {
-        let Some(credential) = self.load_passkey(credential_id).await? else {
+    ) -> Result<PasskeySignIn, IdentityError> {
+        let Some(credential) = self.load_passkey(&cmd.credential_id).await? else {
             return Err(IdentityError::UnknownCredential);
         };
         if self.load_user(&credential.user_id).await?.is_none() {
             return Err(IdentityError::UserNotFound);
         }
-        if let Some(passkey_json) = updated_passkey_json {
+        if let Some(passkey_json) = cmd.updated_passkey_json {
             credential
                 .write()?
                 .routing_key_opt(routing_key.clone())
@@ -34,17 +54,22 @@ impl<E: Executor> super::Command<E> {
                 .await?;
         }
         let user_id = credential.user_id;
-        self.record_sign_in(
-            &user_id,
-            SignInFacts {
-                method: SignInMethod::Passkey,
-                provider: None,
-                credential_id: Some(credential_id.to_owned()),
-                context,
-            },
-            routing_key,
-        )
-        .await?;
-        Ok(user_id)
+        let user = self
+            .record_sign_in(
+                &user_id,
+                SignInFacts {
+                    method: SignInMethod::Passkey,
+                    provider: None,
+                    credential_id: Some(cmd.credential_id),
+                    context: cmd.context,
+                },
+                routing_key,
+            )
+            .await?;
+        Ok(PasskeySignIn {
+            switched_from: cmd.session_user_id.filter(|me| *me != user_id),
+            user_id,
+            label: user.label,
+        })
     }
 }

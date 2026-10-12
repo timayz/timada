@@ -5,7 +5,7 @@ use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use timada_identity::{
     Command, CompleteOAuth2, LoginContext, OAuth2Mode, RegisterPasskey, RegistrationMode,
-    VerifiedPasskey,
+    SignInPasskey, VerifiedPasskey,
 };
 
 /// A fresh in-memory event store, as in evento's `bank-axum-sqlite` example.
@@ -104,4 +104,17 @@ pub async fn register_via_oauth2<E: Executor>(
 
 pub fn new_id() -> String {
     ulid::Ulid::generate().to_string()
+}
+
+pub fn sign_in_passkey(
+    credential_id: &str,
+    updated_passkey_json: Option<&str>,
+    session_user_id: Option<&str>,
+) -> SignInPasskey {
+    SignInPasskey {
+        credential_id: credential_id.to_owned(),
+        updated_passkey_json: updated_passkey_json.map(str::to_owned),
+        session_user_id: session_user_id.map(str::to_owned),
+        context: context(),
+    }
 }
