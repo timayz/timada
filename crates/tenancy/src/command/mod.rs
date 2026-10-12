@@ -25,7 +25,7 @@ use crate::aggregator::{
     Accepted, Claimed, Created, MemberGranted, MemberRevoked, MemberRoleChanged, Released, Renamed,
     Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
 };
-use crate::value_object::{ROLE_OWNER, invitation_id, tenant_slug_id};
+use crate::value_object::{ROLE_OWNER, implies, invitation_id, tenant_slug_id};
 
 /// The command gateway. Cheap to clone when `E` is (the dashboard's executor
 /// is an `Arc` wrapper).
@@ -89,14 +89,15 @@ impl TenantState {
     }
 
     /// Whether `user_id` holds `permission` here: owners hold every one,
-    /// other members what their role grants, non-members nothing.
+    /// other members what their role grants (`manage` implying `read`),
+    /// non-members nothing.
     pub fn can(&self, user_id: &str, permission: &str) -> bool {
         match self.role_of(user_id) {
             Some(ROLE_OWNER) => true,
             Some(role) => self
                 .roles
                 .get(role)
-                .is_some_and(|def| def.permissions.contains(permission)),
+                .is_some_and(|def| def.permissions.iter().any(|held| implies(held, permission))),
             None => false,
         }
     }
