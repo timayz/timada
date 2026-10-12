@@ -2,6 +2,7 @@
 
 pub mod admin;
 pub mod auth;
+pub mod invitations;
 pub mod t;
 pub mod tenants;
 

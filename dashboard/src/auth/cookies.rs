@@ -14,6 +14,9 @@ use webauthn_rs::prelude::{DiscoverableAuthentication, PasskeyRegistration};
 
 /// Longest a sign-in attempt may take between its first and last step.
 pub const FLOW_MAX_AGE_SECS: u64 = 10 * 60;
+/// How long an invitation link waits in the browser for the person to sign
+/// in or create an account before it has to be opened again.
+pub const INVITE_MAX_AGE_SECS: u64 = 60 * 60;
 
 /// An OIDC redirect in progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +85,24 @@ pub struct EmailFlow {
     pub issued_at: u64,
 }
 
+/// An invitation link opened while signed out. Any sign-in or registration
+/// that finishes while it is fresh lands back on the invitation page, where
+/// the person accepts explicitly.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct InviteFlow {
+    pub token: String,
+    pub issued_at: u64,
+}
+
+impl std::fmt::Debug for InviteFlow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InviteFlow")
+            .field("token", &"******")
+            .field("issued_at", &self.issued_at)
+            .finish()
+    }
+}
+
 /// A passkey sign-in ceremony in progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PasskeyLoginFlow {
@@ -118,7 +139,19 @@ pub fn passkey_login_flow(cx: &Cx) -> UnparsedCookieStore<PasskeyLoginFlow, impl
     cookie_store(flow_jar(cx), "auth_pk_auth")
 }
 
+pub fn invite_flow(cx: &Cx) -> UnparsedCookieStore<InviteFlow, impl Cookies + '_> {
+    cookie_store(
+        flow_jar(cx).default_max_age(time::Duration::seconds(INVITE_MAX_AGE_SECS as i64)),
+        "auth_invite",
+    )
+}
+
 /// Whether a flow started at `issued_at` may still finish at `now`.
 pub fn is_fresh(issued_at: u64, now: u64) -> bool {
     now >= issued_at && now - issued_at <= FLOW_MAX_AGE_SECS
+}
+
+/// Whether an invitation opened at `issued_at` still waits at `now`.
+pub fn is_invite_fresh(issued_at: u64, now: u64) -> bool {
+    now >= issued_at && now - issued_at <= INVITE_MAX_AGE_SECS
 }

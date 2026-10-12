@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 pub const ROLE_OWNER: &str = "owner";
 
 /// Every permission a custom role can grant, as `resource:action`. The list
-/// only grows: a stored role may name any of them.
+/// only grows: a stored role may name any of them. `manage` on a resource
+/// implies `read` on it (see [`implies`]).
 ///
 /// - `tenant:manage` — rename the tenant (its settings).
 /// - `members:read` — see the members and the pending invitations.
@@ -132,6 +133,20 @@ pub fn split_permission(permission: &str) -> Option<(&str, &str)> {
     is_permission(permission)
         .then(|| permission.split_once(':'))
         .flatten()
+}
+
+/// Whether holding `held` grants `wanted`: the same permission, or `manage`
+/// on the resource `wanted` only reads.
+pub fn implies(held: &str, wanted: &str) -> bool {
+    if held == wanted {
+        return true;
+    }
+    match (split_permission(held), split_permission(wanted)) {
+        (Some((resource, "manage")), Some((wanted_resource, "read"))) => {
+            resource == wanted_resource
+        }
+        _ => false,
+    }
 }
 
 /// Deduplicates and checks a permission list against [`PERMISSIONS`].
@@ -282,6 +297,15 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn manage_implies_read_on_the_same_resource() {
+        assert!(implies("members:manage", "members:read"));
+        assert!(implies("members:read", "members:read"));
+        assert!(!implies("members:read", "members:manage"));
+        assert!(!implies("roles:manage", "members:read"));
+        assert!(!implies("members:manage", "members:delete"));
     }
 
     #[test]

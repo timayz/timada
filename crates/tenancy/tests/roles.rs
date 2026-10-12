@@ -163,6 +163,27 @@ async fn permissions_follow_roles_and_owners_hold_everything() {
     assert!(PERMISSIONS.iter().all(|p| state.can(&alice, p)));
     assert!(state.can(&bob, PERMISSION_MEMBERS_READ));
     assert!(!state.can(&bob, PERMISSION_MEMBERS_MANAGE));
+    // `manage` implies `read` on the same resource.
+    cmd.define_role(
+        &alice,
+        &tenant.id,
+        role("manager", &[PERMISSION_MEMBERS_MANAGE]),
+    )
+    .await
+    .unwrap();
+    cmd.grant_member(&alice, &tenant.id, &new_id(), "manager")
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    let manager = state
+        .members
+        .iter()
+        .find(|(_, r)| r.as_str() == "manager")
+        .map(|(u, _)| u.clone())
+        .unwrap();
+    assert!(state.can(&manager, PERMISSION_MEMBERS_READ));
+    assert!(state.can(&manager, PERMISSION_MEMBERS_MANAGE));
+    assert!(!state.can(&manager, PERMISSION_ROLES_MANAGE));
     assert!(!state.can(&bob, PERMISSION_TENANT_MANAGE));
     assert!(!state.can(&new_id(), PERMISSION_MEMBERS_READ));
 

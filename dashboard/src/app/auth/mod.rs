@@ -15,6 +15,9 @@ pub mod sessions;
 use timada_identity::IdentityError;
 use topcoat::{context::Cx, router::href};
 
+use crate::auth::cookies::{invite_flow, is_invite_fresh};
+use crate::auth::now;
+
 /// The query-string code the pages show for a domain error.
 pub fn error_code(err: &IdentityError) -> &'static str {
     match err {
@@ -107,12 +110,33 @@ pub fn home_url_with_message(cx: &Cx, message: &str) -> String {
         .resolve(cx)
 }
 
-/// Where a sign-in lands: home, with a notice when the browser was signed in
-/// as someone else before.
+/// Where a sign-in lands: the invitation the browser opened while signed
+/// out, if one is waiting; else home, with a notice when the browser was
+/// signed in as someone else before.
 pub fn signed_in_url(cx: &Cx, label: &str, switched: bool) -> String {
+    if let Some(url) = pending_invitation_url(cx) {
+        return url;
+    }
     if switched {
         home_url_with_message(cx, &format!("You are now signed in as {label}."))
     } else {
         home_url(cx)
     }
+}
+
+/// The invitation page a fresh `auth_invite` cookie points at. The cookie is
+/// left in place: the invitation page removes it once the person accepts or
+/// the link turns out invalid.
+fn pending_invitation_url(cx: &Cx) -> Option<String> {
+    let store = invite_flow(cx).parse().ok().flatten()?;
+    let flow = store.get();
+    if !is_invite_fresh(flow.issued_at, now()) {
+        store.remove();
+        return None;
+    }
+    Some(crate::app::invitations::token::invitation_url(
+        cx,
+        &flow.token,
+        None,
+    ))
 }

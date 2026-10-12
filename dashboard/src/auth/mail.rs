@@ -1,4 +1,5 @@
-//! The one e-mail this application sends: a code that proves an address.
+//! The e-mails this application sends: a code that proves an address, and
+//! an invitation to join a tenant.
 
 use anyhow::Context as _;
 use topcoat::{
@@ -36,6 +37,34 @@ pub fn build(config: &config::MailConfig) -> anyhow::Result<Mailer> {
 /// Mails `code` to `to`. The code is never logged; a delivery failure is.
 pub async fn send_code(cx: &Cx, to: &str, kind: EmailFlowKind, code: &str) -> Result<()> {
     let mail = code_mail(cx, to, kind, code).await?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
+/// Mails an invitation link. `link` is absolute (the recipient is not on
+/// this site yet).
+pub async fn send_invitation(
+    cx: &Cx,
+    to: &str,
+    tenant_name: &str,
+    inviter: &str,
+    role_label: &str,
+    link: &str,
+) -> Result<()> {
+    let from = app_context::<MailSender>(cx).0.clone();
+    let subject = format!("You are invited to join {tenant_name} on Timada");
+    let mail = mail! {
+        from: from,
+        to: Mailbox::new(to)?,
+        subject: &subject,
+        html: {
+            cx =>
+            <p><strong>(inviter)</strong> " invites you to join " <strong>(tenant_name)</strong> " as " <strong>(role_label)</strong> "."</p>
+            <p><a href=(link)>"Accept the invitation"</a></p>
+            <p>"Or open this address: " (link)</p>
+            <p>"The link is valid for 7 days. If you do not know this tenant, you can ignore this message."</p>
+        },
+    }?;
     send(cx, mail).await?;
     Ok(())
 }
@@ -98,5 +127,33 @@ mod tests {
         let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
         assert!(wire.contains("123456"), "{wire}");
         assert!(wire.contains("valid for 10 minutes"), "{wire}");
+    }
+
+    #[tokio::test]
+    async fn the_invitation_carries_the_link() {
+        let transport = MemoryTransport::new();
+        let cx = CxTestBuilder::new()
+            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .build();
+
+        send_invitation(
+            &cx,
+            "bob@example.com",
+            "Acme",
+            "Ada",
+            "Support",
+            "https://timada.localhost/invitations/t0k3n",
+        )
+        .await
+        .unwrap();
+
+        let sent = transport.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].subject(), "You are invited to join Acme on Timada");
+        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        assert!(wire.contains("/invitations/t0k3n"), "{wire}");
+        assert!(wire.contains("Ada"), "{wire}");
+        assert!(wire.contains("Support"), "{wire}");
     }
 }
