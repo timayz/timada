@@ -103,6 +103,18 @@ pub fn describe_error(code: &str) -> &'static str {
     }
 }
 
+/// What a permission of [`timada_tenancy::PERMISSIONS`] lets a role do.
+pub fn describe_permission(permission: &str) -> &'static str {
+    match permission {
+        "tenant:manage" => "Rename the tenant",
+        "members:read" => "See members and pending invitations",
+        "members:manage" => "Invite, change roles and remove members (owners excepted)",
+        "roles:manage" => "Define, edit and remove roles",
+        "api-keys:manage" => "Manage the store API keys (not available yet)",
+        _ => "Unknown permission",
+    }
+}
+
 /// Unix seconds as an ISO-8601 UTC timestamp (no calendar crate needed).
 pub fn format_time(secs: u64) -> String {
     let days = (secs / 86_400) as i64;

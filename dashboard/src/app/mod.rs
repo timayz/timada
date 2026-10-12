@@ -26,6 +26,7 @@ use webauthn_rs::prelude::Webauthn;
 
 use crate::auth::mail::Mailer;
 use crate::auth::oidc::Providers;
+use crate::authz::Authorizer;
 use crate::cluster::Executor;
 use crate::config::Config;
 use crate::db::{ReadPool, WritePool};
@@ -41,6 +42,7 @@ pub struct Services {
     pub webauthn: Webauthn,
     pub mailer: Mailer,
     pub tenants: Arc<Tenants>,
+    pub authorizer: Arc<Authorizer>,
     pub config: Config,
 }
 
@@ -53,6 +55,7 @@ pub fn router(services: Services) -> Router {
         webauthn,
         mailer,
         tenants,
+        authorizer,
         config,
     } = services;
     // The bundle sits next to the binary; `topcoat dev` writes it after every
@@ -82,6 +85,7 @@ pub fn router(services: Services) -> Router {
         .app_context(providers)
         .app_context(webauthn)
         .app_context(tenants)
+        .app_context(authorizer)
         // The transport behind `topcoat::mail::send`, and who the codes come from.
         .mail(mailer.transport)
         .app_context(mailer.sender)
