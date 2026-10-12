@@ -80,6 +80,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     if nav.roles {
                         <a class="underline" href=(href!(super::roles::index, Slug(slug.clone())))>"Roles"</a>
                     }
+                    if nav.api_keys {
+                        <a class="underline" href=(href!(super::api_keys::index, Slug(slug.clone())))>"API keys"</a>
+                    }
                     <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
                 </nav>
             </header>

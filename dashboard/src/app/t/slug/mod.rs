@@ -2,6 +2,7 @@
 //! members and roles pages; every one of them starts with [`require_tenant`]
 //! and then asks the [`TenantAccess`] for the permission it needs.
 
+pub mod api_keys;
 pub mod members;
 pub mod rename;
 pub mod roles;
@@ -9,8 +10,8 @@ pub mod roles;
 use std::sync::Arc;
 
 use timada_tenancy::{
-    PERMISSION_MEMBERS_READ, PERMISSION_ROLES_MANAGE, PERMISSION_TENANT_MANAGE, ROLE_OWNER,
-    TenantState,
+    PERMISSION_API_KEYS_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ROLES_MANAGE,
+    PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
 };
 use topcoat::{
     Result,
@@ -134,6 +135,7 @@ pub fn tenant_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str
 pub struct TenantNav {
     pub members: bool,
     pub roles: bool,
+    pub api_keys: bool,
 }
 
 impl TenantNav {
@@ -141,6 +143,7 @@ impl TenantNav {
         Ok(Self {
             members: access.can(cx, PERMISSION_MEMBERS_READ).await?,
             roles: access.can(cx, PERMISSION_ROLES_MANAGE).await?,
+            api_keys: access.can(cx, PERMISSION_API_KEYS_MANAGE).await?,
         })
     }
 }
@@ -169,6 +172,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                     if nav.roles {
                         <a class="underline" href=(href!(roles::index, Slug(tenant.slug.clone())))>"Roles"</a>
+                    }
+                    if nav.api_keys {
+                        <a class="underline" href=(href!(api_keys::index, Slug(tenant.slug.clone())))>"API keys"</a>
                     }
                     <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
                     <a class="underline" href=(href!(crate::app::auth::account::account))>"Account"</a>

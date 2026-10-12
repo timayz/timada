@@ -15,7 +15,7 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `members:manage` — invite, change roles and remove members (never to or
 ///   from `owner`: that stays with owners).
 /// - `roles:manage` — define, edit and remove custom roles.
-/// - `api-keys:manage` — reserved for the store API keys (not built yet).
+/// - `api-keys:manage` — create and revoke the store API keys.
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
@@ -30,6 +30,11 @@ pub const PERMISSION_ROLES_MANAGE: &str = "roles:manage";
 pub const PERMISSION_API_KEYS_MANAGE: &str = "api-keys:manage";
 
 pub const MAX_ROLE_LABEL_LEN: usize = 40;
+pub const MAX_API_KEY_LABEL_LEN: usize = 40;
+/// Every store API token starts with it, so one is recognizable in a config.
+pub const API_KEY_PREFIX: &str = "tk_";
+/// How many characters after the prefix a key's hint keeps.
+pub const API_KEY_HINT_LEN: usize = 8;
 /// How long an invitation link stays valid: seven days.
 pub const INVITATION_TTL_SECS: u64 = 7 * 24 * 3600;
 pub const MAX_EMAIL_LEN: usize = 254;
@@ -211,6 +216,41 @@ pub fn invitation_id(token: &str) -> String {
 /// A fresh invitation token: 32 random bytes, URL-safe base64 without
 /// padding (43 characters), from the thread generator (seeded by the OS).
 pub fn generate_invitation_token() -> String {
+    random_base64url()
+}
+
+/// The stream of a store API key, from the token a storefront presents.
+pub fn api_key_id(token: &str) -> String {
+    evento::hash_ids(vec!["api-key", token])
+}
+
+/// A fresh store API token: the prefix and 32 random bytes as URL-safe
+/// base64 without padding (46 characters in all).
+pub fn generate_api_key_token() -> String {
+    format!("{API_KEY_PREFIX}{}", random_base64url())
+}
+
+/// What the pages show of a token: the prefix and the next
+/// [`API_KEY_HINT_LEN`] characters.
+pub fn api_key_hint(token: &str) -> String {
+    token
+        .chars()
+        .take(API_KEY_PREFIX.len() + API_KEY_HINT_LEN)
+        .collect()
+}
+
+/// Trims a key label and checks it is 1 to 40 characters.
+pub fn normalize_api_key_label(label: &str) -> Result<String, crate::TenancyError> {
+    let label = label.trim();
+    if label.is_empty() || label.chars().count() > MAX_API_KEY_LABEL_LEN {
+        return Err(crate::TenancyError::InvalidApiKeyLabel);
+    }
+    Ok(label.to_owned())
+}
+
+/// 32 random bytes as URL-safe base64 without padding (43 characters), from
+/// the thread generator (seeded by the OS).
+fn random_base64url() -> String {
     use base64::Engine;
     use rand::RngCore;
 
@@ -361,5 +401,21 @@ mod tests {
         assert_ne!(token, generate_invitation_token());
         assert_eq!(invitation_id(&token).len(), 64);
         assert_ne!(invitation_id("a"), invitation_id("b"));
+    }
+
+    #[test]
+    fn api_key_tokens_are_prefixed_hinted_and_hashed() {
+        let token = generate_api_key_token();
+        assert_eq!(token.len(), API_KEY_PREFIX.len() + 43, "{token}");
+        assert!(token.starts_with(API_KEY_PREFIX));
+        assert_ne!(token, generate_api_key_token());
+        let hint = api_key_hint(&token);
+        assert_eq!(hint.len(), API_KEY_PREFIX.len() + API_KEY_HINT_LEN);
+        assert!(token.starts_with(&hint));
+        assert_eq!(api_key_id(&token).len(), 64);
+        assert_ne!(api_key_id(&token), invitation_id(&token));
+        assert_eq!(normalize_api_key_label("  Shop ").unwrap(), "Shop");
+        assert!(normalize_api_key_label(" ").is_err());
+        assert!(normalize_api_key_label(&"x".repeat(41)).is_err());
     }
 }

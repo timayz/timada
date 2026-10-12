@@ -17,6 +17,9 @@ pub const FLOW_MAX_AGE_SECS: u64 = 10 * 60;
 /// How long an invitation link waits in the browser for the person to sign
 /// in or create an account before it has to be opened again.
 pub const INVITE_MAX_AGE_SECS: u64 = 60 * 60;
+/// How long a freshly created store API token stays readable on the keys
+/// page after the redirect that follows its creation.
+pub const API_KEY_REVEAL_MAX_AGE_SECS: u64 = 5 * 60;
 
 /// An OIDC redirect in progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +113,28 @@ pub struct PasskeyLoginFlow {
     pub issued_at: u64,
 }
 
+/// A store API token on its way from the creating request to the page that
+/// shows it once. Private like the sign-in flows: the token never appears in
+/// a URL or a log.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ApiKeyReveal {
+    pub key_id: String,
+    pub label: String,
+    pub token: String,
+    pub issued_at: u64,
+}
+
+impl std::fmt::Debug for ApiKeyReveal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiKeyReveal")
+            .field("key_id", &self.key_id)
+            .field("label", &self.label)
+            .field("token", &"******")
+            .field("issued_at", &self.issued_at)
+            .finish()
+    }
+}
+
 fn flow_jar(cx: &Cx) -> impl Cookies + '_ {
     // `Lax`, not `Strict`: the OIDC callback is a top-level cross-site
     // navigation and must still carry the cookie.
@@ -143,6 +168,13 @@ pub fn invite_flow(cx: &Cx) -> UnparsedCookieStore<InviteFlow, impl Cookies + '_
     cookie_store(
         flow_jar(cx).default_max_age(time::Duration::seconds(INVITE_MAX_AGE_SECS as i64)),
         "auth_invite",
+    )
+}
+
+pub fn api_key_reveal(cx: &Cx) -> UnparsedCookieStore<ApiKeyReveal, impl Cookies + '_> {
+    cookie_store(
+        flow_jar(cx).default_max_age(time::Duration::seconds(API_KEY_REVEAL_MAX_AGE_SECS as i64)),
+        "api_key_reveal",
     )
 }
 

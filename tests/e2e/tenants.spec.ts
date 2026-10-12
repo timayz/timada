@@ -1,24 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { ADMIN_STATE } from "./fixtures";
+import { createTenant, uniqueTenant } from "./tenants";
 
 // Tenants: self-service creation, the tenant's own page, and the platform
 // administration (status, suspend, resume). The e2e configuration closes an
 // idle tenant database after 2 seconds, so a test can watch it stop.
-
-/// A name no other test run used, and the slug the server derives from it.
-function uniqueTenant(prefix: string): { name: string; slug: string } {
-  const id = `${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
-  return { name: `${prefix} ${id}`, slug: `${prefix.toLowerCase().replace(/\s+/g, "-")}-${id}` };
-}
-
-/// Fills the creation form and lands on the new tenant's page.
-async function createTenant(page: import("@playwright/test").Page, name: string) {
-  await page.goto("/tenants/new");
-  await page.getByLabel("Name").fill(name);
-  await page.getByRole("button", { name: "Create tenant" }).click();
-  await expect(page).toHaveURL(/\/t\/[a-z0-9-]+\?/);
-}
 
 test("a user creates a tenant, owns it and renames it", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));

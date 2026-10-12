@@ -1,0 +1,145 @@
+//! `/t/{slug}/api-keys`: the store API keys of a tenant, for members with
+//! `api-keys:manage`. A key's token is shown once, right after its creation
+//! (it travels in a private cookie across the redirect), then only its hint.
+
+pub mod create;
+pub mod revoke;
+
+use timada_tenancy::{MAX_API_KEY_LABEL_LEN, PERMISSION_API_KEYS_MANAGE, api_keys_of_tenant};
+use topcoat::{
+    Result,
+    context::{Cx, app_context},
+    router::{href, page, query_params},
+    view::{View, view},
+};
+
+use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::auth::Flash;
+use crate::auth::cookies::{ApiKeyReveal, api_key_reveal, is_fresh};
+use crate::auth::{now, user_labels};
+use crate::db::ReadPool;
+use crate::ui::{document, format_time, notice};
+
+#[topcoat::router::query_params(error = bad_request)]
+struct ApiKeysQuery {
+    error: Option<String>,
+    message: Option<String>,
+}
+
+pub fn api_keys_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
+    href!(index, Slug(slug.to_owned()))
+        .query(Flash { error, message })
+        .resolve(cx)
+}
+
+/// The token created by the request before this one, read once: the cookie
+/// is removed whether or not it is still fresh.
+fn take_reveal(cx: &Cx) -> Option<ApiKeyReveal> {
+    let store = api_key_reveal(cx).parse().ok().flatten()?;
+    let reveal = store.get();
+    store.remove();
+    is_fresh(reveal.issued_at, now()).then_some(reveal)
+}
+
+#[page]
+pub async fn index(cx: &Cx) -> Result<impl View> {
+    let access = require_tenant(cx).await?;
+    access
+        .require_permission(cx, PERMISSION_API_KEYS_MANAGE)
+        .await?;
+    let query = query_params::<ApiKeysQuery>(cx)?;
+    let nav = TenantNav::of(cx, &access).await?;
+    let TenantAccess { tenant, .. } = access;
+    let reveal = take_reveal(cx);
+    let keys = api_keys_of_tenant(app_context::<ReadPool>(cx), &tenant.id).await?;
+    let ids: Vec<String> = keys.iter().map(|k| k.created_by.clone()).collect();
+    let labels = user_labels(cx, &ids).await?;
+    let slug = tenant.slug.clone();
+    let title = format!("API keys · {}", tenant.name);
+
+    Ok(view! {
+        document(
+            title: &title,
+            <header class="mb-8 flex items-center justify-between">
+                <h1 class="text-2xl font-semibold">"API keys"</h1>
+                <nav class="flex items-center gap-4 text-sm">
+                    <a class="underline" href=(href!(super::index, Slug(slug.clone())))>(&tenant.name)</a>
+                    if nav.members {
+                        <a class="underline" href=(href!(super::members::index, Slug(slug.clone())))>"Members"</a>
+                    }
+                    if nav.roles {
+                        <a class="underline" href=(href!(super::roles::index, Slug(slug.clone())))>"Roles"</a>
+                    }
+                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
+                </nav>
+            </header>
+            notice(error: query.error.as_deref(), message: query.message.as_deref())
+
+            if let Some(reveal) = &reveal {
+                <section class="mb-8 rounded border border-amber-300 bg-amber-50 p-4" data-api-key-reveal=(&reveal.key_id)>
+                    <h2 class="text-lg font-medium">"Your new key " <q>(&reveal.label)</q></h2>
+                    <p class="mt-1 text-sm text-amber-900">
+                        "Copy it now: this is the only time it is shown. A storefront presents it when it connects to this tenant's store."
+                    </p>
+                    <code class="mt-3 block select-all rounded border border-amber-200 bg-white px-3 py-2 font-mono text-sm" data-api-key-token="">(&reveal.token)</code>
+                </section>
+            }
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <p class="mb-3 text-sm text-neutral-500">
+                    "A key reads and writes everything in this tenant's event store. Revoke one the moment it may have leaked."
+                </p>
+                <table class="w-full text-left text-sm">
+                    <thead>
+                        <tr class="border-b border-neutral-200 text-neutral-500">
+                            <th class="py-2 font-medium">"Label"</th>
+                            <th class="py-2 font-medium">"Key"</th>
+                            <th class="py-2 font-medium">"Created"</th>
+                            <th class="py-2 font-medium">"Status"</th>
+                            <th class="py-2 font-medium"><span class="sr-only">"Actions"</span></th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-neutral-100">
+                        if keys.is_empty() {
+                            <tr><td class="py-2 text-neutral-500" colspan="5">"No key yet."</td></tr>
+                        }
+                        for key in &keys {
+                            <tr data-api-key=(&key.hint)>
+                                <td class="py-2">(&key.label)</td>
+                                <td class="py-2"><code>(&key.hint) "…"</code></td>
+                                <td class="py-2">
+                                    (labels.get(&key.created_by).cloned().unwrap_or_else(|| key.created_by.clone()))
+                                    ", " <time datetime=(key.created_at)>(format_time(key.created_at as u64))</time>
+                                </td>
+                                <td class="py-2" data-api-key-status=(if key.is_active() { "active" } else { "revoked" })>
+                                    (match key.revoked_at {
+                                        None => "Active".to_owned(),
+                                        Some(at) => format!("Revoked {}", format_time(at as u64)),
+                                    })
+                                </td>
+                                <td class="py-2 text-right">
+                                    if key.is_active() {
+                                        <form method="post" action=(href!(revoke::revoke, Slug(slug.clone())))>
+                                            <input type="hidden" name="key_id" value=(&key.id)>
+                                            <button class="rounded border border-red-700 px-2 py-1 text-xs text-red-700 hover:bg-red-50">"Revoke"</button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+
+            <section class="rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"Create a key"</h2>
+                <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="space-y-3">
+                    <label class="block text-sm" for="new-key-label">"Label"</label>
+                    <input id="new-key-label" name="label" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                        type="text" maxlength=(MAX_API_KEY_LABEL_LEN) required="" placeholder="Web storefront">
+                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Create key"</button>
+                </form>
+            </section>
+        )
+    })
+}
