@@ -4,8 +4,10 @@
 //! version it observes, and `write()` sends as `original_version`, never goes
 //! stale. None of them is snapshotted: streams are a handful of events.
 
+mod add_email;
 mod add_passkey;
 mod admin;
+mod change_password;
 mod check_password;
 mod complete_oauth2;
 mod email_challenge;
@@ -30,7 +32,9 @@ mod update_profile;
 
 use std::ops::Deref;
 
+pub use add_email::*;
 pub use add_passkey::*;
+pub use change_password::*;
 pub use check_password::*;
 pub use complete_oauth2::*;
 pub use email_challenge::*;
@@ -46,10 +50,10 @@ use evento::{
 
 use crate::aggregator::{
     AdminGranted, AdminRevoked, AttemptFailed, Claimed, CodeIssued, Consumed, Created, Deleted,
-    EmailRegistered, Ended, FirstUserClaimed, Linked, OAuth2AccountLinked, OAuth2AccountUnlinked,
-    PasskeyAdded, PasskeyRemoved, PasskeyRenamed, PasswordChanged, ProfileUpdated, Refreshed,
-    Registered, Released, Removed, SessionsRevoked, SignedIn, SignedInWithPassword, SignedOut,
-    Started, Unlinked, Updated,
+    EmailAdded, EmailRegistered, Ended, FirstUserClaimed, Linked, OAuth2AccountLinked,
+    OAuth2AccountUnlinked, PasskeyAdded, PasskeyRemoved, PasskeyRenamed, PasswordChanged,
+    ProfileUpdated, Refreshed, Registered, Released, Removed, SessionsRevoked, SignedIn,
+    SignedInWithPassword, SignedOut, Started, Unlinked, Updated,
 };
 use crate::error::IdentityError;
 use crate::value_object::{
@@ -105,7 +109,8 @@ pub struct PasswordMethod {
     pub email: String,
     /// PHC string.
     pub password_hash: String,
-    /// Unix seconds of the latest `EmailRegistered` / `PasswordChanged`.
+    /// Unix seconds of the latest `EmailRegistered` / `EmailAdded` /
+    /// `PasswordChanged`.
     pub changed_at: u64,
 }
 
@@ -209,6 +214,7 @@ pub fn user_projection<E: Executor>() -> Projection<E, UserState> {
         .handler(on_email_registered())
         .handler(on_password_changed())
         .handler(on_signed_in_with_password())
+        .handler(on_email_added())
         .skip::<SignedOut>()
         .strict()
 }
@@ -401,6 +407,16 @@ async fn on_signed_in_with_password(
             at: event.timestamp,
         },
     );
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_email_added(event: Event<EmailAdded>, user: &mut UserState) -> anyhow::Result<()> {
+    user.password = Some(PasswordMethod {
+        email: event.data.email.to_owned(),
+        password_hash: event.data.password_hash.to_owned(),
+        changed_at: event.timestamp,
+    });
     Ok(())
 }
 

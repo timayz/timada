@@ -113,3 +113,47 @@ test("an address that already has an account cannot register again", async ({ pa
   await expect(page).toHaveURL(/\/auth\/register\?error=weak_password/);
   await expect(page.getByRole("alert").first()).toContainText("between 8 and 128");
 });
+
+test("the password changes from the account page and signs other browsers out", async ({ browser }) => {
+  const email = uniqueEmail("chg");
+  const laptop = await browser.newContext();
+  const page = await laptop.newPage();
+  await registerWithEmail(page, email);
+  const phone = await browser.newContext();
+  const phonePage = await phone.newPage();
+  await signInWithEmail(phonePage, email);
+
+  await page.goto("/auth/account");
+  const section = page.locator("section", { hasText: "E-mail and password" });
+  await expect(section).toContainText("cannot be changed");
+  const fill = async (current: string, next: string, confirm: string) => {
+    await page.getByLabel("Current password").fill(current);
+    await page.getByLabel("New password", { exact: true }).fill(next);
+    await page.getByLabel("Confirm the new password").fill(confirm);
+    await page.getByRole("button", { name: "Change password" }).click();
+  };
+
+  await fill(PASSWORD, NEW_PASSWORD, "something else");
+  await expect(page).toHaveURL(/\/auth\/account\?error=password_mismatch$/);
+  await expect(page.getByRole("alert").first()).toContainText("do not match");
+  await fill("not the password", NEW_PASSWORD, NEW_PASSWORD);
+  await expect(page).toHaveURL(/\/auth\/account\?error=wrong_password$/);
+  await expect(page.getByRole("alert").first()).toContainText("current password is wrong");
+  await fill(PASSWORD, NEW_PASSWORD, NEW_PASSWORD);
+  await expect(page).toHaveURL(/\/auth\/account\?message=/);
+  await expect(page.getByRole("status")).toContainText("Password changed");
+  await expect(page.locator("section", { hasText: "Profile" })).toContainText(email);
+
+  // The phone was signed out; only the new password opens the door.
+  await phonePage.goto("/auth/account");
+  await expect(phonePage).toHaveURL(/\/auth\/login$/);
+  await phonePage.getByLabel("E-mail address").fill(email);
+  await phonePage.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await phonePage.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(phonePage).toHaveURL(/\/auth\/login\?error=invalid_credentials$/);
+  await signInWithEmail(phonePage, email, NEW_PASSWORD);
+  await expect(phonePage.locator("header").getByText("Signed in as")).toContainText(email);
+
+  await laptop.close();
+  await phone.close();
+});

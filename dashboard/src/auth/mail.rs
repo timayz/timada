@@ -1,13 +1,13 @@
 //! The one e-mail this application sends: a code that proves an address.
 
 use anyhow::Context as _;
-use timada_identity::ChallengePurpose;
 use topcoat::{
     Result,
     context::{Cx, app_context},
     mail::{Mail, MailConfig, Mailbox, SmtpTransport, mail, send},
 };
 
+use crate::auth::cookies::EmailFlowKind;
 use crate::config;
 
 /// Who the codes come from (`mail.from`).
@@ -34,31 +34,34 @@ pub fn build(config: &config::MailConfig) -> anyhow::Result<Mailer> {
 }
 
 /// Mails `code` to `to`. The code is never logged; a delivery failure is.
-pub async fn send_code(cx: &Cx, to: &str, purpose: ChallengePurpose, code: &str) -> Result<()> {
-    let mail = code_mail(cx, to, purpose, code).await?;
+pub async fn send_code(cx: &Cx, to: &str, kind: EmailFlowKind, code: &str) -> Result<()> {
+    let mail = code_mail(cx, to, kind, code).await?;
     send(cx, mail).await?;
     Ok(())
 }
 
-fn subject(purpose: ChallengePurpose) -> &'static str {
-    match purpose {
-        ChallengePurpose::Register => "Confirm your e-mail address for Timada",
-        ChallengePurpose::SignIn => "Your Timada sign-in code",
-        ChallengePurpose::ResetPassword => "Reset your Timada password",
+fn subject(kind: EmailFlowKind) -> &'static str {
+    match kind {
+        EmailFlowKind::Register | EmailFlowKind::AddEmail => {
+            "Confirm your e-mail address for Timada"
+        }
+        EmailFlowKind::SignIn => "Your Timada sign-in code",
+        EmailFlowKind::ResetPassword => "Reset your Timada password",
     }
 }
 
-async fn code_mail(cx: &Cx, to: &str, purpose: ChallengePurpose, code: &str) -> Result<Mail> {
+async fn code_mail(cx: &Cx, to: &str, kind: EmailFlowKind, code: &str) -> Result<Mail> {
     let from = app_context::<MailSender>(cx).0.clone();
-    let intro = match purpose {
-        ChallengePurpose::Register => "Enter this code to finish creating your account:",
-        ChallengePurpose::SignIn => "Enter this code to finish signing in:",
-        ChallengePurpose::ResetPassword => "Enter this code to choose a new password:",
+    let intro = match kind {
+        EmailFlowKind::Register => "Enter this code to finish creating your account:",
+        EmailFlowKind::SignIn => "Enter this code to finish signing in:",
+        EmailFlowKind::ResetPassword => "Enter this code to choose a new password:",
+        EmailFlowKind::AddEmail => "Enter this code to add this address to your account:",
     };
     Ok(mail! {
         from: from,
         to: Mailbox::new(to)?,
-        subject: subject(purpose),
+        subject: subject(kind),
         html: {
             cx =>
             <p>(intro)</p>
@@ -84,7 +87,7 @@ mod tests {
             .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
             .build();
 
-        send_code(&cx, "alice@example.com", ChallengePurpose::SignIn, "123456")
+        send_code(&cx, "alice@example.com", EmailFlowKind::SignIn, "123456")
             .await
             .unwrap();
 

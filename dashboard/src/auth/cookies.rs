@@ -5,6 +5,7 @@
 //! single-use.
 
 use serde::{Deserialize, Serialize};
+use timada_identity::ChallengePurpose;
 use topcoat::{
     context::Cx,
     cookie::{Cookies, SameSite, UnparsedCookieStore, cookie_store, private_cookies, time},
@@ -39,19 +40,44 @@ pub struct PasskeyRegistrationFlow {
     pub issued_at: u64,
 }
 
+/// What a mailed code is for, as the pages see it. Adding an address to an
+/// account proves the same thing as registering one (a free address whose
+/// mail the person reads), so both issue a `Register` code: the domain's
+/// [`ChallengePurpose`] is frozen in the event store and the difference only
+/// matters to the page the code comes back to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailFlowKind {
+    Register,
+    SignIn,
+    ResetPassword,
+    /// A signed-in user adds the e-mail + password method.
+    AddEmail,
+}
+
+impl EmailFlowKind {
+    pub fn purpose(self) -> ChallengePurpose {
+        match self {
+            Self::Register | Self::AddEmail => ChallengePurpose::Register,
+            Self::SignIn => ChallengePurpose::SignIn,
+            Self::ResetPassword => ChallengePurpose::ResetPassword,
+        }
+    }
+}
+
 /// A mailed code on its way: which address, why, and what to do once it is
 /// back. Unlike the other flows this cookie is not single-use: a wrong code
 /// keeps it, and it is removed on success, expiry or too many attempts (the
 /// attempts themselves are counted server-side).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmailFlow {
-    /// A [`timada_identity::ChallengePurpose`] as `as_str`.
-    pub purpose: String,
+    pub kind: EmailFlowKind,
     /// Normalized address.
     pub email: String,
-    /// `register`: the hash of the password typed on the sign-up form.
+    /// `Register`, `AddEmail`: the hash of the password typed on the form.
     pub password_hash: Option<String>,
-    /// `sign_in`: the user the password identified.
+    /// `SignIn`: the user the password identified. `AddEmail`: the user the
+    /// address is for.
     pub user_id: Option<String>,
     pub issued_at: u64,
 }
