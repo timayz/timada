@@ -20,6 +20,7 @@ event timada-identity/User::PasskeyRemoved { credential_id: String }
 event timada-identity/User::PasskeyRenamed { credential_id: String, name: String }
 event timada-identity/User::ProfileUpdated { account: String, label: String }
 event timada-identity/User::Registered { account: String, label: String, method: SignInMethod }
+event timada-identity/User::SessionsRevoked { except_session: Option<String> }
 event timada-identity/User::SignedIn { method: SignInMethod, provider: Option<String>, credential_id: Option<String>, user_agent: Option<String>, ip: Option<String> }
 event timada-identity/User::SignedOut unit
 

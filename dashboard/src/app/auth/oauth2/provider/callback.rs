@@ -9,12 +9,12 @@ use topcoat::{
 };
 
 use super::Provider;
-use crate::app::auth::{account_url, error_code, home_url, login_url};
+use crate::app::auth::{account_url, error_code, login_url, signed_in_url};
 use crate::auth::{
     cookies::{is_fresh, oidc_flow},
     current_user, identity, login_context, now,
     oidc::Providers,
-    start_session,
+    sign_in_as,
 };
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -100,8 +100,12 @@ pub async fn callback(cx: &Cx) -> Result<SeeOther> {
             Ok(see_other(account_url(cx, None, Some("Provider linked."))))
         }
         Ok(outcome) => {
-            start_session(cx, &outcome.user_id).await?;
-            Ok(see_other(home_url(cx)))
+            sign_in_as(cx, &outcome.user_id).await?;
+            Ok(see_other(signed_in_url(
+                cx,
+                &outcome.label,
+                outcome.switched_from.is_some(),
+            )))
         }
         Err(err) if err.is_user_facing() => Ok(see_other(failure_url(error_code(&err)))),
         Err(err) => Err(err.into()),

@@ -9,10 +9,12 @@ mod end_session;
 mod first_user;
 mod oauth2_index;
 mod passkey_index;
+mod refresh_session;
 mod register_passkey;
 mod remove_passkey;
 mod rename_passkey;
 mod resolve_session;
+mod revoke_sessions;
 mod sign_in;
 mod sign_in_passkey;
 mod start_session;
@@ -23,6 +25,8 @@ use std::ops::Deref;
 
 pub use complete_oauth2::*;
 pub use register_passkey::*;
+pub use resolve_session::*;
+pub use sign_in_passkey::*;
 
 use evento::{
     Executor, Projection, ProjectionAggregate, WriteBuilder, WriteError, metadata::Event,
@@ -31,7 +35,7 @@ use evento::{
 use crate::aggregator::{
     AdminGranted, Created, Deleted, Ended, FirstUserClaimed, Linked, OAuth2AccountLinked,
     OAuth2AccountUnlinked, PasskeyAdded, PasskeyRemoved, PasskeyRenamed, ProfileUpdated, Refreshed,
-    Registered, Removed, SignedIn, SignedOut, Started, Unlinked, Updated,
+    Registered, Removed, SessionsRevoked, SignedIn, SignedOut, Started, Unlinked, Updated,
 };
 use crate::error::IdentityError;
 use crate::value_object::{
@@ -93,6 +97,28 @@ pub struct SignInRecord {
 /// Sign-ins kept on the user for the account page's history.
 const SIGN_IN_HISTORY: usize = 50;
 
+/// The latest "sign out everywhere" on a user. Sessions started before it are
+/// void; the one it names (the browser that asked) survives.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionsRevocation {
+    /// Unix milliseconds of the revocation.
+    pub at_ms: u64,
+    /// Session aggregate id spared by the revocation.
+    pub except_session: Option<String>,
+}
+
+impl SessionsRevocation {
+    pub fn covers(&self, session: &SessionState) -> bool {
+        session.started_at_ms <= self.at_ms
+            && self.except_session.as_deref() != Some(session.id.as_str())
+    }
+}
+
+/// Unix milliseconds of an event, for cutoffs where a second is too coarse.
+fn event_millis(event: &evento::Event) -> u64 {
+    event.timestamp * 1000 + u64::from(event.timestamp_subsec)
+}
+
 #[evento::projection(id = id, name = "timada-identity/UserState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
@@ -109,6 +135,7 @@ pub struct UserState {
     pub registered_at: u64,
     /// The stream stays replayable but every command treats the user as gone.
     pub deleted: bool,
+    pub sessions_revoked: Option<SessionsRevocation>,
 }
 
 impl UserState {
@@ -147,6 +174,7 @@ pub fn user_projection<E: Executor>() -> Projection<E, UserState> {
         .handler(on_passkey_removed())
         .handler(on_signed_in())
         .handler(on_deleted())
+        .handler(on_sessions_revoked())
         .skip::<SignedOut>()
         .strict()
 }
@@ -267,6 +295,18 @@ async fn on_deleted(_event: Event<Deleted>, user: &mut UserState) -> anyhow::Res
     Ok(())
 }
 
+#[evento::handler]
+async fn on_sessions_revoked(
+    event: Event<SessionsRevoked>,
+    user: &mut UserState,
+) -> anyhow::Result<()> {
+    user.sessions_revoked = Some(SessionsRevocation {
+        at_ms: event_millis(&event),
+        except_session: event.data.except_session.to_owned(),
+    });
+    Ok(())
+}
+
 // =============================================================================
 // OAuth2Account index
 // =============================================================================
@@ -378,9 +418,17 @@ async fn on_passkey_credential_removed(
 pub struct SessionState {
     pub id: String,
     pub user_id: String,
+    /// Unix seconds of `Started`.
+    pub started_at: u64,
+    /// Unix milliseconds of `Started`, compared against a revocation cutoff.
+    pub started_at_ms: u64,
     /// Unix seconds.
     pub expires_at: u64,
+    /// Unix seconds of the latest `Refreshed`.
+    pub refreshed_at: Option<u64>,
     pub ended: bool,
+    pub user_agent: Option<String>,
+    pub ip: Option<String>,
 }
 
 impl SessionState {
@@ -401,8 +449,12 @@ pub fn session_projection<E: Executor>() -> Projection<E, SessionState> {
 async fn on_session_started(event: Event<Started>, state: &mut SessionState) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
     state.user_id = event.data.user_id.to_owned();
+    state.started_at = event.timestamp;
+    state.started_at_ms = event_millis(&event);
     state.expires_at = event.data.expires_at;
     state.ended = false;
+    state.user_agent = event.data.user_agent.to_owned();
+    state.ip = event.data.ip.to_owned();
     Ok(())
 }
 
@@ -412,6 +464,7 @@ async fn on_session_refreshed(
     state: &mut SessionState,
 ) -> anyhow::Result<()> {
     state.expires_at = event.data.expires_at;
+    state.refreshed_at = Some(event.timestamp);
     Ok(())
 }
 

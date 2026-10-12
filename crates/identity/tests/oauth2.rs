@@ -78,16 +78,47 @@ async fn create_user_rejects_a_registered_identity() {
 }
 
 #[tokio::test]
-async fn signed_in_browsers_cannot_login_or_register() {
+async fn signing_in_while_signed_in_switches_or_re_signs_in() {
     let cmd = command().await;
-    let user_id = register_via_oauth2(&cmd, "google", "1").await;
-    for mode in [
-        OAuth2Mode::Login,
-        OAuth2Mode::CreateUser,
-        OAuth2Mode::CreateUserOrLogin,
-    ] {
+    let alice = register_via_oauth2(&cmd, "google", "alice").await;
+    let bob = register_via_oauth2(&cmd, "google", "bob").await;
+
+    // Bob's identity from Alice's browser: Bob signs in, Alice's session goes.
+    for mode in [OAuth2Mode::Login, OAuth2Mode::CreateUserOrLogin] {
+        let outcome = cmd
+            .complete_oauth2(oauth2(mode, Some(&alice), "google", "bob"))
+            .await
+            .unwrap();
+        assert_eq!(outcome.user_id, bob, "{mode:?}");
+        assert_eq!(outcome.label, "User bob");
+        assert_eq!(outcome.switched_from.as_deref(), Some(alice.as_str()));
+        assert!(!outcome.created && !outcome.linked);
+    }
+    assert_eq!(
+        cmd.load_user(&bob).await.unwrap().unwrap().sign_ins.len(),
+        3
+    );
+
+    // Her own identity: a plain re-sign-in.
+    let outcome = cmd
+        .complete_oauth2(oauth2(OAuth2Mode::Login, Some(&alice), "google", "alice"))
+        .await
+        .unwrap();
+    assert_eq!(outcome.user_id, alice);
+    assert_eq!(outcome.switched_from, None);
+    assert_eq!(
+        cmd.load_user(&alice).await.unwrap().unwrap().sign_ins.len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn creating_an_account_while_signed_in_is_refused() {
+    let cmd = command().await;
+    let alice = register_via_oauth2(&cmd, "google", "alice").await;
+    for mode in [OAuth2Mode::CreateUser, OAuth2Mode::CreateUserOrLogin] {
         let err = cmd
-            .complete_oauth2(oauth2(mode, Some(&user_id), "google", "2"))
+            .complete_oauth2(oauth2(mode, Some(&alice), "google", "new"))
             .await
             .unwrap_err();
         assert!(
@@ -95,6 +126,28 @@ async fn signed_in_browsers_cannot_login_or_register() {
             "{mode:?}: {err}"
         );
     }
+    assert!(
+        cmd.load_oauth2_account("google", "new")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let err = cmd
+        .complete_oauth2(oauth2(
+            OAuth2Mode::CreateUser,
+            Some(&alice),
+            "google",
+            "alice",
+        ))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::AlreadyRegistered), "{err}");
+    let err = cmd
+        .complete_oauth2(oauth2(OAuth2Mode::Login, Some(&alice), "google", "ghost"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::NotRegistered), "{err}");
     let err = cmd
         .complete_oauth2(oauth2(OAuth2Mode::AddToUser, None, "google", "2"))
         .await

@@ -49,6 +49,11 @@ pub enum User {
     },
     SignedOut,
     Deleted,
+    /// Every session started up to this event's time is void, except the one
+    /// named (the browser that asked, when a user signs out everywhere else).
+    SessionsRevoked {
+        except_session: Option<String>,
+    },
 }
 
 /// Index entry: one provider identity (`provider`, `sub`) → one user. The

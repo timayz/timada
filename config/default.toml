@@ -11,6 +11,10 @@ port = 3000
 # is tagged with it, so background processing can be scoped per region. Omit
 # for a single-region deployment.
 # region = "eu-west-1"
+# Reverse proxies whose X-Forwarded-For header is trusted, as IP addresses or
+# CIDR networks. Without it the sign-in history records the proxy's address.
+# Behind the Docker-hosted Traefik of compose.yml: ["172.16.0.0/12"].
+trusted_proxies = []
 
 [database]
 # sqlx DSN. The file holds events, projections and the consensus journal.
@@ -24,7 +28,9 @@ max_connections = 3
 # through TIMADA__AUTH__SECRET_KEY in production rather than in this file.
 # Rotating it only interrupts sign-ins in progress.
 # secret_key = ""
-# How long a signed-in session stays valid, in seconds (14 days).
+# How long a signed-in session stays valid, in seconds (14 days). A session in
+# use is renewed for the full duration once half of it has elapsed, so only
+# idle browsers are signed out.
 session_lifetime_secs = 1209600
 # Name the browser shows when someone creates a passkey for this site.
 rp_name = "Timada"

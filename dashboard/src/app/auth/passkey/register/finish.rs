@@ -11,8 +11,8 @@ use crate::app::auth::passkey::{Done, into_error};
 use crate::app::auth::{account_url, home_url};
 use crate::auth::{
     cookies::{is_fresh, passkey_registration_flow},
-    current_user, identity, login_context, now, start_session,
-    webauthn::{encode_credential_id, passkey_to_json},
+    current_user, identity, login_context, now, sign_in_as,
+    webauthn::{aaguid_from_attestation, encode_credential_id, passkey_to_json},
 };
 
 #[derive(Deserialize)]
@@ -64,8 +64,13 @@ pub async fn finish(cx: &Cx, Json(req): Json<FinishRequest>) -> Result<Json<Done
             passkey: VerifiedPasskey {
                 credential_id: encode_credential_id(passkey.cred_id()),
                 passkey_json: passkey_to_json(&passkey).map_err(topcoat::Error::from_anyhow)?,
-                // The `Passkey` type keeps attestation internals private.
-                aaguid: String::new(),
+                // The `Passkey` type keeps attestation internals private, so
+                // read the authenticator model id off the raw response.
+                aaguid: aaguid_from_attestation(
+                    req.credential.response.attestation_object.as_ref(),
+                )
+                .map(|id| id.hyphenated().to_string())
+                .unwrap_or_default(),
                 rp_id: webauthn
                     .get_allowed_origins()
                     .first()
@@ -82,7 +87,7 @@ pub async fn finish(cx: &Cx, Json(req): Json<FinishRequest>) -> Result<Json<Done
         .map_err(into_error)?;
 
     if outcome.created {
-        start_session(cx, &outcome.user_id).await?;
+        sign_in_as(cx, &outcome.user_id).await?;
         Ok(Json(Done {
             location: home_url(cx),
         }))

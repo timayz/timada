@@ -61,7 +61,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "session_changed" => {
             "Your session changed while this step was in progress. Please try again."
         }
-        "signed_in" => "You are already signed in.",
+        "signed_in" => "You are already signed in. Sign out first to create another account.",
         "sign_in_required" => "Please sign in first.",
         "last_method" => "You cannot remove your only way to sign in.",
         "too_many_passkeys" => "This account has reached its passkey limit.",

@@ -69,7 +69,7 @@ test("register with a passkey, sign out, sign in without a username", async ({ p
   await expect(page.getByRole("status")).toContainText("Passkey renamed.");
   await expect(passkeyRows.first().getByLabel("Passkey name")).toHaveValue("Laptop");
 
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(page).toHaveURL(/\/auth\/login$/);
   await page.goto("/auth/account");
   await expect(page).toHaveURL(/\/auth\/login$/);

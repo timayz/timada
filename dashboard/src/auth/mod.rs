@@ -8,7 +8,7 @@ pub mod webauthn;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use timada_identity::{Command, LoginContext, UserState};
+use timada_identity::{Command, LoginContext, SessionState, UserState};
 use topcoat::{
     Result,
     context::{Cx, app_context, memoize},
@@ -17,10 +17,11 @@ use topcoat::{
         href,
         request::{client_ip, headers},
     },
-    session,
+    session::{self, TokenHash},
 };
 
 use crate::cluster::Executor;
+use crate::config::Config;
 
 /// The command gateway over this node's executor.
 pub fn identity(cx: &Cx) -> Command<Executor> {
@@ -41,7 +42,8 @@ pub fn unix_seconds(time: SystemTime) -> u64 {
 }
 
 /// The signed-in user, resolved once per request from the session cookie.
-/// `None` when there is no session, it expired, or the user is gone.
+/// `None` when there is no session, it expired, was revoked, or the user is
+/// gone. A session past half its lifetime is renewed on the way.
 #[memoize(as_ref)]
 pub async fn current_user(cx: &Cx) -> Option<UserState> {
     let hash = match session::token_hash(cx).await {
@@ -52,12 +54,39 @@ pub async fn current_user(cx: &Cx) -> Option<UserState> {
             return None;
         }
     };
-    match identity(cx).resolve_session(&hash, now()).await {
-        Ok(user) => user,
+    let resolved = match identity(cx).resolve_session(&hash, now()).await {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) => return None,
         Err(err) => {
             tracing::error!(%err, "cannot resolve the session");
-            None
+            return None;
         }
+    };
+    slide_expiry(cx, &hash, &resolved.session).await;
+    Some(resolved.user)
+}
+
+/// Sliding expiration: once half the lifetime has elapsed, re-issue the
+/// cookie for a full lifetime and extend the record. Best effort: the
+/// request proceeds on the current session whatever happens here.
+async fn slide_expiry(cx: &Cx, hash: &TokenHash, session: &SessionState) {
+    let lifetime = app_context::<Config>(cx).auth.session_lifetime_secs;
+    if session.expires_at.saturating_sub(now()) >= lifetime / 2 {
+        return;
+    }
+    let refreshed = match session::refresh(cx).await {
+        Ok(Some(refreshed)) => refreshed,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::warn!(%err, "cannot re-issue the session cookie");
+            return;
+        }
+    };
+    if let Err(err) = identity(cx)
+        .refresh_session(hash, unix_seconds(refreshed.expires_at))
+        .await
+    {
+        tracing::warn!(%err, "cannot extend the session record");
     }
 }
 
@@ -79,10 +108,18 @@ pub fn login_context(cx: &Cx) -> LoginContext {
     }
 }
 
-/// Starts a browser session for `user_id` and records it. Call after a
-/// successful sign-in or registration.
-pub async fn start_session(cx: &Cx, user_id: &str) -> Result<()> {
-    let session = session::start(cx).await?;
+/// Signs the browser in as `user_id` after a successful sign-in or
+/// registration. A session already present (switching accounts, or signing in
+/// again) is replaced: its token is rotated and its record ended, so no token
+/// ever outlives the user it was issued to.
+pub async fn sign_in_as(cx: &Cx, user_id: &str) -> Result<()> {
+    let session = match session::rotate(cx).await? {
+        Some(rotation) => {
+            identity(cx).end_session(&rotation.revoked).await?;
+            rotation.session
+        }
+        None => session::start(cx).await?,
+    };
     identity(cx)
         .start_session(
             &session.token_hash,
