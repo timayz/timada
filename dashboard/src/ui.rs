@@ -94,6 +94,15 @@ pub fn describe_error(code: &str) -> &'static str {
         "role_exists" => "This role already exists.",
         "unknown_role" => "This role does not exist.",
         "role_in_use" => "Move its members to another role before removing it.",
+        "invalid_product_name" => "A product name is 1 to 120 characters.",
+        "invalid_product_slug" => "A product slug is 2 to 64 lowercase letters, digits and dashes.",
+        "product_slug_taken" => "Another product already uses this slug.",
+        "invalid_description" => "A description is at most 4000 characters.",
+        "invalid_amount" => "Enter the price as a number with at most two decimals, like 12.50.",
+        "invalid_currency" => "Choose one of the listed currencies.",
+        "product_not_found" => "This product does not exist.",
+        "product_archived" => "This product is archived and cannot change any more.",
+        "product_not_priced" => "Set a price before publishing.",
         "invalid_permission" => "One of the permissions is not known.",
         "already_member" => "This user is already a member.",
         "not_member" => "This user is not a member.",
@@ -115,6 +124,8 @@ pub fn describe_permission(permission: &str) -> &'static str {
         }
         "roles:manage" => "Define, edit and remove roles",
         "api-keys:manage" => "Create and revoke the store API keys",
+        "products:read" => "See the products",
+        "products:manage" => "Create, edit, publish and archive products",
         _ => "Unknown permission",
     }
 }

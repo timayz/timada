@@ -2,6 +2,15 @@
 # `event` and `type` lines are frozen — add a new variant instead of editing
 # one. A `view` line may change when its projection's `.revision(n)` grows.
 
+event timada-catalog/Product::Archived { archived_by: String }
+event timada-catalog/Product::Created { slug: String, name: String, created_by: String }
+event timada-catalog/Product::Described { description: String, described_by: String }
+event timada-catalog/Product::Priced { amount_cents: u64, currency: String, priced_by: String }
+event timada-catalog/Product::Published { published_by: String }
+event timada-catalog/Product::Renamed { name: String, renamed_by: String }
+event timada-catalog/Product::Unpublished { unpublished_by: String }
+event timada-catalog/ProductSlug::Claimed { product_id: String }
+event timada-catalog/ProductSlug::Released unit
 event timada-identity/EmailAccount::Claimed { user_id: String, email: String }
 event timada-identity/EmailAccount::Released unit
 event timada-identity/EmailChallenge::AttemptFailed unit

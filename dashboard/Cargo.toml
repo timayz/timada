@@ -21,6 +21,7 @@ clap.workspace = true
 config.workspace = true
 timada-identity = { path = "../crates/identity" }
 timada-tenancy = { path = "../crates/tenancy" }
+timada-catalog = { path = "../crates/catalog" }
 openidconnect.workspace = true
 webauthn-rs.workspace = true
 webauthn-rs-proto.workspace = true

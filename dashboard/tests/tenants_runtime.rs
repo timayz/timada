@@ -1,7 +1,8 @@
 //! The tenant runtime end to end on one node: a tenant's database is created
 //! on first use, written and read through its own consensus group, closed when
 //! idle or when too many are open, and reopened with its read models resuming
-//! where they stopped.
+//! where they stopped. The catalog's product list is the real read model fed
+//! this way; a probe subscription records what the runtime delivers.
 //!
 //! The dashboard is a binary crate, so the runtime is reached through the
 //! binary's own test harness (`#[path]` includes of the modules under test),
@@ -26,6 +27,7 @@ use evento_accord::GroupId;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
+use timada_catalog::{CreateProduct, count_products, products_of_tenant};
 use timada_tenancy::aggregator::{Renamed, Tenant};
 use timada_tenancy::{Command, CreateTenant, TenantState, read_model_subscription};
 
@@ -88,6 +90,9 @@ async fn harness(max_open: usize) -> Harness {
             .add_migrations(timada_tenancy::migrations())
             .unwrap();
         migrator
+            .add_migrations(timada_catalog::migrations())
+            .unwrap();
+        migrator
             .run(&mut *conn, &evento::migrator::Plan::apply_all())
             .await
             .unwrap();
@@ -108,7 +113,10 @@ async fn harness(max_open: usize) -> Harness {
         None,
         platform.clone(),
         pool.clone(),
-        vec![probe(seen.clone())],
+        vec![
+            probe(seen.clone()),
+            Arc::new(timada_catalog::read_model_subscription),
+        ],
     );
     Harness {
         tenants,
@@ -319,6 +327,80 @@ async fn suspended_and_unknown_tenants_are_not_opened() {
         h.tenants.status(&acme.id),
         TenantStatus::Running { .. }
     ));
+
+    h.tenants.shutdown().await;
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+/// Waits until the shared product list of `tenant` satisfies `ok`.
+async fn wait_products(
+    pool: &SqlitePool,
+    tenant: &TenantState,
+    what: &str,
+    mut ok: impl FnMut(&[timada_catalog::ProductRow]) -> bool,
+) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let rows = products_of_tenant(pool, &tenant.id, None, 0, 10)
+                .await
+                .unwrap();
+            if ok(&rows) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out: {what}"));
+}
+
+#[tokio::test]
+async fn a_tenant_read_model_lands_in_the_shared_database() {
+    let h = harness(8).await;
+    let acme = h.create("acme").await;
+    let zeta = h.create("zeta").await;
+
+    // A product written through acme's own store shows up in the shared
+    // list, under acme only.
+    let catalog = timada_catalog::Command(h.tenants.open(&acme).await.unwrap());
+    let mug = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Blue Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    wait_products(&h.pool, &acme, "the product is listed", |rows| {
+        rows.len() == 1 && rows[0].id == mug.id
+    })
+    .await;
+    assert_eq!(count_products(&h.pool, &zeta.id, None).await.unwrap(), 0);
+    assert!(
+        catalog
+            .load_product_by_slug("blue-mug")
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // Closed when idle, reopened on use: the read model resumes from its
+    // cursor in the tenant's file and updates the same row.
+    tokio::time::sleep(IDLE * 4).await;
+    h.tenants.sweep().await;
+    assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
+    let catalog = timada_catalog::Command(h.tenants.open(&acme).await.unwrap());
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    wait_products(&h.pool, &acme, "the price reaches the row", |rows| {
+        rows.len() == 1 && rows[0].amount_cents == Some(1250)
+    })
+    .await;
+    assert_eq!(count_products(&h.pool, &acme.id, None).await.unwrap(), 1);
 
     h.tenants.shutdown().await;
     let _ = std::fs::remove_dir_all(&h.dir);

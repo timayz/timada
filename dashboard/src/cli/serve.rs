@@ -113,10 +113,12 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 }
 
 /// The read models fed from each tenant's own stream into the shared
-/// database. None yet: the first tenant-scoped bounded context registers its
-/// subscription here.
+/// database: the catalog's product list. Every tenant-scoped bounded context
+/// registers its subscription here.
 fn tenant_subscriptions() -> Vec<TenantSubscription> {
-    Vec::new()
+    vec![Arc::new(|pool, tenant_id| {
+        timada_catalog::read_model_subscription(pool, tenant_id)
+    })]
 }
 
 async fn start_read_model(
