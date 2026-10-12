@@ -2,8 +2,9 @@ mod common;
 
 use common::*;
 use timada_identity::{
-    CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, ChallengePurpose, IdentityError, RegisterWithPassword,
-    ResetPassword, SignInKind, SignInWithPassword, hash_password,
+    AddEmail, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, ChallengePurpose, ChangePassword,
+    IdentityError, RegisterWithPassword, ResetPassword, SignInKind, SignInWithPassword,
+    hash_password,
 };
 
 fn registration(email: &str, code: &str, hash: &str) -> RegisterWithPassword {
@@ -383,5 +384,168 @@ async fn two_registrations_for_one_address_make_one_user() {
             .unwrap()
             .unwrap()
             .consumed
+    );
+}
+
+#[tokio::test]
+async fn the_password_changes_with_the_current_one() {
+    let cmd = command().await;
+    let alice = register_via_email(&cmd, "alice@example.com").await;
+    let bob = register_via_oauth2(&cmd, "google", "bob").await;
+    let new_hash = hash_password("a brand new password").await.unwrap();
+    let change = |user: &str, current: &str| ChangePassword {
+        user_id: user.to_owned(),
+        current_password: current.to_owned(),
+        new_password_hash: new_hash.clone(),
+    };
+
+    let err = cmd
+        .change_password(change(&alice, "not the password"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::WrongPassword), "{err}");
+    // No e-mail + password method: nothing to change.
+    let err = cmd
+        .change_password(change(&bob, PASSWORD))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::NotRegistered), "{err}");
+    let err = cmd
+        .change_password(change("nobody", PASSWORD))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::UserNotFound), "{err}");
+
+    cmd.change_password(change(&alice, PASSWORD)).await.unwrap();
+    let user = cmd.load_user(&alice).await.unwrap().unwrap();
+    assert_eq!(user.password.as_ref().unwrap().password_hash, new_hash);
+    assert_eq!(user.sign_ins.len(), 1, "a change is not a sign-in");
+    let err = cmd
+        .check_password("alice@example.com", PASSWORD)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::InvalidCredentials), "{err}");
+    cmd.check_password("alice@example.com", "a brand new password")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_provider_user_adds_an_address_once() {
+    let cmd = command().await;
+    let alice = register_via_email(&cmd, "alice@example.com").await;
+    let bob = register_via_oauth2(&cmd, "google", "bob").await;
+    let hash = hash_password(PASSWORD).await.unwrap();
+    let add = |session: Option<&str>, bound: &str, email: &str, code: &str| AddEmail {
+        session_user_id: session.map(str::to_owned),
+        bound_user_id: bound.to_owned(),
+        email: email.to_owned(),
+        code: code.to_owned(),
+        password_hash: hash.clone(),
+    };
+
+    // A taken address gets no code.
+    let err = cmd
+        .issue_email_code("alice@example.com", ChallengePurpose::Register, NOW)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::AlreadyRegistered), "{err}");
+
+    let issued = cmd
+        .issue_email_code("Bob@Example.com", ChallengePurpose::Register, NOW)
+        .await
+        .unwrap();
+    // The browser must still be signed in as the user the flow was for.
+    let err = cmd
+        .add_email(
+            add(Some(&alice), &bob, "bob@example.com", &issued.code),
+            NOW + 1,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::SessionMismatch), "{err}");
+    let err = cmd
+        .add_email(add(None, &bob, "bob@example.com", &issued.code), NOW + 1)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::SessionMismatch), "{err}");
+    // A user with an address keeps it, without spending the code.
+    let err = cmd
+        .add_email(
+            add(Some(&alice), &alice, "bob@example.com", &issued.code),
+            NOW + 1,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::InvalidState), "{err}");
+
+    cmd.add_email(
+        add(Some(&bob), &bob, "bob@example.com", &issued.code),
+        NOW + 1,
+    )
+    .await
+    .unwrap();
+    let user = cmd.load_user(&bob).await.unwrap().unwrap();
+    let method = user.password.as_ref().unwrap();
+    assert_eq!(method.email, "bob@example.com");
+    assert_eq!(method.password_hash, hash);
+    assert_eq!(
+        user.account, "bob@example.com",
+        "the provider's address stays"
+    );
+    assert_eq!(user.sign_in_methods(), 2);
+    assert_eq!(
+        cmd.load_email_account("bob@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .user_id,
+        bob
+    );
+    assert_eq!(
+        cmd.check_password("bob@example.com", PASSWORD)
+            .await
+            .unwrap()
+            .user_id,
+        bob
+    );
+    // The code is burnt, and the address is now taken.
+    let err = cmd
+        .add_email(
+            add(Some(&bob), &bob, "bob@example.com", &issued.code),
+            NOW + 2,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::InvalidState), "{err}");
+    let err = cmd
+        .issue_email_code("bob@example.com", ChallengePurpose::Register, NOW + 100)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::AlreadyRegistered), "{err}");
+    // A sign-in code is not proof of a free address.
+    let issued = cmd
+        .issue_email_code("bob@example.com", ChallengePurpose::SignIn, NOW + 100)
+        .await
+        .unwrap();
+    let carol = register_via_oauth2(&cmd, "google", "carol").await;
+    let err = cmd
+        .add_email(
+            add(Some(&carol), &carol, "carol@example.com", &issued.code),
+            NOW + 101,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::InvalidCode), "{err}");
+
+    // The provider can go now: the password remains a way in.
+    cmd.unlink_oauth2(&bob, "google", "bob").await.unwrap();
+    assert_eq!(
+        cmd.load_user(&bob)
+            .await
+            .unwrap()
+            .unwrap()
+            .sign_in_methods(),
+        1
     );
 }

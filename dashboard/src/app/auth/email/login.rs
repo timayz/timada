@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use timada_identity::{ChallengePurpose, normalize_email};
+use timada_identity::normalize_email;
 use topcoat::{
     Result,
     context::Cx,
@@ -12,7 +12,7 @@ use topcoat::{
 
 use crate::app::auth::{error_code, login_url, verify_url};
 use crate::auth::{
-    cookies::{EmailFlow, email_flow},
+    cookies::{EmailFlow, EmailFlowKind, email_flow},
     identity, now,
 };
 
@@ -39,11 +39,11 @@ pub async fn login(cx: &Cx, Form(form): Form<LoginForm>) -> Result<SeeOther> {
     // Valid: `check_password` normalized it already.
     let email = normalize_email(&form.email).map_err(topcoat::Error::from)?;
 
-    match super::start_challenge(cx, &email, ChallengePurpose::SignIn).await? {
+    match super::start_challenge(cx, &email, EmailFlowKind::SignIn).await? {
         Ok(started) => {
             email_flow(cx)
                 .set(EmailFlow {
-                    purpose: ChallengePurpose::SignIn.as_str().to_owned(),
+                    kind: EmailFlowKind::SignIn,
                     email,
                     password_hash: None,
                     user_id: Some(owner.user_id),

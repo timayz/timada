@@ -2,7 +2,7 @@
 //! address is proven with a mailed code before anything is created.
 
 use serde::Deserialize;
-use timada_identity::{ChallengePurpose, hash_password, normalize_email};
+use timada_identity::{hash_password, normalize_email};
 use topcoat::{
     Result,
     context::Cx,
@@ -16,7 +16,7 @@ use topcoat::{
 
 use crate::app::auth::{error_code, home_url, register_url, verify_url};
 use crate::auth::{
-    cookies::{EmailFlow, email_flow},
+    cookies::{EmailFlow, EmailFlowKind, email_flow},
     current_user, identity, now,
 };
 use crate::ui::{document, notice};
@@ -99,11 +99,11 @@ pub async fn submit(cx: &Cx, Form(form): Form<RegisterForm>) -> Result<SeeOther>
         Err(err) => return Err(err.into()),
     };
 
-    match super::email::start_challenge(cx, &email, ChallengePurpose::Register).await? {
+    match super::email::start_challenge(cx, &email, EmailFlowKind::Register).await? {
         Ok(started) => {
             email_flow(cx)
                 .set(EmailFlow {
-                    purpose: ChallengePurpose::Register.as_str().to_owned(),
+                    kind: EmailFlowKind::Register,
                     email,
                     password_hash: Some(password_hash),
                     user_id: None,

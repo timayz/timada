@@ -8,6 +8,7 @@ pub mod login;
 pub mod logout;
 pub mod oauth2;
 pub mod passkey;
+pub mod password;
 pub mod register;
 pub mod sessions;
 
@@ -34,6 +35,7 @@ pub fn error_code(err: &IdentityError) -> &'static str {
         IdentityError::CodeRecentlySent => "code_recently_sent",
         IdentityError::InvalidEmail => "invalid_email",
         IdentityError::WeakPassword => "weak_password",
+        IdentityError::WrongPassword => "wrong_password",
         IdentityError::InvalidState | IdentityError::Write(_) | IdentityError::Other(_) => "failed",
     }
 }

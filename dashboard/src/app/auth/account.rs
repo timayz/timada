@@ -56,9 +56,36 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
                         <strong>(&password.email)</strong>
                         " · password changed " <time datetime=(password.changed_at)>(format_time(password.changed_at))</time>
                     </p>
-                    <p class="mt-2 text-sm text-neutral-600">"To change the password, sign out and use “Forgot password?” on the sign-in page."</p>
+                    <p class="mt-1 text-xs text-neutral-500">"The address is set once and cannot be changed."</p>
+                    <form method="post" action=(href!(super::password::change)) class="mt-4 space-y-3">
+                        <input type="hidden" name="user_id" value=(user_id)>
+                        <h3 class="text-sm font-medium">"Change the password"</h3>
+                        <label class="block text-sm" for="current-password">"Current password"</label>
+                        <input id="current-password" name="current_password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                            type="password" autocomplete="current-password" required="">
+                        <label class="block text-sm" for="new-password">"New password"</label>
+                        <input id="new-password" name="password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                            type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
+                        <label class="block text-sm" for="new-password-confirm">"Confirm the new password"</label>
+                        <input id="new-password-confirm" name="password_confirm" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                            type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
+                        <p class="text-xs text-neutral-500">"8 characters or more. Your other browsers will be signed out."</p>
+                        <button class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700">"Change password"</button>
+                    </form>
                 } else {
                     <p class="text-sm text-neutral-500">"Not set up: this account signs in with a provider or a passkey."</p>
+                    <form method="post" action=(href!(super::email::add::add)) class="mt-4 space-y-3">
+                        <input type="hidden" name="user_id" value=(user_id)>
+                        <h3 class="text-sm font-medium">"Add an e-mail address and a password"</h3>
+                        <label class="block text-sm" for="new-email">"E-mail address"</label>
+                        <input id="new-email" name="email" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                            type="email" autocomplete="email" maxlength="254" required="">
+                        <label class="block text-sm" for="new-email-password">"Password"</label>
+                        <input id="new-email-password" name="password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                            type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
+                        <p class="text-xs text-neutral-500">"8 characters or more. We will e-mail you a code to confirm the address; it cannot be changed afterwards."</p>
+                        <button class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700">"Add e-mail address"</button>
+                    </form>
                 }
             </section>
 

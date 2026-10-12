@@ -40,6 +40,8 @@ pub enum IdentityError {
     InvalidEmail,
     #[error("the password must be between 8 and 128 characters")]
     WeakPassword,
+    #[error("the current password is wrong")]
+    WrongPassword,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]

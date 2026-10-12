@@ -3,7 +3,7 @@
 //! is registered.
 
 use serde::Deserialize;
-use timada_identity::{ChallengePurpose, normalize_email};
+use timada_identity::normalize_email;
 use topcoat::{
     Result,
     context::Cx,
@@ -17,7 +17,7 @@ use topcoat::{
 
 use crate::app::auth::{forgot_password_url, verify_url};
 use crate::auth::{
-    cookies::{EmailFlow, email_flow},
+    cookies::{EmailFlow, EmailFlowKind, email_flow},
     now,
 };
 use crate::ui::{document, notice};
@@ -59,14 +59,14 @@ pub async fn submit(cx: &Cx, Form(form): Form<ForgotForm>) -> Result<SeeOther> {
     let Ok(email) = normalize_email(&form.email) else {
         return Ok(see_other(forgot_password_url(cx, Some("invalid_email"))));
     };
-    match super::email::start_challenge(cx, &email, ChallengePurpose::ResetPassword).await? {
+    match super::email::start_challenge(cx, &email, EmailFlowKind::ResetPassword).await? {
         // Unknown address, or a code already on its way: same answer.
         Ok(_) | Err("not_registered") | Err("code_recently_sent") => {}
         Err(code) => return Ok(see_other(forgot_password_url(cx, Some(code)))),
     }
     email_flow(cx)
         .set(EmailFlow {
-            purpose: ChallengePurpose::ResetPassword.as_str().to_owned(),
+            kind: EmailFlowKind::ResetPassword,
             email,
             password_hash: None,
             user_id: None,

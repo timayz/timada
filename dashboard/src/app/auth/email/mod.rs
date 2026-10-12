@@ -1,17 +1,20 @@
 //! The e-mail + password sign-in: `POST /auth/email/login` checks the
 //! password and mails a code, `/auth/email/verify` takes the code back (for a
-//! registration, a sign-in or a password reset) and `/auth/email/resend`
-//! mails another one. The step in between travels in the `EmailFlow` cookie.
+//! registration, a sign-in, a password reset or an address added to an
+//! account), `/auth/email/resend` mails another one and `POST /auth/email/add`
+//! starts adding an address from the account page. The step in between
+//! travels in the `EmailFlow` cookie.
 
+pub mod add;
 pub mod login;
 pub mod resend;
 pub mod verify;
 
-use timada_identity::{ChallengePurpose, IdentityError};
+use timada_identity::IdentityError;
 use topcoat::{Result, context::Cx};
 
 use crate::app::auth::error_code;
-use crate::auth::{identity, mail::send_code, now};
+use crate::auth::{cookies::EmailFlowKind, identity, mail::send_code, now};
 
 /// What [`start_challenge`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,11 +41,14 @@ impl Started {
 pub async fn start_challenge(
     cx: &Cx,
     email: &str,
-    purpose: ChallengePurpose,
+    kind: EmailFlowKind,
 ) -> Result<Result<Started, &'static str>> {
-    match identity(cx).issue_email_code(email, purpose, now()).await {
+    match identity(cx)
+        .issue_email_code(email, kind.purpose(), now())
+        .await
+    {
         Ok(issued) => {
-            if let Err(err) = send_code(cx, &issued.email, purpose, &issued.code).await {
+            if let Err(err) = send_code(cx, &issued.email, kind, &issued.code).await {
                 tracing::error!(%err, "cannot send the e-mail code");
                 return Ok(Err("mail_failed"));
             }

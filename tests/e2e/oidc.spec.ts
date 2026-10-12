@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { registerWithEmail, uniqueEmail } from "./email";
+import { PASSWORD, enterCode, latestCode, mailCount, registerWithEmail, signInWithEmail, uniqueEmail } from "./email";
 
 // The OpenID Connect flow against the dex container from compose.yml
 // (config/e2e.toml registers it as the "Dex" provider). Skipped when the
@@ -71,5 +71,47 @@ test("signing in through the provider while signed in switches accounts", async 
   });
   await signInAtDex(page);
   await expect(page.getByRole("status")).toContainText(`You are now signed in as ${DEX_USER}.`);
+  await expect(page.locator("header").getByText("Signed in as")).toContainText(DEX_USER);
+});
+
+test("a provider user adds an e-mail address and a password, once", async ({ page }) => {
+  await page.getByRole("button", { name: "Continue with Dex" }).click();
+  await signInAtDex(page);
+  await page.goto("/auth/account");
+  const section = page.locator("section", { hasText: "E-mail and password" });
+  await expect(section).toContainText("Not set up");
+
+  // An address that belongs to someone else is refused before any mail.
+  const taken = uniqueEmail("taken");
+  const other = await page.context().browser()!.newContext();
+  await registerWithEmail(await other.newPage(), taken);
+  await other.close();
+  await section.getByLabel("E-mail address").fill(taken);
+  await section.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await section.getByRole("button", { name: "Add e-mail address" }).click();
+  await expect(page).toHaveURL(/\/auth\/account\?error=already_registered$/);
+  await expect(page.getByRole("alert").first()).toContainText("already registered");
+
+  // A free one gets a code; the code adds the method.
+  const email = uniqueEmail("dex");
+  const before = await mailCount(page.request, email);
+  await section.getByLabel("E-mail address").fill(email);
+  await section.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await section.getByRole("button", { name: "Add e-mail address" }).click();
+  await expect(page).toHaveURL(/\/auth\/email\/verify$/);
+  await expect(page.getByText("We sent a 6-digit code to")).toContainText(email);
+  await expect(page.getByRole("link", { name: "Back to your account" })).toBeVisible();
+  await enterCode(page, await latestCode(page.request, email, before));
+  await expect(page).toHaveURL(/\/auth\/account\?message=/);
+  await expect(page.getByRole("status")).toContainText("E-mail address added");
+  await expect(page.locator("section", { hasText: "Profile" })).toContainText(DEX_USER);
+  await expect(section).toContainText(email);
+  await expect(section).toContainText("cannot be changed");
+  await expect(section.getByRole("button", { name: "Add e-mail address" })).toHaveCount(0);
+  await expect(section.getByRole("button", { name: "Change password" })).toBeVisible();
+
+  // The address now signs in, as the same user.
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signInWithEmail(page, email);
   await expect(page.locator("header").getByText("Signed in as")).toContainText(DEX_USER);
 });

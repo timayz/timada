@@ -69,6 +69,12 @@ pub enum User {
         user_agent: Option<String>,
         ip: Option<String>,
     },
+    /// An existing user (provider or passkey) gains the e-mail + password
+    /// method, after the address was proven with a mailed code.
+    EmailAdded {
+        email: String,
+        password_hash: String,
+    },
 }
 
 /// Index entry: one provider identity (`provider`, `sub`) → one user. The
