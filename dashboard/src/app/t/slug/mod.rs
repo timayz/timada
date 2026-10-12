@@ -1,11 +1,17 @@
-//! `/t/{slug}`: a tenant's home, for its members.
+//! `/t/{slug}`: a tenant's home, for its members. Child modules add the
+//! members and roles pages; every one of them starts with [`require_tenant`]
+//! and then asks the [`TenantAccess`] for the permission it needs.
 
+pub mod members;
 pub mod rename;
+pub mod roles;
 
 use std::sync::Arc;
 
-use timada_identity::users_by_ids;
-use timada_tenancy::{ROLE_OWNER, TenantState};
+use timada_tenancy::{
+    PERMISSION_MEMBERS_READ, PERMISSION_ROLES_MANAGE, PERMISSION_TENANT_MANAGE, ROLE_OWNER,
+    TenantState,
+};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -19,8 +25,8 @@ use topcoat::{
 use crate::app::auth::Flash;
 use crate::app::tenants::tenancy;
 use crate::auth::{require_user, unix_seconds};
+use crate::authz::Authorizer;
 use crate::cluster::Executor;
-use crate::db::ReadPool;
 use crate::tenants::{TenantStatus, Tenants};
 use crate::ui::{document, format_time, notice};
 
@@ -29,6 +35,8 @@ module_param!(pub slug);
 /// The tenant of the request and the member looking at it.
 pub struct TenantAccess {
     pub tenant: TenantState,
+    /// The signed-in member.
+    pub user_id: String,
     /// The role the signed-in user holds in it.
     pub role: String,
     /// The tenant's event store, open while it is not suspended.
@@ -39,6 +47,23 @@ pub struct TenantAccess {
 impl TenantAccess {
     pub fn is_owner(&self) -> bool {
         self.role == ROLE_OWNER
+    }
+
+    /// Whether the member holds `permission` (`resource:action`).
+    pub async fn can(&self, cx: &Cx, permission: &str) -> Result<bool> {
+        app_context::<Arc<Authorizer>>(cx)
+            .allows(&self.tenant, &self.user_id, permission)
+            .await
+            .map_err(topcoat::Error::from_anyhow)
+    }
+
+    /// 403 unless the member holds `permission`.
+    pub async fn require_permission(&self, cx: &Cx, permission: &str) -> Result<()> {
+        if self.can(cx, permission).await? {
+            Ok(())
+        } else {
+            Err(forbidden().into())
+        }
     }
 
     /// The tenant's executor, or 403 while the tenant is suspended. Nothing
@@ -78,9 +103,19 @@ pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
     };
     Ok(TenantAccess {
         tenant,
+        user_id: user.id.clone(),
         role,
         executor,
     })
+}
+
+/// How a role is shown: its label for a custom role, the name otherwise.
+pub fn role_label(tenant: &TenantState, role: &str) -> String {
+    tenant
+        .roles
+        .get(role)
+        .map(|def| def.label.clone())
+        .unwrap_or_else(|| role.to_owned())
 }
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -95,22 +130,30 @@ pub fn tenant_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str
         .resolve(cx)
 }
 
+/// The navigation every tenant page shares: the sections the member may see.
+pub struct TenantNav {
+    pub members: bool,
+    pub roles: bool,
+}
+
+impl TenantNav {
+    pub async fn of(cx: &Cx, access: &TenantAccess) -> Result<Self> {
+        Ok(Self {
+            members: access.can(cx, PERMISSION_MEMBERS_READ).await?,
+            roles: access.can(cx, PERMISSION_ROLES_MANAGE).await?,
+        })
+    }
+}
+
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
     let query = query_params::<TenantQuery>(cx)?;
-    let is_owner = access.is_owner();
+    let nav = TenantNav::of(cx, &access).await?;
+    let can_manage = access.can(cx, PERMISSION_TENANT_MANAGE).await?;
     let TenantAccess { tenant, role, .. } = access;
+    let role = role_label(&tenant, &role);
     let status = app_context::<Arc<Tenants>>(cx).status(&tenant.id);
-    let member_ids: Vec<String> = tenant.members.keys().cloned().collect();
-    let labels = users_by_ids(app_context::<ReadPool>(cx), &member_ids).await?;
-    let label_of = move |user_id: &str| -> String {
-        labels
-            .iter()
-            .find(|u| u.id == user_id)
-            .map(|u| u.label.clone())
-            .unwrap_or_else(|| user_id.to_owned())
-    };
 
     Ok(view! {
         document(
@@ -121,6 +164,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     if tenant.is_suspended() { " " <span class="rounded bg-amber-100 px-2 text-sm font-normal text-amber-800">"suspended"</span> }
                 </h1>
                 <nav class="flex items-center gap-4 text-sm">
+                    if nav.members {
+                        <a class="underline" href=(href!(members::index, Slug(tenant.slug.clone())))>"Members"</a>
+                    }
+                    if nav.roles {
+                        <a class="underline" href=(href!(roles::index, Slug(tenant.slug.clone())))>"Roles"</a>
+                    }
                     <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
                     <a class="underline" href=(href!(crate::app::auth::account::account))>"Account"</a>
                 </nav>
@@ -138,6 +187,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <dl class="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
                     <dt class="text-neutral-500">"Address"</dt><dd><code>"/t/" (&tenant.slug)</code></dd>
                     <dt class="text-neutral-500">"Your role"</dt><dd>(&role)</dd>
+                    <dt class="text-neutral-500">"Members"</dt><dd>(tenant.members.len())</dd>
                     <dt class="text-neutral-500">"Created"</dt><dd><time datetime=(tenant.created_at)>(format_time(tenant.created_at))</time></dd>
                     <dt class="text-neutral-500">"Database"</dt>
                     <dd data-tenant-status=(if matches!(status, TenantStatus::Running { .. }) { "running" } else { "stopped" })>
@@ -149,19 +199,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 </dl>
             </section>
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Members"</h2>
-                <ul class="divide-y divide-neutral-100 text-sm">
-                    for (user_id, role) in &tenant.members {
-                        <li class="flex justify-between py-2">
-                            <span>(label_of(user_id))</span>
-                            <span class="text-neutral-500">(role)</span>
-                        </li>
-                    }
-                </ul>
-            </section>
-
-            if is_owner {
+            if can_manage {
                 <section class="rounded border border-neutral-200 bg-white p-4">
                     <h2 class="mb-2 text-lg font-medium">"Settings"</h2>
                     <form method="post" action=(href!(rename::rename, Slug(tenant.slug.clone()))) class="space-y-3">

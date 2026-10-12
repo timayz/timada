@@ -5,7 +5,6 @@ pub mod suspend;
 
 use std::sync::Arc;
 
-use timada_identity::users_by_ids;
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -18,8 +17,7 @@ use crate::app::admin::require_admin;
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, index as tenant_page};
 use crate::app::tenants::tenancy;
-use crate::auth::unix_seconds;
-use crate::db::ReadPool;
+use crate::auth::{unix_seconds, user_labels};
 use crate::tenants::{TenantStatus, Tenants};
 use crate::ui::{document, format_time, notice};
 
@@ -56,13 +54,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let runtime = app_context::<Arc<Tenants>>(cx);
     let status = runtime.status(&tenant.id);
-    let member_ids: Vec<String> = tenant.members.keys().cloned().collect();
-    let labels = users_by_ids(app_context::<ReadPool>(cx), &member_ids).await?;
+    let mut ids: Vec<String> = tenant.members.keys().cloned().collect();
+    ids.push(tenant.created_by.clone());
+    let labels = user_labels(cx, &ids).await?;
     let label_of = move |user_id: &str| -> String {
         labels
-            .iter()
-            .find(|u| u.id == user_id)
-            .map(|u| u.label.clone())
+            .get(user_id)
+            .cloned()
             .unwrap_or_else(|| user_id.to_owned())
     };
     let title = format!("{} · Tenants", tenant.name);

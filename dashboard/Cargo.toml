@@ -28,6 +28,7 @@ serde_json.workspace = true
 base64.workspace = true
 uuid.workspace = true
 ciborium.workspace = true
+casbin.workspace = true
 
 [build-dependencies]
 topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind"] }
