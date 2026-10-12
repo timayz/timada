@@ -15,7 +15,7 @@ fi
 export TIMADA_CONFIG=config/e2e.toml
 topcoat asset bundle -p timada-dashboard
 cargo build -q -p timada-dashboard
-./target/debug/timada-dashboard reset
+./target/debug/timada-dashboard reset   # also removes the tenant databases
 ./target/debug/timada-dashboard serve &
 server=$!
 trap 'kill "$server" 2>/dev/null; wait "$server" 2>/dev/null || true' EXIT

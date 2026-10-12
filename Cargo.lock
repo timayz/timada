@@ -3961,10 +3961,12 @@ dependencies = [
  "sqlx",
  "sqlx_migrator",
  "timada-identity",
+ "timada-tenancy",
  "tokio",
  "topcoat",
  "tracing",
  "tracing-subscriber",
+ "ulid",
  "uuid",
  "webauthn-rs",
  "webauthn-rs-proto",
@@ -3976,6 +3978,21 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argon2",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "timada-tenancy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "bitcode",
  "evento",
  "sqlx",

@@ -60,9 +60,21 @@ from = "Timada <no-reply@timada.localhost>"
 # http://localhost:1080. Set TIMADA__MAIL__SMTP_URL in production.
 smtp_url = "smtp://localhost:1025"
 
-# Multi-node cluster. Omit the whole section to run a single node (no extra
-# ports). Writes need a majority of nodes, so a 3-node cluster keeps working
-# with one node down. `node_id` is this node's index into `peers`.
+[tenants]
+# Directory holding one database per tenant (its events and its consensus
+# journal). Created on demand.
+dir = "data/tenants"
+# A tenant's database is closed after this long without a request, in seconds;
+# the next request opens it again.
+idle_timeout_secs = 300
+# Most tenant databases open at once; beyond it the least recently used is
+# closed. Each open database may hold three connections (one OS thread each).
+max_open = 64
+
+# Multi-node cluster. Omit the whole section to run a single node: it then
+# talks to itself over a loopback port chosen by the system. Writes need a
+# majority of nodes, so a 3-node cluster keeps working with one node down.
+# `node_id` is this node's index into `peers`. Every node hosts every tenant.
 # [cluster]
 # node_id = 0
 # peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]

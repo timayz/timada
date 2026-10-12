@@ -73,6 +73,7 @@ pub async fn users(cx: &Cx) -> Result<impl View> {
                 <h1 class="text-2xl font-semibold">"Users"</h1>
                 <nav class="flex items-center gap-4 text-sm">
                     <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
+                    <a class="underline" href=(href!(crate::app::admin::tenants::tenants))>"Tenants"</a>
                     <a class="underline" href=(href!(crate::app::auth::account::account))>"Account"</a>
                 </nav>
             </header>
