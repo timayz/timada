@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 
 use config::{ConfigError, Environment, File};
 use serde::Deserialize;
@@ -14,10 +15,11 @@ use serde::Deserialize;
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
-    /// Absent: a single node on the in-memory transport. Present: one node of
-    /// an Accord cluster over TCP.
+    /// Absent: a single node, talking to itself over a loopback port. Present:
+    /// one node of an Accord cluster over TCP.
     #[serde(default)]
     pub cluster: Option<ClusterConfig>,
+    pub tenants: TenantsConfig,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -94,6 +96,21 @@ pub struct DatabaseConfig {
     pub max_connections: u32,
 }
 
+/// Where tenant databases live and when an idle one is closed.
+#[derive(Debug, Deserialize, Clone)]
+pub struct TenantsConfig {
+    /// Directory holding one SQLite file per tenant (its events and its
+    /// consensus journal).
+    pub dir: PathBuf,
+    /// A tenant whose database saw no request for this long is closed; the
+    /// next request opens it again.
+    pub idle_timeout_secs: u64,
+    /// Most tenant databases open at once; beyond it the least recently used
+    /// is closed. Each open database holds up to three connections, and
+    /// sqlx-sqlite runs one OS thread per connection.
+    pub max_open: usize,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ClusterConfig {
     /// This node's index into `peers`.
@@ -125,6 +142,9 @@ impl Config {
             .set_default("server.port", 3000)?
             .set_default("database.url", "sqlite:data/timada.db")?
             .set_default("database.max_connections", 3)?
+            .set_default("tenants.dir", "data/tenants")?
+            .set_default("tenants.idle_timeout_secs", 300)?
+            .set_default("tenants.max_open", 64)?
             .set_default("auth.session_lifetime_secs", 14 * 24 * 60 * 60)?
             .set_default("auth.rp_name", "Timada")?
             .set_default("mail.from", "Timada <no-reply@timada.localhost>")?
@@ -147,6 +167,7 @@ impl Config {
             cluster.validate()?;
         }
         config.server.validate()?;
+        config.tenants.validate()?;
         config.auth.validate()?;
         config.mail.validate()?;
 
@@ -218,6 +239,26 @@ impl MailConfig {
             )));
         }
         Ok(())
+    }
+}
+
+impl TenantsConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.idle_timeout_secs == 0 {
+            return Err(ConfigError::Message(
+                "tenants.idle_timeout_secs must be greater than 0".into(),
+            ));
+        }
+        if self.max_open == 0 {
+            return Err(ConfigError::Message(
+                "tenants.max_open must be at least 1".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn idle_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.idle_timeout_secs)
     }
 }
 

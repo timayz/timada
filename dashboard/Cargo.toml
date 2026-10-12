@@ -20,6 +20,7 @@ tracing-subscriber.workspace = true
 clap.workspace = true
 config.workspace = true
 timada-identity = { path = "../crates/identity" }
+timada-tenancy = { path = "../crates/tenancy" }
 openidconnect.workspace = true
 webauthn-rs.workspace = true
 webauthn-rs-proto.workspace = true
@@ -33,3 +34,4 @@ topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind
 
 [dev-dependencies]
 evento-lock.workspace = true
+ulid.workspace = true

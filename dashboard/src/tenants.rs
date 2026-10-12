@@ -1,0 +1,365 @@
+//! The tenant runtime: one event database per tenant, opened on activity and
+//! closed when idle.
+//!
+//! A tenant is "up" while its database is open: its consensus group runs on
+//! this node and its read-model subscriptions follow its stream into the
+//! shared database. Every tenant-scoped request goes through [`Tenants::open`],
+//! which is the activity signal; [`Tenants::sweep`] closes what has not been
+//! asked for in `tenants.idle_timeout_secs`, and a bounded number stay open at
+//! once. A peer that talks about a group this node has closed triggers
+//! [`Tenants::reopen`], which opens it only if the catalog knows the tenant:
+//! the wire cannot create one.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
+
+use anyhow::{Context, Result};
+use evento::Evento;
+use evento::migrator::Migrate;
+use evento::subscription::{Subscription, SubscriptionBuilder};
+use evento_accord::{AccordExecutor, GroupId};
+use evento_sql::Sql;
+use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use timada_tenancy::{Command, TenantState, group_of, tenant_by_group};
+use tokio::task::JoinHandle;
+
+use crate::cluster::{Cluster, Executor};
+use crate::config::TenantsConfig;
+
+/// A read model fed from one tenant's events into the shared database: given
+/// the shared (writable) pool and the tenant id, the subscription to start on
+/// the tenant's executor. Rows it writes carry the tenant id. Started when the
+/// tenant opens, stopped when it closes; its cursor lives in the tenant's own
+/// database, so it resumes where it left off.
+pub type TenantSubscription =
+    Arc<dyn Fn(SqlitePool, &str) -> SubscriptionBuilder<Executor> + Send + Sync>;
+
+/// Whether a tenant's database is open on this node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TenantStatus {
+    Running { since: SystemTime },
+    Stopped,
+}
+
+struct OpenTenant {
+    tenant_id: String,
+    executor: Executor,
+    pool: SqlitePool,
+    subscriptions: Vec<Subscription>,
+    opened_at: SystemTime,
+    last_used: Instant,
+}
+
+pub struct Tenants {
+    cluster: Arc<Cluster>,
+    dir: PathBuf,
+    idle_timeout: Duration,
+    max_open: usize,
+    region: Option<String>,
+    /// The platform store, to check the catalog before opening on a peer's word.
+    platform: Executor,
+    /// The shared database the read models are written to.
+    read_models: SqlitePool,
+    subscriptions: Vec<TenantSubscription>,
+    open: Mutex<HashMap<GroupId, OpenTenant>>,
+    /// One open at a time per group: a request and the transport hook may race
+    /// to open the same tenant, and must not both migrate a fresh file.
+    open_locks: Mutex<HashMap<GroupId, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl Tenants {
+    pub fn new(
+        cluster: Arc<Cluster>,
+        config: &TenantsConfig,
+        region: Option<String>,
+        platform: Executor,
+        read_models: SqlitePool,
+        subscriptions: Vec<TenantSubscription>,
+    ) -> Arc<Self> {
+        let tenants = Arc::new(Self {
+            cluster: cluster.clone(),
+            dir: config.dir.clone(),
+            idle_timeout: config.idle_timeout(),
+            max_open: config.max_open.max(1),
+            region,
+            platform,
+            read_models,
+            subscriptions,
+            open: Mutex::new(HashMap::new()),
+            open_locks: Mutex::new(HashMap::new()),
+        });
+        cluster.attach_tenants(tenants.clone());
+        tenants
+    }
+
+    /// The file of a tenant's database.
+    pub fn path_of(&self, tenant_id: &str) -> PathBuf {
+        self.dir.join(format!("{tenant_id}.db"))
+    }
+
+    pub fn status(&self, tenant_id: &str) -> TenantStatus {
+        let open = self.open.lock().expect("open poisoned");
+        match open.get(&GroupId(group_of(tenant_id))) {
+            Some(t) if t.tenant_id == tenant_id => TenantStatus::Running { since: t.opened_at },
+            _ => TenantStatus::Stopped,
+        }
+    }
+
+    pub fn open_count(&self) -> usize {
+        self.open.lock().expect("open poisoned").len()
+    }
+
+    /// The tenant's executor, opening its database if needed. Counts as
+    /// activity. A suspended tenant is refused.
+    pub async fn open(&self, tenant: &TenantState) -> Result<Executor> {
+        anyhow::ensure!(
+            !tenant.is_suspended(),
+            "tenant {} is suspended",
+            tenant.slug
+        );
+        let group = GroupId(group_of(&tenant.id));
+        if let Some(executor) = self.touch(group, &tenant.id) {
+            return Ok(executor);
+        }
+        let open_lock = Arc::clone(
+            self.open_locks
+                .lock()
+                .expect("open_locks poisoned")
+                .entry(group)
+                .or_default(),
+        );
+        let _opening = open_lock.lock().await;
+        if let Some(executor) = self.touch(group, &tenant.id) {
+            return Ok(executor);
+        }
+
+        // Two ids hashing to one group would share a consensus group: refuse
+        // the second rather than mix their streams.
+        if let Some(other) = tenant_by_group(&self.read_models, group.0).await?
+            && other.id != tenant.id
+        {
+            anyhow::bail!(
+                "tenants {} and {} share consensus group {}; cannot open the second",
+                other.slug,
+                tenant.slug,
+                group.0
+            );
+        }
+
+        let path = self.path_of(&tenant.id);
+        let (sql, pool) = open_db(&path)
+            .await
+            .with_context(|| format!("cannot open {}", path.display()))?;
+        let node = match self
+            .cluster
+            .open_group(group, sql.clone(), pool.clone())
+            .await
+        {
+            Ok(node) => node,
+            Err(err) => {
+                pool.close().await;
+                return Err(err.context(format!("cannot open the group of tenant {}", tenant.slug)));
+            }
+        };
+        let mut executor = Evento::new(AccordExecutor::<Sql<sqlx::Sqlite>>::new(node, sql));
+        if let Some(region) = &self.region {
+            executor = executor.default_routing_key(region.clone());
+        }
+
+        let mut subscriptions = Vec::with_capacity(self.subscriptions.len());
+        for build in &self.subscriptions {
+            let subscription = build(self.read_models.clone(), &tenant.id)
+                .start(&executor)
+                .await
+                .with_context(|| format!("cannot start a read model of tenant {}", tenant.slug))?;
+            subscriptions.push(subscription);
+        }
+
+        // No std lock guard may live across an await (the futures must stay
+        // `Send`), so the bookkeeping is one synchronous block and the awaits
+        // come after it.
+        let evicted = {
+            let mut open = self.open.lock().expect("open poisoned");
+            open.insert(
+                group,
+                OpenTenant {
+                    tenant_id: tenant.id.clone(),
+                    executor: executor.clone(),
+                    pool,
+                    subscriptions,
+                    opened_at: SystemTime::now(),
+                    last_used: Instant::now(),
+                },
+            );
+            let mut evicted = Vec::new();
+            while open.len() > self.max_open {
+                let Some((&victim, _)) = open
+                    .iter()
+                    .filter(|(g, _)| **g != group)
+                    .min_by_key(|(_, t)| t.last_used)
+                else {
+                    break;
+                };
+                if let Some(t) = open.remove(&victim) {
+                    evicted.push((victim, t));
+                }
+            }
+            evicted
+        };
+        tracing::info!(tenant = %tenant.slug, group = group.0, path = %path.display(), "tenant opened");
+        for (group, t) in evicted {
+            tracing::info!(tenant = %t.tenant_id, group = group.0, "tenant closed (too many open)");
+            self.shut(group, t).await;
+        }
+        Ok(executor)
+    }
+
+    /// Marks a tenant used and returns its executor when it is open.
+    fn touch(&self, group: GroupId, tenant_id: &str) -> Option<Executor> {
+        let mut open = self.open.lock().expect("open poisoned");
+        let t = open.get_mut(&group).filter(|t| t.tenant_id == tenant_id)?;
+        t.last_used = Instant::now();
+        Some(t.executor.clone())
+    }
+
+    /// Closes a tenant's database now (an administrator suspended it, or the
+    /// node is shutting down). Nothing to do when it is not open.
+    pub async fn close(&self, tenant_id: &str) {
+        let group = GroupId(group_of(tenant_id));
+        let removed = {
+            let mut open = self.open.lock().expect("open poisoned");
+            match open.get(&group) {
+                Some(t) if t.tenant_id == tenant_id => open.remove(&group),
+                _ => None,
+            }
+        };
+        if let Some(t) = removed {
+            tracing::info!(tenant = %t.tenant_id, group = group.0, "tenant closed");
+            self.shut(group, t).await;
+        }
+    }
+
+    /// Closes every tenant idle for longer than the timeout.
+    pub async fn sweep(&self) {
+        let idle = {
+            let mut open = self.open.lock().expect("open poisoned");
+            let cutoff = Instant::now() - self.idle_timeout;
+            let groups: Vec<GroupId> = open
+                .iter()
+                .filter(|(_, t)| t.last_used <= cutoff)
+                .map(|(g, _)| *g)
+                .collect();
+            groups
+                .into_iter()
+                .filter_map(|g| open.remove(&g).map(|t| (g, t)))
+                .collect::<Vec<_>>()
+        };
+        for (group, t) in idle {
+            tracing::info!(tenant = %t.tenant_id, group = group.0, "tenant closed (idle)");
+            self.shut(group, t).await;
+        }
+    }
+
+    /// Runs [`sweep`](Self::sweep) periodically until the task is aborted.
+    pub fn start_sweeper(self: &Arc<Self>) -> JoinHandle<()> {
+        let tenants = Arc::clone(self);
+        let every =
+            (self.idle_timeout / 4).clamp(Duration::from_millis(50), Duration::from_secs(30));
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(every);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                tenants.sweep().await;
+            }
+        })
+    }
+
+    /// The transport's unrouted-group hook: a peer sent frames for a group this
+    /// node has not opened. Open it only if the catalog knows the tenant and it
+    /// is not suspended; anything else is ignored.
+    pub fn reopen(self: &Arc<Self>, group: GroupId) {
+        let tenants = Arc::clone(self);
+        tokio::spawn(async move {
+            let row = match tenant_by_group(&tenants.read_models, group.0).await {
+                Ok(Some(row)) => row,
+                Ok(None) => {
+                    tracing::debug!(group = group.0, "frames for an unknown group ignored");
+                    return;
+                }
+                Err(err) => {
+                    tracing::warn!(group = group.0, %err, "cannot look the group up");
+                    return;
+                }
+            };
+            let tenant = match Command(tenants.platform.clone()).load_tenant(&row.id).await {
+                Ok(Some(tenant)) if !tenant.is_suspended() => tenant,
+                Ok(_) => return,
+                Err(err) => {
+                    tracing::warn!(tenant = %row.slug, %err, "cannot load the tenant");
+                    return;
+                }
+            };
+            if let Err(err) = tenants.open(&tenant).await {
+                tracing::warn!(tenant = %tenant.slug, %err, "cannot reopen the tenant for a peer");
+            }
+        });
+    }
+
+    /// Closes every open tenant.
+    pub async fn shutdown(&self) {
+        let all: Vec<(GroupId, OpenTenant)> =
+            self.open.lock().expect("open poisoned").drain().collect();
+        for (group, t) in all {
+            self.shut(group, t).await;
+        }
+    }
+
+    async fn shut(&self, group: GroupId, t: OpenTenant) {
+        for subscription in &t.subscriptions {
+            subscription.stop();
+        }
+        for subscription in t.subscriptions {
+            let reason = subscription.stopped().await;
+            if reason.is_failure() {
+                tracing::error!(tenant = %t.tenant_id, %reason, "a tenant read model had stopped");
+            }
+        }
+        self.cluster.close_group(group);
+        t.pool.close().await;
+    }
+}
+
+/// Opens (creating and migrating if needed) a tenant's file: WAL with full
+/// synchronous writes because the file is also the consensus journal, few
+/// connections because sqlx-sqlite runs one OS thread per connection.
+async fn open_db(path: &Path) -> Result<(Sql<sqlx::Sqlite>, SqlitePool)> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Full)
+        .busy_timeout(Duration::from_secs(5));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(3)
+        .min_connections(0)
+        .idle_timeout(Some(Duration::from_secs(30)))
+        .connect_with(options)
+        .await?;
+    let mut conn = pool.acquire().await?;
+    evento_sql_migrator::new::<sqlx::Sqlite>()?
+        .run(&mut *conn, &sqlx_migrator::Plan::apply_all())
+        .await?;
+    drop(conn);
+    // One `Sql` for both the data-store bridge and the executor: two `.into()`s
+    // from the same pool would not share the write-wake channel subscriptions
+    // rely on.
+    let sql: Sql<sqlx::Sqlite> = pool.clone().into();
+    Ok((sql, pool))
+}

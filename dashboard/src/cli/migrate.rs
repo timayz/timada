@@ -33,7 +33,7 @@ pub async fn migrate(config: Config) -> Result<()> {
     Ok(())
 }
 
-/// Drops the database file and migrates a fresh one. Development only: the
+/// Drops the database file and the tenant databases, then migrates a fresh one. Development only: the
 /// subcommand does not exist in release builds.
 #[cfg(debug_assertions)]
 pub async fn reset(config: Config) -> Result<()> {
@@ -44,6 +44,11 @@ pub async fn reset(config: Config) -> Result<()> {
         sqlx::Sqlite::drop_database(url).await?;
     } else {
         tracing::info!(url, "database does not exist, nothing to drop");
+    }
+    let tenants = &config.tenants.dir;
+    if tenants.is_dir() {
+        tracing::warn!(dir = %tenants.display(), "removing the tenant databases");
+        std::fs::remove_dir_all(tenants)?;
     }
 
     migrate(config).await?;

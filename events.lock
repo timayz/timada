@@ -33,6 +33,15 @@ event timada-identity/User::SessionsRevoked { except_session: Option<String> }
 event timada-identity/User::SignedIn { method: SignInMethod, provider: Option<String>, credential_id: Option<String>, user_agent: Option<String>, ip: Option<String> }
 event timada-identity/User::SignedInWithPassword { user_agent: Option<String>, ip: Option<String> }
 event timada-identity/User::SignedOut unit
+event timada-tenancy/Tenant::Created { slug: String, name: String, created_by: String }
+event timada-tenancy/Tenant::MemberGranted { user_id: String, role: String }
+event timada-tenancy/Tenant::MemberRevoked { user_id: String }
+event timada-tenancy/Tenant::MemberRoleChanged { user_id: String, role: String }
+event timada-tenancy/Tenant::Renamed { name: String }
+event timada-tenancy/Tenant::Resumed unit
+event timada-tenancy/Tenant::Suspended { reason: String }
+event timada-tenancy/TenantSlug::Claimed { tenant_id: String }
+event timada-tenancy/TenantSlug::Released unit
 
 type timada_identity::value_object::ChallengePurpose enum { Register, SignIn, ResetPassword }
 type timada_identity::value_object::SignInMethod enum { OAuth2, Passkey }

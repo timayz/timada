@@ -4,6 +4,7 @@ mod cli;
 mod cluster;
 mod config;
 mod db;
+mod tenants;
 mod ui;
 
 use anyhow::Result;
