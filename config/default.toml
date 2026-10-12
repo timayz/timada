@@ -45,6 +45,9 @@ rp_name = "Timada"
 # issuer = "https://accounts.google.com"
 # client_id = ""
 # client_secret = ""   # or TIMADA__AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET
+#
+# For local development, compose.yml ships a dex provider with a fixed test
+# user; config/e2e.toml shows the block to copy.
 
 # Multi-node cluster. Omit the whole section to run a single node (no extra
 # ports). Writes need a majority of nodes, so a 3-node cluster keeps working
