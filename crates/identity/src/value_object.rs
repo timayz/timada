@@ -1,5 +1,7 @@
 use bitcode::{Decode, Encode};
 
+use crate::error::IdentityError;
+
 /// How a user proved who they are. Persisted in events: add variants, never
 /// reorder or remove them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
@@ -44,28 +46,53 @@ impl OAuth2Mode {
     }
 }
 
-/// Why a passkey registration ceremony was started. Not persisted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RegistrationMode {
-    /// A visitor without a session creates an account with this passkey.
-    CreateUser,
-    /// A signed-in user adds a passkey to their account.
-    AddToUser,
+/// What a mailed one-time code proves. Persisted in events: add variants,
+/// never reorder or remove them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
+pub enum ChallengePurpose {
+    /// A visitor proves an address before an account is created for it.
+    #[default]
+    Register,
+    /// A user who gave the right password proves they still hold the address.
+    SignIn,
+    /// A user who forgot their password proves they hold the address.
+    ResetPassword,
 }
 
-impl RegistrationMode {
+impl ChallengePurpose {
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
-            "create_user" => Self::CreateUser,
-            "add_to_user" => Self::AddToUser,
+            "register" => Self::Register,
+            "sign_in" => Self::SignIn,
+            "reset_password" => Self::ResetPassword,
             _ => return None,
         })
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::CreateUser => "create_user",
-            Self::AddToUser => "add_to_user",
+            Self::Register => "register",
+            Self::SignIn => "sign_in",
+            Self::ResetPassword => "reset_password",
+        }
+    }
+}
+
+/// Every way a user can sign in, for the sign-in history. Not persisted:
+/// the password method has its own events, the others carry [`SignInMethod`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SignInKind {
+    #[default]
+    OAuth2,
+    Passkey,
+    Password,
+}
+
+impl From<SignInMethod> for SignInKind {
+    fn from(method: SignInMethod) -> Self {
+        match method {
+            SignInMethod::OAuth2 => Self::OAuth2,
+            SignInMethod::Passkey => Self::Passkey,
         }
     }
 }
@@ -121,8 +148,58 @@ pub fn session_id(token_hash: &[u8; 32]) -> String {
     evento::hash_ids(vec!["session", &hex(token_hash)])
 }
 
+/// Aggregate id of the index entry for one e-mail address (normalized with
+/// [`normalize_email`]).
+pub fn email_account_id(email: &str) -> String {
+    evento::hash_ids(vec!["email", email])
+}
+
+/// Aggregate id of the one-time codes mailed to one address.
+pub fn email_challenge_id(email: &str) -> String {
+    evento::hash_ids(vec!["email-challenge", email])
+}
+
+/// What the challenge stream stores instead of a code. A six-digit code is
+/// guessable under any hash; the attempt cap and the expiry are what protect
+/// it, the hash only keeps the plaintext out of the store.
+pub fn email_code_hash(challenge_id: &str, code: &str) -> String {
+    evento::hash_ids(vec!["email-code", challenge_id, code])
+}
+
+/// The canonical form of an address: trimmed, lower-cased, one `@` with
+/// something on both sides, nothing that is not printable.
+pub fn normalize_email(email: &str) -> Result<String, IdentityError> {
+    let email = email.trim().to_lowercase();
+    let valid = email.len() <= MAX_EMAIL_LEN
+        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
+        && matches!(email.split_once('@'), Some((local, domain))
+            if !local.is_empty() && !domain.is_empty() && !domain.contains('@'));
+    if valid {
+        Ok(email)
+    } else {
+        Err(IdentityError::InvalidEmail)
+    }
+}
+
 /// Aggregate id of the singleton that remembers who registered first.
 pub const REGISTRY_ID: &str = "registry";
+
+/// Longest address accepted (RFC 5321's path limit).
+pub const MAX_EMAIL_LEN: usize = 254;
+
+/// How long a mailed code stays valid, in seconds.
+pub const CODE_TTL_SECS: u64 = 10 * 60;
+
+/// How long after a code is mailed another one may be requested for the
+/// same address, in seconds.
+pub const CODE_RESEND_AFTER_SECS: u64 = 60;
+
+/// Wrong guesses after which a code is dead and a new one must be mailed.
+pub const CODE_MAX_ATTEMPTS: u32 = 5;
+
+/// Password length policy (NIST 800-63B: length, no composition rules).
+pub const PASSWORD_MIN_LEN: usize = 8;
+pub const PASSWORD_MAX_LEN: usize = 128;
 
 /// Most passkeys one account may hold. Keeps the registration ceremony's
 /// `excludeCredentials` list, which travels in a cookie, small.
@@ -150,6 +227,30 @@ mod tests {
         assert_ne!(
             oauth2_account_id("google", "123"),
             oauth2_account_id("auth0", "123")
+        );
+    }
+
+    #[test]
+    fn emails_are_normalized_and_checked() {
+        assert_eq!(
+            normalize_email("  Alice@Example.COM ").unwrap(),
+            "alice@example.com"
+        );
+        for bad in [
+            "",
+            "alice",
+            "@example.com",
+            "alice@",
+            "a b@example.com",
+            "a@b@c",
+        ] {
+            assert!(normalize_email(bad).is_err(), "{bad:?}");
+        }
+        assert!(normalize_email(&format!("{}@x.y", "a".repeat(260))).is_err());
+        assert_eq!(email_account_id("alice@example.com").len(), 64);
+        assert_ne!(
+            email_challenge_id("alice@example.com"),
+            email_account_id("alice@example.com")
         );
     }
 

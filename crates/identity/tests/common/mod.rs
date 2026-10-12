@@ -5,9 +5,15 @@ use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
 use timada_identity::{
-    Command, CompleteOAuth2, LoginContext, OAuth2Mode, RegisterPasskey, RegistrationMode,
-    SignInPasskey, VerifiedPasskey,
+    AddPasskey, ChallengePurpose, Command, CompleteOAuth2, LoginContext, OAuth2Mode,
+    RegisterWithPassword, SignInPasskey, VerifiedPasskey, hash_password,
 };
+
+/// A fixed "now" for the commands that take one (unix seconds).
+pub const NOW: u64 = 1_700_000_000;
+
+/// A password that passes the policy.
+pub const PASSWORD: &str = "correct horse battery";
 
 /// A fresh in-memory event store, as in evento's `bank-axum-sqlite` example.
 pub async fn executor() -> evento::Sqlite {
@@ -83,21 +89,37 @@ pub fn passkey(credential_id: &str) -> VerifiedPasskey {
     }
 }
 
-pub fn register_passkey(
-    mode: RegistrationMode,
+pub fn add_passkey(
     session_user_id: Option<&str>,
     bound_user_id: &str,
     credential_id: &str,
-) -> RegisterPasskey {
-    RegisterPasskey {
-        mode,
+) -> AddPasskey {
+    AddPasskey {
         session_user_id: session_user_id.map(str::to_owned),
         bound_user_id: bound_user_id.to_owned(),
         passkey: passkey(credential_id),
-        account: "alice".to_owned(),
-        label: "Alice".to_owned(),
-        context: context(),
     }
+}
+
+/// Registers a user with an e-mail address and [`PASSWORD`], proving the
+/// address with the code the domain issued, and returns the user id.
+pub async fn register_via_email<E: Executor>(cmd: &Command<E>, email: &str) -> String {
+    let issued = cmd
+        .issue_email_code(email, ChallengePurpose::Register, NOW)
+        .await
+        .unwrap();
+    cmd.register_with_password(
+        RegisterWithPassword {
+            email: email.to_owned(),
+            code: issued.code,
+            password_hash: hash_password(PASSWORD).await.unwrap(),
+            context: context(),
+        },
+        NOW,
+    )
+    .await
+    .unwrap()
+    .user_id
 }
 
 /// Registers a user through the login page's default flow and returns its id.
