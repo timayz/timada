@@ -17,6 +17,7 @@ use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::auth::cookies::{ApiKeyReveal, api_key_reveal, is_fresh};
 use crate::auth::{now, user_labels};
+use crate::config::Config;
 use crate::db::ReadPool;
 use crate::ui::{document, format_time, notice};
 
@@ -51,6 +52,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
     let reveal = take_reveal(cx);
+    let store_api = app_context::<Config>(cx).store_api.clone();
     let keys = api_keys_of_tenant(app_context::<ReadPool>(cx), &tenant.id).await?;
     let ids: Vec<String> = keys.iter().map(|k| k.created_by.clone()).collect();
     let labels = user_labels(cx, &ids).await?;
@@ -82,6 +84,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         "Copy it now: this is the only time it is shown. A storefront presents it when it connects to this tenant's store."
                     </p>
                     <code class="mt-3 block select-all rounded border border-amber-200 bg-white px-3 py-2 font-mono text-sm" data-api-key-token="">(&reveal.token)</code>
+                    <p class="mt-3 text-sm text-amber-900">
+                        (match &store_api {
+                            Some(api) => match &api.public_addr {
+                                Some(addr) => format!("Storefronts connect to {addr} with it."),
+                                None => "Storefronts connect to this node's store API with it.".to_owned(),
+                            },
+                            None => "The store API is not enabled on this node yet; the key will work once it is.".to_owned(),
+                        })
+                    </p>
                 </section>
             }
 

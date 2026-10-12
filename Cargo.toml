@@ -14,7 +14,7 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal"] }
 topcoat = { version = "=0.10.0", features = ["tailwind", "anyhow", "mail", "mail-smtp"] }
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.19", features = ["sqlite"] }
-evento = { version = "=2.0.0-alpha.33", features = ["sqlite"] }
+evento = { version = "=2.0.0-alpha.33", features = ["sqlite", "remote"] }
 evento-sql = { version = "=2.0.0-alpha.33", features = ["sqlite", "accord"] }
 evento-sql-migrator = { version = "=2.0.0-alpha.33", features = ["sqlite", "accord"] }
 evento-accord = "=2.0.0-alpha.33"
@@ -30,6 +30,9 @@ serde_json = "1.0"
 base64 = "0.22"
 rand = "0.9"
 casbin = "2.20"
+async-trait = "0.1"
+tokio-rustls = "0.26"
+rcgen = "0.14"
 uuid = { version = "1", features = ["v5"] }
 ciborium = "0.2"
 serde = { version = "1.0", features = ["derive"] }
@@ -57,3 +60,15 @@ debug = false
 [profile.debugging]
 inherits = "dev"
 debug = true
+
+# TEMPORARY until evento 2.0.0-alpha.34 is published: the per-connection
+# resolver lives in the local checkout.
+[patch.crates-io]
+evento = { path = "../evento/evento" }
+evento-core = { path = "../evento/evento-core" }
+evento-macro = { path = "../evento/evento-macro" }
+evento-sql = { path = "../evento/evento-sql" }
+evento-sql-migrator = { path = "../evento/evento-sql-migrator" }
+evento-accord = { path = "../evento/evento-accord" }
+evento-lock = { path = "../evento/evento-lock" }
+evento-remote = { path = "../evento/evento-remote" }
