@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { registerWithEmail, uniqueEmail } from "./email";
 
 // The OpenID Connect flow against the dex container from compose.yml
 // (config/e2e.toml registers it as the "Dex" provider). Skipped when the
@@ -12,26 +13,6 @@ async function signInAtDex(page: Page) {
   await page.locator("#password").fill("password");
   await page.locator("#submit-login").click();
   await expect(page).toHaveURL(/timada\.localhost\/(\?.*)?$/);
-}
-
-async function registerWithPasskey(page: Page, name: string) {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2",
-      transport: "internal",
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-      automaticPresenceSimulation: true,
-    },
-  });
-  await page.goto("/auth/login");
-  await page.getByText("New here? Create an account with a passkey").click();
-  await page.getByLabel("Your name").fill(name);
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page).toHaveURL(/\/$/);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -74,7 +55,7 @@ test("a tampered callback is refused and the attempt cannot be replayed", async 
 });
 
 test("signing in through the provider while signed in switches accounts", async ({ page }) => {
-  await registerWithPasskey(page, `Passkey user ${Date.now()}`);
+  await registerWithEmail(page, uniqueEmail("local"));
 
   // The login page sends signed-in browsers home, so submit its form directly.
   await page.evaluate(() => {
