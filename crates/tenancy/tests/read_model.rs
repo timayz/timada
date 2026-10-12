@@ -19,8 +19,8 @@ async fn tenants_and_members_are_listed_and_stay_idempotent() {
     let cmd = Command(executor.clone());
     let alice = new_id();
     let bob = new_id();
-    let acme = create_tenant(&cmd, "acme", &alice).await;
-    let zeta = create_tenant(&cmd, "zeta", &bob).await;
+    let acme = create_tenant(&cmd, "Acme", &alice).await;
+    let zeta = create_tenant(&cmd, "Zeta", &bob).await;
     cmd.rename_tenant(&bob, &zeta.id, "Aardvark").await.unwrap();
     cmd.suspend_tenant(&zeta.id, "unpaid").await.unwrap();
 
@@ -35,6 +35,7 @@ async fn tenants_and_members_are_listed_and_stay_idempotent() {
     assert_eq!(rows[0].suspended_reason.as_deref(), Some("unpaid"));
     assert_eq!(rows[0].group(), group_of(&zeta.id));
     assert_eq!(rows[1].slug, "acme");
+    assert_eq!(rows[1].name, "Acme");
     assert_eq!(rows[1].created_by, alice);
     assert_eq!(rows[1].member_count, 1);
     assert!(!rows[1].suspended);

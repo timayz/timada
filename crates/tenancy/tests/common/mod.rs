@@ -32,16 +32,15 @@ pub async fn command() -> Command<evento::Sqlite> {
     Command(executor_with_pool().await.0)
 }
 
-pub fn create(slug: &str, owner: &str) -> CreateTenant {
+pub fn create(name: &str, owner: &str) -> CreateTenant {
     CreateTenant {
-        slug: slug.to_owned(),
-        name: format!("{slug} shop"),
+        name: name.to_owned(),
         owner_user_id: owner.to_owned(),
     }
 }
 
-pub async fn create_tenant(cmd: &Command<evento::Sqlite>, slug: &str, owner: &str) -> TenantState {
-    cmd.create_tenant(create(slug, owner)).await.unwrap()
+pub async fn create_tenant(cmd: &Command<evento::Sqlite>, name: &str, owner: &str) -> TenantState {
+    cmd.create_tenant(create(name, owner)).await.unwrap()
 }
 
 pub fn new_id() -> String {

@@ -7,7 +7,7 @@ use timada_tenancy::TenancyError;
 async fn only_an_owner_renames_a_tenant() {
     let cmd = command().await;
     let alice = new_id();
-    let tenant = create_tenant(&cmd, "acme", &alice).await;
+    let tenant = create_tenant(&cmd, "Acme", &alice).await;
 
     cmd.rename_tenant(&alice, &tenant.id, " Acme Corp ")
         .await
@@ -38,7 +38,7 @@ async fn only_an_owner_renames_a_tenant() {
 #[tokio::test]
 async fn suspension_is_idempotent_and_reversible() {
     let cmd = command().await;
-    let tenant = create_tenant(&cmd, "acme", &new_id()).await;
+    let tenant = create_tenant(&cmd, "Acme", &new_id()).await;
 
     let err = cmd.resume_tenant(&tenant.id).await.unwrap_err();
     assert!(matches!(err, TenancyError::NotSuspended), "{err}");

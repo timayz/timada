@@ -3,14 +3,16 @@ use ulid::Ulid;
 
 use crate::aggregator::{Created, MemberGranted};
 use crate::error::TenancyError;
-use crate::value_object::{ROLE_OWNER, normalize_name, normalize_slug};
+use crate::value_object::{ROLE_OWNER, normalize_name, slugify, suffixed_slug};
 
 use super::{Command, TenantState};
 
+/// Tries at the plain slug, then with fresh random suffixes.
+const SLUG_ATTEMPTS: usize = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateTenant {
-    /// The URL handle; lowercased and validated.
-    pub slug: String,
+    /// The display name; the URL handle (slug) derives from it.
     pub name: String,
     /// The signed-in user creating the tenant; becomes its owner.
     pub owner_user_id: String,
@@ -18,20 +20,33 @@ pub struct CreateTenant {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Claims the slug, then creates the tenant with its owner in one commit.
-    /// A tenant stream that cannot be created after the claim gives the slug
-    /// back (best effort: a failure there only leaves the slug reserved).
+    /// Derives the slug from the name (`Acme Shop` → `acme-shop`; a taken one
+    /// gets a short random suffix, `acme-shop-k3x9p`), claims it, then creates
+    /// the tenant with its owner in one commit. A tenant stream that cannot be
+    /// created after the claim gives the slug back (best effort: a failure
+    /// there only leaves the slug reserved).
     pub async fn create_tenant(
         &self,
         cmd: CreateTenant,
         routing_key: Option<String>,
     ) -> Result<TenantState, TenancyError> {
-        let slug = normalize_slug(&cmd.slug)?;
         let name = normalize_name(&cmd.name)?;
         let tenant_id = Ulid::generate().to_string();
 
-        self.claim_slug(&slug, &tenant_id, routing_key.clone())
-            .await?;
+        let base = slugify(&name);
+        let mut slug = base.clone();
+        for attempt in 0..SLUG_ATTEMPTS {
+            match self
+                .claim_slug(&slug, &tenant_id, routing_key.clone())
+                .await
+            {
+                Ok(()) => break,
+                Err(TenancyError::SlugTaken) if attempt + 1 < SLUG_ATTEMPTS => {
+                    slug = suffixed_slug(&base);
+                }
+                Err(err) => return Err(err),
+            }
+        }
 
         let created = evento::append(&tenant_id)
             .original_version(0)

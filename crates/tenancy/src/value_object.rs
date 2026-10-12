@@ -8,6 +8,10 @@ pub const ROLE_OWNER: &str = "owner";
 pub const MAX_NAME_LEN: usize = 80;
 pub const MIN_SLUG_LEN: usize = 2;
 pub const MAX_SLUG_LEN: usize = 32;
+/// Length of the random suffix added when a derived slug is already taken.
+pub const SLUG_SUFFIX_LEN: usize = 5;
+/// The slug of a name with no usable characters.
+pub const FALLBACK_SLUG: &str = "tenant";
 
 /// The index stream of a slug.
 pub fn tenant_slug_id(slug: &str) -> String {
@@ -29,6 +33,43 @@ pub fn normalize_slug(slug: &str) -> Result<String, crate::TenancyError> {
     } else {
         Err(crate::TenancyError::InvalidSlug)
     }
+}
+
+/// The slug a name gives: ASCII-transliterated, lowercased, runs of anything
+/// else collapsed into one dash, cut to [`MAX_SLUG_LEN`]. A name with nothing
+/// usable gives [`FALLBACK_SLUG`].
+pub fn slugify(name: &str) -> String {
+    let ascii = deunicode::deunicode(name).to_ascii_lowercase();
+    let mut slug = String::with_capacity(ascii.len());
+    for c in ascii.chars() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = truncate_slug(&slug, MAX_SLUG_LEN);
+    if slug.len() < MIN_SLUG_LEN {
+        FALLBACK_SLUG.to_owned()
+    } else {
+        slug
+    }
+}
+
+/// `slug` with a short random suffix (`acme-k3x9p`), kept within
+/// [`MAX_SLUG_LEN`]. Used when the plain slug is taken.
+pub fn suffixed_slug(slug: &str) -> String {
+    let id = ulid::Ulid::generate().to_string().to_ascii_lowercase();
+    let suffix = &id[id.len() - SLUG_SUFFIX_LEN..];
+    let base = truncate_slug(slug, MAX_SLUG_LEN - SLUG_SUFFIX_LEN - 1);
+    format!("{base}-{suffix}")
+}
+
+/// Cuts a slug to `max` bytes without leaving a dangling dash.
+fn truncate_slug(slug: &str, max: usize) -> String {
+    let mut slug: &str = &slug[..slug.len().min(max)];
+    slug = slug.trim_matches('-');
+    slug.to_owned()
 }
 
 /// Trims a display name and checks it is 1 to 80 characters.
@@ -64,6 +105,32 @@ mod tests {
             assert!(normalize_slug(bad).is_err(), "{bad:?}");
         }
         assert!(normalize_slug(&"a".repeat(32)).is_ok());
+    }
+
+    #[test]
+    fn slugs_derive_from_names() {
+        assert_eq!(slugify("Acme Shop"), "acme-shop");
+        assert_eq!(slugify("  Épicerie du Coin !  "), "epicerie-du-coin");
+        assert_eq!(slugify("Straße 7 / Köln"), "strasse-7-koln");
+        assert_eq!(slugify("--Acme--"), "acme");
+        assert_eq!(slugify("!!!"), FALLBACK_SLUG);
+        assert_eq!(slugify("a"), FALLBACK_SLUG);
+        let long = slugify(&"ab-".repeat(20));
+        assert!(long.len() <= MAX_SLUG_LEN && !long.ends_with('-'), "{long}");
+        assert!(normalize_slug(&long).is_ok());
+        assert!(normalize_slug(&slugify("日本語の店")).is_ok());
+    }
+
+    #[test]
+    fn suffixed_slugs_stay_valid_and_short() {
+        let s = suffixed_slug("acme");
+        assert_eq!(s.len(), "acme-".len() + SLUG_SUFFIX_LEN, "{s}");
+        assert!(s.starts_with("acme-"));
+        assert!(normalize_slug(&s).is_ok());
+        let long = suffixed_slug(&"a".repeat(MAX_SLUG_LEN));
+        assert_eq!(long.len(), MAX_SLUG_LEN, "{long}");
+        assert!(normalize_slug(&long).is_ok());
+        assert_ne!(suffixed_slug("acme"), suffixed_slug("acme"));
     }
 
     #[test]

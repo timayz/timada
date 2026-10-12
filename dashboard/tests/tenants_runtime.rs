@@ -124,7 +124,6 @@ impl Harness {
         let tenant = self
             .platform
             .create_tenant(CreateTenant {
-                slug: slug.into(),
                 name: slug.into(),
                 owner_user_id: "alice".into(),
             })
