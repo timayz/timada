@@ -12,6 +12,7 @@ event timada-identity/Session::Ended unit
 event timada-identity/Session::Refreshed { expires_at: u64 }
 event timada-identity/Session::Started { user_id: String, expires_at: u64, user_agent: Option<String>, ip: Option<String> }
 event timada-identity/User::AdminGranted unit
+event timada-identity/User::AdminRevoked unit
 event timada-identity/User::Deleted unit
 event timada-identity/User::OAuth2AccountLinked { provider: String, provider_user_id: String, name: Option<String>, email: Option<String>, picture: Option<String> }
 event timada-identity/User::OAuth2AccountUnlinked { provider: String, provider_user_id: String }

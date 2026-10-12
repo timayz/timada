@@ -54,6 +54,7 @@ pub enum User {
     SessionsRevoked {
         except_session: Option<String>,
     },
+    AdminRevoked,
 }
 
 /// Index entry: one provider identity (`provider`, `sub`) → one user. The
