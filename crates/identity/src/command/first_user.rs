@@ -43,13 +43,14 @@ impl<E: Executor> Command<E> {
     }
 
     /// Repairs a claim whose admin grant never landed (a crash between the two
-    /// writes). Called on every sign-in; a no-op for everyone else.
+    /// writes). Called on every sign-in; a no-op for everyone else, and for a
+    /// first user whose role an administrator has since decided.
     pub(crate) async fn grant_admin_if_first(
         &self,
         user: &UserState,
         routing_key: Option<String>,
     ) -> Result<(), IdentityError> {
-        if user.is_admin {
+        if user.is_admin || user.role_assigned {
             return Ok(());
         }
         let Some(registry) = self.load_registry().await? else {
@@ -62,7 +63,7 @@ impl<E: Executor> Command<E> {
         self.grant_admin(&user.id, routing_key).await
     }
 
-    async fn grant_admin(
+    pub(crate) async fn grant_admin(
         &self,
         user_id: &str,
         routing_key: Option<String>,

@@ -1,4 +1,4 @@
-.PHONY: dev lint fmt fmt-check test check machete
+.PHONY: dev lint fmt fmt-check test check machete e2e
 
 start: up dev
 
@@ -29,6 +29,10 @@ reset:
 
 migrate:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml migrate
+
+# Browser tests on a fresh database behind the compose Traefik (`make up` first).
+e2e:
+	scripts/e2e.sh
 
 # Run Clippy linter for code quality
 lint:

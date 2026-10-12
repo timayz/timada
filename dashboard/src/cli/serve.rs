@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 
 use crate::config::Config;
@@ -27,8 +29,22 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let providers = auth::oidc::Providers::discover(&config.auth, &config.server.url).await?;
     let webauthn = auth::webauthn::build(&config.auth, &config.server.url)?;
 
-    // Subscriptions start here, before the router takes requests. Keep each
-    // handle and `shutdown()` them after `topcoat::serve` returns.
+    // Read models catch up from their saved cursor before the router takes
+    // requests, then follow the stream. A failed worker is logged and the
+    // pages fall back to stale rows; the node keeps serving.
+    let read_models = Arc::new(
+        timada_identity::read_model_subscription(write_pool.clone())
+            .start(&executor)
+            .await
+            .context("cannot start the identity read models")?,
+    );
+    let watched = read_models.clone();
+    tokio::spawn(async move {
+        let reason = watched.stopped().await;
+        if reason.is_failure() {
+            tracing::error!(%reason, "identity read models stopped; admin pages are stale");
+        }
+    });
 
     let router = app::router(
         executor,
@@ -49,6 +65,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // `RouterService::shutdown_timeout` to finish.
     topcoat::serve(listener, router).await?;
 
+    read_models.stop();
+    read_models.stopped().await;
     read_pool.close().await;
     write_pool.close().await;
     Ok(())

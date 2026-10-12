@@ -3936,6 +3936,7 @@ dependencies = [
  "bitcode",
  "evento",
  "sqlx",
+ "sqlx_migrator",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

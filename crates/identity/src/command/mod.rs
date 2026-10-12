@@ -4,6 +4,7 @@
 //! version it observes, and `write()` sends as `original_version`, never goes
 //! stale. None of them is snapshotted: streams are a handful of events.
 
+mod admin;
 mod complete_oauth2;
 mod end_session;
 mod first_user;
@@ -33,9 +34,10 @@ use evento::{
 };
 
 use crate::aggregator::{
-    AdminGranted, Created, Deleted, Ended, FirstUserClaimed, Linked, OAuth2AccountLinked,
-    OAuth2AccountUnlinked, PasskeyAdded, PasskeyRemoved, PasskeyRenamed, ProfileUpdated, Refreshed,
-    Registered, Removed, SessionsRevoked, SignedIn, SignedOut, Started, Unlinked, Updated,
+    AdminGranted, AdminRevoked, Created, Deleted, Ended, FirstUserClaimed, Linked,
+    OAuth2AccountLinked, OAuth2AccountUnlinked, PasskeyAdded, PasskeyRemoved, PasskeyRenamed,
+    ProfileUpdated, Refreshed, Registered, Removed, SessionsRevoked, SignedIn, SignedOut, Started,
+    Unlinked, Updated,
 };
 use crate::error::IdentityError;
 use crate::value_object::{
@@ -127,6 +129,9 @@ pub struct UserState {
     pub account: String,
     pub label: String,
     pub is_admin: bool,
+    /// An administrator decided the role (granted or revoked). Until then the
+    /// first-user rule may still grant it.
+    pub role_assigned: bool,
     pub oauth2_accounts: Vec<LinkedOAuth2Account>,
     pub passkeys: Vec<LinkedPasskey>,
     /// Most recent last.
@@ -167,6 +172,7 @@ pub fn user_projection<E: Executor>() -> Projection<E, UserState> {
         .handler(on_registered())
         .handler(on_profile_updated())
         .handler(on_admin_granted())
+        .handler(on_admin_revoked())
         .handler(on_oauth2_account_linked())
         .handler(on_oauth2_account_unlinked())
         .handler(on_passkey_added())
@@ -201,6 +207,14 @@ async fn on_profile_updated(
 #[evento::handler]
 async fn on_admin_granted(_event: Event<AdminGranted>, user: &mut UserState) -> anyhow::Result<()> {
     user.is_admin = true;
+    user.role_assigned = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_admin_revoked(_event: Event<AdminRevoked>, user: &mut UserState) -> anyhow::Result<()> {
+    user.is_admin = false;
+    user.role_assigned = true;
     Ok(())
 }
 
@@ -509,11 +523,12 @@ async fn on_first_user_claimed(
 impl<E: Executor> Command<E> {
     /// The user, or `None` when unknown or deleted.
     pub async fn load_user(&self, id: impl Into<String>) -> anyhow::Result<Option<UserState>> {
-        Ok(user_projection()
-            .load(id)
-            .execute(&self.0)
-            .await?
-            .filter(|u| !u.deleted))
+        Ok(self.load_user_any(id).await?.filter(|u| !u.deleted))
+    }
+
+    /// The user including a deleted one (administration pages show those).
+    pub async fn load_user_any(&self, id: impl Into<String>) -> anyhow::Result<Option<UserState>> {
+        user_projection().load(id).execute(&self.0).await
     }
 
     /// The currently linked index entry for a provider identity.

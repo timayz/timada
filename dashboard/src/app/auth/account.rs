@@ -1,13 +1,15 @@
-use timada_identity::SignInMethod;
+use timada_identity::{SignInMethod, active_sessions, session_id};
 use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
+    session,
     view::{View, view},
 };
 
-use crate::auth::{oidc::Providers, require_user, webauthn::authenticator_name};
-use crate::ui::{document, notice};
+use crate::auth::{now, oidc::Providers, require_user, webauthn::authenticator_name};
+use crate::db::ReadPool;
+use crate::ui::{document, format_time, notice, session_row};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct AccountQuery {
@@ -21,6 +23,8 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
     let query = query_params::<AccountQuery>(cx)?;
     let providers = app_context::<Providers>(cx);
     let user_id = user.id.as_str();
+    let current_session = session::token_hash(cx).await?.map(|hash| session_id(&hash));
+    let sessions = active_sessions(app_context::<ReadPool>(cx), user_id, now() as i64).await?;
 
     Ok(view! {
         document(
@@ -125,6 +129,16 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <h2 class="mb-2 text-lg font-medium">"Sessions"</h2>
+                <ul class="mb-3 divide-y divide-neutral-100">
+                    for s in &sessions {
+                        session_row(
+                            started_at: s.started_at as u64,
+                            ip: s.ip.as_deref(),
+                            user_agent: s.user_agent.as_deref(),
+                            current: current_session.as_deref() == Some(s.id.as_str()),
+                        )
+                    }
+                </ul>
                 <p class="mb-3 text-sm text-neutral-600">"Lost a device, or signed in on a shared computer? Every other browser is signed out; this one stays."</p>
                 <form method="post" action=(href!(super::sessions::revoke::revoke))>
                     <input type="hidden" name="user_id" value=(user_id)>
@@ -158,36 +172,4 @@ fn provider_label<'a>(providers: &'a Providers, name: &'a str) -> &'a str {
         .get(name)
         .map(|p| p.label.as_str())
         .unwrap_or(name)
-}
-
-/// Unix seconds as an ISO-8601 UTC timestamp (no calendar crate needed).
-fn format_time(secs: u64) -> String {
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    // Civil-from-days (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC",
-        rem / 3600,
-        (rem % 3600) / 60,
-        rem % 60
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn formats_unix_time() {
-        assert_eq!(super::format_time(0), "1970-01-01 00:00:00 UTC");
-        assert_eq!(super::format_time(1_700_000_000), "2023-11-14 22:13:20 UTC");
-    }
 }

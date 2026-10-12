@@ -1,0 +1,17 @@
+# End-to-end test configuration, used by `make e2e` (scripts/e2e.sh): a
+# throwaway database that is reset before every run, so the first user the
+# tests register is the administrator. Everything in here is a test fixture;
+# nothing is a secret.
+
+[server]
+# Traefik from compose.yml forwards to this process from the Docker bridge.
+trusted_proxies = ["172.16.0.0/12"]
+
+[database]
+url = "sqlite:data/e2e.db"
+
+[auth]
+secret_key = "e2e-only-secret-key-never-used-outside-the-test-suite"
+
+[monitoring]
+log_level = "info,timada_dashboard=debug"

@@ -1,5 +1,6 @@
 //! The topcoat router. This module maps to `/`; child modules add paths.
 
+pub mod admin;
 pub mod auth;
 
 use std::time::Duration;
@@ -81,6 +82,9 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
                 <h1 class="text-2xl font-semibold">"Timada dashboard"</h1>
                 <nav class="flex items-center gap-4 text-sm">
                     <span>"Signed in as " <strong>(&user.label)</strong></span>
+                    if user.is_admin {
+                        <a class="underline" href=(href!(admin::users::users))>"Users"</a>
+                    }
                     <a class="underline" href=(href!(auth::account::account))>"Account"</a>
                     <form method="post" action=(href!(auth::logout::logout))>
                         <button class="underline">"Sign out"</button>
