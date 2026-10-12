@@ -1,5 +1,3 @@
-use timada_identity::ChallengePurpose;
-
 use super::Started;
 use topcoat::{
     Result,
@@ -24,14 +22,11 @@ pub async fn resend(cx: &Cx) -> Result<SeeOther> {
         Ok(Some(store)) => store.get(),
         Ok(None) | Err(_) => return Ok(see_other(login_url(cx, Some("expired")))),
     };
-    let Some(purpose) = ChallengePurpose::parse(&flow.purpose) else {
-        return Ok(see_other(login_url(cx, Some("expired"))));
-    };
     if !is_fresh(flow.issued_at, now()) {
         return Ok(see_other(login_url(cx, Some("expired"))));
     }
 
-    let started = super::start_challenge(cx, &flow.email, purpose).await?;
+    let started = super::start_challenge(cx, &flow.email, flow.kind).await?;
     match started {
         // Asking again is the one place the throttle is an error to show.
         Ok(Started::AlreadySent) => Ok(see_other(verify_url(cx, Some("code_recently_sent"), None))),

@@ -1,7 +1,6 @@
 use serde::Deserialize;
 use timada_identity::{
-    ChallengePurpose, IdentityError, RegisterWithPassword, ResetPassword, SignInWithPassword,
-    hash_password,
+    AddEmail, IdentityError, RegisterWithPassword, ResetPassword, SignInWithPassword, hash_password,
 };
 use topcoat::{
     Result,
@@ -16,11 +15,11 @@ use topcoat::{
 };
 
 use crate::app::auth::{
-    error_code, forgot_password_url, home_url_with_message, login_url, register_url, signed_in_url,
-    verify_url,
+    account_url, error_code, forgot_password_url, home_url_with_message, login_url, register_url,
+    signed_in_url, verify_url,
 };
 use crate::auth::{
-    cookies::{EmailFlow, email_flow, is_fresh},
+    cookies::{EmailFlow, EmailFlowKind, email_flow, is_fresh},
     current_user, identity, login_context, now, sign_in_as,
 };
 use crate::ui::{document, notice};
@@ -32,25 +31,26 @@ struct VerifyQuery {
 }
 
 /// The flow in progress, or `None` when there is none or it is stale.
-fn current_flow(cx: &Cx) -> Option<(EmailFlow, ChallengePurpose)> {
+fn current_flow(cx: &Cx) -> Option<EmailFlow> {
     let flow = match email_flow(cx).parse() {
         Ok(Some(store)) => store.get(),
         Ok(None) | Err(_) => return None,
     };
-    let purpose = ChallengePurpose::parse(&flow.purpose)?;
-    is_fresh(flow.issued_at, now()).then_some((flow, purpose))
+    is_fresh(flow.issued_at, now()).then_some(flow)
 }
 
 #[page]
 pub async fn verify(cx: &Cx) -> Result<impl View> {
-    let Some((flow, purpose)) = current_flow(cx) else {
+    let Some(flow) = current_flow(cx) else {
         return Err(redirect(login_url(cx, Some("expired"))).into());
     };
     let query = query_params::<VerifyQuery>(cx)?;
-    let (title, action) = match purpose {
-        ChallengePurpose::Register => ("Confirm your e-mail address", "Create account"),
-        ChallengePurpose::SignIn => ("Check your e-mail", "Sign in"),
-        ChallengePurpose::ResetPassword => ("Choose a new password", "Change password"),
+    let kind = flow.kind;
+    let (title, action) = match kind {
+        EmailFlowKind::Register => ("Confirm your e-mail address", "Create account"),
+        EmailFlowKind::SignIn => ("Check your e-mail", "Sign in"),
+        EmailFlowKind::ResetPassword => ("Choose a new password", "Change password"),
+        EmailFlowKind::AddEmail => ("Confirm your e-mail address", "Add e-mail address"),
     };
 
     Ok(view! {
@@ -66,7 +66,7 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
                 <label class="block text-sm" for="code">"Code"</label>
                 <input id="code" name="code" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2 tracking-widest"
                     type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required="" autofocus="">
-                if purpose == ChallengePurpose::ResetPassword {
+                if kind == EmailFlowKind::ResetPassword {
                     <label class="block text-sm" for="password">"New password"</label>
                     <input id="password" name="password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
                         type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
@@ -81,8 +81,10 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
                 <form method="post" action=(href!(super::resend::resend))>
                     <button class="underline">"Send a new code"</button>
                 </form>
-                if purpose == ChallengePurpose::Register {
+                if kind == EmailFlowKind::Register {
                     <a class="underline" href=(href!(crate::app::auth::register::register))>"Use another address"</a>
+                } else if kind == EmailFlowKind::AddEmail {
+                    <a class="underline" href=(href!(crate::app::auth::account::account))>"Back to your account"</a>
                 } else {
                     <a class="underline" href=(href!(crate::app::auth::login::login))>"Back to sign in"</a>
                 }
@@ -109,14 +111,19 @@ struct Completed {
 
 #[route(POST)]
 pub async fn submit(cx: &Cx, Form(form): Form<VerifyForm>) -> Result<SeeOther> {
-    let Some((flow, purpose)) = current_flow(cx) else {
+    let Some(flow) = current_flow(cx) else {
         return Ok(see_other(login_url(cx, Some("expired"))));
     };
+    let kind = flow.kind;
     let context = login_context(cx);
     let email = flow.email.clone();
 
-    let outcome: std::result::Result<Completed, IdentityError> = match purpose {
-        ChallengePurpose::Register => {
+    if kind == EmailFlowKind::AddEmail {
+        return add_email(cx, flow, form.code).await;
+    }
+
+    let outcome: std::result::Result<Completed, IdentityError> = match kind {
+        EmailFlowKind::Register => {
             let Some(password_hash) = flow.password_hash.clone() else {
                 return Ok(see_other(register_url(cx, Some("expired"), Some(&email))));
             };
@@ -138,7 +145,7 @@ pub async fn submit(cx: &Cx, Form(form): Form<VerifyForm>) -> Result<SeeOther> {
                     reset: false,
                 })
         }
-        ChallengePurpose::SignIn => {
+        EmailFlowKind::SignIn => {
             let Some(user_id) = flow.user_id.clone() else {
                 return Ok(see_other(login_url(cx, Some("expired"))));
             };
@@ -161,7 +168,7 @@ pub async fn submit(cx: &Cx, Form(form): Form<VerifyForm>) -> Result<SeeOther> {
                     reset: false,
                 })
         }
-        ChallengePurpose::ResetPassword => {
+        EmailFlowKind::ResetPassword => {
             let password = form.password.unwrap_or_default();
             if form.password_confirm.unwrap_or_default() != password {
                 return Ok(see_other(verify_url(cx, Some("password_mismatch"), None)));
@@ -191,6 +198,7 @@ pub async fn submit(cx: &Cx, Form(form): Form<VerifyForm>) -> Result<SeeOther> {
                     reset: true,
                 })
         }
+        EmailFlowKind::AddEmail => unreachable!("handled above"),
     };
 
     match outcome {
@@ -221,11 +229,51 @@ pub async fn submit(cx: &Cx, Form(form): Form<VerifyForm>) -> Result<SeeOther> {
         Err(err) if err.is_user_facing() => {
             email_flow(cx).remove();
             let code = error_code(&err);
-            Ok(see_other(match purpose {
-                ChallengePurpose::Register => register_url(cx, Some(code), Some(&email)),
-                ChallengePurpose::SignIn => login_url(cx, Some(code)),
-                ChallengePurpose::ResetPassword => forgot_password_url(cx, Some(code)),
+            Ok(see_other(match kind {
+                EmailFlowKind::Register => register_url(cx, Some(code), Some(&email)),
+                EmailFlowKind::SignIn => login_url(cx, Some(code)),
+                EmailFlowKind::ResetPassword => forgot_password_url(cx, Some(code)),
+                EmailFlowKind::AddEmail => unreachable!("handled above"),
             }))
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// The code is back for an address added from the account page. The browser
+/// stays signed in as it was; the flow only adds a way to sign in.
+async fn add_email(cx: &Cx, flow: EmailFlow, code: String) -> Result<SeeOther> {
+    let (Some(bound_user_id), Some(password_hash)) = (flow.user_id, flow.password_hash) else {
+        email_flow(cx).remove();
+        return Ok(see_other(account_url(cx, Some("expired"), None)));
+    };
+    let outcome = identity(cx)
+        .add_email(
+            AddEmail {
+                session_user_id: current_user(cx).await.map(|u| u.id.clone()),
+                bound_user_id,
+                email: flow.email,
+                code,
+                password_hash,
+            },
+            now(),
+        )
+        .await;
+    match outcome {
+        Ok(()) => {
+            email_flow(cx).remove();
+            Ok(see_other(account_url(
+                cx,
+                None,
+                Some("E-mail address added. You can sign in with it and your password."),
+            )))
+        }
+        Err(IdentityError::InvalidCode) => {
+            Ok(see_other(verify_url(cx, Some("invalid_code"), None)))
+        }
+        Err(err) if err.is_user_facing() => {
+            email_flow(cx).remove();
+            Ok(see_other(account_url(cx, Some(error_code(&err)), None)))
         }
         Err(err) => Err(err.into()),
     }
