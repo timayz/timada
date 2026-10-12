@@ -140,5 +140,6 @@ pub fn migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
     let mut migrator = evento_sql_migrator::new::<sqlx::Sqlite>()?;
     migrator.add_migrations(timada_identity::migrations())?;
     migrator.add_migrations(timada_tenancy::migrations())?;
+    migrator.add_migrations(timada_catalog::migrations())?;
     Ok(migrator)
 }

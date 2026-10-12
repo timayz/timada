@@ -16,18 +16,24 @@ pub const ROLE_OWNER: &str = "owner";
 ///   from `owner`: that stays with owners).
 /// - `roles:manage` — define, edit and remove custom roles.
 /// - `api-keys:manage` — create and revoke the store API keys.
+/// - `products:read` — see the products of the catalog.
+/// - `products:manage` — create, edit, publish and archive products.
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
     PERMISSION_MEMBERS_MANAGE,
     PERMISSION_ROLES_MANAGE,
     PERMISSION_API_KEYS_MANAGE,
+    PERMISSION_PRODUCTS_READ,
+    PERMISSION_PRODUCTS_MANAGE,
 ];
 pub const PERMISSION_TENANT_MANAGE: &str = "tenant:manage";
 pub const PERMISSION_MEMBERS_READ: &str = "members:read";
 pub const PERMISSION_MEMBERS_MANAGE: &str = "members:manage";
 pub const PERMISSION_ROLES_MANAGE: &str = "roles:manage";
 pub const PERMISSION_API_KEYS_MANAGE: &str = "api-keys:manage";
+pub const PERMISSION_PRODUCTS_READ: &str = "products:read";
+pub const PERMISSION_PRODUCTS_MANAGE: &str = "products:manage";
 
 pub const MAX_ROLE_LABEL_LEN: usize = 40;
 pub const MAX_API_KEY_LABEL_LEN: usize = 40;
@@ -342,6 +348,7 @@ mod tests {
     #[test]
     fn manage_implies_read_on_the_same_resource() {
         assert!(implies("members:manage", "members:read"));
+        assert!(implies("products:manage", "products:read"));
         assert!(implies("members:read", "members:read"));
         assert!(!implies("members:read", "members:manage"));
         assert!(!implies("roles:manage", "members:read"));

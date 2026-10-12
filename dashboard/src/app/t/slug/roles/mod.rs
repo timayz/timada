@@ -61,6 +61,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <h1 class="text-2xl font-semibold">"Roles"</h1>
                 <nav class="flex items-center gap-4 text-sm">
                     <a class="underline" href=(href!(super::index, Slug(slug.clone())))>(&tenant.name)</a>
+                    if nav.products {
+                        <a class="underline" href=(href!(super::products::index, Slug(slug.clone())))>"Products"</a>
+                    }
                     if nav.members {
                         <a class="underline" href=(href!(super::members::index, Slug(slug.clone())))>"Members"</a>
                     }
