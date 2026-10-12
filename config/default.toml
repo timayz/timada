@@ -49,6 +49,17 @@ rp_name = "Timada"
 # For local development, compose.yml ships a dex provider with a fixed test
 # user; config/e2e.toml shows the block to copy.
 
+[mail]
+# Signing up, signing in and resetting a password with an e-mail address each
+# mail a one-time code. This is the sender shown on those messages.
+from = "Timada <no-reply@timada.localhost>"
+# Where outgoing mail is submitted. "smtp://host:port" talks to a server
+# without encryption (a local mailbox); "smtp://user:pass@host:587?tls=required"
+# upgrades to TLS; "smtps://user:pass@host:465" connects over TLS. The default
+# is the development mailbox from compose.yml, whose inbox is readable at
+# http://localhost:1080. Set TIMADA__MAIL__SMTP_URL in production.
+smtp_url = "smtp://localhost:1025"
+
 # Multi-node cluster. Omit the whole section to run a single node (no extra
 # ports). Writes need a majority of nodes, so a 3-node cluster keeps working
 # with one node down. `node_id` is this node's index into `peers`.

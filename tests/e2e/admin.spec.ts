@@ -1,41 +1,22 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { PASSWORD, registerWithEmail, uniqueEmail } from "./email";
 import { ADMIN_NAME, ADMIN_STATE } from "./fixtures";
 
 // The administrator's pages. The admin is the first registered user, created
 // by admin.setup.ts on a fresh database (`make e2e`).
 
-async function registerMember(page: Page, name: string) {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2",
-      transport: "internal",
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-      automaticPresenceSimulation: true,
-    },
-  });
-  await page.goto("/auth/login");
-  await page.getByText("New here? Create an account with a passkey").click();
-  await page.getByLabel("Your name").fill(name);
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page).toHaveURL(/\/$/);
-}
-
 test("members get no admin pages", async ({ page }) => {
-  await registerMember(page, `Member ${Date.now()}`);
+  await registerWithEmail(page, uniqueEmail("member"));
   await expect(page.getByRole("link", { name: "Users" })).toHaveCount(0);
   const response = await page.goto("/admin/users");
   expect(response?.status()).toBe(403);
 });
 
 test("the administrator lists, signs out, promotes and deletes users", async ({ browser }) => {
-  const memberName = `Carol ${Date.now()}`;
+  const memberName = uniqueEmail("carol");
   const memberContext = await browser.newContext();
   const memberPage = await memberContext.newPage();
-  await registerMember(memberPage, memberName);
+  await registerWithEmail(memberPage, memberName);
 
   const adminContext = await browser.newContext({ storageState: ADMIN_STATE });
   const admin = await adminContext.newPage();
@@ -54,7 +35,7 @@ test("the administrator lists, signs out, promotes and deletes users", async ({ 
     await expect(row).toBeVisible({ timeout: 1000 });
   }).toPass({ timeout: 15_000 });
   await expect(row).toContainText("Member");
-  await expect(row).toContainText("1 passkey");
+  await expect(row).toContainText("password, 0 providers, 0 passkeys");
   await row.getByRole("link", { name: memberName }).click();
   await expect(admin.getByRole("heading", { name: memberName })).toBeVisible();
   await expect(admin.locator("section", { hasText: "Sessions" }).locator("li")).toHaveCount(1);
@@ -95,10 +76,12 @@ test("the administrator lists, signs out, promotes and deletes users", async ({ 
     await expect(admin.getByRole("row", { name: memberName })).toContainText("deleted", { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
 
-  // Her passkey no longer signs in.
+  // Her password no longer signs in.
   await memberPage.goto("/auth/login");
-  await memberPage.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await expect(memberPage.locator("[data-auth-error]")).toContainText("not registered");
+  await memberPage.getByLabel("E-mail address").fill(memberName);
+  await memberPage.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await memberPage.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(memberPage).toHaveURL(/\/auth\/login\?error=invalid_credentials$/);
 
   await memberContext.close();
   await adminContext.close();

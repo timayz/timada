@@ -1,4 +1,4 @@
-use timada_identity::{SignInMethod, active_sessions, session_id};
+use timada_identity::{SignInKind, active_sessions, session_id};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -47,6 +47,19 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
                     <dt class="text-neutral-500">"Name"</dt><dd>(&user.label)</dd>
                     <dt class="text-neutral-500">"Role"</dt><dd>(if user.is_admin { "Administrator" } else { "Member" })</dd>
                 </dl>
+            </section>
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"E-mail and password"</h2>
+                if let Some(password) = &user.password {
+                    <p class="text-sm">
+                        <strong>(&password.email)</strong>
+                        " · password changed " <time datetime=(password.changed_at)>(format_time(password.changed_at))</time>
+                    </p>
+                    <p class="mt-2 text-sm text-neutral-600">"To change the password, sign out and use “Forgot password?” on the sign-in page."</p>
+                } else {
+                    <p class="text-sm text-neutral-500">"Not set up: this account signs in with a provider or a passkey."</p>
+                }
             </section>
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
@@ -116,7 +129,6 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
                         <button type="button"
                             class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700"
                             data-passkey-register=""
-                            data-mode="add_to_user"
                             data-user-id=(user_id)
                             data-name-input="#new-passkey-name"
                             data-start=(href!(super::passkey::register::start::start))
@@ -154,8 +166,9 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
                             <time datetime=(entry.at)>(format_time(entry.at))</time>
                             " · "
                             (match entry.method {
-                                SignInMethod::OAuth2 => entry.provider.clone().unwrap_or_else(|| "provider".to_owned()),
-                                SignInMethod::Passkey => "passkey".to_owned(),
+                                SignInKind::OAuth2 => entry.provider.clone().unwrap_or_else(|| "provider".to_owned()),
+                                SignInKind::Passkey => "passkey".to_owned(),
+                                SignInKind::Password => "password".to_owned(),
                             })
                             if let Some(ip) = &entry.ip { " · " (ip) }
                             if let Some(ua) = &entry.user_agent { <span class="block truncate text-neutral-500">(ua)</span> }

@@ -26,6 +26,20 @@ pub enum IdentityError {
     TooManyPasskeys,
     #[error("not allowed")]
     Forbidden,
+    #[error("the e-mail address or the password is wrong")]
+    InvalidCredentials,
+    #[error("this code is not right")]
+    InvalidCode,
+    #[error("this code has expired")]
+    CodeExpired,
+    #[error("too many wrong codes; ask for a new one")]
+    TooManyAttempts,
+    #[error("a code was sent a moment ago; wait before asking for another")]
+    CodeRecentlySent,
+    #[error("this is not a valid e-mail address")]
+    InvalidEmail,
+    #[error("the password must be between 8 and 128 characters")]
+    WeakPassword,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]

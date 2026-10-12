@@ -1,9 +1,7 @@
 mod common;
 
 use common::*;
-use timada_identity::{IdentityError, OAuth2Mode, RegistrationMode};
-
-const NOW: u64 = 1_700_000_000;
+use timada_identity::{IdentityError, OAuth2Mode};
 
 #[tokio::test]
 async fn admins_grant_and_revoke_roles_but_not_their_own() {
@@ -61,14 +59,9 @@ async fn deleting_a_user_voids_sessions_and_frees_identities() {
     let cmd = command().await;
     let root = register_via_oauth2(&cmd, "google", "root").await;
     let bob = register_via_oauth2(&cmd, "google", "bob").await;
-    cmd.register_passkey(register_passkey(
-        RegistrationMode::AddToUser,
-        Some(&bob),
-        &bob,
-        "cred-bob",
-    ))
-    .await
-    .unwrap();
+    cmd.add_passkey(add_passkey(Some(&bob), &bob, "cred-bob"))
+        .await
+        .unwrap();
     let hash = [1u8; 32];
     cmd.start_session(&hash, &bob, NOW + 600, context())
         .await
@@ -114,5 +107,47 @@ async fn deleting_a_user_voids_sessions_and_frees_identities() {
             .user_id,
         outcome.user_id,
         "the new owner keeps the identity"
+    );
+}
+
+#[tokio::test]
+async fn deleting_an_email_user_frees_the_address() {
+    let cmd = command().await;
+    let root = register_via_oauth2(&cmd, "google", "root").await;
+    let carol = register_via_email(&cmd, "carol@example.com").await;
+
+    cmd.delete_user(&root, &carol).await.unwrap();
+    assert!(
+        cmd.load_email_account("carol@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let err = cmd
+        .check_password("carol@example.com", PASSWORD)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::InvalidCredentials), "{err}");
+
+    // The person registers again with the same address: a new user.
+    let again = register_via_email(&cmd, "carol@example.com").await;
+    assert_ne!(again, carol);
+    assert_eq!(
+        cmd.load_email_account("carol@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .user_id,
+        again
+    );
+    // Deleting the old record again leaves the new owner alone.
+    cmd.delete_user(&root, &carol).await.unwrap();
+    assert_eq!(
+        cmd.load_email_account("carol@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .user_id,
+        again
     );
 }

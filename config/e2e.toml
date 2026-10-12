@@ -23,5 +23,11 @@ issuer = "http://localhost:5556/dex"
 client_id = "timada"
 client_secret = "timada-e2e-client-secret"
 
+# The development mailbox from compose.yml; the tests read the codes back
+# through its API on port 1080.
+[mail]
+from = "Timada <no-reply@timada.localhost>"
+smtp_url = "smtp://localhost:1025"
+
 [monitoring]
 log_level = "info,timada_dashboard=debug"

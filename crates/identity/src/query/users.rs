@@ -18,6 +18,9 @@ pub struct UserRow {
     pub sign_in_count: i64,
     pub oauth2_count: i64,
     pub passkey_count: i64,
+    /// The address of the e-mail + password method, when the user has one.
+    pub email: Option<String>,
+    pub has_password: bool,
 }
 
 /// One row of `identity_sessions`.
@@ -60,7 +63,7 @@ pub async fn list_users(
     let pattern = q.map(contains);
     sqlx::query_as(
         "SELECT id, account, label, is_admin, deleted, registered_at, last_sign_in_at,
-            sign_in_count, oauth2_count, passkey_count
+            sign_in_count, oauth2_count, passkey_count, email, has_password
          FROM identity_users
          WHERE ?1 IS NULL OR account LIKE ?1 ESCAPE '\\' OR label LIKE ?1 ESCAPE '\\'
          ORDER BY deleted, label COLLATE NOCASE, id

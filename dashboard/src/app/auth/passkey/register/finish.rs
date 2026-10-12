@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use timada_identity::{RegisterPasskey, RegistrationMode, VerifiedPasskey};
+use timada_identity::{AddPasskey, VerifiedPasskey};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -7,11 +7,11 @@ use topcoat::{
 };
 use webauthn_rs::prelude::{RegisterPublicKeyCredential, Webauthn};
 
+use crate::app::auth::account_url;
 use crate::app::auth::passkey::{Done, into_error};
-use crate::app::auth::{account_url, home_url};
 use crate::auth::{
     cookies::{is_fresh, passkey_registration_flow},
-    current_user, identity, login_context, now, sign_in_as,
+    current_user, identity, now,
     webauthn::{aaguid_from_attestation, encode_credential_id, passkey_to_json},
 };
 
@@ -33,14 +33,11 @@ pub async fn finish(cx: &Cx, Json(req): Json<FinishRequest>) -> Result<Json<Done
             store.remove();
             flow
         }
-        Ok(None) | Err(_) => return Err(bad_request("this sign-in attempt expired").into()),
+        Ok(None) | Err(_) => return Err(bad_request("this attempt expired").into()),
     };
     if !is_fresh(flow.issued_at, now()) {
-        return Err(bad_request("this sign-in attempt expired").into());
+        return Err(bad_request("this attempt expired").into());
     }
-    let Some(mode) = RegistrationMode::parse(&flow.mode) else {
-        return Err(bad_request("unknown mode").into());
-    };
 
     let passkey = webauthn
         .finish_passkey_registration(&req.credential, &flow.state)
@@ -56,9 +53,8 @@ pub async fn finish(cx: &Cx, Json(req): Json<FinishRequest>) -> Result<Json<Done
         .map(|n| n.chars().take(64).collect())
         .unwrap_or_else(|| "Passkey".to_owned());
 
-    let outcome = identity(cx)
-        .register_passkey(RegisterPasskey {
-            mode,
+    identity(cx)
+        .add_passkey(AddPasskey {
             session_user_id: current_user(cx).await.map(|u| u.id.clone()),
             bound_user_id: flow.bound_user_id,
             passkey: VerifiedPasskey {
@@ -79,21 +75,11 @@ pub async fn finish(cx: &Cx, Json(req): Json<FinishRequest>) -> Result<Json<Done
                     .to_owned(),
                 name,
             },
-            account: flow.account,
-            label: flow.label,
-            context: login_context(cx),
         })
         .await
         .map_err(into_error)?;
 
-    if outcome.created {
-        sign_in_as(cx, &outcome.user_id).await?;
-        Ok(Json(Done {
-            location: home_url(cx),
-        }))
-    } else {
-        Ok(Json(Done {
-            location: account_url(cx, None, Some("Passkey added.")),
-        }))
-    }
+    Ok(Json(Done {
+        location: account_url(cx, None, Some("Passkey added.")),
+    }))
 }

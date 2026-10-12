@@ -102,10 +102,6 @@ impl Providers {
         self.by_name.values()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.by_name.is_empty()
-    }
-
     /// Builds the authorization URL with PKCE, a fresh `state` and a fresh
     /// `nonce`.
     pub fn authorize(&self, provider: &Provider) -> Authorization {

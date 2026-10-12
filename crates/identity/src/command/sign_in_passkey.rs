@@ -3,7 +3,7 @@ use evento::ProjectionAggregate;
 
 use crate::aggregator::Updated;
 use crate::error::IdentityError;
-use crate::value_object::{LoginContext, SignInMethod};
+use crate::value_object::{LoginContext, SignInKind};
 
 use super::sign_in::SignInFacts;
 
@@ -58,7 +58,7 @@ impl<E: Executor> super::Command<E> {
             .record_sign_in(
                 &user_id,
                 SignInFacts {
-                    method: SignInMethod::Passkey,
+                    kind: SignInKind::Passkey,
                     provider: None,
                     credential_id: Some(cmd.credential_id),
                     context: cmd.context,

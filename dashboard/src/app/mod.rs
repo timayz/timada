@@ -10,6 +10,7 @@ use topcoat::{
     asset::{AssetBundle, RouterBuilderAssetExt},
     context::Cx,
     cookie::{Key, RouterBuilderCookieExt},
+    mail::RouterBuilderMailExt,
     router::{
         Router, RouterBuilderDiscoverExt, TrustedProxies, href, module_router, page, query_params,
     },
@@ -19,6 +20,7 @@ use topcoat::{
 };
 use webauthn_rs::prelude::Webauthn;
 
+use crate::auth::mail::Mailer;
 use crate::auth::oidc::Providers;
 use crate::cluster::Executor;
 use crate::config::Config;
@@ -31,6 +33,7 @@ pub fn router(
     write_pool: WritePool,
     providers: Providers,
     webauthn: Webauthn,
+    mailer: Mailer,
     config: Config,
 ) -> Router {
     // The bundle sits next to the binary; `topcoat dev` writes it after every
@@ -59,6 +62,9 @@ pub fn router(
         .app_context(write_pool)
         .app_context(providers)
         .app_context(webauthn)
+        // The transport behind `topcoat::mail::send`, and who the codes come from.
+        .mail(mailer.transport)
+        .app_context(mailer.sender)
         .app_context(config)
         .assets(assets)
         .runtime()

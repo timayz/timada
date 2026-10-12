@@ -4,44 +4,57 @@
 //! version it observes, and `write()` sends as `original_version`, never goes
 //! stale. None of them is snapshotted: streams are a handful of events.
 
+mod add_passkey;
 mod admin;
+mod check_password;
 mod complete_oauth2;
+mod email_challenge;
+mod email_index;
 mod end_session;
 mod first_user;
 mod oauth2_index;
 mod passkey_index;
 mod refresh_session;
-mod register_passkey;
+mod register_with_password;
 mod remove_passkey;
 mod rename_passkey;
+mod reset_password;
 mod resolve_session;
 mod revoke_sessions;
 mod sign_in;
 mod sign_in_passkey;
+mod sign_in_with_password;
 mod start_session;
 mod unlink_oauth2;
 mod update_profile;
 
 use std::ops::Deref;
 
+pub use add_passkey::*;
+pub use check_password::*;
 pub use complete_oauth2::*;
-pub use register_passkey::*;
+pub use email_challenge::*;
+pub use register_with_password::*;
+pub use reset_password::*;
 pub use resolve_session::*;
 pub use sign_in_passkey::*;
+pub use sign_in_with_password::*;
 
 use evento::{
     Executor, Projection, ProjectionAggregate, WriteBuilder, WriteError, metadata::Event,
 };
 
 use crate::aggregator::{
-    AdminGranted, AdminRevoked, Created, Deleted, Ended, FirstUserClaimed, Linked,
-    OAuth2AccountLinked, OAuth2AccountUnlinked, PasskeyAdded, PasskeyRemoved, PasskeyRenamed,
-    ProfileUpdated, Refreshed, Registered, Removed, SessionsRevoked, SignedIn, SignedOut, Started,
-    Unlinked, Updated,
+    AdminGranted, AdminRevoked, AttemptFailed, Claimed, CodeIssued, Consumed, Created, Deleted,
+    EmailRegistered, Ended, FirstUserClaimed, Linked, OAuth2AccountLinked, OAuth2AccountUnlinked,
+    PasskeyAdded, PasskeyRemoved, PasskeyRenamed, PasswordChanged, ProfileUpdated, Refreshed,
+    Registered, Released, Removed, SessionsRevoked, SignedIn, SignedInWithPassword, SignedOut,
+    Started, Unlinked, Updated,
 };
 use crate::error::IdentityError;
 use crate::value_object::{
-    REGISTRY_ID, SignInMethod, oauth2_account_id, passkey_credential_id, session_id,
+    ChallengePurpose, REGISTRY_ID, SignInKind, email_account_id, email_challenge_id,
+    oauth2_account_id, passkey_credential_id, session_id,
 };
 
 /// The command gateway. Cheap to clone when `E` is (the dashboard's executor
@@ -85,9 +98,20 @@ pub struct LinkedPasskey {
     pub added_at: u64,
 }
 
+/// The e-mail + password sign-in method of a user.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PasswordMethod {
+    /// Normalized address, also the user's login identifier.
+    pub email: String,
+    /// PHC string.
+    pub password_hash: String,
+    /// Unix seconds of the latest `EmailRegistered` / `PasswordChanged`.
+    pub changed_at: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SignInRecord {
-    pub method: SignInMethod,
+    pub method: SignInKind,
     pub provider: Option<String>,
     pub credential_id: Option<String>,
     pub user_agent: Option<String>,
@@ -134,6 +158,7 @@ pub struct UserState {
     pub role_assigned: bool,
     pub oauth2_accounts: Vec<LinkedOAuth2Account>,
     pub passkeys: Vec<LinkedPasskey>,
+    pub password: Option<PasswordMethod>,
     /// Most recent last.
     pub sign_ins: Vec<SignInRecord>,
     /// Unix seconds of `Registered`.
@@ -147,7 +172,7 @@ impl UserState {
     /// How many ways this user can still sign in. Unlinking the last one would
     /// lock them out.
     pub fn sign_in_methods(&self) -> usize {
-        self.oauth2_accounts.len() + self.passkeys.len()
+        self.oauth2_accounts.len() + self.passkeys.len() + usize::from(self.password.is_some())
     }
 
     pub fn has_oauth2_account(&self, provider: &str, provider_user_id: &str) -> bool {
@@ -181,6 +206,9 @@ pub fn user_projection<E: Executor>() -> Projection<E, UserState> {
         .handler(on_signed_in())
         .handler(on_deleted())
         .handler(on_sessions_revoked())
+        .handler(on_email_registered())
+        .handler(on_password_changed())
+        .handler(on_signed_in_with_password())
         .skip::<SignedOut>()
         .strict()
 }
@@ -288,19 +316,26 @@ async fn on_passkey_removed(
 
 #[evento::handler]
 async fn on_signed_in(event: Event<SignedIn>, user: &mut UserState) -> anyhow::Result<()> {
-    user.sign_ins.push(SignInRecord {
-        method: event.data.method,
-        provider: event.data.provider.to_owned(),
-        credential_id: event.data.credential_id.to_owned(),
-        user_agent: event.data.user_agent.to_owned(),
-        ip: event.data.ip.to_owned(),
-        at: event.timestamp,
-    });
+    push_sign_in(
+        user,
+        SignInRecord {
+            method: event.data.method.into(),
+            provider: event.data.provider.to_owned(),
+            credential_id: event.data.credential_id.to_owned(),
+            user_agent: event.data.user_agent.to_owned(),
+            ip: event.data.ip.to_owned(),
+            at: event.timestamp,
+        },
+    );
+    Ok(())
+}
+
+fn push_sign_in(user: &mut UserState, record: SignInRecord) {
+    user.sign_ins.push(record);
     if user.sign_ins.len() > SIGN_IN_HISTORY {
         let excess = user.sign_ins.len() - SIGN_IN_HISTORY;
         user.sign_ins.drain(..excess);
     }
-    Ok(())
 }
 
 #[evento::handler]
@@ -318,6 +353,54 @@ async fn on_sessions_revoked(
         at_ms: event_millis(&event),
         except_session: event.data.except_session.to_owned(),
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_email_registered(
+    event: Event<EmailRegistered>,
+    user: &mut UserState,
+) -> anyhow::Result<()> {
+    user.id = event.aggregate_id.to_owned();
+    user.account = event.data.email.to_owned();
+    user.label = event.data.label.to_owned();
+    user.registered_at = event.timestamp;
+    user.password = Some(PasswordMethod {
+        email: event.data.email.to_owned(),
+        password_hash: event.data.password_hash.to_owned(),
+        changed_at: event.timestamp,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_password_changed(
+    event: Event<PasswordChanged>,
+    user: &mut UserState,
+) -> anyhow::Result<()> {
+    if let Some(password) = user.password.as_mut() {
+        password.password_hash = event.data.password_hash.to_owned();
+        password.changed_at = event.timestamp;
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_signed_in_with_password(
+    event: Event<SignedInWithPassword>,
+    user: &mut UserState,
+) -> anyhow::Result<()> {
+    push_sign_in(
+        user,
+        SignInRecord {
+            method: SignInKind::Password,
+            provider: None,
+            credential_id: None,
+            user_agent: event.data.user_agent.to_owned(),
+            ip: event.data.ip.to_owned(),
+            at: event.timestamp,
+        },
+    );
     Ok(())
 }
 
@@ -419,6 +502,120 @@ async fn on_passkey_credential_removed(
     state: &mut PasskeyCredentialState,
 ) -> anyhow::Result<()> {
     state.removed = true;
+    Ok(())
+}
+
+// =============================================================================
+// EmailAccount index
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-identity/EmailAccountState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct EmailAccountState {
+    pub id: String,
+    pub user_id: String,
+    pub email: String,
+    pub released: bool,
+}
+
+pub fn email_account_projection<E: Executor>() -> Projection<E, EmailAccountState> {
+    Projection::new::<crate::aggregator::EmailAccount>()
+        .handler(on_email_claimed())
+        .handler(on_email_released())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_email_claimed(
+    event: Event<Claimed>,
+    state: &mut EmailAccountState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.user_id = event.data.user_id.to_owned();
+    state.email = event.data.email.to_owned();
+    state.released = false;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_email_released(
+    _event: Event<Released>,
+    state: &mut EmailAccountState,
+) -> anyhow::Result<()> {
+    state.released = true;
+    Ok(())
+}
+
+// =============================================================================
+// EmailChallenge
+// =============================================================================
+
+/// The latest code mailed to an address and what happened to it.
+#[evento::projection(id = id, name = "timada-identity/EmailChallengeState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct EmailChallengeState {
+    pub id: String,
+    pub purpose: ChallengePurpose,
+    pub code_hash: String,
+    /// Unix seconds.
+    pub issued_at: u64,
+    /// Unix seconds.
+    pub expires_at: u64,
+    /// Wrong guesses against the current code.
+    pub failed_attempts: u32,
+    /// The current code was used.
+    pub consumed: bool,
+}
+
+impl EmailChallengeState {
+    /// Whether the current code may still be tried at `now`.
+    pub fn is_open_at(&self, now: u64) -> bool {
+        !self.consumed
+            && self.failed_attempts < crate::value_object::CODE_MAX_ATTEMPTS
+            && now < self.expires_at
+    }
+}
+
+pub fn email_challenge_projection<E: Executor>() -> Projection<E, EmailChallengeState> {
+    Projection::new::<crate::aggregator::EmailChallenge>()
+        .handler(on_code_issued())
+        .handler(on_attempt_failed())
+        .handler(on_consumed())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_code_issued(
+    event: Event<CodeIssued>,
+    state: &mut EmailChallengeState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.purpose = event.data.purpose;
+    state.code_hash = event.data.code_hash.to_owned();
+    state.issued_at = event.data.issued_at;
+    state.expires_at = event.data.expires_at;
+    state.failed_attempts = 0;
+    state.consumed = false;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_attempt_failed(
+    _event: Event<AttemptFailed>,
+    state: &mut EmailChallengeState,
+) -> anyhow::Result<()> {
+    state.failed_attempts += 1;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_consumed(
+    _event: Event<Consumed>,
+    state: &mut EmailChallengeState,
+) -> anyhow::Result<()> {
+    state.consumed = true;
     Ok(())
 }
 
@@ -572,6 +769,39 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<PasskeyCredentialState>> {
         passkey_credential_projection()
             .load(passkey_credential_id(credential_id))
+            .execute(&self.0)
+            .await
+    }
+
+    /// The currently claimed index entry for a normalized address.
+    pub async fn load_email_account(
+        &self,
+        email: &str,
+    ) -> anyhow::Result<Option<EmailAccountState>> {
+        Ok(self
+            .load_email_account_any(email)
+            .await?
+            .filter(|a| !a.released))
+    }
+
+    /// The index entry including released ones (needed to re-claim).
+    pub(crate) async fn load_email_account_any(
+        &self,
+        email: &str,
+    ) -> anyhow::Result<Option<EmailAccountState>> {
+        email_account_projection()
+            .load(email_account_id(email))
+            .execute(&self.0)
+            .await
+    }
+
+    /// The latest code mailed to a normalized address, if any was.
+    pub async fn load_email_challenge(
+        &self,
+        email: &str,
+    ) -> anyhow::Result<Option<EmailChallengeState>> {
+        email_challenge_projection()
+            .load(email_challenge_id(email))
             .execute(&self.0)
             .await
     }

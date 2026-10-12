@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use timada_identity::{IdentityError, OAuth2Mode, SignInMethod};
+use timada_identity::{IdentityError, OAuth2Mode, SignInKind};
 
 #[tokio::test]
 async fn create_user_or_login_registers_then_signs_in() {
@@ -20,7 +20,7 @@ async fn create_user_or_login_registers_then_signs_in() {
     assert_eq!(user.oauth2_accounts.len(), 1);
     assert_eq!(user.sign_in_methods(), 1);
     assert_eq!(user.sign_ins.len(), 1);
-    assert_eq!(user.last_sign_in().unwrap().method, SignInMethod::OAuth2);
+    assert_eq!(user.last_sign_in().unwrap().method, SignInKind::OAuth2);
     assert!(user.is_admin, "the first user administers the instance");
 
     let again = cmd

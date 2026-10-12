@@ -5,7 +5,8 @@ use std::pin::Pin;
 use std::task::Poll;
 
 use common::*;
-use timada_identity::{OAuth2Mode, REGISTRY_ID};
+use timada_identity::aggregator::{FirstUserClaimed, Linked, OAuth2AccountLinked, Registered};
+use timada_identity::{OAuth2Mode, REGISTRY_ID, SignInMethod, oauth2_account_id};
 
 #[tokio::test]
 async fn exactly_one_of_many_concurrent_first_registrations_becomes_admin() {
@@ -40,37 +41,52 @@ async fn exactly_one_of_many_concurrent_first_registrations_becomes_admin() {
 #[tokio::test]
 async fn a_missing_admin_grant_is_repaired_on_sign_in() {
     let cmd = command().await;
-    // Simulate a crash between the claim and the grant: the claim exists for a
-    // user who was never granted admin.
-    let user_id = {
-        // Claim the registry for an id first, then register that user by hand
-        // through a passkey flow using the same bound id.
-        let id = new_id();
-        evento::append(REGISTRY_ID)
-            .original_version(0)
-            .event(&timada_identity::aggregator::FirstUserClaimed {
-                user_id: id.clone(),
-            })
-            .commit(&cmd.0)
-            .await
-            .unwrap();
-        id
-    };
-    cmd.register_passkey(register_passkey(
-        timada_identity::RegistrationMode::CreateUser,
-        None,
-        &user_id,
-        "cred-1",
-    ))
-    .await
-    .unwrap();
-    // Registration lost the claim (someone else holds it), so no grant yet…
-    // except the claim names this very user, and the sign-in notices.
-    let user = cmd.load_user(&user_id).await.unwrap().unwrap();
-    assert!(
-        user.is_admin,
-        "sign-in during registration repaired the grant"
-    );
+    // Simulate a crash between the claim and the grant: the user and their
+    // provider identity exist and the registry names them, but no grant
+    // landed. Written by hand, exactly as `register_oauth2` would have.
+    let user_id = new_id();
+    evento::append(REGISTRY_ID)
+        .original_version(0)
+        .event(&FirstUserClaimed {
+            user_id: user_id.clone(),
+        })
+        .commit(&cmd.0)
+        .await
+        .unwrap();
+    evento::append(&user_id)
+        .original_version(0)
+        .event(&Registered {
+            account: "1@example.com".to_owned(),
+            label: "User 1".to_owned(),
+            method: SignInMethod::OAuth2,
+        })
+        .event(&OAuth2AccountLinked {
+            provider: "google".to_owned(),
+            provider_user_id: "1".to_owned(),
+            name: None,
+            email: None,
+            picture: None,
+        })
+        .commit(&cmd.0)
+        .await
+        .unwrap();
+    evento::append(oauth2_account_id("google", "1"))
+        .original_version(0)
+        .event(&Linked {
+            user_id: user_id.clone(),
+            provider: "google".to_owned(),
+            provider_user_id: "1".to_owned(),
+        })
+        .commit(&cmd.0)
+        .await
+        .unwrap();
+    assert!(!cmd.load_user(&user_id).await.unwrap().unwrap().is_admin);
+
+    // The next sign-in notices that the claim names this very user.
+    cmd.complete_oauth2(oauth2(OAuth2Mode::Login, None, "google", "1"))
+        .await
+        .unwrap();
+    assert!(cmd.load_user(&user_id).await.unwrap().unwrap().is_admin);
 
     let other = register_via_oauth2(&cmd, "google", "2").await;
     assert!(!cmd.load_user(&other).await.unwrap().unwrap().is_admin);

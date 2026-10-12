@@ -90,6 +90,12 @@ impl<E: Executor> super::Command<E> {
                 .await;
             tolerate_new_owner(freed)?;
         }
+        if let Some(password) = &user.password {
+            let freed = self
+                .release_email_index(user_id, &password.email, routing_key.clone())
+                .await;
+            tolerate_new_owner(freed)?;
+        }
         Ok(())
     }
 }

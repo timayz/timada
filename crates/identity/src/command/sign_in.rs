@@ -1,15 +1,15 @@
 use evento::Executor;
 
-use crate::aggregator::SignedIn;
+use crate::aggregator::{SignedIn, SignedInWithPassword};
 use crate::error::IdentityError;
-use crate::value_object::{LoginContext, SignInMethod};
+use crate::value_object::{LoginContext, SignInKind, SignInMethod};
 
 use super::{Command, UserState};
 
 /// What a successful sign-in records.
 #[derive(Debug, Clone)]
 pub(crate) struct SignInFacts {
-    pub method: SignInMethod,
+    pub kind: SignInKind,
     pub provider: Option<String>,
     pub credential_id: Option<String>,
     pub context: LoginContext,
@@ -27,8 +27,19 @@ impl<E: Executor> Command<E> {
     ) -> Result<UserState, IdentityError> {
         let user = self
             .append_user(user_id, routing_key.clone(), |_, builder| {
+                let method = match facts.kind {
+                    SignInKind::OAuth2 => SignInMethod::OAuth2,
+                    SignInKind::Passkey => SignInMethod::Passkey,
+                    SignInKind::Password => {
+                        builder.event(&SignedInWithPassword {
+                            user_agent: facts.context.user_agent.clone(),
+                            ip: facts.context.ip.clone(),
+                        });
+                        return Ok(());
+                    }
+                };
                 builder.event(&SignedIn {
-                    method: facts.method,
+                    method,
                     provider: facts.provider.clone(),
                     credential_id: facts.credential_id.clone(),
                     user_agent: facts.context.user_agent.clone(),

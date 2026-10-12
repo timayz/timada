@@ -28,6 +28,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // failing a sign-in later.
     let providers = auth::oidc::Providers::discover(&config.auth, &config.server.url).await?;
     let webauthn = auth::webauthn::build(&config.auth, &config.server.url)?;
+    let mailer = auth::mail::build(&config.mail)?;
 
     // Read models catch up from their saved cursor before the router takes
     // requests, then follow the stream. A failed worker is logged and the
@@ -52,6 +53,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         WritePool(write_pool.clone()),
         providers,
         webauthn,
+        mailer,
         config,
     );
 

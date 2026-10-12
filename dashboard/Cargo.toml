@@ -25,7 +25,6 @@ webauthn-rs.workspace = true
 webauthn-rs-proto.workspace = true
 serde_json.workspace = true
 base64.workspace = true
-ulid.workspace = true
 uuid.workspace = true
 ciborium.workspace = true
 
