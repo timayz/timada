@@ -33,6 +33,8 @@ event timada-identity/User::SessionsRevoked { except_session: Option<String> }
 event timada-identity/User::SignedIn { method: SignInMethod, provider: Option<String>, credential_id: Option<String>, user_agent: Option<String>, ip: Option<String> }
 event timada-identity/User::SignedInWithPassword { user_agent: Option<String>, ip: Option<String> }
 event timada-identity/User::SignedOut unit
+event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, created_by: String, created_at: u64 }
+event timada-tenancy/ApiKey::Revoked { revoked_by: String, revoked_at: u64 }
 event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }

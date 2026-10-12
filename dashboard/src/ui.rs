@@ -99,6 +99,8 @@ pub fn describe_error(code: &str) -> &'static str {
         "not_member" => "This user is not a member.",
         "last_owner" => "A tenant keeps at least one owner.",
         "invitation_invalid" => "This invitation is no longer valid.",
+        "invalid_api_key_label" => "A key label is 1 to 40 characters.",
+        "api_key_invalid" => "This API key does not exist or is already revoked.",
         _ => "Something went wrong. Please try again.",
     }
 }
@@ -112,7 +114,7 @@ pub fn describe_permission(permission: &str) -> &'static str {
             "Invite, change roles and remove members (owners excepted; includes seeing them)"
         }
         "roles:manage" => "Define, edit and remove roles",
-        "api-keys:manage" => "Manage the store API keys (not available yet)",
+        "api-keys:manage" => "Create and revoke the store API keys",
         _ => "Unknown permission",
     }
 }

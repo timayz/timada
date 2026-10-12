@@ -82,3 +82,31 @@ pub enum Invitation {
         revoked_by: String,
     },
 }
+
+/// The store API key events, in their own module: the macro names an event
+/// struct after its variant, and `Created` / `Revoked` already belong to the
+/// tenant and the invitation above.
+pub mod api_key {
+    /// A store's credential to the tenant's event store, presented when a
+    /// storefront connects. One stream per token, id =
+    /// [`api_key_id`](crate::api_key_id): the token is shown once at creation,
+    /// the stream knows its hash and a short hint to tell keys apart. A key
+    /// reads and writes everything in its tenant's store; revoking it is the
+    /// only way to narrow that.
+    #[evento::aggregate(name = "timada-tenancy/ApiKey")]
+    pub enum ApiKey {
+        Created {
+            tenant_id: String,
+            label: String,
+            /// The token's first characters (`tk_` and eight more), for the pages.
+            hint: String,
+            created_by: String,
+            /// Unix seconds.
+            created_at: u64,
+        },
+        Revoked {
+            revoked_by: String,
+            revoked_at: u64,
+        },
+    }
+}

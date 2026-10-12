@@ -4,6 +4,7 @@
 //! version it observes, and `write()` sends as `original_version`, never goes
 //! stale. None of them is snapshotted: a tenant stream is a handful of events.
 
+mod api_key;
 mod create;
 mod invite;
 mod member;
@@ -15,17 +16,19 @@ mod suspend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 
+pub use api_key::*;
 pub use create::*;
 pub use invite::*;
 pub use role::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
+use crate::aggregator::api_key::{Created as ApiKeyCreated, Revoked as ApiKeyRevoked};
 use crate::aggregator::{
     Accepted, Claimed, Created, MemberGranted, MemberRevoked, MemberRoleChanged, Released, Renamed,
     Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
 };
-use crate::value_object::{ROLE_OWNER, implies, invitation_id, tenant_slug_id};
+use crate::value_object::{ROLE_OWNER, api_key_id, implies, invitation_id, tenant_slug_id};
 
 /// The command gateway. Cheap to clone when `E` is (the dashboard's executor
 /// is an `Arc` wrapper).
@@ -330,6 +333,61 @@ async fn on_invitation_revoked(
 }
 
 // =============================================================================
+// ApiKey
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-tenancy/ApiKeyState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct ApiKeyState {
+    pub id: String,
+    pub tenant_id: String,
+    pub label: String,
+    pub hint: String,
+    pub created_by: String,
+    pub created_at: u64,
+    pub revoked_by: Option<String>,
+    pub revoked_at: Option<u64>,
+}
+
+impl ApiKeyState {
+    pub fn is_active(&self) -> bool {
+        self.revoked_at.is_none()
+    }
+}
+
+pub fn api_key_projection<E: Executor>() -> Projection<E, ApiKeyState> {
+    Projection::new::<crate::aggregator::api_key::ApiKey>()
+        .handler(on_api_key_created())
+        .handler(on_api_key_revoked())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_api_key_created(
+    event: Event<ApiKeyCreated>,
+    key: &mut ApiKeyState,
+) -> anyhow::Result<()> {
+    key.id = event.aggregate_id.to_owned();
+    key.tenant_id = event.data.tenant_id.to_owned();
+    key.label = event.data.label.to_owned();
+    key.hint = event.data.hint.to_owned();
+    key.created_by = event.data.created_by.to_owned();
+    key.created_at = event.data.created_at;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_api_key_revoked(
+    event: Event<ApiKeyRevoked>,
+    key: &mut ApiKeyState,
+) -> anyhow::Result<()> {
+    key.revoked_by = Some(event.data.revoked_by.to_owned());
+    key.revoked_at = Some(event.data.revoked_at);
+    Ok(())
+}
+
+// =============================================================================
 // Loads
 // =============================================================================
 
@@ -382,5 +440,15 @@ impl<E: Executor> Command<E> {
         token: &str,
     ) -> anyhow::Result<Option<InvitationState>> {
         self.load_invitation(&invitation_id(token)).await
+    }
+
+    /// A store API key by its stream id (what the pages list).
+    pub async fn load_api_key(&self, key_id: &str) -> anyhow::Result<Option<ApiKeyState>> {
+        api_key_projection().load(key_id).execute(&self.0).await
+    }
+
+    /// The store API key a token names, if any.
+    pub async fn load_api_key_by_token(&self, token: &str) -> anyhow::Result<Option<ApiKeyState>> {
+        self.load_api_key(&api_key_id(token)).await
     }
 }
