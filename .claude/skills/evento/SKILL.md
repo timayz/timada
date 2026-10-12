@@ -4,7 +4,7 @@ description: >-
   Build event-sourcing / CQRS / DDD features in Rust with the `evento` crate.
   Use when defining aggregates and events, writing commands that commit events,
   building projections/read models, wiring subscriptions, or setting up the
-  SQL/Fjall executor and migrations. Triggers on `#[evento::aggregate]`,
+  SQL/Fjall/remote executor and migrations. Triggers on `#[evento::aggregate]`,
   `evento::create`/`evento::append`, `Projection`, `SubscriptionBuilder`,
   `Executor`, or a Cargo dependency on `evento`.
 ---
@@ -22,14 +22,15 @@ client/server executor (`remote`), and a consensus-replicated executor
 
 ```toml
 [dependencies]
-evento = { version = "=2.0.0-alpha.28", features = ["sqlite"] }  # or "postgres", "mysql", "fjall", "remote"
+evento = { version = "=2.0.0-alpha.35", features = ["sqlite"] }  # or "postgres", "mysql", "fjall", "remote"
 bitcode = "0.6"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 ```
 
 Feature flags: `sqlite` / `postgres` / `mysql` / `fjall` / `remote`, `sql` (all SQL),
-`macro` (default, the proc-macros), `group` (multi-executor), `rw` (read/write split).
+`macro` (default, the proc-macros), `group` (multi-executor), `rw` (executor combinators:
+`Rw` read/write split and `Sidecar`; implied by `fjall`).
 
 ### Executor + migrations (SQL)
 
@@ -48,7 +49,54 @@ let executor: evento::Sqlite = pool.into();   // also: evento::Postgres / evento
 
 ```rust
 let executor = evento::Fjall::open("./events.db")?;
+
+// Tests/examples: a temp store, removed when the last clone of the executor drops.
+let executor = evento::Fjall::temporary()?;
 ```
+
+### Remote (client/server split) and executor combinators
+
+Serve any executor over framed TCP; `RemoteClient` implements `Executor`, so
+commands, projections and subscriptions work unchanged across the network.
+
+```rust
+// Server process — `serve` is the open single-store case (tokens ignored).
+let listener = tokio::net::TcpListener::bind("0.0.0.0:4321").await?;
+let handle = evento::remote::serve(listener, evento::Fjall::open("./data")?);
+// Client process
+let client = evento::RemoteClient::connect("127.0.0.1:4321".parse()?).await?;
+// handle.shutdown().await — dropping the handle does NOT stop the server.
+```
+
+- **One store per tenant / authentication:** implement `evento::remote::Resolver`.
+  Every connection opens with a `Hello { token, peer }` (client side:
+  `RemoteClient::builder(addr).token("…").connect().await?`); `resolve` answers
+  `Session::new(executor)` — optionally `.keep(guard)` (dropped when the connection
+  ends, e.g. a tenant lease) and `.close_when(watch_rx)` (server-side kick on
+  revocation) — or `Err(Rejection)`, which the client sees as its `connect` error.
+  Pass it to `serve_with(listener, resolver)`. It runs again on every reconnect.
+- **TLS:** `serve_tls(listener, acceptor, exec)` / `serve_tls_with(listener, acceptor, resolver)`
+  take a `tokio_rustls::TlsAcceptor`; the client side is
+  `.builder(addr).tls(connector, server_name)`. Plain TCP is for trusted networks —
+  a token travels in clear text there.
+- **A client that runs its own subscriptions** (a replica of a web app following the
+  shared store) must keep cursors and snapshots in a store it owns, or replicas fence
+  each other out of one subscription key:
+
+```rust
+let client = evento::RemoteClient::connect("127.0.0.1:4321".parse()?).await?;
+let local = evento::Fjall::open("./replica-state")?;          // owned by THIS process only
+let executor = evento::Sidecar::from((client, local));        // events: client; cursors/snapshots: local
+```
+
+- `Rw::from((read_exec, write_exec))` splits reads from writes (CQRS with two databases).
+- `evento::Evento::new(exec)` type-erases any executor (`Arc<Box<dyn Executor>>`) —
+  use it when a struct must hold "some executor" without a generic parameter.
+- **Accord (consensus-replicated, alpha):** `evento-accord` replicates writes
+  leaderlessly with any local backend serving reads. One process can host many
+  consensus groups (one SQLite DB per tenant) via `MuxTransport` + `SweepScheduler`
+  + `GroupHost`; see `evento-accord/OPERATIONS.md` §10 and
+  `examples/bank-axum-accord-tenants/`.
 
 ## 1. Define aggregates & events
 
@@ -63,13 +111,59 @@ pub enum Account {
     MoneyDeposited { amount: i64 },
     MoneyWithdrawn { amount: i64 },
 }
-// Generated: structs `AccountOpened`, `MoneyDeposited`, `MoneyWithdrawn`, and a
-// unit struct `Account`. Pass extra derives: `#[evento::aggregate(serde::Serialize)]`.
+// Generated: structs `AccountOpened`, `MoneyDeposited`, `MoneyWithdrawn`, a
+// unit struct `Account`, and an enum `AccountEvent` newtyping those structs.
+// Pass extra derives: `#[evento::aggregate(serde::Serialize)]` (they also apply
+// to `AccountEvent`).
+```
+
+**Going back out.** `AccountEvent::try_from(&event)?` turns a stored
+`evento::Event` into an exhaustively matchable value — use it for SSE, webhooks,
+outbox rows and audit logs instead of matching on `event.name`, so a new variant
+is a compile error rather than a silent `_` fallthrough. `.event_name()` gives
+the stored name back; errors are `evento::FromEventError`. Decoding is verbatim,
+so an `upcast_to` predecessor decodes to its *own* variant.
+
+```rust
+match AccountEvent::try_from(&event)? {
+    AccountEvent::AccountOpened(AccountOpened { owner, .. }) => sse.send(owner),
+    AccountEvent::MoneyDeposited(d) => sse.send(d.amount),
+    AccountEvent::MoneyWithdrawn(_) => {}
+}
 ```
 
 Pin on-disk identities so refactors never orphan stored events:
 `#[evento::aggregate(name = "bank/BankAccount")]` on the enum,
 `#[evento(name = "opened.v1")]` on a variant.
+
+**Evolving an event.** A stored event's layout is frozen (bitcode is positional):
+never edit a variant that a database may hold. Add a new variant and upcast the
+old one to it — old stored events are converted before handlers see them, so only
+the newest handler is needed:
+
+```rust
+#[evento::aggregate(name = "myapp/Payment")]
+pub enum Payment {
+    #[evento(upcast_to = PaymentRefundedV2)]   // keep: it is the decode schema
+    PaymentRefunded { amount: i64 },
+    PaymentRefundedV2 { amount: i64, reason: String },
+}
+impl From<PaymentRefunded> for PaymentRefundedV2 { /* fill the new fields */ }
+```
+
+Declared once on the aggregate; every `Projection`/`SubscriptionBuilder` that
+registers `.handler(..)` or `.skip::<PaymentRefundedV2>()` also accepts
+`PaymentRefunded` (`tombstone::<New>()` and `has_event::<New>()` too). Chains
+(`V1 -> V2 -> V3`) work; a handler for the old event itself still wins, so
+consumers migrate one at a time. `#[evento::subscription_all]` sees stored
+events un-upcast.
+
+**Locking shapes.** `evento-lock` (dev-dependency) records every event, every
+`Encode` type an event reaches, and every executor-snapshotted view in
+`events.lock`; a test (`evento_lock::check(env!("CARGO_MANIFEST_DIR")).unwrap()`)
+fails when a frozen line changes. After adding an event run
+`EVENTO_LOCK=update cargo test` and commit `events.lock`. A failing lock means:
+restore the edit and add a variant, or bump the view's `.revision(n)`.
 
 ## 2. Write events
 
@@ -132,7 +226,8 @@ let view: Option<AccountView> = Projection::<_, AccountView>::new::<Account>()
     .await?;
 ```
 
-`Projection` builder: `.handler(h)`, `.skip::<Ev>()`, `.data(v)`, `.revision(n)`
+`Projection` builder: `.handler(h)`, `.skip::<Ev>()`, `.data(v)` (reaches hand-written
+`Snapshot` impls, not handlers — projection handlers take no context), `.revision(n)`
 (bumps snapshot version → invalidates old snapshots), `.strict()`,
 `.tombstone::<Ev>()` (an event that deletes the projection), then a terminal
 `.load(id)` / `.load_ids(ids)` → `LoadBuilder`, or `.subscription(key)` →
@@ -143,7 +238,11 @@ let view: Option<AccountView> = Projection::<_, AccountView>::new::<Account>()
 
 - **Executor-backed** (default): give the projection bitcode derives —
   `#[evento::projection(bitcode::Encode, bitcode::Decode)]` — and snapshots are
-  persisted via the executor (blanket `Snapshot` impl).
+  persisted via the executor (blanket `Snapshot` impl), keyed by
+  `(aggregate type, projection name, id)`: several snapshotted views of one
+  aggregate are fine. The name defaults to `"<module path>::<Struct>"`; pin it
+  with `#[evento::projection(name = "myapp/View", ...)]` so a rename/move does
+  not orphan the stored snapshots. An undecodable snapshot is a cache miss.
 - **`#[evento::snapshot(memory)]`**: process-local table keyed by aggregate id;
   read materialized rows with `View::snapshot_rows().read().unwrap()`.
 - **`#[evento::snapshot(none)]`**: no snapshots, always replay.
@@ -196,7 +295,10 @@ impl<E: Executor> Command<E> {
 
 `#[evento::subscription]` handlers take the context first, then the event:
 `(context: &Context<'_, E>, event: Event<SomeEvent>)`. They may do side effects
-(read models, notifications) via `context.executor` and `context.extract::<Data<T>>()`.
+(read models, notifications) via `context.executor` and `context.extract::<T>()` —
+`.data(v)` stores `v` under its own type, and `extract` clones it, so `T` must be `Clone`
+and cheap to clone; wrap anything else in `Data` and extract `Data<T>`.
+`context.try_extract::<T>()?` returns a `MissingData` error instead of panicking.
 
 ```rust
 use evento::{Executor, metadata::Event, subscription::{Context, SubscriptionBuilder}};
@@ -212,7 +314,7 @@ async fn notify_deposit<E: Executor>(
 
 let sub = SubscriptionBuilder::<evento::Sqlite>::new("notifier") // unique key = cursor scope
     .handler(notify_deposit())
-    .routing_key("accounts")   // or .all() for every routing key; default = only NULL routing key
+    .routing_key("accounts")   // .any_routing_key() for every key; default = only NULL routing key
     .chunk_size(100)
     .retry(5)                  // exponential backoff; .no_retry() to disable
     .start(&executor)          // background task; returns a handle
@@ -222,59 +324,126 @@ sub.shutdown().await?;
 ```
 
 - `.start(exec)` runs a background loop; `.run_once(exec)` drains pending events once and returns.
+- `sub.stopped().await` resolves to a `StopReason` once the worker ends: `Shutdown`,
+  `StoppedByHandler`, `LostOwnership` (another worker claimed the key), `Failed(err)`
+  (retries exhausted, no `.continue_on_error()`), or `Panicked`. Await it to notice a
+  dead subscription instead of discovering a stale read model later.
 - `.strict()` fails on an unhandled event; `.continue_on_error()` keeps going after a handler error.
+- **Live bridge (SSE, WebSocket, fanout):** `.live(exec)` is the whole shape in one call —
+  `.ephemeral().start_from_latest().start(exec)`. `.ephemeral()` keeps the cursor in memory — no
+  subscriber row, no fence, no acknowledge, reads only — and `.start_from_latest()` begins at
+  the stream head instead of replaying history (it applies only when there is no cursor yet, so
+  a durable subscription still resumes on restart); use them separately for the combinations
+  `.live()` does not cover. A handler ends its own subscription with
+  `ctx.stop()`, reporting `StopReason::StoppedByHandler` — a normal end, not a failure.
+  Neither `.ephemeral()` nor `.start_from_latest()` is offered on `ProjectionSubscription`.
+  One subscription per connection is worth it only when each wants a different slice
+  (`.aggregate::<A>(id)`); otherwise run one fanning out over a `broadcast` channel.
 - Process **all** raw events of an aggregate (no payload deserialization) with
-  `#[evento::subscription_all]` + `event: evento::metadata::RawEvent<Account>`.
+  `#[evento::subscription_all]` + `event: evento::metadata::RawEvent<Account>`;
+  call `event.decode()?` for the typed `AccountEvent` when you want it.
 - Keep a projection auto-updated: `Projection::new::<A>().handler(..).subscription("key").start(&exec)`.
 
 ## 5. Reading events directly
 
-```rust
-use evento::{EventFilter, cursor::Args};
+`evento::read::<A>(id)` is the read-side counterpart of `Projection::load` — use it
+when you want the events themselves (SSE, webhooks, outbox rows, audit logs).
 
-let page = executor.read(
-    Some([EventFilter::by_id("mycrate/Account", &id)].into()),  // by_type / by_event / exact
-    None,                                                       // routing key filter
-    Args::forward(50, None),                                    // cursor pagination
-    None,                                                       // exclusive timestamp bound (µs)
-).await?;
+```rust
+// Whole stream, oldest first; pages are drained internally.
+let events: Vec<evento::Event> = evento::read::<Account>(&id).execute(&executor).await?;
+
+// Typed: exhaustive match, a new variant is a compile error.
+for event in evento::read::<Account>(&id).decode(&executor).await? {
+    match event {
+        AccountEvent::MoneyDeposited(d) => sse.send(d.amount),
+        _ => {}
+    }
+}
 ```
 
-`EventFilter`: `by_type(type)`, `by_id(type, id)`, `by_event(type, name)`,
-`exact(type, id, name)`. The ext trait `AggregateExt` adds
-`executor.has_event::<Ev>(id)` and `executor.original_version::<Ev>(id)`.
+`ReadBuilder`: `.event::<Ev>()` (one event type), `.routing_key(k)` /
+`.no_routing_key()`, `.limit(n)`, `.after(cursor)` / `.before(cursor)`,
+`.backward()`, `.args(Args)`, then a terminal `.execute()` → `Vec<Event>`,
+`.decode()` → `Vec<{Enum}Event>`, or `.page()` → `ReadResult<Event>` (one page +
+`page_info` for cursor-driven callers). `evento::read_raw(type, id)` takes the
+aggregate type as a string; it has no `.decode()`.
+
+- **`.limit(n)` is a total, not a page size** — `.execute()` never silently truncates.
+- **`.backward()` takes the tail** of the stream (GraphQL `last:`); events still come
+  back oldest-first.
+- Drop to `executor.read(filters, routing_key, args, to_micros)` only for queries
+  spanning several aggregates. `EventFilter` constructors are typed —
+  `by_type::<A>()`, `by_id::<A>(id)`, `by_event::<Ev>()`, `exact::<Ev>(id)` — each with
+  a `*_raw` string form (`by_id_raw(type, id)`, …) for runtime types.
+- The ext trait `AggregateExt` adds `executor.has_event::<Ev>(id)` and
+  `executor.original_version::<Ev>(id)`.
 
 ## Gotchas
 
-- **Routing keys scope subscriptions.** A subscription with no `.routing_key()`/`.all()`
-  only sees events whose routing key is NULL. `.all()` subscriptions are stored per
+- **Readers and subscriptions default routing keys oppositely.** `evento::read(..)` with
+  no `.routing_key()` reads **every** routing key; narrow it with `.no_routing_key()`.
+  A subscription with no `.routing_key()`/`.any_routing_key()` only sees events whose
+  routing key is NULL. `.any_routing_key()` subscriptions are stored per
   executor-default-routing-key, so multi-tenant setups stay isolated.
 - **The subscription key is the cursor identity.** Reusing a key across two different
-  subscriptions makes them share (and corrupt) one cursor. Keep keys unique.
+  subscriptions makes them share (and corrupt) one cursor. Keep keys unique — except under
+  `.ephemeral()`, where nothing is stored under the key and any number of subscriptions may
+  share one concurrently.
 - **Optimistic concurrency:** always pass the correct `original_version` to `append`;
   handle `WriteError::InvalidOriginalVersion` (retry by reloading).
 - **Handler order doesn't matter, coverage does.** Unhandled events are silently
-  skipped unless you call `.strict()`.
-- **Write-side projections must be `.strict()` (with `.skip::<Ev>()` for events they
-  don't fold).** A non-strict projection only *reads* the events it has handlers for,
-  so the version it observes — and `write()` sends as `original_version` — goes stale
-  as soon as an unhandled event lands, and every later command fails with
-  `InvalidOriginalVersion`.
+  skipped unless you call `.strict()`. An older event declared with
+  `#[evento(upcast_to = New)]` counts as handled when `New` is handled or skipped.
+- **Upcasting changes what handlers fold, not what snapshots hold.** If the `From`
+  conversion yields different state than the old handler you deleted, bump
+  `.revision(n)` so stored snapshots are rebuilt.
+- **Frozen means nested types too.** Adding a field to `Money`, or a variant to an
+  enum used in an event (even at the end), breaks decoding as surely as editing the
+  event. `events.lock` catches it; `EVENTO_LOCK=force` is only for never-deployed shapes.
+- **A `Sidecar` local store belongs to exactly one process.** Two processes sharing it
+  share cursors again. Cursor keys are prefixed by the events store's routing key, so one
+  local store may follow several event stores with distinct routing keys.
 - **Don't `.unwrap()` a load.** `projection.load(id).execute(exec).await` returns
   `anyhow::Result<Option<T>>`; propagate the error with `?` and treat `None` as not-found.
 
 ## Reference
 
 Canonical, compiling usage lives in the evento repository
-(<https://github.com/timayz/evento>; paths below are relative to its root).
-In this workspace, `crates/catalog` is the reference layout and `crates/order`
-shows an ACL subscription and an orchestration saga:
+(<https://github.com/timayz/evento>; the user keeps a checkout at `~/projects/github/timayz/evento`,
+which wins over this file when they disagree; paths below are relative to its root):
 - `examples/quickstart/` — smallest end-to-end run (aggregate → command → load → subscription).
 - `examples/bank/` — aggregates, `#[evento::command]` commands, queries/projections
   (one per snapshot mode), co-keyed `Owner` aggregate.
 - `examples/bank-axum-sqlite/` and `examples/bank-axum-fjall/` — web wiring,
   migrations, projection subscriptions; `bank-axum-remote/` (client/server split)
-  and `bank-axum-accord/` (consensus cluster).
+  and `bank-axum-accord/` (consensus cluster); `bank-axum-accord-tenants/` (many
+  consensus groups per process, one SQLite DB per tenant).
+- `evento-remote/README.md` — resolver, `Hello` token, TLS; `evento-accord/OPERATIONS.md`.
 - `evento-macro/README.md` — full macro reference (all options); copied here as `macros.md`.
+  `executors.md` and `subscriptions.md` here go deeper on executors (SQL, Fjall, `Rw`, `Sidecar`,
+  remote, accord) and on the subscription runtime.
 - `evento-test/src/lib.rs` — the behavioral contract suite (load, routing isolation,
   snapshots, optimistic locking, multi-aggregate, full command lifecycle).
+
+## In this workspace
+
+- Layout per bounded context (mirrors `examples/bank`): `crates/<ctx>/src/{aggregator.rs,
+  command/{mod,<verb>}.rs, query/<view>.rs, error.rs, value_object.rs}`; `crates/catalog` and
+  `crates/tenancy` are the reference crates. Pin `#[evento::aggregate(name = "timada-<ctx>/<Enum>")]`
+  (crate names are permanent) and `#[evento::projection(name = "timada-<ctx>/<View>", …)]` on every
+  snapshotted view. `Command` borrows `&E` so subscription handlers can issue commands.
+- A crate using `#[evento::aggregate]` must depend on `bitcode` directly (the macro expands to
+  `bitcode::` paths; cargo-machete is told to ignore it), and a crate using `#[evento::subscription]`
+  in its tests must dev-depend on the `evento` facade (the macros emit `::evento::` paths).
+- Uniqueness (slugs, e-mails, tokens) is an index aggregate with a deterministic id
+  (`hash_ids([..])`), created by appending its first event at version 0.
+- Every event carries who did it (`*_by`); permissions are the host's, never the crate's.
+- The shapes are locked by `events.lock` at the workspace root, checked by
+  `dashboard/tests/events_lock.rs`. After adding an event, a nested `Encode` type or a snapshotted
+  view: `EVENTO_LOCK=update cargo test -p timada-dashboard --test events_lock`, commit the lock.
+  Never edit a persisted variant or enum; add a variant (and `#[evento(upcast_to = New)]` when the
+  old one must fold like the new one).
+- Executors in play: the platform store is `Rw<Sqlite, Sqlite>` over two pools wrapped in an
+  Accord group; each tenant is its own group and file; a storefront is
+  `Sidecar<RemoteClient, Sqlite>` over the merchant app's pool. See `docs/architecture.md`.

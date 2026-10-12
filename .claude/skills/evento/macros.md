@@ -58,6 +58,7 @@ This generates:
 - `Aggregate` trait implementation (provides `aggregate_type()`)
 - `AggregateEvent` trait implementation (provides `event_name()`)
 - A unit struct named after the enum, for use as the aggregate marker
+- A `{Enum}Event` enum newtyping those structs, with `TryFrom<&evento::Event>`
 - Automatic derives: `Debug`, `Clone`, `PartialEq`, `Default`, and bitcode serialization
 
 The aggregate type defaults to `"{package_name}/{enum_name}"`, e.g. `"bank/BankAccount"`.
@@ -76,9 +77,76 @@ pub enum BankAccount {
 }
 ```
 
+#### Evolving an event with `upcast_to`
+
+A stored event's layout is frozen, so a new shape is a new variant. Point the old
+variant at it and provide a `From` impl: older stored events are converted before
+handlers see them, and only the newest handler has to exist.
+
+```rust
+#[evento::aggregate(name = "myapp/Payment")]
+pub enum Payment {
+    #[evento(upcast_to = PaymentRefundedV2)]
+    PaymentRefunded { amount: i64 },
+    PaymentRefundedV2 { amount: i64, reason: String },
+}
+
+impl From<PaymentRefunded> for PaymentRefundedV2 {
+    fn from(old: PaymentRefunded) -> Self {
+        Self { amount: old.amount, reason: "unknown".to_owned() }
+    }
+}
+```
+
+The target must be another variant of the same enum; self-references and cycles
+are compile errors, and chains (`V1 -> V2 -> V3`) are folded into a single
+conversion. The macro generates `AggregateEvent::upcasters()` on the newer
+event; `#[evento::handler]`, `#[evento::subscription]` and `.skip::<E>()` pick
+it up, so nothing is declared per projection. Keep the old variant in the enum —
+it is the schema old events are decoded with.
+
+#### Decoding a stored event back to the enum
+
+The enum name is taken by the marker struct, so the events are also collected
+into a sibling `{Enum}Event` that newtypes them. Anything forwarding events out
+of the store — SSE, webhooks, outbox tables, audit logs — can then match
+exhaustively instead of laddering over `event.name` with a `_` arm that silently
+swallows variants added later:
+
+```rust
+match BankAccountEvent::try_from(&event)? {
+    BankAccountEvent::AccountOpened(AccountOpened { owner_id, .. }) => { /* ... */ }
+    BankAccountEvent::MoneyDeposited(deposit) => credit(deposit),
+}
+```
+
+`event_name()` on the enum returns the stored name of the event it holds. The
+conversion fails with `evento::FromEventError` when the event belongs to another
+aggregate, names no known variant, or does not decode.
+
+Decoding is verbatim — `#[evento(upcast_to = ...)]` is **not** applied, so an old
+stored event decodes to its own variant. That matches what
+`#[evento::subscription_all]` sees, and a `RawEvent<A>` decodes the same way:
+
+```rust
+#[evento::subscription_all]
+async fn audit<E: Executor>(
+    _ctx: &Context<'_, E>,
+    event: RawEvent<BankAccount>,
+) -> anyhow::Result<()> {
+    match event.decode()? {
+        BankAccountEvent::AccountOpened(_) => { /* ... */ }
+        _ => {}
+    }
+    Ok(())
+}
+```
+
 #### Additional Derives
 
-Pass additional derives as arguments (they combine with `name = "..."` in any order):
+Pass additional derives as arguments (they combine with `name = "..."` in any
+order). They apply to the event structs *and* to the `{Enum}Event` enum, so
+`serde::Serialize` is enough to serialize a whole decoded event:
 
 ```rust
 #[evento::aggregate(serde::Serialize, serde::Deserialize)]
@@ -105,7 +173,7 @@ pub struct AccountBalanceView {
 // - Adds `Default` and `Clone` derives
 ```
 
-Options:
+Options, which may be combined in any order:
 
 - `cursor = <Type>` — use a custom cursor field type instead of `String`. The
   type must be `Clone + From<evento::cursor::Value> + Into<evento::cursor::Value>`
@@ -113,6 +181,11 @@ Options:
 - `id = <field>` — additionally implement `ProjectionAggregate`, returning the
   named field as the aggregate id. This enables `view.write()` for emitting
   events from the projection.
+- `name = "..."` — pin the projection name that snapshots are keyed by, instead
+  of the default `"<module path>::<Struct>"` (see [Snapshots](#snapshots-with-eventosnapshot)).
+- any path (e.g. `bitcode::Encode`, `serde::Serialize`) — added to the derive
+  list, alongside the `Default` and `Clone` the macro adds and any
+  `#[derive(...)]` written on the struct.
 
 ```rust
 #[evento::projection(cursor = evento::cursor::Value, id = id)]
@@ -125,8 +198,22 @@ pub struct AccountDetailsView {
 ### Snapshots with `#[evento::snapshot]`
 
 Projections that derive `bitcode::Encode`/`bitcode::Decode` get executor-backed
-snapshots from a blanket impl. For the other common cases, apply this attribute
-to the projection struct (mode required):
+snapshots from a blanket impl. Those snapshots are keyed by
+`(aggregate type, projection name, aggregate id)`, so several snapshotted
+projections of one aggregate never share a slot. The projection name defaults to
+`"<module path>::<Struct>"`; pin it so that renaming or moving the struct keeps
+its snapshots:
+
+```rust
+#[evento::projection(name = "myapp/BalanceView", bitcode::Encode, bitcode::Decode)]
+pub struct BalanceView {
+    pub balance: i64,
+}
+```
+
+(`name` is rejected on generic structs, which keep a per-instantiation type
+name.) For the other common cases, apply this attribute to the projection
+struct (mode required):
 
 ```rust
 // Opt out of snapshotting entirely:

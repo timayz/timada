@@ -23,4 +23,7 @@ trap 'kill "$server" 2>/dev/null; wait "$server" 2>/dev/null || true' EXIT
 base_url="${E2E_BASE_URL:-https://timada.localhost}"
 curl -sk --retry 30 --retry-delay 1 --retry-all-errors -o /dev/null "$base_url/auth/login"
 
-playwright test tests/e2e "$@"
+# Without arguments the whole suite; with them only what they name (a spec path
+# or a title filter). The directory must not be passed alongside: Playwright
+# ORs filters, so it would match everything again.
+playwright test "${@:-tests/e2e}"

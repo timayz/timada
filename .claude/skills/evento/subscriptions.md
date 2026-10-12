@@ -49,12 +49,12 @@ pub enum RoutingKey {
 }
 ```
 
-With no `.routing_key()` / `.all()` call, the subscription inherits the **executor's `default_routing_key()`** (set via `Evento::default_routing_key`); if the executor has none, it defaults to `RoutingKey::Value(None)` — *only events with no routing key*. To consume everything use `.all()`. To consume one partition, use `.routing_key("accounts")`.
+With no `.routing_key()` / `.any_routing_key()` call, the subscription inherits the **executor's `default_routing_key()`** (set via `Evento::default_routing_key`); if the executor has none, it defaults to `RoutingKey::Value(None)` — *only events with no routing key*. To consume everything use `.any_routing_key()`. To consume one partition, use `.routing_key("accounts")`.
 
 Storage-key prefixing keeps cursors isolated:
 
 - `.routing_key("accounts")` persists the cursor under `"accounts.my-sub"` instead of `"my-sub"` — two subscriptions with the same logical key but different routing keys keep separate cursors. This is the standard pattern for parallel partitioned consumers.
-- `.all()` on an executor with a default routing key still prefixes the storage key with that default, so multi-tenant executors don't share one subscriber row.
+- `.any_routing_key()` on an executor with a default routing key still prefixes the storage key with that default, so multi-tenant executors don't share one subscriber row.
 
 ## Handler dispatch
 
