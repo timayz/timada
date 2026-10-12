@@ -30,7 +30,8 @@ reset:
 migrate:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml migrate
 
-# Browser tests on a fresh database behind the compose Traefik (`make up` first).
+# Browser tests on a fresh database behind the compose Traefik, with the compose
+# dex container as the OIDC provider (`make up` first).
 e2e:
 	scripts/e2e.sh
 

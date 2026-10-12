@@ -4,7 +4,10 @@
 # nothing is a secret.
 
 [server]
-# Traefik from compose.yml forwards to this process from the Docker bridge.
+# Traefik from compose.yml forwards to this process from the Docker bridge, and
+# its X-Forwarded-For is then used. Docker's port publishing still hides the
+# browser behind the bridge gateway (172.18.0.1 rather than 127.0.0.1); on a
+# host where the proxy sees clients directly, the real address comes through.
 trusted_proxies = ["172.16.0.0/12"]
 
 [database]
@@ -12,6 +15,13 @@ url = "sqlite:data/e2e.db"
 
 [auth]
 secret_key = "e2e-only-secret-key-never-used-outside-the-test-suite"
+
+# The dex container from compose.yml; see .docker/dex/config.yaml.
+[auth.providers.dex]
+label = "Dex"
+issuer = "http://localhost:5556/dex"
+client_id = "timada"
+client_secret = "timada-e2e-client-secret"
 
 [monitoring]
 log_level = "info,timada_dashboard=debug"
