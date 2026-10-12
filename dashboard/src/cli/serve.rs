@@ -36,6 +36,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         tenant_subscriptions(),
     );
     let sweeper = tenants.start_sweeper();
+    let authorizer = crate::authz::Authorizer::new().await?;
 
     // Sign-in providers are resolved through discovery now, so a bad issuer
     // or network stops the server with the provider's name instead of
@@ -70,6 +71,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         webauthn,
         mailer,
         tenants: tenants.clone(),
+        authorizer,
         config,
     });
 

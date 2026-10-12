@@ -18,7 +18,7 @@ struct RenameForm {
     name: String,
 }
 
-/// Owners rename the tenant; the domain refuses everyone else.
+/// Members with `tenant:manage` rename the tenant; the domain refuses everyone else.
 #[route(POST)]
 pub async fn rename(cx: &Cx, Form(form): Form<RenameForm>) -> Result<SeeOther> {
     let user = require_user(cx).await?;
