@@ -1,0 +1,177 @@
+# Architecture
+
+Timada is a multi-tenant e-commerce back office with a headless storefront library.
+A merchant (a *tenant*) signs in to the dashboard, invites a team, manages a catalog
+and mints API keys; the merchant's own web app depends on `timada-storefront`,
+connects with a key and sells from that catalog in its own markup.
+
+Everything is Rust. The web layer is [topcoat](https://crates.io/crates/topcoat)
+(server-rendered pages, `view!` components, cookie sessions); state is event-sourced
+with [evento](https://github.com/timayz/evento) over SQLite, replicated by its Accord
+consensus executor; read models are SQL tables fed by subscriptions. One binary,
+`timada-dashboard`, hosts all of it.
+
+## Workspace map
+
+| Path | Package | Role |
+|---|---|---|
+| `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions |
+| `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
+| `crates/catalog` | `timada-catalog` | Products: the first context living in a tenant's own store |
+| `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
+| `crates/core` | `timada-core` | Reserved; holds no code yet |
+| `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
+| `examples/storefront` | `storefront-example` | A minimal merchant app on the library, driven by the browser suite |
+| `tests/e2e` | | Playwright suite against the running dashboard |
+| `events.lock` | | Every persisted shape, frozen (see *Evolving events*) |
+
+Dependencies point one way: context crates depend on evento and sqlx only (plus
+`timada-catalog` from the storefront library); the dashboard depends on every crate;
+nothing depends on the dashboard.
+
+## Bounded contexts
+
+A context crate is pure domain code: aggregates, commands, read-model queries. It
+knows nothing about HTTP, cookies, files, consensus groups or who is allowed to do
+what; the host decides permissions and hands the crate verified facts.
+
+Each crate follows the same layout, copied from evento's `examples/bank`:
+`aggregator.rs` (the `#[evento::aggregate]` enums, names pinned to
+`timada-<ctx>/<Enum>` because the aggregate type is persisted), `command/` (one file
+per verb on a `Command<'_, E>` that borrows the executor), `query/` (one file per
+read model), `error.rs`, `value_object.rs`.
+
+Recurring patterns:
+
+- **Uniqueness without a unique index.** A slug, an e-mail address, a session or API
+  token is an *index aggregate* with a deterministic id (`hash_ids([kind, value])`).
+  Appending its first event at version 0 is an atomic create-unless-exists, and loading
+  it reads the event store directly, so a lookup sees its own writes.
+- **Every event says who did it** (`*_by` fields). Authorisation lives in the host.
+- **Write-side state** is a strict projection with `#[evento::snapshot(none)]`, so
+  commands observe the exact version they write against.
+- **Read models** are SQL tables in the shared database, fed by one
+  `read_model_subscription` per crate. They are eventually consistent; pages that must
+  show a write immediately read the aggregate.
+
+## Where data lives
+
+```
+data/timada.db            the platform store: identity + tenancy events, every read-model
+                          table (including the tenants' catalog_products), the consensus journal
+data/tenants/<id>.db      one per tenant: its catalog events and its consensus journal
+<merchant app>/store.db   a storefront replica: subscription cursor, snapshots, product rows
+```
+
+The platform store is opened once with two pools (`dashboard/src/db.rs`): a read
+pool and a single-connection write pool, so writes serialize up front instead of
+failing with `SQLITE_BUSY`. The write side runs WAL with `synchronous = FULL`.
+
+Tenant-scoped contexts write to the tenant's file through the tenant's executor and
+project into the shared database keyed by tenant id, so one dashboard query lists a
+tenant's products while the events stay isolated by construction.
+
+## The runtime (dashboard)
+
+`dashboard/src/cli/serve.rs` wires everything, in this order.
+
+1. **Cluster** (`cluster.rs`). One `MuxTransport`, one `SweepScheduler` and one
+   `GroupHost` per process. Every event database is an Accord consensus group: the
+   platform store is the default group, each tenant a group of its own. Writes are
+   coordinated across the cluster (`[cluster]` peers; a majority must agree), reads,
+   snapshots and subscriptions are served from this node's own files. Without a
+   `[cluster]` section the node talks to itself over a loopback port, so one code
+   path serves both deployments.
+2. **Tenants** (`tenants.rs`). A tenant is *up* while its database is open: its
+   consensus group runs and its read-model subscriptions follow its stream. Every
+   tenant-scoped request goes through `Tenants::open`, which is the activity signal.
+   A sweeper closes what has been idle longer than `tenants.idle_timeout_secs` and
+   evicts the least recently used beyond `tenants.max_open`. A peer talking about a
+   group this node closed triggers `reopen`, which opens it only if the catalog knows
+   the tenant and it is not suspended: the wire cannot create one. The list of
+   per-tenant read models is `tenant_subscriptions()` in `serve.rs`; adding a
+   tenant-scoped context means adding one entry there.
+3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens
+   with an API key token; the resolver loads the key by the token's hash, leases the
+   tenant (a leased tenant is never closed as idle) and serves the connection with that
+   tenant's executor and nothing else. Revoking the key ends its connections; suspending
+   the tenant closes its database, and reconnects are refused.
+4. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
+   roles as roles. Policies are not loaded at startup: every tenant-scoped request loads
+   the tenant's strict state, whose version says which events it reflects, and the
+   enforcer re-syncs a tenant's rules when a newer state comes along. Owners bypass.
+   `manage` on a resource implies `read`.
+5. **Auth glue** (`auth/`). The web side of the identity context: OIDC discovery and
+   token exchange, WebAuthn ceremonies, mailed one-time codes, the private cookies that
+   carry a sign-in attempt between steps, and the session cookie.
+6. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
+   `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
+   `/tenants/new` and `/t/{slug}` (members, roles, API keys, products), `/invitations/{token}`,
+   `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.
+
+Shutdown stops the HTTP server, then the store API (its leases hold tenants open), the
+sweeper and the tenants, the read-model subscriptions and finally the pools.
+
+## One write, end to end
+
+A member renames a product on `/t/{slug}/products/{id}`:
+
+1. The page handler loads the session, the tenant state and the enforcer's answer for
+   `products:manage`.
+2. `tenants.open(tenant)` returns the tenant's executor (opening the file and its
+   consensus group if needed).
+3. `timada_catalog::Command::rename_product` loads the product's write-side state, checks the
+   invariants and commits `Renamed { name, renamed_by }` at the observed version.
+4. The commit goes through the tenant's Accord group and lands in `data/tenants/<id>.db`.
+5. The tenant's `catalog` subscription writes the new name into `catalog_products` in
+   the platform store; the next page load shows it.
+6. Every storefront connected to that tenant through the store API is notified at
+   once; its `storefront/catalog` subscription updates the local `storefront_products`
+   row.
+
+## The storefront side
+
+`timada-storefront` runs inside the merchant's app. Its executor is a `Sidecar`:
+events go through the remote client to the store API, while the subscription cursor,
+the projection snapshots and the product rows live in the app's own SQLite file. One
+file per replica, so replicas never fence each other out of the subscription and
+nothing accumulates on the tenant's store. The library registers no page of its own
+(route discovery belongs to the host); it offers queries, a guard, one component and
+`GET {prefix}/status`. Details and the example app are in `docs/storefront.md`.
+
+## Evolving events
+
+Events are encoded with bitcode, which is positional: a stored event's layout, and
+every type nested in it, is frozen. `events.lock` at the workspace root records every
+event, every encoded type and every snapshotted view; `dashboard/tests/events_lock.rs`
+fails when a frozen line changes. The rules:
+
+- Never edit or remove a persisted variant, field or enum. Add a variant, a companion
+  event, or a new event with `#[evento(upcast_to = New)]` on the old one.
+- After adding a shape: `EVENTO_LOCK=update cargo test -p timada-dashboard --test events_lock`
+  and commit the lock.
+- A snapshotted view whose shape changes bumps `.revision(n)`; its name is pinned
+  with `name = "timada-<ctx>/<View>"` so a move does not orphan snapshots.
+
+## Configuration
+
+`config/default.toml` is the full shape with its defaults; a file given with
+`--config` (or `TIMADA_CONFIG`) overrides it, and `TIMADA__<SECTION>__<KEY>`
+environment variables override both. Sections: `server` (URL, bind, region, trusted
+proxies), `database`, `auth` (secret, session lifetime, OIDC providers), `mail`,
+`tenants`, `store_api` (omit to not expose it), `cluster` (omit for a single node),
+`monitoring`. `config/dev.local.toml` is the developer's own file and is ignored by
+git; `config/e2e.toml` is what the browser suite runs on. Configuration is written for
+operators: it names what things do, not the libraries behind them.
+
+## Testing
+
+- `cargo test --workspace` (inside `nix develop`): the crates' domain tests over a
+  temporary store, and the dashboard's integration tests, which boot the runtime in
+  process: `tenants_runtime` (open, idle, evict, reopen), `store_api` (TCP, keys, TLS),
+  `storefront` (the library against a live store), `events_lock`.
+- `make e2e`: `scripts/e2e.sh` builds the dashboard and the example storefront, resets
+  the database, starts the server on `config/e2e.toml` and runs Playwright through the
+  compose stack (`make up`: Traefik for HTTPS, dex as an OIDC provider, MailDev as the
+  mailbox the tests read codes from). Pass a spec path or a title filter to run part of it.
+- `make check` runs tests, clippy with warnings denied, rustfmt and cargo-machete.
