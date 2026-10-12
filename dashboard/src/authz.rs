@@ -7,6 +7,8 @@
 //! reflects. The enforcer keeps, per tenant, the version it was synced from
 //! and re-syncs when a newer state comes along, so a role edit applies on the
 //! very next request. Owners bypass casbin: they hold every permission.
+//! `manage` on a resource is stored as both `manage` and `read` rules, the
+//! domain's implication (`timada_tenancy::implies`) made explicit.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -110,12 +112,18 @@ impl Inner {
         let mut policies: Vec<Vec<String>> = Vec::new();
         for (role, def) in &tenant.roles {
             for (resource, action) in def.permissions.iter().filter_map(|p| split_permission(p)) {
-                policies.push(vec![
-                    role.clone(),
-                    dom.to_owned(),
-                    resource.to_owned(),
-                    action.to_owned(),
-                ]);
+                let rule = |action: &str| {
+                    vec![
+                        role.clone(),
+                        dom.to_owned(),
+                        resource.to_owned(),
+                        action.to_owned(),
+                    ]
+                };
+                policies.push(rule(action));
+                if action == "manage" && !def.permissions.contains(&format!("{resource}:read")) {
+                    policies.push(rule("read"));
+                }
             }
         }
         if !policies.is_empty() {
@@ -196,6 +204,32 @@ mod tests {
         );
         assert!(!authz.allows(&t, "bob", "members:delete").await.unwrap());
         assert!(!authz.allows(&t, "bob", "nonsense").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn manage_implies_read() {
+        let authz = Authorizer::new().await.unwrap();
+        let mut t = tenant(1);
+        t.roles.get_mut("support").unwrap().permissions =
+            [PERMISSION_MEMBERS_MANAGE.to_owned()].into_iter().collect();
+        assert!(
+            authz
+                .allows(&t, "bob", PERMISSION_MEMBERS_READ)
+                .await
+                .unwrap()
+        );
+        assert!(
+            authz
+                .allows(&t, "bob", PERMISSION_MEMBERS_MANAGE)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !authz
+                .allows(&t, "bob", PERMISSION_ROLES_MANAGE)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

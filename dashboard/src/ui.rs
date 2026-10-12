@@ -108,7 +108,9 @@ pub fn describe_permission(permission: &str) -> &'static str {
     match permission {
         "tenant:manage" => "Rename the tenant",
         "members:read" => "See members and pending invitations",
-        "members:manage" => "Invite, change roles and remove members (owners excepted)",
+        "members:manage" => {
+            "Invite, change roles and remove members (owners excepted; includes seeing them)"
+        }
         "roles:manage" => "Define, edit and remove roles",
         "api-keys:manage" => "Manage the store API keys (not available yet)",
         _ => "Unknown permission",
