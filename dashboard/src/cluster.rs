@@ -49,6 +49,8 @@ const PENDING_TTL: Duration = Duration::from_secs(10);
 pub struct Cluster {
     host: Arc<GroupHost>,
     ids: Vec<NodeId>,
+    /// Shared by every group this node hosts.
+    node_config: NodeConfig,
     /// The tenant runtime, once it exists: the transport's unrouted hook asks
     /// it to open a tenant a peer is already talking about.
     tenants: Arc<OnceLock<Arc<Tenants>>>,
@@ -107,9 +109,20 @@ impl Cluster {
         let sweep = scheduler.start();
         let host = Arc::new(GroupHost::new(mux, scheduler));
 
+        // Pages load an aggregate right after writing it, possibly on another
+        // node. With several nodes, a read-index barrier makes each
+        // single-aggregate read wait for the writes a quorum already committed
+        // (one consensus round per read). Alone, a node applies its own writes
+        // before the commit returns, so the barrier would only add latency.
+        let node_config = NodeConfig {
+            linearizable_reads: ids.len() > 1,
+            ..NodeConfig::default()
+        };
+
         Ok(Self {
             host,
             ids,
+            node_config,
             tenants,
             _tasks: vec![serve, sweep],
         })
@@ -152,7 +165,7 @@ impl Cluster {
                 self.topology(),
                 store,
                 journal,
-                NodeConfig::default(),
+                self.node_config,
             )
             .await
             .context("cannot open the platform store")?;
@@ -176,13 +189,7 @@ impl Cluster {
         let store = Arc::new(ExecutorDataStore::new(sql)) as Arc<dyn DataStore>;
         let journal = Arc::new(SqlJournal::<sqlx::Sqlite>::new(pool)) as Arc<dyn Journal>;
         self.host
-            .open(
-                group,
-                self.topology(),
-                store,
-                journal,
-                NodeConfig::default(),
-            )
+            .open(group, self.topology(), store, journal, self.node_config)
             .await
     }
 

@@ -75,6 +75,9 @@ max_open = 64
 # talks to itself over a loopback port chosen by the system. Writes need a
 # majority of nodes, so a 3-node cluster keeps working with one node down.
 # `node_id` is this node's index into `peers`. Every node hosts every tenant.
+# With several nodes, a page that reads what it just wrote waits for the other
+# nodes' latest writes first (one extra round trip per read), so what a user
+# sees after an action is always current whichever node answers.
 # [cluster]
 # node_id = 0
 # peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
