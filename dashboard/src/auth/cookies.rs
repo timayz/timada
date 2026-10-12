@@ -33,13 +33,26 @@ pub struct OidcFlow {
 /// A passkey registration ceremony in progress.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PasskeyRegistrationFlow {
-    pub mode: String,
-    /// The user the passkey is for: the signed-in user, or the id a new user
-    /// will get.
+    /// The signed-in user the passkey is for.
     pub bound_user_id: String,
-    pub account: String,
-    pub label: String,
     pub state: PasskeyRegistration,
+    pub issued_at: u64,
+}
+
+/// A mailed code on its way: which address, why, and what to do once it is
+/// back. Unlike the other flows this cookie is not single-use: a wrong code
+/// keeps it, and it is removed on success, expiry or too many attempts (the
+/// attempts themselves are counted server-side).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailFlow {
+    /// A [`timada_identity::ChallengePurpose`] as `as_str`.
+    pub purpose: String,
+    /// Normalized address.
+    pub email: String,
+    /// `register`: the hash of the password typed on the sign-up form.
+    pub password_hash: Option<String>,
+    /// `sign_in`: the user the password identified.
+    pub user_id: Option<String>,
     pub issued_at: u64,
 }
 
@@ -69,6 +82,10 @@ pub fn passkey_registration_flow(
     cx: &Cx,
 ) -> UnparsedCookieStore<PasskeyRegistrationFlow, impl Cookies + '_> {
     cookie_store(flow_jar(cx), "auth_pk_reg")
+}
+
+pub fn email_flow(cx: &Cx) -> UnparsedCookieStore<EmailFlow, impl Cookies + '_> {
+    cookie_store(flow_jar(cx), "auth_email")
 }
 
 pub fn passkey_login_flow(cx: &Cx) -> UnparsedCookieStore<PasskeyLoginFlow, impl Cookies + '_> {

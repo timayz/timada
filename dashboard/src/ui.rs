@@ -69,6 +69,17 @@ pub fn describe_error(code: &str) -> &'static str {
         "provider" => "The sign-in provider returned an error.",
         "unknown_provider" => "Unknown sign-in provider.",
         "not_allowed" => "You are not allowed to do that.",
+        "invalid_credentials" => "The e-mail address or the password is wrong.",
+        "invalid_code" => "That code is not right. Check the latest e-mail and try again.",
+        "code_expired" => "That code has expired. Please start again.",
+        "too_many_attempts" => "Too many wrong codes. Please start again to get a new one.",
+        "code_recently_sent" => {
+            "A code was sent a moment ago. Wait a minute before asking for another."
+        }
+        "invalid_email" => "Please enter a valid e-mail address.",
+        "weak_password" => "The password must be between 8 and 128 characters.",
+        "password_mismatch" => "The two passwords do not match.",
+        "mail_failed" => "The e-mail could not be sent. Please try again in a moment.",
         _ => "Something went wrong. Please try again.",
     }
 }
