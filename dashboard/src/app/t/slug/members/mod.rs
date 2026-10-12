@@ -1,22 +1,28 @@
-//! `/t/{slug}/members`: who belongs to the tenant, and (with
-//! `members:manage`) moving them between roles or removing them. Every
-//! member sees the page's "Leave" on their own row.
+//! `/t/{slug}/members`: who belongs to the tenant, the invitations still
+//! waiting, and (with `members:manage`) inviting, moving members between
+//! roles or removing them. Every member sees "Leave" on their own row.
 
 pub mod change;
+pub mod invite;
 pub mod revoke;
+pub mod revoke_invitation;
 
-use timada_tenancy::{PERMISSION_MEMBERS_MANAGE, PERMISSION_MEMBERS_READ, ROLE_OWNER};
+use timada_tenancy::{
+    MAX_EMAIL_LEN, PERMISSION_MEMBERS_MANAGE, PERMISSION_MEMBERS_READ, ROLE_OWNER,
+    open_invitations_of_tenant,
+};
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, app_context},
     router::{href, page, query_params},
     view::{View, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant, role_label};
 use crate::app::auth::Flash;
-use crate::auth::user_labels;
-use crate::ui::{document, notice};
+use crate::auth::{now, user_labels};
+use crate::db::ReadPool;
+use crate::ui::{document, format_time, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct MembersQuery {
@@ -45,7 +51,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         user_id: me,
         ..
     } = access;
-    let ids: Vec<String> = tenant.members.keys().cloned().collect();
+    let invitations =
+        open_invitations_of_tenant(app_context::<ReadPool>(cx), &tenant.id, now()).await?;
+    let mut ids: Vec<String> = tenant.members.keys().cloned().collect();
+    ids.extend(invitations.iter().map(|i| i.invited_by.clone()));
     let labels = user_labels(cx, &ids).await?;
     let slug = tenant.slug.clone();
     // The roles a manager can move someone to: owner only for owners.
@@ -125,6 +134,57 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     </tbody>
                 </table>
+            </section>
+
+            if can_manage {
+                <section class="mt-8 rounded border border-neutral-200 bg-white p-4">
+                    <h2 class="mb-2 text-lg font-medium">"Invite a member"</h2>
+                    <form method="post" action=(href!(invite::invite, Slug(slug.clone()))) class="flex flex-wrap items-end gap-2">
+                        <div class="grow">
+                            <label class="block text-sm" for="invite-email">"E-mail address"</label>
+                            <input id="invite-email" name="email" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                                type="email" maxlength=(MAX_EMAIL_LEN) required="">
+                        </div>
+                        <div>
+                            <label class="block text-sm" for="invite-role">"Invite as"</label>
+                            <select id="invite-role" name="role" class="mt-1 rounded border border-neutral-300 px-2 py-2">
+                                for (name, label) in &choices {
+                                    <option value=(name)>(label)</option>
+                                }
+                            </select>
+                        </div>
+                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Send invitation"</button>
+                    </form>
+                    <p class="mt-2 text-xs text-neutral-500">"The link in the e-mail is valid for 7 days. Whoever opens it signed in joins with that role."</p>
+                </section>
+            }
+
+            <section class="mt-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"Pending invitations"</h2>
+                if invitations.is_empty() {
+                    <p class="text-sm text-neutral-500">"None."</p>
+                } else {
+                    <ul class="divide-y divide-neutral-100 text-sm">
+                        for invitation in &invitations {
+                            <li class="flex items-center justify-between py-2" data-invitation-email=(&invitation.email)>
+                                <span>
+                                    (&invitation.email)
+                                    <span class="text-neutral-500">
+                                        " · " (role_label(&tenant, &invitation.role))
+                                        " · invited by " (&labels[&invitation.invited_by])
+                                        " · expires " <time datetime=(invitation.expires_at)>(format_time(invitation.expires_at as u64))</time>
+                                    </span>
+                                </span>
+                                if can_manage {
+                                    <form method="post" action=(href!(revoke_invitation::revoke_invitation, Slug(slug.clone())))>
+                                        <input type="hidden" name="invitation_id" value=(&invitation.id)>
+                                        <button class="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100">"Withdraw"</button>
+                                    </form>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
             </section>
         )
     })
