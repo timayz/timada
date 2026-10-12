@@ -1,7 +1,8 @@
 [workspace]
 members = [
 	"crates/*",
-	"dashboard"
+	"dashboard",
+	"examples/*"
 ]
 resolver = "2"
 
@@ -12,6 +13,12 @@ authors = ["timada team"]
 [workspace.dependencies]
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal"] }
 topcoat = { version = "=0.10.0", features = ["tailwind", "anyhow", "mail", "mail-smtp"] }
+# The standalone crates, for a library crate (a library names them directly;
+# only an application depends on the facade).
+topcoat-core = { version = "=0.10.0", features = ["anyhow"] }
+topcoat-router = "=0.10.0"
+topcoat-view = "=0.10.0"
+topcoat-view-macro = "=0.10.0"
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.19", features = ["sqlite"] }
 evento = { version = "=2.0.0-alpha.34", features = ["sqlite", "remote"] }
@@ -61,3 +68,8 @@ debug = false
 inherits = "dev"
 debug = true
 
+
+# Until evento 2.0.0-alpha.35 is published: `Sidecar` comes from the local
+# checkout of evento PR #264 (branch `feat/sidecar-executor`).
+[patch.crates-io]
+evento-core = { path = "../evento/evento-core" }
