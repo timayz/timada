@@ -37,6 +37,9 @@ You almost never implement this trait yourself — use one of the built-in execu
 | `Evento` (type-erased `Arc<Box<dyn Executor>>`) | (always) | `evento-core` |
 | `EventoGroup` | `group` | `evento-core` |
 | `Rw<R, W>` | `rw` (implied by `fjall`) | `evento-core` |
+| `Sidecar<E, L>` | `rw` | `evento-core` |
+| `evento::RemoteClient` (`evento_remote::Client`) | `remote` | `evento-remote` |
+| `AccordExecutor` (consensus-replicated) | — | `evento-accord` |
 
 ## SQL setup
 
@@ -135,7 +138,7 @@ let tenant = evento::Evento::new(sqlite_executor)
     .default_routing_key("tenant-a");
 ```
 
-`default_routing_key` fills in missing routing keys on `write` (explicit per-aggregate keys win) and is inherited by `SubscriptionBuilder` / `ProjectionSubscription` when the user hasn't called `.routing_key()` or `.all()`.
+`default_routing_key` fills in missing routing keys on `write` (explicit per-aggregate keys win) and is inherited by `SubscriptionBuilder` / `ProjectionSubscription` when the user hasn't called `.routing_key()` or `.any_routing_key()`.
 
 ### `EventoGroup` (feature `group`)
 
@@ -156,6 +159,93 @@ let rw: evento::sql::RwSqlite = (read_pool.into(), write_pool.into()).into();
 ```
 
 `RwSqlite` / `RwMySql` / `RwPostgres` are convenience aliases (`Rw<Sqlite, Sqlite>`, etc.).
+
+### `Sidecar<E, L>` (feature `rw`, since alpha.35)
+
+Events on one executor, a subscription's bookkeeping on another. Writes, reads,
+`write_watch`, `stable_timestamp`, `latest_version` and `stream_routing_key` go to
+`E` (typically a remote `Client` shared by many processes); `upsert_subscriber`,
+`acknowledge`, worker fences and the snapshot calls go to `L`, a store this
+process owns (a SQLite file, a Fjall directory). Construct via `new` or `From<(E, L)>`;
+`events()` / `local()` give the halves back.
+
+```rust
+let sidecar: evento::Sidecar<evento::RemoteClient, evento::Sqlite> = (client, local_pool.into()).into();
+```
+
+- Use it for a replica of a client application that follows a shared store:
+  replicas never fence each other out of one subscription key, nothing
+  accumulates on the shared store, a restart resumes from the local cursor.
+- `L` must belong to exactly one process; two processes sharing it share cursors again.
+- Cursor keys stay `{E's routing key}.{name}`, so one local store may follow
+  several event stores with distinct routing keys.
+- `L` needs evento's tables: run `evento::sql_migrator` on the local pool too.
+
+## Remote client/server (feature `remote`, `evento-remote`)
+
+`serve(listener, executor)` exposes **any** executor over length-delimited framed
+TCP; `Client` implements `Executor` by forwarding every call, so `evento::create`,
+projections and subscriptions work unchanged against the remote store. Writes on
+the server push a notification to every client, so client-side subscriptions wake
+as fast as a local `write_watch`; the server's `stable_timestamp` piggybacks on
+every frame.
+
+```rust
+// Server
+let handle = evento_remote::serve(listener, executor);          // ServerHandle; dropping it does NOT stop the server
+handle.shutdown().await;
+
+// Client
+let client = evento_remote::Client::connect("127.0.0.1:4321".parse()?).await?;
+let client = evento_remote::Client::builder(addr)
+    .token("tk_…")                                              // sent in the Hello frame
+    .tls(connector, server_name)                                // rustls TlsConnector + ServerName
+    .request_timeout(Duration::from_secs(10))
+    .connections(2)                                             // pool size; clones share it
+    .connect().await?;                                          // fails at once on a Rejection
+```
+
+Many stores and credentials (since alpha.34, wire `FORMAT_VERSION` 4): implement
+`Resolver` and pass it to `serve_with` / `serve_tls_with`. Every connection opens
+with `Hello { token: Option<Token>, peer }` (the token redacts its `Debug`); the
+resolver answers once per connection (a reconnect is a new connection) with the
+`Session` to serve it, or a `Rejection` the client surfaces as the error's source.
+
+```rust
+#[async_trait::async_trait]
+impl evento_remote::Resolver for KeyResolver {
+    type Executor = TenantExecutor;
+    async fn resolve(&self, hello: &Hello) -> Result<Session<TenantExecutor>, Rejection> {
+        let key = self.authenticate(hello.token.as_ref()).await?;   // load by hash, no secret compare
+        let (executor, lease) = self.tenants.open(key.tenant_id).await?;
+        Ok(Session::new(executor)
+            .keep(lease)                       // anything to hold for the connection's lifetime
+            .close_when(key.revoked_rx))       // watch::Receiver<bool>: true ends the connection
+    }
+}
+let handle = evento_remote::serve_tls_with(listener, acceptor, resolver); // rustls TlsAcceptor
+```
+
+`serve` is the trivial resolver (tokens ignored). Plain TCP carries the token
+in clear text: trusted networks only.
+
+## Consensus cluster (`evento-accord`)
+
+`AccordExecutor` replicates events across `N = 2f + 1` nodes (leaderless,
+strictly serializable) over a `DataStore` + `Journal` the caller supplies
+(`evento_sql::Sql` + `evento_sql::SqlJournal` on one SQLite file; the
+`accord` feature of `evento-sql-migrator` adds the journal tables). One
+process can host many groups: `GroupHost::new(mux, scheduler)` over one
+`MuxTransport` (served once per process, `serve`/`serve_tls`/
+`serve_tls_verified`) and one `SweepScheduler` (`start` once); `open(group,
+topology, datastore, journal, config)` registers the inbox, recovers from the
+journal and schedules sweeps (idempotent), `close(group)` unregisters it and
+returns the `Node`. Frames for a closed group reach the transport's
+`UnroutedHandler` (sweep gossip excluded since alpha.33), which is how a node
+reopens a tenant a peer is talking about. A single node talks to itself over a
+loopback port, so the same code serves both deployments. Reference:
+`examples/bank-axum-accord-tenants` upstream; in this workspace
+`dashboard/src/cluster.rs` and `dashboard/src/tenants.rs`.
 
 ## Raw paginated reads with `Reader` (SQL)
 
