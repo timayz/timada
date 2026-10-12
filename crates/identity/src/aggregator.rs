@@ -1,7 +1,7 @@
 //! Events. Every variant and every field is frozen once it ships (bitcode is
 //! positional); evolve by adding variants.
 
-use crate::value_object::SignInMethod;
+use crate::value_object::{ChallengePurpose, SignInMethod};
 
 /// A person with an account. Holds the profile, the list of sign-in methods
 /// (for the account page) and the sign-in history.
@@ -55,6 +55,20 @@ pub enum User {
         except_session: Option<String>,
     },
     AdminRevoked,
+    /// A user created with an e-mail address and a password, after the
+    /// address was proven with a mailed code. `password_hash` is a PHC string.
+    EmailRegistered {
+        email: String,
+        label: String,
+        password_hash: String,
+    },
+    PasswordChanged {
+        password_hash: String,
+    },
+    SignedInWithPassword {
+        user_agent: Option<String>,
+        ip: Option<String>,
+    },
 }
 
 /// Index entry: one provider identity (`provider`, `sub`) → one user. The
@@ -109,4 +123,28 @@ pub enum Session {
 #[evento::aggregate(name = "timada-identity/Registry")]
 pub enum Registry {
     FirstUserClaimed { user_id: String },
+}
+
+/// Index entry: one e-mail address → one user, for the password sign-in.
+/// The aggregate id is [`crate::email_account_id`] of the normalized address.
+#[evento::aggregate(name = "timada-identity/EmailAccount")]
+pub enum EmailAccount {
+    Claimed { user_id: String, email: String },
+    Released,
+}
+
+/// The one-time codes mailed to an address, one stream per normalized
+/// address (id [`crate::email_challenge_id`]). A new `CodeIssued` replaces
+/// the previous code; attempts are counted here so that no client-held state
+/// can reset them. Times are unix seconds.
+#[evento::aggregate(name = "timada-identity/EmailChallenge")]
+pub enum EmailChallenge {
+    CodeIssued {
+        purpose: ChallengePurpose,
+        code_hash: String,
+        issued_at: u64,
+        expires_at: u64,
+    },
+    AttemptFailed,
+    Consumed,
 }

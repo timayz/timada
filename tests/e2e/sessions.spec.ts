@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type CDPSession, type Page } from "@playwright/test";
+import { registerWithEmail, signInWithEmail, uniqueEmail } from "./email";
 
 // Sessions across browsers: "sign out everywhere else" and switching accounts
 // by signing in with another user's passkey while signed in.
@@ -21,28 +22,11 @@ async function virtualAuthenticator(page: Page, cdp?: CDPSession): Promise<Authe
   return { cdp, id: authenticatorId };
 }
 
-async function registerWithPasskey(page: Page, name: string) {
-  await page.goto("/auth/login");
-  await page.getByText("New here? Create an account with a passkey").click();
-  await page.getByLabel("Your name").fill(name);
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(name);
-}
-
-async function signInWithPasskey(page: Page) {
-  await page.goto("/auth/login");
-  await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await expect(page).toHaveURL(/\/$/);
-}
-
-/// Moves every credential of `from` into a fresh authenticator on `to`, so a
-/// second browser context can sign in with a passkey created in the first.
-async function copyCredentials(from: Authenticator, to: Authenticator) {
-  const { credentials } = await from.cdp.send("WebAuthn.getCredentials", { authenticatorId: from.id });
-  for (const credential of credentials) {
-    await to.cdp.send("WebAuthn.addCredential", { authenticatorId: to.id, credential });
-  }
+/// Adds a passkey to the signed-in account from the account page.
+async function addPasskey(page: Page) {
+  await page.goto("/auth/account");
+  await page.getByRole("button", { name: "Add a passkey" }).click();
+  await expect(page.getByRole("status")).toContainText("Passkey added.");
 }
 
 /// The browser-side half of a passkey sign-in, as auth.js does it, without
@@ -75,12 +59,10 @@ test("sign out everywhere else keeps this browser and ends the others", async ({
   const phone: BrowserContext = await browser.newContext();
   const laptopPage = await laptop.newPage();
   const phonePage = await phone.newPage();
-  const laptopAuth = await virtualAuthenticator(laptopPage);
-  const phoneAuth = await virtualAuthenticator(phonePage);
+  const email = uniqueEmail("alice");
 
-  await registerWithPasskey(laptopPage, `Alice ${Date.now()}`);
-  await copyCredentials(laptopAuth, phoneAuth);
-  await signInWithPasskey(phonePage);
+  await registerWithEmail(laptopPage, email);
+  await signInWithEmail(phonePage, email);
   await expect(phonePage.locator("header").getByText("Signed in as")).toBeVisible();
 
   await laptopPage.goto("/auth/account");
@@ -93,7 +75,7 @@ test("sign out everywhere else keeps this browser and ends the others", async ({
   await expect(laptopPage.locator("header").getByText("Signed in as")).toBeVisible();
 
   // The phone can sign in again right away.
-  await signInWithPasskey(phonePage);
+  await signInWithEmail(phonePage, email);
   await expect(phonePage.locator("header").getByText("Signed in as")).toBeVisible();
 
   await laptop.close();
@@ -101,33 +83,27 @@ test("sign out everywhere else keeps this browser and ends the others", async ({
 });
 
 test("signing in with another user's passkey switches accounts", async ({ page }) => {
-  const stamp = Date.now();
-  const first = await virtualAuthenticator(page);
-  await registerWithPasskey(page, `Alice ${stamp}`);
-  const { credentials: aliceCredentials } = await first.cdp.send("WebAuthn.getCredentials", {
-    authenticatorId: first.id,
-  });
+  const alice = uniqueEmail("alice");
+  const bob = uniqueEmail("bob");
+  await virtualAuthenticator(page);
+  await registerWithEmail(page, alice);
+  await addPasskey(page);
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
 
-  // Bob registers on another device; the browser is now his.
-  await first.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: first.id });
-  const second = await virtualAuthenticator(page, first.cdp);
-  await registerWithPasskey(page, `Bob ${stamp}`);
+  // Bob registers in the same browser; it is his now. He creates no passkey,
+  // so the authenticator still only holds Alice's.
+  await registerWithEmail(page, bob);
+  await expect(page.locator("header").getByText("Signed in as")).toContainText(bob);
 
-  // Alice's key is plugged back in and used while Bob is signed in.
-  await first.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: second.id });
-  const third = await virtualAuthenticator(page, first.cdp);
-  for (const credential of aliceCredentials) {
-    await third.cdp.send("WebAuthn.addCredential", { authenticatorId: third.id, credential });
-  }
+  // Alice's passkey is used while Bob is signed in.
   const location = await passkeySignInViaApi(page);
   await page.goto(location);
-  await expect(page.getByRole("status")).toContainText(`You are now signed in as Alice ${stamp}.`);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(`Alice ${stamp}`);
+  await expect(page.getByRole("status")).toContainText(`You are now signed in as ${alice}.`);
+  await expect(page.locator("header").getByText("Signed in as")).toContainText(alice);
 
   // Her own passkey again: no switch, no notice.
   const again = await passkeySignInViaApi(page);
   expect(again).not.toContain("message=");
   await page.goto(again);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(`Alice ${stamp}`);
+  await expect(page.locator("header").getByText("Signed in as")).toContainText(alice);
 });

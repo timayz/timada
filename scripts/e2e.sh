@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 # Runs the browser suite against a server on a fresh database. Expects the
-# compose stack (Traefik) to be up: `make up`. Run inside `nix develop`.
+# compose stack to be up (`make up`): Traefik in front, dex as the OIDC
+# provider and MailDev as the mailbox the tests read sign-in codes from. Run
+# inside `nix develop`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+maildev="${MAILDEV_URL:-http://localhost:1080}"
+if ! curl -sf -o /dev/null "$maildev/email"; then
+  echo "the development mailbox is not reachable at $maildev: run 'make up' first" >&2
+  exit 1
+fi
 
 export TIMADA_CONFIG=config/e2e.toml
 topcoat asset bundle -p timada-dashboard

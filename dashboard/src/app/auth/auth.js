@@ -1,7 +1,8 @@
-// Passkey ceremonies. The server speaks WebAuthn Level 3 JSON, so the browser's
-// parseCreationOptionsFromJSON / parseRequestOptionsFromJSON / toJSON do the
-// conversions. Buttons carry their endpoints in data attributes; see
-// app/auth/login.rs and app/auth/account.rs.
+// Passkey ceremonies: adding one to the signed-in account (account page) and
+// signing in with one (login page). The server speaks WebAuthn Level 3 JSON,
+// so the browser's parseCreationOptionsFromJSON / parseRequestOptionsFromJSON
+// / toJSON do the conversions. Buttons carry their endpoints in data
+// attributes; see app/auth/login.rs and app/auth/account.rs.
 
 async function post(url, body) {
   const response = await fetch(url, {
@@ -23,16 +24,14 @@ function nameFrom(button) {
 
 async function register(button) {
   const options = await post(button.dataset.start, {
-    mode: button.dataset.mode,
     user_id: button.dataset.userId ?? null,
-    name: nameFrom(button),
   });
   const credential = await navigator.credentials.create({
     publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(options.publicKey),
   });
   const done = await post(button.dataset.finish, {
     credential: credential.toJSON(),
-    name: button.dataset.mode === "add_to_user" ? nameFrom(button) : "Passkey",
+    name: nameFrom(button) ?? "Passkey",
   });
   window.location.assign(done.location);
 }

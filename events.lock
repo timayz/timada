@@ -2,6 +2,11 @@
 # `event` and `type` lines are frozen — add a new variant instead of editing
 # one. A `view` line may change when its projection's `.revision(n)` grows.
 
+event timada-identity/EmailAccount::Claimed { user_id: String, email: String }
+event timada-identity/EmailAccount::Released unit
+event timada-identity/EmailChallenge::AttemptFailed unit
+event timada-identity/EmailChallenge::CodeIssued { purpose: ChallengePurpose, code_hash: String, issued_at: u64, expires_at: u64 }
+event timada-identity/EmailChallenge::Consumed unit
 event timada-identity/OAuth2Account::Linked { user_id: String, provider: String, provider_user_id: String }
 event timada-identity/OAuth2Account::Unlinked unit
 event timada-identity/PasskeyCredential::Created { user_id: String, credential_id: String, passkey_json: String, aaguid: String, rp_id: String, name: String }
@@ -14,15 +19,19 @@ event timada-identity/Session::Started { user_id: String, expires_at: u64, user_
 event timada-identity/User::AdminGranted unit
 event timada-identity/User::AdminRevoked unit
 event timada-identity/User::Deleted unit
+event timada-identity/User::EmailRegistered { email: String, label: String, password_hash: String }
 event timada-identity/User::OAuth2AccountLinked { provider: String, provider_user_id: String, name: Option<String>, email: Option<String>, picture: Option<String> }
 event timada-identity/User::OAuth2AccountUnlinked { provider: String, provider_user_id: String }
 event timada-identity/User::PasskeyAdded { credential_id: String, name: String, aaguid: String }
 event timada-identity/User::PasskeyRemoved { credential_id: String }
 event timada-identity/User::PasskeyRenamed { credential_id: String, name: String }
+event timada-identity/User::PasswordChanged { password_hash: String }
 event timada-identity/User::ProfileUpdated { account: String, label: String }
 event timada-identity/User::Registered { account: String, label: String, method: SignInMethod }
 event timada-identity/User::SessionsRevoked { except_session: Option<String> }
 event timada-identity/User::SignedIn { method: SignInMethod, provider: Option<String>, credential_id: Option<String>, user_agent: Option<String>, ip: Option<String> }
+event timada-identity/User::SignedInWithPassword { user_agent: Option<String>, ip: Option<String> }
 event timada-identity/User::SignedOut unit
 
+type timada_identity::value_object::ChallengePurpose enum { Register, SignIn, ResetPassword }
 type timada_identity::value_object::SignInMethod enum { OAuth2, Passkey }

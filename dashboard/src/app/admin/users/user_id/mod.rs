@@ -4,7 +4,7 @@ pub mod delete;
 pub mod role;
 pub mod sign_out;
 
-use timada_identity::{SignInMethod, user_sessions};
+use timada_identity::{SignInKind, user_sessions};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -81,6 +81,12 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
                     <p class="text-sm text-neutral-500">"None."</p>
                 }
                 <ul class="divide-y divide-neutral-100 text-sm">
+                    if let Some(password) = &user.password {
+                        <li class="py-2">
+                            <strong>"E-mail and password"</strong> " · " (&password.email)
+                            " · password changed " <time datetime=(password.changed_at)>(format_time(password.changed_at))</time>
+                        </li>
+                    }
                     for account in &user.oauth2_accounts {
                         <li class="py-2">
                             <strong>(providers.get(&account.provider).map(|p| p.label.as_str()).unwrap_or(&account.provider))</strong>
@@ -123,8 +129,9 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
                             <time datetime=(entry.at)>(format_time(entry.at))</time>
                             " · "
                             (match entry.method {
-                                SignInMethod::OAuth2 => entry.provider.clone().unwrap_or_else(|| "provider".to_owned()),
-                                SignInMethod::Passkey => "passkey".to_owned(),
+                                SignInKind::OAuth2 => entry.provider.clone().unwrap_or_else(|| "provider".to_owned()),
+                                SignInKind::Passkey => "passkey".to_owned(),
+                                SignInKind::Password => "password".to_owned(),
                             })
                             if let Some(ip) = &entry.ip { " · " (ip) }
                             if let Some(ua) = &entry.user_agent { <span class="block truncate text-neutral-500">(ua)</span> }
