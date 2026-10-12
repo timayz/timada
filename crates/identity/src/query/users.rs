@@ -87,6 +87,25 @@ pub async fn count_users(pool: &SqlitePool, q: Option<&str>) -> sqlx::Result<i64
     .await
 }
 
+/// The rows of the given users, in no particular order; unknown ids are
+/// skipped. For pages that show other contexts' user ids by name.
+pub async fn users_by_ids(pool: &SqlitePool, ids: &[String]) -> sqlx::Result<Vec<UserRow>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut query = sqlx::QueryBuilder::new(
+        "SELECT id, account, label, is_admin, deleted, registered_at, last_sign_in_at,
+            sign_in_count, oauth2_count, passkey_count, email, has_password
+         FROM identity_users WHERE id IN (",
+    );
+    let mut separated = query.separated(", ");
+    for id in ids {
+        separated.push_bind(id);
+    }
+    separated.push_unseparated(")");
+    query.build_query_as().fetch_all(pool).await
+}
+
 /// Every known session of a user, newest first.
 pub async fn user_sessions(pool: &SqlitePool, user_id: &str) -> sqlx::Result<Vec<SessionRow>> {
     sqlx::query_as(

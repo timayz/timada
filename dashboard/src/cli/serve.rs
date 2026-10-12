@@ -1,10 +1,14 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use evento::subscription::Subscription;
 
+use crate::app::{self, Services};
+use crate::auth;
+use crate::cluster::{Cluster, Executor};
 use crate::config::Config;
 use crate::db::{self, ReadPool, WritePool};
-use crate::{app, auth, cluster};
+use crate::tenants::{TenantSubscription, Tenants};
 
 pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> Result<()> {
     let host = host.unwrap_or_else(|| config.server.host.clone());
@@ -15,13 +19,23 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let write_pool = db::create_write_pool(&config.database.url).await?;
     let read_pool =
         db::create_read_pool(&config.database.url, config.database.max_connections).await?;
-    let executor = cluster::build(
-        config.cluster.as_ref(),
-        config.server.region.as_deref(),
-        read_pool.clone(),
+    let cluster = Arc::new(Cluster::build(config.cluster.as_ref()).await?);
+    let executor = cluster
+        .open_platform(
+            config.server.region.as_deref(),
+            read_pool.clone(),
+            write_pool.clone(),
+        )
+        .await?;
+    let tenants = Tenants::new(
+        cluster.clone(),
+        &config.tenants,
+        config.server.region.clone(),
+        executor.clone(),
         write_pool.clone(),
-    )
-    .await?;
+        tenant_subscriptions(),
+    );
+    let sweeper = tenants.start_sweeper();
 
     // Sign-in providers are resolved through discovery now, so a bad issuer
     // or network stops the server with the provider's name instead of
@@ -33,29 +47,31 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // Read models catch up from their saved cursor before the router takes
     // requests, then follow the stream. A failed worker is logged and the
     // pages fall back to stale rows; the node keeps serving.
-    let read_models = Arc::new(
-        timada_identity::read_model_subscription(write_pool.clone())
-            .start(&executor)
-            .await
-            .context("cannot start the identity read models")?,
-    );
-    let watched = read_models.clone();
-    tokio::spawn(async move {
-        let reason = watched.stopped().await;
-        if reason.is_failure() {
-            tracing::error!(%reason, "identity read models stopped; admin pages are stale");
-        }
-    });
+    let read_models = vec![
+        start_read_model(
+            "identity",
+            timada_identity::read_model_subscription(write_pool.clone()),
+            &executor,
+        )
+        .await?,
+        start_read_model(
+            "tenancy",
+            timada_tenancy::read_model_subscription(write_pool.clone()),
+            &executor,
+        )
+        .await?,
+    ];
 
-    let router = app::router(
+    let router = app::router(Services {
         executor,
-        ReadPool(read_pool.clone()),
-        WritePool(write_pool.clone()),
+        read_pool: ReadPool(read_pool.clone()),
+        write_pool: WritePool(write_pool.clone()),
         providers,
         webauthn,
         mailer,
+        tenants: tenants.clone(),
         config,
-    );
+    });
 
     let listener = tokio::net::TcpListener::bind((host.as_str(), port))
         .await
@@ -67,9 +83,43 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // `RouterService::shutdown_timeout` to finish.
     topcoat::serve(listener, router).await?;
 
-    read_models.stop();
-    read_models.stopped().await;
+    sweeper.abort();
+    tenants.shutdown().await;
+    for subscription in &read_models {
+        subscription.stop();
+    }
+    for subscription in &read_models {
+        subscription.stopped().await;
+    }
     read_pool.close().await;
     write_pool.close().await;
     Ok(())
+}
+
+/// The read models fed from each tenant's own stream into the shared
+/// database. None yet: the first tenant-scoped bounded context registers its
+/// subscription here.
+fn tenant_subscriptions() -> Vec<TenantSubscription> {
+    Vec::new()
+}
+
+async fn start_read_model(
+    name: &'static str,
+    builder: evento::subscription::SubscriptionBuilder<Executor>,
+    executor: &Executor,
+) -> Result<Arc<Subscription>> {
+    let subscription = Arc::new(
+        builder
+            .start(executor)
+            .await
+            .with_context(|| format!("cannot start the {name} read models"))?,
+    );
+    let watched = subscription.clone();
+    tokio::spawn(async move {
+        let reason = watched.stopped().await;
+        if reason.is_failure() {
+            tracing::error!(%reason, "{name} read models stopped; their pages are stale");
+        }
+    });
+    Ok(subscription)
 }

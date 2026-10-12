@@ -82,6 +82,12 @@ pub fn describe_error(code: &str) -> &'static str {
         "wrong_password" => "The current password is wrong.",
         "email_set" => "This account already has an e-mail address.",
         "mail_failed" => "The e-mail could not be sent. Please try again in a moment.",
+        "invalid_slug" => "A slug is 2 to 32 lowercase letters, digits and dashes.",
+        "slug_taken" => "This slug is already taken. Choose another one.",
+        "invalid_name" => "The name must be between 1 and 80 characters.",
+        "tenant_not_found" => "This tenant does not exist.",
+        "tenant_suspended" => "This tenant is suspended.",
+        "not_suspended" => "This tenant is not suspended.",
         _ => "Something went wrong. Please try again.",
     }
 }

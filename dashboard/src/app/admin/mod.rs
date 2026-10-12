@@ -1,5 +1,6 @@
 //! Back-office pages under `/admin`, for administrators only.
 
+pub mod tenants;
 pub mod users;
 
 use timada_identity::{IdentityError, UserState};

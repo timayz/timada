@@ -14,14 +14,15 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal"] }
 topcoat = { version = "=0.10.0", features = ["tailwind", "anyhow", "mail", "mail-smtp"] }
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.19", features = ["sqlite"] }
-evento = { version = "=2.0.0-alpha.32", features = ["sqlite"] }
-evento-sql = { version = "=2.0.0-alpha.32", features = ["sqlite", "accord"] }
-evento-sql-migrator = { version = "=2.0.0-alpha.32", features = ["sqlite", "accord"] }
-evento-accord = "=2.0.0-alpha.32"
-evento-lock = "=2.0.0-alpha.32"
+evento = { version = "=2.0.0-alpha.33", features = ["sqlite"] }
+evento-sql = { version = "=2.0.0-alpha.33", features = ["sqlite", "accord"] }
+evento-sql-migrator = { version = "=2.0.0-alpha.33", features = ["sqlite", "accord"] }
+evento-accord = "=2.0.0-alpha.33"
+evento-lock = "=2.0.0-alpha.33"
 bitcode = "0.6"
 argon2 = { version = "0.5", features = ["std"] }
 ulid = "3.0"
+deunicode = "1.6"
 openidconnect = "4.0.1"
 webauthn-rs = { version = "0.5.5", features = ["danger-allow-state-serialisation", "conditional-ui"] }
 webauthn-rs-proto = "0.5.5"
