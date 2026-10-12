@@ -1,4 +1,8 @@
 import { expect, test, type CDPSession, type Page } from "@playwright/test";
+import { registerWithEmail, uniqueEmail } from "./email";
+
+// Passkeys are added to an existing account (here one registered with an
+// address) and then sign in on their own, without a mailed code.
 
 // A CTAP2 platform authenticator with resident keys and user verification,
 // as a phone or laptop with biometrics would behave. Chrome's WebAuthn
@@ -21,31 +25,27 @@ async function virtualAuthenticator(page: Page, cdp?: CDPSession): Promise<Authe
   return { cdp, id: authenticatorId };
 }
 
-const name = `Alice ${Date.now()}`;
-
-test("register with a passkey, sign out, sign in without a username", async ({ page }) => {
+test("add passkeys to an account, sign out, sign in without a username", async ({ page }) => {
+  const email = uniqueEmail("alice");
   const first = await virtualAuthenticator(page);
 
   await page.goto("/");
   await expect(page).toHaveURL(/\/auth\/login$/);
-
-  await page.getByText("New here? Create an account with a passkey").click();
-  await page.getByLabel("Your name").fill(name);
-  await page.getByRole("button", { name: "Create account" }).click();
-
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByText(`Signed in as`)).toContainText(name);
+  await registerWithEmail(page, email);
+  await expect(page.getByText("Signed in as")).toContainText(email);
 
   await page.getByRole("link", { name: "Account" }).click();
   await expect(page.getByRole("heading", { name: "Passkeys" })).toBeVisible();
-  const passkeyRows = page.locator("section", { hasText: "Passkeys" }).locator("li");
-  await expect(passkeyRows).toHaveCount(1);
+  await expect(page.locator("section", { hasText: "E-mail and password" })).toContainText(email);
   await expect(page.getByText("Administrator").or(page.getByText("Member"))).toBeVisible();
-  await expect(page.locator("section", { hasText: "Recent sign-ins" }).locator("li")).toHaveCount(1);
+  const passkeyRows = page.locator("section", { hasText: "Passkeys" }).locator("li");
+  await expect(passkeyRows).toHaveCount(0);
 
-  // The only sign-in method cannot be removed.
-  await page.getByRole("button", { name: "Remove" }).click();
-  await expect(page.getByRole("alert")).toContainText("only way to sign in");
+  await page.getByLabel("Name for the new passkey").fill("First key");
+  await page.getByRole("button", { name: "Add a passkey" }).click();
+  await expect(page.getByRole("status")).toContainText("Passkey added.");
+  await expect(passkeyRows).toHaveCount(1);
+  await expect(page.locator("section", { hasText: "Recent sign-ins" }).locator("li")).toHaveCount(1);
 
   // The first device already holds a credential for this account, so the
   // server's excludeCredentials makes it refuse a second one.
@@ -74,21 +74,18 @@ test("register with a passkey, sign out, sign in without a username", async ({ p
   await page.goto("/auth/account");
   await expect(page).toHaveURL(/\/auth\/login$/);
 
-  // Usernameless sign-in: the authenticator picks the resident credential.
+  // Usernameless sign-in: the authenticator picks the resident credential,
+  // and no code is needed.
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByText("Signed in as")).toContainText(name);
+  await expect(page.getByText("Signed in as")).toContainText(email);
 
   await page.goto("/auth/account");
   await expect(page.locator("section", { hasText: "Recent sign-ins" }).locator("li")).toHaveCount(2);
 });
 
-test("a signed-in browser cannot start a registration for a new user", async ({ page, request }) => {
-  await virtualAuthenticator(page);
-  await page.goto("/auth/login");
-  await page.getByText("New here? Create an account with a passkey").click();
-  await page.getByLabel("Your name").fill(`Bob ${Date.now()}`);
-  await page.getByRole("button", { name: "Create account" }).click();
+test("the session cookie is locked down and adding a passkey needs a session", async ({ page, request }) => {
+  await registerWithEmail(page, uniqueEmail("bob"));
   await expect(page).toHaveURL(/\/$/);
 
   const cookies = await page.context().cookies();
@@ -96,9 +93,14 @@ test("a signed-in browser cannot start a registration for a new user", async ({ 
   expect(session?.secure).toBe(true);
   expect(session?.httpOnly).toBe(true);
 
-  const response = await page.request.post("/auth/passkey/register/start", {
-    data: { mode: "create_user", name: "Mallory" },
+  // A browser without a session cannot start a registration at all.
+  const response = await request.post("/auth/passkey/register/start", {
+    data: { user_id: "anyone" },
   });
-  expect(response.status()).toBe(400);
-  expect(await response.text()).toContain("already signed in");
+  expect(response.status()).toBe(401);
+  // A signed-in browser cannot start one for another user.
+  const forged = await page.request.post("/auth/passkey/register/start", {
+    data: { user_id: "someone-else" },
+  });
+  expect(forged.status()).toBe(403);
 });

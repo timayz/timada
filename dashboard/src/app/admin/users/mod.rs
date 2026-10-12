@@ -105,7 +105,7 @@ pub async fn users(cx: &Cx) -> Result<impl View> {
                             </td>
                             <td class="py-2 pr-3">(&row.account)</td>
                             <td class="py-2 pr-3">(if row.is_admin { "Administrator" } else { "Member" })</td>
-                            <td class="py-2 pr-3">(row.oauth2_count) " provider" (if row.oauth2_count == 1 { "" } else { "s" }) ", " (row.passkey_count) " passkey" (if row.passkey_count == 1 { "" } else { "s" })</td>
+                            <td class="py-2 pr-3">(if row.has_password { "password, " } else { "" }) (row.oauth2_count) " provider" (if row.oauth2_count == 1 { "" } else { "s" }) ", " (row.passkey_count) " passkey" (if row.passkey_count == 1 { "" } else { "s" })</td>
                             <td class="py-2">
                                 if let Some(at) = row.last_sign_in_at {
                                     <time datetime=(at)>(format_time(at as u64))</time>

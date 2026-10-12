@@ -65,15 +65,17 @@ async fn upsert_user(pool: &SqlitePool, user: &UserState) -> anyhow::Result<()> 
     let revoked = user.sessions_revoked.as_ref();
     sqlx::query(
         "INSERT INTO identity_users (id, account, label, is_admin, deleted, registered_at,
-            last_sign_in_at, sign_in_count, oauth2_count, passkey_count, sessions_revoked_at_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            last_sign_in_at, sign_in_count, oauth2_count, passkey_count, sessions_revoked_at_ms,
+            email, has_password)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT (id) DO UPDATE SET
             account = excluded.account, label = excluded.label,
             is_admin = excluded.is_admin, deleted = excluded.deleted,
             registered_at = excluded.registered_at, last_sign_in_at = excluded.last_sign_in_at,
             sign_in_count = excluded.sign_in_count, oauth2_count = excluded.oauth2_count,
             passkey_count = excluded.passkey_count,
-            sessions_revoked_at_ms = excluded.sessions_revoked_at_ms",
+            sessions_revoked_at_ms = excluded.sessions_revoked_at_ms,
+            email = excluded.email, has_password = excluded.has_password",
     )
     .bind(&user.id)
     .bind(&user.account)
@@ -86,6 +88,8 @@ async fn upsert_user(pool: &SqlitePool, user: &UserState) -> anyhow::Result<()> 
     .bind(user.oauth2_accounts.len() as i64)
     .bind(user.passkeys.len() as i64)
     .bind(revoked.map(|r| r.at_ms as i64))
+    .bind(user.password.as_ref().map(|p| p.email.as_str()))
+    .bind(user.password.is_some())
     .execute(pool)
     .await?;
 

@@ -9,7 +9,7 @@ pub const MIGRATION_APP: &str = "identity";
 
 /// Every migration of this crate, oldest first.
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![ReadModels0001]
+    vec_box![ReadModels0001, Email0002]
 }
 
 /// `identity_users` and `identity_sessions`, one row per aggregate, rewritten
@@ -62,6 +62,26 @@ sqlx_migrator::sqlite_migration!(
         (
             "CREATE INDEX identity_sessions_user ON identity_sessions (user_id, ended, expires_at)",
             "DROP INDEX identity_sessions_user"
+        ),
+    ]
+);
+
+/// The e-mail + password method: the address and whether one is set.
+pub struct Email0002;
+
+sqlx_migrator::sqlite_migration!(
+    Email0002,
+    "identity",
+    "0002_email",
+    vec_box![("identity", "0001_read_models")],
+    vec_box![
+        (
+            "ALTER TABLE identity_users ADD COLUMN email TEXT",
+            "ALTER TABLE identity_users DROP COLUMN email"
+        ),
+        (
+            "ALTER TABLE identity_users ADD COLUMN has_password INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE identity_users DROP COLUMN has_password"
         ),
     ]
 );

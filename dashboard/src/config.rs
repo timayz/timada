@@ -19,6 +19,7 @@ pub struct Config {
     #[serde(default)]
     pub cluster: Option<ClusterConfig>,
     pub auth: AuthConfig,
+    pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
 }
 
@@ -51,6 +52,18 @@ pub struct ProviderConfig {
     pub issuer: String,
     pub client_id: String,
     pub client_secret: String,
+}
+
+/// Outgoing e-mail: the codes that prove an address at sign-up, sign-in and
+/// password reset.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MailConfig {
+    /// Sender shown on those e-mails, e.g. `Timada <no-reply@example.com>`.
+    pub from: String,
+    /// Where messages are submitted: `smtp://host:port` (no encryption, for a
+    /// local mailbox), `smtp://user:pass@host:587?tls=required` (STARTTLS) or
+    /// `smtps://user:pass@host:465` (implicit TLS).
+    pub smtp_url: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -114,6 +127,8 @@ impl Config {
             .set_default("database.max_connections", 3)?
             .set_default("auth.session_lifetime_secs", 14 * 24 * 60 * 60)?
             .set_default("auth.rp_name", "Timada")?
+            .set_default("mail.from", "Timada <no-reply@timada.localhost>")?
+            .set_default("mail.smtp_url", "smtp://localhost:1025")?
             .set_default("monitoring.log_level", "info,sqlx=warn")?
             .set_default("monitoring.log_json", false)?
             .set_default("monitoring.log_target", true)?
@@ -133,6 +148,7 @@ impl Config {
         }
         config.server.validate()?;
         config.auth.validate()?;
+        config.mail.validate()?;
 
         Ok(config)
     }
@@ -185,6 +201,26 @@ impl AuthConfig {
     }
 }
 
+impl MailConfig {
+    /// Both values are parsed again when the transport is built; fail here
+    /// with the key name instead.
+    fn validate(&self) -> Result<(), ConfigError> {
+        if let Err(err) = self.from.parse::<topcoat::mail::Mailbox>() {
+            return Err(ConfigError::Message(format!(
+                "mail.from: '{}' is not a mailbox ({err})",
+                self.from
+            )));
+        }
+        if let Err(err) = topcoat::mail::SmtpTransport::from_url(&self.smtp_url) {
+            return Err(ConfigError::Message(format!(
+                "mail.smtp_url: '{}' is not a usable address ({err})",
+                self.smtp_url
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl ClusterConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         if self.peers.is_empty() {
@@ -229,6 +265,29 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn mail_settings_are_checked_with_their_key() {
+        let ok = MailConfig {
+            from: "Timada <no-reply@example.com>".into(),
+            smtp_url: "smtp://localhost:1025".into(),
+        };
+        assert!(ok.validate().is_ok());
+        let err = MailConfig {
+            from: "nobody".into(),
+            ..ok.clone()
+        }
+        .validate()
+        .unwrap_err();
+        assert!(err.to_string().starts_with("mail.from"), "{err}");
+        let err = MailConfig {
+            smtp_url: "https://example.com".into(),
+            ..ok
+        }
+        .validate()
+        .unwrap_err();
+        assert!(err.to_string().starts_with("mail.smtp_url"), "{err}");
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::ui::{document, notice};
 #[topcoat::router::query_params(error = bad_request)]
 struct LoginQuery {
     error: Option<String>,
+    message: Option<String>,
 }
 
 #[page]
@@ -25,7 +26,22 @@ pub async fn login(cx: &Cx) -> Result<impl View> {
         document(
             title: "Sign in",
             <h1 class="mb-6 text-2xl font-semibold">"Sign in to Timada"</h1>
-            notice(error: query.error.as_deref())
+            notice(error: query.error.as_deref(), message: query.message.as_deref())
+
+            <form method="post" action=(href!(super::email::login::login)) class="mb-4 space-y-3 rounded border border-neutral-200 bg-white p-4">
+                <label class="block text-sm" for="email">"E-mail address"</label>
+                <input id="email" name="email" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                    type="email" autocomplete="username" maxlength="254" required="">
+                <label class="block text-sm" for="password">"Password"</label>
+                <input id="password" name="password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                    type="password" autocomplete="current-password" required="">
+                <button class="w-full rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Sign in"</button>
+                <p class="text-sm text-neutral-600">
+                    <a class="underline" href=(href!(super::forgot_password::forgot_password))>"Forgot password?"</a>
+                    " · New here? "
+                    <a class="underline" href=(href!(super::register::register))>"Create an account"</a>
+                </p>
+            </form>
 
             <section class="mb-8 space-y-3">
                 for provider in providers.iter() {
@@ -36,33 +52,17 @@ pub async fn login(cx: &Cx) -> Result<impl View> {
                         </button>
                     </form>
                 }
-                if providers.is_empty() {
-                    <p class="text-sm text-neutral-500">"No sign-in provider is configured."</p>
-                }
             </section>
 
             <section class="space-y-3 border-t border-neutral-200 pt-6">
                 <button type="button"
-                    class="w-full rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700"
+                    class="w-full rounded border border-neutral-900 px-4 py-2 font-medium hover:bg-neutral-100"
                     data-passkey-login=""
                     data-start=(href!(super::passkey::login::start::start))
                     data-finish=(href!(super::passkey::login::finish::finish))>
                     "Sign in with a passkey"
                 </button>
-                <details class="rounded border border-neutral-200 bg-white p-4">
-                    <summary class="cursor-pointer font-medium">"New here? Create an account with a passkey"</summary>
-                    <label class="mt-3 block text-sm" for="passkey-name">"Your name"</label>
-                    <input id="passkey-name" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2" type="text" autocomplete="name" maxlength="64" required="">
-                    <button type="button"
-                        class="mt-3 w-full rounded border border-neutral-900 px-4 py-2 font-medium hover:bg-neutral-100"
-                        data-passkey-register=""
-                        data-mode="create_user"
-                        data-name-input="#passkey-name"
-                        data-start=(href!(super::passkey::register::start::start))
-                        data-finish=(href!(super::passkey::register::finish::finish))>
-                        "Create account"
-                    </button>
-                </details>
+                <p class="text-xs text-neutral-500">"Passkeys are added from your account page once you are signed in."</p>
             </section>
         )
     })

@@ -3,7 +3,7 @@ use ulid::Ulid;
 
 use crate::aggregator::{OAuth2AccountLinked, Registered, SignedIn};
 use crate::error::IdentityError;
-use crate::value_object::{LoginContext, OAuth2Mode, ProviderIdentity, SignInMethod};
+use crate::value_object::{LoginContext, OAuth2Mode, ProviderIdentity, SignInKind, SignInMethod};
 
 use super::UserState;
 use super::sign_in::SignInFacts;
@@ -49,7 +49,7 @@ impl<E: Executor> super::Command<E> {
             .load_oauth2_account(&cmd.identity.provider, &cmd.identity.provider_user_id)
             .await?;
         let facts = SignInFacts {
-            method: SignInMethod::OAuth2,
+            kind: SignInKind::OAuth2,
             provider: Some(cmd.identity.provider.clone()),
             credential_id: None,
             context: cmd.context.clone(),
