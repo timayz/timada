@@ -5,22 +5,27 @@
 //! stale. None of them is snapshotted: a tenant stream is a handful of events.
 
 mod create;
+mod invite;
+mod member;
 mod rename;
+mod role;
 mod slug_index;
 mod suspend;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 
 pub use create::*;
+pub use invite::*;
+pub use role::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
-    Claimed, Created, MemberGranted, MemberRevoked, MemberRoleChanged, Released, Renamed, Resumed,
-    Suspended,
+    Accepted, Claimed, Created, MemberGranted, MemberRevoked, MemberRoleChanged, Released, Renamed,
+    Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
 };
-use crate::value_object::{ROLE_OWNER, tenant_slug_id};
+use crate::value_object::{ROLE_OWNER, invitation_id, tenant_slug_id};
 
 /// The command gateway. Cheap to clone when `E` is (the dashboard's executor
 /// is an `Arc` wrapper).
@@ -52,6 +57,17 @@ pub struct TenantState {
     pub suspended: Option<String>,
     /// `user id → role`, sorted so pages are stable.
     pub members: BTreeMap<String, String>,
+    /// The custom roles, by name. `owner` is not among them: it is implicit
+    /// and grants everything.
+    pub roles: BTreeMap<String, RoleDef>,
+}
+
+/// A custom role as the tenant defined it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoleDef {
+    pub label: String,
+    /// Entries of [`PERMISSIONS`](crate::PERMISSIONS).
+    pub permissions: BTreeSet<String>,
 }
 
 impl TenantState {
@@ -66,6 +82,32 @@ impl TenantState {
     pub fn is_owner(&self, user_id: &str) -> bool {
         self.role_of(user_id) == Some(ROLE_OWNER)
     }
+
+    /// Whether `role` can be granted: `owner` or a defined custom role.
+    pub fn has_role(&self, role: &str) -> bool {
+        role == ROLE_OWNER || self.roles.contains_key(role)
+    }
+
+    /// Whether `user_id` holds `permission` here: owners hold every one,
+    /// other members what their role grants, non-members nothing.
+    pub fn can(&self, user_id: &str, permission: &str) -> bool {
+        match self.role_of(user_id) {
+            Some(ROLE_OWNER) => true,
+            Some(role) => self
+                .roles
+                .get(role)
+                .is_some_and(|def| def.permissions.contains(permission)),
+            None => false,
+        }
+    }
+
+    pub fn owners(&self) -> usize {
+        self.members_with_role(ROLE_OWNER)
+    }
+
+    pub fn members_with_role(&self, role: &str) -> usize {
+        self.members.values().filter(|r| r.as_str() == role).count()
+    }
 }
 
 pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
@@ -77,6 +119,9 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_member_granted())
         .handler(on_member_role_changed())
         .handler(on_member_revoked())
+        .handler(on_role_defined())
+        .handler(on_role_updated())
+        .handler(on_role_removed())
         .strict()
 }
 
@@ -139,6 +184,42 @@ async fn on_member_revoked(
     Ok(())
 }
 
+#[evento::handler]
+async fn on_role_defined(
+    event: Event<RoleDefined>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.roles.insert(
+        event.data.role.to_owned(),
+        RoleDef {
+            label: event.data.label.to_owned(),
+            permissions: event.data.permissions.iter().cloned().collect(),
+        },
+    );
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_role_updated(
+    event: Event<RoleUpdated>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    if let Some(def) = tenant.roles.get_mut(&event.data.role) {
+        def.label = event.data.label.to_owned();
+        def.permissions = event.data.permissions.iter().cloned().collect();
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_role_removed(
+    event: Event<RoleRemoved>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.roles.remove(&event.data.role);
+    Ok(())
+}
+
 // =============================================================================
 // TenantSlug (index)
 // =============================================================================
@@ -177,6 +258,77 @@ async fn on_slug_released(
 }
 
 // =============================================================================
+// Invitation
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-tenancy/InvitationState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvitationState {
+    pub id: String,
+    pub tenant_id: String,
+    /// Normalized address the link went to.
+    pub email: String,
+    pub role: String,
+    pub invited_by: String,
+    pub sent_at: u64,
+    pub expires_at: u64,
+    pub accepted_by: Option<String>,
+    pub accepted_at: Option<u64>,
+    pub revoked: bool,
+}
+
+impl InvitationState {
+    /// Whether the link still works at `now`: not accepted, not revoked, not
+    /// expired.
+    pub fn is_open_at(&self, now: u64) -> bool {
+        self.accepted_by.is_none() && !self.revoked && now < self.expires_at
+    }
+}
+
+pub fn invitation_projection<E: Executor>() -> Projection<E, InvitationState> {
+    Projection::new::<crate::aggregator::Invitation>()
+        .handler(on_invitation_sent())
+        .handler(on_invitation_accepted())
+        .handler(on_invitation_revoked())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_invitation_sent(
+    event: Event<Sent>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.id = event.aggregate_id.to_owned();
+    invitation.tenant_id = event.data.tenant_id.to_owned();
+    invitation.email = event.data.email.to_owned();
+    invitation.role = event.data.role.to_owned();
+    invitation.invited_by = event.data.invited_by.to_owned();
+    invitation.sent_at = event.data.sent_at;
+    invitation.expires_at = event.data.expires_at;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invitation_accepted(
+    event: Event<Accepted>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.accepted_by = Some(event.data.user_id.to_owned());
+    invitation.accepted_at = Some(event.data.accepted_at);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invitation_revoked(
+    _event: Event<Revoked>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.revoked = true;
+    Ok(())
+}
+
+// =============================================================================
 // Loads
 // =============================================================================
 
@@ -210,5 +362,24 @@ impl<E: Executor> Command<E> {
             .load(tenant_slug_id(slug))
             .execute(&self.0)
             .await
+    }
+
+    /// An invitation by its stream id (what the pages list).
+    pub async fn load_invitation(
+        &self,
+        invitation_id: &str,
+    ) -> anyhow::Result<Option<InvitationState>> {
+        invitation_projection()
+            .load(invitation_id)
+            .execute(&self.0)
+            .await
+    }
+
+    /// The invitation a link token opens, if any.
+    pub async fn load_invitation_by_token(
+        &self,
+        token: &str,
+    ) -> anyhow::Result<Option<InvitationState>> {
+        self.load_invitation(&invitation_id(token)).await
     }
 }

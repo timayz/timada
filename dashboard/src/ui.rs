@@ -88,6 +88,17 @@ pub fn describe_error(code: &str) -> &'static str {
         "tenant_not_found" => "This tenant does not exist.",
         "tenant_suspended" => "This tenant is suspended.",
         "not_suspended" => "This tenant is not suspended.",
+        "invalid_role" => "A role name is 2 to 32 lowercase letters, digits and dashes.",
+        "reserved_role" => "This role name is reserved.",
+        "invalid_role_label" => "A role label is 1 to 40 characters.",
+        "role_exists" => "This role already exists.",
+        "unknown_role" => "This role does not exist.",
+        "role_in_use" => "Move its members to another role before removing it.",
+        "invalid_permission" => "One of the permissions is not known.",
+        "already_member" => "This user is already a member.",
+        "not_member" => "This user is not a member.",
+        "last_owner" => "A tenant keeps at least one owner.",
+        "invitation_invalid" => "This invitation is no longer valid.",
         _ => "Something went wrong. Please try again.",
     }
 }

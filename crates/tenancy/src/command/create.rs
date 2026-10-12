@@ -85,4 +85,17 @@ impl<E: Executor> Command<E> {
             .await?
             .ok_or(TenancyError::NotFound)
     }
+
+    /// The tenant, or `NotFound`; `Suspended` while it is offline. Every
+    /// change a member makes starts here: a suspended tenant is read-only.
+    pub(crate) async fn require_active(
+        &self,
+        tenant_id: &str,
+    ) -> Result<TenantState, TenancyError> {
+        let tenant = self.require_tenant(tenant_id).await?;
+        if tenant.is_suspended() {
+            return Err(TenancyError::Suspended);
+        }
+        Ok(tenant)
+    }
 }

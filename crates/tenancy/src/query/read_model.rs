@@ -1,6 +1,6 @@
 //! The subscription that keeps the SQL read models current.
 //!
-//! The handler reloads the strict write model of the tenant the event belongs
+//! Each handler reloads the strict write model of the stream the event belongs
 //! to and rewrites its rows, so delivery may repeat (the subscription is
 //! at-least-once) without the rows drifting.
 
@@ -11,8 +11,8 @@ use evento::{
 };
 use sqlx::SqlitePool;
 
-use crate::aggregator::Tenant;
-use crate::command::{TenantState, tenant_projection};
+use crate::aggregator::{Invitation, Tenant};
+use crate::command::{InvitationState, TenantState, invitation_projection, tenant_projection};
 use crate::value_object::group_of;
 
 /// The cursor identity of the read-model subscription. One per node.
@@ -25,6 +25,7 @@ pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBui
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(pool)
         .handler(on_tenant_event())
+        .handler(on_invitation_event())
         .any_routing_key()
 }
 
@@ -82,5 +83,45 @@ async fn upsert_tenant(pool: &SqlitePool, tenant: &TenantState) -> anyhow::Resul
             .await?;
     }
     tx.commit().await?;
+    Ok(())
+}
+
+#[evento::subscription_all]
+async fn on_invitation_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<Invitation>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let Some(invitation) = invitation_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_invitation(&pool, &invitation).await
+}
+
+async fn upsert_invitation(pool: &SqlitePool, invitation: &InvitationState) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO tenancy_invitations (id, tenant_id, email, role, invited_by, sent_at,
+            expires_at, accepted_by, accepted_at, revoked)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT (id) DO UPDATE SET
+            accepted_by = excluded.accepted_by, accepted_at = excluded.accepted_at,
+            revoked = excluded.revoked",
+    )
+    .bind(&invitation.id)
+    .bind(&invitation.tenant_id)
+    .bind(&invitation.email)
+    .bind(&invitation.role)
+    .bind(&invitation.invited_by)
+    .bind(invitation.sent_at as i64)
+    .bind(invitation.expires_at as i64)
+    .bind(invitation.accepted_by.as_deref())
+    .bind(invitation.accepted_at.map(|at| at as i64))
+    .bind(invitation.revoked)
+    .execute(pool)
+    .await?;
     Ok(())
 }
