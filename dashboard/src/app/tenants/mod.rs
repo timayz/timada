@@ -23,6 +23,18 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::Forbidden => "not_allowed",
         TenancyError::Suspended => "tenant_suspended",
         TenancyError::NotSuspended => "not_suspended",
+        TenancyError::InvalidRole => "invalid_role",
+        TenancyError::ReservedRole => "reserved_role",
+        TenancyError::InvalidRoleLabel => "invalid_role_label",
+        TenancyError::RoleExists => "role_exists",
+        TenancyError::UnknownRole => "unknown_role",
+        TenancyError::RoleInUse => "role_in_use",
+        TenancyError::InvalidPermission => "invalid_permission",
+        TenancyError::InvalidEmail => "invalid_email",
+        TenancyError::AlreadyMember => "already_member",
+        TenancyError::NotMember => "not_member",
+        TenancyError::LastOwner => "last_owner",
+        TenancyError::InvitationInvalid => "invitation_invalid",
         TenancyError::Write(_) | TenancyError::Other(_) => "failed",
     }
 }
