@@ -8,6 +8,7 @@ use crate::auth;
 use crate::cluster::{Cluster, Executor};
 use crate::config::Config;
 use crate::db::{self, ReadPool, WritePool};
+use crate::store_api::{self, StoreConnections};
 use crate::tenants::{TenantSubscription, Tenants};
 
 pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> Result<()> {
@@ -36,6 +37,14 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         tenant_subscriptions(),
     );
     let sweeper = tenants.start_sweeper();
+    let connections = StoreConnections::new();
+    let store_api = store_api::serve(
+        config.store_api.as_ref(),
+        executor.clone(),
+        tenants.clone(),
+        connections.clone(),
+    )
+    .await?;
     let authorizer = crate::authz::Authorizer::new().await?;
 
     // Sign-in providers are resolved through discovery now, so a bad issuer
@@ -72,6 +81,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         mailer,
         tenants: tenants.clone(),
         authorizer,
+        store: connections,
         config,
     });
 
@@ -85,6 +95,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // `RouterService::shutdown_timeout` to finish.
     topcoat::serve(listener, router).await?;
 
+    // Store connections go first: their leases hold tenants open.
+    if let Some(store_api) = store_api {
+        store_api.shutdown().await;
+    }
     sweeper.abort();
     tenants.shutdown().await;
     for subscription in &read_models {

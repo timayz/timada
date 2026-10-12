@@ -87,8 +87,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dt class="text-neutral-500">"Status"</dt>
                     <dd data-tenant-status="">
                         (status_label(tenant.is_suspended(), status))
-                        if let TenantStatus::Running { since } = status {
+                        if let TenantStatus::Running { since, leases } = status {
                             " since " <time datetime=(unix_seconds(since))>(format_time(unix_seconds(since)))</time>
+                            if leases > 0 { " · " (leases) " store connection(s)" }
                         }
                         if let Some(reason) = &tenant.suspended { ": " (reason) }
                     </dd>

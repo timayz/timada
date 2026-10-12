@@ -8,10 +8,14 @@
 //! asked for in `tenants.idle_timeout_secs`, and a bounded number stay open at
 //! once. A peer that talks about a group this node has closed triggers
 //! [`Tenants::reopen`], which opens it only if the catalog knows the tenant:
-//! the wire cannot create one.
+//! the wire cannot create one. A storefront connected through the store API
+//! holds a [`TenantLease`]: a leased tenant is neither closed as idle nor
+//! evicted (a store with subscriptions is never idle anyway), only by an
+//! administrator or at shutdown.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -40,7 +44,11 @@ pub type TenantSubscription =
 /// Whether a tenant's database is open on this node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TenantStatus {
-    Running { since: SystemTime },
+    Running {
+        since: SystemTime,
+        /// Store connections holding the tenant open.
+        leases: usize,
+    },
     Stopped,
 }
 
@@ -51,6 +59,33 @@ struct OpenTenant {
     subscriptions: Vec<Subscription>,
     opened_at: SystemTime,
     last_used: Instant,
+    /// Live [`TenantLease`]s; shared with each lease so a drop needs no lookup.
+    leases: Arc<AtomicUsize>,
+}
+
+/// A store connection's hold on an open tenant, released on drop. The
+/// counter is the one of the open entry the lease was taken on: a tenant
+/// closed and reopened underneath an old lease is not affected by it.
+pub struct TenantLease {
+    executor: Executor,
+    tenant_id: String,
+    leases: Arc<AtomicUsize>,
+}
+
+impl TenantLease {
+    pub fn executor(&self) -> &Executor {
+        &self.executor
+    }
+
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
+    }
+}
+
+impl Drop for TenantLease {
+    fn drop(&mut self) {
+        self.leases.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 pub struct Tenants {
@@ -103,7 +138,10 @@ impl Tenants {
     pub fn status(&self, tenant_id: &str) -> TenantStatus {
         let open = self.open.lock().expect("open poisoned");
         match open.get(&GroupId(group_of(tenant_id))) {
-            Some(t) if t.tenant_id == tenant_id => TenantStatus::Running { since: t.opened_at },
+            Some(t) if t.tenant_id == tenant_id => TenantStatus::Running {
+                since: t.opened_at,
+                leases: t.leases.load(Ordering::Acquire),
+            },
             _ => TenantStatus::Stopped,
         }
     }
@@ -192,15 +230,24 @@ impl Tenants {
                     subscriptions,
                     opened_at: SystemTime::now(),
                     last_used: Instant::now(),
+                    leases: Arc::new(AtomicUsize::new(0)),
                 },
             );
             let mut evicted = Vec::new();
             while open.len() > self.max_open {
+                // Only an unleased tenant can go; when every one is held by a
+                // store connection the limit is exceeded rather than a live
+                // connection cut.
                 let Some((&victim, _)) = open
                     .iter()
-                    .filter(|(g, _)| **g != group)
+                    .filter(|(g, t)| **g != group && t.leases.load(Ordering::Acquire) == 0)
                     .min_by_key(|(_, t)| t.last_used)
                 else {
+                    tracing::warn!(
+                        open = open.len(),
+                        max_open = self.max_open,
+                        "every open tenant is held by a store connection; over the limit"
+                    );
                     break;
                 };
                 if let Some(t) = open.remove(&victim) {
@@ -215,6 +262,26 @@ impl Tenants {
             self.shut(group, t).await;
         }
         Ok(executor)
+    }
+
+    /// Holds a tenant open for a store connection: [`open`](Self::open), then
+    /// a lease that keeps the sweeper and the eviction away until it drops.
+    pub async fn lease(&self, tenant: &TenantState) -> Result<TenantLease> {
+        let executor = self.open(tenant).await?;
+        let group = GroupId(group_of(&tenant.id));
+        let leases = {
+            let open = self.open.lock().expect("open poisoned");
+            open.get(&group)
+                .filter(|t| t.tenant_id == tenant.id)
+                .map(|t| Arc::clone(&t.leases))
+        }
+        .with_context(|| format!("tenant {} closed while being leased", tenant.slug))?;
+        leases.fetch_add(1, Ordering::AcqRel);
+        Ok(TenantLease {
+            executor,
+            tenant_id: tenant.id.clone(),
+            leases,
+        })
     }
 
     /// Marks a tenant used and returns its executor when it is open.
@@ -249,7 +316,7 @@ impl Tenants {
             let cutoff = Instant::now() - self.idle_timeout;
             let groups: Vec<GroupId> = open
                 .iter()
-                .filter(|(_, t)| t.last_used <= cutoff)
+                .filter(|(_, t)| t.last_used <= cutoff && t.leases.load(Ordering::Acquire) == 0)
                 .map(|(g, _)| *g)
                 .collect();
             groups

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use config::{ConfigError, Environment, File};
 use serde::Deserialize;
@@ -20,6 +20,9 @@ pub struct Config {
     #[serde(default)]
     pub cluster: Option<ClusterConfig>,
     pub tenants: TenantsConfig,
+    /// Absent: this node does not expose the store API.
+    #[serde(default)]
+    pub store_api: Option<StoreApiConfig>,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -111,6 +114,52 @@ pub struct TenantsConfig {
     pub max_open: usize,
 }
 
+/// The store API: where a merchant's storefront connects with one of the
+/// tenant's API keys to read and write that tenant's events.
+#[derive(Debug, Deserialize, Clone)]
+pub struct StoreApiConfig {
+    /// Address to bind, e.g. `0.0.0.0:4321`.
+    pub listen: SocketAddr,
+    /// The address storefronts are told to connect to, shown on the API keys
+    /// page next to a new key.
+    #[serde(default)]
+    pub public_addr: Option<String>,
+    /// PEM files; with both set, connections are encrypted. Without them a
+    /// key travels in clear text: only on a private network or behind a
+    /// proxy that terminates TLS.
+    #[serde(default)]
+    pub tls_cert: Option<PathBuf>,
+    #[serde(default)]
+    pub tls_key: Option<PathBuf>,
+}
+
+impl StoreApiConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        match (&self.tls_cert, &self.tls_key) {
+            (None, None) => Ok(()),
+            (Some(cert), Some(key)) => {
+                for (name, path) in [("store_api.tls_cert", cert), ("store_api.tls_key", key)] {
+                    if !path.is_file() {
+                        return Err(ConfigError::Message(format!(
+                            "{name}: '{}' is not a readable file",
+                            path.display()
+                        )));
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(ConfigError::Message(
+                "store_api.tls_cert and store_api.tls_key go together: set both or neither".into(),
+            )),
+        }
+    }
+
+    /// The certificate and key files, when connections are encrypted.
+    pub fn tls(&self) -> Option<(&Path, &Path)> {
+        Some((self.tls_cert.as_deref()?, self.tls_key.as_deref()?))
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ClusterConfig {
     /// This node's index into `peers`.
@@ -168,6 +217,9 @@ impl Config {
         }
         config.server.validate()?;
         config.tenants.validate()?;
+        if let Some(store_api) = &config.store_api {
+            store_api.validate()?;
+        }
         config.auth.validate()?;
         config.mail.validate()?;
 
@@ -329,6 +381,31 @@ mod tests {
         .validate()
         .unwrap_err();
         assert!(err.to_string().starts_with("mail.smtp_url"), "{err}");
+    }
+
+    #[test]
+    fn store_api_tls_files_go_together() {
+        let plain = StoreApiConfig {
+            listen: "127.0.0.1:4321".parse().unwrap(),
+            public_addr: None,
+            tls_cert: None,
+            tls_key: None,
+        };
+        assert!(plain.validate().is_ok());
+        assert!(plain.tls().is_none());
+        let half = StoreApiConfig {
+            tls_cert: Some("cert.pem".into()),
+            ..plain.clone()
+        };
+        let err = half.validate().unwrap_err();
+        assert!(err.to_string().contains("go together"), "{err}");
+        let missing = StoreApiConfig {
+            tls_cert: Some("/nonexistent/cert.pem".into()),
+            tls_key: Some("/nonexistent/key.pem".into()),
+            ..plain
+        };
+        let err = missing.validate().unwrap_err();
+        assert!(err.to_string().starts_with("store_api.tls_cert"), "{err}");
     }
 
     #[test]

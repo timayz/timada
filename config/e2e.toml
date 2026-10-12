@@ -18,6 +18,12 @@ url = "sqlite:data/e2e.db"
 dir = "data/e2e-tenants"
 idle_timeout_secs = 2
 
+# The browser suite cannot drive it (the Rust integration test does); it is
+# here so the server under test boots the listener too.
+[store_api]
+listen = "127.0.0.1:4321"
+public_addr = "localhost:4321"
+
 [auth]
 secret_key = "e2e-only-secret-key-never-used-outside-the-test-suite"
 
