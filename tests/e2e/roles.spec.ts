@@ -1,20 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
+import { createTenant, uniqueTenant } from "./tenants";
 
 // Custom roles: an owner defines, edits and removes them under
 // /t/{slug}/roles; the members page lists the seats; non-members get 403.
-
-function uniqueTenant(prefix: string): { name: string; slug: string } {
-  const id = `${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
-  return { name: `${prefix} ${id}`, slug: `${prefix.toLowerCase().replace(/\s+/g, "-")}-${id}` };
-}
-
-async function createTenant(page: import("@playwright/test").Page, name: string) {
-  await page.goto("/tenants/new");
-  await page.getByLabel("Name").fill(name);
-  await page.getByRole("button", { name: "Create tenant" }).click();
-  await expect(page).toHaveURL(/\/t\/[a-z0-9-]+\?/);
-}
 
 test("an owner defines, edits and removes roles", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));

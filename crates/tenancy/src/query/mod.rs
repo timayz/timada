@@ -3,13 +3,15 @@
 //! tenant for the administration, or the invitations of a tenant (one stream
 //! each) needs an index a relational store is good at:
 //! [`read_model_subscription`] keeps the SQLite tables current from the event
-//! stream, and [`tenants`] / [`invitations`] query them.
+//! stream, and [`tenants`] / [`invitations`] / [`api_keys`] query them.
 
+mod api_keys;
 mod invitations;
 mod migrations;
 mod read_model;
 mod tenants;
 
+pub use api_keys::*;
 pub use invitations::*;
 pub use migrations::*;
 pub use read_model::*;

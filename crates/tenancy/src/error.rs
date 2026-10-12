@@ -40,6 +40,10 @@ pub enum TenancyError {
     LastOwner,
     #[error("this invitation is no longer valid")]
     InvitationInvalid,
+    #[error("a key label is 1 to 40 characters")]
+    InvalidApiKeyLabel,
+    #[error("this API key is not valid")]
+    ApiKeyInvalid,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]

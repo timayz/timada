@@ -35,6 +35,8 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::NotMember => "not_member",
         TenancyError::LastOwner => "last_owner",
         TenancyError::InvitationInvalid => "invitation_invalid",
+        TenancyError::InvalidApiKeyLabel => "invalid_api_key_label",
+        TenancyError::ApiKeyInvalid => "api_key_invalid",
         TenancyError::Write(_) | TenancyError::Other(_) => "failed",
     }
 }
