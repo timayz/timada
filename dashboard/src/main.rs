@@ -1,5 +1,6 @@
 mod app;
 mod auth;
+mod authz;
 mod cli;
 mod cluster;
 mod config;

@@ -7,9 +7,10 @@ pub mod mail;
 pub mod oidc;
 pub mod webauthn;
 
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use timada_identity::{Command, LoginContext, SessionState, UserState};
+use timada_identity::{Command, LoginContext, SessionState, UserState, users_by_ids};
 use topcoat::{
     Result,
     context::{Cx, app_context, memoize},
@@ -23,6 +24,7 @@ use topcoat::{
 
 use crate::cluster::Executor;
 use crate::config::Config;
+use crate::db::ReadPool;
 
 /// The command gateway over this node's executor.
 pub fn identity(cx: &Cx) -> Command<Executor> {
@@ -89,6 +91,17 @@ async fn slide_expiry(cx: &Cx, hash: &TokenHash, session: &SessionState) {
     {
         tracing::warn!(%err, "cannot extend the session record");
     }
+}
+
+/// Display labels of users, by id, from the read model; an id it does not
+/// know (yet) is shown as is.
+pub async fn user_labels(cx: &Cx, ids: &[String]) -> Result<HashMap<String, String>> {
+    let rows = users_by_ids(app_context::<ReadPool>(cx), ids).await?;
+    let mut labels: HashMap<String, String> = rows.into_iter().map(|u| (u.id, u.label)).collect();
+    for id in ids {
+        labels.entry(id.clone()).or_insert_with(|| id.clone());
+    }
+    Ok(labels)
 }
 
 /// The signed-in user, or a redirect to the login page.
