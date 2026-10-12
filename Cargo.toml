@@ -21,11 +21,11 @@ topcoat-view = "=0.10.0"
 topcoat-view-macro = "=0.10.0"
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.19", features = ["sqlite"] }
-evento = { version = "=2.0.0-alpha.34", features = ["sqlite", "remote"] }
-evento-sql = { version = "=2.0.0-alpha.34", features = ["sqlite", "accord"] }
-evento-sql-migrator = { version = "=2.0.0-alpha.34", features = ["sqlite", "accord"] }
-evento-accord = "=2.0.0-alpha.34"
-evento-lock = "=2.0.0-alpha.34"
+evento = { version = "=2.0.0-alpha.35", features = ["sqlite", "remote"] }
+evento-sql = { version = "=2.0.0-alpha.35", features = ["sqlite", "accord"] }
+evento-sql-migrator = { version = "=2.0.0-alpha.35", features = ["sqlite", "accord"] }
+evento-accord = "=2.0.0-alpha.35"
+evento-lock = "=2.0.0-alpha.35"
 bitcode = "0.6"
 argon2 = { version = "0.5", features = ["std"] }
 ulid = "3.0"
@@ -68,8 +68,3 @@ debug = false
 inherits = "dev"
 debug = true
 
-
-# Until evento 2.0.0-alpha.35 is published: `Sidecar` comes from the local
-# checkout of evento PR #264 (branch `feat/sidecar-executor`).
-[patch.crates-io]
-evento-core = { path = "../evento/evento-core" }
