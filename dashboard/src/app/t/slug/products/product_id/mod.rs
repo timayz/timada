@@ -18,8 +18,7 @@ use std::sync::Arc;
 use timada_catalog::{
     CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
     MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS,
-    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, categories_of_tenant,
-    format_money,
+    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, format_money,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 
@@ -266,7 +265,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         })
         .unwrap_or_else(|| "Not priced yet".to_owned());
     // What it may still join is the whole tree, which the read model holds.
-    let joinable: Vec<Choice> = rows_of(categories_of_tenant(pool, &access.tenant.id).await?)
+    let joinable: Vec<Choice> = rows_of(pool, &access.tenant.id)
+        .await?
         .iter()
         .filter(|row| !product.categories.contains(&row.category.id))
         .map(Choice::of)

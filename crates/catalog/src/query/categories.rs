@@ -129,9 +129,69 @@ fn depth_of(
     depth
 }
 
+/// Every `(category id, product id)` of a tenant whose product is not
+/// archived: what [`subtree_counts`] needs to count a category's page.
+pub async fn memberships_of_tenant(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> sqlx::Result<Vec<(String, String)>> {
+    sqlx::query_as(
+        "SELECT pc.category_id, pc.product_id
+         FROM catalog_product_categories pc
+         JOIN catalog_products p ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
+         WHERE pc.tenant_id = ?1 AND p.status <> 'archived'",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// How many distinct products each category's page lists: those filed under
+/// it and under everything below it, each counted once however many of the
+/// categories it belongs to.
+///
+/// Keyed by category id; a category not in `nodes` is absent.
+pub fn subtree_counts<T: TreeNode>(
+    nodes: &[TreeOf<T>],
+    memberships: &[(String, String)],
+) -> std::collections::HashMap<String, i64> {
+    let mut by_category: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+    for (category_id, product_id) in memberships {
+        by_category
+            .entry(category_id.as_str())
+            .or_default()
+            .push(product_id.as_str());
+    }
+    let mut counts = std::collections::HashMap::new();
+    for node in nodes {
+        count_subtree(node, &by_category, &mut counts);
+    }
+    counts
+}
+
+/// Counts one node, bottom-up, and hands its products back to its parent so
+/// a product in both is counted once.
+fn count_subtree<T: TreeNode>(
+    node: &TreeOf<T>,
+    by_category: &std::collections::HashMap<&str, Vec<&str>>,
+    counts: &mut std::collections::HashMap<String, i64>,
+) -> std::collections::HashSet<String> {
+    let mut products: std::collections::HashSet<String> = by_category
+        .get(node.item.node_id())
+        .map(|ids| ids.iter().map(|id| (*id).to_owned()).collect())
+        .unwrap_or_default();
+    for child in &node.children {
+        products.extend(count_subtree(child, by_category, counts));
+    }
+    counts.insert(node.item.node_id().to_owned(), products.len() as i64);
+    products
+}
+
 /// The live categories of a tenant, parents before children, each level in
-/// its own order. `product_count` counts the products of that very category
-/// that are not archived.
+/// its own order. `product_count` counts the products filed under that very
+/// category that are not archived; what its page lists is
+/// [`subtree_counts`].
 pub async fn categories_of_tenant(
     pool: &SqlitePool,
     tenant_id: &str,
@@ -260,6 +320,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["a", "a1", "a2", "a1x"]
         );
+    }
+
+    #[test]
+    fn counts_a_subtree_once_per_product() {
+        let tree = tree_of(vec![
+            Node("bedding", None),
+            Node("mats", Some("bedding")),
+            Node("toys", None),
+        ]);
+        let memberships = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(c, p)| ((*c).to_owned(), (*p).to_owned()))
+                .collect()
+        };
+
+        // A product in the child counts for the parent's page too.
+        let counts = subtree_counts(&tree, &memberships(&[("mats", "mat")]));
+        assert_eq!(counts["bedding"], 1);
+        assert_eq!(counts["mats"], 1);
+        assert_eq!(counts["toys"], 0);
+
+        // One in both is still one product on the parent's page.
+        let counts = subtree_counts(&tree, &memberships(&[("bedding", "mat"), ("mats", "mat")]));
+        assert_eq!(counts["bedding"], 1, "not two");
+        assert_eq!(counts["mats"], 1);
+
+        // Different products add up.
+        let counts = subtree_counts(
+            &tree,
+            &memberships(&[("bedding", "basket"), ("mats", "mat"), ("toys", "ball")]),
+        );
+        assert_eq!(counts["bedding"], 2);
+        assert_eq!(counts["toys"], 1);
     }
 
     #[test]

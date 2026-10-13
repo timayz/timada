@@ -7,7 +7,8 @@ pub mod category_id;
 pub mod create;
 
 use timada_catalog::{
-    CatalogError, CategoryRow, MAX_CATEGORY_NAME_LEN, categories_of_tenant, tree_of,
+    CatalogError, CategoryRow, MAX_CATEGORY_NAME_LEN, categories_of_tenant, memberships_of_tenant,
+    subtree_counts, tree_of,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -47,27 +48,52 @@ pub fn error_code(err: &CatalogError) -> &'static str {
     }
 }
 
-/// A category and how deep it sits, the tree flattened for a table: parents
-/// before their children, each level in its own order.
+/// A category, how deep it sits, and the two numbers a merchant needs: the
+/// products filed under it and the products its storefront page lists.
 pub struct Row {
     pub category: CategoryRow,
     pub depth: usize,
+    /// Distinct products under it and everything below it: what the shop's
+    /// page for it shows. Equal to `category.product_count` for a category
+    /// with no sub-categories.
+    pub subtree_count: i64,
 }
 
-/// The live categories of a tenant, in tree order with their depth.
-pub fn rows_of(categories: Vec<CategoryRow>) -> Vec<Row> {
-    fn walk(nodes: Vec<timada_catalog::TreeOf<CategoryRow>>, depth: usize, out: &mut Vec<Row>) {
+impl Row {
+    /// Whether its page shows more than what is filed directly under it.
+    pub fn inherits(&self) -> bool {
+        self.subtree_count != self.category.product_count
+    }
+}
+
+/// The live categories of a tenant in tree order, each with its depth and
+/// the count its storefront page would show.
+pub async fn rows_of(pool: &sqlx::SqlitePool, tenant_id: &str) -> Result<Vec<Row>> {
+    let tree = tree_of(categories_of_tenant(pool, tenant_id).await?);
+    let counts = subtree_counts(&tree, &memberships_of_tenant(pool, tenant_id).await?);
+
+    fn walk(
+        nodes: Vec<timada_catalog::TreeOf<CategoryRow>>,
+        depth: usize,
+        counts: &std::collections::HashMap<String, i64>,
+        out: &mut Vec<Row>,
+    ) {
         for node in nodes {
+            let subtree_count = counts
+                .get(&node.item.id)
+                .copied()
+                .unwrap_or(node.item.product_count);
             out.push(Row {
                 category: node.item,
                 depth,
+                subtree_count,
             });
-            walk(node.children, depth + 1, out);
+            walk(node.children, depth + 1, counts, out);
         }
     }
     let mut out = Vec::new();
-    walk(tree_of(categories), 0, &mut out);
-    out
+    walk(tree, 0, &counts, &mut out);
+    Ok(out)
 }
 
 /// A category as an option of a parent `<select>`: owned, because the view
@@ -107,7 +133,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<ReadPool>(cx);
-    let rows = rows_of(categories_of_tenant(pool, &tenant.id).await?);
+    let rows = rows_of(pool, &tenant.id).await?;
     let slug = tenant.slug.clone();
     let title = format!("Categories · {}", tenant.name);
     // A category at the deepest level takes no children of its own.
@@ -130,12 +156,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <p class="mb-4 text-sm text-neutral-500">
                     "Categories are what a shopper browses: a top-level one holds sub-categories, three levels deep at most. A product belongs to as many as fit it."
                 </p>
+                <p class="mb-4 text-sm text-neutral-500">
+                    "A category's page in the shop lists what is filed under it and under every sub-category below it, so a product in a sub-category counts for its parents too."
+                </p>
                 <table class="w-full text-left text-sm">
                     <thead>
                         <tr class="border-b border-neutral-200 text-neutral-500">
                             <th class="py-2 font-medium">"Name"</th>
                             <th class="py-2 font-medium">"Slug"</th>
-                            <th class="py-2 font-medium">"Products"</th>
+                            <th class="py-2 font-medium">"On its page"</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
@@ -148,7 +177,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <a class="underline" href=(href!(category_id::index, Slug(slug.clone()), category_id::CategoryId(row.category.id.clone())))>(&row.category.name)</a>
                                 </td>
                                 <td class="py-2"><code>(&row.category.slug)</code></td>
-                                <td class="py-2" data-category-count=(row.category.product_count)>(row.category.product_count)</td>
+                                <td class="py-2">
+                                    <span data-category-count=(row.subtree_count)>(row.subtree_count)</span>
+                                    if row.inherits() {
+                                        <span class="text-neutral-500" data-category-direct=(row.category.product_count)>
+                                            " (" (row.category.product_count) " filed here)"
+                                        </span>
+                                    }
+                                </td>
                             </tr>
                         }
                     </tbody>
