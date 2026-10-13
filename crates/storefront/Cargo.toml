@@ -11,7 +11,7 @@ topcoat-router.workspace = true
 topcoat-view.workspace = true
 topcoat-view-macro.workspace = true
 evento.workspace = true
-sqlx = { workspace = true, features = ["derive"] }
+sqlx = { workspace = true, features = ["derive", "json"] }
 sqlx_migrator.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true

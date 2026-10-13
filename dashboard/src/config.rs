@@ -20,6 +20,7 @@ pub struct Config {
     #[serde(default)]
     pub cluster: Option<ClusterConfig>,
     pub tenants: TenantsConfig,
+    pub media: MediaConfig,
     /// Absent: this node does not expose the store API.
     #[serde(default)]
     pub store_api: Option<StoreApiConfig>,
@@ -114,6 +115,32 @@ pub struct TenantsConfig {
     pub max_open: usize,
 }
 
+/// The pictures merchants upload for their products: where the files are
+/// kept and the address shoppers load them from.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MediaConfig {
+    /// Directory holding one sub-directory per tenant. Created on demand.
+    pub dir: PathBuf,
+    /// The address this node's `/media` is reached at from the outside, or a
+    /// cache in front of it. A storefront is told to load pictures from here,
+    /// so it has to work from a shopper's browser, not only from the server.
+    pub public_url: String,
+}
+
+impl MediaConfig {
+    fn validate(&mut self) -> Result<(), ConfigError> {
+        let url = self.public_url.trim_end_matches('/');
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(ConfigError::Message(format!(
+                "media.public_url: '{}' must start with http:// or https://",
+                self.public_url
+            )));
+        }
+        self.public_url = url.to_owned();
+        Ok(())
+    }
+}
+
 /// The store API: where a merchant's storefront connects with one of the
 /// tenant's API keys to read and write that tenant's events.
 #[derive(Debug, Deserialize, Clone)]
@@ -194,6 +221,8 @@ impl Config {
             .set_default("tenants.dir", "data/tenants")?
             .set_default("tenants.idle_timeout_secs", 300)?
             .set_default("tenants.max_open", 64)?
+            .set_default("media.dir", "data/media")?
+            .set_default("media.public_url", "https://timada.localhost/media")?
             .set_default("auth.session_lifetime_secs", 14 * 24 * 60 * 60)?
             .set_default("auth.rp_name", "Timada")?
             .set_default("mail.from", "Timada <no-reply@timada.localhost>")?
@@ -207,7 +236,8 @@ impl Config {
             builder = builder.add_source(File::with_name(path).required(true));
         }
 
-        let config: Self = builder
+        // Mutable: a few sections tidy a value as they check it.
+        let mut config: Self = builder
             .add_source(Environment::with_prefix("timada").separator("__"))
             .build()?
             .try_deserialize()?;
@@ -217,6 +247,7 @@ impl Config {
         }
         config.server.validate()?;
         config.tenants.validate()?;
+        config.media.validate()?;
         if let Some(store_api) = &config.store_api {
             store_api.validate()?;
         }

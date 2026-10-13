@@ -31,6 +31,7 @@ struct Inner {
     executor: Evento,
     pool: SqlitePool,
     prefix: String,
+    media_url: Option<String>,
     request_timeout: Duration,
     subscription: Mutex<SubscriptionState>,
     stop: watch::Sender<bool>,
@@ -106,6 +107,7 @@ impl Store {
             executor,
             pool,
             prefix: config.prefix.into_owned(),
+            media_url: config.media_url,
             request_timeout: config.request_timeout,
             subscription: Mutex::new(SubscriptionState::Running),
             stop,
@@ -131,6 +133,11 @@ impl Store {
     /// The URL prefix of the library's endpoints.
     pub fn prefix(&self) -> &str {
         &self.inner.prefix
+    }
+
+    /// Where this store's pictures are loaded from, when the host said so.
+    pub fn media_url(&self) -> Option<&str> {
+        self.inner.media_url.as_deref()
     }
 
     /// Asks the store one cheap question and counts the local copy.

@@ -64,12 +64,13 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
     let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO storefront_products (id, slug, name, description, amount_cents, currency,
-            status, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            status, updated_at, images_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT (id) DO UPDATE SET
             slug = excluded.slug, name = excluded.name, description = excluded.description,
             amount_cents = excluded.amount_cents, currency = excluded.currency,
-            status = excluded.status, updated_at = excluded.updated_at",
+            status = excluded.status, updated_at = excluded.updated_at,
+            images_json = excluded.images_json",
     )
     .bind(&product.id)
     .bind(&product.slug)
@@ -79,6 +80,7 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
     .bind(product.price.as_ref().map(|p| p.currency.as_str()))
     .bind(product.status.as_str())
     .bind(product.updated_at as i64)
+    .bind(images_json(product)?)
     .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM storefront_product_categories WHERE product_id = ?1")
@@ -97,6 +99,26 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
     }
     tx.commit().await?;
     Ok(())
+}
+
+/// The gallery as the local rows carry it.
+fn images_json(product: &ProductState) -> anyhow::Result<String> {
+    let images: Vec<crate::Image> = product
+        .images
+        .iter()
+        .map(|image| crate::Image {
+            id: image.id.clone(),
+            file: image.file(),
+            mime: image.mime.clone(),
+            alt: image.alt.clone(),
+            width: image.width,
+            height: image.height,
+            // Filled in when a page reads the product: the address belongs
+            // to the host's configuration, not to the row.
+            url: String::new(),
+        })
+        .collect();
+    Ok(serde_json::to_string(&images)?)
 }
 
 async fn upsert_category(pool: &SqlitePool, category: &CategoryState) -> anyhow::Result<()> {

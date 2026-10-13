@@ -8,7 +8,7 @@ pub const MIGRATION_APP: &str = "storefront";
 /// applies them with evento's own; a host running its own migrator can add
 /// them to it instead.
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Products0001, Categories0002]
+    vec_box![Products0001, Categories0002, ProductImages0003]
 }
 
 pub struct Products0001;
@@ -82,4 +82,19 @@ sqlx_migrator::sqlite_migration!(
             "DROP INDEX storefront_product_categories_category"
         ),
     ]
+);
+
+pub struct ProductImages0003;
+sqlx_migrator::sqlite_migration!(
+    ProductImages0003,
+    "storefront",
+    "0003_product_images",
+    vec_box![("storefront", "0002_categories")],
+    vec_box![(
+        // The gallery as JSON: a page shows a product whole, and the row is
+        // rewritten whole from the store, so a table of its own would buy
+        // nothing.
+        "ALTER TABLE storefront_products ADD COLUMN images_json TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE storefront_products DROP COLUMN images_json"
+    )]
 );

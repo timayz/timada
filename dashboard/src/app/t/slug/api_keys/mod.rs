@@ -19,6 +19,7 @@ use crate::auth::cookies::{ApiKeyReveal, api_key_reveal, is_fresh};
 use crate::auth::{now, user_labels};
 use crate::config::Config;
 use crate::db::ReadPool;
+use crate::media::Media;
 use crate::ui::{document, format_time, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -54,6 +55,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let reveal = take_reveal(cx);
     let store_api = app_context::<Config>(cx).store_api.clone();
     let keys = api_keys_of_tenant(app_context::<ReadPool>(cx), &tenant.id).await?;
+    let media_url = app_context::<std::sync::Arc<Media>>(cx).tenant_url(&tenant.id);
     let ids: Vec<String> = keys.iter().map(|k| k.created_by.clone()).collect();
     let labels = user_labels(cx, &ids).await?;
     let slug = tenant.slug.clone();
@@ -86,6 +88,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </p>
                 </section>
             }
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"What a storefront needs"</h2>
+                <dl class="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
+                    <dt class="text-neutral-500">"Store address"</dt>
+                    <dd data-store-addr="">
+                        (match &store_api {
+                            Some(api) => api.public_addr.clone().unwrap_or_else(|| api.listen.to_string()),
+                            None => "not enabled on this node".to_owned(),
+                        })
+                    </dd>
+                    <dt class="text-neutral-500">"Picture address"</dt>
+                    <dd><code data-media-url="">(&media_url)</code></dd>
+                </dl>
+                <p class="mt-3 text-sm text-neutral-500">
+                    "A storefront loads the product pictures from the picture address; set it alongside the key."
+                </p>
+            </section>
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <p class="mb-3 text-sm text-neutral-500">

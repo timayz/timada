@@ -17,7 +17,8 @@ use topcoat::{
     cookie::{Key, RouterBuilderCookieExt},
     mail::RouterBuilderMailExt,
     router::{
-        Router, RouterBuilderDiscoverExt, TrustedProxies, href, module_router, page, query_params,
+        BodyLimit, Router, RouterBuilderDirectoryExt, RouterBuilderDiscoverExt, TrustedProxies,
+        href, module_router, page, query_params,
     },
     runtime::RouterBuilderRuntimeExt,
     session::{RouterBuilderSessionExt, SessionConfig},
@@ -31,6 +32,7 @@ use crate::authz::Authorizer;
 use crate::cluster::Executor;
 use crate::config::Config;
 use crate::db::{ReadPool, WritePool};
+use crate::media::{MEDIA_ROUTE, Media, MediaCache};
 use crate::store_api::StoreConnections;
 use crate::tenants::Tenants;
 use crate::ui::{document, notice};
@@ -45,6 +47,8 @@ pub struct Services {
     pub mailer: Mailer,
     pub tenants: Arc<Tenants>,
     pub authorizer: Arc<Authorizer>,
+    /// Where the product pictures are kept and served from.
+    pub media: Arc<Media>,
     /// The live store connections, so revoking a key ends them.
     pub store: Arc<StoreConnections>,
     pub config: Config,
@@ -60,6 +64,7 @@ pub fn router(services: Services) -> Router {
         mailer,
         tenants,
         authorizer,
+        media,
         store,
         config,
     } = services;
@@ -70,8 +75,17 @@ pub fn router(services: Services) -> Router {
         "asset bundle missing: run `topcoat dev` or `topcoat asset bundle -p timada-dashboard`",
     );
 
+    // A picture is at most 8 MiB, and a multipart body carries a little more
+    // than the file it holds.
+    const UPLOAD_LIMIT: usize = 10 * 1024 * 1024;
+
     module_router!()
         .discover()
+        // Product pictures: public, unauthenticated, cached forever. An id is
+        // an unguessable ULID and the file at an address never changes.
+        .serve_dir(MEDIA_ROUTE, media.dir().to_path_buf())
+        .layer(MediaCache::new())
+        .layer(BodyLimit::max(UPLOAD_LIMIT).at("/t"))
         // Absolute URLs (the OIDC redirect URI) follow the public address.
         .base_url(config.server.url.as_str())
         // Validated by `Config::load`; `networks` panics on a bad entry.
@@ -91,6 +105,7 @@ pub fn router(services: Services) -> Router {
         .app_context(webauthn)
         .app_context(tenants)
         .app_context(authorizer)
+        .app_context(media)
         .app_context(store)
         // The transport behind `topcoat::mail::send`, and who the codes come from.
         .mail(mailer.transport)

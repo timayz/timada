@@ -81,6 +81,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         mailer,
         tenants: tenants.clone(),
         authorizer,
+        media: Arc::new(crate::media::Media::new(&config.media)),
         store: connections,
         config,
     });

@@ -11,7 +11,7 @@ edition = "2024"
 authors = ["timada team"]
 
 [workspace.dependencies]
-tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal", "fs"] }
 topcoat = { version = "=0.10.0", features = ["tailwind", "anyhow", "mail", "mail-smtp", "fs", "multipart"] }
 # The standalone crates, for a library crate (a library names them directly;
 # only an application depends on the facade).
@@ -39,6 +39,8 @@ rand = "0.9"
 casbin = "2.20"
 async-trait = "0.1"
 tokio-rustls = "0.26"
+# Reads a picture's kind and size from its header bytes alone.
+imagesize = "0.14"
 rcgen = "0.14"
 uuid = { version = "1", features = ["v5"] }
 ciborium = "0.2"

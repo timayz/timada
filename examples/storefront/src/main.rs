@@ -8,6 +8,8 @@
 //! - `STORE_TOKEN` — the API key's token, from the tenant's API keys page
 //! - `STORE_DB` — the local SQLite file (`storefront.db`)
 //! - `STORE_TLS_CA` + `STORE_TLS_SERVER_NAME` — TLS to the store (optional)
+//! - `STORE_MEDIA_URL` — where the product pictures are loaded from, as the
+//!   tenant's API keys page shows it (optional)
 //! - `HOST` / `PORT` — where to listen (`127.0.0.1` / `3456`)
 
 mod app;
@@ -39,6 +41,9 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(ca) = std::env::var("STORE_TLS_CA") {
         let server_name = env_or("STORE_TLS_SERVER_NAME", "localhost");
         config = config.tls(StoreTls::from_ca_pem(Path::new(&ca), &server_name)?);
+    }
+    if let Ok(media) = std::env::var("STORE_MEDIA_URL") {
+        config = config.media_url(media);
     }
 
     let pool = SqlitePoolOptions::new()

@@ -68,6 +68,10 @@ pub struct StoreConfig {
     pub tls: Option<StoreTls>,
     /// How long one request to the store may take.
     pub request_timeout: Duration,
+    /// Where this tenant's product pictures are loaded from, with no
+    /// trailing slash: the picture address shown on its API keys page.
+    /// Without it, a picture is only its file name and the host serves it.
+    pub media_url: Option<String>,
     /// The URL prefix of the library's own endpoints (`/store`).
     pub prefix: Cow<'static, str>,
 }
@@ -80,6 +84,7 @@ impl StoreConfig {
             tls: None,
             request_timeout: Duration::from_secs(10),
             prefix: Cow::Borrowed(DEFAULT_PREFIX),
+            media_url: None,
         }
     }
 
@@ -90,6 +95,15 @@ impl StoreConfig {
 
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
+        self
+    }
+
+    /// Where this tenant's product pictures are loaded from; a trailing
+    /// slash is dropped. The tenant's API keys page shows the address.
+    pub fn media_url(mut self, base: impl Into<String>) -> Self {
+        let base = base.into();
+        let base = base.trim_end_matches('/');
+        self.media_url = (!base.is_empty()).then(|| base.to_owned());
         self
     }
 

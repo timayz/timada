@@ -4,17 +4,20 @@
 pub mod archive;
 pub mod categorize;
 pub mod describe;
+pub mod images;
 pub mod price;
 pub mod publish;
 pub mod rename;
 pub mod uncategorize;
 pub mod unpublish;
 
+use std::sync::Arc;
 use timada_catalog::{
-    CURRENCIES, CategoryState, MAX_DESCRIPTION_LEN, MAX_NAME_LEN, ProductState,
-    categories_of_tenant,
+    CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT,
+    MAX_NAME_LEN, ProductState, categories_of_tenant,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
+
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -31,6 +34,7 @@ use crate::app::t::slug::categories::{Choice, rows_of};
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::auth::user_labels;
 use crate::db::ReadPool;
+use crate::media::Media;
 use crate::ui::{document, format_time, notice};
 
 module_param!(pub product_id);
@@ -69,7 +73,7 @@ async fn require_product(cx: &Cx, access: &TenantAccess) -> Result<ProductState>
 
 /// What every action on a product shares: the member may manage products,
 /// the product exists, and the outcome goes back to the product page.
-async fn act<F>(cx: &Cx, message: &'static str, run: F) -> Result<SeeOther>
+pub(crate) async fn act<F>(cx: &Cx, message: &'static str, run: F) -> Result<SeeOther>
 where
     F: AsyncFnOnce(
         &timada_catalog::Command<crate::cluster::Executor>,
@@ -145,6 +149,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // the rest of this page, so a change shows at once; each one is then
     // read from its own stream too (a product is in a handful at most).
     let memberships = memberships_of(&access, &product).await?;
+    // Each picture with the address a browser loads it from.
+    let media = app_context::<Arc<Media>>(cx);
+    let gallery: Vec<(timada_catalog::ProductImage, String)> = product
+        .images
+        .iter()
+        .map(|image| (image.clone(), media.url(&access.tenant.id, &image.file())))
+        .collect();
+    let gallery_full = gallery.len() >= MAX_IMAGES_PER_PRODUCT;
+    let last = gallery.len().saturating_sub(1);
     // What it may still join is the whole tree, which the read model holds.
     let joinable: Vec<Choice> = rows_of(categories_of_tenant(pool, &access.tenant.id).await?)
         .iter()
@@ -190,6 +203,64 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dt class="text-neutral-500">"Changed"</dt>
                     <dd><time datetime=(product.updated_at)>(format_time(product.updated_at))</time></dd>
                 </dl>
+            </section>
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"Pictures"</h2>
+                if gallery.is_empty() {
+                    <p class="text-sm text-neutral-500">"No picture yet. The first one is what a listing shows."</p>
+                }
+                <ul class="grid gap-4 sm:grid-cols-2">
+                    for (position, (image, url)) in gallery.iter().enumerate() {
+                        <li class="flex gap-3 rounded border border-neutral-200 p-3" data-image=(&image.id)>
+                            <img class="h-24 w-24 shrink-0 rounded object-cover" src=(url) alt=(&image.alt)
+                                width=(image.width.unwrap_or(96)) height=(image.height.unwrap_or(96)) loading="lazy">
+                            <div class="min-w-0 flex-1 text-sm">
+                                if position == 0 {
+                                    <p class="mb-1 text-xs text-neutral-500" data-image-first="">"Shown in listings"</p>
+                                }
+                                if editable {
+                                    <form method="post" action=(href!(images::image_id::alt::alt, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
+                                        <label class="sr-only" for=(format!("alt-{}", image.id))>"What it shows"</label>
+                                        <input id=(format!("alt-{}", image.id)) name="alt" type="text" maxlength=(MAX_ALT_LEN)
+                                            class="w-full rounded border border-neutral-300 px-2 py-1" placeholder="What it shows" value=(&image.alt)>
+                                        <button class="mt-2 rounded border border-neutral-300 px-2 py-1 text-xs">"Save"</button>
+                                    </form>
+                                    <div class="mt-2 flex gap-2">
+                                        if position > 0 {
+                                            <form method="post" action=(href!(images::image_id::up::up, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
+                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs" aria-label="Move earlier">"↑"</button>
+                                            </form>
+                                        }
+                                        if position < last {
+                                            <form method="post" action=(href!(images::image_id::down::down, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
+                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs" aria-label="Move later">"↓"</button>
+                                            </form>
+                                        }
+                                        <form method="post" action=(href!(images::image_id::remove::remove, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
+                                            <button class="rounded border border-neutral-300 px-2 py-1 text-xs text-red-700">"Remove"</button>
+                                        </form>
+                                    </div>
+                                } else {
+                                    <p class="truncate text-neutral-500">(if image.alt.is_empty() { "—" } else { image.alt.as_str() })</p>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ul>
+                if editable && !gallery_full {
+                    <form method="post" enctype="multipart/form-data" class="mt-4 space-y-2"
+                        action=(href!(images::upload::upload, Slug(slug.clone()), ProductId(product.id.clone())))>
+                        <label class="block text-sm font-medium" for="product-image">"Add a picture"</label>
+                        <input id="product-image" name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required="" class="block text-sm">
+                        <label class="block text-sm" for="product-image-alt">"What it shows (optional)"</label>
+                        <input id="product-image-alt" name="alt" type="text" maxlength=(MAX_ALT_LEN)
+                            class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="A blue mug on a desk">
+                        <button class="rounded border border-neutral-300 px-3 py-1 text-sm">"Upload"</button>
+                    </form>
+                } else if editable {
+                    <p class="mt-4 text-sm text-neutral-500">"This product carries as many pictures as it can. Remove one to add another."</p>
+                }
             </section>
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
