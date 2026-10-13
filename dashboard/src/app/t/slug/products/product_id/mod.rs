@@ -14,7 +14,7 @@ pub mod unpublish;
 use std::sync::Arc;
 use timada_catalog::{
     CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT,
-    MAX_NAME_LEN, ProductState, categories_of_tenant,
+    MAX_NAME_LEN, ProductState,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 
@@ -159,7 +159,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let gallery_full = gallery.len() >= MAX_IMAGES_PER_PRODUCT;
     let last = gallery.len().saturating_sub(1);
     // What it may still join is the whole tree, which the read model holds.
-    let joinable: Vec<Choice> = rows_of(categories_of_tenant(pool, &access.tenant.id).await?)
+    let joinable: Vec<Choice> = rows_of(pool, &access.tenant.id)
+        .await?
         .iter()
         .filter(|row| !product.categories.contains(&row.category.id))
         .map(Choice::of)

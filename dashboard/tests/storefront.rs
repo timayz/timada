@@ -28,7 +28,10 @@ use evento::remote::ServerHandle;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
-use timada_catalog::{AddImage, CreateCategory, CreateProduct};
+use timada_catalog::{
+    AddImage, CreateCategory, CreateProduct, categories_of_tenant, memberships_of_tenant,
+    subtree_counts, tree_of,
+};
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
     SubscriptionState, category_ancestors, find_category, published_categories,
@@ -92,6 +95,9 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
         migrator
             .add_migrations(timada_tenancy::migrations())
+            .unwrap();
+        migrator
+            .add_migrations(timada_catalog::migrations())
             .unwrap();
         migrator
             .run(&mut *conn, &evento::migrator::Plan::apply_all())
@@ -837,6 +843,135 @@ async fn a_store_carries_the_gallery_with_the_address_it_is_loaded_from() {
             .is_some_and(|p| p.images.len() == 1)
     })
     .await;
+
+    store.shutdown().await;
+}
+
+/// What the back office would show for each category, by slug: the same
+/// counting the shop does, read from the platform's own read model.
+async fn dashboard_counts(h: &Harness, tenant: &TenantState) -> Vec<(String, i64)> {
+    // The dashboard's read model is fed by the tenant's own subscription; in
+    // this test nothing runs it, so catch it up by hand.
+    let catalog = h.catalog(tenant).await;
+    timada_catalog::read_model_subscription::<cluster::Executor>(h.pool.clone(), &tenant.id)
+        .run_once(&catalog.0)
+        .await
+        .unwrap();
+    let rows = categories_of_tenant(&h.pool, &tenant.id).await.unwrap();
+    let tree = tree_of(rows);
+    let counts = subtree_counts(
+        &tree,
+        &memberships_of_tenant(&h.pool, &tenant.id).await.unwrap(),
+    );
+    let mut out: Vec<(String, i64)> = tree
+        .iter()
+        .flat_map(|node| node.flatten())
+        .map(|node| {
+            (
+                node.item.slug.clone(),
+                counts.get(&node.item.id).copied().unwrap_or(0),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// What the shop would show for each category, by slug.
+async fn storefront_counts(pool: &SqlitePool) -> Vec<(String, i64)> {
+    fn walk(nodes: &[timada_storefront::CategoryNode], out: &mut Vec<(String, i64)>) {
+        for node in nodes {
+            out.push((node.category.slug.clone(), node.product_count));
+            walk(&node.children, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(&published_categories(pool).await.unwrap(), &mut out);
+    out.sort();
+    out
+}
+
+#[tokio::test]
+async fn the_back_office_and_the_shop_count_a_category_the_same_way() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme).await;
+
+    let bedding = catalog
+        .create_category(
+            "alice",
+            CreateCategory {
+                name: "Bedding".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mats = catalog
+        .create_category(
+            "alice",
+            CreateCategory {
+                name: "Mats".into(),
+                slug: None,
+                parent_id: Some(bedding.id.clone()),
+            },
+        )
+        .await
+        .unwrap();
+    // One filed only under the sub-category, one under both.
+    stock(&catalog, "Cooling Mat", 2990, &[&mats.id]).await;
+    stock(&catalog, "Wool Mat", 1990, &[&bedding.id, &mats.id]).await;
+
+    let pool = h.local_pool("acme-shop").await;
+    let store = Store::connect(h.config(&token), pool.clone())
+        .await
+        .unwrap();
+    eventually("both products reach the shop", async || {
+        published(&pool).await.len() == 2
+    })
+    .await;
+
+    // A product in the sub-category counts for the parent's page, and one in
+    // both is counted once rather than twice.
+    let expected = vec![("bedding".to_owned(), 2), ("mats".to_owned(), 2)];
+    assert_eq!(storefront_counts(&pool).await, expected);
+    assert_eq!(dashboard_counts(&h, &acme).await, expected);
+
+    // Taking a product out of the parent changes neither page: it is still
+    // filed under the sub-category, which the parent's page covers.
+    let wool = published_product_by_slug(&pool, "wool-mat")
+        .await
+        .unwrap()
+        .unwrap();
+    catalog
+        .uncategorize_product("alice", &wool.id, &bedding.id)
+        .await
+        .unwrap();
+    eventually("the removal reaches the shop", async || {
+        published_product_categories(&pool, &wool.id)
+            .await
+            .unwrap()
+            .len()
+            == 1
+    })
+    .await;
+    assert_eq!(storefront_counts(&pool).await, expected);
+    assert_eq!(dashboard_counts(&h, &acme).await, expected);
+
+    // Out of the sub-category as well, and it leaves both pages.
+    catalog
+        .uncategorize_product("alice", &wool.id, &mats.id)
+        .await
+        .unwrap();
+    eventually("and so does the second removal", async || {
+        storefront_counts(&pool).await == vec![("bedding".to_owned(), 1), ("mats".to_owned(), 1)]
+    })
+    .await;
+    assert_eq!(
+        dashboard_counts(&h, &acme).await,
+        vec![("bedding".to_owned(), 1), ("mats".to_owned(), 1)]
+    );
 
     store.shutdown().await;
 }

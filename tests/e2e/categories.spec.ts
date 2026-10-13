@@ -89,13 +89,27 @@ test("an owner builds a category tree and files a product under it", async ({ pa
   await expect(page.getByRole("status")).toContainText("Added to the category.");
   await expect(page.locator("[data-membership=mats]")).toContainText("Cat mats");
 
-  // The count reaches the tree, and the parent counts only its own.
+  // The count reaches the tree. A product in a sub-category counts for its
+  // parent too, because the parent's page in the shop lists it.
   await expect(async () => {
     await page.goto(`/t/${slug}/categories`);
     await expect(page.locator("[data-category=mats] [data-category-count]")).toHaveText("1", { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
+  const bedding = page.locator("[data-category=bedding]");
+  await expect(bedding.locator("[data-category-count]")).toHaveText("1");
+  await expect(bedding.locator("[data-category-direct]")).toHaveText("0");
+  await expect(bedding).toContainText("0 filed here");
+  // A leaf says one number, not two.
+  await expect(page.locator("[data-category=mats] [data-category-direct]")).toHaveCount(0);
+
+  // The same two numbers on each category's own page.
   await page.goto(matsUrl);
   await expect(page.locator("[data-category-products]")).toContainText("1 product");
+  await expect(page.locator("[data-category-direct]")).toContainText("1 product");
+  await page.goto(beddingUrl);
+  await expect(page.locator("[data-category-products]")).toContainText("1 product");
+  await expect(page.locator("[data-category-products]")).toContainText("counting its sub-categories");
+  await expect(page.locator("[data-category-direct]")).toContainText("0 products");
 
   // The products list filters by category.
   await expect(async () => {
