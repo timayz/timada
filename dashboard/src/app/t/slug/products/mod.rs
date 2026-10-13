@@ -15,7 +15,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::db::ReadPool;
@@ -119,19 +119,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: &title,
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Products"</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(super::index, Slug(slug.clone())))>(&tenant.name)</a>
-                    if nav.members {
-                        <a class="underline" href=(href!(super::members::index, Slug(slug.clone())))>"Members"</a>
-                    }
-                    if nav.roles {
-                        <a class="underline" href=(href!(super::roles::index, Slug(slug.clone())))>"Roles"</a>
-                    }
-                    if nav.api_keys {
-                        <a class="underline" href=(href!(super::api_keys::index, Slug(slug.clone())))>"API keys"</a>
-                    }
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                </nav>
+                tenant_nav(tenant: &tenant, nav: &nav, current: "products")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
