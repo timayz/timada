@@ -9,7 +9,7 @@ pub mod rename;
 
 use timada_catalog::{
     CategoryState, MAX_CATEGORY_DESCRIPTION_LEN, MAX_CATEGORY_NAME_LEN, ProductFilter,
-    categories_of_tenant, count_products, live_child_count,
+    count_products, live_child_count,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -121,16 +121,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .unwrap_or_else(|| category.created_by.clone());
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<ReadPool>(cx);
-    let products = count_products(
+    // The whole tree: it carries the counts, and it says where this category
+    // may move to (anything live that is not itself or one of its
+    // descendants, with room for it below).
+    let rows = rows_of(pool, &tenant.id).await?;
+    // Filed directly under it, and what its page in the shop lists.
+    let filed_here = count_products(
         pool,
         &tenant.id,
         &ProductFilter::default().category(Some(&category.id)),
     )
     .await?;
+    let on_its_page = rows
+        .iter()
+        .find(|row| row.category.id == category.id)
+        .map(|row| row.subtree_count)
+        .unwrap_or(filed_here);
     let children = live_child_count(pool, &tenant.id, &category.id).await?;
-    // Where this category may move to: anything live that is not itself or
-    // one of its descendants, with room for it below.
-    let rows = rows_of(categories_of_tenant(pool, &tenant.id).await?);
     let descendants: Vec<&str> = {
         let mut ids = vec![category.id.as_str()];
         for row in &rows {
@@ -177,16 +184,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 " / " (&category.name)
             </nav>
 
+            if children > 0 {
+                <p class="mb-4 text-sm text-neutral-500">
+                    "Its page in the shop also lists what is filed under its sub-categories, so taking a product out of this category does not hide it there while it stays in one of them."
+                </p>
+            }
+
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <h2 class="mb-2 text-lg font-medium">"Overview"</h2>
                 <dl class="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
                     <dt class="text-neutral-500">"Slug"</dt><dd><code>(&category.slug)</code></dd>
                     <dt class="text-neutral-500">"Description"</dt>
                     <dd data-category-description="" class="whitespace-pre-line">(if category.description.is_empty() { "—" } else { category.description.as_str() })</dd>
-                    <dt class="text-neutral-500">"Products"</dt>
+                    <dt class="text-neutral-500">"On its page"</dt>
+                    <dd data-category-products=(on_its_page)>
+                        (on_its_page) " product" (if on_its_page == 1 { "" } else { "s" })
+                        if on_its_page != filed_here {
+                            <span class="text-neutral-500">", counting its sub-categories"</span>
+                        }
+                    </dd>
+                    <dt class="text-neutral-500">"Filed here"</dt>
                     <dd>
-                        <a class="underline" data-category-products=(products) href=(href!(crate::app::t::slug::products::index, Slug(slug.clone())).query(ProductsOfCategory { category: &category.id }).resolve(cx))>
-                            (products) " product" (if products == 1 { "" } else { "s" })
+                        <a class="underline" data-category-direct=(filed_here) href=(href!(crate::app::t::slug::products::index, Slug(slug.clone())).query(ProductsOfCategory { category: &category.id }).resolve(cx))>
+                            (filed_here) " product" (if filed_here == 1 { "" } else { "s" })
                         </a>
                     </dd>
                     <dt class="text-neutral-500">"Sub-categories"</dt><dd data-category-children=(children)>(children)</dd>

@@ -172,6 +172,18 @@ test("a storefront browses the categories its products are filed under", async (
   await expect(page.locator("nav.sections [data-category=mats]")).toContainText("Mats (2)");
   await expect(page.locator("nav.sections [data-category=toys]")).toContainText("Toys (1)");
 
+  // The shop and the back office agree on every one of those numbers.
+  await page.goto(`/t/${slug}/categories`);
+  for (const [category, count] of [
+    ["bedding", "2"],
+    ["mats", "2"],
+    ["toys", "1"],
+  ]) {
+    await expect(page.locator(`[data-category=${category}] [data-category-count]`)).toHaveText(count);
+  }
+  await expect(page.locator("[data-category=bedding] [data-category-direct]")).toHaveText("0");
+  await page.goto(`${STOREFRONT}/`);
+
   // A top-level category lists what is under it, newest first by default.
   await page.locator("nav.sections [data-category=bedding]").click();
   await expect(page).toHaveURL(`${STOREFRONT}/c/bedding`);

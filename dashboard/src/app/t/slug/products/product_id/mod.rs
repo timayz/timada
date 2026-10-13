@@ -10,10 +10,7 @@ pub mod rename;
 pub mod uncategorize;
 pub mod unpublish;
 
-use timada_catalog::{
-    CURRENCIES, CategoryState, MAX_DESCRIPTION_LEN, MAX_NAME_LEN, ProductState,
-    categories_of_tenant,
-};
+use timada_catalog::{CURRENCIES, CategoryState, MAX_DESCRIPTION_LEN, MAX_NAME_LEN, ProductState};
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
     Result,
@@ -146,7 +143,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // read from its own stream too (a product is in a handful at most).
     let memberships = memberships_of(&access, &product).await?;
     // What it may still join is the whole tree, which the read model holds.
-    let joinable: Vec<Choice> = rows_of(categories_of_tenant(pool, &access.tenant.id).await?)
+    let joinable: Vec<Choice> = rows_of(pool, &access.tenant.id)
+        .await?
         .iter()
         .filter(|row| !product.categories.contains(&row.category.id))
         .map(Choice::of)
