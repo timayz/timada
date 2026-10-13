@@ -2,17 +2,22 @@
 //! (so an edit shows at once), with the forms that change it.
 
 pub mod archive;
+pub mod categorize;
 pub mod describe;
 pub mod price;
 pub mod publish;
 pub mod rename;
+pub mod uncategorize;
 pub mod unpublish;
 
-use timada_catalog::{CURRENCIES, MAX_DESCRIPTION_LEN, MAX_NAME_LEN, ProductState};
+use timada_catalog::{
+    CURRENCIES, CategoryState, MAX_DESCRIPTION_LEN, MAX_NAME_LEN, ProductState,
+    categories_of_tenant,
+};
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, app_context},
     router::{
         error::{SeeOther, not_found, see_other},
         href, module_param, page, path_param, query_params,
@@ -22,8 +27,10 @@ use topcoat::{
 
 use super::{catalog, error_code, status_label};
 use crate::app::auth::Flash;
+use crate::app::t::slug::categories::{Choice, rows_of};
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::auth::user_labels;
+use crate::db::ReadPool;
 use crate::ui::{document, format_time, notice};
 
 module_param!(pub product_id);
@@ -96,6 +103,28 @@ where
     }
 }
 
+/// The categories a product is in, live ones first: read from their own
+/// streams so the page shows a change the moment it is made.
+async fn memberships_of(
+    access: &TenantAccess,
+    product: &ProductState,
+) -> Result<Vec<CategoryState>> {
+    let gateway = catalog(access)?;
+    let mut memberships: Vec<CategoryState> = Vec::new();
+    for category_id in &product.categories {
+        if let Some(category) = gateway
+            .load_category(category_id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+        {
+            memberships.push(category);
+        }
+    }
+    memberships
+        .sort_by(|a, b| (a.archived, a.position, &a.name).cmp(&(b.archived, b.position, &b.name)));
+    Ok(memberships)
+}
+
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
@@ -111,6 +140,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .get(&product.created_by)
         .cloned()
         .unwrap_or_else(|| product.created_by.clone());
+    let pool = app_context::<ReadPool>(cx);
+    // Which categories it is in comes from the product's own stream, like
+    // the rest of this page, so a change shows at once; each one is then
+    // read from its own stream too (a product is in a handful at most).
+    let memberships = memberships_of(&access, &product).await?;
+    // What it may still join is the whole tree, which the read model holds.
+    let joinable: Vec<Choice> = rows_of(categories_of_tenant(pool, &access.tenant.id).await?)
+        .iter()
+        .filter(|row| !product.categories.contains(&row.category.id))
+        .map(Choice::of)
+        .collect();
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let editable = can_manage && !product.is_archived();
@@ -150,6 +190,43 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dt class="text-neutral-500">"Changed"</dt>
                     <dd><time datetime=(product.updated_at)>(format_time(product.updated_at))</time></dd>
                 </dl>
+            </section>
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"Categories"</h2>
+                if memberships.is_empty() {
+                    <p class="text-sm text-neutral-500">"In no category yet. A shopper finds a product by browsing the categories it is in."</p>
+                }
+                <ul class="divide-y divide-neutral-100 text-sm">
+                    for membership in &memberships {
+                        <li class="flex items-center justify-between py-2" data-membership=(&membership.slug)>
+                            <span>
+                                if membership.archived {
+                                    (&membership.name) " " <span class="rounded bg-neutral-100 px-2 text-xs text-neutral-700">"archived"</span>
+                                } else {
+                                    <a class="underline" href=(href!(crate::app::t::slug::categories::category_id::index, Slug(slug.clone()), crate::app::t::slug::categories::category_id::CategoryId(membership.id.clone())))>(&membership.name)</a>
+                                }
+                            </span>
+                            if editable {
+                                <form method="post" action=(href!(uncategorize::uncategorize, Slug(slug.clone()), ProductId(product.id.clone())))>
+                                    <input type="hidden" name="category_id" value=(&membership.id)>
+                                    <button class="rounded border border-neutral-300 px-2 py-1 text-xs">"Remove"</button>
+                                </form>
+                            }
+                        </li>
+                    }
+                </ul>
+                if editable && !joinable.is_empty() {
+                    <form method="post" action=(href!(categorize::categorize, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-3 flex gap-2">
+                        <label class="sr-only" for="product-category">"Category"</label>
+                        <select id="product-category" name="category_id" class="w-full rounded border border-neutral-300 px-3 py-2" required="">
+                            for choice in &joinable {
+                                <option value=(&choice.id)>(&choice.label)</option>
+                            }
+                        </select>
+                        <button class="rounded border border-neutral-300 px-3 py-2 text-sm">"Add to category"</button>
+                    </form>
+                }
             </section>
 
             if product.is_archived() {

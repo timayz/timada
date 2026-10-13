@@ -6,7 +6,9 @@ use topcoat_core::error::{Error, Result};
 use topcoat_router::error::not_found;
 
 use crate::query::{
-    Product, ProductPage, ProductQuery, published_product_by_slug, published_products,
+    Category, CategoryNode, Product, ProductPage, ProductQuery, category_ancestors,
+    published_categories, published_category_by_slug, published_product_by_slug,
+    published_products,
 };
 use crate::store::Store;
 
@@ -39,4 +41,59 @@ pub async fn require_product(cx: &Cx, slug: &str) -> Result<Product> {
     product_by_slug(cx, slug)
         .await?
         .ok_or_else(|| not_found().into())
+}
+
+/// A page of the published catalog in a category and everything under it.
+pub async fn category_products(
+    cx: &Cx,
+    node: &CategoryNode,
+    query: &ProductQuery,
+) -> Result<ProductPage> {
+    let query = query.clone().in_categories(node.subtree_ids());
+    products(cx, &query).await
+}
+
+/// The live categories as trees, each with how many published products are in
+/// it and below it: what a navigation menu is built from.
+pub async fn categories(cx: &Cx) -> Result<Vec<CategoryNode>> {
+    published_categories(store(cx).pool())
+        .await
+        .map_err(|err| Error::from_anyhow(err.into()))
+}
+
+/// A live category by slug, if any.
+pub async fn category_by_slug(cx: &Cx, slug: &str) -> Result<Option<Category>> {
+    published_category_by_slug(store(cx).pool(), slug)
+        .await
+        .map_err(|err| Error::from_anyhow(err.into()))
+}
+
+/// A live category by slug, or 404.
+pub async fn require_category(cx: &Cx, slug: &str) -> Result<Category> {
+    category_by_slug(cx, slug)
+        .await?
+        .ok_or_else(|| not_found().into())
+}
+
+/// The categories above this one, top-level first: a breadcrumb.
+pub async fn category_path(cx: &Cx, category: &Category) -> Result<Vec<Category>> {
+    category_ancestors(store(cx).pool(), category)
+        .await
+        .map_err(|err| Error::from_anyhow(err.into()))
+}
+
+/// The live categories a product is filed under, in tree order: the first is
+/// what a breadcrumb usually shows.
+pub async fn product_categories(cx: &Cx, product: &Product) -> Result<Vec<Category>> {
+    crate::query::published_product_categories(store(cx).pool(), &product.id)
+        .await
+        .map_err(|err| Error::from_anyhow(err.into()))
+}
+
+/// Published products sharing a category with this one, newest first, at most
+/// `limit` of them and never the product itself.
+pub async fn related_products(cx: &Cx, product: &Product, limit: u32) -> Result<Vec<Product>> {
+    crate::query::published_related_products(store(cx).pool(), product, limit)
+        .await
+        .map_err(|err| Error::from_anyhow(err.into()))
 }

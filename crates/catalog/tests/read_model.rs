@@ -2,8 +2,9 @@ mod common;
 
 use common::*;
 use timada_catalog::{
-    Command, ProductStatus, count_products, product_by_id, products_of_tenant,
-    read_model_subscription,
+    Command, ProductFilter, ProductStatus, categories_of_product, categories_of_tenant,
+    category_by_id, count_products, live_child_count, product_by_id, products_of_tenant,
+    read_model_subscription, tree_of,
 };
 
 const TENANT: &str = "tenant-acme";
@@ -32,9 +33,10 @@ async fn products_are_listed_searched_counted_and_stay_idempotent() {
     catch_up(&executor, &pool).await;
     catch_up(&executor, &pool).await;
 
-    assert_eq!(count_products(&pool, TENANT, None).await.unwrap(), 2);
-    assert_eq!(count_products(&pool, "other", None).await.unwrap(), 0);
-    let rows = products_of_tenant(&pool, TENANT, None, 0, 50)
+    let all = ProductFilter::default();
+    assert_eq!(count_products(&pool, TENANT, &all).await.unwrap(), 2);
+    assert_eq!(count_products(&pool, "other", &all).await.unwrap(), 0);
+    let rows = products_of_tenant(&pool, TENANT, &all, 0, 50)
         .await
         .unwrap();
     assert_eq!(rows.len(), 2);
@@ -51,11 +53,16 @@ async fn products_are_listed_searched_counted_and_stay_idempotent() {
     assert_eq!(plate_row.price(), None);
     assert_eq!(plate_row.status(), ProductStatus::Draft);
 
-    let found = products_of_tenant(&pool, TENANT, Some("MUG"), 0, 50)
+    let found = products_of_tenant(&pool, TENANT, &all.clone().search(Some("MUG")), 0, 50)
         .await
         .unwrap();
     assert_eq!(found.len(), 1, "search is case-insensitive");
-    assert_eq!(count_products(&pool, TENANT, Some("%")).await.unwrap(), 0);
+    assert_eq!(
+        count_products(&pool, TENANT, &all.clone().search(Some("%")))
+            .await
+            .unwrap(),
+        0
+    );
     assert_eq!(
         product_by_id(&pool, TENANT, &plate.id)
             .await
@@ -81,12 +88,172 @@ async fn an_archived_product_leaves_its_slug_to_the_next_one() {
     let second = create_product(&cmd, "Blue Mug").await;
     catch_up(&executor, &pool).await;
 
-    let rows = products_of_tenant(&pool, TENANT, Some("blue-mug"), 0, 50)
-        .await
-        .unwrap();
+    let rows = products_of_tenant(
+        &pool,
+        TENANT,
+        &ProductFilter::default().search(Some("blue-mug")),
+        0,
+        50,
+    )
+    .await
+    .unwrap();
     assert_eq!(rows.len(), 2, "both rows keep the slug, one archived");
     assert_eq!(rows[0].id, second.id);
     assert_eq!(rows[0].status(), ProductStatus::Draft);
     assert_eq!(rows[1].id, first.id);
     assert_eq!(rows[1].status(), ProductStatus::Archived);
+}
+
+#[tokio::test]
+async fn the_category_tree_carries_its_product_counts() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let bedding = create_category(&cmd, "Bedding").await;
+    let mats = create_child(&cmd, "Mats", &bedding.id).await;
+    let toys = create_category(&cmd, "Toys").await;
+    cmd.position_category(ALICE, &toys.id, 1).await.unwrap();
+    let mat = create_product(&cmd, "Cooling mat").await;
+    let ball = create_product(&cmd, "Ball").await;
+    cmd.categorize_product(ALICE, &mat.id, &bedding.id)
+        .await
+        .unwrap();
+    cmd.categorize_product(ALICE, &mat.id, &mats.id)
+        .await
+        .unwrap();
+    cmd.categorize_product(ALICE, &ball.id, &toys.id)
+        .await
+        .unwrap();
+
+    catch_up(&executor, &pool).await;
+    catch_up(&executor, &pool).await;
+
+    let rows = categories_of_tenant(&pool, TENANT).await.unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(
+        categories_of_tenant(&pool, "other")
+            .await
+            .unwrap()
+            .is_empty(),
+        "rows are the tenant's own"
+    );
+    let tree = tree_of(rows);
+    assert_eq!(
+        tree.iter()
+            .map(|n| n.item.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Bedding", "Toys"],
+        "position orders the top level"
+    );
+    assert_eq!(tree[0].children.len(), 1);
+    assert_eq!(tree[0].children[0].item.name, "Mats");
+    assert_eq!(tree[0].item.product_count, 1);
+    assert_eq!(tree[0].children[0].item.product_count, 1);
+    assert_eq!(tree[1].item.product_count, 1);
+    assert_eq!(
+        live_child_count(&pool, TENANT, &bedding.id).await.unwrap(),
+        1
+    );
+    assert_eq!(live_child_count(&pool, TENANT, &toys.id).await.unwrap(), 0);
+
+    // The filter takes a category, and membership rows follow the product.
+    let in_bedding = ProductFilter::default().category(Some(&bedding.id));
+    assert_eq!(count_products(&pool, TENANT, &in_bedding).await.unwrap(), 1);
+    assert_eq!(
+        products_of_tenant(&pool, TENANT, &in_bedding, 0, 50)
+            .await
+            .unwrap()[0]
+            .id,
+        mat.id
+    );
+    assert_eq!(
+        categories_of_product(&pool, TENANT, &mat.id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Bedding", "Mats"]
+    );
+
+    cmd.uncategorize_product(ALICE, &mat.id, &bedding.id)
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    assert_eq!(
+        count_products(&pool, TENANT, &in_bedding).await.unwrap(),
+        0,
+        "leaving a category removes the row"
+    );
+    assert_eq!(
+        category_by_id(&pool, TENANT, &bedding.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .product_count,
+        0
+    );
+}
+
+#[tokio::test]
+async fn an_archived_category_leaves_the_tree_but_keeps_its_memberships() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let bedding = create_category(&cmd, "Bedding").await;
+    let mat = create_product(&cmd, "Cooling mat").await;
+    cmd.categorize_product(ALICE, &mat.id, &bedding.id)
+        .await
+        .unwrap();
+    cmd.archive_category(ALICE, &bedding.id).await.unwrap();
+    catch_up(&executor, &pool).await;
+
+    assert!(
+        categories_of_tenant(&pool, TENANT)
+            .await
+            .unwrap()
+            .is_empty(),
+        "an archived category is not listed"
+    );
+    let row = category_by_id(&pool, TENANT, &bedding.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.archived, "it is still there by id");
+    let memberships = categories_of_product(&pool, TENANT, &mat.id).await.unwrap();
+    assert_eq!(memberships.len(), 1);
+    assert!(
+        memberships[0].archived,
+        "so the product page can show it as archived"
+    );
+}
+
+#[tokio::test]
+async fn an_archived_product_drops_out_of_its_categories_count() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let bedding = create_category(&cmd, "Bedding").await;
+    let mat = create_product(&cmd, "Cooling mat").await;
+    cmd.categorize_product(ALICE, &mat.id, &bedding.id)
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    assert_eq!(
+        category_by_id(&pool, TENANT, &bedding.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .product_count,
+        1
+    );
+
+    cmd.archive_product(ALICE, &mat.id).await.unwrap();
+    catch_up(&executor, &pool).await;
+    assert_eq!(
+        category_by_id(&pool, TENANT, &bedding.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .product_count,
+        0,
+        "an archived product is not counted"
+    );
 }

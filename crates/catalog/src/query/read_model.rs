@@ -14,7 +14,8 @@ use evento::{
 use sqlx::SqlitePool;
 
 use crate::aggregator::Product;
-use crate::command::{ProductState, product_projection};
+use crate::aggregator::category::Category;
+use crate::command::{CategoryState, ProductState, category_projection, product_projection};
 
 /// The cursor identity of the read-model subscription, in each tenant's store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-catalog/read-models";
@@ -34,6 +35,7 @@ pub fn read_model_subscription<E: Executor>(
         .data(pool)
         .data(TenantId(tenant_id.to_owned()))
         .handler(on_product_event())
+        .handler(on_category_event())
         .any_routing_key()
 }
 
@@ -54,12 +56,32 @@ async fn on_product_event<E: Executor>(
     upsert_product(&pool, &tenant.0, &product).await
 }
 
-/// Writes the row of a product as the write model sees it.
+#[evento::subscription_all]
+async fn on_category_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<Category>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let tenant: TenantId = context.extract();
+    let Some(category) = category_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_category(&pool, &tenant.0, &category).await
+}
+
+/// Writes the row of a product and its category memberships as the write
+/// model sees them, in one transaction: the row and its memberships are
+/// never half-written.
 pub async fn upsert_product(
     pool: &SqlitePool,
     tenant_id: &str,
     product: &ProductState,
 ) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO catalog_products (tenant_id, id, slug, name, description, amount_cents,
             currency, status, created_by, created_at, updated_at)
@@ -80,6 +102,54 @@ pub async fn upsert_product(
     .bind(&product.created_by)
     .bind(product.created_at as i64)
     .bind(product.updated_at as i64)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM catalog_product_categories WHERE tenant_id = ?1 AND product_id = ?2")
+        .bind(tenant_id)
+        .bind(&product.id)
+        .execute(&mut *tx)
+        .await?;
+    for category_id in &product.categories {
+        sqlx::query(
+            "INSERT INTO catalog_product_categories (tenant_id, product_id, category_id)
+             VALUES (?1, ?2, ?3)",
+        )
+        .bind(tenant_id)
+        .bind(&product.id)
+        .bind(category_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Writes the row of a category as the write model sees it.
+pub async fn upsert_category(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    category: &CategoryState,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO catalog_categories (tenant_id, id, slug, name, description, parent_id,
+            position, archived, created_by, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT (tenant_id, id) DO UPDATE SET
+            slug = excluded.slug, name = excluded.name, description = excluded.description,
+            parent_id = excluded.parent_id, position = excluded.position,
+            archived = excluded.archived, updated_at = excluded.updated_at",
+    )
+    .bind(tenant_id)
+    .bind(&category.id)
+    .bind(&category.slug)
+    .bind(&category.name)
+    .bind(&category.description)
+    .bind(category.parent_id.as_deref())
+    .bind(category.position as i64)
+    .bind(category.archived)
+    .bind(&category.created_by)
+    .bind(category.created_at as i64)
+    .bind(category.updated_at as i64)
     .execute(pool)
     .await?;
     Ok(())
