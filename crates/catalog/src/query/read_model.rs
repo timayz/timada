@@ -84,13 +84,17 @@ pub async fn upsert_product(
     let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO catalog_products (tenant_id, id, slug, name, description, amount_cents,
-            currency, status, created_by, created_at, updated_at, thumbnail, image_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            currency, status, created_by, created_at, updated_at, thumbnail, image_count,
+            min_amount_cents, max_amount_cents, variant_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             slug = excluded.slug, name = excluded.name, description = excluded.description,
             amount_cents = excluded.amount_cents, currency = excluded.currency,
             status = excluded.status, updated_at = excluded.updated_at,
-            thumbnail = excluded.thumbnail, image_count = excluded.image_count",
+            thumbnail = excluded.thumbnail, image_count = excluded.image_count,
+            min_amount_cents = excluded.min_amount_cents,
+            max_amount_cents = excluded.max_amount_cents,
+            variant_count = excluded.variant_count",
     )
     .bind(tenant_id)
     .bind(&product.id)
@@ -98,13 +102,18 @@ pub async fn upsert_product(
     .bind(&product.name)
     .bind(&product.description)
     .bind(product.price.as_ref().map(|p| p.amount_cents as i64))
-    .bind(product.price.as_ref().map(|p| p.currency.as_str()))
+    // The currency everything on this product is priced in, which for one
+    // sold only through its variants is theirs rather than a base price's.
+    .bind(product.currency())
     .bind(product.status.as_str())
     .bind(&product.created_by)
     .bind(product.created_at as i64)
     .bind(product.updated_at as i64)
     .bind(product.images.first().map(|image| image.file()))
     .bind(product.images.len() as i64)
+    .bind(product.price_range().map(|(min, _, _)| min as i64))
+    .bind(product.price_range().map(|(_, max, _)| max as i64))
+    .bind(product.variants.len() as i64)
     .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM catalog_product_categories WHERE tenant_id = ?1 AND product_id = ?2")

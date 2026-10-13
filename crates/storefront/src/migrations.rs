@@ -8,7 +8,12 @@ pub const MIGRATION_APP: &str = "storefront";
 /// applies them with evento's own; a host running its own migrator can add
 /// them to it instead.
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Products0001, Categories0002, ProductImages0003]
+    vec_box![
+        Products0001,
+        Categories0002,
+        ProductImages0003,
+        ProductVariants0004
+    ]
 }
 
 pub struct Products0001;
@@ -97,4 +102,40 @@ sqlx_migrator::sqlite_migration!(
         "ALTER TABLE storefront_products ADD COLUMN images_json TEXT NOT NULL DEFAULT '[]'",
         "ALTER TABLE storefront_products DROP COLUMN images_json"
     )]
+);
+
+pub struct ProductVariants0004;
+sqlx_migrator::sqlite_migration!(
+    ProductVariants0004,
+    "storefront",
+    "0004_product_variants",
+    vec_box![("storefront", "0003_product_images")],
+    vec_box![
+        (
+            "ALTER TABLE storefront_products ADD COLUMN options_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE storefront_products DROP COLUMN options_json"
+        ),
+        (
+            "ALTER TABLE storefront_products ADD COLUMN variants_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE storefront_products DROP COLUMN variants_json"
+        ),
+        (
+            "ALTER TABLE storefront_products ADD COLUMN attributes_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE storefront_products DROP COLUMN attributes_json"
+        ),
+        (
+            // What a listing sorts and filters by when the price varies.
+            "ALTER TABLE storefront_products ADD COLUMN min_amount_cents INTEGER",
+            "ALTER TABLE storefront_products DROP COLUMN min_amount_cents"
+        ),
+        (
+            "ALTER TABLE storefront_products ADD COLUMN max_amount_cents INTEGER",
+            "ALTER TABLE storefront_products DROP COLUMN max_amount_cents"
+        ),
+        (
+            "CREATE INDEX storefront_products_price
+                ON storefront_products (status, min_amount_cents)",
+            "DROP INDEX storefront_products_price"
+        ),
+    ]
 );

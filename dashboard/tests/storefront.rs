@@ -28,7 +28,7 @@ use evento::remote::ServerHandle;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
-use timada_catalog::{AddImage, CreateCategory, CreateProduct};
+use timada_catalog::{AddImage, CreateCategory, CreateProduct, DefineVariant, OptionSelection};
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
     SubscriptionState, category_ancestors, find_category, published_categories,
@@ -835,6 +835,168 @@ async fn a_store_carries_the_gallery_with_the_address_it_is_loaded_from() {
             .await
             .unwrap()
             .is_some_and(|p| p.images.len() == 1)
+    })
+    .await;
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_store_carries_the_variants_a_shopper_picks_from() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme).await;
+
+    // A harness in two colours and two sizes, priced per combination, and a
+    // plain product beside it.
+    let harness_id = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Cat Harness".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    let colour = catalog
+        .define_option(
+            "alice",
+            &harness_id,
+            "Colour",
+            vec!["Beige".into(), "Blue".into()],
+        )
+        .await
+        .unwrap();
+    let size = catalog
+        .define_option("alice", &harness_id, "Size", vec!["S".into(), "M".into()])
+        .await
+        .unwrap();
+    for (c, s, amount, sku) in [
+        ("Beige", "S", 2290u64, "harness-beige-s"),
+        ("Beige", "M", 2490, "harness-beige-m"),
+        ("Blue", "S", 2290, "harness-blue-s"),
+    ] {
+        catalog
+            .define_variant(
+                "alice",
+                &harness_id,
+                DefineVariant {
+                    selections: vec![
+                        OptionSelection {
+                            option_id: colour.clone(),
+                            value: c.into(),
+                        },
+                        OptionSelection {
+                            option_id: size.clone(),
+                            value: s.into(),
+                        },
+                    ],
+                    sku: Some(sku.into()),
+                    amount_cents: amount,
+                    currency: "EUR".into(),
+                    image_id: None,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    catalog
+        .set_attribute("alice", &harness_id, "Material", "Nylon")
+        .await
+        .unwrap();
+    // No price of its own: the variants are its price.
+    catalog.publish_product("alice", &harness_id).await.unwrap();
+    stock(&catalog, "Feather Wand", 990, &[]).await;
+
+    let pool = h.local_pool("acme-shop").await;
+    let store = Store::connect(h.config(&token), pool.clone())
+        .await
+        .unwrap();
+    eventually("the varying product reaches the local copy", async || {
+        published_product_by_slug(&pool, "cat-harness")
+            .await
+            .unwrap()
+            .is_some_and(|p| p.variants.len() == 3)
+    })
+    .await;
+    eventually("and so does the plain one beside it", async || {
+        published(&pool).await.len() == 2
+    })
+    .await;
+
+    let harness = published_product_by_slug(&pool, "cat-harness")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        harness
+            .options
+            .iter()
+            .map(|o| o.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Colour", "Size"]
+    );
+    assert_eq!(harness.options[0].values, ["Beige", "Blue"]);
+    // A listing shows what it may cost, not one of the amounts.
+    assert_eq!(harness.price().as_deref(), Some("22.90–24.90 EUR"));
+    let range = harness.price_range().unwrap();
+    assert!(range.varies());
+    assert_eq!((range.min_cents, range.max_cents), (2290, 2490));
+    assert_eq!(
+        harness.attributes,
+        vec![timada_storefront::Attribute {
+            name: "Material".into(),
+            value: "Nylon".into(),
+        }]
+    );
+
+    // The menus of a product page resolve to one variant, in any order.
+    let picked = vec![
+        (size.clone(), "M".to_owned()),
+        (colour.clone(), "Beige".to_owned()),
+    ];
+    let variant = harness.variant(&picked).expect("that combination is sold");
+    assert_eq!(variant.price(), "24.90 EUR");
+    assert_eq!(variant.sku.as_deref(), Some("harness-beige-m"));
+    assert_eq!(variant.value_of(&colour), Some("Beige"));
+    assert!(
+        harness
+            .variant(&[(colour.clone(), "Blue".into()), (size.clone(), "M".into())])
+            .is_none(),
+        "the one combination they did not price is not sold"
+    );
+
+    // Sorting goes by what a shopper would pay, not by the base price.
+    let cheapest = published_products(&pool, &ProductQuery::default().sort(ProductSort::PriceAsc))
+        .await
+        .unwrap();
+    assert_eq!(
+        cheapest
+            .items
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Feather Wand", "Cat Harness"]
+    );
+    let dearest = published_products(&pool, &ProductQuery::default().sort(ProductSort::PriceDesc))
+        .await
+        .unwrap();
+    assert_eq!(dearest.items[0].name, "Cat Harness");
+
+    // A variant that goes narrows the range.
+    catalog
+        .remove_variant("alice", &harness_id, &harness.variants[1].id)
+        .await
+        .unwrap();
+    eventually("the narrower range reaches the local copy", async || {
+        published_product_by_slug(&pool, "cat-harness")
+            .await
+            .unwrap()
+            .and_then(|p| p.price())
+            == Some("22.90 EUR".to_owned())
     })
     .await;
 

@@ -40,6 +40,38 @@ pub enum CatalogError {
     ImageNotFound,
     #[error("the new order must list every picture of the product exactly once")]
     InvalidImageOrder,
+    #[error("a product varies in at most three ways")]
+    TooManyOptions,
+    #[error("an option's name must be between 1 and 40 characters")]
+    InvalidOptionName,
+    #[error("this option is already there")]
+    OptionExists,
+    #[error("an option takes 1 to 20 values, each at most 40 characters")]
+    InvalidOptionValues,
+    #[error("option not found")]
+    OptionNotFound,
+    #[error("the options cannot change while the product has variants")]
+    OptionInUse,
+    #[error("a variant still uses one of the values being dropped")]
+    OptionValueInUse,
+    #[error("a product sells at most a hundred variants")]
+    TooManyVariants,
+    #[error("a variant names a value for every option, exactly once")]
+    InvalidSelection,
+    #[error("this combination is already sold as another variant")]
+    VariantExists,
+    #[error("variant not found")]
+    VariantNotFound,
+    #[error("every price of a product is in the same currency")]
+    CurrencyMismatch,
+    #[error("a code is 1 to 64 of letters, digits, dot, dash and underscore")]
+    InvalidSku,
+    #[error("another variant already uses this code")]
+    SkuTaken,
+    #[error("a fact needs a name of at most 40 characters and a value of at most 400")]
+    InvalidAttribute,
+    #[error("a product's table holds at most thirty facts")]
+    TooManyAttributes,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]

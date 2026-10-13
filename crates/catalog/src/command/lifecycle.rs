@@ -5,8 +5,8 @@ use crate::error::CatalogError;
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Puts the product on sale. It needs a price; already published is a
-    /// no-op.
+    /// Puts the product on sale. It needs a price of its own or at least one
+    /// variant to pick; already published is a no-op.
     pub async fn publish_product(
         &self,
         actor: &str,
@@ -17,7 +17,7 @@ impl<E: Executor> super::Command<E> {
         if product.is_published() {
             return Ok(());
         }
-        if product.price.is_none() {
+        if !product.is_priced() {
             return Err(CatalogError::NotPriced);
         }
         product
@@ -53,8 +53,8 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Retires the product for good and frees its slug. Already archived is
-    /// a no-op.
+    /// Retires the product for good and frees its slug and the codes of its
+    /// variants. Already archived is a no-op.
     pub async fn archive_product(
         &self,
         actor: &str,
@@ -75,10 +75,19 @@ impl<E: Executor> super::Command<E> {
             .commit(&self.0)
             .await?;
         if let Err(release) = self
-            .release_slug(&product.slug, product_id, routing_key)
+            .release_slug(&product.slug, product_id, routing_key.clone())
             .await
         {
             tracing::warn!(slug = %product.slug, %release, "cannot give the slug back after archiving");
+        }
+        for variant in &product.variants {
+            if let Some(sku) = &variant.sku
+                && let Err(release) = self
+                    .release_sku(sku, &variant.id, routing_key.clone())
+                    .await
+            {
+                tracing::warn!(%sku, %release, "cannot give a code back after archiving");
+            }
         }
         Ok(())
     }

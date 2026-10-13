@@ -21,6 +21,94 @@ pub struct Image {
     pub url: String,
 }
 
+/// A way a product varies, with the values it takes.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+pub struct ProductOption {
+    pub id: String,
+    pub name: String,
+    pub values: Vec<String>,
+}
+
+/// One combination a shopper buys, with its own price.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+pub struct Variant {
+    pub id: String,
+    /// A value for every option of the product, in the options' order.
+    pub selections: Vec<Selection>,
+    /// The merchant's own code for it.
+    pub sku: Option<String>,
+    pub amount_cents: i64,
+    pub currency: String,
+    /// One of the product's pictures, shown when this variant is picked.
+    pub image_id: Option<String>,
+}
+
+impl Variant {
+    /// The price as a person reads it (`22.90 EUR`).
+    pub fn price(&self) -> String {
+        format_money(self.amount_cents.max(0) as u64, &self.currency)
+    }
+
+    /// The value it takes for an option, if it names one.
+    pub fn value_of(&self, option_id: &str) -> Option<&str> {
+        self.selections
+            .iter()
+            .find(|s| s.option_id == option_id)
+            .map(|s| s.value.as_str())
+    }
+
+    /// Whether this is the variant those `(option id, value)` pairs name,
+    /// whatever order they come in.
+    pub fn matches(&self, picked: &[(String, String)]) -> bool {
+        self.selections.len() == picked.len()
+            && self.selections.iter().all(|mine| {
+                picked
+                    .iter()
+                    .any(|(option_id, value)| *option_id == mine.option_id && *value == mine.value)
+            })
+    }
+}
+
+/// One option of a variant and the value it takes.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+pub struct Selection {
+    pub option_id: String,
+    pub value: String,
+}
+
+/// A fact in a product's table.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+pub struct Attribute {
+    pub name: String,
+    pub value: String,
+}
+
+/// What a shopper may pay for a product: the two amounts are equal when
+/// nothing varies.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PriceRange {
+    pub min_cents: i64,
+    pub max_cents: i64,
+    pub currency: String,
+}
+
+impl PriceRange {
+    /// Whether the price depends on what a shopper picks.
+    pub fn varies(&self) -> bool {
+        self.min_cents != self.max_cents
+    }
+
+    /// `12.50 EUR`, or `12.00–18.00 EUR` when it varies.
+    pub fn label(&self) -> String {
+        let max = format_money(self.max_cents.max(0) as u64, &self.currency);
+        if !self.varies() {
+            return max;
+        }
+        let min = format_money(self.min_cents.max(0) as u64, &self.currency);
+        format!("{}–{max}", min.trim_end_matches(&self.currency).trim_end())
+    }
+}
+
 /// A product as the storefront shows it.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq, Hash)]
 pub struct Product {
@@ -35,15 +123,39 @@ pub struct Product {
     /// Its pictures, in the order the merchant put them.
     #[sqlx(json, rename = "images_json")]
     pub images: Vec<Image>,
+    /// The ways it varies; empty when it does not.
+    #[sqlx(json, rename = "options_json")]
+    pub options: Vec<ProductOption>,
+    /// The combinations it sells, each with its own price.
+    #[sqlx(json, rename = "variants_json")]
+    pub variants: Vec<Variant>,
+    /// The facts in its table.
+    #[sqlx(json, rename = "attributes_json")]
+    pub attributes: Vec<Attribute>,
+    pub min_amount_cents: Option<i64>,
+    pub max_amount_cents: Option<i64>,
 }
 
 impl Product {
-    /// The price as a person reads it (`12.50 EUR`), once it has one.
+    /// The price as a listing shows it: `12.50 EUR`, or `12.00–18.00 EUR`
+    /// when the variants differ. Empty when it has no price at all.
     pub fn price(&self) -> Option<String> {
-        Some(format_money(
-            self.amount_cents? as u64,
-            self.currency.as_deref()?,
-        ))
+        Some(self.price_range()?.label())
+    }
+
+    /// The cheapest and the dearest a shopper may pay.
+    pub fn price_range(&self) -> Option<PriceRange> {
+        Some(PriceRange {
+            min_cents: self.min_amount_cents?,
+            max_cents: self.max_amount_cents?,
+            currency: self.currency.clone()?,
+        })
+    }
+
+    /// The variant those `(option id, value)` pairs name, if the product
+    /// sells it: what a page resolves its menus to.
+    pub fn variant(&self, picked: &[(String, String)]) -> Option<&Variant> {
+        self.variants.iter().find(|variant| variant.matches(picked))
     }
 
     /// The picture a listing shows, when it has one.
@@ -221,7 +333,9 @@ macro_rules! products_where {
 macro_rules! products_page {
     ($order:literal) => {
         concat!(
-            "SELECT id, slug, name, description, amount_cents, currency, updated_at, images_json
+            "SELECT id, slug, name, description, amount_cents, currency, updated_at,
+                images_json, options_json, variants_json, attributes_json,
+                min_amount_cents, max_amount_cents
              FROM storefront_products ",
             products_where!(),
             $order,
@@ -231,11 +345,13 @@ macro_rules! products_page {
 }
 
 const PAGE_NEWEST: &str = products_page!("ORDER BY updated_at DESC, id DESC");
-/// A product with no price sorts last either way.
+/// Sorted by what a shopper would actually pay: the cheapest a product can
+/// be going up, the dearest going down. One with no price sorts last either
+/// way.
 const PAGE_PRICE_ASC: &str =
-    products_page!("ORDER BY amount_cents IS NULL, amount_cents ASC, id DESC");
+    products_page!("ORDER BY min_amount_cents IS NULL, min_amount_cents ASC, id DESC");
 const PAGE_PRICE_DESC: &str =
-    products_page!("ORDER BY amount_cents IS NULL, amount_cents DESC, id DESC");
+    products_page!("ORDER BY max_amount_cents IS NULL, max_amount_cents DESC, id DESC");
 const COUNT: &str = concat!(
     "SELECT count(*) FROM storefront_products ",
     products_where!()
@@ -284,7 +400,9 @@ pub async fn published_product_by_slug(
     slug: &str,
 ) -> sqlx::Result<Option<Product>> {
     sqlx::query_as(
-        "SELECT id, slug, name, description, amount_cents, currency, updated_at, images_json
+        "SELECT id, slug, name, description, amount_cents, currency, updated_at,
+            images_json, options_json, variants_json, attributes_json,
+            min_amount_cents, max_amount_cents
          FROM storefront_products WHERE slug = ?1 AND status = 'published'",
     )
     .bind(slug)

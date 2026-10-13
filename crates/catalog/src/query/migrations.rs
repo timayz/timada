@@ -5,7 +5,12 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "catalog";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Products0001, Categories0002, ProductImages0003]
+    vec_box![
+        Products0001,
+        Categories0002,
+        ProductImages0003,
+        ProductVariants0004
+    ]
 }
 
 pub struct Products0001;
@@ -110,6 +115,30 @@ sqlx_migrator::sqlite_migration!(
         (
             "ALTER TABLE catalog_products ADD COLUMN image_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE catalog_products DROP COLUMN image_count"
+        ),
+    ]
+);
+
+pub struct ProductVariants0004;
+sqlx_migrator::sqlite_migration!(
+    ProductVariants0004,
+    "catalog",
+    "0004_product_variants",
+    vec_box![("catalog", "0003_product_images")],
+    vec_box![
+        (
+            // What a listing shows when a product varies: the cheapest and
+            // the dearest a shopper may pay.
+            "ALTER TABLE catalog_products ADD COLUMN min_amount_cents INTEGER",
+            "ALTER TABLE catalog_products DROP COLUMN min_amount_cents"
+        ),
+        (
+            "ALTER TABLE catalog_products ADD COLUMN max_amount_cents INTEGER",
+            "ALTER TABLE catalog_products DROP COLUMN max_amount_cents"
+        ),
+        (
+            "ALTER TABLE catalog_products ADD COLUMN variant_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE catalog_products DROP COLUMN variant_count"
         ),
     ]
 );

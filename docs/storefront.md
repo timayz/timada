@@ -92,6 +92,27 @@ everything below it. `subtree_ids` gives the ids a collection page passes to
 `in_categories`. An archived category is in none of this; the products that were in it
 stay on sale.
 
+## What a product varies by
+
+```rust
+let Some(range) = product.price_range() else { return };
+range.label();                      // "22.90 EUR", or "22.90–24.90 EUR"
+range.varies();                     // whether a shopper's choice changes the price
+
+for option in &product.options { /* option.name, option.values */ }
+for variant in &product.variants { /* variant.price(), variant.sku, variant.image_id */ }
+product.variant(&picked);           // the variant those (option id, value) pairs name
+for fact in &product.attributes { /* fact.name, fact.value */ }
+```
+
+`product.price()` is `price_range().label()`: one amount when nothing varies, a range
+when it does. `options` is empty for a product that does not vary, and then `variants`
+is too. `Variant::value_of` and `Variant::matches` are what a page needs to light up
+the right row as a shopper changes the menus.
+
+`ProductSort::PriceAsc` orders by the cheapest a product can be and `PriceDesc` by the
+dearest, so a sorted list reads the way a shopper expects.
+
 ## Pictures
 
 A product carries `images`, in the order the merchant put them; `product.image()` is

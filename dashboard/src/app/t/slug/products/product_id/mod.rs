@@ -2,19 +2,24 @@
 //! (so an edit shows at once), with the forms that change it.
 
 pub mod archive;
+pub mod attributes;
 pub mod categorize;
 pub mod describe;
 pub mod images;
+pub mod options;
 pub mod price;
 pub mod publish;
 pub mod rename;
 pub mod uncategorize;
 pub mod unpublish;
+pub mod variants;
 
 use std::sync::Arc;
 use timada_catalog::{
-    CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT,
-    MAX_NAME_LEN, ProductState, categories_of_tenant,
+    CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
+    MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS,
+    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, categories_of_tenant,
+    format_money,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 
@@ -107,6 +112,65 @@ where
     }
 }
 
+/// A way the product varies, ready to render: its values as the textarea
+/// shows them, one a line.
+pub struct OptionRow {
+    pub id: String,
+    pub name: String,
+    pub values: String,
+}
+
+impl OptionRow {
+    fn of(option: &ProductOption) -> Self {
+        Self {
+            id: option.id.clone(),
+            name: option.name.clone(),
+            values: option.values.join("\n"),
+        }
+    }
+}
+
+/// A combination the product sells, ready to render.
+pub struct VariantRow {
+    pub id: String,
+    /// `Colour: Beige · Size: S`, in the product's own option order.
+    pub selections: String,
+    pub sku: String,
+    /// The amount as the form wants it typed, without the currency.
+    pub amount: String,
+    pub currency: String,
+    pub image_id: String,
+}
+
+impl VariantRow {
+    fn of(variant: &ProductVariant, product: &ProductState) -> Self {
+        let selections = variant
+            .selections
+            .iter()
+            .map(|selection| {
+                let name = product
+                    .option(&selection.option_id)
+                    .map(|option| option.name.as_str())
+                    .unwrap_or("?");
+                format!("{name}: {}", selection.value)
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
+        Self {
+            id: variant.id.clone(),
+            selections,
+            sku: variant.sku.clone().unwrap_or_default(),
+            amount: format!(
+                "{}.{:02}",
+                variant.price.amount_cents / 100,
+                variant.price.amount_cents % 100
+            ),
+            currency: variant.price.currency.clone(),
+            image_id: variant.image_id.clone().unwrap_or_default(),
+        }
+    }
+}
+
 /// The categories a product is in, live ones first: read from their own
 /// streams so the page shows a change the moment it is made.
 async fn memberships_of(
@@ -156,8 +220,51 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .iter()
         .map(|image| (image.clone(), media.url(&access.tenant.id, &image.file())))
         .collect();
+    let editable = can_manage && !product.is_archived();
     let gallery_full = gallery.len() >= MAX_IMAGES_PER_PRODUCT;
     let last = gallery.len().saturating_sub(1);
+    // The view takes what it renders, so the menus and rows are built as
+    // owned values first.
+    let options: Vec<OptionRow> = product.options.iter().map(OptionRow::of).collect();
+    let variants: Vec<VariantRow> = product
+        .variants
+        .iter()
+        .map(|variant| VariantRow::of(variant, &product))
+        .collect();
+    let picture_choices: Vec<(String, String)> = product
+        .images
+        .iter()
+        .map(|image| {
+            let label = if image.alt.is_empty() {
+                image.file()
+            } else {
+                image.alt.clone()
+            };
+            (image.id.clone(), label)
+        })
+        .collect();
+    let has_variants = !product.variants.is_empty();
+    let options_locked = editable && has_variants;
+    let can_add_option = editable && !has_variants && options.len() < MAX_OPTIONS;
+    let can_add_variant = editable && !options.is_empty() && product.variants.len() < MAX_VARIANTS;
+    let attributes = product.attributes.clone();
+    let price_currency = product.currency().unwrap_or(CURRENCIES[0]).to_owned();
+    let price_label = product
+        .price_range()
+        .map(|(min, max, currency)| {
+            if min == max {
+                format_money(min, currency)
+            } else {
+                format!(
+                    "{}–{}",
+                    format_money(min, currency)
+                        .trim_end_matches(currency)
+                        .trim_end(),
+                    format_money(max, currency)
+                )
+            }
+        })
+        .unwrap_or_else(|| "Not priced yet".to_owned());
     // What it may still join is the whole tree, which the read model holds.
     let joinable: Vec<Choice> = rows_of(categories_of_tenant(pool, &access.tenant.id).await?)
         .iter()
@@ -166,7 +273,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .collect();
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
-    let editable = can_manage && !product.is_archived();
     let current_currency = product
         .price
         .as_ref()
@@ -195,7 +301,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <dl class="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
                     <dt class="text-neutral-500">"Slug"</dt><dd><code>(&product.slug)</code></dd>
                     <dt class="text-neutral-500">"Price"</dt>
-                    <dd data-product-price="">(product.price.as_ref().map(|p| p.to_string()).unwrap_or_else(|| "Not priced yet".to_owned()))</dd>
+                    <dd data-product-price="" data-product-price-range=(&price_label)>(&price_label)</dd>
                     <dt class="text-neutral-500">"Description"</dt>
                     <dd data-product-description="" class="whitespace-pre-line">(if product.description.is_empty() { "—" } else { product.description.as_str() })</dd>
                     <dt class="text-neutral-500">"Created"</dt>
@@ -296,6 +402,217 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                         </select>
                         <button class="rounded border border-neutral-300 px-3 py-2 text-sm">"Add to category"</button>
+                    </form>
+                }
+            </section>
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"Options"</h2>
+                <p class="mb-3 text-sm text-neutral-500">
+                    "A product that comes in several colours or sizes varies by them. Settle the options first: once it sells variants they cannot change."
+                </p>
+                if options.is_empty() {
+                    <p class="text-sm text-neutral-500">"This product does not vary. It sells at the price above."</p>
+                }
+                <ul class="space-y-3">
+                    for option in &options {
+                        <li class="rounded border border-neutral-200 p-3" data-option=(&option.id)>
+                            if editable && !options_locked {
+                                <form method="post" action=(href!(options::option_id::values::values, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="space-y-2">
+                                    <label class="block text-sm font-medium" for=(format!("option-name-{}", option.id))>"Name of " (&option.name)</label>
+                                    <input id=(format!("option-name-{}", option.id)) name="name" type="text" maxlength=(MAX_OPTION_NAME_LEN) required=""
+                                        class="w-full rounded border border-neutral-300 px-3 py-2" value=(&option.name)>
+                                    <label class="block text-sm" for=(format!("option-values-{}", option.id))>"Values of " (&option.name) ", one a line"</label>
+                                    <textarea id=(format!("option-values-{}", option.id)) name="values" rows="3"
+                                        class="w-full rounded border border-neutral-300 px-3 py-2">(&option.values)</textarea>
+                                    <button class="rounded border border-neutral-300 px-3 py-1 text-sm">"Save option"</button>
+                                </form>
+                                <form method="post" action=(href!(options::option_id::remove::remove, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="mt-2">
+                                    <button class="rounded border border-neutral-300 px-3 py-1 text-xs text-red-700">"Remove option"</button>
+                                </form>
+                            } else {
+                                <p class="text-sm"><strong>(&option.name)</strong></p>
+                                <p class="whitespace-pre-line text-sm text-neutral-500">(&option.values)</p>
+                            }
+                        </li>
+                    }
+                </ul>
+                if options_locked {
+                    <p class="mt-3 text-sm text-neutral-500">"Remove every variant before changing the options."</p>
+                }
+                if can_add_option {
+                    <form method="post" action=(href!(options::define::define, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 space-y-2">
+                        <label class="block text-sm font-medium" for="new-option-name">"Add an option"</label>
+                        <input id="new-option-name" name="name" type="text" maxlength=(MAX_OPTION_NAME_LEN) required=""
+                            class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="Colour">
+                        <label class="block text-sm" for="new-option-values">"Values, one a line"</label>
+                        <textarea id="new-option-values" name="values" rows="3" required=""
+                            class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="Beige&#10;Blue&#10;Grey"></textarea>
+                        <button class="rounded border border-neutral-300 px-3 py-1 text-sm">"Add option"</button>
+                    </form>
+                }
+            </section>
+
+            if !options.is_empty() {
+                <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                    <h2 class="mb-2 text-lg font-medium">"Variants"</h2>
+                    <p class="mb-3 text-sm text-neutral-500">
+                        "One combination a shopper buys, with its own price. A product with variants is published without a price of its own."
+                    </p>
+                    <table class="w-full text-left text-sm" data-variants="">
+                        <thead>
+                            <tr class="border-b border-neutral-200 text-neutral-500">
+                                <th class="py-2 font-medium">"Combination"</th>
+                                <th class="py-2 font-medium">"Price"</th>
+                                <th class="py-2 font-medium">"Code"</th>
+                                <th class="py-2 font-medium">"Picture"</th>
+                                <th class="py-2 font-medium"><span class="sr-only">"Actions"</span></th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-neutral-100">
+                            if variants.is_empty() {
+                                <tr><td class="py-2 text-neutral-500" colspan="5">"No variant yet."</td></tr>
+                            }
+                            for variant in &variants {
+                                <tr data-variant=(&variant.id)>
+                                    <td class="py-2" data-variant-selections=(&variant.selections)>(&variant.selections)</td>
+                                    <td class="py-2">
+                                        if editable {
+                                            <form method="post" action=(href!(variants::variant_id::price::price, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex gap-1">
+                                                <label class="sr-only" for=(format!("variant-amount-{}", variant.id))>"Price of " (&variant.selections)</label>
+                                                <input id=(format!("variant-amount-{}", variant.id)) name="amount" type="text" inputmode="decimal" required=""
+                                                    class="w-20 rounded border border-neutral-300 px-2 py-1" value=(&variant.amount)>
+                                                <label class="sr-only" for=(format!("variant-currency-{}", variant.id))>"Currency of " (&variant.selections)</label>
+                                                <select id=(format!("variant-currency-{}", variant.id)) name="currency" class="rounded border border-neutral-300 px-1 py-1">
+                                                    for currency in CURRENCIES {
+                                                        <option value=(*currency) selected=(variant.currency == *currency)>(*currency)</option>
+                                                    }
+                                                </select>
+                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs">"Set"</button>
+                                            </form>
+                                        } else {
+                                            (&variant.amount) " " (&variant.currency)
+                                        }
+                                    </td>
+                                    <td class="py-2">
+                                        if editable {
+                                            <form method="post" action=(href!(variants::variant_id::sku::sku, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex gap-1">
+                                                <label class="sr-only" for=(format!("variant-sku-{}", variant.id))>"Code of " (&variant.selections)</label>
+                                                <input id=(format!("variant-sku-{}", variant.id)) name="sku" type="text" maxlength=(MAX_SKU_LEN)
+                                                    class="w-28 rounded border border-neutral-300 px-2 py-1" value=(&variant.sku)>
+                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs">"Save"</button>
+                                            </form>
+                                        } else if variant.sku.is_empty() { "—" } else { <code>(&variant.sku)</code> }
+                                    </td>
+                                    <td class="py-2">
+                                        if editable && !picture_choices.is_empty() {
+                                            <form method="post" action=(href!(variants::variant_id::image::image, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex gap-1">
+                                                <label class="sr-only" for=(format!("variant-image-{}", variant.id))>"Picture of " (&variant.selections)</label>
+                                                <select id=(format!("variant-image-{}", variant.id)) name="image_id" class="rounded border border-neutral-300 px-1 py-1">
+                                                    <option value="" selected=(variant.image_id.is_empty())>"None"</option>
+                                                    for (id, label) in &picture_choices {
+                                                        <option value=(id) selected=(&variant.image_id == id)>(label)</option>
+                                                    }
+                                                </select>
+                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs">"Set"</button>
+                                            </form>
+                                        } else { "—" }
+                                    </td>
+                                    <td class="py-2 text-right">
+                                        if editable {
+                                            <form method="post" action=(href!(variants::variant_id::remove::remove, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone())))>
+                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs text-red-700">"Remove"</button>
+                                            </form>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    if can_add_variant {
+                        <form method="post" action=(href!(variants::define::define, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 space-y-2">
+                            <h3 class="text-sm font-medium">"Add a variant"</h3>
+                            for option in &options {
+                                <label class="block text-sm" for=(format!("pick-{}", option.id))>(&option.name)</label>
+                                <select id=(format!("pick-{}", option.id)) name=(format!("option:{}", option.id)) required=""
+                                    class="w-full rounded border border-neutral-300 px-3 py-2">
+                                    for value in option.values.lines() {
+                                        <option value=(value)>(value)</option>
+                                    }
+                                </select>
+                            }
+                            <div class="flex gap-2">
+                                <div class="flex-1">
+                                    <label class="block text-sm" for="variant-amount">"Variant price"</label>
+                                    <input id="variant-amount" name="amount" type="text" inputmode="decimal" required=""
+                                        class="mt-1 w-full rounded border border-neutral-300 px-3 py-2" placeholder="22.90">
+                                </div>
+                                <div>
+                                    <label class="block text-sm" for="variant-currency">"Variant currency"</label>
+                                    <select id="variant-currency" name="currency" class="mt-1 rounded border border-neutral-300 px-3 py-2">
+                                        for currency in CURRENCIES {
+                                            <option value=(*currency) selected=(price_currency == *currency)>(*currency)</option>
+                                        }
+                                    </select>
+                                </div>
+                            </div>
+                            <label class="block text-sm" for="variant-sku">"Variant code (optional)"</label>
+                            <input id="variant-sku" name="sku" type="text" maxlength=(MAX_SKU_LEN)
+                                class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="harness-beige-s">
+                            if !picture_choices.is_empty() {
+                                <label class="block text-sm" for="variant-picture">"Variant picture (optional)"</label>
+                                <select id="variant-picture" name="image_id" class="w-full rounded border border-neutral-300 px-3 py-2">
+                                    <option value="">"None"</option>
+                                    for (id, label) in &picture_choices {
+                                        <option value=(id)>(label)</option>
+                                    }
+                                </select>
+                            }
+                            <button class="rounded border border-neutral-300 px-3 py-1 text-sm">"Add variant"</button>
+                        </form>
+                    }
+                </section>
+            }
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"Facts"</h2>
+                <p class="mb-3 text-sm text-neutral-500">
+                    "What a shopper reads beside the description: what it is made of, how big it is."
+                </p>
+                <table class="w-full text-left text-sm" data-attributes="">
+                    <tbody class="divide-y divide-neutral-100">
+                        if attributes.is_empty() {
+                            <tr><td class="py-2 text-neutral-500" colspan="3">"No fact yet."</td></tr>
+                        }
+                        for attribute in &attributes {
+                            <tr data-attribute=(&attribute.name)>
+                                <th class="py-2 pr-4 text-left font-medium" scope="row">(&attribute.name)</th>
+                                <td class="py-2">(&attribute.value)</td>
+                                <td class="py-2 text-right">
+                                    if editable {
+                                        <form method="post" action=(href!(attributes::remove::remove, Slug(slug.clone()), ProductId(product.id.clone())))>
+                                            <input type="hidden" name="name" value=(&attribute.name)>
+                                            <button class="rounded border border-neutral-300 px-2 py-1 text-xs text-red-700">"Remove"</button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                if editable {
+                    <form method="post" action=(href!(attributes::set::set, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 flex gap-2">
+                        <div class="flex-1">
+                            <label class="block text-sm" for="attribute-name">"Fact name"</label>
+                            <input id="attribute-name" name="name" type="text" maxlength=(MAX_ATTRIBUTE_NAME_LEN) required=""
+                                class="mt-1 w-full rounded border border-neutral-300 px-3 py-2" placeholder="Material">
+                        </div>
+                        <div class="flex-1">
+                            <label class="block text-sm" for="attribute-value">"Fact value"</label>
+                            <input id="attribute-value" name="value" type="text" maxlength=(MAX_ATTRIBUTE_VALUE_LEN) required=""
+                                class="mt-1 w-full rounded border border-neutral-300 px-3 py-2" placeholder="Nylon">
+                        </div>
+                        <button class="self-end rounded border border-neutral-300 px-3 py-2 text-sm">"Set fact"</button>
                     </form>
                 }
             </section>
