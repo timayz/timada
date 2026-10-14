@@ -62,11 +62,18 @@ pub async fn upload(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
 
     let media = app_context::<Arc<Media>>(cx).clone();
     let image_id = new_image_id();
+    let file = format!("{image_id}.{}", sniffed.ext);
     act(cx, "Picture added.", async |catalog, actor, id| {
         media
             .store(&tenant_id, &image_id, sniffed.ext, &bytes)
             .await
             .map_err(timada_catalog::CatalogError::Other)?;
+        // On a majority of nodes before it is recorded, like the event that
+        // records it: a node going down takes no picture with it.
+        if let Err(err) = media.replicate(&tenant_id, &file, bytes.clone()).await {
+            media.remove(&tenant_id, &file).await;
+            return Err(timada_catalog::CatalogError::Other(err));
+        }
         let added = catalog
             .add_image(
                 actor,
@@ -82,9 +89,7 @@ pub async fn upload(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
             )
             .await;
         if added.is_err() {
-            media
-                .remove(&tenant_id, &format!("{image_id}.{}", sniffed.ext))
-                .await;
+            media.remove(&tenant_id, &file).await;
         }
         added
     })
