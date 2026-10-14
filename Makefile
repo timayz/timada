@@ -31,8 +31,10 @@ migrate:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml migrate
 
 # The example storefront at https://storefront.localhost, listening on every
-# interface so the compose Traefik reaches it. STORE_TOKEN comes from a
-# tenant's API keys page: STORE_TOKEN=... make storefront
+# interface so the compose Traefik reaches it. STORE_TOKEN and STORE_MEDIA_URL
+# (where the product pictures load from) both come from a tenant's API keys
+# page; without the media URL the pictures don't show:
+#   STORE_TOKEN=... STORE_MEDIA_URL=https://timada.localhost/media/<tenant_id> make storefront
 storefront:
 	HOST=0.0.0.0 cargo run -p storefront-example
 
