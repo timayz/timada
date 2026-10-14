@@ -1,4 +1,7 @@
-use sqlx_migrator::{Migration, vec_box};
+use anyhow::Context as _;
+use evento::migrator::Migrate as _;
+use sqlx::SqlitePool;
+use sqlx_migrator::{Info as _, Migration, vec_box};
 
 /// The app name under which these migrations are recorded (the macro needs
 /// the literal, so it is repeated there).
@@ -15,6 +18,22 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         ProductVariants0004,
         ProductSearch0005
     ]
+}
+
+/// Applies evento's tables and the library's own to `pool`.
+/// [`Store::connect`](crate::Store::connect) runs it; a host can also run it
+/// ahead of time, without reaching the store.
+pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().map_err(anyhow::Error::from)?;
+    migrator
+        .add_migrations(migrations())
+        .map_err(anyhow::Error::from)?;
+    migrator
+        .run(&mut *conn, &evento::migrator::Plan::apply_all())
+        .await
+        .context("cannot prepare the local database")?;
+    Ok(())
 }
 
 pub struct Products0001;

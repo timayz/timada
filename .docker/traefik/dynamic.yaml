@@ -17,6 +17,13 @@ http:
       priority: 25
       entryPoints:
         - https
+    storefront-dev:
+      rule: "Host(`storefront.localhost`)"
+      tls: true
+      service: storefront-dev
+      priority: 25
+      entryPoints:
+        - https
 
   services:
     # The three nodes of the local cluster (`cluster.web_peers` in
@@ -32,3 +39,8 @@ http:
           path: /auth/login
           interval: 2s
           timeout: 1s
+    # The example storefront (`make storefront`).
+    storefront-dev:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3456"
