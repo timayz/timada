@@ -12,7 +12,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         Products0001,
         Categories0002,
         ProductImages0003,
-        ProductVariants0004
+        ProductVariants0004,
+        ProductSearch0005
     ]
 }
 
@@ -176,6 +177,30 @@ sqlx_migrator::sqlite_migration!(
             "CREATE INDEX storefront_category_products_price_desc ON storefront_category_products
                 (category_id, max_amount_cents IS NULL, max_amount_cents DESC, product_id DESC)",
             "DROP INDEX storefront_category_products_price_desc"
+        ),
+    ]
+);
+
+pub struct ProductSearch0005;
+sqlx_migrator::sqlite_migration!(
+    ProductSearch0005,
+    "storefront",
+    "0005_product_search",
+    vec_box![("storefront", "0004_product_variants")],
+    vec_box![
+        (
+            // Cut in runs of three characters, so a search matches anywhere
+            // in a word as `LIKE '%q%'` did, ignoring case and accents. The
+            // rowid is the product row's.
+            "CREATE VIRTUAL TABLE storefront_products_fts USING fts5(
+                slug, name, tokenize = 'trigram remove_diacritics 1'
+            )",
+            "DROP TABLE storefront_products_fts"
+        ),
+        (
+            "INSERT INTO storefront_products_fts (rowid, slug, name)
+                SELECT rowid, slug, name FROM storefront_products",
+            "DELETE FROM storefront_products_fts"
         ),
     ]
 );

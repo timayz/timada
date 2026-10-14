@@ -4,7 +4,7 @@ use common::*;
 use timada_catalog::{
     Command, ProductFilter, ProductStatus, categories_of_product, categories_of_tenant,
     category_by_id, count_products, live_child_count, product_by_id, products_of_tenant,
-    read_model_subscription, tree_of,
+    read_model_subscription, tree_of, upsert_product,
 };
 
 const TENANT: &str = "tenant-acme";
@@ -299,4 +299,60 @@ async fn the_stored_counts_follow_a_move() {
     catch_up(&executor, &pool).await;
     assert_eq!(row(bedding.id).await, (0, 0));
     assert_eq!(row(toys.id).await, (0, 0));
+}
+
+#[tokio::test]
+async fn a_search_reads_the_index_of_its_own_tenant() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let mug = create_product(&cmd, "Café Mug").await;
+    create_product(&cmd, "Plate").await;
+    catch_up(&executor, &pool).await;
+    // A second tenant with a product of the same name.
+    upsert_product(&pool, "tenant-zeta", &mug).await.unwrap();
+    let search = |q: &'static str| ProductFilter::default().search(Some(q));
+
+    assert_eq!(
+        count_products(&pool, TENANT, &search("cafe"))
+            .await
+            .unwrap(),
+        1,
+        "one tenant's match, accents ignored"
+    );
+    assert_eq!(
+        count_products(&pool, "tenant-zeta", &search("CAFÉ"))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        count_products(&pool, TENANT, &search("é m")).await.unwrap(),
+        1,
+        "a phrase matches across a space"
+    );
+    assert_eq!(
+        count_products(&pool, TENANT, &search("ug")).await.unwrap(),
+        1,
+        "shorter than the index cuts, still found"
+    );
+
+    cmd.rename_product(ALICE, &mug.id, "Tea Cup").await.unwrap();
+    catch_up(&executor, &pool).await;
+    assert_eq!(
+        count_products(&pool, TENANT, &search("é m")).await.unwrap(),
+        0,
+        "the old name is out of the index (the slug keeps \"cafe\")"
+    );
+    let found = products_of_tenant(&pool, TENANT, &search("tea c"), 0, 50)
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].id, mug.id);
+    assert_eq!(
+        count_products(&pool, "tenant-zeta", &search("é m"))
+            .await
+            .unwrap(),
+        1,
+        "the other tenant's product kept its name"
+    );
 }

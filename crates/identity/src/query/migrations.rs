@@ -9,7 +9,7 @@ pub const MIGRATION_APP: &str = "identity";
 
 /// Every migration of this crate, oldest first.
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![ReadModels0001, Email0002]
+    vec_box![ReadModels0001, Email0002, UserSearch0003]
 }
 
 /// `identity_users` and `identity_sessions`, one row per aggregate, rewritten
@@ -82,6 +82,30 @@ sqlx_migrator::sqlite_migration!(
         (
             "ALTER TABLE identity_users ADD COLUMN has_password INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE identity_users DROP COLUMN has_password"
+        ),
+    ]
+);
+
+/// What the administrator's search finds a user by: the account and the
+/// name, cut in runs of three characters so a search matches anywhere in a
+/// word, ignoring case and accents. The rowid is the user row's.
+pub struct UserSearch0003;
+sqlx_migrator::sqlite_migration!(
+    UserSearch0003,
+    "identity",
+    "0003_user_search",
+    vec_box![("identity", "0002_email")],
+    vec_box![
+        (
+            "CREATE VIRTUAL TABLE identity_users_fts USING fts5(
+                account, label, tokenize = 'trigram remove_diacritics 1'
+            )",
+            "DROP TABLE identity_users_fts"
+        ),
+        (
+            "INSERT INTO identity_users_fts (rowid, account, label)
+                SELECT rowid, account, label FROM identity_users",
+            "DELETE FROM identity_users_fts"
         ),
     ]
 );

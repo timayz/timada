@@ -52,6 +52,48 @@ fn contains(q: &str) -> String {
     format!("%{escaped}%")
 }
 
+/// The full-text phrase matching `q` anywhere in a word, when `q` is long
+/// enough for the index (it is cut in runs of three characters); `None`
+/// otherwise, and the search falls back to [`contains`].
+fn phrase(q: &str) -> Option<String> {
+    (q.chars().count() >= 3).then(|| format!("\"{}\"", q.replace('"', "\"\"")))
+}
+
+/// Where the users come from, `?1` being what was searched for. With a phrase
+/// the full-text index leads (`CROSS JOIN` keeps the planner from walking
+/// every user in order instead); without one `?1` is a `LIKE` pattern or
+/// `NULL`.
+macro_rules! users_from {
+    (phrase) => {
+        "FROM identity_users_fts f CROSS JOIN identity_users u ON u.rowid = f.rowid
+         WHERE identity_users_fts MATCH ?1 "
+    };
+    (pattern) => {
+        "FROM identity_users u
+         WHERE ?1 IS NULL OR u.account LIKE ?1 ESCAPE '\\' OR u.label LIKE ?1 ESCAPE '\\' "
+    };
+}
+
+macro_rules! users_page {
+    ($from:ident) => {
+        concat!(
+            "SELECT u.id, u.account, u.label, u.is_admin, u.deleted, u.registered_at,
+                u.last_sign_in_at, u.sign_in_count, u.oauth2_count, u.passkey_count, u.email,
+                u.has_password ",
+            users_from!($from),
+            "ORDER BY u.deleted, u.label COLLATE NOCASE, u.id LIMIT ?2 OFFSET ?3"
+        )
+    };
+}
+
+/// What `?1` is, and whether it is a phrase for the index.
+fn search_of(q: Option<&str>) -> (Option<String>, bool) {
+    match q.and_then(phrase) {
+        Some(phrase) => (Some(phrase), true),
+        None => (q.map(contains), false),
+    }
+}
+
 /// Users whose account or name contains `q` (everyone when `None`),
 /// deleted ones last, then by name.
 pub async fn list_users(
@@ -60,31 +102,31 @@ pub async fn list_users(
     offset: i64,
     limit: i64,
 ) -> sqlx::Result<Vec<UserRow>> {
-    let pattern = q.map(contains);
-    sqlx::query_as(
-        "SELECT id, account, label, is_admin, deleted, registered_at, last_sign_in_at,
-            sign_in_count, oauth2_count, passkey_count, email, has_password
-         FROM identity_users
-         WHERE ?1 IS NULL OR account LIKE ?1 ESCAPE '\\' OR label LIKE ?1 ESCAPE '\\'
-         ORDER BY deleted, label COLLATE NOCASE, id
-         LIMIT ?2 OFFSET ?3",
-    )
-    .bind(pattern)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
+    let (search, indexed) = search_of(q);
+    let statement = if indexed {
+        users_page!(phrase)
+    } else {
+        users_page!(pattern)
+    };
+    sqlx::query_as(statement)
+        .bind(search)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
 }
 
 pub async fn count_users(pool: &SqlitePool, q: Option<&str>) -> sqlx::Result<i64> {
-    let pattern = q.map(contains);
-    sqlx::query_scalar(
-        "SELECT COUNT(*) FROM identity_users
-         WHERE ?1 IS NULL OR account LIKE ?1 ESCAPE '\\' OR label LIKE ?1 ESCAPE '\\'",
-    )
-    .bind(pattern)
-    .fetch_one(pool)
-    .await
+    let (search, indexed) = search_of(q);
+    let statement = if indexed {
+        concat!("SELECT COUNT(*) ", users_from!(phrase))
+    } else {
+        concat!("SELECT COUNT(*) ", users_from!(pattern))
+    };
+    sqlx::query_scalar(statement)
+        .bind(search)
+        .fetch_one(pool)
+        .await
 }
 
 /// The rows of the given users, in no particular order; unknown ids are

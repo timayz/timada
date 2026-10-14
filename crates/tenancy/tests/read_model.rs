@@ -46,6 +46,16 @@ async fn tenants_and_members_are_listed_and_stay_idempotent() {
         "search is case-insensitive on slug and name"
     );
     assert_eq!(count_tenants(&pool, Some("%")).await.unwrap(), 0);
+    assert_eq!(
+        list_tenants(&pool, Some("dvar"), 0, 50).await.unwrap()[0].id,
+        zeta.id,
+        "a renamed tenant is found by its new name"
+    );
+    assert_eq!(
+        count_tenants(&pool, Some("cm")).await.unwrap(),
+        1,
+        "shorter than the index cuts, still found"
+    );
 
     let mine = tenants_of_user(&pool, &alice).await.unwrap();
     assert_eq!(mine.len(), 1);
