@@ -1,10 +1,10 @@
-.PHONY: dev lint fmt fmt-check test check machete e2e
+.PHONY: dev storefront storefront.migrate lint fmt fmt-check test check machete e2e
 
 start: up dev
 
 cert:
 	mkdir -p .docker/traefik/certs
-	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost
+	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost storefront.localhost
 
 cert.install:
 		sudo mkcert -install
@@ -29,6 +29,15 @@ reset:
 
 migrate:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml migrate
+
+# The example storefront at https://storefront.localhost, listening on every
+# interface so the compose Traefik reaches it. STORE_TOKEN comes from a
+# tenant's API keys page: STORE_TOKEN=... make storefront
+storefront:
+	HOST=0.0.0.0 cargo run -p storefront-example
+
+storefront.migrate:
+	cargo run -p storefront-example -- migrate
 
 # Browser tests on a fresh database behind the compose Traefik, with the compose
 # dex container as the OIDC provider (`make up` first).
