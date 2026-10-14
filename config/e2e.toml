@@ -13,10 +13,8 @@ trusted_proxies = ["172.16.0.0/12"]
 [database]
 url = "sqlite:data/e2e.db"
 
-# Short enough for a test to watch a tenant go idle.
 [tenants]
 dir = "data/e2e-tenants"
-idle_timeout_secs = 2
 
 [media]
 dir = "data/e2e-media"

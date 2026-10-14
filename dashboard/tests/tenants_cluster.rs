@@ -11,6 +11,8 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/limits.rs"]
+mod limits;
 #[path = "../src/tenants.rs"]
 mod tenants;
 
@@ -91,8 +93,7 @@ impl Node {
             self.cluster.clone(),
             &TenantsConfig {
                 dir: self.dir.join("tenants"),
-                idle_timeout_secs: 60,
-                max_open: 8,
+                max_open: Some(8),
             },
             None,
             self.platform.clone(),
@@ -203,8 +204,7 @@ async fn a_node_that_missed_writes_catches_up_without_a_request() {
         .unwrap();
 
     assert_eq!(events_in(&t2.path_of(&tenant.id)).await, 3);
-    // The writes it fetched are younger than the idle timeout: the tenant is
-    // in use in the cluster, so it stays open, as the sweeper would keep it.
+    // Caught up, it stays open until an eviction makes room.
     assert!(matches!(
         t2.status(&tenant.id),
         TenantStatus::Running { .. }
