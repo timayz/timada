@@ -28,7 +28,9 @@ pub struct LegalForm {
     city: String,
     country: String,
     vat_number: String,
-    default_vat_rate_bps: String,
+    /// A checkbox: absent when unticked.
+    #[serde(default)]
+    oss_registered: Option<String>,
 }
 
 /// Saves the legal identity; the crate checks the SIRET and the VAT number.
@@ -53,14 +55,6 @@ pub async fn save(cx: &Cx, Form(form): Form<LegalForm>) -> Result<SeeOther> {
             }
         },
     };
-    let Ok(default_vat_rate_bps) = form.default_vat_rate_bps.trim().parse::<u32>() else {
-        return Ok(see_other(invoicing_url(
-            cx,
-            slug,
-            Some("invalid_vat_rate"),
-            None,
-        )));
-    };
     let identity = LegalIdentity {
         legal_name: form.legal_name,
         legal_form: form.legal_form,
@@ -74,7 +68,7 @@ pub async fn save(cx: &Cx, Form(form): Form<LegalForm>) -> Result<SeeOther> {
         country: form.country,
         contact_email: form.contact_email,
         vat_number: Some(form.vat_number),
-        default_vat_rate_bps: Some(default_vat_rate_bps),
+        oss_registered: form.oss_registered.is_some(),
     };
     match tenancy(cx)
         .set_legal_identity(&access.user_id, &access.tenant.id, identity)

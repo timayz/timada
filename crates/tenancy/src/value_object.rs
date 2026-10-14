@@ -518,9 +518,6 @@ mod tests {
     }
 }
 
-/// The rates of French VAT, in basis points: standard 20 %, intermediate
-/// 10 %, reduced 5.5 % and super-reduced 2.1 %.
-pub const VAT_RATES_BPS: &[u32] = &[2000, 1000, 550, 210];
 pub const MAX_LEGAL_NAME_LEN: usize = 120;
 pub const MAX_LEGAL_FORM_LEN: usize = 40;
 pub const MAX_LEGAL_LINE_LEN: usize = 200;
@@ -583,15 +580,6 @@ pub fn normalize_vat_number(vat_number: &str, siret: &str) -> Result<String, cra
     }
 }
 
-/// A rate of [`VAT_RATES_BPS`].
-pub fn normalize_vat_rate(rate_bps: u32) -> Result<u32, crate::TenancyError> {
-    if VAT_RATES_BPS.contains(&rate_bps) {
-        Ok(rate_bps)
-    } else {
-        Err(crate::TenancyError::InvalidVatRate)
-    }
-}
-
 /// Trims a required piece of the legal identity and checks its length.
 pub(crate) fn normalize_legal_text(text: &str, max: usize) -> Result<String, crate::TenancyError> {
     let text = text.trim();
@@ -639,11 +627,5 @@ mod legal_tests {
         );
         assert!(normalize_vat_number("FR86120027016", "12002701600092").is_err());
         assert!(normalize_vat_number("FR85120027017", "12002701600092").is_err());
-    }
-
-    #[test]
-    fn vat_rates_are_the_french_ones() {
-        assert_eq!(normalize_vat_rate(550).unwrap(), 550);
-        assert!(normalize_vat_rate(1900).is_err());
     }
 }

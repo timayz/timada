@@ -15,7 +15,7 @@ export async function createTenant(page: Page, name: string) {
 }
 
 /// Says who the merchant is in law, which a sale needs: a VAT-registered
-/// SAS charging 20 % unless told otherwise.
+/// SAS, not registered for the EU One-Stop Shop.
 export async function setLegalIdentity(page: Page, slug: string, vatNumber = "FR85120027016") {
   await page.goto(`/t/${slug}/invoicing`);
   await page.getByLabel("Legal name").fill("Acme Boutique SAS");
@@ -28,7 +28,6 @@ export async function setLegalIdentity(page: Page, slug: string, vatNumber = "FR
   await page.getByLabel("Postal code").fill("75002");
   await page.getByLabel("City", { exact: true }).fill("Paris");
   await page.getByLabel("Intra-community VAT number (blank under the exemption)").fill(vatNumber);
-  await page.getByLabel("Default rate, for a product that names none").selectOption("2000");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("status")).toContainText("Legal identity saved.");
 }

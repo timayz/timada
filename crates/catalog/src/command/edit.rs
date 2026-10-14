@@ -1,9 +1,10 @@
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{Described, Priced, Renamed, VatRateSet};
+use crate::aggregator::{Described, Priced, Renamed, TaxCategorySet};
 use crate::error::CatalogError;
 use crate::value_object::{
-    VAT_RATES_BPS, normalize_currency, normalize_description, normalize_name,
+    TAX_CATEGORIES, TAX_CATEGORY_STANDARD, normalize_currency, normalize_description,
+    normalize_name,
 };
 
 use super::Price;
@@ -103,28 +104,32 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Sets the VAT rate the product's prices include, in basis points, one
-    /// of [`VAT_RATES_BPS`]; `None` falls back to the merchant's default.
-    /// The same rate is a no-op.
-    pub async fn set_product_vat_rate(
+    /// Sets what kind of goods the product is for VAT, one of
+    /// [`TAX_CATEGORIES`]; `standard` (or `None`) is the default. The same
+    /// category is a no-op.
+    pub async fn set_product_tax_category(
         &self,
         actor: &str,
         product_id: &str,
-        rate_bps: Option<u32>,
+        category: Option<&str>,
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
-        if rate_bps.is_some_and(|rate| !VAT_RATES_BPS.contains(&rate)) {
-            return Err(CatalogError::InvalidVatRate);
-        }
+        let category = match category.map(str::trim) {
+            None | Some("") | Some(TAX_CATEGORY_STANDARD) => None,
+            Some(key) if TAX_CATEGORIES.iter().any(|(known, _)| *known == key) => {
+                Some(key.to_owned())
+            }
+            Some(_) => return Err(CatalogError::InvalidTaxCategory),
+        };
         let product = self.require_editable(product_id).await?;
-        if product.vat_rate_bps == rate_bps {
+        if product.tax_category == category {
             return Ok(());
         }
         product
             .write()?
             .routing_key_opt(routing_key)
-            .event(&VatRateSet {
-                rate_bps,
+            .event(&TaxCategorySet {
+                category,
                 set_by: actor.to_owned(),
             })
             .commit(&self.0)

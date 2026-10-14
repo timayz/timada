@@ -10,18 +10,19 @@ pub mod options;
 pub mod price;
 pub mod publish;
 pub mod rename;
+pub mod tax_category;
 pub mod uncategorize;
 pub mod unpublish;
 pub mod variants;
-pub mod vat_rate;
 
 use std::sync::Arc;
 use timada_catalog::{
     CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
     MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS,
-    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, format_money,
+    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, TAX_CATEGORIES,
+    format_money, tax_category_label,
 };
-use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ, VAT_RATES_BPS};
+use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 
 use topcoat::{
     Result,
@@ -36,7 +37,6 @@ use topcoat::{
 use super::{catalog, error_code, status_label};
 use crate::app::auth::Flash;
 use crate::app::t::slug::categories::{Choice, rows_of};
-use crate::app::t::slug::invoicing::format_vat_rate;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::auth::user_labels;
 use crate::db::ReadPool;
@@ -274,15 +274,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(Choice::of)
         .collect();
     let TenantAccess { tenant, .. } = access;
-    // Rates only mean something to a merchant who charges VAT.
-    let default_vat_rate = tenant
+    // The kind of goods only matters to a merchant who charges VAT.
+    let charges_vat = tenant
         .legal
         .as_ref()
-        .and_then(|legal| legal.default_vat_rate_bps);
-    let vat_label = match (product.vat_rate_bps, default_vat_rate) {
-        (_, None) => "Not charged".to_owned(),
-        (Some(rate), Some(_)) => format_vat_rate(rate),
-        (None, Some(default)) => format!("{} (default)", format_vat_rate(default)),
+        .is_some_and(|legal| legal.is_vat_registered());
+    let tax_label = if charges_vat {
+        tax_category_label(product.tax_category()).to_owned()
+    } else {
+        "Not charged".to_owned()
     };
     let slug = tenant.slug.clone();
     let current_currency = product
@@ -315,7 +315,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dt class="text-neutral-500">"Price"</dt>
                     <dd data-product-price="" data-product-price-range=(&price_label)>(&price_label)</dd>
                     <dt class="text-neutral-500">"VAT"</dt>
-                    <dd data-product-vat="">(&vat_label)</dd>
+                    <dd data-product-vat="">(&tax_label)</dd>
                     <dt class="text-neutral-500">"Description"</dt>
                     <dd data-product-description="" class="whitespace-pre-line">(if product.description.is_empty() { "—" } else { product.description.as_str() })</dd>
                     <dt class="text-neutral-500">"Created"</dt>
@@ -657,16 +657,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </div>
                         <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Set price"</button>
                     </form>
-                    if default_vat_rate.is_some() {
-                        <form method="post" action=(href!(vat_rate::vat_rate, Slug(slug.clone()), ProductId(product.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
-                            <label class="block text-sm font-medium" for="product-vat">"VAT rate included in the price"</label>
-                            <select id="product-vat" name="rate" class="mt-1 rounded border border-neutral-300 px-3 py-2">
-                                <option value="" selected=(product.vat_rate_bps.is_none())>"Default"</option>
-                                for rate in VAT_RATES_BPS.iter().copied() {
-                                    <option value=(rate) selected=(product.vat_rate_bps == Some(rate))>(format_vat_rate(rate))</option>
+                    if charges_vat {
+                        <form method="post" action=(href!(tax_category::tax_category, Slug(slug.clone()), ProductId(product.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
+                            <label class="block text-sm font-medium" for="product-tax">"Kind of goods, for VAT"</label>
+                            <select id="product-tax" name="category" class="mt-1 rounded border border-neutral-300 px-3 py-2">
+                                for (key, label) in TAX_CATEGORIES.iter().copied() {
+                                    <option value=(key) selected=(product.tax_category() == key)>(label)</option>
                                 }
                             </select>
-                            <button class="mt-3 block rounded border border-neutral-300 px-3 py-1 text-sm">"Set VAT rate"</button>
+                            <p class="mt-1 text-xs text-neutral-500">"Each country taxes a kind at its own rate; most goods are standard."</p>
+                            <button class="mt-3 block rounded border border-neutral-300 px-3 py-1 text-sm">"Set kind"</button>
                         </form>
                     }
                     <form method="post" action=(href!(describe::describe, Slug(slug.clone()), ProductId(product.id.clone()))) class="rounded border border-neutral-200 bg-white p-4 md:col-span-2">
@@ -714,7 +714,7 @@ pub struct PriceForm {
 }
 
 #[derive(serde::Deserialize)]
-pub struct VatRateForm {
-    /// Basis points, or blank for the merchant's default.
-    pub rate: String,
+pub struct TaxCategoryForm {
+    /// A key of `TAX_CATEGORIES`.
+    pub category: String,
 }

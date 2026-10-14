@@ -10,7 +10,7 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_invoicing::{
-    Address, InvoiceLine, NewCreditNote, NewInvoice, PAYMENT_METHOD_CARD, Seller,
+    Address, InvoiceLine, NewCreditNote, NewInvoice, PAYMENT_METHOD_CARD, Seller, french_rate_bps,
 };
 use timada_orders::aggregator::{Placed, Refunded};
 use timada_tenancy::LegalIdentity;
@@ -105,15 +105,15 @@ async fn on_placed<E: Executor>(
     let catalog = timada_catalog::Command(store.0);
     let mut lines = Vec::with_capacity(event.data.lines.len());
     for line in &event.data.lines {
-        let vat_rate_bps = match legal.default_vat_rate_bps {
-            None => None,
-            Some(default) => Some(
-                catalog
-                    .load_product(&line.product_id)
-                    .await?
-                    .and_then(|product| product.vat_rate_bps)
-                    .unwrap_or(default),
-            ),
+        let vat_rate_bps = if legal.is_vat_registered() {
+            let category = catalog
+                .load_product(&line.product_id)
+                .await?
+                .map(|product| product.tax_category().to_owned())
+                .unwrap_or_default();
+            Some(french_rate_bps(&category))
+        } else {
+            None
         };
         lines.push(InvoiceLine {
             name: line.name.clone(),

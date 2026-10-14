@@ -88,9 +88,10 @@ pub enum Tenant {
         /// The intra-community VAT number; `None` under the VAT exemption
         /// for small businesses (franchise en base, art. 293 B du CGI).
         vat_number: Option<String>,
-        /// The rate, in basis points, of a product that names none; `None`
-        /// exactly when `vat_number` is.
-        default_vat_rate_bps: Option<u32>,
+        /// Registered for the EU One-Stop Shop: sales to consumers in other
+        /// EU countries carry their VAT from the first euro, not only past
+        /// the yearly threshold. Needs a `vat_number`.
+        oss_registered: bool,
         set_by: String,
     },
 }

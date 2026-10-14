@@ -20,6 +20,18 @@ pub const PAYMENT_METHOD_CARD: &str = "card";
 /// its invoices.
 pub const FRANCHISE_MENTION: &str = "TVA non applicable, art. 293 B du CGI";
 
+/// The French VAT rate of a kind of goods (a catalog tax category), in
+/// basis points: books and basic food 5.5 %, medicines sold without
+/// prescription 10 %, press 2.1 %, everything else 20 %.
+pub fn french_rate_bps(category: &str) -> u32 {
+    match category {
+        "books" | "food" => 550,
+        "medicines" => 1000,
+        "press" => 210,
+        _ => 2000,
+    }
+}
+
 /// The index stream of an order's invoice.
 pub fn invoice_id(order_id: &str) -> String {
     evento::hash_ids(vec!["invoice", order_id])

@@ -14,14 +14,16 @@ is in law:
 - the RCS city, if the company is registered;
 - the registered address and a contact e-mail;
 - VAT, one of two ways:
-  - a VAT number, which must embed the SIREN under its key, plus the default rate;
+  - a VAT number, which must embed the SIREN under its key, and whether the merchant
+    is registered for the EU One-Stop Shop;
   - nothing, for the exemption for small businesses. The invoices then carry
     *TVA non applicable, art. 293 B du CGI*.
 
 Until this is set, checkout refuses to take a payment (`invoicing_not_configured`):
 no sale goes through without an invoice that can name the seller. A VAT-registered
-merchant can give a product its own rate (20, 10, 5.5 or 2.1 %) on the product
-page. Catalog prices always include VAT.
+merchant says on the product page what kind of goods each product is: standard,
+books, food, medicines or press. In France that is 20, 5.5, 5.5, 10 and 2.1 %. Catalog
+prices always include VAT.
 
 ## What a document says
 

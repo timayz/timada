@@ -358,13 +358,13 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page).toHaveURL(/error=invalid_siret/);
     await expect(page.locator("[data-invoicing]")).toHaveCount(0);
-    // VAT-registered, so a product can take a reduced rate.
+    // VAT-registered, so a product says what kind of goods it is.
     await page.goto(plateUrl);
-    await expect(page.locator("[data-product-vat]")).toHaveText("20\u00a0% (default)");
-    await page.getByLabel("VAT rate included in the price").selectOption({ label: "5,5\u00a0%" });
-    await page.getByRole("button", { name: "Set VAT rate" }).click();
-    await expect(page.getByRole("status")).toContainText("VAT rate set.");
-    await expect(page.locator("[data-product-vat]")).toHaveText("5,5\u00a0%");
+    await expect(page.locator("[data-product-vat]")).toHaveText("Standard");
+    await page.getByLabel("Kind of goods, for VAT").selectOption({ label: "Food" });
+    await page.getByRole("button", { name: "Set kind" }).click();
+    await expect(page.getByRole("status")).toContainText("Kind of goods set.");
+    await expect(page.locator("[data-product-vat]")).toHaveText("Food");
 
     // The merchant connects a Stripe account; a key Stripe refuses is not saved.
     await page.goto(`/t/${slug}`);

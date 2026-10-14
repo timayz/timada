@@ -251,7 +251,7 @@ impl Harness {
                     country: "FR".into(),
                     contact_email: "shop@example.org".into(),
                     vat_number: Some("FR85120027016".into()),
-                    default_vat_rate_bps: Some(2000),
+                    oss_registered: false,
                     ..Default::default()
                 },
             )

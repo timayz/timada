@@ -298,7 +298,7 @@ async fn on_legal_identity_set(
         country: data.country.to_owned(),
         contact_email: data.contact_email.to_owned(),
         vat_number: data.vat_number.to_owned(),
-        default_vat_rate_bps: data.default_vat_rate_bps,
+        oss_registered: data.oss_registered,
     });
     Ok(())
 }

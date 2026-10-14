@@ -5,7 +5,7 @@ use crate::error::TenancyError;
 use crate::value_object::{
     MAX_LEGAL_CITY_LEN, MAX_LEGAL_FORM_LEN, MAX_LEGAL_LINE_LEN, MAX_LEGAL_NAME_LEN,
     MAX_LEGAL_POSTAL_CODE_LEN, PERMISSION_TENANT_MANAGE, normalize_email, normalize_legal_optional,
-    normalize_legal_text, normalize_siret, normalize_vat_number, normalize_vat_rate,
+    normalize_legal_text, normalize_siret, normalize_vat_number,
 };
 
 /// Who a merchant is in law: what its invoices must say about it. The
@@ -27,9 +27,9 @@ pub struct LegalIdentity {
     pub contact_email: String,
     /// `None` under the VAT exemption for small businesses.
     pub vat_number: Option<String>,
-    /// The rate of a product that names none, in basis points; set exactly
-    /// when `vat_number` is.
-    pub default_vat_rate_bps: Option<u32>,
+    /// Registered for the EU One-Stop Shop: other EU countries' VAT from the
+    /// first euro of sales to their consumers. Needs a `vat_number`.
+    pub oss_registered: bool,
 }
 
 impl LegalIdentity {
@@ -47,8 +47,7 @@ impl LegalIdentity {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Sets (or replaces) the legal identity. Needs `tenant:manage`; the
-    /// same identity is a no-op. A VAT number needs a default rate and the
-    /// exemption needs none.
+    /// same identity is a no-op. The One-Stop Shop needs a VAT number.
     pub async fn set_legal_identity(
         &self,
         actor_user_id: &str,
@@ -80,7 +79,7 @@ impl<E: Executor> super::Command<E> {
                 country: identity.country,
                 contact_email: identity.contact_email,
                 vat_number: identity.vat_number,
-                default_vat_rate_bps: identity.default_vat_rate_bps,
+                oss_registered: identity.oss_registered,
                 set_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)
@@ -91,17 +90,12 @@ impl<E: Executor> super::Command<E> {
 
 fn normalize_identity(identity: LegalIdentity) -> Result<LegalIdentity, TenancyError> {
     let siret = normalize_siret(&identity.siret)?;
-    let (vat_number, default_vat_rate_bps) = match (
-        normalize_legal_optional(identity.vat_number.as_deref(), MAX_LEGAL_FORM_LEN)?,
-        identity.default_vat_rate_bps,
-    ) {
-        (None, _) => (None, None),
-        (Some(number), Some(rate)) => (
-            Some(normalize_vat_number(&number, &siret)?),
-            Some(normalize_vat_rate(rate)?),
-        ),
-        (Some(_), None) => return Err(TenancyError::InvalidVatRate),
-    };
+    let vat_number = normalize_legal_optional(identity.vat_number.as_deref(), MAX_LEGAL_FORM_LEN)?
+        .map(|number| normalize_vat_number(&number, &siret))
+        .transpose()?;
+    if identity.oss_registered && vat_number.is_none() {
+        return Err(TenancyError::OssWithoutVatNumber);
+    }
     let country = identity.country.trim().to_ascii_uppercase();
     if country.len() != 2 || !country.bytes().all(|b| b.is_ascii_uppercase()) {
         return Err(TenancyError::InvalidLegalIdentity);
@@ -119,6 +113,6 @@ fn normalize_identity(identity: LegalIdentity) -> Result<LegalIdentity, TenancyE
         country,
         contact_email: normalize_email(&identity.contact_email)?,
         vat_number,
-        default_vat_rate_bps,
+        oss_registered: identity.oss_registered,
     })
 }

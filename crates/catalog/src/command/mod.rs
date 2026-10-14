@@ -37,8 +37,8 @@ use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
     Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Described, ImageAdded,
     ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionRemoved, OptionRenamed,
-    OptionValuesChanged, Priced, Published, Released, Renamed, Uncategorized, Unpublished,
-    VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged, VatRateSet,
+    OptionValuesChanged, Priced, Published, Released, Renamed, TaxCategorySet, Uncategorized,
+    Unpublished, VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -197,9 +197,8 @@ pub struct ProductState {
     pub variants: Vec<ProductVariant>,
     /// The facts in its table, in the order they were set.
     pub attributes: Vec<ProductAttribute>,
-    /// The VAT rate its prices include, in basis points; `None` is the
-    /// merchant's default.
-    pub vat_rate_bps: Option<u32>,
+    /// What kind of goods it is for VAT; `None` is `standard`.
+    pub tax_category: Option<String>,
     pub created_by: String,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -208,6 +207,13 @@ pub struct ProductState {
 }
 
 impl ProductState {
+    /// What kind of goods it is for VAT, `standard` unless told otherwise.
+    pub fn tax_category(&self) -> &str {
+        self.tax_category
+            .as_deref()
+            .unwrap_or(crate::TAX_CATEGORY_STANDARD)
+    }
+
     pub fn is_published(&self) -> bool {
         self.status == ProductStatus::Published
     }
@@ -285,7 +291,7 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_variant_removed())
         .handler(on_attribute_set())
         .handler(on_attribute_removed())
-        .handler(on_vat_rate_set())
+        .handler(on_tax_category_set())
         .strict()
 }
 
@@ -652,11 +658,11 @@ async fn on_attribute_removed(
 }
 
 #[evento::handler]
-async fn on_vat_rate_set(
-    event: Event<VatRateSet>,
+async fn on_tax_category_set(
+    event: Event<TaxCategorySet>,
     product: &mut ProductState,
 ) -> anyhow::Result<()> {
-    product.vat_rate_bps = event.data.rate_bps;
+    product.tax_category = event.data.category.to_owned();
     product.updated_at = event.timestamp;
     Ok(())
 }
