@@ -150,6 +150,12 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_api_key_label" => "A key label is 1 to 40 characters.",
         "invalid_api_key_scopes" => "Choose at least one scope for the key.",
         "api_key_invalid" => "This API key does not exist or is already revoked.",
+        "order_not_found" => "This order does not exist.",
+        "order_cancelled" => "A cancelled order cannot be fulfilled.",
+        "invalid_publishable_key" => "A publishable key starts with pk_.",
+        "not_cancellable" => "A fulfilled order cannot be cancelled.",
+        "invalid_tracking" => "A tracking number is at most 200 characters.",
+        "invalid_reason" => "Say why the order is cancelled, in at most 500 characters.",
         _ => "Something went wrong. Please try again.",
     }
 }
@@ -166,6 +172,11 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "api-keys:manage" => "Create and revoke the store API keys",
         "products:read" => "See the products and categories",
         "products:manage" => "Create, edit, publish and archive products; organise the categories",
+        "orders:read" => "See the orders and the carts shoppers left",
+        "orders:manage" => {
+            "Mark orders fulfilled, and cancel and refund them (includes seeing them)"
+        }
+        "payments:manage" => "Set up how shoppers pay (the payment provider's keys)",
         _ => "Unknown permission",
     }
 }
@@ -174,6 +185,7 @@ pub fn describe_api_key_scope(scope: &str) -> &'static str {
     match scope {
         "store:read" => "Read the events and run subscriptions over them",
         "store:write" => "Write events (includes reading)",
+        "store:checkout" => "Fill carts and place orders, nothing else",
         _ => "Unknown scope",
     }
 }
