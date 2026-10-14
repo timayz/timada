@@ -141,7 +141,8 @@ tenant's products while the events stay isolated by construction.
    Stripe's card form; Stripe calls `POST /stripe/webhooks/{tenant_id}`, any node,
    which checks the signature, reads the payment back from Stripe and only then
    creates the order (`place_paid_order`). A second payment of a cart is refunded;
-   cancelling an order refunds it first.
+   cancelling an order refunds it first. Setting it up and testing it locally:
+   `docs/payments.md`.
 5. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
    roles as roles. Policies are not loaded at startup: every tenant-scoped request loads
    the tenant's strict state, whose version says which events it reflects, and the

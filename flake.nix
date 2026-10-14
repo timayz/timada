@@ -75,6 +75,7 @@
             cargo-machete
             cargo-tarpaulin
             cargo-edit
+            stripe-cli
             tailwindcss_4
             imagemagick # mobile/scripts/icons.mjs
             pkgs-unstable.playwright-test
