@@ -11,7 +11,8 @@
 //! the wire cannot create one. A storefront connected through the store API
 //! holds a [`TenantLease`]: a leased tenant is neither closed as idle nor
 //! evicted (a store with subscriptions is never idle anyway), only by an
-//! administrator or at shutdown.
+//! administrator or at shutdown. A web request holds a [`RequestHold`] the
+//! same way while it runs, so a slow write is never cut by the sweeper.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -61,6 +62,16 @@ struct OpenTenant {
     last_used: Instant,
     /// Live [`TenantLease`]s; shared with each lease so a drop needs no lookup.
     leases: Arc<AtomicUsize>,
+    /// Requests running against it, each holding a [`RequestHold`]. Kept
+    /// apart from `leases`, which pages show as store connections.
+    requests: Arc<AtomicUsize>,
+}
+
+impl OpenTenant {
+    /// Whether anything holds it open: a store connection or a request.
+    fn is_held(&self) -> bool {
+        self.leases.load(Ordering::Acquire) > 0 || self.requests.load(Ordering::Acquire) > 0
+    }
 }
 
 /// A store connection's hold on an open tenant, released on drop. The
@@ -85,6 +96,26 @@ impl TenantLease {
 impl Drop for TenantLease {
     fn drop(&mut self) {
         self.leases.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A web request's hold on an open tenant, released on drop: while it lives
+/// the tenant is neither closed as idle nor evicted, so a write that takes
+/// longer than the idle timeout still has its database.
+pub struct RequestHold {
+    executor: Executor,
+    requests: Arc<AtomicUsize>,
+}
+
+impl RequestHold {
+    pub fn executor(&self) -> &Executor {
+        &self.executor
+    }
+}
+
+impl Drop for RequestHold {
+    fn drop(&mut self) {
+        self.requests.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -231,22 +262,23 @@ impl Tenants {
                     opened_at: SystemTime::now(),
                     last_used: Instant::now(),
                     leases: Arc::new(AtomicUsize::new(0)),
+                    requests: Arc::new(AtomicUsize::new(0)),
                 },
             );
             let mut evicted = Vec::new();
             while open.len() > self.max_open {
-                // Only an unleased tenant can go; when every one is held by a
-                // store connection the limit is exceeded rather than a live
-                // connection cut.
+                // Only a tenant nothing holds can go; when every one is held
+                // the limit is exceeded rather than a live connection or a
+                // running request cut.
                 let Some((&victim, _)) = open
                     .iter()
-                    .filter(|(g, t)| **g != group && t.leases.load(Ordering::Acquire) == 0)
+                    .filter(|(g, t)| **g != group && !t.is_held())
                     .min_by_key(|(_, t)| t.last_used)
                 else {
                     tracing::warn!(
                         open = open.len(),
                         max_open = self.max_open,
-                        "every open tenant is held by a store connection; over the limit"
+                        "every open tenant is held by a store connection or a request; over the limit"
                     );
                     break;
                 };
@@ -268,20 +300,40 @@ impl Tenants {
     /// a lease that keeps the sweeper and the eviction away until it drops.
     pub async fn lease(&self, tenant: &TenantState) -> Result<TenantLease> {
         let executor = self.open(tenant).await?;
-        let group = GroupId(group_of(&tenant.id));
-        let leases = {
-            let open = self.open.lock().expect("open poisoned");
-            open.get(&group)
-                .filter(|t| t.tenant_id == tenant.id)
-                .map(|t| Arc::clone(&t.leases))
-        }
-        .with_context(|| format!("tenant {} closed while being leased", tenant.slug))?;
-        leases.fetch_add(1, Ordering::AcqRel);
+        let leases = self.counter_of(tenant, |t| &t.leases)?;
         Ok(TenantLease {
             executor,
             tenant_id: tenant.id.clone(),
             leases,
         })
+    }
+
+    /// Holds a tenant open for one request: [`open`](Self::open), then a hold
+    /// that keeps the sweeper and the eviction away until it drops. Counts as
+    /// activity, as `open` does.
+    pub async fn hold(&self, tenant: &TenantState) -> Result<RequestHold> {
+        let executor = self.open(tenant).await?;
+        let requests = self.counter_of(tenant, |t| &t.requests)?;
+        Ok(RequestHold { executor, requests })
+    }
+
+    /// Takes one on the counter `pick` names, on the tenant's open entry.
+    fn counter_of(
+        &self,
+        tenant: &TenantState,
+        pick: fn(&OpenTenant) -> &Arc<AtomicUsize>,
+    ) -> Result<Arc<AtomicUsize>> {
+        let group = GroupId(group_of(&tenant.id));
+        let open = self.open.lock().expect("open poisoned");
+        let counter = open
+            .get(&group)
+            .filter(|t| t.tenant_id == tenant.id)
+            .map(|t| Arc::clone(pick(t)))
+            .with_context(|| format!("tenant {} closed while being held", tenant.slug))?;
+        // Under the lock, so the sweeper cannot pick the tenant between the
+        // lookup and the count.
+        counter.fetch_add(1, Ordering::AcqRel);
+        Ok(counter)
     }
 
     /// Marks a tenant used and returns its executor when it is open.
@@ -316,7 +368,7 @@ impl Tenants {
             let cutoff = Instant::now() - self.idle_timeout;
             let groups: Vec<GroupId> = open
                 .iter()
-                .filter(|(_, t)| t.last_used <= cutoff && t.leases.load(Ordering::Acquire) == 0)
+                .filter(|(_, t)| t.last_used <= cutoff && !t.is_held())
                 .map(|(g, _)| *g)
                 .collect();
             groups
