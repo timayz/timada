@@ -32,8 +32,9 @@ store.shutdown().await;
 
 Events stay on the store. The app's SQLite file holds the subscription cursor (key
 `storefront/catalog`, prefixed by the store's region), the projection snapshots, the
-`storefront_products` rows and the category tree (`storefront_categories` and
-`storefront_product_categories`). One file per replica of the app: replicas never fence each
+`storefront_products` rows (the gallery among them) and the category tree
+(`storefront_categories` and `storefront_product_categories`). Picture files are not
+copied: they are loaded from the store's own address. One file per replica of the app: replicas never fence each
 other out of the subscription, nothing accumulates on the store, and a restarted replica
 resumes from its own cursor.
 
@@ -96,13 +97,27 @@ count instead of counting. `in_categories` is the narrower filter: products file
 directly under any of the ids, which is what related products use. An archived category
 is in none of this; the products that were in it stay on sale.
 
-## The one component
+## Pictures
+
+A product carries `images`, in the order the merchant put them; `product.image()` is
+the first, which is what a listing shows. Each one knows its `alt`, `mime`, `width`
+and `height`, and its `url`.
+
+That address is only absolute once the host passes
+`StoreConfig::media_url("<picture address>")`, taking the value from the tenant's API
+keys page. Without it a picture keeps its bare `file` name, which suits a host serving
+the files itself. The context helpers fill the addresses in; a host reading rows
+directly with `published_products` calls `Product::fill_urls(media_url(cx))` itself.
+
+## The two components
 
 ```rust
 price(product: &product, attrs: attributes! { class="price" })
+product_image(image: &photo, attrs: attributes! { class="photo" })
 ```
 
-renders `<span data-price class="price">12.50 EUR</span>`. The library ships no other
+They render `<span data-price class="price">12.50 EUR</span>` and an `<img data-image
+src alt width height loading="lazy" decoding="async">`. The library ships no other
 markup and no CSS classes (a host's Tailwind build does not scan a dependency anyway):
 everything a page shows is the merchant's own `view!` around `Product` values.
 
@@ -118,15 +133,16 @@ counts the published rows of the local copy.
 
 ## The example
 
-`examples/storefront` is a complete app on the library: a catalog page, a product page,
-inline styles, no asset bundle. Against a dashboard whose `[store_api]` listens on
-`127.0.0.1:4321`:
+`examples/storefront` is a complete app on the library: a catalog page, a category
+page, a product page, inline styles, no asset bundle. Against a dashboard whose
+`[store_api]` listens on `127.0.0.1:4321`:
 
 ```sh
-STORE_TOKEN=tk_… cargo run -p storefront-example
+STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
+    cargo run -p storefront-example
 open http://127.0.0.1:3456/
 ```
 
-`STORE_ADDR`, `STORE_DB`, `HOST`, `PORT`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` are
-the other knobs. The browser suite (`tests/e2e/storefront.spec.ts`) boots it with a key
+Both values are on the tenant's API keys page. `STORE_ADDR`, `STORE_DB`, `HOST`,
+`PORT`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` are the other knobs. The browser suite (`tests/e2e/storefront.spec.ts`) boots it with a key
 minted in the dashboard and checks the catalog follows live.

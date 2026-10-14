@@ -50,6 +50,11 @@ pub async fn reset(config: Config) -> Result<()> {
         tracing::warn!(dir = %tenants.display(), "removing the tenant databases");
         std::fs::remove_dir_all(tenants)?;
     }
+    let media = &config.media.dir;
+    if media.is_dir() {
+        tracing::warn!(dir = %media.display(), "removing the uploaded pictures");
+        std::fs::remove_dir_all(media)?;
+    }
 
     migrate(config).await?;
 

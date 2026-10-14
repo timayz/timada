@@ -28,7 +28,7 @@ use evento::remote::ServerHandle;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
-use timada_catalog::{CreateCategory, CreateProduct, categories_of_tenant};
+use timada_catalog::{AddImage, CreateCategory, CreateProduct, categories_of_tenant};
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
     SubscriptionState, category_ancestors, find_category, published_categories,
@@ -749,6 +749,101 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         3,
         "its products are still for sale"
     );
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_store_carries_the_gallery_with_the_address_it_is_loaded_from() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme).await;
+    let mat = stock(&catalog, "Cooling Mat", 2990, &[]).await;
+    for (id, alt) in [
+        ("img-front", "Seen from the front"),
+        ("img-cat", "A cat on it"),
+    ] {
+        catalog
+            .add_image(
+                "alice",
+                &mat,
+                AddImage {
+                    image_id: id.into(),
+                    ext: "png".into(),
+                    size: 4096,
+                    width: Some(1200),
+                    height: Some(800),
+                    alt: alt.into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    // The host says where its pictures are served from; the library turns
+    // each one into an address a browser can load.
+    let pool = h.local_pool("acme-shop").await;
+    let config = h
+        .config(&token)
+        .media_url("https://cdn.example/media/acme/");
+    let store = Store::connect(config, pool.clone()).await.unwrap();
+    eventually("the product reaches the local copy", async || {
+        published_product_by_slug(&pool, "cooling-mat")
+            .await
+            .unwrap()
+            .is_some_and(|p| p.images.len() == 2)
+    })
+    .await;
+
+    let mut product = published_product_by_slug(&pool, "cooling-mat")
+        .await
+        .unwrap()
+        .unwrap();
+    // The rows hold the file name; the address is added when a page reads it.
+    assert_eq!(product.images[0].url, "");
+    product.fill_urls(store.media_url());
+    assert_eq!(product.images[0].file, "img-front.png");
+    assert_eq!(
+        product.images[0].url, "https://cdn.example/media/acme/img-front.png",
+        "the trailing slash of the configured address is dropped"
+    );
+    assert_eq!(product.images[0].alt, "Seen from the front");
+    assert_eq!(product.images[0].mime, "image/png");
+    assert_eq!(
+        (product.images[0].width, product.images[0].height),
+        (Some(1200), Some(800))
+    );
+    assert_eq!(
+        product.image().map(|i| i.id.as_str()),
+        Some("img-front"),
+        "a listing shows the first one"
+    );
+
+    // Reordering and removing reach the copy too.
+    catalog
+        .reorder_images("alice", &mat, vec!["img-cat".into(), "img-front".into()])
+        .await
+        .unwrap();
+    eventually("the new order reaches the local copy", async || {
+        published_product_by_slug(&pool, "cooling-mat")
+            .await
+            .unwrap()
+            .and_then(|p| p.image().map(|i| i.id.clone()))
+            == Some("img-cat".to_owned())
+    })
+    .await;
+    catalog
+        .remove_image("alice", &mat, "img-cat")
+        .await
+        .unwrap();
+    eventually("and so does a removal", async || {
+        published_product_by_slug(&pool, "cooling-mat")
+            .await
+            .unwrap()
+            .is_some_and(|p| p.images.len() == 1)
+    })
+    .await;
 
     store.shutdown().await;
 }

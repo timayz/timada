@@ -28,13 +28,17 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             write_pool.clone(),
         )
         .await?;
+    let media = Arc::new(crate::media::Media::new(
+        &config.media,
+        config.cluster.as_ref(),
+    )?);
     let tenants = Tenants::new(
         cluster.clone(),
         &config.tenants,
         config.server.region.clone(),
         executor.clone(),
         write_pool.clone(),
-        tenant_subscriptions(),
+        tenant_subscriptions(media.clone()),
     );
     let sweeper = tenants.start_sweeper();
     let connections = StoreConnections::new();
@@ -81,6 +85,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         mailer,
         tenants: tenants.clone(),
         authorizer,
+        media,
         store: connections,
         config,
     });
@@ -112,13 +117,15 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     Ok(())
 }
 
-/// The read models fed from each tenant's own stream into the shared
-/// database: the catalog's product list. Every tenant-scoped bounded context
-/// registers its subscription here.
-fn tenant_subscriptions() -> Vec<TenantSubscription> {
-    vec![Arc::new(|pool, tenant_id| {
-        timada_catalog::read_model_subscription(pool, tenant_id)
-    })]
+/// What follows each tenant's own stream while it is open: the read models
+/// fed into the shared database (the catalog's product list), and this
+/// node's copies of the product pictures. Every tenant-scoped bounded
+/// context registers its subscription here.
+fn tenant_subscriptions(media: Arc<crate::media::Media>) -> Vec<TenantSubscription> {
+    vec![
+        Arc::new(timada_catalog::read_model_subscription::<Executor>),
+        Arc::new(move |_, tenant_id| crate::media::subscription(media.clone(), tenant_id)),
+    ]
 }
 
 async fn start_read_model(

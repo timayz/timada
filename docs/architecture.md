@@ -17,7 +17,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 |---|---|---|
 | `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions |
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
-| `crates/catalog` | `timada-catalog` | Products and the categories they are filed under: the first context living in a tenant's own store |
+| `crates/catalog` | `timada-catalog` | Products, their pictures and the categories they are filed under: the first context living in a tenant's own store |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
 | `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
@@ -61,6 +61,7 @@ data/timada.db            the platform store: identity + tenancy events, every r
                           table (including the tenants' catalog_products and
                           catalog_categories), the consensus journal
 data/tenants/<id>.db      one per tenant: its catalog events and its consensus journal
+data/media/<id>/          one per tenant: the product pictures, named <image id>.<ext>
 <merchant app>/store.db   a storefront replica: subscription cursor, snapshots, product and
                           category rows
 ```
@@ -132,6 +133,34 @@ A member renames a product on `/t/{slug}/products/{id}`:
 6. Every storefront connected to that tenant through the store API is notified at
    once; its `storefront/catalog` subscription updates the local `storefront_products`
    row.
+
+## Product pictures
+
+The event store records what a picture is, never its bytes: an id, the format, the
+size, what it shows. The file lands in `media.dir/<tenant>/<image id>.<ext>` and is
+served at `/media/...` by a directory route with `Cache-Control: immutable`, since a
+new picture is a new id and an address never changes what it holds. There is no
+authentication on it: an id is an unguessable ULID, and a shopper's browser has no
+session on this node.
+
+`dashboard/src/media.rs` writes and deletes the files. An upload stores the file and
+then commits, deleting it again if the commit fails; a removal commits and then
+deletes. So a failure leaves a file nobody references rather than a product pointing
+at nothing. `media.public_url` is the address a shopper loads a picture from, shown on
+each tenant's API keys page for its storefront to be configured with.
+
+With several nodes, every node keeps every picture, so a node going down takes none
+with it and `media.public_url` can point at any of them or at a balancer in front.
+The node taking an upload stores the file, copies it to the other nodes
+(`PUT /cluster/media/<tenant>/<file>` on their `cluster.web_peers` address, with
+`cluster.secret` as a bearer token) and commits only once a majority of the cluster
+holds it, the same majority the commit itself needs; short of that the upload is
+refused and the copies are left unreferenced. Copies to the slower nodes carry on
+after the commit. Each node also runs a per-tenant subscription
+(`timada-dashboard/media`) that fetches from a peer's `/media` any picture added that
+it lacks (a node that was down during the upload, or a new one replaying the stream)
+and deletes the pictures removed. It only runs while the tenant is open on that node,
+so a node that missed a picture catches up the next time the tenant opens there.
 
 ## The storefront side
 

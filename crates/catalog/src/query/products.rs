@@ -20,6 +20,9 @@ pub struct ProductRow {
     pub created_at: i64,
     /// Unix seconds.
     pub updated_at: i64,
+    /// The file name of the first picture, when it has one.
+    pub thumbnail: Option<String>,
+    pub image_count: i64,
 }
 
 impl ProductRow {
@@ -77,7 +80,7 @@ pub async fn products_of_tenant(
 ) -> sqlx::Result<Vec<ProductRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, slug, name, description, amount_cents, currency, status,
-            created_by, created_at, updated_at
+            created_by, created_at, updated_at, thumbnail, image_count
          FROM catalog_products
          WHERE tenant_id = ?1
            AND (?2 IS NULL OR slug LIKE ?2 ESCAPE '\\' OR name LIKE ?2 ESCAPE '\\')
@@ -123,7 +126,7 @@ pub async fn product_by_id(
 ) -> sqlx::Result<Option<ProductRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, slug, name, description, amount_cents, currency, status,
-            created_by, created_at, updated_at
+            created_by, created_at, updated_at, thumbnail, image_count
          FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
     )
     .bind(tenant_id)
