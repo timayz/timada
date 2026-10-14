@@ -4,10 +4,13 @@
 //!
 //! Configuration comes from the environment:
 //!
-//! - `STORE_ADDR` — the store API of the timada node (`127.0.0.1:4321`)
+//! - `STORE_ADDR` — the store API (`127.0.0.1:4321`): one node, or a host name
+//!   in front of several (a load balancer, a geo-routed name), looked up again
+//!   on every reconnect
 //! - `STORE_TOKEN` — the API key's token, from the tenant's API keys page
 //! - `STORE_DB` — the local SQLite file (`storefront.db`)
-//! - `STORE_TLS_CA` + `STORE_TLS_SERVER_NAME` — TLS to the store (optional)
+//! - `STORE_TLS_CA` — TLS to the store (optional), checked against
+//!   `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by default)
 //! - `STORE_MEDIA_URL` — where the product pictures are loaded from, as the
 //!   tenant's API keys page shows it (optional)
 //! - `HOST` / `PORT` — where to listen (`127.0.0.1` / `3456`)
@@ -17,7 +20,6 @@
 
 mod app;
 
-use std::net::SocketAddr;
 use std::path::Path;
 
 use anyhow::Context as _;
@@ -52,13 +54,15 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let addr: SocketAddr = env_or("STORE_ADDR", "127.0.0.1:4321")
-        .parse()
-        .context("STORE_ADDR is not an address")?;
+    let addr = env_or("STORE_ADDR", "127.0.0.1:4321");
+    let Some((store_host, _)) = addr.rsplit_once(':') else {
+        anyhow::bail!("STORE_ADDR is not host:port: {addr:?}");
+    };
+    let store_host = store_host.trim_matches(['[', ']']).to_owned();
     let token = std::env::var("STORE_TOKEN").context("STORE_TOKEN is not set")?;
     let mut config = StoreConfig::new(addr, token);
     if let Ok(ca) = std::env::var("STORE_TLS_CA") {
-        let server_name = env_or("STORE_TLS_SERVER_NAME", "localhost");
+        let server_name = env_or("STORE_TLS_SERVER_NAME", &store_host);
         config = config.tls(StoreTls::from_ca_pem(Path::new(&ca), &server_name)?);
     }
     if let Ok(media) = std::env::var("STORE_MEDIA_URL") {

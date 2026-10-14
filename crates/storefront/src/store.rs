@@ -69,7 +69,7 @@ impl Store {
     /// own) and starts following the catalog into it.
     pub async fn connect(config: StoreConfig, pool: SqlitePool) -> anyhow::Result<Store> {
         let mut builder =
-            RemoteClient::builder(config.addr).request_timeout(config.request_timeout);
+            RemoteClient::builder(config.addr.clone()).request_timeout(config.request_timeout);
         builder = builder.token(config.token.clone());
         if let Some(tls) = config.tls.clone() {
             builder = builder.tls(tls.connector, tls.server_name);
