@@ -517,3 +517,133 @@ mod tests {
         assert!(normalize_api_key_label(&"x".repeat(41)).is_err());
     }
 }
+
+/// The rates of French VAT, in basis points: standard 20 %, intermediate
+/// 10 %, reduced 5.5 % and super-reduced 2.1 %.
+pub const VAT_RATES_BPS: &[u32] = &[2000, 1000, 550, 210];
+pub const MAX_LEGAL_NAME_LEN: usize = 120;
+pub const MAX_LEGAL_FORM_LEN: usize = 40;
+pub const MAX_LEGAL_LINE_LEN: usize = 200;
+pub const MAX_LEGAL_POSTAL_CODE_LEN: usize = 20;
+pub const MAX_LEGAL_CITY_LEN: usize = 100;
+
+/// Strips spaces and checks a SIRET: 14 digits passing the Luhn check. La
+/// Poste's establishments (SIREN 356 000 000) follow their own rule instead:
+/// the sum of the digits is a multiple of five.
+pub fn normalize_siret(siret: &str) -> Result<String, crate::TenancyError> {
+    let siret: String = siret.chars().filter(|c| !c.is_whitespace()).collect();
+    if siret.len() != 14 || !siret.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(crate::TenancyError::InvalidSiret);
+    }
+    let digits = siret.bytes().map(|b| u32::from(b - b'0'));
+    let valid = if siret.starts_with("356000000") {
+        digits.sum::<u32>().is_multiple_of(5)
+    } else {
+        luhn(digits)
+    };
+    if valid {
+        Ok(siret)
+    } else {
+        Err(crate::TenancyError::InvalidSiret)
+    }
+}
+
+fn luhn(digits: impl DoubleEndedIterator<Item = u32>) -> bool {
+    let sum: u32 = digits
+        .rev()
+        .enumerate()
+        .map(|(i, d)| {
+            if i % 2 == 1 {
+                let d = d * 2;
+                if d > 9 { d - 9 } else { d }
+            } else {
+                d
+            }
+        })
+        .sum();
+    sum.is_multiple_of(10)
+}
+
+/// Strips spaces, uppercases and checks a French VAT number against the
+/// SIREN it must embed: `FR`, a two-digit key, the nine digits of the SIREN,
+/// the key being `(12 + 3 × (SIREN mod 97)) mod 97`.
+pub fn normalize_vat_number(vat_number: &str, siret: &str) -> Result<String, crate::TenancyError> {
+    let vat: String = vat_number
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    let siren = &siret[..9.min(siret.len())];
+    let expected = siren
+        .parse::<u64>()
+        .map(|siren| format!("FR{:02}{siren:09}", (12 + 3 * (siren % 97)) % 97));
+    match expected {
+        Ok(expected) if expected == vat => Ok(vat),
+        _ => Err(crate::TenancyError::InvalidVatNumber),
+    }
+}
+
+/// A rate of [`VAT_RATES_BPS`].
+pub fn normalize_vat_rate(rate_bps: u32) -> Result<u32, crate::TenancyError> {
+    if VAT_RATES_BPS.contains(&rate_bps) {
+        Ok(rate_bps)
+    } else {
+        Err(crate::TenancyError::InvalidVatRate)
+    }
+}
+
+/// Trims a required piece of the legal identity and checks its length.
+pub(crate) fn normalize_legal_text(text: &str, max: usize) -> Result<String, crate::TenancyError> {
+    let text = text.trim();
+    if text.is_empty() || text.chars().count() > max {
+        Err(crate::TenancyError::InvalidLegalIdentity)
+    } else {
+        Ok(text.to_owned())
+    }
+}
+
+/// Like [`normalize_legal_text`], blank being `None`.
+pub(crate) fn normalize_legal_optional(
+    text: Option<&str>,
+    max: usize,
+) -> Result<Option<String>, crate::TenancyError> {
+    match text.map(str::trim).filter(|t| !t.is_empty()) {
+        None => Ok(None),
+        Some(text) => normalize_legal_text(text, max).map(Some),
+    }
+}
+
+#[cfg(test)]
+mod legal_tests {
+    use super::*;
+
+    #[test]
+    fn siret_is_luhn_checked() {
+        // INSEE's head office.
+        assert_eq!(
+            normalize_siret("120 027 016 00092").unwrap(),
+            "12002701600092"
+        );
+        assert!(normalize_siret("12002701600093").is_err());
+        assert!(normalize_siret("1200270160009").is_err());
+        assert!(normalize_siret("1200270160009a").is_err());
+        // La Poste's own rule.
+        assert!(normalize_siret("35600000000047").is_ok());
+    }
+
+    #[test]
+    fn vat_number_embeds_the_siren_and_its_key() {
+        assert_eq!(
+            normalize_vat_number("fr 85 120027016", "12002701600092").unwrap(),
+            "FR85120027016"
+        );
+        assert!(normalize_vat_number("FR86120027016", "12002701600092").is_err());
+        assert!(normalize_vat_number("FR85120027017", "12002701600092").is_err());
+    }
+
+    #[test]
+    fn vat_rates_are_the_french_ones() {
+        assert_eq!(normalize_vat_rate(550).unwrap(), 550);
+        assert!(normalize_vat_rate(1900).is_err());
+    }
+}

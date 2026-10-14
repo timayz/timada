@@ -14,6 +14,10 @@ pub const FALLBACK_SLUG: &str = "product";
 pub const MAX_AMOUNT_CENTS: u64 = 100_000_000_000;
 /// The currencies a product can be priced in, as ISO-4217 codes. All of them
 /// have two minor digits.
+/// The rates of French VAT a price may include, in basis points: standard
+/// 20 %, intermediate 10 %, reduced 5.5 % and super-reduced 2.1 %.
+pub const VAT_RATES_BPS: &[u32] = &[2000, 1000, 550, 210];
+
 pub const CURRENCIES: &[&str] = &["EUR", "USD", "GBP", "CHF"];
 pub const MAX_CATEGORY_NAME_LEN: usize = 80;
 pub const MAX_CATEGORY_DESCRIPTION_LEN: usize = 2000;

@@ -95,3 +95,37 @@ async fn an_archived_product_refuses_edits() {
         "archiving twice writes once"
     );
 }
+
+#[tokio::test]
+async fn the_vat_rate_is_a_french_one_or_the_default() {
+    let cmd = command().await;
+    let product = create_product(&cmd, "Book").await;
+    let id = product.id.as_str();
+    assert_eq!(product.vat_rate_bps, None);
+
+    cmd.set_product_vat_rate(ALICE, id, Some(550))
+        .await
+        .unwrap();
+    let reduced = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(reduced.vat_rate_bps, Some(550));
+
+    // The same rate writes nothing.
+    cmd.set_product_vat_rate(ALICE, id, Some(550))
+        .await
+        .unwrap();
+    let again = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(
+        again.aggregate_version().unwrap(),
+        reduced.aggregate_version().unwrap()
+    );
+
+    let err = cmd
+        .set_product_vat_rate(ALICE, id, Some(1900))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CatalogError::InvalidVatRate), "{err}");
+
+    cmd.set_product_vat_rate(ALICE, id, None).await.unwrap();
+    let default = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(default.vat_rate_bps, None);
+}

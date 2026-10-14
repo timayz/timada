@@ -72,6 +72,8 @@ pub enum CatalogError {
     InvalidAttribute,
     #[error("a product's table holds at most thirty facts")]
     TooManyAttributes,
+    #[error("unknown VAT rate")]
+    InvalidVatRate,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]

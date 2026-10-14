@@ -30,7 +30,7 @@ use sqlx_migrator::Info;
 use timada_catalog::CreateProduct;
 use timada_orders::{CartItem, Checkout, PaymentAnswer, STOREFRONT_ACTOR, ShippingAddress};
 use timada_tenancy::{
-    Command, ConfigurePayments, CreateTenant, TenantState, read_model_subscription,
+    Command, ConfigurePayments, CreateTenant, LegalIdentity, TenantState, read_model_subscription,
 };
 
 use cluster::Cluster;
@@ -229,7 +229,33 @@ impl Harness {
         tenant
     }
 
+    /// Says who the merchant is, which a sale needs.
+    async fn set_legal(&self, tenant: &TenantState) {
+        self.platform
+            .set_legal_identity(
+                "alice",
+                &tenant.id,
+                LegalIdentity {
+                    legal_name: "Acme SAS".into(),
+                    legal_form: "SAS".into(),
+                    siret: "12002701600092".into(),
+                    line1: "1 rue de la Paix".into(),
+                    postal_code: "75002".into(),
+                    city: "Paris".into(),
+                    country: "FR".into(),
+                    contact_email: "shop@example.org".into(),
+                    vat_number: Some("FR85120027016".into()),
+                    default_vat_rate_bps: Some(2000),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Sets the legal identity too, unless it is there already.
     async fn connect_stripe(&self, tenant: &TenantState) -> TenantState {
+        self.set_legal(tenant).await;
         self.platform
             .configure_payments(
                 "alice",
@@ -445,7 +471,13 @@ async fn requests_that_cannot_go_ahead_are_refused() {
     let acme = h.create("acme").await;
     let (cart_id, mug) = h.cart(&acme).await;
 
+    // Nobody to name on the invoice yet.
+    assert_eq!(
+        h.ask(&acme, &cart_id, None).await,
+        PaymentAnswer::Refused("invoicing_not_configured".into())
+    );
     // No Stripe account yet.
+    h.set_legal(&acme).await;
     assert_eq!(
         h.ask(&acme, &cart_id, None).await,
         PaymentAnswer::Refused("payments_unavailable".into())

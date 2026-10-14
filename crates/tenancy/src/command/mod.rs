@@ -7,6 +7,7 @@
 mod api_key;
 mod create;
 mod invite;
+mod legal;
 mod member;
 mod payments;
 mod rename;
@@ -20,6 +21,7 @@ use std::ops::Deref;
 pub use api_key::*;
 pub use create::*;
 pub use invite::*;
+pub use legal::*;
 pub use payments::*;
 pub use role::*;
 
@@ -29,7 +31,7 @@ use crate::aggregator::api_key::{
     Created as ApiKeyCreated, Revoked as ApiKeyRevoked, Scoped as ApiKeyScoped,
 };
 use crate::aggregator::{
-    Accepted, Claimed, Created, MemberGranted, MemberRevoked, MemberRoleChanged,
+    Accepted, Claimed, Created, LegalIdentitySet, MemberGranted, MemberRevoked, MemberRoleChanged,
     PaymentsConfigured, PaymentsRemoved, Released, Renamed, Resumed, Revoked, RoleDefined,
     RoleRemoved, RoleUpdated, Sent, Suspended,
 };
@@ -73,6 +75,8 @@ pub struct TenantState {
     pub roles: BTreeMap<String, RoleDef>,
     /// How shoppers pay, once set up.
     pub payments: Option<PaymentSettings>,
+    /// Who the merchant is in law, once set: what its invoices say.
+    pub legal: Option<LegalIdentity>,
 }
 
 /// The merchant's account with the payment provider. The secrets are sealed
@@ -151,6 +155,7 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_role_removed())
         .handler(on_payments_configured())
         .handler(on_payments_removed())
+        .handler(on_legal_identity_set())
         .strict()
 }
 
@@ -271,6 +276,30 @@ async fn on_payments_removed(
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     tenant.payments = None;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_legal_identity_set(
+    event: Event<LegalIdentitySet>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    tenant.legal = Some(LegalIdentity {
+        legal_name: data.legal_name.to_owned(),
+        legal_form: data.legal_form.to_owned(),
+        share_capital_cents: data.share_capital_cents,
+        siret: data.siret.to_owned(),
+        rcs_city: data.rcs_city.to_owned(),
+        line1: data.line1.to_owned(),
+        line2: data.line2.to_owned(),
+        postal_code: data.postal_code.to_owned(),
+        city: data.city.to_owned(),
+        country: data.country.to_owned(),
+        contact_email: data.contact_email.to_owned(),
+        vat_number: data.vat_number.to_owned(),
+        default_vat_rate_bps: data.default_vat_rate_bps,
+    });
     Ok(())
 }
 

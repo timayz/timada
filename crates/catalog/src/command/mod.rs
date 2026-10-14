@@ -38,7 +38,7 @@ use crate::aggregator::{
     Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Described, ImageAdded,
     ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionRemoved, OptionRenamed,
     OptionValuesChanged, Priced, Published, Released, Renamed, Uncategorized, Unpublished,
-    VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
+    VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged, VatRateSet,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -197,6 +197,9 @@ pub struct ProductState {
     pub variants: Vec<ProductVariant>,
     /// The facts in its table, in the order they were set.
     pub attributes: Vec<ProductAttribute>,
+    /// The VAT rate its prices include, in basis points; `None` is the
+    /// merchant's default.
+    pub vat_rate_bps: Option<u32>,
     pub created_by: String,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -282,6 +285,7 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_variant_removed())
         .handler(on_attribute_set())
         .handler(on_attribute_removed())
+        .handler(on_vat_rate_set())
         .strict()
 }
 
@@ -643,6 +647,16 @@ async fn on_attribute_removed(
     product
         .attributes
         .retain(|attribute| attribute.name != event.data.name);
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_vat_rate_set(
+    event: Event<VatRateSet>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.vat_rate_bps = event.data.rate_bps;
     product.updated_at = event.timestamp;
     Ok(())
 }

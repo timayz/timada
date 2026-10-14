@@ -145,6 +145,12 @@ pub enum Product {
         name: String,
         removed_by: String,
     },
+    /// The VAT rate its price includes, in basis points (`550` is 5.5 %),
+    /// for every variant alike; `None` falls back to the merchant's default.
+    VatRateSet {
+        rate_bps: Option<u32>,
+        set_by: String,
+    },
 }
 
 /// The index `sku → variant`: one stream per code, with the deterministic id

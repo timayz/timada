@@ -1,8 +1,10 @@
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{Described, Priced, Renamed};
+use crate::aggregator::{Described, Priced, Renamed, VatRateSet};
 use crate::error::CatalogError;
-use crate::value_object::{normalize_currency, normalize_description, normalize_name};
+use crate::value_object::{
+    VAT_RATES_BPS, normalize_currency, normalize_description, normalize_name,
+};
 
 use super::Price;
 
@@ -95,6 +97,35 @@ impl<E: Executor> super::Command<E> {
                 amount_cents,
                 currency,
                 priced_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Sets the VAT rate the product's prices include, in basis points, one
+    /// of [`VAT_RATES_BPS`]; `None` falls back to the merchant's default.
+    /// The same rate is a no-op.
+    pub async fn set_product_vat_rate(
+        &self,
+        actor: &str,
+        product_id: &str,
+        rate_bps: Option<u32>,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        if rate_bps.is_some_and(|rate| !VAT_RATES_BPS.contains(&rate)) {
+            return Err(CatalogError::InvalidVatRate);
+        }
+        let product = self.require_editable(product_id).await?;
+        if product.vat_rate_bps == rate_bps {
+            return Ok(());
+        }
+        product
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&VatRateSet {
+                rate_bps,
+                set_by: actor.to_owned(),
             })
             .commit(&self.0)
             .await?;
