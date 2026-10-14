@@ -1,0 +1,109 @@
+//! Card payments, on each tenant's own Stripe account.
+//!
+//! A storefront asks to pay (`Cart::CheckoutRequested`); [`subscription`]
+//! prices the cart from the store, opens a payment with Stripe under the
+//! tenant's secret key and records it (`Cart::PaymentRequested`) for the
+//! storefront's card form. Stripe tells the webhook (`app/stripe`) when the
+//! payment went through, and only then does the order exist. Cancelling an
+//! order gives the money back through Stripe first.
+//!
+//! The tenant's Stripe secrets are recorded sealed ([`seal`]) under the
+//! operator's `payments.secret_key`; without that setting no tenant takes
+//! payments.
+
+mod gateway;
+pub mod seal;
+pub mod signature;
+mod subscription;
+pub mod webhook;
+
+use std::sync::Arc;
+
+pub use gateway::*;
+pub use subscription::*;
+
+use timada_tenancy::TenantState;
+
+use crate::cluster::Executor;
+use crate::config::PaymentsConfig;
+use seal::Sealer;
+
+/// Who the dashboard's own payment events say did them.
+pub const DASHBOARD_ACTOR: &str = "timada-dashboard";
+
+/// A tenant's Stripe account, opened.
+#[derive(Clone)]
+pub struct Account {
+    pub publishable_key: String,
+    pub secret_key: String,
+    pub webhook_secret: String,
+}
+
+impl std::fmt::Debug for Account {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Account")
+            .field("publishable_key", &self.publishable_key)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The payments service: the provider, and the key to the tenants' secrets.
+pub struct Payments {
+    sealer: Option<Sealer>,
+    pub gateway: Arc<dyn PaymentGateway>,
+    platform: Executor,
+}
+
+impl Payments {
+    /// `config`: `None` turns payments off for every tenant.
+    pub fn new(
+        config: Option<&PaymentsConfig>,
+        gateway: Arc<dyn PaymentGateway>,
+        platform: Executor,
+    ) -> Self {
+        Self {
+            sealer: config.map(|config| Sealer::new(&config.secret_key)),
+            gateway,
+            platform,
+        }
+    }
+
+    /// Whether the operator enabled payments on this node.
+    pub fn enabled(&self) -> bool {
+        self.sealer.is_some()
+    }
+
+    fn sealer(&self) -> anyhow::Result<&Sealer> {
+        self.sealer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("payments are not enabled (no [payments] section)"))
+    }
+
+    pub fn seal(&self, plain: &str) -> anyhow::Result<Vec<u8>> {
+        self.sealer()?.seal(plain)
+    }
+
+    /// The tenant's Stripe account, opened; `None` when it set up none or
+    /// payments are off here.
+    pub fn account_of(&self, tenant: &TenantState) -> anyhow::Result<Option<Account>> {
+        let (Some(settings), Some(sealer)) = (&tenant.payments, &self.sealer) else {
+            return Ok(None);
+        };
+        Ok(Some(Account {
+            publishable_key: settings.publishable_key.clone(),
+            secret_key: sealer.open(&settings.secret_key_sealed)?,
+            webhook_secret: sealer.open(&settings.webhook_secret_sealed)?,
+        }))
+    }
+
+    /// [`account_of`](Self::account_of) a tenant read from the platform store.
+    pub async fn account(&self, tenant_id: &str) -> anyhow::Result<Option<Account>> {
+        let tenant = timada_tenancy::Command(self.platform.clone())
+            .load_tenant(tenant_id)
+            .await?;
+        match tenant {
+            Some(tenant) if !tenant.is_suspended() => self.account_of(&tenant),
+            _ => Ok(None),
+        }
+    }
+}
