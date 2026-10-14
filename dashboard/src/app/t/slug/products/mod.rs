@@ -6,7 +6,10 @@
 pub mod create;
 pub mod product_id;
 
-use timada_catalog::{CatalogError, Command, MAX_NAME_LEN, count_products, products_of_tenant};
+use timada_catalog::{
+    CatalogError, Command, MAX_NAME_LEN, ProductFilter, categories_of_tenant, count_products,
+    products_of_tenant,
+};
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
     Result,
@@ -27,6 +30,8 @@ const PAGE_SIZE: i64 = 50;
 struct ProductsQuery {
     /// Matches the slug or the name.
     q: Option<String>,
+    /// The id of a category to list only.
+    category: Option<String>,
     /// 1-based.
     page: Option<i64>,
     error: Option<String>,
@@ -37,6 +42,8 @@ struct ProductsQuery {
 struct ProductsLink<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     q: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     page: Option<i64>,
 }
@@ -64,6 +71,11 @@ pub fn error_code(err: &CatalogError) -> &'static str {
         CatalogError::NotFound => "product_not_found",
         CatalogError::Archived => "product_archived",
         CatalogError::NotPriced => "product_not_priced",
+        CatalogError::CategoryNotFound => "category_not_found",
+        CatalogError::CategoryArchived => "category_archived",
+        CatalogError::CategoryCycle => "category_cycle",
+        CatalogError::CategoryTooDeep => "category_too_deep",
+        CatalogError::TooManyCategories => "too_many_categories",
         CatalogError::Write(_) | CatalogError::Other(_) => "failed",
     }
 }
@@ -86,19 +98,26 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_manage = access.can(cx, PERMISSION_PRODUCTS_MANAGE).await?;
     let query = query_params::<ProductsQuery>(cx)?;
     let q = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+    let category = query
+        .category
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
     let page_number = query.page.unwrap_or(1).max(1);
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<ReadPool>(cx);
-    let total = count_products(pool, &tenant.id, q).await?;
+    let filter = ProductFilter::default().search(q).category(category);
+    let total = count_products(pool, &tenant.id, &filter).await?;
     let rows = products_of_tenant(
         pool,
         &tenant.id,
-        q,
+        &filter,
         (page_number - 1) * PAGE_SIZE,
         PAGE_SIZE,
     )
     .await?;
+    let category_rows = categories_of_tenant(pool, &tenant.id).await?;
     let pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
     let slug = tenant.slug.clone();
     let page_link = {
@@ -107,6 +126,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             href!(index, Slug(slug.clone()))
                 .query(ProductsLink {
                     q,
+                    category,
                     page: Some(page),
                 })
                 .resolve(cx)
@@ -128,6 +148,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <label class="sr-only" for="products-search">"Search"</label>
                     <input id="products-search" name="q" type="search" value=(q.unwrap_or(""))
                         class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="Name or slug">
+                    if !category_rows.is_empty() {
+                        <label class="sr-only" for="products-category">"Category"</label>
+                        <select id="products-category" name="category" class="rounded border border-neutral-300 px-3 py-2">
+                            <option value="">"Every category"</option>
+                            for row in &category_rows {
+                                <option value=(&row.id) selected=(category == Some(row.id.as_str()))>(&row.name)</option>
+                            }
+                        </select>
+                    }
                     <button class="rounded border border-neutral-300 px-3 py-2">"Search"</button>
                 </form>
                 <table class="w-full text-left text-sm">

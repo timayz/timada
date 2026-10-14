@@ -20,6 +20,16 @@ pub enum CatalogError {
     Archived,
     #[error("a product needs a price before it is published")]
     NotPriced,
+    #[error("category not found")]
+    CategoryNotFound,
+    #[error("this category is archived")]
+    CategoryArchived,
+    #[error("a category cannot be moved under one of its own sub-categories")]
+    CategoryCycle,
+    #[error("categories nest at most three levels deep")]
+    CategoryTooDeep,
+    #[error("a product belongs to at most ten categories")]
+    TooManyCategories,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
