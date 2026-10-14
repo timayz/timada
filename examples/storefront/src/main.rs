@@ -11,6 +11,9 @@
 //! - `STORE_MEDIA_URL` — where the product pictures are loaded from, as the
 //!   tenant's API keys page shows it (optional)
 //! - `HOST` / `PORT` — where to listen (`127.0.0.1` / `3456`)
+//!
+//! `storefront migrate` prepares the local database and exits, without
+//! reaching the store.
 
 mod app;
 
@@ -33,6 +36,22 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    let pool = SqlitePoolOptions::new()
+        .max_connections(3)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(env_or("STORE_DB", "storefront.db"))
+                .create_if_missing(true)
+                .journal_mode(SqliteJournalMode::Wal),
+        )
+        .await
+        .context("cannot open the local database")?;
+    if std::env::args().nth(1).as_deref() == Some("migrate") {
+        timada_storefront::migrate(&pool).await?;
+        tracing::info!("local database ready");
+        return Ok(());
+    }
+
     let addr: SocketAddr = env_or("STORE_ADDR", "127.0.0.1:4321")
         .parse()
         .context("STORE_ADDR is not an address")?;
@@ -46,16 +65,6 @@ async fn main() -> anyhow::Result<()> {
         config = config.media_url(media);
     }
 
-    let pool = SqlitePoolOptions::new()
-        .max_connections(3)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(env_or("STORE_DB", "storefront.db"))
-                .create_if_missing(true)
-                .journal_mode(SqliteJournalMode::Wal),
-        )
-        .await
-        .context("cannot open the local database")?;
     let store = Store::connect(config, pool).await?;
 
     let host = env_or("HOST", "127.0.0.1");
