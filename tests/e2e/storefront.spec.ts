@@ -9,8 +9,9 @@ import { createTenant, uniqueTenant } from "./tenants";
 // The headless storefront end to end: a merchant publishes a product and
 // mints an API key in the dashboard; the example storefront (a separate
 // process built on timada-storefront) connects to the store API with the
-// key, shows the product, follows the catalog live, and browses the
-// categories the products are filed under.
+// key, shows the product, follows the catalog live, browses the categories
+// the products are filed under, and (with a key that may sell) takes an order
+// the merchant then moves along in the dashboard.
 
 const STORE_ADDR = process.env.E2E_STORE_ADDR ?? "127.0.0.1:4321";
 const STOREFRONT_PORT = Number(process.env.E2E_STOREFRONT_PORT ?? 3456);
@@ -35,10 +36,14 @@ const PNG = Buffer.from(
 );
 
 /// Mints a key on the tenant's page and reads it, with the address the
-/// tenant's pictures are served from.
-async function mintKey(page: Page, slug: string): Promise<{ token: string; mediaUrl: string }> {
+/// tenant's pictures are served from. `sell` adds store:checkout to the
+/// default read scope.
+async function mintKey(page: Page, slug: string, sell = false): Promise<{ token: string; mediaUrl: string }> {
   await page.goto(`/t/${slug}/api-keys`);
   await page.getByLabel("Label").fill("Example storefront");
+  if (sell) {
+    await page.getByRole("checkbox", { name: "store:checkout" }).first().check();
+  }
   await page.getByRole("button", { name: "Create key" }).click();
   const token = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
   expect(token).toMatch(/^tk_/);
@@ -240,4 +245,112 @@ test("a storefront browses the categories its products are filed under", async (
   await expect(related).toContainText("You may also like");
   await expect(related.locator("[data-product=wool-mat]")).toBeVisible();
   await expect(related.locator("[data-product=cooling-mat]")).toHaveCount(0);
+});
+
+test("a shopper orders from the storefront and the merchant fulfils it", async ({ page, request }) => {
+  await registerWithEmail(page, uniqueEmail("merchant"));
+  const { name, slug } = uniqueTenant("Order Shop");
+  await createTenant(page, name);
+  await publishProduct(page, slug, "Blue Mug", "12.50");
+  await publishProduct(page, slug, "Red Plate", "8");
+
+  const key = await mintKey(page, slug, true);
+  await startStorefront(request, key, 2);
+
+  // Into the cart, from two product pages.
+  await page.goto(`${STOREFRONT}/p/blue-mug`);
+  await page.getByLabel("Quantity").fill("2");
+  await page.getByRole("button", { name: "Add to cart" }).click();
+  await expect(page).toHaveURL(`${STOREFRONT}/cart`);
+  await expect(page.locator("[data-cart-total]")).toHaveText("25.00 EUR");
+  await page.goto(`${STOREFRONT}/p/red-plate`);
+  await page.getByRole("button", { name: "Add to cart" }).click();
+  await expect(page.locator("[data-cart-total]")).toHaveText("33.00 EUR");
+
+  // Change a quantity, then take a line out and put it back.
+  await page.getByLabel("Quantity of Blue Mug").fill("3");
+  await page.locator("[data-cart-line='Blue Mug']").getByRole("button", { name: "Update" }).click();
+  await expect(page.locator("[data-cart-total]")).toHaveText("45.50 EUR");
+  await page.getByRole("button", { name: "Remove Red Plate" }).click();
+  await expect(page.locator("[data-cart-line='Red Plate']")).toHaveCount(0);
+  await expect(page.locator("[data-cart-total]")).toHaveText("37.50 EUR");
+
+  // An open cart shows in the dashboard.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/carts`);
+    await expect(page.locator("[data-cart-items]").first()).toHaveText("3", { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+
+  // Checkout: a bad country is refused and the form comes back filled in.
+  await page.goto(`${STOREFRONT}/cart`);
+  await page.getByRole("link", { name: "Check out" }).click();
+  await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
+  await page.getByLabel("E-mail").fill("ada@example.org");
+  await page.getByLabel("Full name").fill("Ada Lovelace");
+  await page.getByLabel("Street address").fill("1 rue de la Paix");
+  await page.getByLabel("Postal code").fill("75002");
+  await page.getByLabel("City").fill("Paris");
+  await page.getByLabel("Country code").fill("F1");
+  await page.getByLabel("Note for the shop (optional)").fill("Leave it at the door");
+  await page.getByRole("button", { name: "Place order" }).click();
+  await expect(page.getByRole("alert")).toContainText("two-letter code");
+  await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
+  await page.getByLabel("Country code").fill("FR");
+  await page.getByRole("button", { name: "Place order" }).click();
+
+  // The confirmation, for this browser only.
+  await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`));
+  const reference = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+  expect(reference).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+  await expect(page.locator("[data-order-total]")).toHaveText("37.50 EUR");
+  await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "awaiting_payment");
+  const confirmation = page.url();
+  const stranger = await page.context().browser()!.newContext();
+  expect((await (await stranger.newPage()).goto(confirmation))?.status()).toBe(404);
+  await stranger.close();
+  // The cart is spent: the next one starts empty.
+  await page.goto(`${STOREFRONT}/cart`);
+  await expect(page.locator("[data-cart-empty]")).toBeVisible();
+
+  // The merchant finds it, marks it paid, then fulfilled.
+  const row = page.locator(`[data-order="${reference}"]`);
+  await expect(async () => {
+    await page.goto(`/t/${slug}/orders`);
+    await expect(row).toHaveAttribute("data-order-status", "awaiting_payment", { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(row.locator("[data-order-total]")).toHaveText("37.50 EUR");
+  await row.getByRole("link", { name: reference }).click();
+  await expect(page.locator("[data-order-note]")).toHaveText("Leave it at the door");
+  await expect(page.locator("[data-order-address]")).toContainText("Ada Lovelace");
+  await expect(page.locator("[data-order-line='Blue Mug']")).toContainText("12.50 EUR");
+  await page.getByRole("button", { name: "Mark as paid" }).click();
+  await expect(page.getByRole("status")).toContainText("Order marked as paid.");
+  await expect(page.locator("dd[data-order-status]")).toHaveAttribute("data-order-status", "paid");
+  await page.getByLabel("Tracking number (optional)").fill("6A12345");
+  await page.getByRole("button", { name: "Mark as fulfilled" }).click();
+  await expect(page.getByRole("status")).toContainText("Order marked as fulfilled.");
+  await expect(page.locator("[data-order-tracking]")).toHaveText("6A12345");
+  await expect(page.getByRole("button", { name: "Cancel the order" })).toHaveCount(0);
+
+  // The shopper sees it on its way.
+  await page.goto(confirmation);
+  await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "fulfilled");
+
+  // A second order is cancelled with a reason.
+  await page.goto(`${STOREFRONT}/p/red-plate`);
+  await page.getByRole("button", { name: "Add to cart" }).click();
+  await page.getByRole("link", { name: "Check out" }).click();
+  await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
+  await page.getByRole("button", { name: "Place order" }).click();
+  const second = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+  const secondRow = page.locator(`[data-order="${second}"]`);
+  await expect(async () => {
+    await page.goto(`/t/${slug}/orders`);
+    await expect(secondRow).toHaveCount(1, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await secondRow.getByRole("link", { name: second }).click();
+  await page.getByLabel("Reason for cancelling").fill("Out of stock");
+  await page.getByRole("button", { name: "Cancel the order" }).click();
+  await expect(page.getByRole("status")).toContainText("Order cancelled.");
+  await expect(page.locator("[data-order-cancel-reason]")).toHaveText("Out of stock");
 });

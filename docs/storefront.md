@@ -22,8 +22,11 @@ store.shutdown().await;
 
 - The **token** is created once on the tenant's *API keys* page of the dashboard and
   shown once. A key reaches its tenant's store and nothing else, as far as its scopes
-  allow: `store:read` (read events, run subscriptions) is all a storefront needs;
-  `store:write` also appends events. A key created before scopes existed holds both.
+  allow: `store:read` (read events, run subscriptions) is all a storefront that only
+  shows the catalog needs; one that sells also needs `store:checkout`, which appends
+  what a shopper does (carts, placing an order) and nothing else. `store:write`
+  appends any event (it implies `store:checkout`); a storefront should not hold it. A
+  key created before scopes existed holds read and write.
 - The **address** is one node's store API, or a `host:port` in front of several (a
   load balancer, a geo-routed name). A name is looked up again on every reconnect, so
   when a node goes away the storefront follows the name to one that answers; any
@@ -154,6 +157,46 @@ src alt width height loading="lazy" decoding="async">`. The library ships no oth
 markup and no CSS classes (a host's Tailwind build does not scan a dependency anyway):
 everything a page shows is the merchant's own `view!` around `Product` values.
 
+## Cart and checkout
+
+With a key holding `store:checkout`, a page sells as well as shows. Carts and orders
+are not copied locally: each call writes to the store and reads back from it, so a
+page shows its change at once, and a cart's prices come from the products in the
+store, so the total a cart page shows is exactly what checkout charges. The local
+copy only adds each line's slug and picture.
+
+```rust
+use timada_storefront::{add_to_cart, cart, place_order, order, Checkout, ShippingAddress};
+
+// The first add makes the cart; keep its id (a cookie, typically).
+let cart_id = match add_to_cart(cx, current_id.as_deref(), &product.id, variant_id, 2).await? {
+    Ok(cart_id) => cart_id,
+    Err(refusal) => return show(refusal.code()),   // e.g. "variant_required"
+};
+let view = cart(cx, &cart_id).await?;              // lines, total, unavailable lines
+let placed = place_order(cx, &cart_id, Checkout {
+    email, shipping, note,
+    expected_total_cents: Some(view.total_cents),   // the total the shopper saw
+}).await?;
+```
+
+- Every call returns `Result<Result<T, OrdersError>>`: the outer error is the store
+  failing (`?` makes it a 500), the inner one a refusal to word for the shopper;
+  `OrdersError::code()` gives a stable code for a URL. The same calls exist as `Store`
+  methods for code outside a request.
+- `add_to_cart` starts a new cart when it is given none, or one already ordered.
+  `set_cart_quantity` (0 removes the line) and `remove_from_cart` change a line.
+- A product that sells variants needs one (`variant_required`); one cart is one
+  currency. A line whose product went off sale shows in `CartView::unavailable`, and
+  checkout waits until it is removed.
+- `place_order` refuses an order whose total moved since the page showed it
+  (`price_changed`) rather than charging it unseen. Placing a cart twice returns the
+  same order. The order waits for payment; the merchant marks it paid, fulfilled or
+  cancelled in the dashboard. Its `reference` (`K7Q4-MZP2`) is what a shopper quotes.
+- Who a shopper is, and which orders a browser may look at, is the host's call: the
+  library hands out any order by id. The example keeps the cart id, the browser's
+  orders and its last address in private cookies.
+
 ## `GET /store/status`
 
 ```json
@@ -167,7 +210,8 @@ counts the published rows of the local copy.
 ## The example
 
 `examples/storefront` is a complete app on the library: a catalog page, a category
-page, a product page, inline styles, no asset bundle. Against a dashboard whose
+page, a product page with an add-to-cart form, a cart, a checkout and an order
+confirmation, inline styles, no asset bundle. Against a dashboard whose
 `[store_api]` listens on `127.0.0.1:4321`:
 
 ```sh
@@ -178,5 +222,8 @@ open http://127.0.0.1:3456/
 
 Both values are on the tenant's API keys page. `STORE_ADDR`, `STORE_DB`, `HOST`,
 `PORT`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by
-default) are the other knobs. The browser suite (`tests/e2e/storefront.spec.ts`) boots it with a key
-minted in the dashboard and checks the catalog follows live.
+default) are the other knobs, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the
+shopper cookies; unset, a random key is made at startup and the cookies do not survive
+a restart. To sell, tick `store:checkout` on the key. The browser suite
+(`tests/e2e/storefront.spec.ts`) boots it with a key minted in the dashboard, checks the
+catalog follows live, then places an order the merchant marks paid and fulfilled.

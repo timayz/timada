@@ -1,7 +1,11 @@
 //! The pages: the catalog at `/`, a category at `/c/{slug}`, a product at
-//! `/p/{slug}`, and the library's `/store/status`.
+//! `/p/{slug}`, the cart at `/cart`, the checkout at `/checkout`, a placed
+//! order at `/orders/{order_id}`, and the library's `/store/status`.
 
 pub mod c;
+pub mod cart;
+pub mod checkout;
+pub mod orders;
 pub mod p;
 
 use timada_storefront::{
@@ -11,12 +15,18 @@ use timada_storefront::{
 use topcoat::{
     Result,
     context::Cx,
+    cookie::{Key, RouterBuilderCookieExt},
     router::{Router, RouterBuilderDiscoverExt, href, module_router, page, query_params},
     view::{Child, View, attributes, view},
 };
 
-pub fn router(store: Store) -> Router {
-    module_router!().discover().store(store).build()
+pub fn router(store: Store, cookie_key: Key) -> Router {
+    module_router!()
+        .discover()
+        .cookies()
+        .app_context(cookie_key)
+        .store(store)
+        .build()
 }
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -73,6 +83,14 @@ pub async fn document(
                     "table.variants, table.attributes { border-collapse: collapse; margin: 1rem 0; min-width: 20rem; }"
                     "table.variants th, table.variants td, table.attributes th, table.attributes td { border: 1px solid #ddd; padding: .4rem .75rem; text-align: left; }"
                     "table.attributes th { background: #fafafa; }"
+                    "table.cart { border-collapse: collapse; width: 100%; margin: 1rem 0; }"
+                    "table.cart th, table.cart td { border-bottom: 1px solid #ddd; padding: .5rem; text-align: left; vertical-align: middle; }"
+                    "table.cart img { width: 4rem; height: 4rem; object-fit: cover; border-radius: .25rem; }"
+                    "table.cart input[type=number] { width: 4rem; }"
+                    "p.notice { padding: .75rem; border-radius: .25rem; background: #fff4e5; border: 1px solid #f5c27a; }"
+                    "form.checkout label { display: block; margin-top: .75rem; }"
+                    "form.checkout input, form.checkout textarea { width: 100%; max-width: 28rem; padding: .4rem; }"
+                    "button.primary { margin-top: 1rem; padding: .6rem 1.2rem; font-size: 1rem; }"
                 </style>
             </head>
             <body>
@@ -81,6 +99,7 @@ pub async fn document(
                     <form method="get" action=(href!(index))>
                         <input name="q" type="search" placeholder="Search" aria-label="Search">
                     </form>
+                    <a href=(href!(cart::index)) data-cart-link="">"Cart"</a>
                 </header>
                 if !nav.is_empty() {
                     <nav class="sections" aria-label="Categories">
@@ -179,4 +198,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
         )
     })
+}
+
+/// How a refusal (an [`OrdersError`](timada_storefront::OrdersError) code
+/// carried in the URL) reads to a shopper.
+pub fn say(code: &str) -> &'static str {
+    match code {
+        "invalid_quantity" => "Choose a quantity from 1 to 99.",
+        "too_many_lines" => "Your cart is full: order what is in it first.",
+        "product_unavailable" => "Sorry, this product is no longer on sale.",
+        "variant_required" => "Choose an option first.",
+        "variant_not_found" => "This combination is not sold.",
+        "mixed_currencies" => "This product is sold in another currency than your cart.",
+        "empty_cart" => "Your cart is empty.",
+        "price_changed" => {
+            "A price changed since you saw it: check the new total and confirm again."
+        }
+        "invalid_email" => "Enter a valid e-mail address.",
+        "invalid_ship_name" => "Enter the name to ship to.",
+        "invalid_address" => "Enter the street, postal code and city.",
+        "invalid_country" => "Enter the country as a two-letter code, such as FR.",
+        "invalid_phone" => "The phone number is too long.",
+        "invalid_note" => "The note is too long.",
+        "cart_not_found" | "cart_checked_out" => "This cart was already ordered.",
+        _ => "Something went wrong. Please try again.",
+    }
 }

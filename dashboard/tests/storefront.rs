@@ -42,7 +42,8 @@ use timada_storefront::{
     published_products, published_related_products,
 };
 use timada_tenancy::{
-    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, TenantState, read_model_subscription,
+    Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
+    read_model_subscription,
 };
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
@@ -103,6 +104,9 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
             .unwrap();
         migrator
             .add_migrations(timada_catalog::migrations())
+            .unwrap();
+        migrator
+            .add_migrations(timada_orders::migrations())
             .unwrap();
         migrator
             .run(&mut *conn, &evento::migrator::Plan::apply_all())
@@ -183,6 +187,10 @@ impl Harness {
     }
 
     async fn key(&self, tenant: &TenantState) -> (String, String) {
+        self.key_with(tenant, &[SCOPE_STORE_READ]).await
+    }
+
+    async fn key_with(&self, tenant: &TenantState, scopes: &[&str]) -> (String, String) {
         let created = self
             .platform
             .create_api_key(
@@ -190,7 +198,7 @@ impl Harness {
                 CreateApiKey {
                     tenant_id: tenant.id.clone(),
                     label: "Shop".into(),
-                    scopes: vec![SCOPE_STORE_READ.into()],
+                    scopes: scopes.iter().map(|s| s.to_string()).collect(),
                 },
                 NOW,
             )
@@ -1157,4 +1165,151 @@ async fn the_back_office_and_the_shop_count_a_category_the_same_way() {
     );
 
     store.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_store_with_a_checkout_key_sells() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h
+        .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
+        .await;
+    let (read_token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme).await;
+    let mug = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Blue Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &mug.id).await.unwrap();
+
+    let pool = h.local_pool("selling-shop").await;
+    let store = Store::connect(h.config(&token), pool.clone())
+        .await
+        .unwrap();
+    eventually("the product is in the local copy", async || {
+        published(&pool).await == vec!["Blue Mug".to_owned()]
+    })
+    .await;
+
+    // The first add makes the cart; the next ones go to it.
+    let cart_id = store
+        .add_to_cart(None, &mug.id, None, 2)
+        .await
+        .unwrap()
+        .unwrap();
+    let same = store
+        .add_to_cart(Some(&cart_id), &mug.id, None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(same, cart_id);
+    let refused = store
+        .add_to_cart(Some(&cart_id), &mug.id, None, 0)
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            refused,
+            Err(timada_storefront::OrdersError::InvalidQuantity)
+        ),
+        "{refused:?}"
+    );
+
+    // Read back at once, priced from the store, illustrated from the copy.
+    let cart = store.cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(cart.item_count, 3);
+    assert_eq!(cart.total().as_deref(), Some("37.50 EUR"));
+    assert_eq!(cart.lines[0].slug.as_deref(), Some("blue-mug"));
+    assert!(cart.can_check_out());
+
+    // The price moves: the total the shopper saw is refused, the new one
+    // goes through.
+    catalog
+        .price_product("alice", &mug.id, 1300, "EUR")
+        .await
+        .unwrap();
+    let checkout = |expected| timada_storefront::Checkout {
+        email: "ada@example.org".into(),
+        shipping: timada_storefront::ShippingAddress {
+            name: "Ada".into(),
+            line1: "1 rue de la Paix".into(),
+            postal_code: "75002".into(),
+            city: "Paris".into(),
+            country: "FR".into(),
+            ..Default::default()
+        },
+        note: None,
+        expected_total_cents: Some(expected),
+    };
+    let moved = store
+        .place_order(&cart_id, checkout(cart.total_cents))
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            moved,
+            Err(timada_storefront::OrdersError::PriceChanged { total_cents: 3900 })
+        ),
+        "{moved:?}"
+    );
+    let placed = store
+        .place_order(&cart_id, checkout(3900))
+        .await
+        .unwrap()
+        .unwrap();
+    let order = store.order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.reference, placed.reference);
+    assert_eq!(order.total_cents, 3900);
+    let cart = store.cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(cart.order_id.as_deref(), Some(placed.order_id.as_str()));
+    // A cart already ordered: the next add starts a new one.
+    let next = store
+        .add_to_cart(Some(&cart_id), &mug.id, None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(next, cart_id);
+
+    // The back office lists it.
+    timada_orders::read_model_subscription::<cluster::Executor>(h.pool.clone(), &acme.id)
+        .run_once(&catalog.0)
+        .await
+        .unwrap();
+    let rows = timada_orders::orders_of_tenant(
+        &h.pool,
+        &acme.id,
+        &timada_orders::OrderFilter::default(),
+        0,
+        10,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].reference, placed.reference);
+    assert_eq!(rows[0].total_label(), "39.00 EUR");
+
+    // A read-only key shows the catalog but cannot sell.
+    let read_pool = h.local_pool("window-shop").await;
+    let window = Store::connect(h.config(&read_token), read_pool)
+        .await
+        .unwrap();
+    let err = window
+        .add_to_cart(None, &mug.id, None, 1)
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("store:write"), "{err:#}");
+
+    window.shutdown().await;
+    store.shutdown().await;
+    h.finish().await;
 }

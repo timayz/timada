@@ -540,6 +540,25 @@ pub async fn published_product_by_slug(
     .await
 }
 
+/// The published products among `ids`, in no particular order: what a cart
+/// page shows its lines with (a product missing here is off sale).
+pub async fn published_products_by_ids(
+    pool: &SqlitePool,
+    ids: &[&str],
+) -> sqlx::Result<Vec<Product>> {
+    let ids = serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_owned());
+    sqlx::query_as(
+        "SELECT id, slug, name, description, amount_cents, currency, updated_at,
+            images_json, options_json, variants_json, attributes_json,
+            min_amount_cents, max_amount_cents
+         FROM storefront_products
+         WHERE id IN (SELECT value FROM json_each(?1)) AND status = 'published'",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+}
+
 // =============================================================================
 // Categories
 // =============================================================================
