@@ -65,7 +65,7 @@ pub async fn category_products(
     node: &CategoryNode,
     query: &ProductQuery,
 ) -> Result<ProductPage> {
-    let query = query.clone().in_categories(node.subtree_ids());
+    let query = query.clone().in_category(node.category.id.clone());
     products(cx, &query).await
 }
 
@@ -91,11 +91,10 @@ pub async fn require_category(cx: &Cx, slug: &str) -> Result<Category> {
         .ok_or_else(|| not_found().into())
 }
 
-/// The categories above this one, top-level first: a breadcrumb.
-pub async fn category_path(cx: &Cx, category: &Category) -> Result<Vec<Category>> {
-    category_ancestors(store(cx).pool(), category)
-        .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+/// The categories above this one, top-level first: a breadcrumb. `menu` is
+/// what [`categories`] returned, so it costs no query.
+pub fn category_path(menu: &[CategoryNode], category: &Category) -> Vec<Category> {
+    category_ancestors(menu, category)
 }
 
 /// The live categories a product is filed under, in tree order: the first is

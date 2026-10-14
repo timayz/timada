@@ -644,10 +644,6 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     assert_eq!(tree[0].children[0].category.name, "Mats");
     assert_eq!(tree[0].children[0].product_count, 2);
     assert_eq!(
-        tree[0].subtree_ids(),
-        vec![bedding.id.clone(), mats.id.clone()]
-    );
-    assert_eq!(
         find_category(&tree, "mats").map(|n| n.product_count),
         Some(2)
     );
@@ -658,9 +654,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        category_ancestors(&pool, &mats_row)
-            .await
-            .unwrap()
+        category_ancestors(&tree, &mats_row)
             .iter()
             .map(|c| c.name.as_str())
             .collect::<Vec<_>>(),
@@ -671,7 +665,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     let cheapest_first = published_products(
         &pool,
         &ProductQuery::default()
-            .in_categories(tree[0].subtree_ids())
+            .in_category(bedding.id.clone())
             .sort(ProductSort::PriceAsc),
     )
     .await
@@ -688,12 +682,22 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     let dearest_first = published_products(
         &pool,
         &ProductQuery::default()
-            .in_categories(tree[0].subtree_ids())
+            .in_category(bedding.id.clone())
             .sort(ProductSort::PriceDesc),
     )
     .await
     .unwrap();
     assert_eq!(dearest_first.items[0].name, "Cooling Mat");
+    let searched = published_products(
+        &pool,
+        &ProductQuery::default()
+            .in_category(bedding.id.clone())
+            .search("wool"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(searched.total, 1, "a search inside a category is counted");
+    assert_eq!(searched.items[0].name, "Wool Mat");
 
     // Related products share a category and never include the product itself.
     let cooling_row = published_product_by_slug(&pool, "cooling-mat")
