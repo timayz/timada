@@ -1,11 +1,19 @@
 //! `/t/{slug}/api-keys`: the store API keys of a tenant, for members with
 //! `api-keys:manage`. A key's token is shown once, right after its creation
 //! (it travels in a private cookie across the redirect), then only its hint.
+//! A key's scopes are chosen at creation and can be changed while it is
+//! active.
 
 pub mod create;
 pub mod revoke;
+pub mod scopes;
 
-use timada_tenancy::{MAX_API_KEY_LABEL_LEN, PERMISSION_API_KEYS_MANAGE, api_keys_of_tenant};
+use std::collections::HashMap;
+
+use timada_tenancy::{
+    API_KEY_SCOPES, MAX_API_KEY_LABEL_LEN, PERMISSION_API_KEYS_MANAGE, SCOPE_STORE_READ,
+    api_keys_of_tenant,
+};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -20,7 +28,18 @@ use crate::auth::{now, user_labels};
 use crate::config::Config;
 use crate::db::ReadPool;
 use crate::media::Media;
-use crate::ui::{document, format_time, notice};
+use crate::ui::{describe_api_key_scope, document, format_time, notice};
+
+/// The form field of a scope checkbox: `scope:<scope>`.
+const SCOPE_FIELD_PREFIX: &str = "scope:";
+
+/// The scopes ticked in a posted key form.
+pub fn checked_scopes(form: &HashMap<String, String>) -> Vec<String> {
+    form.keys()
+        .filter_map(|key| key.strip_prefix(SCOPE_FIELD_PREFIX))
+        .map(str::to_owned)
+        .collect()
+}
 
 #[topcoat::router::query_params(error = bad_request)]
 struct ApiKeysQuery {
@@ -109,13 +128,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <p class="mb-3 text-sm text-neutral-500">
-                    "A key reads and writes everything in this tenant's event store. Revoke one the moment it may have leaked."
+                    "A key reads this tenant's event store; one with store:write also writes to it. Give a storefront that only shows the catalogue a read-only key. Changing a key's scopes reconnects the stores using it. Revoke a key the moment it may have leaked."
                 </p>
                 <table class="w-full text-left text-sm">
                     <thead>
                         <tr class="border-b border-neutral-200 text-neutral-500">
                             <th class="py-2 font-medium">"Label"</th>
                             <th class="py-2 font-medium">"Key"</th>
+                            <th class="py-2 font-medium">"Scopes"</th>
                             <th class="py-2 font-medium">"Created"</th>
                             <th class="py-2 font-medium">"Status"</th>
                             <th class="py-2 font-medium"><span class="sr-only">"Actions"</span></th>
@@ -123,12 +143,28 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
                         if keys.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="5">"No key yet."</td></tr>
+                            <tr><td class="py-2 text-neutral-500" colspan="6">"No key yet."</td></tr>
                         }
                         for key in &keys {
                             <tr data-api-key=(&key.hint)>
                                 <td class="py-2">(&key.label)</td>
                                 <td class="py-2"><code>(&key.hint) "…"</code></td>
+                                <td class="py-2" data-api-key-scopes=(&key.scope_list)>
+                                    if key.is_active() {
+                                        <form method="post" action=(href!(scopes::scopes, Slug(slug.clone()))) class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                            <input type="hidden" name="key_id" value=(&key.id)>
+                                            for scope in API_KEY_SCOPES {
+                                                <label class="flex items-center gap-1" title=(describe_api_key_scope(scope))>
+                                                    <input type="checkbox" name=(format!("{SCOPE_FIELD_PREFIX}{scope}")) value="on" checked=(key.has_scope(scope))>
+                                                    <code>(*scope)</code>
+                                                </label>
+                                            }
+                                            <button class="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100">"Save scopes"</button>
+                                        </form>
+                                    } else {
+                                        <code class="text-neutral-500">(&key.scope_list)</code>
+                                    }
+                                </td>
                                 <td class="py-2">
                                     (labels.get(&key.created_by).cloned().unwrap_or_else(|| key.created_by.clone()))
                                     ", " <time datetime=(key.created_at)>(format_time(key.created_at as u64))</time>
@@ -159,6 +195,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <label class="block text-sm" for="new-key-label">"Label"</label>
                     <input id="new-key-label" name="label" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
                         type="text" maxlength=(MAX_API_KEY_LABEL_LEN) required="" placeholder="Web storefront">
+                    <fieldset class="space-y-1 text-sm">
+                        <legend class="mb-1 text-sm">"Scopes"</legend>
+                        for scope in API_KEY_SCOPES {
+                            <label class="flex items-center gap-2">
+                                <input type="checkbox" name=(format!("{SCOPE_FIELD_PREFIX}{scope}")) value="on" checked=(*scope == SCOPE_STORE_READ)>
+                                <span>(describe_api_key_scope(scope)) " " <code class="text-neutral-500">(*scope)</code></span>
+                            </label>
+                        }
+                    </fieldset>
                     <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Create key"</button>
                 </form>
             </section>

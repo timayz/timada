@@ -23,12 +23,17 @@ pub use role::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
-use crate::aggregator::api_key::{Created as ApiKeyCreated, Revoked as ApiKeyRevoked};
+use crate::aggregator::api_key::{
+    Created as ApiKeyCreated, Revoked as ApiKeyRevoked, Scoped as ApiKeyScoped,
+};
 use crate::aggregator::{
     Accepted, Claimed, Created, MemberGranted, MemberRevoked, MemberRoleChanged, Released, Renamed,
     Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
 };
-use crate::value_object::{ROLE_OWNER, api_key_id, implies, invitation_id, tenant_slug_id};
+use crate::value_object::{
+    LEGACY_API_KEY_SCOPES, ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id,
+    tenant_slug_id,
+};
 
 /// The command gateway. Cheap to clone when `E` is (the dashboard's executor
 /// is an `Arc` wrapper).
@@ -348,11 +353,21 @@ pub struct ApiKeyState {
     pub created_at: u64,
     pub revoked_by: Option<String>,
     pub revoked_at: Option<u64>,
+    /// What the key may do, sorted. A key created before scopes existed
+    /// holds [`LEGACY_API_KEY_SCOPES`] until its scopes are changed.
+    pub scopes: BTreeSet<String>,
 }
 
 impl ApiKeyState {
     pub fn is_active(&self) -> bool {
         self.revoked_at.is_none()
+    }
+
+    /// Whether one of the key's scopes grants `scope`.
+    pub fn allows(&self, scope: &str) -> bool {
+        self.scopes
+            .iter()
+            .any(|held| api_key_scope_implies(held, scope))
     }
 }
 
@@ -360,6 +375,7 @@ pub fn api_key_projection<E: Executor>() -> Projection<E, ApiKeyState> {
     Projection::new::<crate::aggregator::api_key::ApiKey>()
         .handler(on_api_key_created())
         .handler(on_api_key_revoked())
+        .handler(on_api_key_scoped())
         .strict()
 }
 
@@ -374,6 +390,11 @@ async fn on_api_key_created(
     key.hint = event.data.hint.to_owned();
     key.created_by = event.data.created_by.to_owned();
     key.created_at = event.data.created_at;
+    // Replaced by the `Scoped` committed with every key created since.
+    key.scopes = LEGACY_API_KEY_SCOPES
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
     Ok(())
 }
 
@@ -384,6 +405,15 @@ async fn on_api_key_revoked(
 ) -> anyhow::Result<()> {
     key.revoked_by = Some(event.data.revoked_by.to_owned());
     key.revoked_at = Some(event.data.revoked_at);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_api_key_scoped(
+    event: Event<ApiKeyScoped>,
+    key: &mut ApiKeyState,
+) -> anyhow::Result<()> {
+    key.scopes = event.data.scopes.iter().cloned().collect();
     Ok(())
 }
 

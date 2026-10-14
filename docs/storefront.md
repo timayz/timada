@@ -21,7 +21,9 @@ store.shutdown().await;
 ```
 
 - The **token** is created once on the tenant's *API keys* page of the dashboard and
-  shown once. A key has full access to its tenant's store and nothing else.
+  shown once. A key reaches its tenant's store and nothing else, as far as its scopes
+  allow: `store:read` (read events, run subscriptions) is all a storefront needs;
+  `store:write` also appends events. A key created before scopes existed holds both.
 - The **address** is one node's store API, or a `host:port` in front of several (a
   load balancer, a geo-routed name). A name is looked up again on every reconnect, so
   when a node goes away the storefront follows the name to one that answers; any

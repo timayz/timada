@@ -90,9 +90,10 @@ pub mod api_key {
     /// A store's credential to the tenant's event store, presented when a
     /// storefront connects. One stream per token, id =
     /// [`api_key_id`](crate::api_key_id): the token is shown once at creation,
-    /// the stream knows its hash and a short hint to tell keys apart. A key
-    /// reads and writes everything in its tenant's store; revoking it is the
-    /// only way to narrow that.
+    /// the stream knows its hash and a short hint to tell keys apart. What a
+    /// key may do is its scopes (`Scoped`); a key created before scopes
+    /// existed has none recorded and keeps the full access it was issued
+    /// with (see [`LEGACY_API_KEY_SCOPES`](crate::LEGACY_API_KEY_SCOPES)).
     #[evento::aggregate(name = "timada-tenancy/ApiKey")]
     pub enum ApiKey {
         Created {
@@ -107,6 +108,16 @@ pub mod api_key {
         Revoked {
             revoked_by: String,
             revoked_at: u64,
+        },
+        /// The whole scope set of a key, replaced: recorded with `Created`
+        /// and again on every change. Scopes are `resource:action` strings
+        /// from [`API_KEY_SCOPES`](crate::API_KEY_SCOPES), never an enum, so
+        /// the vocabulary can grow without a new event.
+        Scoped {
+            scopes: Vec<String>,
+            scoped_by: String,
+            /// Unix seconds.
+            scoped_at: u64,
         },
     }
 }
