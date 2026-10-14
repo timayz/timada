@@ -44,3 +44,24 @@ http:
       loadBalancer:
         servers:
           - url: "http://host.docker.internal:3456"
+
+# The store API, for storefronts: STORE_ADDR=store.timada.localhost:4320 with
+# STORE_TLS_CA=/etc/ssl/certs/ca-certificates.crt. Traefik ends TLS here and
+# hands plain TCP to whichever node answers (each node's `store_api.listen`
+# on 0.0.0.0:4321, 4322 and 4323). A storefront whose node goes away
+# reconnects through here to another one.
+tcp:
+  routers:
+    store-api:
+      rule: "HostSNI(`store.timada.localhost`)"
+      entryPoints:
+        - store
+      service: store-api
+      tls: {}
+  services:
+    store-api:
+      loadBalancer:
+        servers:
+          - address: "host.docker.internal:4321"
+          - address: "host.docker.internal:4322"
+          - address: "host.docker.internal:4323"
