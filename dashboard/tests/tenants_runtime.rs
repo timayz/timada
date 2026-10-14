@@ -27,7 +27,7 @@ use evento_accord::GroupId;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
-use timada_catalog::{CreateProduct, count_products, products_of_tenant};
+use timada_catalog::{CreateProduct, ProductFilter, count_products, products_of_tenant};
 use timada_tenancy::aggregator::{Renamed, Tenant};
 use timada_tenancy::{Command, CreateTenant, TenantState, read_model_subscription};
 
@@ -341,7 +341,7 @@ async fn wait_products(
 ) {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let rows = products_of_tenant(pool, &tenant.id, None, 0, 10)
+            let rows = products_of_tenant(pool, &tenant.id, &ProductFilter::default(), 0, 10)
                 .await
                 .unwrap();
             if ok(&rows) {
@@ -377,7 +377,12 @@ async fn a_tenant_read_model_lands_in_the_shared_database() {
         rows.len() == 1 && rows[0].id == mug.id
     })
     .await;
-    assert_eq!(count_products(&h.pool, &zeta.id, None).await.unwrap(), 0);
+    assert_eq!(
+        count_products(&h.pool, &zeta.id, &ProductFilter::default())
+            .await
+            .unwrap(),
+        0
+    );
     assert!(
         catalog
             .load_product_by_slug("blue-mug")
@@ -400,7 +405,12 @@ async fn a_tenant_read_model_lands_in_the_shared_database() {
         rows.len() == 1 && rows[0].amount_cents == Some(1250)
     })
     .await;
-    assert_eq!(count_products(&h.pool, &acme.id, None).await.unwrap(), 1);
+    assert_eq!(
+        count_products(&h.pool, &acme.id, &ProductFilter::default())
+            .await
+            .unwrap(),
+        1
+    );
 
     h.tenants.shutdown().await;
     let _ = std::fs::remove_dir_all(&h.dir);

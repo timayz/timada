@@ -4,10 +4,12 @@
 //! `catalog_products` current from one tenant's event stream into a shared
 //! database (every row carries the tenant id), and [`products`] queries it.
 
+mod categories;
 mod migrations;
 mod products;
 mod read_model;
 
+pub use categories::*;
 pub use migrations::*;
 pub use products::*;
 pub use read_model::*;
