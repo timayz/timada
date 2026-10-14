@@ -151,8 +151,8 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_api_key_scopes" => "Choose at least one scope for the key.",
         "api_key_invalid" => "This API key does not exist or is already revoked.",
         "order_not_found" => "This order does not exist.",
-        "not_awaiting_payment" => "This order is no longer awaiting payment.",
-        "not_paid" => "Only a paid order can be marked fulfilled.",
+        "order_cancelled" => "A cancelled order cannot be fulfilled.",
+        "invalid_publishable_key" => "A publishable key starts with pk_.",
         "not_cancellable" => "A fulfilled order cannot be cancelled.",
         "invalid_tracking" => "A tracking number is at most 200 characters.",
         "invalid_reason" => "Say why the order is cancelled, in at most 500 characters.",
@@ -173,7 +173,10 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "products:read" => "See the products and categories",
         "products:manage" => "Create, edit, publish and archive products; organise the categories",
         "orders:read" => "See the orders and the carts shoppers left",
-        "orders:manage" => "Mark orders paid or fulfilled, and cancel them (includes seeing them)",
+        "orders:manage" => {
+            "Mark orders fulfilled, and cancel and refund them (includes seeing them)"
+        }
+        "payments:manage" => "Set up how shoppers pay (the payment provider's keys)",
         _ => "Unknown permission",
     }
 }

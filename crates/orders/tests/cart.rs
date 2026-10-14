@@ -184,10 +184,7 @@ async fn a_checked_out_cart_takes_no_more_changes() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let cart_id = cart_with(&orders, &mug, 1).await;
-    orders
-        .place_order(SHOPPER, &cart_id, checkout())
-        .await
-        .unwrap();
+    pay(&orders, &cart_id, checkout()).await;
 
     let added = orders
         .add_to_cart(SHOPPER, &cart_id, item(&mug, None, 1))

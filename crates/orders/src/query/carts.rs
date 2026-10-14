@@ -10,6 +10,8 @@ pub struct CartRow {
     pub id: String,
     /// The order it became, once checked out.
     pub order_id: Option<String>,
+    /// `open`, or `paying` once a payment was asked for.
+    pub status: String,
     pub line_count: i64,
     pub item_count: i64,
     /// Unix seconds.
@@ -27,7 +29,7 @@ pub async fn open_carts(
     limit: i64,
 ) -> sqlx::Result<Vec<CartRow>> {
     sqlx::query_as(
-        "SELECT tenant_id, id, order_id, line_count, item_count, created_at, updated_at
+        "SELECT tenant_id, id, order_id, status, line_count, item_count, created_at, updated_at
          FROM orders_carts
          WHERE tenant_id = ?1 AND order_id IS NULL AND item_count > 0
          ORDER BY updated_at DESC, id DESC LIMIT ?2 OFFSET ?3",

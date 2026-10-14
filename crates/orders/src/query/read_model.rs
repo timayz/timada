@@ -81,10 +81,11 @@ pub async fn upsert_cart(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO orders_carts (tenant_id, id, order_id, line_count, item_count, created_at,
-            updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            updated_at, status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             order_id = excluded.order_id, line_count = excluded.line_count,
+            status = excluded.status,
             item_count = excluded.item_count, updated_at = excluded.updated_at",
     )
     .bind(tenant_id)
@@ -94,6 +95,7 @@ pub async fn upsert_cart(
     .bind(i64::from(cart.item_count()))
     .bind(cart.created_at as i64)
     .bind(cart.updated_at as i64)
+    .bind(cart.status())
     .execute(pool)
     .await?;
     Ok(())
@@ -107,10 +109,12 @@ pub async fn upsert_order(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO orders_orders (tenant_id, id, reference, cart_id, status, email, name,
-            country, item_count, total_cents, currency, placed_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
+            refunded_cents)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
-            status = excluded.status, updated_at = excluded.updated_at",
+            status = excluded.status, updated_at = excluded.updated_at,
+            refunded_cents = excluded.refunded_cents",
     )
     .bind(tenant_id)
     .bind(&order.id)
@@ -125,6 +129,8 @@ pub async fn upsert_order(
     .bind(&order.currency)
     .bind(order.placed_at as i64)
     .bind(order.updated_at as i64)
+    .bind(&order.payment.payment_id)
+    .bind(order.refunded_cents as i64)
     .execute(pool)
     .await?;
     Ok(())

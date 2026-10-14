@@ -70,19 +70,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <th class="py-2 font-medium">"Cart"</th>
                             <th class="py-2 font-medium">"Products"</th>
                             <th class="py-2 font-medium">"Items"</th>
+                            <th class="py-2 font-medium">"State"</th>
                             <th class="py-2 font-medium">"Started"</th>
                             <th class="py-2 font-medium">"Last change"</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="5">"No open cart."</td></tr>
+                            <tr><td class="py-2 text-neutral-500" colspan="6">"No open cart."</td></tr>
                         }
                         for row in &rows {
                             <tr data-cart=(&row.id)>
                                 <td class="py-2"><code>(&row.id)</code></td>
                                 <td class="py-2">(row.line_count)</td>
                                 <td class="py-2" data-cart-items="">(row.item_count)</td>
+                                <td class="py-2" data-cart-status=(&row.status)>(if row.status == "paying" { "Paying" } else { "Filling" })</td>
                                 <td class="py-2"><time datetime=(row.created_at)>(format_time(row.created_at as u64))</time></td>
                                 <td class="py-2"><time datetime=(row.updated_at)>(format_time(row.updated_at as u64))</time></td>
                             </tr>

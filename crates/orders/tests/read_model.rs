@@ -18,15 +18,9 @@ async fn orders_and_carts_are_listed() {
     let left = cart_with(&orders, &mug, 3).await;
     let _empty = orders.create_cart(SHOPPER).await.unwrap();
     let ordered = cart_with(&orders, &mug, 2).await;
-    let placed = orders
-        .place_order(SHOPPER, &ordered, checkout())
-        .await
-        .unwrap();
+    let placed = pay(&orders, &ordered, checkout()).await;
     let cancelled_cart = cart_with(&orders, &mug, 1).await;
-    let cancelled = orders
-        .place_order(SHOPPER, &cancelled_cart, checkout())
-        .await
-        .unwrap();
+    let cancelled = pay(&orders, &cancelled_cart, checkout()).await;
     orders
         .cancel_order(ALICE, &cancelled.order_id, "Test".into())
         .await
@@ -45,7 +39,8 @@ async fn orders_and_carts_are_listed() {
     assert_eq!(rows.len(), 2);
     let row = rows.iter().find(|row| row.id == placed.order_id).unwrap();
     assert_eq!(row.reference, placed.reference);
-    assert_eq!(row.status(), OrderStatus::AwaitingPayment);
+    assert_eq!(row.status(), OrderStatus::Paid);
+    assert!(row.payment_id.starts_with("pi_"));
     assert_eq!(row.total_label(), "25.00 EUR");
     assert_eq!(row.item_count, 2);
     assert_eq!(row.name, "Ada Lovelace");

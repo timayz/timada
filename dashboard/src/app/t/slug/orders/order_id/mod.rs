@@ -1,10 +1,9 @@
-//! `/t/{slug}/orders/{order_id}`: one order, read from its own stream (so a
-//! change shows at once), with what the merchant does next: mark it paid,
-//! mark it fulfilled, or cancel it.
+//! `/t/{slug}/orders/{order_id}`: one paid order, read from its own stream
+//! (so a change shows at once), with what the merchant does next: mark it
+//! fulfilled, or cancel it.
 
 pub mod cancel;
 pub mod fulfil;
-pub mod pay;
 
 use timada_catalog::format_money;
 use timada_orders::{MAX_REASON_LEN, MAX_TRACKING_LEN, OrderState, OrderStatus, OrdersError};
@@ -124,10 +123,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let status = order.status;
     let address = order.shipping.clone();
     let order_id = order.id.clone();
-    let can_pay = can_manage && status == OrderStatus::AwaitingPayment;
+
     let can_fulfil = can_manage && status == OrderStatus::Paid;
-    let can_cancel =
-        can_manage && matches!(status, OrderStatus::AwaitingPayment | OrderStatus::Paid);
+    let payment = format!(
+        "{} · {}",
+        format_money(order.payment.amount_cents, &order.payment.currency),
+        order.payment.payment_id
+    );
+    let refunded =
+        (order.refunded_cents > 0).then(|| format_money(order.refunded_cents, &order.currency));
+    let can_cancel = can_manage && status == OrderStatus::Paid;
     let title = format!("Order {} · {}", order.reference, tenant.name);
 
     Ok(view! {
@@ -149,9 +154,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dd data-order-status=(status.as_str())>(status.label())</dd>
                     <dt class="text-neutral-500">"Placed"</dt>
                     <dd><time datetime=(order.placed_at)>(format_time(order.placed_at))</time></dd>
-                    if let Some(at) = order.paid_at {
-                        <dt class="text-neutral-500">"Paid"</dt>
-                        <dd><time datetime=(at)>(format_time(at))</time></dd>
+                    <dt class="text-neutral-500">"Payment"</dt>
+                    <dd data-order-payment="">(&payment)</dd>
+                    if let Some(refunded) = &refunded {
+                        <dt class="text-neutral-500">"Refunded"</dt>
+                        <dd data-order-refunded="">(refunded)</dd>
                     }
                     if let Some(at) = order.fulfilled_at {
                         <dt class="text-neutral-500">"Fulfilled"</dt>
@@ -231,16 +238,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
             </section>
 
-            if can_pay || can_fulfil || can_cancel {
+            if can_fulfil || can_cancel {
                 <section class="rounded border border-neutral-200 bg-white p-4">
                     <h2 class="mb-2 text-lg font-medium">"Next step"</h2>
                     <div class="space-y-4">
-                        if can_pay {
-                            <form method="post" action=(href!(pay::pay, Slug(slug.clone()), OrderId(order_id.clone())))>
-                                <p class="mb-2 text-sm text-neutral-500">"Once the money is in, record it; the order can then be fulfilled."</p>
-                                <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Mark as paid"</button>
-                            </form>
-                        }
                         if can_fulfil {
                             <form method="post" action=(href!(fulfil::fulfil, Slug(slug.clone()), OrderId(order_id.clone()))) class="space-y-2">
                                 <label class="block text-sm" for="order-tracking">"Tracking number (optional)"</label>
