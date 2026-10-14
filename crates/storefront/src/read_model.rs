@@ -128,11 +128,23 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
         .await?;
     }
     let is_counted = product.status.as_str() == "published";
-    // A rename or a new price leaves every count as it was.
+    // A rename or a new price leaves every count as it was; only the keys
+    // its categories' pages sort it by move.
     if was_counted.unwrap_or(false) != is_counted
         || (is_counted && !was_in.iter().eq(product.categories.iter()))
     {
         refresh_category_counts(&mut tx).await?;
+    } else if is_counted {
+        sqlx::query(
+            "UPDATE storefront_category_products
+             SET (updated_at, min_amount_cents, max_amount_cents) =
+                (SELECT updated_at, min_amount_cents, max_amount_cents
+                 FROM storefront_products WHERE id = ?1)
+             WHERE product_id = ?1",
+        )
+        .bind(&product.id)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(())
@@ -274,8 +286,10 @@ async fn refresh_category_counts(conn: &mut sqlx::SqliteConnection) -> sqlx::Res
         .await?;
         for product_id in &counts.subtree_products {
             sqlx::query(
-                "INSERT INTO storefront_category_products (category_id, product_id)
-                 VALUES (?1, ?2)",
+                "INSERT INTO storefront_category_products (category_id, product_id, updated_at,
+                    min_amount_cents, max_amount_cents)
+                 SELECT ?1, id, updated_at, min_amount_cents, max_amount_cents
+                 FROM storefront_products WHERE id = ?2",
             )
             .bind(&id)
             .bind(product_id)

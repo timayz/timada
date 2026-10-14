@@ -76,10 +76,11 @@ last either way.
 
 ```rust
 use timada_storefront::{categories, category_path, find_category, product_categories,
-    related_products, require_category};
+    related_products, require_category, require_category_in};
 
 let menu = categories(cx).await?;                     // live categories as trees
-let category = require_category(cx, slug).await?;     // 404 when archived or unknown
+let node = require_category_in(&menu, slug)?;         // 404 when archived or unknown, no query
+let category = require_category(cx, slug).await?;     // the same without a menu at hand
 let crumbs = category_path(&menu, &category);         // its ancestors, read off the menu
 let node = find_category(&menu, &category.slug);      // its node, with children and count
 let also = related_products(cx, &product, 4).await?;  // same category, never itself
@@ -91,9 +92,9 @@ which counts the published products of the whole subtree, so a top-level entry s
 everything below it. The count is worked out by the catalog subscription when a product
 is filed, published or archived, or a category is moved, and stored on the category's
 row, so building the menu on every page is one plain query. The same subscription keeps,
-for each category, the products its page lists, so `in_category` filters on one id
-however deep the tree goes, and a page with no search reads its total from the stored
-count instead of counting. `in_categories` is the narrower filter: products filed
+for each category, the products its page lists with the keys it sorts them by, so a page
+of `in_category` with no search is read off an index in the order asked for, costing
+its own size however large the store is, and its total is the stored count. `in_categories` is the narrower filter: products filed
 directly under any of the ids, which is what related products use. An archived category
 is in none of this; the products that were in it stay on sale.
 

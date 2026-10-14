@@ -373,6 +373,33 @@ const COUNT: &str = concat!(
     products_where!()
 );
 
+/// One page of a category, read off what the subscription keeps for it: the
+/// rows are already in `$order` in an index of their own, so the page costs
+/// its own size however large the store is. `?1` is the category, `?2` and
+/// `?3` the limit and offset.
+macro_rules! category_page {
+    ($order:literal) => {
+        concat!(
+            "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
+                p.updated_at, p.images_json, p.options_json, p.variants_json,
+                p.attributes_json, p.min_amount_cents, p.max_amount_cents
+             FROM storefront_category_products cp
+             JOIN storefront_products p ON p.id = cp.product_id
+             WHERE cp.category_id = ?1 ",
+            $order,
+            " LIMIT ?2 OFFSET ?3"
+        )
+    };
+}
+
+const CATEGORY_NEWEST: &str = category_page!("ORDER BY cp.updated_at DESC, cp.product_id DESC");
+const CATEGORY_PRICE_ASC: &str = category_page!(
+    "ORDER BY cp.min_amount_cents IS NULL, cp.min_amount_cents ASC, cp.product_id DESC"
+);
+const CATEGORY_PRICE_DESC: &str = category_page!(
+    "ORDER BY cp.max_amount_cents IS NULL, cp.max_amount_cents DESC, cp.product_id DESC"
+);
+
 /// The published products a query matches, in the order it asks for.
 pub async fn published_products(
     pool: &SqlitePool,
@@ -383,27 +410,45 @@ pub async fn published_products(
     let pattern = query.q.as_deref().map(contains);
     // A JSON array, read back by `json_each`: one bind for any number of ids.
     let categories = serde_json::to_string(&query.categories).unwrap_or_else(|_| "[]".to_owned());
-    let total: i64 = match query.category.as_deref() {
-        // A category's page as it is: the count the subscription stored.
-        Some(category)
-            if pattern.is_none() && query.categories.is_empty() && query.exclude.is_none() =>
-        {
+    let offset = i64::from(page - 1) * per_page;
+    // A category's page as it is, with nothing else to match: the count and
+    // the order the subscription stored.
+    if let Some(category) = query.category.as_deref()
+        && pattern.is_none()
+        && query.categories.is_empty()
+        && query.exclude.is_none()
+    {
+        let total: i64 =
             sqlx::query_scalar("SELECT subtree_count FROM storefront_categories WHERE id = ?1")
                 .bind(category)
                 .fetch_optional(pool)
                 .await?
-                .unwrap_or(0)
-        }
-        _ => {
-            sqlx::query_scalar(COUNT)
-                .bind(&pattern)
-                .bind(&categories)
-                .bind(query.exclude.as_deref())
-                .bind(query.category.as_deref())
-                .fetch_one(pool)
-                .await?
-        }
-    };
+                .unwrap_or(0);
+        let statement = match query.sort {
+            ProductSort::Newest => CATEGORY_NEWEST,
+            ProductSort::PriceAsc => CATEGORY_PRICE_ASC,
+            ProductSort::PriceDesc => CATEGORY_PRICE_DESC,
+        };
+        let items = sqlx::query_as(statement)
+            .bind(category)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(pool)
+            .await?;
+        return Ok(ProductPage {
+            items,
+            page,
+            per_page: per_page as u32,
+            total,
+        });
+    }
+    let total: i64 = sqlx::query_scalar(COUNT)
+        .bind(&pattern)
+        .bind(&categories)
+        .bind(query.exclude.as_deref())
+        .bind(query.category.as_deref())
+        .fetch_one(pool)
+        .await?;
     let statement = match query.sort {
         ProductSort::Newest => PAGE_NEWEST,
         ProductSort::PriceAsc => PAGE_PRICE_ASC,
@@ -415,7 +460,7 @@ pub async fn published_products(
         .bind(query.exclude.as_deref())
         .bind(query.category.as_deref())
         .bind(per_page)
-        .bind(i64::from(page - 1) * per_page)
+        .bind(offset)
         .fetch_all(pool)
         .await?;
     Ok(ProductPage {

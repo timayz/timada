@@ -617,7 +617,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         .await
         .unwrap();
     let cooling = stock(&catalog, "Cooling Mat", 2990, &[&mats.id]).await;
-    stock(&catalog, "Wool Mat", 1990, &[&mats.id]).await;
+    let wool = stock(&catalog, "Wool Mat", 1990, &[&mats.id]).await;
     stock(&catalog, "Feather Wand", 990, &[&toys.id]).await;
 
     let pool = h.local_pool("acme-shop").await;
@@ -700,6 +700,28 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     .unwrap();
     assert_eq!(searched.total, 1, "a search inside a category is counted");
     assert_eq!(searched.items[0].name, "Wool Mat");
+
+    // A new price re-sorts a category's page though nothing was filed anew.
+    catalog
+        .price_product("alice", &wool, 3990, "EUR")
+        .await
+        .unwrap();
+    eventually("the category page sorts by the new price", async || {
+        published_products(
+            &pool,
+            &ProductQuery::default()
+                .in_category(bedding.id.clone())
+                .sort(ProductSort::PriceAsc),
+        )
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .map(|p| p.name.clone())
+        .collect::<Vec<_>>()
+            == ["Cooling Mat", "Wool Mat"]
+    })
+    .await;
 
     // Related products share a category and never include the product itself.
     let cooling_row = published_product_by_slug(&pool, "cooling-mat")

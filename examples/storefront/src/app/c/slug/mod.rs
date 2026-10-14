@@ -1,7 +1,7 @@
 //! A category and the products in it, sub-categories included.
 
 use timada_storefront::{
-    ProductQuery, ProductSort, categories, category_path, find_category, products, require_category,
+    ProductQuery, ProductSort, categories, category_path, products, require_category_in,
 };
 use topcoat::{
     Result,
@@ -31,8 +31,11 @@ struct CategoryLink<'a> {
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let category = require_category(cx, path_param::<Slug>(cx)).await?;
+    // The menu holds every live category, so the page's own comes out of it.
     let nav = categories(cx).await?;
+    let node = require_category_in(&nav, path_param::<Slug>(cx))?;
+    let category = node.category.clone();
+    let children = node.children.clone();
     let crumbs = category_path(&nav, &category);
     let query = query_params::<CategoryQuery>(cx)?;
     let sort = query
@@ -42,8 +45,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .unwrap_or_default();
     // The products of this category and of everything below it, which is
     // what a shopper expects from a top-level entry.
-    let node = find_category(&nav, &category.slug);
-    let children = node.map(|node| node.children.clone()).unwrap_or_default();
     let page = products(
         cx,
         &ProductQuery::default()

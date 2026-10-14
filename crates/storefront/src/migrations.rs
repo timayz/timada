@@ -147,5 +147,35 @@ sqlx_migrator::sqlite_migration!(
                 ON storefront_products (status, min_amount_cents)",
             "DROP INDEX storefront_products_price"
         ),
+        // A category's page reads its products straight off these, in the
+        // order a shopper picked, without sorting.
+        (
+            "ALTER TABLE storefront_category_products
+                ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE storefront_category_products DROP COLUMN updated_at"
+        ),
+        (
+            "ALTER TABLE storefront_category_products ADD COLUMN min_amount_cents INTEGER",
+            "ALTER TABLE storefront_category_products DROP COLUMN min_amount_cents"
+        ),
+        (
+            "ALTER TABLE storefront_category_products ADD COLUMN max_amount_cents INTEGER",
+            "ALTER TABLE storefront_category_products DROP COLUMN max_amount_cents"
+        ),
+        (
+            "CREATE INDEX storefront_category_products_newest ON storefront_category_products
+                (category_id, updated_at DESC, product_id DESC)",
+            "DROP INDEX storefront_category_products_newest"
+        ),
+        (
+            "CREATE INDEX storefront_category_products_price_asc ON storefront_category_products
+                (category_id, min_amount_cents IS NULL, min_amount_cents, product_id DESC)",
+            "DROP INDEX storefront_category_products_price_asc"
+        ),
+        (
+            "CREATE INDEX storefront_category_products_price_desc ON storefront_category_products
+                (category_id, max_amount_cents IS NULL, max_amount_cents DESC, product_id DESC)",
+            "DROP INDEX storefront_category_products_price_desc"
+        ),
     ]
 );
