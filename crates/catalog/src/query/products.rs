@@ -3,6 +3,7 @@
 use sqlx::{FromRow, SqlitePool};
 
 use crate::command::{Price, ProductStatus};
+use crate::value_object::format_money;
 
 /// One row of `catalog_products`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -23,6 +24,11 @@ pub struct ProductRow {
     /// The file name of the first picture, when it has one.
     pub thumbnail: Option<String>,
     pub image_count: i64,
+    /// The cheapest and the dearest a shopper may pay: equal when nothing
+    /// varies, absent when the product has no price at all.
+    pub min_amount_cents: Option<i64>,
+    pub max_amount_cents: Option<i64>,
+    pub variant_count: i64,
 }
 
 impl ProductRow {
@@ -35,6 +41,23 @@ impl ProductRow {
 
     pub fn status(&self) -> ProductStatus {
         ProductStatus::parse(&self.status).unwrap_or_default()
+    }
+
+    /// The price as a listing shows it: one amount, or a range when the
+    /// variants differ (`12.00–18.00 EUR`).
+    pub fn price_label(&self) -> Option<String> {
+        let currency = self.currency.as_deref()?;
+        let (min, max) = (self.min_amount_cents?, self.max_amount_cents?);
+        if min == max {
+            return Some(format_money(min as u64, currency));
+        }
+        Some(format!(
+            "{}–{}",
+            format_money(min as u64, currency)
+                .trim_end_matches(currency)
+                .trim_end(),
+            format_money(max as u64, currency)
+        ))
     }
 }
 
@@ -80,7 +103,8 @@ pub async fn products_of_tenant(
 ) -> sqlx::Result<Vec<ProductRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, slug, name, description, amount_cents, currency, status,
-            created_by, created_at, updated_at, thumbnail, image_count
+            created_by, created_at, updated_at, thumbnail, image_count,
+            min_amount_cents, max_amount_cents, variant_count
          FROM catalog_products
          WHERE tenant_id = ?1
            AND (?2 IS NULL OR slug LIKE ?2 ESCAPE '\\' OR name LIKE ?2 ESCAPE '\\')
@@ -126,7 +150,8 @@ pub async fn product_by_id(
 ) -> sqlx::Result<Option<ProductRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, slug, name, description, amount_cents, currency, status,
-            created_by, created_at, updated_at, thumbnail, image_count
+            created_by, created_at, updated_at, thumbnail, image_count,
+            min_amount_cents, max_amount_cents, variant_count
          FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
     )
     .bind(tenant_id)

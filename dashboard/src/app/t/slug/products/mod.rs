@@ -81,6 +81,22 @@ pub fn error_code(err: &CatalogError) -> &'static str {
         CatalogError::InvalidAlt => "invalid_alt",
         CatalogError::ImageNotFound => "image_not_found",
         CatalogError::InvalidImageOrder => "invalid_image_order",
+        CatalogError::TooManyOptions => "too_many_options",
+        CatalogError::InvalidOptionName => "invalid_option_name",
+        CatalogError::OptionExists => "option_exists",
+        CatalogError::InvalidOptionValues => "invalid_option_values",
+        CatalogError::OptionNotFound => "option_not_found",
+        CatalogError::OptionInUse => "option_in_use",
+        CatalogError::OptionValueInUse => "option_value_in_use",
+        CatalogError::TooManyVariants => "too_many_variants",
+        CatalogError::InvalidSelection => "invalid_selection",
+        CatalogError::VariantExists => "variant_exists",
+        CatalogError::VariantNotFound => "variant_not_found",
+        CatalogError::CurrencyMismatch => "currency_mismatch",
+        CatalogError::InvalidSku => "invalid_sku",
+        CatalogError::SkuTaken => "sku_taken",
+        CatalogError::InvalidAttribute => "invalid_attribute",
+        CatalogError::TooManyAttributes => "too_many_attributes",
         CatalogError::Write(_) | CatalogError::Other(_) => "failed",
     }
 }
@@ -184,7 +200,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <a class="underline" href=(href!(product_id::index, Slug(slug.clone()), product_id::ProductId(row.id.clone())))>(&row.name)</a>
                                 </td>
                                 <td class="py-2"><code>(&row.slug)</code></td>
-                                <td class="py-2">(row.price().map(|p| p.to_string()).unwrap_or_else(|| "—".to_owned()))</td>
+                                <td class="py-2" data-product-price="">(row.price_label().unwrap_or_else(|| "—".to_owned()))</td>
                                 <td class="py-2">(status_label(row.status()))</td>
                                 <td class="py-2"><time datetime=(row.updated_at)>(format_time(row.updated_at as u64))</time></td>
                             </tr>

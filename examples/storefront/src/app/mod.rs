@@ -68,6 +68,11 @@ pub async fn document(
                     "nav.crumbs { color: #666; font-size: .875rem; margin-bottom: 1rem; }"
                     "nav.sort { margin-bottom: 1rem; }"
                     "section.related { margin-top: 2.5rem; }"
+                    "form.picker { margin: 1rem 0; }"
+                    "form.picker label { display: inline-block; min-width: 6rem; }"
+                    "table.variants, table.attributes { border-collapse: collapse; margin: 1rem 0; min-width: 20rem; }"
+                    "table.variants th, table.variants td, table.attributes th, table.attributes td { border: 1px solid #ddd; padding: .4rem .75rem; text-align: left; }"
+                    "table.attributes th { background: #fafafa; }"
                 </style>
             </head>
             <body>

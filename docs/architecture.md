@@ -17,7 +17,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 |---|---|---|
 | `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions |
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
-| `crates/catalog` | `timada-catalog` | Products, their pictures and the categories they are filed under: the first context living in a tenant's own store |
+| `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own store |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
 | `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
@@ -133,6 +133,20 @@ A member renames a product on `/t/{slug}/products/{id}`:
 6. Every storefront connected to that tenant through the store API is notified at
    once; its `storefront/catalog` subscription updates the local `storefront_products`
    row.
+
+## What a product varies by
+
+A product that comes in several colours or sizes declares its *options* and then one
+*variant* per combination, each with its own price and optionally the merchant's own
+code. The options settle first: once variants exist they cannot change, because a
+variant names a value for every option exactly once and that has to stay true. A
+product with variants is published without a price of its own, and what a listing
+shows is the range across them. Every price on one product is in one currency, so a
+range always means something.
+
+Codes are unique across a tenant through the same index-aggregate pattern as slugs
+(`timada-catalog/ProductSku`), compared without regard to case. A variant that goes,
+and an archived product, give their codes back.
 
 ## Product pictures
 
