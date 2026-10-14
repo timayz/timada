@@ -7,6 +7,7 @@ pub mod carts;
 pub mod categories;
 pub mod members;
 pub mod orders;
+pub mod payments;
 pub mod products;
 pub mod rename;
 pub mod roles;
@@ -15,8 +16,8 @@ use std::sync::Arc;
 
 use timada_tenancy::{
     PERMISSION_API_KEYS_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ORDERS_READ,
-    PERMISSION_PRODUCTS_READ, PERMISSION_ROLES_MANAGE, PERMISSION_TENANT_MANAGE, ROLE_OWNER,
-    TenantState,
+    PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_ROLES_MANAGE,
+    PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
 };
 use topcoat::{
     Result,
@@ -144,6 +145,7 @@ pub struct TenantNav {
     pub categories: bool,
     pub orders: bool,
     pub carts: bool,
+    pub payments: bool,
     pub members: bool,
     pub roles: bool,
     pub api_keys: bool,
@@ -162,6 +164,7 @@ impl TenantNav {
             // placed yet.
             orders,
             carts: orders,
+            payments: access.can(cx, PERMISSION_PAYMENTS_MANAGE).await?,
             members: access.can(cx, PERMISSION_MEMBERS_READ).await?,
             roles: access.can(cx, PERMISSION_ROLES_MANAGE).await?,
             api_keys: access.can(cx, PERMISSION_API_KEYS_MANAGE).await?,
@@ -194,6 +197,9 @@ pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) ->
             }
             if nav.carts && current != "carts" {
                 <a class="underline" href=(href!(carts::index, Slug(slug.clone())))>"Carts"</a>
+            }
+            if nav.payments && current != "payments" {
+                <a class="underline" href=(href!(payments::index, Slug(slug.clone())))>"Payments"</a>
             }
             if nav.members && current != "members" {
                 <a class="underline" href=(href!(members::index, Slug(slug.clone())))>"Members"</a>

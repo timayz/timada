@@ -49,13 +49,15 @@ struct Harness {
 /// A read model fed from each tenant's stream: records what it is given, into
 /// a list shared with the test instead of a table.
 fn probe(seen: Arc<Mutex<Vec<(String, String)>>>) -> TenantSubscription {
-    Arc::new(move |_pool: SqlitePool, tenant_id: &str| {
-        SubscriptionBuilder::new("test/probe")
-            .data(seen.clone())
-            .data(tenant_id.to_owned())
-            .handler(on_tenant_event())
-            .any_routing_key()
-    })
+    Arc::new(
+        move |_pool: SqlitePool, tenant_id: &str, _: &cluster::Executor| {
+            SubscriptionBuilder::new("test/probe")
+                .data(seen.clone())
+                .data(tenant_id.to_owned())
+                .handler(on_tenant_event())
+                .any_routing_key()
+        },
+    )
 }
 
 #[evento::subscription_all]
@@ -114,7 +116,9 @@ async fn harness(max_open: usize) -> Harness {
         pool.clone(),
         vec![
             probe(seen.clone()),
-            Arc::new(timada_catalog::read_model_subscription),
+            Arc::new(|pool, tenant_id: &str, _: &cluster::Executor| {
+                timada_catalog::read_model_subscription(pool, tenant_id)
+            }),
         ],
     );
     Harness {

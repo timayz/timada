@@ -44,12 +44,13 @@ use crate::cluster::{Cluster, Executor, PENDING_TTL};
 use crate::config::TenantsConfig;
 
 /// A read model fed from one tenant's events into the shared database: given
-/// the shared (writable) pool and the tenant id, the subscription to start on
-/// the tenant's executor. Rows it writes carry the tenant id. Started when the
-/// tenant opens, stopped when it closes; its cursor lives in the tenant's own
-/// database, so it resumes where it left off.
+/// the shared (writable) pool, the tenant id and the tenant's executor (for a
+/// subscription that writes back to the tenant's store), the subscription to
+/// start on that executor. Rows it writes carry the tenant id. Started when
+/// the tenant opens, stopped when it closes; its cursor lives in the tenant's
+/// own database, so it resumes where it left off.
 pub type TenantSubscription =
-    Arc<dyn Fn(SqlitePool, &str) -> SubscriptionBuilder<Executor> + Send + Sync>;
+    Arc<dyn Fn(SqlitePool, &str, &Executor) -> SubscriptionBuilder<Executor> + Send + Sync>;
 
 /// Whether a tenant's database is open on this node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,7 +281,7 @@ impl Tenants {
 
         let mut subscriptions = Vec::with_capacity(self.subscriptions.len());
         for build in &self.subscriptions {
-            let subscription = build(self.read_models.clone(), &tenant.id)
+            let subscription = build(self.read_models.clone(), &tenant.id, &executor)
                 .start(&executor)
                 .await
                 .with_context(|| format!("cannot start a read model of tenant {}", tenant.slug))?;

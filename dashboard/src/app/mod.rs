@@ -5,6 +5,7 @@ pub mod auth;
 pub mod cluster;
 pub mod invitations;
 mod server_errors;
+pub mod stripe;
 pub mod t;
 pub mod tenants;
 
@@ -51,6 +52,8 @@ pub struct Services {
     pub authorizer: Arc<Authorizer>,
     /// Where the product pictures are kept and served from.
     pub media: Arc<Media>,
+    /// The tenants' Stripe accounts and the provider they are reached through.
+    pub payments: Arc<crate::payments::Payments>,
     /// The live store connections, so revoking a key ends them.
     pub store: Arc<StoreConnections>,
     pub config: Config,
@@ -67,6 +70,7 @@ pub fn router(services: Services) -> Router {
         tenants,
         authorizer,
         media,
+        payments,
         store,
         config,
     } = services;
@@ -110,6 +114,7 @@ pub fn router(services: Services) -> Router {
         .app_context(tenants)
         .app_context(authorizer)
         .app_context(media)
+        .app_context(payments)
         .app_context(store)
         // The transport behind `topcoat::mail::send`, and who the codes come from.
         .mail(mailer.transport)

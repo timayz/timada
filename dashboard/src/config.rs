@@ -24,6 +24,9 @@ pub struct Config {
     /// Absent: this node does not expose the store API.
     #[serde(default)]
     pub store_api: Option<StoreApiConfig>,
+    /// Absent: tenants cannot take payments.
+    #[serde(default)]
+    pub payments: Option<PaymentsConfig>,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -135,6 +138,32 @@ impl MediaConfig {
             )));
         }
         self.public_url = url.to_owned();
+        Ok(())
+    }
+}
+
+/// Card payments: each tenant connects its own Stripe account; this node
+/// keeps the account's secrets encrypted under `secret_key`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct PaymentsConfig {
+    /// At least 32 characters, the same on every node. The tenants' Stripe
+    /// secrets are encrypted with it: changing it makes them unreadable, and
+    /// each merchant has to enter them again.
+    pub secret_key: String,
+    /// Where Stripe's API is reached; Stripe's own address when unset. Tests
+    /// point it at a local stand-in.
+    #[serde(default)]
+    pub stripe_api_url: Option<String>,
+}
+
+impl PaymentsConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.secret_key.len() < 32 {
+            return Err(ConfigError::Message(
+                "payments.secret_key must be at least 32 characters (set TIMADA__PAYMENTS__SECRET_KEY)"
+                    .into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -256,6 +285,9 @@ impl Config {
         config.media.validate()?;
         if let Some(store_api) = &config.store_api {
             store_api.validate()?;
+        }
+        if let Some(payments) = &config.payments {
+            payments.validate()?;
         }
         config.auth.validate()?;
         config.mail.validate()?;
