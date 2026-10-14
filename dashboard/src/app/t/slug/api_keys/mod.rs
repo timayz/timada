@@ -13,7 +13,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::app::auth::Flash;
 use crate::auth::cookies::{ApiKeyReveal, api_key_reveal, is_fresh};
 use crate::auth::{now, user_labels};
@@ -64,19 +64,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: &title,
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"API keys"</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(super::index, Slug(slug.clone())))>(&tenant.name)</a>
-                    if nav.products {
-                        <a class="underline" href=(href!(super::products::index, Slug(slug.clone())))>"Products"</a>
-                    }
-                    if nav.members {
-                        <a class="underline" href=(href!(super::members::index, Slug(slug.clone())))>"Members"</a>
-                    }
-                    if nav.roles {
-                        <a class="underline" href=(href!(super::roles::index, Slug(slug.clone())))>"Roles"</a>
-                    }
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                </nav>
+                tenant_nav(tenant: &tenant, nav: &nav, current: "api_keys")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
