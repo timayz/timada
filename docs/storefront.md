@@ -159,6 +159,8 @@ everything a page shows is the merchant's own `view!` around `Product` values.
 
 ## Cart and checkout
 
+(Setting up payments and testing them with Stripe's test mode: `docs/payments.md`.)
+
 With a key holding `store:checkout`, a page sells as well as shows. Carts and orders
 are not copied locally: each call writes to the store and reads back from it, so a
 page shows its change at once, and a cart's prices come from the products in the
