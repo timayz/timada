@@ -24,13 +24,11 @@ sqlx_migrator = { version = "0.19", features = ["sqlite"] }
 # Tracks evento's alpha branch until the release after alpha.35 ships the
 # accord fix for writes another node recovered (timayz/evento#266); go back to
 # a pinned version then. Cargo.lock holds the exact commit.
-# TEMPORARY: on timayz/evento#267 (store address looked up on every reconnect)
-# until it merges; switch these back to branch = "feat/remote-address-lookup" then.
-evento = { git = "https://github.com/timayz/evento", branch = "feat/remote-address-lookup", features = ["sqlite", "remote"] }
-evento-sql = { git = "https://github.com/timayz/evento", branch = "feat/remote-address-lookup", features = ["sqlite", "accord"] }
-evento-sql-migrator = { git = "https://github.com/timayz/evento", branch = "feat/remote-address-lookup", features = ["sqlite", "accord"] }
-evento-accord = { git = "https://github.com/timayz/evento", branch = "feat/remote-address-lookup" }
-evento-lock = { git = "https://github.com/timayz/evento", branch = "feat/remote-address-lookup" }
+evento = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "remote"] }
+evento-sql = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "accord"] }
+evento-sql-migrator = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "accord"] }
+evento-accord = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-lock = { git = "https://github.com/timayz/evento", branch = "alpha" }
 bitcode = "0.6"
 argon2 = { version = "0.5", features = ["std"] }
 ulid = "3.0"
