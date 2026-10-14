@@ -80,6 +80,16 @@ dir = "data/media"
 # its storefront to be configured with.
 public_url = "https://timada.localhost/media"
 
+# Card payments. Each tenant connects its own Stripe account on
+# /t/<slug>/payments; the account's secrets are kept encrypted with
+# secret_key, which every node shares (changing it makes the stored secrets
+# unreadable: merchants then enter them again). Without this section, tenants
+# cannot take payments.
+# [payments]
+# secret_key = "at least 32 characters, the same on every node"
+# # Where Stripe's API is reached; Stripe's own address when unset.
+# stripe_api_url = "http://localhost:12111"
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events. A connected storefront keeps its tenant's database open.

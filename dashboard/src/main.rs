@@ -7,6 +7,7 @@ mod config;
 mod db;
 mod limits;
 mod media;
+mod payments;
 mod read_only_store;
 mod store_api;
 mod tenants;
