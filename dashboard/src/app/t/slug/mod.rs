@@ -5,6 +5,7 @@
 pub mod api_keys;
 pub mod carts;
 pub mod categories;
+pub mod invoices;
 pub mod invoicing;
 pub mod members;
 pub mod orders;
@@ -146,6 +147,7 @@ pub struct TenantNav {
     pub categories: bool,
     pub orders: bool,
     pub carts: bool,
+    pub invoices: bool,
     pub payments: bool,
     pub invoicing: bool,
     pub members: bool,
@@ -166,6 +168,8 @@ impl TenantNav {
             // placed yet.
             orders,
             carts: orders,
+            // Invoices are what the orders were billed as.
+            invoices: orders,
             payments: access.can(cx, PERMISSION_PAYMENTS_MANAGE).await?,
             invoicing: access.can(cx, PERMISSION_TENANT_MANAGE).await?,
             members: access.can(cx, PERMISSION_MEMBERS_READ).await?,
@@ -178,7 +182,7 @@ impl TenantNav {
 /// The header links of a tenant page: the tenant's home, each section the
 /// member may see, the dashboard and the account. `current` names the
 /// section being shown (`"home"`, `"products"`, `"categories"`, `"orders"`,
-/// `"carts"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
+/// `"carts"`, `"invoices"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
 /// section), which gets
 /// no link.
 #[component]
@@ -200,6 +204,9 @@ pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) ->
             }
             if nav.carts && current != "carts" {
                 <a class="underline" href=(href!(carts::index, Slug(slug.clone())))>"Carts"</a>
+            }
+            if nav.invoices && current != "invoices" {
+                <a class="underline" href=(href!(invoices::index, Slug(slug.clone())))>"Invoices"</a>
             }
             if nav.payments && current != "payments" {
                 <a class="underline" href=(href!(payments::index, Slug(slug.clone())))>"Payments"</a>

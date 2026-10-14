@@ -347,7 +347,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     const { name, slug } = uniqueTenant("Paying Shop");
     await createTenant(page, name);
     await publishProduct(page, slug, "Blue Mug", "12.50");
-    await publishProduct(page, slug, "Red Plate", "8");
+    const plateUrl = await publishProduct(page, slug, "Red Plate", "8");
 
     // The merchant says who it is, so its invoices can name it; a SIRET
     // that fails its check is refused.
@@ -358,6 +358,13 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page).toHaveURL(/error=invalid_siret/);
     await expect(page.locator("[data-invoicing]")).toHaveCount(0);
+    // VAT-registered, so a product can take a reduced rate.
+    await page.goto(plateUrl);
+    await expect(page.locator("[data-product-vat]")).toHaveText("20\u00a0% (default)");
+    await page.getByLabel("VAT rate included in the price").selectOption({ label: "5,5\u00a0%" });
+    await page.getByRole("button", { name: "Set VAT rate" }).click();
+    await expect(page.getByRole("status")).toContainText("VAT rate set.");
+    await expect(page.locator("[data-product-vat]")).toHaveText("5,5\u00a0%");
 
     // The merchant connects a Stripe account; a key Stripe refuses is not saved.
     await page.goto(`/t/${slug}`);
@@ -405,6 +412,18 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     expect(reference).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid");
     await expect(page.locator("[data-order-total]")).toHaveText("25.00 EUR");
+    // The dashboard invoices it a moment later; the shopper downloads it.
+    const year = new Date().getUTCFullYear();
+    const invoiceLink = page.locator(`[data-document="F${year}-000001"]`);
+    await expect(async () => {
+      await page.reload();
+      await expect(invoiceLink).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    const invoicePdf = await page.request.get(new URL((await invoiceLink.getAttribute("href"))!, page.url()).toString());
+    expect(invoicePdf.status()).toBe(200);
+    expect(invoicePdf.headers()["content-type"]).toBe("application/pdf");
+    expect(invoicePdf.headers()["content-disposition"]).toContain(`F${year}-000001.pdf`);
+    expect((await invoicePdf.body()).subarray(0, 5).toString()).toBe("%PDF-");
     // Told twice, still one order.
     expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
     await page.goto(`${STOREFRONT}/cart`);
@@ -418,6 +437,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     }).toPass({ timeout: 15_000 });
     await row.getByRole("link", { name: reference }).click();
     await expect(page.locator("[data-order-payment]")).toContainText(intent.id);
+    await expect(page.locator(`[data-order-documents] [data-document="F${year}-000001"]`)).toBeVisible();
     await expect(page.locator("[data-order-address]")).toContainText("Ada Lovelace");
     await page.getByLabel("Tracking number (optional)").fill("6A12345");
     await page.getByRole("button", { name: "Mark as fulfilled" }).click();
@@ -448,6 +468,23 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(page.locator("[data-order-refunded]")).toHaveText("8.00 EUR");
     await expect(page.locator("[data-order-cancel-reason]")).toHaveText("Out of stock");
     expect(stripe.refunds).toEqual([{ payment_intent: second.id, amount: 800 }]);
+
+    // The refund is credited against the second invoice.
+    const creditNote = page.locator(`[data-order-documents] [data-document="A${year}-000001"]`);
+    await expect(async () => {
+      await page.reload();
+      await expect(creditNote).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(page.locator(`[data-order-documents] [data-document="F${year}-000002"]`)).toBeVisible();
+    const creditPdf = await page.request.get((await creditNote.locator("a").getAttribute("href"))!);
+    expect(creditPdf.headers()["content-type"]).toBe("application/pdf");
+
+    // The accountant's list holds all three.
+    await expect(async () => {
+      await page.goto(`/t/${slug}/invoices`);
+      await expect(page.locator("[data-document]")).toHaveCount(3, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(page.locator(`[data-document="A${year}-000001"]`)).toContainText("Credit note");
   } finally {
     await stripe.stop();
   }

@@ -11,6 +11,8 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/invoicing.rs"]
+mod invoicing;
 #[path = "../src/limits.rs"]
 mod limits;
 #[path = "../src/payments/mod.rs"]
@@ -171,6 +173,7 @@ async fn harness() -> Harness {
         platform.clone(),
     ));
     let subscribed = payments.clone();
+    let invoicing_platform = platform.clone();
     let tenants = Tenants::new(
         cluster,
         &TenantsConfig {
@@ -180,11 +183,14 @@ async fn harness() -> Harness {
         None,
         platform.clone(),
         pool.clone(),
-        vec![Arc::new(
-            move |_, tenant_id: &str, executor: &cluster::Executor| {
+        vec![
+            Arc::new(move |_, tenant_id: &str, executor: &cluster::Executor| {
                 payments::subscription(subscribed.clone(), tenant_id, executor.clone())
-            },
-        )],
+            }),
+            Arc::new(move |_, tenant_id: &str, executor: &cluster::Executor| {
+                invoicing::subscription(invoicing_platform.clone(), tenant_id, executor.clone())
+            }),
+        ],
     );
     Harness {
         tenants,
@@ -430,7 +436,54 @@ async fn a_paid_cart_becomes_one_order() {
     assert_eq!(order.payment.payment_id, payment.payment_id);
     assert_eq!(order.payment.currency, "EUR");
     assert_eq!(order.email, "ada@example.org");
+
+    // The order is invoiced, at the merchant's default rate.
+    let invoicing = timada_invoicing::Command(h.store(&acme).await);
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert!(invoice.label.ends_with("-000001"), "{}", invoice.label);
+    assert!(invoice.label.starts_with('F'));
+    assert_eq!(invoice.total_cents, 2500);
+    assert_eq!(invoice.lines[0].vat_rate_bps, Some(2000));
+    assert_eq!(invoice.vat[0].base_cents, 2083);
+    assert_eq!(invoice.vat[0].vat_cents, 417);
+    assert_eq!(invoice.seller.address.name, "Acme SAS");
+    assert_eq!(invoice.buyer.name, "Ada");
+    assert_eq!(invoice.order_reference, order.reference);
+    assert!(
+        timada_invoicing::pdf::render(&invoice)
+            .unwrap()
+            .starts_with(b"%PDF-")
+    );
+
+    // A refund is credited against it.
+    orders
+        .record_refund("alice", &order_id, "re_42", 1000)
+        .await
+        .unwrap();
+    let credit =
+        eventually(async || invoicing.load_credit_note_of_refund("re_42").await.unwrap()).await;
+    assert!(credit.label.starts_with('A') && credit.label.ends_with("-000001"));
+    assert_eq!(
+        credit.invoice_label.as_deref(),
+        Some(invoice.label.as_str())
+    );
+    assert_eq!(credit.total_cents, 1000);
     h.finish().await;
+}
+
+/// Waits for what a subscription writes.
+async fn eventually<T>(mut probe: impl AsyncFnMut() -> Option<T>) -> T {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(value) = probe().await {
+                return value;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the subscription wrote it")
 }
 
 #[tokio::test]

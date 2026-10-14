@@ -1,0 +1,29 @@
+[package]
+name = "timada-invoicing"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+
+[features]
+# Renders the documents as PDF (Typst, with its own fonts compiled in).
+pdf = ["dep:typst", "dep:typst-as-lib", "dep:typst-pdf", "dep:typst-assets"]
+
+[dependencies]
+evento.workspace = true
+bitcode.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+sqlx = { workspace = true, features = ["derive"] }
+sqlx_migrator.workspace = true
+typst = { workspace = true, optional = true }
+typst-as-lib = { workspace = true, optional = true }
+typst-pdf = { workspace = true, optional = true }
+typst-assets = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio.workspace = true
+
+# `#[evento::aggregate]` expands to `bitcode::` paths, so the crate must name the
+# dependency even though no source file mentions it.
+[package.metadata.cargo-machete]
+ignored = ["bitcode"]

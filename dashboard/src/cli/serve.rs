@@ -49,7 +49,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.server.region.clone(),
         executor.clone(),
         write_pool.clone(),
-        tenant_subscriptions(media.clone(), payments.clone()),
+        tenant_subscriptions(media.clone(), payments.clone(), executor.clone()),
     );
     let connections = StoreConnections::new();
     let store_api = store_api::serve(
@@ -144,11 +144,13 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
 /// What follows each tenant's own stream while it is open: the read models
 /// fed into the shared database (the catalog's product list, the orders and
-/// carts), and this node's copies of the product pictures. Every
+/// carts, the invoices), this node's copies of the product pictures, and
+/// the answers the dashboard writes back (payments, invoices). Every
 /// tenant-scoped bounded context registers its subscription here.
 fn tenant_subscriptions(
     media: Arc<crate::media::Media>,
     payments: Arc<crate::payments::Payments>,
+    platform: Executor,
 ) -> Vec<TenantSubscription> {
     vec![
         Arc::new(|pool, tenant_id, _: &Executor| {
@@ -157,11 +159,17 @@ fn tenant_subscriptions(
         Arc::new(|pool, tenant_id, _: &Executor| {
             timada_orders::read_model_subscription(pool, tenant_id)
         }),
+        Arc::new(|pool, tenant_id, _: &Executor| {
+            timada_invoicing::read_model_subscription(pool, tenant_id)
+        }),
         Arc::new(move |_, tenant_id, _: &Executor| {
             crate::media::subscription(media.clone(), tenant_id)
         }),
         Arc::new(move |_, tenant_id, executor: &Executor| {
             crate::payments::subscription(payments.clone(), tenant_id, executor.clone())
+        }),
+        Arc::new(move |_, tenant_id, executor: &Executor| {
+            crate::invoicing::subscription(platform.clone(), tenant_id, executor.clone())
         }),
     ]
 }

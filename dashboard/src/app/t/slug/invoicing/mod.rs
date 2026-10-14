@@ -31,14 +31,7 @@ pub fn invoicing_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&
 }
 
 /// `2000` as `20 %`, `550` as `5,5 %`: how French invoices write a rate.
-pub fn format_vat_rate(rate_bps: u32) -> String {
-    let whole = rate_bps / 100;
-    match rate_bps % 100 {
-        0 => format!("{whole} %"),
-        part if part % 10 == 0 => format!("{whole},{} %", part / 10),
-        part => format!("{whole},{part:02} %"),
-    }
-}
+pub use timada_invoicing::format_rate_fr as format_vat_rate;
 
 /// `1000050` cents as `10000.50`, what the form shows back.
 fn format_capital(cents: u64) -> String {
@@ -150,17 +143,4 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             </form>
         )
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rates_read_the_french_way() {
-        assert_eq!(format_vat_rate(2000), "20 %");
-        assert_eq!(format_vat_rate(550), "5,5 %");
-        assert_eq!(format_vat_rate(210), "2,1 %");
-        assert_eq!(format_vat_rate(1925), "19,25 %");
-    }
 }
