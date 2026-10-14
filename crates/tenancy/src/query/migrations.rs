@@ -5,7 +5,13 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "tenancy";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![ReadModels0001, Invitations0002, ApiKeys0003]
+    vec_box![
+        ReadModels0001,
+        Invitations0002,
+        ApiKeys0003,
+        TenantSearch0004,
+        TenantList0005
+    ]
 }
 
 pub struct ReadModels0001;
@@ -105,6 +111,63 @@ sqlx_migrator::sqlite_migration!(
         (
             "CREATE INDEX tenancy_api_keys_tenant ON tenancy_api_keys (tenant_id)",
             "DROP INDEX tenancy_api_keys_tenant"
+        ),
+    ]
+);
+
+/// What the administrator's search finds a tenant by: the slug and the name,
+/// cut in runs of three characters so a search matches anywhere in a word,
+/// ignoring case and accents. The rowid is the tenant row's.
+pub struct TenantSearch0004;
+sqlx_migrator::sqlite_migration!(
+    TenantSearch0004,
+    "tenancy",
+    "0004_tenant_search",
+    vec_box![("tenancy", "0003_api_keys")],
+    vec_box![
+        (
+            "CREATE VIRTUAL TABLE tenancy_tenants_fts USING fts5(
+                slug, name, tokenize = 'trigram remove_diacritics 1'
+            )",
+            "DROP TABLE tenancy_tenants_fts"
+        ),
+        (
+            "INSERT INTO tenancy_tenants_fts (rowid, slug, name)
+                SELECT rowid, slug, name FROM tenancy_tenants",
+            "DELETE FROM tenancy_tenants_fts"
+        ),
+    ]
+);
+
+/// What the administrator's list of tenants reads on every page: an index in
+/// its own order (the old one compared case-sensitively, so the list sorted
+/// every tenant to show one page), and how many tenants there are, kept by
+/// the subscription instead of counted.
+pub struct TenantList0005;
+sqlx_migrator::sqlite_migration!(
+    TenantList0005,
+    "tenancy",
+    "0005_tenant_list",
+    vec_box![("tenancy", "0004_tenant_search")],
+    vec_box![
+        (
+            "DROP INDEX tenancy_tenants_name",
+            "CREATE INDEX tenancy_tenants_name ON tenancy_tenants (name)"
+        ),
+        (
+            "CREATE INDEX tenancy_tenants_list ON tenancy_tenants (name COLLATE NOCASE, id)",
+            "DROP INDEX tenancy_tenants_list"
+        ),
+        (
+            "CREATE TABLE tenancy_totals (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                tenants INTEGER NOT NULL
+            )",
+            "DROP TABLE tenancy_totals"
+        ),
+        (
+            "INSERT INTO tenancy_totals (id, tenants) SELECT 1, count(*) FROM tenancy_tenants",
+            "DELETE FROM tenancy_totals"
         ),
     ]
 );
