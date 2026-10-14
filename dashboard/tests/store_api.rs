@@ -189,7 +189,10 @@ impl Harness {
     }
 
     async fn connect_with(&self, token: Option<&str>) -> anyhow::Result<Client> {
-        let mut builder = Client::builder(self.addr).request_timeout(Duration::from_secs(2));
+        // The client's default timeout: the hello opens the tenant (a new
+        // SQLite file and its migrations), which a loaded machine can take
+        // seconds over.
+        let mut builder = Client::builder(self.addr);
         if let Some(token) = token {
             builder = builder.token(token);
         }
@@ -332,19 +335,19 @@ async fn revoking_a_key_ends_its_connections() {
     assert_eq!(h.connections.count(&key_id), 0);
 
     // The connection is gone: requests fail, the reconnect is refused, and
-    // the lease is released.
+    // the lease is released. A request sent while the client is being refused
+    // waits for a connection that never comes, so it is bounded here rather
+    // than by the client's timeout.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        match count(&client).await {
-            Ok(_) => assert!(tokio::time::Instant::now() < deadline, "still served"),
-            Err(err) => {
+        match tokio::time::timeout(Duration::from_secs(2), count(&client)).await {
+            Ok(Ok(_)) => assert!(tokio::time::Instant::now() < deadline, "still served"),
+            Ok(Err(err)) => {
                 let msg = format!("{err:#}");
-                assert!(
-                    msg.contains("connection lost") || msg.contains("timed out"),
-                    "unexpected error: {msg}"
-                );
+                assert!(msg.contains("connection lost"), "unexpected error: {msg}");
                 break;
             }
+            Err(_) => break,
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
