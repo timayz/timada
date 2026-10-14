@@ -76,10 +76,11 @@ last either way.
 
 ```rust
 use timada_storefront::{categories, category_path, find_category, product_categories,
-    related_products, require_category};
+    related_products, require_category, require_category_in};
 
 let menu = categories(cx).await?;                     // live categories as trees
-let category = require_category(cx, slug).await?;     // 404 when archived or unknown
+let node = require_category_in(&menu, slug)?;         // 404 when archived or unknown, no query
+let category = require_category(cx, slug).await?;     // the same without a menu at hand
 let crumbs = category_path(&menu, &category);         // its ancestors, read off the menu
 let node = find_category(&menu, &category.slug);      // its node, with children and count
 let also = related_products(cx, &product, 4).await?;  // same category, never itself
@@ -91,11 +92,32 @@ which counts the published products of the whole subtree, so a top-level entry s
 everything below it. The count is worked out by the catalog subscription when a product
 is filed, published or archived, or a category is moved, and stored on the category's
 row, so building the menu on every page is one plain query. The same subscription keeps,
-for each category, the products its page lists, so `in_category` filters on one id
-however deep the tree goes, and a page with no search reads its total from the stored
-count instead of counting. `in_categories` is the narrower filter: products filed
+for each category, the products its page lists with the keys it sorts them by, so a page
+of `in_category` with no search is read off an index in the order asked for, costing
+its own size however large the store is, and its total is the stored count. `in_categories` is the narrower filter: products filed
 directly under any of the ids, which is what related products use. An archived category
 is in none of this; the products that were in it stay on sale.
+
+## What a product varies by
+
+```rust
+let Some(range) = product.price_range() else { return };
+range.label();                      // "22.90 EUR", or "22.90–24.90 EUR"
+range.varies();                     // whether a shopper's choice changes the price
+
+for option in &product.options { /* option.name, option.values */ }
+for variant in &product.variants { /* variant.price(), variant.sku, variant.image_id */ }
+product.variant(&picked);           // the variant those (option id, value) pairs name
+for fact in &product.attributes { /* fact.name, fact.value */ }
+```
+
+`product.price()` is `price_range().label()`: one amount when nothing varies, a range
+when it does. `options` is empty for a product that does not vary, and then `variants`
+is too. `Variant::value_of` and `Variant::matches` are what a page needs to light up
+the right row as a shopper changes the menus.
+
+`ProductSort::PriceAsc` orders by the cheapest a product can be and `PriceDesc` by the
+dearest, so a sorted list reads the way a shopper expects.
 
 ## Pictures
 

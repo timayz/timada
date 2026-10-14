@@ -82,23 +82,35 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
     .await?;
     sqlx::query(
         "INSERT INTO storefront_products (id, slug, name, description, amount_cents, currency,
-            status, updated_at, images_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            status, updated_at, images_json, options_json, variants_json, attributes_json,
+            min_amount_cents, max_amount_cents)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT (id) DO UPDATE SET
             slug = excluded.slug, name = excluded.name, description = excluded.description,
             amount_cents = excluded.amount_cents, currency = excluded.currency,
             status = excluded.status, updated_at = excluded.updated_at,
-            images_json = excluded.images_json",
+            images_json = excluded.images_json, options_json = excluded.options_json,
+            variants_json = excluded.variants_json,
+            attributes_json = excluded.attributes_json,
+            min_amount_cents = excluded.min_amount_cents,
+            max_amount_cents = excluded.max_amount_cents",
     )
     .bind(&product.id)
     .bind(&product.slug)
     .bind(&product.name)
     .bind(&product.description)
     .bind(product.price.as_ref().map(|p| p.amount_cents as i64))
-    .bind(product.price.as_ref().map(|p| p.currency.as_str()))
+    // The currency everything on this product is priced in, which for one
+    // sold only through its variants is theirs rather than a base price's.
+    .bind(product.currency())
     .bind(product.status.as_str())
     .bind(product.updated_at as i64)
     .bind(images_json(product)?)
+    .bind(options_json(product)?)
+    .bind(variants_json(product)?)
+    .bind(attributes_json(product)?)
+    .bind(product.price_range().map(|(min, _, _)| min as i64))
+    .bind(product.price_range().map(|(_, max, _)| max as i64))
     .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM storefront_product_categories WHERE product_id = ?1")
@@ -116,11 +128,23 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
         .await?;
     }
     let is_counted = product.status.as_str() == "published";
-    // A rename or a new price leaves every count as it was.
+    // A rename or a new price leaves every count as it was; only the keys
+    // its categories' pages sort it by move.
     if was_counted.unwrap_or(false) != is_counted
         || (is_counted && !was_in.iter().eq(product.categories.iter()))
     {
         refresh_category_counts(&mut tx).await?;
+    } else if is_counted {
+        sqlx::query(
+            "UPDATE storefront_category_products
+             SET (updated_at, min_amount_cents, max_amount_cents) =
+                (SELECT updated_at, min_amount_cents, max_amount_cents
+                 FROM storefront_products WHERE id = ?1)
+             WHERE product_id = ?1",
+        )
+        .bind(&product.id)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(())
@@ -144,6 +168,57 @@ fn images_json(product: &ProductState) -> anyhow::Result<String> {
         })
         .collect();
     Ok(serde_json::to_string(&images)?)
+}
+
+/// The ways it varies, as the local rows carry them.
+fn options_json(product: &ProductState) -> anyhow::Result<String> {
+    let options: Vec<crate::ProductOption> = product
+        .options
+        .iter()
+        .map(|option| crate::ProductOption {
+            id: option.id.clone(),
+            name: option.name.clone(),
+            values: option.values.clone(),
+        })
+        .collect();
+    Ok(serde_json::to_string(&options)?)
+}
+
+/// The combinations it sells, as the local rows carry them.
+fn variants_json(product: &ProductState) -> anyhow::Result<String> {
+    let variants: Vec<crate::Variant> = product
+        .variants
+        .iter()
+        .map(|variant| crate::Variant {
+            id: variant.id.clone(),
+            selections: variant
+                .selections
+                .iter()
+                .map(|selection| crate::Selection {
+                    option_id: selection.option_id.clone(),
+                    value: selection.value.clone(),
+                })
+                .collect(),
+            sku: variant.sku.clone(),
+            amount_cents: variant.price.amount_cents as i64,
+            currency: variant.price.currency.clone(),
+            image_id: variant.image_id.clone(),
+        })
+        .collect();
+    Ok(serde_json::to_string(&variants)?)
+}
+
+/// The facts in its table, as the local rows carry them.
+fn attributes_json(product: &ProductState) -> anyhow::Result<String> {
+    let attributes: Vec<crate::Attribute> = product
+        .attributes
+        .iter()
+        .map(|attribute| crate::Attribute {
+            name: attribute.name.clone(),
+            value: attribute.value.clone(),
+        })
+        .collect();
+    Ok(serde_json::to_string(&attributes)?)
 }
 
 /// The category row, and its counts worked out again when it is new, moved
@@ -211,8 +286,10 @@ async fn refresh_category_counts(conn: &mut sqlx::SqliteConnection) -> sqlx::Res
         .await?;
         for product_id in &counts.subtree_products {
             sqlx::query(
-                "INSERT INTO storefront_category_products (category_id, product_id)
-                 VALUES (?1, ?2)",
+                "INSERT INTO storefront_category_products (category_id, product_id, updated_at,
+                    min_amount_cents, max_amount_cents)
+                 SELECT ?1, id, updated_at, min_amount_cents, max_amount_cents
+                 FROM storefront_products WHERE id = ?2",
             )
             .bind(&id)
             .bind(product_id)
