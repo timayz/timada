@@ -11,7 +11,7 @@ SQLite database, and hands pages the data; the markup is the merchant's.
 use timada_storefront::{RouterBuilderStoreExt, Store, StoreConfig, StoreTls};
 
 let pool = SqlitePoolOptions::new().connect_with(options).await?;   // the app's database
-let config = StoreConfig::new("store.example.com:4321".parse()?, token)
+let config = StoreConfig::new("store.example.com:4321", token)
     .tls(StoreTls::from_ca_pem(Path::new("store-ca.pem"), "store.example.com")?)
     .prefix("/store");                                              // the default
 let store = Store::connect(config, pool).await?;
@@ -22,6 +22,11 @@ store.shutdown().await;
 
 - The **token** is created once on the tenant's *API keys* page of the dashboard and
   shown once. A key has full access to its tenant's store and nothing else.
+- The **address** is one node's store API, or a `host:port` in front of several (a
+  load balancer, a geo-routed name). A name is looked up again on every reconnect, so
+  when a node goes away the storefront follows the name to one that answers; any
+  node serves any tenant. Locally, `store.localhost:4320` is Traefik's balancer over
+  the cluster nodes' store APIs (`.docker/traefik/dynamic.yaml`).
 - **TLS** is optional in the library and in the dashboard's `[store_api]` section; without
   it the token travels in clear text, so plain TCP is for trusted networks only.
 - `Store::connect` fails at once when the store is unreachable or refuses the key. It
@@ -170,5 +175,6 @@ open http://127.0.0.1:3456/
 ```
 
 Both values are on the tenant's API keys page. `STORE_ADDR`, `STORE_DB`, `HOST`,
-`PORT`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` are the other knobs. The browser suite (`tests/e2e/storefront.spec.ts`) boots it with a key
+`PORT`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by
+default) are the other knobs. The browser suite (`tests/e2e/storefront.spec.ts`) boots it with a key
 minted in the dashboard and checks the catalog follows live.

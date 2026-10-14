@@ -4,7 +4,7 @@ start: up dev
 
 cert:
 	mkdir -p .docker/traefik/certs
-	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost storefront.localhost
+	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost storefront.localhost store.localhost
 
 cert.install:
 		sudo mkcert -install
@@ -35,6 +35,9 @@ migrate:
 # (where the product pictures load from) both come from a tenant's API keys
 # page; without the media URL the pictures don't show:
 #   STORE_TOKEN=... STORE_MEDIA_URL=https://timada.localhost/media/<tenant_id> make storefront
+# It talks to one node's store API (127.0.0.1:4321) unless told otherwise; to
+# go through Traefik's balancer over the cluster nodes instead:
+#   STORE_ADDR=store.localhost:4320 STORE_TLS_CA="$$(mkcert -CAROOT)/rootCA.pem" ...
 storefront:
 	HOST=0.0.0.0 cargo run -p storefront-example
 
