@@ -88,7 +88,9 @@ let filed_under = product_categories(cx, &product).await?;
 
 `categories` returns `CategoryNode`s: the category, its children, and `product_count`,
 which counts the published products of the whole subtree, so a top-level entry shows
-everything below it. `subtree_ids` gives the ids a collection page passes to
+everything below it. The count is worked out by the catalog subscription when a product
+is filed, published or archived, or a category is moved, and stored on the category's
+row, so building the menu on every page is one plain query. `subtree_ids` gives the ids a collection page passes to
 `in_categories`. An archived category is in none of this; the products that were in it
 stay on sale.
 

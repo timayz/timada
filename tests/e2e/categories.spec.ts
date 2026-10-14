@@ -97,7 +97,7 @@ test("an owner builds a category tree and files a product under it", async ({ pa
   }).toPass({ timeout: 15_000 });
   const bedding = page.locator("[data-category=bedding]");
   await expect(bedding.locator("[data-category-count]")).toHaveText("1");
-  await expect(bedding.locator("[data-category-direct]")).toHaveText("0");
+  await expect(bedding.locator("[data-category-direct]")).toHaveAttribute("data-category-direct", "0");
   await expect(bedding).toContainText("0 filed here");
   // A leaf says one number, not two.
   await expect(page.locator("[data-category=mats] [data-category-direct]")).toHaveCount(0);

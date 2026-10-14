@@ -30,7 +30,6 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
 use timada_catalog::{
     AddImage, CreateCategory, CreateProduct, DefineVariant, OptionSelection, categories_of_tenant,
-    memberships_of_tenant, subtree_counts, tree_of,
 };
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
@@ -1019,21 +1018,11 @@ async fn dashboard_counts(h: &Harness, tenant: &TenantState) -> Vec<(String, i64
         .run_once(&catalog.0)
         .await
         .unwrap();
-    let rows = categories_of_tenant(&h.pool, &tenant.id).await.unwrap();
-    let tree = tree_of(rows);
-    let counts = subtree_counts(
-        &tree,
-        &memberships_of_tenant(&h.pool, &tenant.id).await.unwrap(),
-    );
-    let mut out: Vec<(String, i64)> = tree
-        .iter()
-        .flat_map(|node| node.flatten())
-        .map(|node| {
-            (
-                node.item.slug.clone(),
-                counts.get(&node.item.id).copied().unwrap_or(0),
-            )
-        })
+    let mut out: Vec<(String, i64)> = categories_of_tenant(&h.pool, &tenant.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.slug, row.subtree_count))
         .collect();
     out.sort();
     out
