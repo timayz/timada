@@ -93,7 +93,7 @@ pub fn error_code(err: &CatalogError) -> &'static str {
         CatalogError::VariantExists => "variant_exists",
         CatalogError::VariantNotFound => "variant_not_found",
         CatalogError::CurrencyMismatch => "currency_mismatch",
-        CatalogError::InvalidVatRate => "invalid_vat_rate",
+        CatalogError::InvalidTaxCategory => "invalid_tax_category",
         CatalogError::InvalidSku => "invalid_sku",
         CatalogError::SkuTaken => "sku_taken",
         CatalogError::InvalidAttribute => "invalid_attribute",

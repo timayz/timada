@@ -97,35 +97,37 @@ async fn an_archived_product_refuses_edits() {
 }
 
 #[tokio::test]
-async fn the_vat_rate_is_a_french_one_or_the_default() {
+async fn the_tax_category_is_a_known_one_or_standard() {
     let cmd = command().await;
     let product = create_product(&cmd, "Book").await;
     let id = product.id.as_str();
-    assert_eq!(product.vat_rate_bps, None);
+    assert_eq!(product.tax_category(), "standard");
 
-    cmd.set_product_vat_rate(ALICE, id, Some(550))
+    cmd.set_product_tax_category(ALICE, id, Some("books"))
         .await
         .unwrap();
-    let reduced = cmd.load_product(id).await.unwrap().unwrap();
-    assert_eq!(reduced.vat_rate_bps, Some(550));
+    let book = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(book.tax_category(), "books");
 
-    // The same rate writes nothing.
-    cmd.set_product_vat_rate(ALICE, id, Some(550))
+    // The same category writes nothing.
+    cmd.set_product_tax_category(ALICE, id, Some("books"))
         .await
         .unwrap();
     let again = cmd.load_product(id).await.unwrap().unwrap();
     assert_eq!(
         again.aggregate_version().unwrap(),
-        reduced.aggregate_version().unwrap()
+        book.aggregate_version().unwrap()
     );
 
     let err = cmd
-        .set_product_vat_rate(ALICE, id, Some(1900))
+        .set_product_tax_category(ALICE, id, Some("cars"))
         .await
         .unwrap_err();
-    assert!(matches!(err, CatalogError::InvalidVatRate), "{err}");
+    assert!(matches!(err, CatalogError::InvalidTaxCategory), "{err}");
 
-    cmd.set_product_vat_rate(ALICE, id, None).await.unwrap();
-    let default = cmd.load_product(id).await.unwrap().unwrap();
-    assert_eq!(default.vat_rate_bps, None);
+    cmd.set_product_tax_category(ALICE, id, Some("standard"))
+        .await
+        .unwrap();
+    let standard = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(standard.tax_category, None);
 }

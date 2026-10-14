@@ -17,7 +17,7 @@ fn identity() -> LegalIdentity {
         country: "fr".to_owned(),
         contact_email: "Hello@Example.com".to_owned(),
         vat_number: Some("fr85 120027016".to_owned()),
-        default_vat_rate_bps: Some(2000),
+        oss_registered: true,
     }
 }
 
@@ -47,9 +47,10 @@ async fn a_manager_sets_the_legal_identity_normalized() {
         .unwrap();
     assert_eq!(cmd.load_tenant(&tenant.id).await.unwrap().unwrap(), state);
 
-    // The exemption drops the default rate with the number.
+    // The exemption: no number, so no One-Stop Shop either.
     let franchise = LegalIdentity {
         vat_number: None,
+        oss_registered: false,
         ..identity()
     };
     cmd.set_legal_identity(&alice, &tenant.id, franchise)
@@ -63,7 +64,7 @@ async fn a_manager_sets_the_legal_identity_normalized() {
         .legal
         .unwrap();
     assert_eq!(legal.vat_number, None);
-    assert_eq!(legal.default_vat_rate_bps, None);
+    assert!(!legal.oss_registered);
 }
 
 #[tokio::test]
@@ -89,17 +90,10 @@ async fn a_wrong_legal_identity_is_refused() {
         ),
         (
             LegalIdentity {
-                default_vat_rate_bps: Some(1900),
+                vat_number: None,
                 ..identity()
             },
-            "rate",
-        ),
-        (
-            LegalIdentity {
-                default_vat_rate_bps: None,
-                ..identity()
-            },
-            "rate",
+            "oss",
         ),
         (
             LegalIdentity {
@@ -117,7 +111,7 @@ async fn a_wrong_legal_identity_is_refused() {
         let expected = match kind {
             "siret" => matches!(err, TenancyError::InvalidSiret),
             "vat" => matches!(err, TenancyError::InvalidVatNumber),
-            "rate" => matches!(err, TenancyError::InvalidVatRate),
+            "oss" => matches!(err, TenancyError::OssWithoutVatNumber),
             _ => matches!(err, TenancyError::InvalidLegalIdentity),
         };
         assert!(expected, "{kind}: {err}");

@@ -168,7 +168,8 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_vat_number" => {
             "A French VAT number is FR, a two-digit key and the SIREN (the SIRET's first nine digits)."
         }
-        "invalid_vat_rate" => "Choose one of the French VAT rates.",
+        "invalid_tax_category" => "Choose one of the tax categories.",
+        "oss_without_vat_number" => "The One-Stop Shop needs a VAT number.",
         "invalid_legal_identity" => {
             "Fill in the legal name, form, address and e-mail, each within its length."
         }

@@ -145,10 +145,11 @@ pub enum Product {
         name: String,
         removed_by: String,
     },
-    /// The VAT rate its price includes, in basis points (`550` is 5.5 %),
-    /// for every variant alike; `None` falls back to the merchant's default.
-    VatRateSet {
-        rate_bps: Option<u32>,
+    /// What kind of goods it is for VAT ([`TAX_CATEGORIES`](crate::TAX_CATEGORIES)),
+    /// for every variant alike: each country taxes a kind at its own rate.
+    /// `None` is `standard`.
+    TaxCategorySet {
+        category: Option<String>,
         set_by: String,
     },
 }

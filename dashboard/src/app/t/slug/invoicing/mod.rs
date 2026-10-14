@@ -2,11 +2,11 @@
 //! `tenant:manage`. Every invoice copies it when issued, so it must be set
 //! before shoppers can pay: the legal name and form, the SIRET, the address,
 //! and either a VAT number with the default rate or the exemption for small
-//! businesses.
+//! businesses, and whether it is registered for the EU One-Stop Shop.
 
 pub mod save;
 
-use timada_tenancy::{LegalIdentity, PERMISSION_TENANT_MANAGE, VAT_RATES_BPS};
+use timada_tenancy::{LegalIdentity, PERMISSION_TENANT_MANAGE};
 use topcoat::{
     Result,
     context::Cx,
@@ -28,16 +28,6 @@ pub fn invoicing_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&
     href!(index, Slug(slug.to_owned()))
         .query(Flash { error, message })
         .resolve(cx)
-}
-
-/// `2000` as `20 %`, `550` as `5,5 %`: how French invoices write a rate.
-pub fn format_vat_rate(rate_bps: u32) -> String {
-    let whole = rate_bps / 100;
-    match rate_bps % 100 {
-        0 => format!("{whole} %"),
-        part if part % 10 == 0 => format!("{whole},{} %", part / 10),
-        part => format!("{whole},{part:02} %"),
-    }
 }
 
 /// `1000050` cents as `10000.50`, what the form shows back.
@@ -68,8 +58,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .share_capital_cents
         .map(format_capital)
         .unwrap_or_default();
-    let registered = legal.is_vat_registered();
-    let default_rate = legal.default_vat_rate_bps.unwrap_or(2000);
     let title = format!("Invoicing · {}", tenant.name);
 
     Ok(view! {
@@ -138,29 +126,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <label class="block text-sm" for="legal-vat">"Intra-community VAT number (blank under the exemption)"</label>
                     <input id="legal-vat" name="vat_number" maxlength="40" placeholder="FR00123456789" value=(legal.vat_number.as_deref().unwrap_or(""))
                         class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                    <label class="block text-sm" for="legal-rate">"Default rate, for a product that names none"</label>
-                    <select id="legal-rate" name="default_vat_rate_bps" class="rounded border border-neutral-300 px-3 py-2">
-                        for rate in VAT_RATES_BPS.iter().copied() {
-                            <option value=(rate) selected=(registered && rate == default_rate)>(format_vat_rate(rate))</option>
-                        }
-                    </select>
+                    <label class="flex items-center gap-2 text-sm">
+                        <input type="checkbox" name="oss_registered" value="on" checked=(legal.oss_registered)>
+                        "Registered for the EU One-Stop Shop (OSS): charge other EU countries' VAT to their consumers from the first euro"
+                    </label>
+                    <p class="text-sm text-neutral-600">
+                        "Without it, other EU countries' VAT applies once your sales to their consumers pass €10,000 in the year."
+                    </p>
                 </fieldset>
 
                 <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save"</button>
             </form>
         )
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rates_read_the_french_way() {
-        assert_eq!(format_vat_rate(2000), "20 %");
-        assert_eq!(format_vat_rate(550), "5,5 %");
-        assert_eq!(format_vat_rate(210), "2,1 %");
-        assert_eq!(format_vat_rate(1925), "19,25 %");
-    }
 }

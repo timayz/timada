@@ -18,8 +18,8 @@ pub enum TenancyError {
     InvalidSiret,
     #[error("the VAT number must be FR, its two-digit key and the SIREN")]
     InvalidVatNumber,
-    #[error("unknown VAT rate")]
-    InvalidVatRate,
+    #[error("the One-Stop Shop needs a VAT number")]
+    OssWithoutVatNumber,
     #[error("fill in every required part of the legal identity, within its length")]
     InvalidLegalIdentity,
     #[error("this tenant is suspended")]
