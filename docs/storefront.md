@@ -25,7 +25,7 @@ store.shutdown().await;
 - The **address** is one node's store API, or a `host:port` in front of several (a
   load balancer, a geo-routed name). A name is looked up again on every reconnect, so
   when a node goes away the storefront follows the name to one that answers; any
-  node serves any tenant. Locally, `store.localhost:4320` is Traefik's balancer over
+  node serves any tenant. Locally, `store.timada.localhost:4320` is Traefik's balancer over
   the cluster nodes' store APIs (`.docker/traefik/dynamic.yaml`).
 - **TLS** is optional in the library and in the dashboard's `[store_api]` section; without
   it the token travels in clear text, so plain TCP is for trusted networks only.
