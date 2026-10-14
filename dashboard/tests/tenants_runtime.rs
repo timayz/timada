@@ -439,6 +439,27 @@ async fn a_tenant_written_to_within_the_timeout_is_not_idle() {
     let _ = std::fs::remove_dir_all(&h.dir);
 }
 
+#[tokio::test]
+async fn a_new_tenant_opens_as_soon_as_its_creation_arrives() {
+    let h = harness(8).await;
+    let acme = h.create("acme").await;
+    assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
+
+    // No request asked for it: its creation alone opens it, so its group
+    // runs here before another node's first write needs it.
+    tenants::creation_subscription(h.tenants.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    assert!(matches!(
+        h.tenants.status(&acme.id),
+        TenantStatus::Running { .. }
+    ));
+
+    h.tenants.shutdown().await;
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
 /// A second connection to a tenant's own database file.
 async fn tenant_pool(h: &Harness, tenant: &TenantState) -> SqlitePool {
     SqlitePoolOptions::new()

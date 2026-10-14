@@ -92,6 +92,10 @@ tenant's products while the events stay isolated by construction.
    evicts the least recently used beyond `tenants.max_open`. Requests are not the only
    use: a node taking part in writes another node coordinates sees none, so a tenant
    with a transaction in flight or an event younger than the timeout is not idle. A
+   new tenant opens on every node as soon as its creation reaches it (a platform
+   subscription, `creation_subscription`; creations older than a minute are history
+   being replayed and are skipped), so its group already runs everywhere when the
+   first write comes, typically a second after the creation. A
    peer talking about a group this node closed triggers `reopen`, which opens it only
    if the catalog knows the tenant and it is not suspended: the wire cannot create
    one. The catalog is a read model, a second behind a tenant created on another

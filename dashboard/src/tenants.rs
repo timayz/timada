@@ -22,12 +22,14 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use evento::Evento;
+use evento::metadata::Event;
 use evento::migrator::Migrate;
-use evento::subscription::{Subscription, SubscriptionBuilder};
+use evento::subscription::{Context as SubscriptionContext, Subscription, SubscriptionBuilder};
 use evento_accord::{AccordExecutor, GroupId};
 use evento_sql::Sql;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use timada_tenancy::aggregator::Created;
 use timada_tenancy::{Command, TenantState, group_of, tenant_by_group};
 use tokio::task::JoinHandle;
 
@@ -561,4 +563,57 @@ async fn open_db(path: &Path) -> Result<(Sql<sqlx::Sqlite>, SqlitePool)> {
     // rely on.
     let sql: Sql<sqlx::Sqlite> = pool.clone().into();
     Ok((sql, pool))
+}
+
+/// The cursor identity of [`creation_subscription`], in the platform store.
+pub const CREATION_SUBSCRIPTION: &str = "timada-dashboard/tenant-created";
+
+/// How recent a creation must be for this node to open the tenant on seeing
+/// it. Older ones are history a node is replaying (it just started, or is
+/// new): opening every tenant ever created would defeat opening on demand.
+const FRESH_CREATION: Duration = Duration::from_secs(60);
+
+/// Opens each tenant on this node as soon as its creation reaches it, so the
+/// tenant's group is already running here when the node that created it
+/// starts writing. Otherwise this node would open it only once that write's
+/// frames arrive, a second late, and the write could fail. Runs on the
+/// platform store of every node; the node that created the tenant has it
+/// open already.
+pub fn creation_subscription(tenants: Arc<Tenants>) -> SubscriptionBuilder<Executor> {
+    SubscriptionBuilder::new(CREATION_SUBSCRIPTION)
+        .data(tenants)
+        .handler(on_tenant_created())
+        .any_routing_key()
+}
+
+#[evento::subscription]
+async fn on_tenant_created<E: evento::Executor>(
+    context: &SubscriptionContext<'_, E>,
+    event: Event<Created>,
+) -> anyhow::Result<()> {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(event.timestamp) > FRESH_CREATION.as_secs() {
+        return Ok(());
+    }
+    let tenants: Arc<Tenants> = context.extract();
+    let tenant = match Command(tenants.platform.clone())
+        .load_tenant(&event.aggregate_id)
+        .await
+    {
+        Ok(Some(tenant)) if !tenant.is_suspended() => tenant,
+        Ok(_) => return Ok(()),
+        Err(err) => {
+            tracing::warn!(tenant = %event.aggregate_id, %err, "cannot load a new tenant");
+            return Ok(());
+        }
+    };
+    // A failure is not worth stalling the subscription for: the tenant still
+    // opens on its first request here, or when a peer's frames arrive.
+    if let Err(err) = tenants.open(&tenant).await {
+        tracing::warn!(tenant = %tenant.slug, %err, "cannot open a new tenant");
+    }
+    Ok(())
 }
