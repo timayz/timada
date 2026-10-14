@@ -83,5 +83,13 @@ sqlx_migrator::sqlite_migration!(
                 ON storefront_product_categories (category_id)",
             "DROP INDEX storefront_product_categories_category"
         ),
+        (
+            "CREATE TABLE storefront_category_products (
+                category_id TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                PRIMARY KEY (category_id, product_id)
+            )",
+            "DROP TABLE storefront_category_products"
+        ),
     ]
 );

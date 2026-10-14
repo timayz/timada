@@ -33,7 +33,7 @@ struct CategoryLink<'a> {
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let category = require_category(cx, path_param::<Slug>(cx)).await?;
     let nav = categories(cx).await?;
-    let crumbs = category_path(cx, &category).await?;
+    let crumbs = category_path(&nav, &category);
     let query = query_params::<CategoryQuery>(cx)?;
     let sort = query
         .sort
@@ -43,14 +43,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // The products of this category and of everything below it, which is
     // what a shopper expects from a top-level entry.
     let node = find_category(&nav, &category.slug);
-    let ids = node
-        .map(|node| node.subtree_ids())
-        .unwrap_or_else(|| vec![category.id.clone()]);
     let children = node.map(|node| node.children.clone()).unwrap_or_default();
     let page = products(
         cx,
         &ProductQuery::default()
-            .in_categories(ids)
+            .in_category(category.id.clone())
             .sort(sort)
             .per_page(PER_PAGE)
             .page(query.page.unwrap_or(1)),

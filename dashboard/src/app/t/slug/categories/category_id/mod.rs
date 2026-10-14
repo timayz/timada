@@ -8,8 +8,8 @@ pub mod position;
 pub mod rename;
 
 use timada_catalog::{
-    CategoryState, MAX_CATEGORY_DESCRIPTION_LEN, MAX_CATEGORY_NAME_LEN, ProductFilter,
-    count_products, live_child_count,
+    CategoryRow, CategoryState, MAX_CATEGORY_DESCRIPTION_LEN, MAX_CATEGORY_NAME_LEN,
+    category_by_id, live_child_count,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -110,10 +110,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<CategoryQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let category = require_category(cx, &access).await?;
-    let ancestors = catalog(&access)?
-        .ancestors(&category.id)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?;
     let labels = user_labels(cx, std::slice::from_ref(&category.created_by)).await?;
     let created_by = labels
         .get(&category.created_by)
@@ -125,18 +121,33 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // may move to (anything live that is not itself or one of its
     // descendants, with room for it below).
     let rows = rows_of(pool, &tenant.id).await?;
-    // Filed directly under it, and what its page in the shop lists.
-    let filed_here = count_products(
-        pool,
-        &tenant.id,
-        &ProductFilter::default().category(Some(&category.id)),
-    )
-    .await?;
-    let on_its_page = rows
-        .iter()
-        .find(|row| row.category.id == category.id)
-        .map(|row| row.category.subtree_count)
-        .unwrap_or(filed_here);
+    // Filed directly under it, and what its page in the shop lists, as the
+    // subscription stored them (the same numbers the tree shows).
+    let (filed_here, on_its_page) = category_by_id(pool, &tenant.id, &category.id)
+        .await?
+        .map(|row| (row.product_count, row.subtree_count))
+        .unwrap_or_default();
+    // The breadcrumb, read off the tree already loaded. The parent comes
+    // from the category itself, so a move shows at once.
+    let ancestors: Vec<CategoryRow> = {
+        let mut chain: Vec<CategoryRow> = Vec::new();
+        let mut next = category.parent_id.as_deref();
+        while let Some(parent_id) = next {
+            if chain.len() > timada_catalog::MAX_CATEGORY_DEPTH
+                || parent_id == category.id
+                || chain.iter().any(|seen| seen.id == parent_id)
+            {
+                break;
+            }
+            let Some(parent) = rows.iter().find(|row| row.category.id == parent_id) else {
+                break;
+            };
+            chain.push(parent.category.clone());
+            next = parent.category.parent_id.as_deref();
+        }
+        chain.reverse();
+        chain
+    };
     let children = live_child_count(pool, &tenant.id, &category.id).await?;
     let descendants: Vec<&str> = {
         let mut ids = vec![category.id.as_str()];

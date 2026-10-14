@@ -61,7 +61,7 @@ A query also narrows and orders the list:
 use timada_storefront::{ProductQuery, ProductSort};
 
 ProductQuery::default()
-    .in_categories(node.subtree_ids())       // this category and everything under it
+    .in_category(category.id.clone())        // this category and everything under it
     .sort(ProductSort::PriceAsc)             // Newest (the default), PriceAsc, PriceDesc
     .exclude(product.id.clone())             // never this one
     .per_page(36)
@@ -79,7 +79,7 @@ use timada_storefront::{categories, category_path, find_category, product_catego
 
 let menu = categories(cx).await?;                     // live categories as trees
 let category = require_category(cx, slug).await?;     // 404 when archived or unknown
-let crumbs = category_path(cx, &category).await?;     // its ancestors, top-level first
+let crumbs = category_path(&menu, &category);         // its ancestors, read off the menu
 let node = find_category(&menu, &category.slug);      // its node, with children and count
 let also = related_products(cx, &product, 4).await?;  // same category, never itself
 let filed_under = product_categories(cx, &product).await?;
@@ -89,9 +89,12 @@ let filed_under = product_categories(cx, &product).await?;
 which counts the published products of the whole subtree, so a top-level entry shows
 everything below it. The count is worked out by the catalog subscription when a product
 is filed, published or archived, or a category is moved, and stored on the category's
-row, so building the menu on every page is one plain query. `subtree_ids` gives the ids a collection page passes to
-`in_categories`. An archived category is in none of this; the products that were in it
-stay on sale.
+row, so building the menu on every page is one plain query. The same subscription keeps,
+for each category, the products its page lists, so `in_category` filters on one id
+however deep the tree goes, and a page with no search reads its total from the stored
+count instead of counting. `in_categories` is the narrower filter: products filed
+directly under any of the ids, which is what related products use. An archived category
+is in none of this; the products that were in it stay on sale.
 
 ## The one component
 
