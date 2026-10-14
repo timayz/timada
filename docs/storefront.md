@@ -52,7 +52,11 @@ for product in &page.items { /* product.name, product.slug, product.price() */ }
 let product = require_product(cx, slug).await?;   // 404 when not published
 ```
 
-`products` lists published products, 24 a page (`per_page`, at most 100).
+`products` lists published products, 24 a page (`per_page`, at most 100). `search`
+matches the name or the slug anywhere in a word, ignoring case and accents, through a
+full-text index the subscription keeps beside the rows, so a search costs what it finds
+rather than the size of the catalog. A search shorter than three characters is too short
+for that index and reads the rows instead.
 `product_by_slug` returns `None` for a draft, an archived product or an unknown slug;
 `require_product` turns that into a 404.
 

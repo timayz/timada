@@ -85,13 +85,15 @@ pub async fn upsert_product(
     product: &ProductState,
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
-    let was_counted: Option<bool> = sqlx::query_scalar(
-        "SELECT status <> 'archived' FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
+    let was: Option<(bool, String, String)> = sqlx::query_as(
+        "SELECT status <> 'archived', slug, name FROM catalog_products
+         WHERE tenant_id = ?1 AND id = ?2",
     )
     .bind(tenant_id)
     .bind(&product.id)
     .fetch_optional(&mut *tx)
     .await?;
+    let was_counted = was.as_ref().map(|(counted, _, _)| *counted);
     let was_in: Vec<String> = sqlx::query_scalar(
         "SELECT category_id FROM catalog_product_categories
          WHERE tenant_id = ?1 AND product_id = ?2 ORDER BY category_id",
@@ -147,6 +149,29 @@ pub async fn upsert_product(
         .bind(tenant_id)
         .bind(&product.id)
         .bind(category_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    // What a search finds it by, rewritten only when that changed.
+    if was
+        .as_ref()
+        .is_none_or(|(_, slug, name)| *slug != product.slug || *name != product.name)
+    {
+        sqlx::query(
+            "DELETE FROM catalog_products_fts WHERE rowid =
+                (SELECT rowid FROM catalog_products WHERE tenant_id = ?1 AND id = ?2)",
+        )
+        .bind(tenant_id)
+        .bind(&product.id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO catalog_products_fts (rowid, tenant_id, slug, name)
+             SELECT rowid, tenant_id, slug, name FROM catalog_products
+             WHERE tenant_id = ?1 AND id = ?2",
+        )
+        .bind(tenant_id)
+        .bind(&product.id)
         .execute(&mut *tx)
         .await?;
     }

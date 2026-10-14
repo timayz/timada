@@ -326,19 +326,41 @@ fn contains(q: &str) -> String {
     format!("%{escaped}%")
 }
 
-/// What a page of products is filtered by, shared by the count and the list
-/// so the two never disagree. `?1` is the search pattern, `?2` the JSON array
-/// of category ids (`[]` for every category), `?3` a product to leave out,
-/// `?4` a category whose page it is (read from what the subscription stored
-/// for it, so a sub-category costs nothing more).
+/// The full-text phrase matching `q` anywhere in a word, when `q` is long
+/// enough for the index (it is cut in runs of three characters); `None`
+/// otherwise, and the search falls back to [`contains`].
+fn phrase(q: &str) -> Option<String> {
+    (q.chars().count() >= 3).then(|| format!("\"{}\"", q.replace('"', "\"\"")))
+}
+
+/// Where a page of products comes from, `?1` being what was searched for.
+/// With a phrase the full-text index leads, so a search costs what it
+/// matches; `CROSS JOIN` keeps the planner from walking every product in
+/// sort order instead. Without one, `?1` is a `LIKE` pattern or `NULL`.
+macro_rules! products_from {
+    (phrase) => {
+        "FROM storefront_products_fts f
+         CROSS JOIN storefront_products p ON p.rowid = f.rowid
+         WHERE storefront_products_fts MATCH ?1 "
+    };
+    (pattern) => {
+        "FROM storefront_products p
+         WHERE (?1 IS NULL OR p.slug LIKE ?1 ESCAPE '\\' OR p.name LIKE ?1 ESCAPE '\\') "
+    };
+}
+
+/// What a page of products is filtered by besides the search, shared by the
+/// count and the list so the two never disagree. `?2` is the JSON array of
+/// category ids (`[]` for every category), `?3` a product to leave out, `?4`
+/// a category whose page it is (read from what the subscription stored for
+/// it, so a sub-category costs nothing more).
 macro_rules! products_where {
     () => {
-        "WHERE status = 'published'
-           AND (?1 IS NULL OR slug LIKE ?1 ESCAPE '\\' OR name LIKE ?1 ESCAPE '\\')
-           AND (?2 = '[]' OR id IN (SELECT product_id FROM storefront_product_categories
+        "AND p.status = 'published'
+           AND (?2 = '[]' OR p.id IN (SELECT product_id FROM storefront_product_categories
                 WHERE category_id IN (SELECT value FROM json_each(?2))))
-           AND (?3 IS NULL OR id <> ?3)
-           AND (?4 IS NULL OR id IN (SELECT product_id FROM storefront_category_products
+           AND (?3 IS NULL OR p.id <> ?3)
+           AND (?4 IS NULL OR p.id IN (SELECT product_id FROM storefront_category_products
                 WHERE category_id = ?4)) "
     };
 }
@@ -347,12 +369,12 @@ macro_rules! products_where {
 /// (sqlx refuses a built string), so each order is its own statement over the
 /// same filter.
 macro_rules! products_page {
-    ($order:literal) => {
+    ($from:ident, $order:literal) => {
         concat!(
-            "SELECT id, slug, name, description, amount_cents, currency, updated_at,
-                images_json, options_json, variants_json, attributes_json,
-                min_amount_cents, max_amount_cents
-             FROM storefront_products ",
+            "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
+                p.updated_at, p.images_json, p.options_json, p.variants_json,
+                p.attributes_json, p.min_amount_cents, p.max_amount_cents ",
+            products_from!($from),
             products_where!(),
             $order,
             " LIMIT ?5 OFFSET ?6"
@@ -360,18 +382,46 @@ macro_rules! products_page {
     };
 }
 
-const PAGE_NEWEST: &str = products_page!("ORDER BY updated_at DESC, id DESC");
-/// Sorted by what a shopper would actually pay: the cheapest a product can
-/// be going up, the dearest going down. One with no price sorts last either
-/// way.
-const PAGE_PRICE_ASC: &str =
-    products_page!("ORDER BY min_amount_cents IS NULL, min_amount_cents ASC, id DESC");
-const PAGE_PRICE_DESC: &str =
-    products_page!("ORDER BY max_amount_cents IS NULL, max_amount_cents DESC, id DESC");
-const COUNT: &str = concat!(
-    "SELECT count(*) FROM storefront_products ",
-    products_where!()
-);
+macro_rules! products_count {
+    ($from:ident) => {
+        concat!("SELECT count(*) ", products_from!($from), products_where!())
+    };
+}
+
+/// Newest first, and by what a shopper would actually pay: the cheapest a
+/// product can be going up, the dearest going down. One with no price sorts
+/// last either way.
+macro_rules! products_pages {
+    ($from:ident) => {
+        [
+            products_page!($from, "ORDER BY p.updated_at DESC, p.id DESC"),
+            products_page!(
+                $from,
+                "ORDER BY p.min_amount_cents IS NULL, p.min_amount_cents ASC, p.id DESC"
+            ),
+            products_page!(
+                $from,
+                "ORDER BY p.max_amount_cents IS NULL, p.max_amount_cents DESC, p.id DESC"
+            ),
+        ]
+    };
+}
+
+const PAGES: [&str; 3] = products_pages!(pattern);
+const COUNT: &str = products_count!(pattern);
+const SEARCH_PAGES: [&str; 3] = products_pages!(phrase);
+const SEARCH_COUNT: &str = products_count!(phrase);
+
+impl ProductSort {
+    /// Its statement among the three of [`products_pages`].
+    fn index(self) -> usize {
+        match self {
+            ProductSort::Newest => 0,
+            ProductSort::PriceAsc => 1,
+            ProductSort::PriceDesc => 2,
+        }
+    }
+}
 
 /// One page of a category, read off what the subscription keeps for it: the
 /// rows are already in `$order` in an index of their own, so the page costs
@@ -407,14 +457,22 @@ pub async fn published_products(
 ) -> sqlx::Result<ProductPage> {
     let per_page = i64::from(query.per_page.clamp(1, MAX_PER_PAGE));
     let page = query.page.max(1);
-    let pattern = query.q.as_deref().map(contains);
+    // A search long enough for the index reads it; a shorter one is a
+    // `LIKE` over the rows.
+    let phrase = query.q.as_deref().and_then(phrase);
+    let (pages, count) = if phrase.is_some() {
+        (SEARCH_PAGES, SEARCH_COUNT)
+    } else {
+        (PAGES, COUNT)
+    };
+    let search = phrase.or_else(|| query.q.as_deref().map(contains));
     // A JSON array, read back by `json_each`: one bind for any number of ids.
     let categories = serde_json::to_string(&query.categories).unwrap_or_else(|_| "[]".to_owned());
     let offset = i64::from(page - 1) * per_page;
     // A category's page as it is, with nothing else to match: the count and
     // the order the subscription stored.
     if let Some(category) = query.category.as_deref()
-        && pattern.is_none()
+        && search.is_none()
         && query.categories.is_empty()
         && query.exclude.is_none()
     {
@@ -442,20 +500,15 @@ pub async fn published_products(
             total,
         });
     }
-    let total: i64 = sqlx::query_scalar(COUNT)
-        .bind(&pattern)
+    let total: i64 = sqlx::query_scalar(count)
+        .bind(&search)
         .bind(&categories)
         .bind(query.exclude.as_deref())
         .bind(query.category.as_deref())
         .fetch_one(pool)
         .await?;
-    let statement = match query.sort {
-        ProductSort::Newest => PAGE_NEWEST,
-        ProductSort::PriceAsc => PAGE_PRICE_ASC,
-        ProductSort::PriceDesc => PAGE_PRICE_DESC,
-    };
-    let items = sqlx::query_as(statement)
-        .bind(&pattern)
+    let items = sqlx::query_as(pages[query.sort.index()])
+        .bind(&search)
         .bind(&categories)
         .bind(query.exclude.as_deref())
         .bind(query.category.as_deref())
