@@ -71,6 +71,16 @@ idle_timeout_secs = 300
 # closed. Each open database may hold three connections (one OS thread each).
 max_open = 64
 
+[media]
+# Directory holding the pictures merchants upload for their products, one
+# sub-directory per tenant. Created on demand.
+dir = "data/media"
+# The address this node's /media is reached at from the outside, or of a cache
+# in front of it. Shoppers' browsers load the product pictures from here, so it
+# has to work from outside the server. Shown on each tenant's API keys page for
+# its storefront to be configured with.
+public_url = "https://timada.localhost/media"
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events. A connected storefront keeps its tenant's database open.
@@ -97,6 +107,16 @@ max_open = 64
 # peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
 # # Bind address for inbound peer traffic; defaults to peers[node_id].
 # listen = "0.0.0.0:7000"
+# # Each node's web address (server.port) as the other nodes reach it, in the
+# # order of `peers`. Every node keeps a copy of every product picture: an
+# # upload is copied to the other nodes and only saved once a majority of them
+# # hold it, and a node that missed one fetches it from the others. Required
+# # with more than one node.
+# web_peers = ["http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002"]
+# # Shared by every node, at least 32 characters: a node only takes a picture
+# # from a peer presenting it. Set it through TIMADA__CLUSTER__SECRET rather
+# # than in this file. Required with more than one node.
+# secret = ""
 
 [monitoring]
 log_level = "info,sqlx=warn"

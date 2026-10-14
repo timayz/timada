@@ -76,6 +76,11 @@ pub fn error_code(err: &CatalogError) -> &'static str {
         CatalogError::CategoryCycle => "category_cycle",
         CatalogError::CategoryTooDeep => "category_too_deep",
         CatalogError::TooManyCategories => "too_many_categories",
+        CatalogError::TooManyImages => "too_many_images",
+        CatalogError::InvalidImage => "unsupported_image",
+        CatalogError::InvalidAlt => "invalid_alt",
+        CatalogError::ImageNotFound => "image_not_found",
+        CatalogError::InvalidImageOrder => "invalid_image_order",
         CatalogError::Write(_) | CatalogError::Other(_) => "failed",
     }
 }

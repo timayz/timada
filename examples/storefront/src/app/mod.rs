@@ -6,7 +6,7 @@ pub mod p;
 
 use timada_storefront::{
     CategoryNode, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, categories, price,
-    products,
+    product_image, products,
 };
 use topcoat::{
     Result,
@@ -52,6 +52,12 @@ pub async fn document(
                     "header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1rem; }"
                     "ul.catalog { list-style: none; padding: 0; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); }"
                     "ul.catalog li { border: 1px solid #ddd; border-radius: .5rem; padding: 1rem; }"
+                    "ul.catalog a { display: block; text-decoration: none; color: inherit; }"
+                    "img.thumb { display: block; width: 100%; height: 10rem; object-fit: cover; border-radius: .25rem; margin-bottom: .5rem; background: #f4f4f4; }"
+                    "ul.gallery { list-style: none; padding: 0; display: grid; gap: .5rem; grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); margin-bottom: 1.5rem; }"
+                    "ul.gallery img { width: 100%; height: 8rem; object-fit: cover; border-radius: .25rem; background: #f4f4f4; }"
+                    "ul.gallery li:first-child { grid-column: 1 / -1; }"
+                    "ul.gallery li:first-child img { height: 20rem; }"
                     ".price { font-weight: 600; }"
                     "nav.pages { display: flex; gap: 1rem; margin-top: 1.5rem; }"
                     "p.description { white-space: pre-line; }"
@@ -117,7 +123,12 @@ pub async fn catalog_grid(products: &[timada_storefront::Product]) -> Result<imp
         <ul class="catalog">
             for product in products {
                 <li data-product=(&product.slug)>
-                    <a href=(href!(p::slug::index, p::slug::Slug(product.slug.clone())))>(&product.name)</a>
+                    <a href=(href!(p::slug::index, p::slug::Slug(product.slug.clone())))>
+                        if let Some(image) = product.image() {
+                            product_image(image: image, attrs: attributes! { class="thumb" })
+                        }
+                        <span>(&product.name)</span>
+                    </a>
                     <div>price(product: product, attrs: attributes! { class="price" })</div>
                 </li>
             }

@@ -14,6 +14,10 @@ event timada-catalog/Product::Archived { archived_by: String }
 event timada-catalog/Product::Categorized { category_id: String, categorized_by: String }
 event timada-catalog/Product::Created { slug: String, name: String, created_by: String }
 event timada-catalog/Product::Described { description: String, described_by: String }
+event timada-catalog/Product::ImageAdded { image_id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32>, alt: String, added_by: String }
+event timada-catalog/Product::ImageAltChanged { image_id: String, alt: String, changed_by: String }
+event timada-catalog/Product::ImageRemoved { image_id: String, removed_by: String }
+event timada-catalog/Product::ImagesReordered { image_ids: Vec<String>, reordered_by: String }
 event timada-catalog/Product::Priced { amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::Published { published_by: String }
 event timada-catalog/Product::Renamed { name: String, renamed_by: String }
