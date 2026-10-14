@@ -14,7 +14,7 @@
 //! administrator or at shutdown. A web request holds a [`RequestHold`] the
 //! same way while it runs, so a slow write is never cut by the sweeper.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -31,7 +31,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use timada_tenancy::{Command, TenantState, group_of, tenant_by_group};
 use tokio::task::JoinHandle;
 
-use crate::cluster::{Cluster, Executor};
+use crate::cluster::{Cluster, Executor, PENDING_TTL};
 use crate::config::TenantsConfig;
 
 /// A read model fed from one tenant's events into the shared database: given
@@ -134,6 +134,9 @@ pub struct Tenants {
     /// One open at a time per group: a request and the transport hook may race
     /// to open the same tenant, and must not both migrate a fresh file.
     open_locks: Mutex<HashMap<GroupId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Groups a peer's frames are being looked up for, so the transport's
+    /// repeated notices do not start a second lookup of the same group.
+    reopening: Mutex<HashSet<GroupId>>,
 }
 
 impl Tenants {
@@ -156,6 +159,7 @@ impl Tenants {
             subscriptions,
             open: Mutex::new(HashMap::new()),
             open_locks: Mutex::new(HashMap::new()),
+            reopening: Mutex::new(HashSet::new()),
         });
         cluster.attach_tenants(tenants.clone());
         tenants
@@ -361,17 +365,40 @@ impl Tenants {
         }
     }
 
-    /// Closes every tenant idle for longer than the timeout.
+    /// Closes every tenant idle for longer than the timeout. A tenant with a
+    /// write in flight, or written to within the timeout, is not idle,
+    /// whichever node took the write: a node that only takes part in another
+    /// node's writes sees no request for the tenant, and closing it would
+    /// leave those writes short of a quorum.
     pub async fn sweep(&self) {
+        let candidates: Vec<(GroupId, String, SqlitePool)> = {
+            let open = self.open.lock().expect("open poisoned");
+            let cutoff = Instant::now() - self.idle_timeout;
+            open.iter()
+                .filter(|(_, t)| t.last_used <= cutoff && !t.is_held())
+                .map(|(g, t)| (*g, t.tenant_id.clone(), t.pool.clone()))
+                .collect()
+        };
+        let mut idle = Vec::new();
+        for (group, tenant_id, pool) in candidates {
+            if self.cluster.group_busy(group) || self.written_recently(&pool).await {
+                self.touch(group, &tenant_id);
+            } else {
+                idle.push(group);
+            }
+        }
         let idle = {
             let mut open = self.open.lock().expect("open poisoned");
             let cutoff = Instant::now() - self.idle_timeout;
-            let groups: Vec<GroupId> = open
-                .iter()
-                .filter(|(_, t)| t.last_used <= cutoff && !t.is_held())
-                .map(|(g, _)| *g)
+            // Used again or held while the events were being looked at: kept.
+            let still_idle: Vec<GroupId> = idle
+                .into_iter()
+                .filter(|g| {
+                    open.get(g)
+                        .is_some_and(|t| t.last_used <= cutoff && !t.is_held())
+                })
                 .collect();
-            groups
+            still_idle
                 .into_iter()
                 .filter_map(|g| open.remove(&g).map(|t| (g, t)))
                 .collect::<Vec<_>>()
@@ -380,6 +407,29 @@ impl Tenants {
             tracing::info!(tenant = %t.tenant_id, group = group.0, "tenant closed (idle)");
             self.shut(group, t).await;
         }
+    }
+
+    /// Whether the tenant's newest event is younger than the idle timeout.
+    /// Every node applies every write to its own copy, so this sees writes
+    /// taken anywhere. A failed query counts as recent: keeping a tenant open
+    /// one sweep longer costs less than closing it under a write.
+    async fn written_recently(&self, pool: &SqlitePool) -> bool {
+        let newest: Result<Option<i64>, sqlx::Error> =
+            sqlx::query_scalar("SELECT MAX(timestamp) FROM event")
+                .fetch_one(pool)
+                .await;
+        let Ok(newest) = newest else {
+            return true;
+        };
+        let Some(newest) = newest else {
+            return false;
+        };
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(i64::MAX);
+        // Whole seconds: an event stamped `newest` may be up to a second younger.
+        now.saturating_sub(newest) <= self.idle_timeout.as_secs() as i64
     }
 
     /// Runs [`sweep`](Self::sweep) periodically until the task is aborted.
@@ -400,11 +450,41 @@ impl Tenants {
     /// The transport's unrouted-group hook: a peer sent frames for a group this
     /// node has not opened. Open it only if the catalog knows the tenant and it
     /// is not suspended; anything else is ignored.
+    ///
+    /// The catalog here is a read model, a moment behind the platform store: a
+    /// tenant created on another node and written to straight away is not in
+    /// it yet when the first frames arrive. The lookup is therefore retried for
+    /// as long as the transport keeps those frames waiting; giving up on the
+    /// first miss would leave the write without a quorum.
     pub fn reopen(self: &Arc<Self>, group: GroupId) {
+        if !self
+            .reopening
+            .lock()
+            .expect("reopening poisoned")
+            .insert(group)
+        {
+            return;
+        }
         let tenants = Arc::clone(self);
         tokio::spawn(async move {
-            let row = match tenant_by_group(&tenants.read_models, group.0).await {
-                Ok(Some(row)) => row,
+            tenants.reopen_known(group).await;
+            tenants
+                .reopening
+                .lock()
+                .expect("reopening poisoned")
+                .remove(&group);
+        });
+    }
+
+    async fn reopen_known(&self, group: GroupId) {
+        const RETRY: Duration = Duration::from_millis(100);
+        let deadline = Instant::now() + PENDING_TTL;
+        let row = loop {
+            match tenant_by_group(&self.read_models, group.0).await {
+                Ok(Some(row)) => break row,
+                Ok(None) if Instant::now() + RETRY < deadline => {
+                    tokio::time::sleep(RETRY).await;
+                }
                 Ok(None) => {
                     tracing::debug!(group = group.0, "frames for an unknown group ignored");
                     return;
@@ -413,19 +493,19 @@ impl Tenants {
                     tracing::warn!(group = group.0, %err, "cannot look the group up");
                     return;
                 }
-            };
-            let tenant = match Command(tenants.platform.clone()).load_tenant(&row.id).await {
-                Ok(Some(tenant)) if !tenant.is_suspended() => tenant,
-                Ok(_) => return,
-                Err(err) => {
-                    tracing::warn!(tenant = %row.slug, %err, "cannot load the tenant");
-                    return;
-                }
-            };
-            if let Err(err) = tenants.open(&tenant).await {
-                tracing::warn!(tenant = %tenant.slug, %err, "cannot reopen the tenant for a peer");
             }
-        });
+        };
+        let tenant = match Command(self.platform.clone()).load_tenant(&row.id).await {
+            Ok(Some(tenant)) if !tenant.is_suspended() => tenant,
+            Ok(_) => return,
+            Err(err) => {
+                tracing::warn!(tenant = %row.slug, %err, "cannot load the tenant");
+                return;
+            }
+        };
+        if let Err(err) = self.open(&tenant).await {
+            tracing::warn!(tenant = %tenant.slug, %err, "cannot reopen the tenant for a peer");
+        }
     }
 
     /// Closes every open tenant.
