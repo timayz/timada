@@ -257,3 +257,46 @@ async fn an_archived_product_drops_out_of_its_categories_count() {
         "an archived product is not counted"
     );
 }
+
+#[tokio::test]
+async fn the_stored_counts_follow_a_move() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let bedding = create_category(&cmd, "Bedding").await;
+    let mats = create_child(&cmd, "Mats", &bedding.id).await;
+    let toys = create_category(&cmd, "Toys").await;
+    let mat = create_product(&cmd, "Cooling mat").await;
+    cmd.categorize_product(ALICE, &mat.id, &bedding.id)
+        .await
+        .unwrap();
+    cmd.categorize_product(ALICE, &mat.id, &mats.id)
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    let row = |id: String| {
+        let pool = pool.clone();
+        async move {
+            let row = category_by_id(&pool, TENANT, &id).await.unwrap().unwrap();
+            (row.product_count, row.subtree_count)
+        }
+    };
+    assert_eq!(row(bedding.id.clone()).await, (1, 1), "counted once");
+    assert_eq!(row(mats.id.clone()).await, (1, 1));
+    assert_eq!(row(toys.id.clone()).await, (0, 0));
+
+    cmd.move_category(ALICE, &mats.id, Some(&toys.id))
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    assert_eq!(row(bedding.id.clone()).await, (1, 1));
+    assert_eq!(
+        row(toys.id.clone()).await,
+        (0, 1),
+        "the new parent lists what came with it"
+    );
+
+    cmd.archive_product(ALICE, &mat.id).await.unwrap();
+    catch_up(&executor, &pool).await;
+    assert_eq!(row(bedding.id).await, (0, 0));
+    assert_eq!(row(toys.id).await, (0, 0));
+}

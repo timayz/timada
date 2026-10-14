@@ -7,8 +7,7 @@ pub mod category_id;
 pub mod create;
 
 use timada_catalog::{
-    CatalogError, CategoryRow, MAX_CATEGORY_NAME_LEN, categories_of_tenant, memberships_of_tenant,
-    subtree_counts, tree_of,
+    CatalogError, CategoryRow, MAX_CATEGORY_NAME_LEN, categories_of_tenant, tree_of,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -48,51 +47,38 @@ pub fn error_code(err: &CatalogError) -> &'static str {
     }
 }
 
-/// A category, how deep it sits, and the two numbers a merchant needs: the
-/// products filed under it and the products its storefront page lists.
+/// A category and how deep it sits. The two numbers a merchant needs are on
+/// the row: `product_count`, filed under it, and `subtree_count`, what the
+/// shop's page for it lists.
 pub struct Row {
     pub category: CategoryRow,
     pub depth: usize,
-    /// Distinct products under it and everything below it: what the shop's
-    /// page for it shows. Equal to `category.product_count` for a category
-    /// with no sub-categories.
-    pub subtree_count: i64,
 }
 
 impl Row {
     /// Whether its page shows more than what is filed directly under it.
     pub fn inherits(&self) -> bool {
-        self.subtree_count != self.category.product_count
+        self.category.subtree_count != self.category.product_count
     }
 }
 
-/// The live categories of a tenant in tree order, each with its depth and
-/// the count its storefront page would show.
+/// The live categories of a tenant in tree order, each with its depth.
 pub async fn rows_of(pool: &sqlx::SqlitePool, tenant_id: &str) -> Result<Vec<Row>> {
-    let tree = tree_of(categories_of_tenant(pool, tenant_id).await?);
-    let counts = subtree_counts(&tree, &memberships_of_tenant(pool, tenant_id).await?);
-
-    fn walk(
-        nodes: Vec<timada_catalog::TreeOf<CategoryRow>>,
-        depth: usize,
-        counts: &std::collections::HashMap<String, i64>,
-        out: &mut Vec<Row>,
-    ) {
+    fn walk(nodes: Vec<timada_catalog::TreeOf<CategoryRow>>, depth: usize, out: &mut Vec<Row>) {
         for node in nodes {
-            let subtree_count = counts
-                .get(&node.item.id)
-                .copied()
-                .unwrap_or(node.item.product_count);
             out.push(Row {
                 category: node.item,
                 depth,
-                subtree_count,
             });
-            walk(node.children, depth + 1, counts, out);
+            walk(node.children, depth + 1, out);
         }
     }
     let mut out = Vec::new();
-    walk(tree, 0, &counts, &mut out);
+    walk(
+        tree_of(categories_of_tenant(pool, tenant_id).await?),
+        0,
+        &mut out,
+    );
     Ok(out)
 }
 
@@ -178,7 +164,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </td>
                                 <td class="py-2"><code>(&row.category.slug)</code></td>
                                 <td class="py-2">
-                                    <span data-category-count=(row.subtree_count)>(row.subtree_count)</span>
+                                    <span data-category-count=(row.category.subtree_count)>(row.category.subtree_count)</span>
                                     if row.inherits() {
                                         <span class="text-neutral-500" data-category-direct=(row.category.product_count)>
                                             " (" (row.category.product_count) " filed here)"

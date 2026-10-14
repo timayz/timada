@@ -1,7 +1,7 @@
 //! What a storefront page reads: the published products of the local copy.
 
 use sqlx::{FromRow, SqlitePool};
-use timada_catalog::{TreeNode, TreeOf, format_money, subtree_counts, tree_of};
+use timada_catalog::{TreeNode, TreeOf, format_money, tree_of};
 
 /// A picture of a product. `url` is where a browser loads it from: absolute
 /// once the host set [`StoreConfig::media_url`](crate::StoreConfig::media_url),
@@ -355,49 +355,44 @@ pub fn find_category<'a>(nodes: &'a [CategoryNode], slug: &str) -> Option<&'a Ca
     nodes.iter().find_map(|node| node.find(slug))
 }
 
+/// A category row with the count its page lists, as the subscription stored
+/// it.
+#[derive(FromRow)]
+struct CountedCategory {
+    #[sqlx(flatten)]
+    category: Category,
+    subtree_count: i64,
+}
+
+impl TreeNode for CountedCategory {
+    fn node_id(&self) -> &str {
+        &self.category.id
+    }
+
+    fn node_parent_id(&self) -> Option<&str> {
+        self.category.parent_id.as_deref()
+    }
+}
+
 /// The live categories of the store as trees, each level in its own order,
 /// with how many published products each one's page lists.
 pub async fn published_categories(pool: &SqlitePool) -> sqlx::Result<Vec<CategoryNode>> {
-    let categories: Vec<Category> = sqlx::query_as(
-        "SELECT id, slug, name, description, parent_id, position
+    let categories: Vec<CountedCategory> = sqlx::query_as(
+        "SELECT id, slug, name, description, parent_id, position, subtree_count
          FROM storefront_categories WHERE archived = 0
          ORDER BY position, name, id",
     )
     .fetch_all(pool)
     .await?;
-    let memberships: Vec<(String, String)> = sqlx::query_as(
-        "SELECT pc.category_id, pc.product_id
-         FROM storefront_product_categories pc
-         JOIN storefront_products p ON p.id = pc.product_id
-         WHERE p.status = 'published'",
-    )
-    .fetch_all(pool)
-    .await?;
-    let tree = tree_of(categories);
-    // Counted once per product however many categories of the subtree it is
-    // in, so the number is what the page actually lists.
-    let counts = subtree_counts(&tree, &memberships);
-    Ok(tree
-        .into_iter()
-        .map(|node| with_counts(node, &counts))
-        .collect())
+    Ok(tree_of(categories).into_iter().map(node_of).collect())
 }
 
-/// Turns a tree of categories into one of [`CategoryNode`], reading each
-/// one's count out of the map.
-fn with_counts(
-    node: TreeOf<Category>,
-    counts: &std::collections::HashMap<String, i64>,
-) -> CategoryNode {
-    let product_count = counts.get(&node.item.id).copied().unwrap_or(0);
+/// Turns a tree of counted categories into one of [`CategoryNode`].
+fn node_of(node: TreeOf<CountedCategory>) -> CategoryNode {
     CategoryNode {
-        category: node.item,
-        children: node
-            .children
-            .into_iter()
-            .map(|child| with_counts(child, counts))
-            .collect(),
-        product_count,
+        category: node.item.category,
+        children: node.children.into_iter().map(node_of).collect(),
+        product_count: node.item.subtree_count,
     }
 }
 

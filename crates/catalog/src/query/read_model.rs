@@ -2,7 +2,9 @@
 //!
 //! The handler reloads the strict write model of the stream the event belongs
 //! to and rewrites its row, so delivery may repeat (the subscription is
-//! at-least-once) without the row drifting. The subscription runs on the
+//! at-least-once) without the row drifting. When what a category counts has
+//! changed, the counts of the tenant's categories are worked out again in
+//! the same transaction, so a page reads them instead of computing them. The subscription runs on the
 //! tenant's own executor (its cursor lives there) and writes into the shared
 //! read-model database it is given.
 
@@ -16,6 +18,7 @@ use sqlx::SqlitePool;
 use crate::aggregator::Product;
 use crate::aggregator::category::Category;
 use crate::command::{CategoryState, ProductState, category_projection, product_projection};
+use crate::query::refresh_category_counts;
 
 /// The cursor identity of the read-model subscription, in each tenant's store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-catalog/read-models";
@@ -74,14 +77,29 @@ async fn on_category_event<E: Executor>(
 }
 
 /// Writes the row of a product and its category memberships as the write
-/// model sees them, in one transaction: the row and its memberships are
-/// never half-written.
+/// model sees them, in one transaction: the row, its memberships and the
+/// category counts they change are never half-written.
 pub async fn upsert_product(
     pool: &SqlitePool,
     tenant_id: &str,
     product: &ProductState,
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
+    let was_counted: Option<bool> = sqlx::query_scalar(
+        "SELECT status <> 'archived' FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
+    )
+    .bind(tenant_id)
+    .bind(&product.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let was_in: Vec<String> = sqlx::query_scalar(
+        "SELECT category_id FROM catalog_product_categories
+         WHERE tenant_id = ?1 AND product_id = ?2 ORDER BY category_id",
+    )
+    .bind(tenant_id)
+    .bind(&product.id)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query(
         "INSERT INTO catalog_products (tenant_id, id, slug, name, description, amount_cents,
             currency, status, created_by, created_at, updated_at, thumbnail, image_count)
@@ -123,16 +141,32 @@ pub async fn upsert_product(
         .execute(&mut *tx)
         .await?;
     }
+    let is_counted = product.status.as_str() != "archived";
+    // A rename or a new price leaves every count as it was.
+    if was_counted.unwrap_or(false) != is_counted
+        || (is_counted && !was_in.iter().eq(product.categories.iter()))
+    {
+        refresh_category_counts(&mut tx, tenant_id).await?;
+    }
     tx.commit().await?;
     Ok(())
 }
 
-/// Writes the row of a category as the write model sees it.
+/// Writes the row of a category as the write model sees it, and works the
+/// counts out again when it is new, moved or archived.
 pub async fn upsert_category(
     pool: &SqlitePool,
     tenant_id: &str,
     category: &CategoryState,
 ) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    let was: Option<(Option<String>, bool)> = sqlx::query_as(
+        "SELECT parent_id, archived FROM catalog_categories WHERE tenant_id = ?1 AND id = ?2",
+    )
+    .bind(tenant_id)
+    .bind(&category.id)
+    .fetch_optional(&mut *tx)
+    .await?;
     sqlx::query(
         "INSERT INTO catalog_categories (tenant_id, id, slug, name, description, parent_id,
             position, archived, created_by, created_at, updated_at)
@@ -153,7 +187,11 @@ pub async fn upsert_category(
     .bind(&category.created_by)
     .bind(category.created_at as i64)
     .bind(category.updated_at as i64)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    if was != Some((category.parent_id.clone(), category.archived)) {
+        refresh_category_counts(&mut tx, tenant_id).await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
