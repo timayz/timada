@@ -139,6 +139,14 @@ pub async fn count_tenants(pool: &SqlitePool, q: Option<&str>) -> sqlx::Result<i
         .await
 }
 
+/// The ids of every tenant not suspended, oldest first: the tenants a node
+/// keeps a copy of.
+pub async fn active_tenant_ids(pool: &SqlitePool) -> sqlx::Result<Vec<String>> {
+    sqlx::query_scalar("SELECT id FROM tenancy_tenants WHERE suspended = 0 ORDER BY created_at, id")
+        .fetch_all(pool)
+        .await
+}
+
 /// The tenant whose database runs in consensus group `group`, if the catalog
 /// knows one.
 pub async fn tenant_by_group(pool: &SqlitePool, group: u64) -> sqlx::Result<Option<TenantRow>> {
