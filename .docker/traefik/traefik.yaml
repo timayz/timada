@@ -19,6 +19,9 @@ entryPoints:
           scheme: https
   https:
     address: ":443"
+  # The store API storefronts connect to (not HTTP: a TCP route).
+  store:
+    address: ":4320"
 
 providers:
   docker:

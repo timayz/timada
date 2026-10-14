@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 use std::fmt;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
+use evento::RemoteAddress;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
@@ -59,8 +59,10 @@ impl fmt::Debug for StoreTls {
 /// How to reach the store.
 #[derive(Clone)]
 pub struct StoreConfig {
-    /// The store API of the timada node.
-    pub addr: SocketAddr,
+    /// The store API: an IP and port, or a `host:port` looked up again on
+    /// every reconnect, so a load balancer or a geo-routed name in front of
+    /// several nodes is followed to whichever node answers.
+    pub addr: RemoteAddress,
     /// The API key's token (`tk_…`), created on the tenant's API keys page.
     pub token: String,
     /// TLS to the store; plain TCP without (the token then travels in clear,
@@ -77,9 +79,9 @@ pub struct StoreConfig {
 }
 
 impl StoreConfig {
-    pub fn new(addr: SocketAddr, token: impl Into<String>) -> Self {
+    pub fn new(addr: impl Into<RemoteAddress>, token: impl Into<String>) -> Self {
         Self {
-            addr,
+            addr: addr.into(),
             token: token.into(),
             tls: None,
             request_timeout: Duration::from_secs(10),
@@ -141,8 +143,7 @@ mod tests {
 
     #[test]
     fn prefixes_are_normalized() {
-        let addr: SocketAddr = "127.0.0.1:4321".parse().unwrap();
-        let config = StoreConfig::new(addr, "tk_x");
+        let config = StoreConfig::new("127.0.0.1:4321", "tk_x");
         assert_eq!(config.prefix, "/store");
         assert_eq!(config.clone().prefix("shop/").prefix, "/shop");
         assert_eq!(config.clone().prefix("/api/store").prefix, "/api/store");
