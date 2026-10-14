@@ -9,7 +9,7 @@ pub const MIGRATION_APP: &str = "identity";
 
 /// Every migration of this crate, oldest first.
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![ReadModels0001, Email0002]
+    vec_box![ReadModels0001, Email0002, UserSearch0003, UserList0004]
 }
 
 /// `identity_users` and `identity_sessions`, one row per aggregate, rewritten
@@ -82,6 +82,64 @@ sqlx_migrator::sqlite_migration!(
         (
             "ALTER TABLE identity_users ADD COLUMN has_password INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE identity_users DROP COLUMN has_password"
+        ),
+    ]
+);
+
+/// What the administrator's search finds a user by: the account and the
+/// name, cut in runs of three characters so a search matches anywhere in a
+/// word, ignoring case and accents. The rowid is the user row's.
+pub struct UserSearch0003;
+sqlx_migrator::sqlite_migration!(
+    UserSearch0003,
+    "identity",
+    "0003_user_search",
+    vec_box![("identity", "0002_email")],
+    vec_box![
+        (
+            "CREATE VIRTUAL TABLE identity_users_fts USING fts5(
+                account, label, tokenize = 'trigram remove_diacritics 1'
+            )",
+            "DROP TABLE identity_users_fts"
+        ),
+        (
+            "INSERT INTO identity_users_fts (rowid, account, label)
+                SELECT rowid, account, label FROM identity_users",
+            "DELETE FROM identity_users_fts"
+        ),
+    ]
+);
+
+/// What the administrator's list of users reads on every page: an index in
+/// its own order (the old one compared case-sensitively, so the list sorted
+/// every user to show one page), and how many users there are, kept by the
+/// subscription instead of counted.
+pub struct UserList0004;
+sqlx_migrator::sqlite_migration!(
+    UserList0004,
+    "identity",
+    "0004_user_list",
+    vec_box![("identity", "0003_user_search")],
+    vec_box![
+        (
+            "DROP INDEX identity_users_label",
+            "CREATE INDEX identity_users_label ON identity_users (deleted, label)"
+        ),
+        (
+            "CREATE INDEX identity_users_list
+                ON identity_users (deleted, label COLLATE NOCASE, id)",
+            "DROP INDEX identity_users_list"
+        ),
+        (
+            "CREATE TABLE identity_totals (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                users INTEGER NOT NULL
+            )",
+            "DROP TABLE identity_totals"
+        ),
+        (
+            "INSERT INTO identity_totals (id, users) SELECT 1, count(*) FROM identity_users",
+            "DELETE FROM identity_totals"
         ),
     ]
 );

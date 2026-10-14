@@ -9,7 +9,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         Products0001,
         Categories0002,
         ProductImages0003,
-        ProductVariants0004
+        ProductVariants0004,
+        ProductSearch0005
     ]
 }
 
@@ -141,6 +142,31 @@ sqlx_migrator::sqlite_migration!(
         (
             "ALTER TABLE catalog_products ADD COLUMN variant_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE catalog_products DROP COLUMN variant_count"
+        ),
+    ]
+);
+
+pub struct ProductSearch0005;
+sqlx_migrator::sqlite_migration!(
+    ProductSearch0005,
+    "catalog",
+    "0005_product_search",
+    vec_box![("catalog", "0004_product_variants")],
+    vec_box![
+        (
+            // Cut in runs of three characters, so a search matches anywhere
+            // in a word as `LIKE '%q%'` did, ignoring case and accents. The
+            // tenant is a column too, so a search narrows to one tenant's
+            // products inside the index. The rowid is the product row's.
+            "CREATE VIRTUAL TABLE catalog_products_fts USING fts5(
+                tenant_id, slug, name, tokenize = 'trigram remove_diacritics 1'
+            )",
+            "DROP TABLE catalog_products_fts"
+        ),
+        (
+            "INSERT INTO catalog_products_fts (rowid, tenant_id, slug, name)
+                SELECT rowid, tenant_id, slug, name FROM catalog_products",
+            "DELETE FROM catalog_products_fts"
         ),
     ]
 );

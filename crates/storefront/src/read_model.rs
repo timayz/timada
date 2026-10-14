@@ -64,15 +64,18 @@ async fn on_category_event<E: Executor>(
     upsert_category(&pool, &category).await
 }
 
-/// The product row, the categories it is in and the counts they change, in
-/// one transaction: a page never sees a product filed half-way.
+/// The product row, the categories it is in, the counts they change and what
+/// a search finds it by, in one transaction: a page never sees a product
+/// filed half-way.
 async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
-    let was_counted: Option<bool> =
-        sqlx::query_scalar("SELECT status = 'published' FROM storefront_products WHERE id = ?1")
-            .bind(&product.id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let was: Option<(bool, String, String)> = sqlx::query_as(
+        "SELECT status = 'published', slug, name FROM storefront_products WHERE id = ?1",
+    )
+    .bind(&product.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let was_counted = was.as_ref().map(|(counted, _, _)| *counted);
     let was_in: Vec<String> = sqlx::query_scalar(
         "SELECT category_id FROM storefront_product_categories
          WHERE product_id = ?1 ORDER BY category_id",
@@ -124,6 +127,25 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
         )
         .bind(&product.id)
         .bind(category_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    if was
+        .as_ref()
+        .is_none_or(|(_, slug, name)| *slug != product.slug || *name != product.name)
+    {
+        sqlx::query(
+            "DELETE FROM storefront_products_fts
+             WHERE rowid = (SELECT rowid FROM storefront_products WHERE id = ?1)",
+        )
+        .bind(&product.id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO storefront_products_fts (rowid, slug, name)
+             SELECT rowid, slug, name FROM storefront_products WHERE id = ?1",
+        )
+        .bind(&product.id)
         .execute(&mut *tx)
         .await?;
     }

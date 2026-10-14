@@ -93,6 +93,74 @@ impl<'a> ProductFilter<'a> {
     }
 }
 
+/// The full-text query for `q` among one tenant's products, when `q` is long
+/// enough for the index (it is cut in runs of three characters); `None`
+/// otherwise, and the search falls back to [`contains`]. The tenant is part
+/// of the query, so the index itself narrows to its products.
+fn phrase(tenant_id: &str, q: &str) -> Option<String> {
+    let quote = |text: &str| format!("\"{}\"", text.replace('"', "\"\""));
+    (q.chars().count() >= 3).then(|| {
+        format!(
+            "tenant_id: {} AND {{slug name}}: {}",
+            quote(tenant_id),
+            quote(q)
+        )
+    })
+}
+
+/// Where a page of products comes from, `?2` being what was searched for.
+/// With a phrase the full-text index leads, so a search costs what it
+/// matches; `CROSS JOIN` keeps the planner from walking every product in
+/// order instead. Without one, `?2` is a `LIKE` pattern or `NULL`.
+macro_rules! products_from {
+    (phrase) => {
+        "FROM catalog_products_fts f
+         CROSS JOIN catalog_products p ON p.rowid = f.rowid
+         WHERE catalog_products_fts MATCH ?2 AND p.tenant_id = ?1 "
+    };
+    (pattern) => {
+        "FROM catalog_products p
+         WHERE p.tenant_id = ?1
+           AND (?2 IS NULL OR p.slug LIKE ?2 ESCAPE '\\' OR p.name LIKE ?2 ESCAPE '\\') "
+    };
+}
+
+/// The rest of the filter, shared by the list and the count.
+macro_rules! products_where {
+    () => {
+        "AND (?3 IS NULL OR p.id IN (SELECT product_id FROM catalog_product_categories
+                WHERE tenant_id = ?1 AND category_id = ?3)) "
+    };
+}
+
+macro_rules! products_page {
+    ($from:ident) => {
+        concat!(
+            "SELECT p.tenant_id, p.id, p.slug, p.name, p.description, p.amount_cents,
+                p.currency, p.status, p.created_by, p.created_at, p.updated_at, p.thumbnail,
+                p.image_count, p.min_amount_cents, p.max_amount_cents, p.variant_count ",
+            products_from!($from),
+            products_where!(),
+            "ORDER BY p.updated_at DESC, p.id DESC LIMIT ?4 OFFSET ?5"
+        )
+    };
+}
+
+macro_rules! products_count {
+    ($from:ident) => {
+        concat!("SELECT count(*) ", products_from!($from), products_where!())
+    };
+}
+
+/// What `?2` is and which statements read it: the index for a phrase, the
+/// rows for a short search or none.
+fn search_of(tenant_id: &str, filter: &ProductFilter<'_>) -> (Option<String>, bool) {
+    match filter.q.and_then(|q| phrase(tenant_id, q)) {
+        Some(phrase) => (Some(phrase), true),
+        None => (filter.q.map(contains), false),
+    }
+}
+
 /// The products of a tenant the filter matches, most recently changed first.
 pub async fn products_of_tenant(
     pool: &SqlitePool,
@@ -101,25 +169,20 @@ pub async fn products_of_tenant(
     offset: i64,
     limit: i64,
 ) -> sqlx::Result<Vec<ProductRow>> {
-    sqlx::query_as(
-        "SELECT tenant_id, id, slug, name, description, amount_cents, currency, status,
-            created_by, created_at, updated_at, thumbnail, image_count,
-            min_amount_cents, max_amount_cents, variant_count
-         FROM catalog_products
-         WHERE tenant_id = ?1
-           AND (?2 IS NULL OR slug LIKE ?2 ESCAPE '\\' OR name LIKE ?2 ESCAPE '\\')
-           AND (?3 IS NULL OR id IN (SELECT product_id FROM catalog_product_categories
-                WHERE tenant_id = ?1 AND category_id = ?3))
-         ORDER BY updated_at DESC, id DESC
-         LIMIT ?4 OFFSET ?5",
-    )
-    .bind(tenant_id)
-    .bind(filter.q.map(contains))
-    .bind(filter.category)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await
+    let (search, indexed) = search_of(tenant_id, filter);
+    let statement = if indexed {
+        products_page!(phrase)
+    } else {
+        products_page!(pattern)
+    };
+    sqlx::query_as(statement)
+        .bind(tenant_id)
+        .bind(search)
+        .bind(filter.category)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
 }
 
 /// How many products [`products_of_tenant`] would list.
@@ -128,18 +191,18 @@ pub async fn count_products(
     tenant_id: &str,
     filter: &ProductFilter<'_>,
 ) -> sqlx::Result<i64> {
-    sqlx::query_scalar(
-        "SELECT count(*) FROM catalog_products
-         WHERE tenant_id = ?1
-           AND (?2 IS NULL OR slug LIKE ?2 ESCAPE '\\' OR name LIKE ?2 ESCAPE '\\')
-           AND (?3 IS NULL OR id IN (SELECT product_id FROM catalog_product_categories
-                WHERE tenant_id = ?1 AND category_id = ?3))",
-    )
-    .bind(tenant_id)
-    .bind(filter.q.map(contains))
-    .bind(filter.category)
-    .fetch_one(pool)
-    .await
+    let (search, indexed) = search_of(tenant_id, filter);
+    let statement = if indexed {
+        products_count!(phrase)
+    } else {
+        products_count!(pattern)
+    };
+    sqlx::query_scalar(statement)
+        .bind(tenant_id)
+        .bind(search)
+        .bind(filter.category)
+        .fetch_one(pool)
+        .await
 }
 
 /// One product of a tenant, by id.

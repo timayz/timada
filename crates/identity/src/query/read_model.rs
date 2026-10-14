@@ -61,8 +61,15 @@ async fn on_session_event<E: Executor>(
     upsert_session(&pool, &session).await
 }
 
+/// The user's row and what a search finds it by, in one transaction.
 async fn upsert_user(pool: &SqlitePool, user: &UserState) -> anyhow::Result<()> {
     let revoked = user.sessions_revoked.as_ref();
+    let mut tx = pool.begin().await?;
+    let was: Option<(String, String)> =
+        sqlx::query_as("SELECT account, label FROM identity_users WHERE id = ?1")
+            .bind(&user.id)
+            .fetch_optional(&mut *tx)
+            .await?;
     sqlx::query(
         "INSERT INTO identity_users (id, account, label, is_admin, deleted, registered_at,
             last_sign_in_at, sign_in_count, oauth2_count, passkey_count, sessions_revoked_at_ms,
@@ -90,8 +97,35 @@ async fn upsert_user(pool: &SqlitePool, user: &UserState) -> anyhow::Result<()> 
     .bind(revoked.map(|r| r.at_ms as i64))
     .bind(user.password.as_ref().map(|p| p.email.as_str()))
     .bind(user.password.is_some())
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    // A new row is one more user to the administrator's list; a repeated
+    // delivery finds the row there and counts nothing.
+    if was.is_none() {
+        sqlx::query("UPDATE identity_totals SET users = users + 1 WHERE id = 1")
+            .execute(&mut *tx)
+            .await?;
+    }
+    // A sign-in changes the row but not what a search finds it by.
+    if was
+        .as_ref()
+        .is_none_or(|(account, label)| *account != user.account || *label != user.label)
+    {
+        sqlx::query(
+            "DELETE FROM identity_users_fts
+             WHERE rowid = (SELECT rowid FROM identity_users WHERE id = ?1)",
+        )
+        .bind(&user.id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO identity_users_fts (rowid, account, label)
+             SELECT rowid, account, label FROM identity_users WHERE id = ?1",
+        )
+        .bind(&user.id)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     // Sessions the revocation voided show as ended; the spared one stays.
     if let Some(revoked) = revoked {
@@ -102,9 +136,10 @@ async fn upsert_user(pool: &SqlitePool, user: &UserState) -> anyhow::Result<()> 
         .bind(&user.id)
         .bind(revoked.at_ms as i64)
         .bind(revoked.except_session.as_deref())
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 

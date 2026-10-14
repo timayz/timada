@@ -52,6 +52,11 @@ async fn on_tenant_event<E: Executor>(
 
 async fn upsert_tenant(pool: &SqlitePool, tenant: &TenantState) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
+    let was: Option<(String, String)> =
+        sqlx::query_as("SELECT slug, name FROM tenancy_tenants WHERE id = ?1")
+            .bind(&tenant.id)
+            .fetch_optional(&mut *tx)
+            .await?;
     sqlx::query(
         "INSERT INTO tenancy_tenants (id, slug, name, created_by, created_at, suspended,
             suspended_reason, group_id, member_count)
@@ -72,6 +77,34 @@ async fn upsert_tenant(pool: &SqlitePool, tenant: &TenantState) -> anyhow::Resul
     .bind(tenant.members.len() as i64)
     .execute(&mut *tx)
     .await?;
+    // A new row is one more tenant to the administrator's list; a repeated
+    // delivery finds the row there and counts nothing.
+    if was.is_none() {
+        sqlx::query("UPDATE tenancy_totals SET tenants = tenants + 1 WHERE id = 1")
+            .execute(&mut *tx)
+            .await?;
+    }
+    // What the administrator's search finds it by, rewritten only when that
+    // changed.
+    if was
+        .as_ref()
+        .is_none_or(|(slug, name)| *slug != tenant.slug || *name != tenant.name)
+    {
+        sqlx::query(
+            "DELETE FROM tenancy_tenants_fts
+             WHERE rowid = (SELECT rowid FROM tenancy_tenants WHERE id = ?1)",
+        )
+        .bind(&tenant.id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO tenancy_tenants_fts (rowid, slug, name)
+             SELECT rowid, slug, name FROM tenancy_tenants WHERE id = ?1",
+        )
+        .bind(&tenant.id)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     // The member rows are rewritten from the state: a revoked member goes
     // away, a changed role is replaced.
