@@ -102,7 +102,12 @@ tenant's products while the events stay isolated by construction.
    node, so the lookup is retried for as long as the transport keeps the frames
    waiting; nodes also wait three seconds (`recovery_timeout`) before taking over a
    transaction, so a peer that opens late joins the write instead of recovering it
-   from under its coordinator. The list of
+   from under its coordinator. Sweep gossip never opens a tenant, so a node that was
+   down would fetch the writes it missed only once something opens the tenant there:
+   at startup in a cluster, `start_catch_up` waits for the platform store to settle,
+   then opens every active tenant (four at a time), holds it until events stop
+   arriving from its peers, and closes it again unless it got used or was written to
+   within the idle timeout. The list of
    per-tenant read models is `tenant_subscriptions()` in `serve.rs`; adding a
    tenant-scoped context means adding one entry there.
 3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens
@@ -226,7 +231,8 @@ operators: it names what things do, not the libraries behind them.
 
 - `cargo test --workspace` (inside `nix develop`): the crates' domain tests over a
   temporary store, and the dashboard's integration tests, which boot the runtime in
-  process: `tenants_runtime` (open, idle, evict, reopen), `store_api` (TCP, keys, TLS),
+  process: `tenants_runtime` (open, idle, evict, reopen, catch-up), `tenants_cluster`
+  (three nodes in one process: a node that missed writes catches up), `store_api` (TCP, keys, TLS),
   `storefront` (the library against a live store), `events_lock`.
 - `make e2e`: `scripts/e2e.sh` builds the dashboard and the example storefront, resets
   the database, starts the server on `config/e2e.toml` and runs Playwright through the
