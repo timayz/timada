@@ -12,6 +12,8 @@ pub enum TenancyError {
     NotFound,
     #[error("not allowed")]
     Forbidden,
+    #[error("a publishable key starts with pk_")]
+    InvalidPublishableKey,
     #[error("this tenant is suspended")]
     Suspended,
     #[error("this tenant is not suspended")]

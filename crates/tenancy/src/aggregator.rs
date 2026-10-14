@@ -48,6 +48,22 @@ pub enum Tenant {
     RoleRemoved {
         role: String,
     },
+    /// How shoppers pay this tenant: the merchant's own account with the
+    /// provider. The secrets are sealed by the host before they get here
+    /// (the crate never sees them in clear), so the event log holds none.
+    PaymentsConfigured {
+        /// `stripe`.
+        provider: String,
+        /// Public: what a shopper's browser loads the card form with.
+        publishable_key: String,
+        secret_key_sealed: Vec<u8>,
+        /// What the provider signs the payment notices with.
+        webhook_secret_sealed: Vec<u8>,
+        configured_by: String,
+    },
+    PaymentsRemoved {
+        removed_by: String,
+    },
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).

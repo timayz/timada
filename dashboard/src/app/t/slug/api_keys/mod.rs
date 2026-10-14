@@ -128,7 +128,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <p class="mb-3 text-sm text-neutral-500">
-                    "A key reads this tenant's event store; one with store:write also writes to it. Give a storefront that only shows the catalogue a read-only key. Changing a key's scopes reconnects the stores using it. Revoke a key the moment it may have leaked."
+                    "A key reads this tenant's event store; one with store:write also writes to it. Give a storefront that only shows the catalogue a read-only key, and one that sells store:read with store:checkout, which lets it fill carts and place orders and nothing else. Changing a key's scopes reconnects the stores using it. Revoke a key the moment it may have leaked."
                 </p>
                 <table class="w-full text-left text-sm">
                     <thead>

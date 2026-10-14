@@ -18,6 +18,9 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `api-keys:manage` — create and revoke the store API keys.
 /// - `products:read` — see the products of the catalog.
 /// - `products:manage` — create, edit, publish and archive products.
+/// - `orders:read` — see the orders shoppers placed and the carts they left.
+/// - `orders:manage` — mark orders fulfilled, and cancel (refund) them.
+/// - `payments:manage` — set up how shoppers pay (the provider's keys).
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
@@ -26,6 +29,9 @@ pub const PERMISSIONS: &[&str] = &[
     PERMISSION_API_KEYS_MANAGE,
     PERMISSION_PRODUCTS_READ,
     PERMISSION_PRODUCTS_MANAGE,
+    PERMISSION_ORDERS_READ,
+    PERMISSION_ORDERS_MANAGE,
+    PERMISSION_PAYMENTS_MANAGE,
 ];
 pub const PERMISSION_TENANT_MANAGE: &str = "tenant:manage";
 pub const PERMISSION_MEMBERS_READ: &str = "members:read";
@@ -34,15 +40,23 @@ pub const PERMISSION_ROLES_MANAGE: &str = "roles:manage";
 pub const PERMISSION_API_KEYS_MANAGE: &str = "api-keys:manage";
 pub const PERMISSION_PRODUCTS_READ: &str = "products:read";
 pub const PERMISSION_PRODUCTS_MANAGE: &str = "products:manage";
+pub const PERMISSION_ORDERS_READ: &str = "orders:read";
+pub const PERMISSION_ORDERS_MANAGE: &str = "orders:manage";
+pub const PERMISSION_PAYMENTS_MANAGE: &str = "payments:manage";
 
 /// Every scope a store API key can hold, as `resource:action`. The list only
 /// grows: a stored key may name any of them. `write` on a resource implies
-/// `read` on it (see [`api_key_scope_implies`]).
-pub const API_KEY_SCOPES: &[&str] = &[SCOPE_STORE_READ, SCOPE_STORE_WRITE];
+/// `read` on it, and `store:write` implies `store:checkout` (see
+/// [`api_key_scope_implies`]).
+pub const API_KEY_SCOPES: &[&str] = &[SCOPE_STORE_READ, SCOPE_STORE_WRITE, SCOPE_STORE_CHECKOUT];
 /// Read the tenant's events and run subscriptions over them.
 pub const SCOPE_STORE_READ: &str = "store:read";
 /// Append events to the tenant's store.
 pub const SCOPE_STORE_WRITE: &str = "store:write";
+/// Append what a shopper does and nothing else: carts and the orders placed
+/// from them. What a storefront needs to sell, without the power to change
+/// the catalog or an order once placed.
+pub const SCOPE_STORE_CHECKOUT: &str = "store:checkout";
 /// What a key created before scopes existed holds: everything there was then.
 /// Frozen: a scope added later is never granted to those keys silently.
 pub const LEGACY_API_KEY_SCOPES: &[&str] = &[SCOPE_STORE_READ, SCOPE_STORE_WRITE];
@@ -238,10 +252,11 @@ pub fn generate_invitation_token() -> String {
 }
 
 /// The stream of a store API key, from the token a storefront presents.
-/// Whether holding the scope `held` grants `wanted`: the same scope, or
-/// `write` on the resource `wanted` only reads.
+/// Whether holding the scope `held` grants `wanted`: the same scope,
+/// `write` on the resource `wanted` only reads, or `store:write` for the
+/// narrower `store:checkout`.
 pub fn api_key_scope_implies(held: &str, wanted: &str) -> bool {
-    if held == wanted {
+    if held == wanted || (held == SCOPE_STORE_WRITE && wanted == SCOPE_STORE_CHECKOUT) {
         return true;
     }
     match (held.split_once(':'), wanted.split_once(':')) {
@@ -383,6 +398,18 @@ mod tests {
         assert!(api_key_scope_implies(SCOPE_STORE_WRITE, SCOPE_STORE_READ));
         assert!(!api_key_scope_implies(SCOPE_STORE_READ, SCOPE_STORE_WRITE));
         assert!(!api_key_scope_implies("catalog:write", SCOPE_STORE_READ));
+        assert!(api_key_scope_implies(
+            SCOPE_STORE_WRITE,
+            SCOPE_STORE_CHECKOUT
+        ));
+        assert!(!api_key_scope_implies(
+            SCOPE_STORE_CHECKOUT,
+            SCOPE_STORE_WRITE
+        ));
+        assert!(!api_key_scope_implies(
+            SCOPE_STORE_CHECKOUT,
+            SCOPE_STORE_READ
+        ));
         assert!(
             LEGACY_API_KEY_SCOPES
                 .iter()

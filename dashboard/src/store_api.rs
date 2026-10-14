@@ -19,7 +19,9 @@ use anyhow::{Context, Result};
 use evento::remote::{
     Hello, Rejection, Resolver, ServerHandle, Session, serve_tls_with, serve_with,
 };
-use timada_tenancy::{Command, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError};
+use timada_tenancy::{
+    Command, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError,
+};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
@@ -158,8 +160,11 @@ impl Resolver for StoreResolver {
             Rejection::Unavailable("this tenant's store cannot be opened right now".into())
         })?;
         let can_write = access.key.allows(SCOPE_STORE_WRITE);
+        let can_sell = access.key.allows(SCOPE_STORE_CHECKOUT);
         let executor = if can_write {
             lease.executor().clone()
+        } else if can_sell {
+            crate::read_only_store::checkout_only(lease.executor().clone(), &access.key.id)
         } else {
             crate::read_only_store::read_only(lease.executor().clone(), &access.key.id)
         };
@@ -168,6 +173,7 @@ impl Resolver for StoreResolver {
             tenant = %access.tenant.slug,
             key = %access.key.hint,
             can_write,
+            can_sell,
             peer = %hello.peer,
             "store connected"
         );

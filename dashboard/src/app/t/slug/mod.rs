@@ -3,8 +3,10 @@
 //! and then asks the [`TenantAccess`] for the permission it needs.
 
 pub mod api_keys;
+pub mod carts;
 pub mod categories;
 pub mod members;
+pub mod orders;
 pub mod products;
 pub mod rename;
 pub mod roles;
@@ -12,8 +14,9 @@ pub mod roles;
 use std::sync::Arc;
 
 use timada_tenancy::{
-    PERMISSION_API_KEYS_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_PRODUCTS_READ,
-    PERMISSION_ROLES_MANAGE, PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
+    PERMISSION_API_KEYS_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ORDERS_READ,
+    PERMISSION_PRODUCTS_READ, PERMISSION_ROLES_MANAGE, PERMISSION_TENANT_MANAGE, ROLE_OWNER,
+    TenantState,
 };
 use topcoat::{
     Result,
@@ -139,6 +142,8 @@ pub fn tenant_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str
 pub struct TenantNav {
     pub products: bool,
     pub categories: bool,
+    pub orders: bool,
+    pub carts: bool,
     pub members: bool,
     pub roles: bool,
     pub api_keys: bool,
@@ -147,11 +152,16 @@ pub struct TenantNav {
 impl TenantNav {
     pub async fn of(cx: &Cx, access: &TenantAccess) -> Result<Self> {
         let products = access.can(cx, PERMISSION_PRODUCTS_READ).await?;
+        let orders = access.can(cx, PERMISSION_ORDERS_READ).await?;
         Ok(Self {
             products,
             // The catalog is one section of the back office: whoever sees the
             // products sees the categories they are filed under.
             categories: products,
+            // Sales are one section too: the open carts are the orders not
+            // placed yet.
+            orders,
+            carts: orders,
             members: access.can(cx, PERMISSION_MEMBERS_READ).await?,
             roles: access.can(cx, PERMISSION_ROLES_MANAGE).await?,
             api_keys: access.can(cx, PERMISSION_API_KEYS_MANAGE).await?,
@@ -161,8 +171,9 @@ impl TenantNav {
 
 /// The header links of a tenant page: the tenant's home, each section the
 /// member may see, the dashboard and the account. `current` names the
-/// section being shown (`"home"`, `"products"`, `"categories"`, `"members"`,
-/// `"roles"`, `"api_keys"`, or `""` for a page below a section), which gets
+/// section being shown (`"home"`, `"products"`, `"categories"`, `"orders"`,
+/// `"carts"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
+/// section), which gets
 /// no link.
 #[component]
 pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) -> Result<impl View> {
@@ -177,6 +188,12 @@ pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) ->
             }
             if nav.categories && current != "categories" {
                 <a class="underline" href=(href!(categories::index, Slug(slug.clone())))>"Categories"</a>
+            }
+            if nav.orders && current != "orders" {
+                <a class="underline" href=(href!(orders::index, Slug(slug.clone())))>"Orders"</a>
+            }
+            if nav.carts && current != "carts" {
+                <a class="underline" href=(href!(carts::index, Slug(slug.clone())))>"Carts"</a>
             }
             if nav.members && current != "members" {
                 <a class="underline" href=(href!(members::index, Slug(slug.clone())))>"Members"</a>
