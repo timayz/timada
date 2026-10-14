@@ -26,6 +26,10 @@ pub enum OrdersError {
     AmountMismatch,
     #[error("this cart was already paid by another payment")]
     DuplicatePayment { order_id: String },
+    /// The dashboard answered a request to pay with a refusal; `code` is the
+    /// one it recorded (any code of this enum, or `payments_unavailable`).
+    #[error("the payment cannot go ahead ({code})")]
+    PaymentRefused { code: String },
     #[error("the total changed since it was shown")]
     PriceChanged { total_cents: u64 },
     #[error("enter a valid e-mail address")]
@@ -56,6 +60,20 @@ pub enum OrdersError {
     Other(#[from] anyhow::Error),
 }
 
+/// Every code a refusal recorded on a cart may carry, so one read back from
+/// the store maps to a `&'static str` again.
+const KNOWN_CODES: &[&str] = &[
+    "cart_not_found",
+    "cart_checked_out",
+    "product_unavailable",
+    "variant_required",
+    "variant_not_found",
+    "mixed_currencies",
+    "empty_cart",
+    "price_changed",
+    crate::PAYMENTS_UNAVAILABLE,
+];
+
 impl OrdersError {
     /// Whether the message can be shown to the person who made the request
     /// (as opposed to an infrastructure failure).
@@ -78,6 +96,15 @@ impl OrdersError {
             Self::EmptyCart => "empty_cart",
             Self::PriceChanged { .. } => "price_changed",
             Self::PaymentNotFound => "payment_not_found",
+            Self::PaymentRefused { code } => {
+                return Some(
+                    KNOWN_CODES
+                        .iter()
+                        .copied()
+                        .find(|known| known == code)
+                        .unwrap_or(crate::PAYMENTS_UNAVAILABLE),
+                );
+            }
             Self::AmountMismatch => "amount_mismatch",
             Self::DuplicatePayment { .. } => "duplicate_payment",
             Self::InvalidEmail => "invalid_email",

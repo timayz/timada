@@ -13,18 +13,27 @@
 //!   `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by default)
 //! - `STORE_MEDIA_URL` — where the product pictures are loaded from, as the
 //!   tenant's API keys page shows it (optional)
+//! - `STORE_COOKIE_KEY` — at least 32 bytes the shopper cookies (cart, past
+//!   orders, last address) are encrypted with; every replica of the app shares
+//!   it. Unset, a random one is made at startup, so the cookies of a browser
+//!   are lost on restart
 //! - `HOST` / `PORT` — where to listen (`127.0.0.1` / `3456`)
+//!
+//! Selling (the cart and checkout) needs a key holding `store:checkout`; with
+//! a read-only key the catalog shows but adding to the cart fails.
 //!
 //! `storefront migrate` prepares the local database and exits, without
 //! reaching the store.
 
 mod app;
+mod shopper;
 
 use std::path::Path;
 
 use anyhow::Context as _;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use timada_storefront::{Store, StoreConfig, StoreTls};
+use topcoat::cookie::Key;
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_owned())
@@ -69,6 +78,17 @@ async fn main() -> anyhow::Result<()> {
         config = config.media_url(media);
     }
 
+    let cookie_key = match std::env::var("STORE_COOKIE_KEY") {
+        Ok(secret) if secret.len() >= 32 => Key::derive_from(secret.as_bytes()),
+        Ok(_) => anyhow::bail!("STORE_COOKIE_KEY must be at least 32 bytes"),
+        Err(_) => {
+            tracing::warn!(
+                "STORE_COOKIE_KEY is not set: shopper cookies use a random key and are lost on restart"
+            );
+            Key::generate()
+        }
+    };
+
     let store = Store::connect(config, pool).await?;
 
     let host = env_or("HOST", "127.0.0.1");
@@ -79,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("cannot bind {host}:{port}"))?;
     tracing::info!("storefront at http://{host}:{port}/");
-    topcoat::serve(listener, app::router(store.clone())).await?;
+    topcoat::serve(listener, app::router(store.clone(), cookie_key)).await?;
 
     store.shutdown().await;
     Ok(())
