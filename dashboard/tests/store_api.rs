@@ -461,7 +461,7 @@ async fn a_read_only_key_cannot_change_the_store() {
 }
 
 #[tokio::test]
-async fn a_checkout_key_sells_and_does_nothing_else() {
+async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (writer_token, _) = h.key(&acme).await;
@@ -504,8 +504,8 @@ async fn a_checkout_key_sells_and_does_nothing_else() {
         )
         .await
         .unwrap();
-    let placed = orders
-        .place_order(
+    let request_id = orders
+        .request_checkout(
             timada_orders::STOREFRONT_ACTOR,
             &cart_id,
             timada_orders::Checkout {
@@ -525,13 +525,48 @@ async fn a_checkout_key_sells_and_does_nothing_else() {
         .await
         .unwrap();
 
-    // What only the merchant does is refused: moving the order along,
-    // touching the catalog.
-    let paid = orders
-        .mark_order_paid("storefront", &placed.order_id)
+    // Answering its own request, making itself an order or touching the
+    // catalog is the merchant's: refused, with the scope named.
+    let pending = orders
+        .pending_payment(&cart_id, &request_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let answered = orders
+        .record_payment_request(
+            "storefront",
+            &cart_id,
+            pending,
+            timada_orders::OpenedPayment {
+                provider: "stripe".into(),
+                payment_id: "pi_forged".into(),
+                client_secret: "secret".into(),
+                publishable_key: "pk_test".into(),
+            },
+        )
         .await
         .unwrap_err();
-    assert!(format!("{paid}").contains("store:checkout"), "{paid}");
+    assert!(
+        format!("{answered}").contains("store:checkout"),
+        "{answered}"
+    );
+    let placed = orders
+        .place_paid_order(
+            "storefront",
+            &cart_id,
+            timada_orders::Payment {
+                provider: "stripe".into(),
+                payment_id: "pi_forged".into(),
+                amount_cents: 2500,
+                currency: "EUR".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(placed, timada_orders::OrdersError::PaymentNotFound),
+        "no payment was recorded, so none can be claimed: {placed}"
+    );
     let repriced = timada_catalog::Command(shop.clone())
         .price_product("storefront", &mug.id, 1, "EUR")
         .await
@@ -541,20 +576,19 @@ async fn a_checkout_key_sells_and_does_nothing_else() {
         "{repriced}"
     );
 
-    // The merchant sees the order as placed, unpaid, at the catalog's price.
-    let order = timada_orders::Command(merchant.clone())
-        .load_order(&placed.order_id)
+    // The merchant sees the request, still unanswered, and the price as set.
+    let cart = timada_orders::Command(merchant.clone())
+        .load_cart(&cart_id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(order.status, timada_orders::OrderStatus::AwaitingPayment);
-    assert_eq!(order.total_cents, 2500);
+    assert!(cart.request(&request_id).unwrap().answer.is_none());
     let product = catalog.load_product(&mug.id).await.unwrap().unwrap();
     assert_eq!(product.price.unwrap().amount_cents, 1250);
 
-    // A key with write may still do it all.
+    // A key with write may do it all.
     timada_orders::Command(merchant.clone())
-        .mark_order_paid("alice", &placed.order_id)
+        .refuse_payment_request("alice", &cart_id, &request_id, "payments_unavailable")
         .await
         .unwrap();
     drop((shop, merchant, orders, catalog));

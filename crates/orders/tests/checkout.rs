@@ -1,10 +1,12 @@
 mod common;
 
 use common::*;
-use timada_orders::{Checkout, OrderStatus, OrdersError, ShippingAddress, order_id};
+use timada_orders::{
+    Checkout, OrderStatus, OrdersError, Payment, PaymentAnswer, ShippingAddress, order_id,
+};
 
 #[tokio::test]
-async fn an_order_copies_what_was_sold() {
+async fn a_paid_order_holds_what_the_payment_was_asked_for() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let (mat, beige, _) = varied_product(&catalog, "Mat").await;
@@ -14,34 +16,33 @@ async fn an_order_copies_what_was_sold() {
         .await
         .unwrap();
 
-    let placed = orders
-        .place_order(
-            SHOPPER,
-            &cart_id,
-            Checkout {
-                note: Some("  Leave it at the door ".into()),
-                expected_total_cents: Some(3500),
-                ..checkout()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(placed.order_id, order_id(&cart_id));
+    let (request_id, payment) = open_payment(
+        &orders,
+        &cart_id,
+        Checkout {
+            note: Some("  Leave it at the door ".into()),
+            expected_total_cents: Some(3500),
+            ..checkout()
+        },
+    )
+    .await;
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert!(cart.is_paying());
+    assert_eq!(cart.status(), "paying");
+    let snapshot = cart
+        .request(&request_id)
+        .unwrap()
+        .payment()
+        .unwrap()
+        .clone();
+    assert_eq!(snapshot.total_cents, 3500);
+    assert_eq!(
+        snapshot.client_secret,
+        format!("{}_secret", payment.payment_id)
+    );
 
-    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
-    assert_eq!(order.reference, placed.reference);
-    assert_eq!(order.status, OrderStatus::AwaitingPayment);
-    assert_eq!(order.currency, "EUR");
-    assert_eq!(order.total_cents, 2 * 1250 + 1000);
-    assert_eq!(order.item_count(), 3);
-    assert_eq!(order.note.as_deref(), Some("Leave it at the door"));
-    assert_eq!(order.lines[0].name, "Mug");
-    assert_eq!(order.lines[0].variant_label, None);
-    assert_eq!(order.lines[1].variant_label.as_deref(), Some("Beige"));
-    assert_eq!(order.lines[1].sku.as_deref(), Some("MAT-B"));
-    assert_eq!(order.lines[1].unit_amount_cents, 1000);
-
-    // The catalog moving on does not touch the order.
+    // The catalog moves on before the payment lands: the order holds what
+    // was paid for.
     catalog
         .rename_product(ALICE, &mug, "Big mug")
         .await
@@ -50,12 +51,25 @@ async fn an_order_copies_what_was_sold() {
         .price_product(ALICE, &mug, 9999, "EUR")
         .await
         .unwrap();
-    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
-    assert_eq!(order.lines[0].name, "Mug");
-    assert_eq!(order.total_cents, 3500);
+    assert!(orders.load_order_of_cart(&cart_id).await.unwrap().is_none());
+    let placed = orders
+        .place_paid_order(DASHBOARD, &cart_id, payment.clone())
+        .await
+        .unwrap();
+    assert_eq!(placed.order_id, order_id(&cart_id));
 
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Paid);
+    assert_eq!(order.payment, payment);
+    assert_eq!(order.total_cents, 2 * 1250 + 1000);
+    assert_eq!(order.note.as_deref(), Some("Leave it at the door"));
+    assert_eq!(order.email, "ada@example.org");
+    assert_eq!(order.lines[0].name, "Mug");
+    assert_eq!(order.lines[1].variant_label.as_deref(), Some("Beige"));
+    assert_eq!(order.lines[1].sku.as_deref(), Some("MAT-B"));
     let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
     assert_eq!(cart.order_id.as_deref(), Some(placed.order_id.as_str()));
+    assert_eq!(cart.status(), "ordered");
     let by_reference = orders
         .load_order_by_reference(&placed.reference)
         .await
@@ -65,108 +79,153 @@ async fn an_order_copies_what_was_sold() {
 }
 
 #[tokio::test]
-async fn placing_again_returns_the_same_order() {
+async fn the_same_payment_told_twice_is_one_order() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let cart_id = cart_with(&orders, &mug, 1).await;
+    let (_, payment) = open_payment(&orders, &cart_id, checkout()).await;
 
     let first = orders
-        .place_order(SHOPPER, &cart_id, checkout())
+        .place_paid_order(DASHBOARD, &cart_id, payment.clone())
         .await
         .unwrap();
     let again = orders
-        .place_order(SHOPPER, &cart_id, checkout())
+        .place_paid_order(DASHBOARD, &cart_id, payment)
         .await
         .unwrap();
     assert_eq!(first, again);
 }
 
 #[tokio::test]
-async fn every_order_has_its_own_reference() {
+async fn a_second_payment_of_an_ordered_cart_is_a_duplicate() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
-    let mut references = std::collections::BTreeSet::new();
-    for _ in 0..10 {
-        let cart_id = cart_with(&orders, &mug, 1).await;
-        let placed = orders
-            .place_order(SHOPPER, &cart_id, checkout())
-            .await
-            .unwrap();
-        references.insert(placed.reference);
-    }
-    assert_eq!(references.len(), 10);
+    let cart_id = cart_with(&orders, &mug, 1).await;
+    // Two tabs, two payments opened before either was paid.
+    let (_, first) = open_payment(&orders, &cart_id, checkout()).await;
+    let (_, second) = open_payment(&orders, &cart_id, checkout()).await;
+
+    let placed = orders
+        .place_paid_order(DASHBOARD, &cart_id, first)
+        .await
+        .unwrap();
+    let duplicate = orders.place_paid_order(DASHBOARD, &cart_id, second).await;
+    assert!(
+        matches!(&duplicate, Err(OrdersError::DuplicatePayment { order_id }) if *order_id == placed.order_id),
+        "{duplicate:?}"
+    );
 }
 
 #[tokio::test]
-async fn a_moved_price_is_never_charged_unseen() {
+async fn a_payment_must_match_what_was_asked_for() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
-    let cart_id = cart_with(&orders, &mug, 2).await;
-    let quote = orders.quote_cart(&cart_id).await.unwrap();
-    assert_eq!(quote.total_cents, 2500);
+    let cart_id = cart_with(&orders, &mug, 1).await;
+    let (_, payment) = open_payment(&orders, &cart_id, checkout()).await;
 
-    catalog
-        .price_product(ALICE, &mug, 1300, "EUR")
-        .await
-        .unwrap();
-    let refused = orders
-        .place_order(
-            SHOPPER,
+    let short = orders
+        .place_paid_order(
+            DASHBOARD,
             &cart_id,
-            Checkout {
-                expected_total_cents: Some(quote.total_cents),
-                ..checkout()
+            Payment {
+                amount_cents: 1,
+                ..payment.clone()
             },
         )
         .await;
     assert!(
-        matches!(
-            refused,
-            Err(OrdersError::PriceChanged { total_cents: 2600 })
-        ),
-        "{refused:?}"
+        matches!(short, Err(OrdersError::AmountMismatch)),
+        "{short:?}"
+    );
+    let unknown = orders
+        .place_paid_order(
+            DASHBOARD,
+            &cart_id,
+            Payment {
+                payment_id: "pi_other".into(),
+                ..payment
+            },
+        )
+        .await;
+    assert!(
+        matches!(unknown, Err(OrdersError::PaymentNotFound)),
+        "{unknown:?}"
     );
     assert!(orders.load_order_of_cart(&cart_id).await.unwrap().is_none());
 }
 
 #[tokio::test]
-async fn what_is_off_sale_or_missing_stops_the_order() {
+async fn a_request_is_priced_once_and_refused_when_it_cannot_go_ahead() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
-    let (mat, _, blue) = varied_product(&catalog, "Mat").await;
-    let cart_id = cart_with(&orders, &mug, 1).await;
-    orders
-        .add_to_cart(SHOPPER, &cart_id, item(&mat, Some(&blue), 1))
+    let cart_id = cart_with(&orders, &mug, 2).await;
+
+    // The price moved since the shopper saw 25.00.
+    catalog
+        .price_product(ALICE, &mug, 1300, "EUR")
         .await
         .unwrap();
-
-    catalog.remove_variant(ALICE, &mat, &blue).await.unwrap();
-    let quote = orders.quote_cart(&cart_id).await.unwrap();
-    assert_eq!(quote.lines.len(), 1);
-    assert_eq!(quote.unavailable.len(), 1);
-    let refused = orders.place_order(SHOPPER, &cart_id, checkout()).await;
+    let request_id = orders
+        .request_checkout(
+            SHOPPER,
+            &cart_id,
+            Checkout {
+                expected_total_cents: Some(2500),
+                ..checkout()
+            },
+        )
+        .await
+        .unwrap();
+    let pending = orders.pending_payment(&cart_id, &request_id).await;
     assert!(
-        matches!(&refused, Err(OrdersError::Unavailable { product_id }) if *product_id == mat),
-        "{refused:?}"
+        matches!(
+            pending,
+            Err(OrdersError::PriceChanged { total_cents: 2600 })
+        ),
+        "{pending:?}"
     );
-
+    let code = pending.unwrap_err().code().unwrap();
     orders
-        .remove_from_cart(SHOPPER, &cart_id, &mat, Some(&blue))
+        .refuse_payment_request(DASHBOARD, &cart_id, &request_id, code)
         .await
         .unwrap();
-    catalog.unpublish_product(ALICE, &mug).await.unwrap();
-    let refused = orders.place_order(SHOPPER, &cart_id, checkout()).await;
+    // Answered: nothing more to do, and a second answer changes nothing.
     assert!(
-        matches!(refused, Err(OrdersError::Unavailable { .. })),
-        "{refused:?}"
+        orders
+            .pending_payment(&cart_id, &request_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    orders
+        .refuse_payment_request(DASHBOARD, &cart_id, &request_id, "other")
+        .await
+        .unwrap();
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.request(&request_id).unwrap().answer,
+        Some(PaymentAnswer::Refused("price_changed".into()))
+    );
+    assert_eq!(cart.status(), "open");
+
+    // Off sale.
+    catalog.unpublish_product(ALICE, &mug).await.unwrap();
+    let request_id = orders
+        .request_checkout(SHOPPER, &cart_id, checkout())
+        .await
+        .unwrap();
+    let pending = orders.pending_payment(&cart_id, &request_id).await;
+    assert!(
+        matches!(pending, Err(OrdersError::Unavailable { .. })),
+        "{pending:?}"
     );
 }
 
 #[tokio::test]
-async fn an_empty_cart_or_a_bad_address_is_refused() {
+async fn an_empty_cart_or_a_bad_address_cannot_ask_to_pay() {
     let (orders, catalog) = store().await;
     let empty = orders.create_cart(SHOPPER).await.unwrap();
-    let refused = orders.place_order(SHOPPER, &empty, checkout()).await;
+    let refused = orders.request_checkout(SHOPPER, &empty, checkout()).await;
     assert!(
         matches!(refused, Err(OrdersError::EmptyCart)),
         "{refused:?}"
@@ -175,7 +234,7 @@ async fn an_empty_cart_or_a_bad_address_is_refused() {
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let cart_id = cart_with(&orders, &mug, 1).await;
     let refused = orders
-        .place_order(
+        .request_checkout(
             SHOPPER,
             &cart_id,
             Checkout {
@@ -189,7 +248,7 @@ async fn an_empty_cart_or_a_bad_address_is_refused() {
         "{refused:?}"
     );
     let refused = orders
-        .place_order(
+        .request_checkout(
             SHOPPER,
             &cart_id,
             Checkout {
@@ -206,10 +265,22 @@ async fn an_empty_cart_or_a_bad_address_is_refused() {
         "{refused:?}"
     );
     let refused = orders
-        .place_order(SHOPPER, "no-such-cart", checkout())
+        .request_checkout(SHOPPER, "no-such-cart", checkout())
         .await;
     assert!(
         matches!(refused, Err(OrdersError::CartNotFound)),
         "{refused:?}"
     );
+}
+
+#[tokio::test]
+async fn every_order_has_its_own_reference() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let mut references = std::collections::BTreeSet::new();
+    for _ in 0..10 {
+        let cart_id = cart_with(&orders, &mug, 1).await;
+        references.insert(pay(&orders, &cart_id, checkout()).await.reference);
+    }
+    assert_eq!(references.len(), 10);
 }

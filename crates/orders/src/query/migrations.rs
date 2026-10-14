@@ -28,6 +28,8 @@ sqlx_migrator::sqlite_migration!(
                 item_count INTEGER NOT NULL,
                 total_cents INTEGER NOT NULL,
                 currency TEXT NOT NULL,
+                payment_id TEXT NOT NULL,
+                refunded_cents INTEGER NOT NULL,
                 placed_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
@@ -47,6 +49,7 @@ sqlx_migrator::sqlite_migration!(
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
                 order_id TEXT,
+                status TEXT NOT NULL,
                 line_count INTEGER NOT NULL,
                 item_count INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,

@@ -123,9 +123,10 @@ tenant's products while the events stay isolated by construction.
    executor wrapped by `read_only_store.rs`: appends refused, snapshot saves dropped,
    subscriber cursors kept under the key's own name. A key holding `store:checkout`
    (what a storefront that sells needs) gets the same wrapper with one opening: it
-   may append what a shopper does, carts and the placing of an order
-   (`timada_orders::is_shopper_event`), and nothing that belongs to the merchant,
-   such as the catalog or an order's payment. Scopes are strings recorded by the
+   may append what a shopper does, filling a cart and asking to pay for it
+   (`timada_orders::is_shopper_event`), and nothing that belongs to the merchant:
+   the catalog, the answer to a request to pay, an order (one exists only once
+   its payment is confirmed to the dashboard). Scopes are strings recorded by the
    `ApiKey::Scoped` event (keys older than it hold read + write). Revoking the key or
    changing its scopes ends its connections; suspending the tenant closes its
    database, and reconnects are refused.

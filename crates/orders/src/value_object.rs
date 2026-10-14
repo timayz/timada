@@ -57,6 +57,25 @@ pub struct OrderLine {
     pub quantity: u32,
 }
 
+/// The payment that paid for an order. Frozen in `events.lock`: the fields
+/// never change.
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct Payment {
+    /// `stripe`.
+    pub provider: String,
+    /// The provider's id of the payment.
+    pub payment_id: String,
+    /// What was charged, in minor units of `currency`.
+    pub amount_cents: u64,
+    pub currency: String,
+}
+
+/// The payment provider the dashboard speaks to.
+pub const PROVIDER_STRIPE: &str = "stripe";
+/// The refusal of a request to pay when the merchant has no payments set up,
+/// or the provider failed.
+pub const PAYMENTS_UNAVAILABLE: &str = "payments_unavailable";
+
 impl OrderLine {
     /// The price of the whole line.
     pub fn amount_cents(&self) -> u64 {
@@ -64,18 +83,27 @@ impl OrderLine {
     }
 }
 
-/// Whether an event is one a shopper's storefront writes: anything on a cart,
-/// an order being placed, and the reference it claims. Everything else
-/// (the catalog, an order once placed) is the merchant's. A store connection
-/// allowed to sell but not to manage is held to these.
+/// Whether an event is one a shopper's storefront writes: filling a cart and
+/// asking to pay for it. Everything else is the dashboard's: answering a
+/// request to pay, the orders (they exist once paid, which only the
+/// provider's word to the dashboard proves) and the catalog. A store
+/// connection allowed to sell but not to manage is held to these.
 pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
     use evento::{Aggregate, AggregateEvent};
 
-    use crate::aggregator::{Cart, OrderReference, Placed};
+    use crate::aggregator::{
+        Cart, CheckoutRequested, Created, ItemAdded, ItemRemoved, QuantitySet,
+    };
 
     aggregate_type == Cart::aggregate_type()
-        || aggregate_type == OrderReference::aggregate_type()
-        || (aggregate_type == Placed::aggregate_type() && name == Placed::event_name())
+        && [
+            Created::event_name(),
+            ItemAdded::event_name(),
+            QuantitySet::event_name(),
+            ItemRemoved::event_name(),
+            CheckoutRequested::event_name(),
+        ]
+        .contains(&name)
 }
 
 /// The order a cart becomes: one per cart, so placing it twice lands on the
@@ -241,9 +269,11 @@ mod tests {
     #[test]
     fn shoppers_write_carts_and_place_orders_only() {
         assert!(is_shopper_event("timada-orders/Cart", "ItemAdded"));
-        assert!(is_shopper_event("timada-orders/OrderReference", "Claimed"));
-        assert!(is_shopper_event("timada-orders/Order", "Placed"));
-        assert!(!is_shopper_event("timada-orders/Order", "Paid"));
+        assert!(is_shopper_event("timada-orders/Cart", "CheckoutRequested"));
+        assert!(!is_shopper_event("timada-orders/Cart", "PaymentRequested"));
+        assert!(!is_shopper_event("timada-orders/Cart", "CheckedOut"));
+        assert!(!is_shopper_event("timada-orders/OrderReference", "Claimed"));
+        assert!(!is_shopper_event("timada-orders/Order", "Placed"));
         assert!(!is_shopper_event("timada-orders/Order", "Cancelled"));
         assert!(!is_shopper_event("timada-catalog/Product", "Priced"));
     }

@@ -24,6 +24,9 @@ pub struct OrderRow {
     pub placed_at: i64,
     /// Unix seconds.
     pub updated_at: i64,
+    /// The provider's id of the payment.
+    pub payment_id: String,
+    pub refunded_cents: i64,
 }
 
 impl OrderRow {
@@ -77,7 +80,7 @@ pub async fn orders_of_tenant(
 ) -> sqlx::Result<Vec<OrderRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, reference, cart_id, status, email, name, country, item_count,
-            total_cents, currency, placed_at, updated_at
+            total_cents, currency, placed_at, updated_at, payment_id, refunded_cents
          FROM orders_orders
          WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)
            AND (?3 IS NULL OR reference LIKE ?3 ESCAPE '\\' OR email LIKE ?3 ESCAPE '\\'
@@ -120,7 +123,7 @@ pub async fn order_by_id(
 ) -> sqlx::Result<Option<OrderRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, reference, cart_id, status, email, name, country, item_count,
-            total_cents, currency, placed_at, updated_at
+            total_cents, currency, placed_at, updated_at, payment_id, refunded_cents
          FROM orders_orders WHERE tenant_id = ?1 AND id = ?2",
     )
     .bind(tenant_id)

@@ -20,6 +20,12 @@ pub enum OrdersError {
     MixedCurrencies,
     #[error("the cart is empty")]
     EmptyCart,
+    #[error("no payment was asked for this cart under that id")]
+    PaymentNotFound,
+    #[error("the amount paid is not what the cart was priced at")]
+    AmountMismatch,
+    #[error("this cart was already paid by another payment")]
+    DuplicatePayment { order_id: String },
     #[error("the total changed since it was shown")]
     PriceChanged { total_cents: u64 },
     #[error("enter a valid e-mail address")]
@@ -36,10 +42,8 @@ pub enum OrdersError {
     InvalidNote,
     #[error("order not found")]
     OrderNotFound,
-    #[error("this order is not awaiting payment")]
-    NotAwaitingPayment,
-    #[error("only a paid order can be fulfilled")]
-    NotPaid,
+    #[error("a cancelled order cannot be fulfilled")]
+    OrderCancelled,
     #[error("a fulfilled or cancelled order cannot be cancelled")]
     NotCancellable,
     #[error("the tracking number is at most 200 characters")]
@@ -73,6 +77,9 @@ impl OrdersError {
             Self::MixedCurrencies => "mixed_currencies",
             Self::EmptyCart => "empty_cart",
             Self::PriceChanged { .. } => "price_changed",
+            Self::PaymentNotFound => "payment_not_found",
+            Self::AmountMismatch => "amount_mismatch",
+            Self::DuplicatePayment { .. } => "duplicate_payment",
             Self::InvalidEmail => "invalid_email",
             Self::InvalidName => "invalid_ship_name",
             Self::InvalidAddress => "invalid_address",
@@ -80,8 +87,7 @@ impl OrdersError {
             Self::InvalidPhone => "invalid_phone",
             Self::InvalidNote => "invalid_note",
             Self::OrderNotFound => "order_not_found",
-            Self::NotAwaitingPayment => "not_awaiting_payment",
-            Self::NotPaid => "not_paid",
+            Self::OrderCancelled => "order_cancelled",
             Self::NotCancellable => "not_cancellable",
             Self::InvalidTracking => "invalid_tracking",
             Self::InvalidReason => "invalid_reason",

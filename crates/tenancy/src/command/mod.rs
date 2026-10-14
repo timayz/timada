@@ -8,6 +8,7 @@ mod api_key;
 mod create;
 mod invite;
 mod member;
+mod payments;
 mod rename;
 mod role;
 mod slug_index;
@@ -19,6 +20,7 @@ use std::ops::Deref;
 pub use api_key::*;
 pub use create::*;
 pub use invite::*;
+pub use payments::*;
 pub use role::*;
 
 use evento::{Executor, Projection, metadata::Event};
@@ -27,8 +29,9 @@ use crate::aggregator::api_key::{
     Created as ApiKeyCreated, Revoked as ApiKeyRevoked, Scoped as ApiKeyScoped,
 };
 use crate::aggregator::{
-    Accepted, Claimed, Created, MemberGranted, MemberRevoked, MemberRoleChanged, Released, Renamed,
-    Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
+    Accepted, Claimed, Created, MemberGranted, MemberRevoked, MemberRoleChanged,
+    PaymentsConfigured, PaymentsRemoved, Released, Renamed, Resumed, Revoked, RoleDefined,
+    RoleRemoved, RoleUpdated, Sent, Suspended,
 };
 use crate::value_object::{
     LEGACY_API_KEY_SCOPES, ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id,
@@ -68,6 +71,21 @@ pub struct TenantState {
     /// The custom roles, by name. `owner` is not among them: it is implicit
     /// and grants everything.
     pub roles: BTreeMap<String, RoleDef>,
+    /// How shoppers pay, once set up.
+    pub payments: Option<PaymentSettings>,
+}
+
+/// The merchant's account with the payment provider. The secrets are sealed
+/// bytes only the host can open.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PaymentSettings {
+    pub provider: String,
+    pub publishable_key: String,
+    pub secret_key_sealed: Vec<u8>,
+    pub webhook_secret_sealed: Vec<u8>,
+    pub configured_by: String,
+    /// Unix seconds.
+    pub configured_at: u64,
 }
 
 /// A custom role as the tenant defined it.
@@ -131,6 +149,8 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_role_defined())
         .handler(on_role_updated())
         .handler(on_role_removed())
+        .handler(on_payments_configured())
+        .handler(on_payments_removed())
         .strict()
 }
 
@@ -226,6 +246,31 @@ async fn on_role_removed(
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     tenant.roles.remove(&event.data.role);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payments_configured(
+    event: Event<PaymentsConfigured>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.payments = Some(PaymentSettings {
+        provider: event.data.provider.to_owned(),
+        publishable_key: event.data.publishable_key.to_owned(),
+        secret_key_sealed: event.data.secret_key_sealed.to_owned(),
+        webhook_secret_sealed: event.data.webhook_secret_sealed.to_owned(),
+        configured_by: event.data.configured_by.to_owned(),
+        configured_at: event.timestamp,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payments_removed(
+    _event: Event<PaymentsRemoved>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.payments = None;
     Ok(())
 }
 

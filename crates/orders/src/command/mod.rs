@@ -18,10 +18,10 @@ pub use checkout::*;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
-    Cancelled, CheckedOut, Claimed, Created, Fulfilled, ItemAdded, ItemRemoved, Paid, Placed,
-    QuantitySet,
+    Cancelled, CheckedOut, CheckoutRequested, Claimed, Created, Fulfilled, ItemAdded, ItemRemoved,
+    PaymentRefused, PaymentRequested, Placed, QuantitySet, Refunded,
 };
-use crate::value_object::{OrderLine, ShippingAddress, order_id};
+use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor>(pub E);
@@ -53,6 +53,48 @@ impl CartLine {
     }
 }
 
+/// A payment opened with the provider for a cart: what the order will hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaymentSnapshot {
+    pub provider: String,
+    pub payment_id: String,
+    pub client_secret: String,
+    pub publishable_key: String,
+    pub lines: Vec<OrderLine>,
+    pub currency: String,
+    pub total_cents: u64,
+}
+
+/// How a request to pay was answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaymentAnswer {
+    /// A payment is open: the shopper's browser confirms it.
+    Requested(PaymentSnapshot),
+    /// It cannot go ahead; the code says why.
+    Refused(String),
+}
+
+/// A shopper's request to pay for the cart, and its answer once there is one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutRequest {
+    pub request_id: String,
+    pub email: String,
+    pub shipping: ShippingAddress,
+    pub note: Option<String>,
+    pub expected_total_cents: Option<u64>,
+    pub answer: Option<PaymentAnswer>,
+}
+
+impl CheckoutRequest {
+    /// The open payment, when the request got one.
+    pub fn payment(&self) -> Option<&PaymentSnapshot> {
+        match &self.answer {
+            Some(PaymentAnswer::Requested(payment)) => Some(payment),
+            _ => None,
+        }
+    }
+}
+
 #[evento::projection(id = id, name = "timada-orders/CartState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
@@ -60,6 +102,8 @@ pub struct CartState {
     pub id: String,
     /// In the order they were first added.
     pub lines: Vec<CartLine>,
+    /// Every request to pay, oldest first.
+    pub requests: Vec<CheckoutRequest>,
     /// The order it became, once checked out.
     pub order_id: Option<String>,
     /// Unix seconds of `Created`.
@@ -83,6 +127,33 @@ impl CartState {
             .iter()
             .find(|line| line.is(product_id, variant_id))
     }
+
+    pub fn request(&self, request_id: &str) -> Option<&CheckoutRequest> {
+        self.requests.iter().find(|r| r.request_id == request_id)
+    }
+
+    /// The request whose open payment has that provider id.
+    pub fn request_paid_by(&self, payment_id: &str) -> Option<&CheckoutRequest> {
+        self.requests
+            .iter()
+            .find(|r| r.payment().is_some_and(|p| p.payment_id == payment_id))
+    }
+
+    /// Whether a payment is open for it (the shopper may be paying).
+    pub fn is_paying(&self) -> bool {
+        !self.is_checked_out() && self.requests.iter().any(|r| r.payment().is_some())
+    }
+
+    /// `open`, `paying` or `ordered`: what the read model stores.
+    pub fn status(&self) -> &'static str {
+        if self.is_checked_out() {
+            "ordered"
+        } else if self.is_paying() {
+            "paying"
+        } else {
+            "open"
+        }
+    }
 }
 
 pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
@@ -92,6 +163,9 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_quantity_set())
         .handler(on_item_removed())
         .handler(on_checked_out())
+        .handler(on_checkout_requested())
+        .handler(on_payment_requested())
+        .handler(on_payment_refused())
         .strict()
 }
 
@@ -152,33 +226,83 @@ async fn on_checked_out(event: Event<CheckedOut>, cart: &mut CartState) -> anyho
     Ok(())
 }
 
+#[evento::handler]
+async fn on_checkout_requested(
+    event: Event<CheckoutRequested>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    cart.requests.push(CheckoutRequest {
+        request_id: event.data.request_id.to_owned(),
+        email: event.data.email.to_owned(),
+        shipping: event.data.shipping.to_owned(),
+        note: event.data.note.to_owned(),
+        expected_total_cents: event.data.expected_total_cents,
+        answer: None,
+    });
+    cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payment_requested(
+    event: Event<PaymentRequested>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|r| r.request_id == event.data.request_id)
+    {
+        request.answer = Some(PaymentAnswer::Requested(PaymentSnapshot {
+            provider: event.data.provider.to_owned(),
+            payment_id: event.data.payment_id.to_owned(),
+            client_secret: event.data.client_secret.to_owned(),
+            publishable_key: event.data.publishable_key.to_owned(),
+            lines: event.data.lines.to_owned(),
+            currency: event.data.currency.to_owned(),
+            total_cents: event.data.total_cents,
+        }));
+    }
+    cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payment_refused(
+    event: Event<PaymentRefused>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|r| r.request_id == event.data.request_id)
+    {
+        request.answer = Some(PaymentAnswer::Refused(event.data.code.to_owned()));
+    }
+    cart.updated_at = event.timestamp;
+    Ok(())
+}
+
 // =============================================================================
 // Order
 // =============================================================================
 
-/// Where an order stands. Placed orders wait for payment; the merchant marks
-/// them paid, then fulfilled, or cancels them before they leave.
+/// Where an order stands. An order exists once paid; the merchant fulfils it,
+/// or cancels it before it leaves (and the payment goes back).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OrderStatus {
     #[default]
-    AwaitingPayment,
     Paid,
     Fulfilled,
     Cancelled,
 }
 
 impl OrderStatus {
-    pub const ALL: [Self; 4] = [
-        Self::AwaitingPayment,
-        Self::Paid,
-        Self::Fulfilled,
-        Self::Cancelled,
-    ];
+    pub const ALL: [Self; 3] = [Self::Paid, Self::Fulfilled, Self::Cancelled];
 
     /// The value stored in the read models.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::AwaitingPayment => "awaiting_payment",
             Self::Paid => "paid",
             Self::Fulfilled => "fulfilled",
             Self::Cancelled => "cancelled",
@@ -194,7 +318,6 @@ impl OrderStatus {
     /// How a page words it.
     pub fn label(self) -> &'static str {
         match self {
-            Self::AwaitingPayment => "Awaiting payment",
             Self::Paid => "Paid",
             Self::Fulfilled => "Fulfilled",
             Self::Cancelled => "Cancelled",
@@ -221,12 +344,16 @@ pub struct OrderState {
     pub lines: Vec<OrderLine>,
     pub currency: String,
     pub total_cents: u64,
+    pub payment: Payment,
+    /// What went back to the shopper, in minor units, all refunds together.
+    pub refunded_cents: u64,
+    /// The provider's ids of those refunds.
+    pub refund_ids: Vec<String>,
     pub status: OrderStatus,
     pub tracking: Option<String>,
     pub cancel_reason: Option<String>,
     /// Unix seconds of `Placed`.
     pub placed_at: u64,
-    pub paid_at: Option<u64>,
     pub fulfilled_at: Option<u64>,
     pub cancelled_at: Option<u64>,
     /// Unix seconds of the last event.
@@ -243,9 +370,9 @@ impl OrderState {
 pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
     Projection::new::<crate::aggregator::Order>()
         .handler(on_placed())
-        .handler(on_paid())
         .handler(on_fulfilled())
         .handler(on_cancelled())
+        .handler(on_refunded())
         .strict()
 }
 
@@ -260,16 +387,17 @@ async fn on_placed(event: Event<Placed>, order: &mut OrderState) -> anyhow::Resu
     order.lines = event.data.lines.to_owned();
     order.currency = event.data.currency.to_owned();
     order.total_cents = event.data.total_cents;
-    order.status = OrderStatus::AwaitingPayment;
+    order.payment = event.data.payment.to_owned();
+    order.status = OrderStatus::Paid;
     order.placed_at = event.timestamp;
     order.updated_at = event.timestamp;
     Ok(())
 }
 
 #[evento::handler]
-async fn on_paid(event: Event<Paid>, order: &mut OrderState) -> anyhow::Result<()> {
-    order.status = OrderStatus::Paid;
-    order.paid_at = Some(event.timestamp);
+async fn on_refunded(event: Event<Refunded>, order: &mut OrderState) -> anyhow::Result<()> {
+    order.refunded_cents += event.data.amount_cents;
+    order.refund_ids.push(event.data.refund_id.to_owned());
     order.updated_at = event.timestamp;
     Ok(())
 }

@@ -4,7 +4,10 @@ use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
 use timada_catalog::{CreateProduct, DefineVariant, OptionSelection};
-use timada_orders::{CartItem, Checkout, Command, STOREFRONT_ACTOR, ShippingAddress};
+use timada_orders::{
+    CartItem, Checkout, Command, OpenedPayment, PROVIDER_STRIPE, Payment, PlacedOrder,
+    STOREFRONT_ACTOR, ShippingAddress,
+};
 
 pub type Orders = Command<evento::Sqlite>;
 pub type Catalog = timada_catalog::Command<evento::Sqlite>;
@@ -141,4 +144,51 @@ pub async fn cart_with(orders: &Orders, product_id: &str, quantity: u32) -> Stri
         .await
         .unwrap();
     cart_id
+}
+
+/// Who answers requests to pay, as the dashboard does.
+pub const DASHBOARD: &str = "timada-dashboard";
+
+/// Asks to pay for the cart and opens a payment for it as the dashboard
+/// would; returns the request id and the payment.
+pub async fn open_payment(orders: &Orders, cart_id: &str, checkout: Checkout) -> (String, Payment) {
+    let request_id = orders
+        .request_checkout(SHOPPER, cart_id, checkout)
+        .await
+        .unwrap();
+    let pending = orders
+        .pending_payment(cart_id, &request_id)
+        .await
+        .unwrap()
+        .expect("a request waiting for its answer");
+    let payment = Payment {
+        provider: PROVIDER_STRIPE.into(),
+        payment_id: format!("pi_{request_id}"),
+        amount_cents: pending.total_cents,
+        currency: pending.currency.clone(),
+    };
+    orders
+        .record_payment_request(
+            DASHBOARD,
+            cart_id,
+            pending,
+            OpenedPayment {
+                provider: PROVIDER_STRIPE.into(),
+                payment_id: payment.payment_id.clone(),
+                client_secret: format!("{}_secret", payment.payment_id),
+                publishable_key: "pk_test".into(),
+            },
+        )
+        .await
+        .unwrap();
+    (request_id, payment)
+}
+
+/// The whole way from a cart to its paid order.
+pub async fn pay(orders: &Orders, cart_id: &str, checkout: Checkout) -> PlacedOrder {
+    let (_, payment) = open_payment(orders, cart_id, checkout).await;
+    orders
+        .place_paid_order(DASHBOARD, cart_id, payment)
+        .await
+        .unwrap()
 }
