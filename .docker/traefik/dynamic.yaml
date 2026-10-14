@@ -46,7 +46,7 @@ http:
           - url: "http://host.docker.internal:3456"
 
 # The store API, for storefronts: STORE_ADDR=store.localhost:4320 with
-# STORE_TLS_CA="$(mkcert -CAROOT)/rootCA.pem". Traefik ends TLS here and
+# STORE_TLS_CA=/etc/ssl/certs/ca-certificates.crt. Traefik ends TLS here and
 # hands plain TCP to whichever node answers (each node's `store_api.listen`
 # on 0.0.0.0:4321, 4322 and 4323). A storefront whose node goes away
 # reconnects through here to another one.

@@ -37,7 +37,7 @@ migrate:
 #   STORE_TOKEN=... STORE_MEDIA_URL=https://timada.localhost/media/<tenant_id> make storefront
 # It talks to one node's store API (127.0.0.1:4321) unless told otherwise; to
 # go through Traefik's balancer over the cluster nodes instead:
-#   STORE_ADDR=store.localhost:4320 STORE_TLS_CA="$$(mkcert -CAROOT)/rootCA.pem" ...
+#   STORE_ADDR=store.localhost:4320 STORE_TLS_CA=/etc/ssl/certs/ca-certificates.crt ...
 storefront:
 	HOST=0.0.0.0 cargo run -p storefront-example
 
