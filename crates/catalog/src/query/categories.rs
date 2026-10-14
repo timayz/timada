@@ -145,6 +145,20 @@ pub fn subtree_counts<T: TreeNode>(
     nodes: &[TreeOf<T>],
     memberships: &[(String, String)],
 ) -> std::collections::HashMap<String, i64> {
+    subtree_products(nodes, memberships)
+        .into_iter()
+        .map(|(id, products)| (id, products.len() as i64))
+        .collect()
+}
+
+/// The distinct products each category's page lists: those filed under it
+/// and under everything below it.
+///
+/// Keyed by category id; a category not in `nodes` is absent.
+pub fn subtree_products<T: TreeNode>(
+    nodes: &[TreeOf<T>],
+    memberships: &[(String, String)],
+) -> std::collections::HashMap<String, std::collections::BTreeSet<String>> {
     let mut by_category: std::collections::HashMap<&str, Vec<&str>> =
         std::collections::HashMap::new();
     for (category_id, product_id) in memberships {
@@ -153,28 +167,28 @@ pub fn subtree_counts<T: TreeNode>(
             .or_default()
             .push(product_id.as_str());
     }
-    let mut counts = std::collections::HashMap::new();
+    let mut out = std::collections::HashMap::new();
     for node in nodes {
-        count_subtree(node, &by_category, &mut counts);
+        collect_subtree(node, &by_category, &mut out);
     }
-    counts
+    out
 }
 
-/// Counts one node, bottom-up, and hands its products back to its parent so
-/// a product in both is counted once.
-fn count_subtree<T: TreeNode>(
+/// Collects one node, bottom-up, and hands its products back to its parent
+/// so a product in both is listed once.
+fn collect_subtree<T: TreeNode>(
     node: &TreeOf<T>,
     by_category: &std::collections::HashMap<&str, Vec<&str>>,
-    counts: &mut std::collections::HashMap<String, i64>,
-) -> std::collections::HashSet<String> {
-    let mut products: std::collections::HashSet<String> = by_category
+    out: &mut std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+) -> std::collections::BTreeSet<String> {
+    let mut products: std::collections::BTreeSet<String> = by_category
         .get(node.item.node_id())
         .map(|ids| ids.iter().map(|id| (*id).to_owned()).collect())
         .unwrap_or_default();
     for child in &node.children {
-        products.extend(count_subtree(child, by_category, counts));
+        products.extend(collect_subtree(child, by_category, out));
     }
-    counts.insert(node.item.node_id().to_owned(), products.len() as i64);
+    out.insert(node.item.node_id().to_owned(), products.clone());
     products
 }
 
@@ -197,13 +211,15 @@ impl TreeNode for CategoryLink {
     }
 }
 
-/// The two numbers stored on a category row.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// What is stored about a category's products.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CategoryCounts {
     /// Products filed under that very category.
     pub product_count: i64,
     /// Distinct products in it and in every live category below it.
     pub subtree_count: i64,
+    /// Those products, by id: what its page lists.
+    pub subtree_products: std::collections::BTreeSet<String>,
 }
 
 /// The counts of every category in `links`, from the `(category id, product
@@ -214,27 +230,33 @@ pub fn category_counts(
     links: Vec<CategoryLink>,
     memberships: &[(String, String)],
 ) -> std::collections::HashMap<String, CategoryCounts> {
-    let mut direct: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
-    for (category_id, _) in memberships {
-        *direct.entry(category_id.as_str()).or_default() += 1;
+    let mut direct: std::collections::HashMap<&str, std::collections::BTreeSet<String>> =
+        std::collections::HashMap::new();
+    for (category_id, product_id) in memberships {
+        direct
+            .entry(category_id.as_str())
+            .or_default()
+            .insert(product_id.clone());
     }
     let mut out: std::collections::HashMap<String, CategoryCounts> = links
         .iter()
         .map(|link| {
-            let product_count = direct.get(link.id.as_str()).copied().unwrap_or(0);
+            let products = direct.get(link.id.as_str()).cloned().unwrap_or_default();
             (
                 link.id.clone(),
                 CategoryCounts {
-                    product_count,
-                    subtree_count: product_count,
+                    product_count: products.len() as i64,
+                    subtree_count: products.len() as i64,
+                    subtree_products: products,
                 },
             )
         })
         .collect();
     let live: Vec<CategoryLink> = links.into_iter().filter(|link| !link.archived).collect();
-    for (id, subtree_count) in subtree_counts(&tree_of(live), memberships) {
+    for (id, products) in subtree_products(&tree_of(live), memberships) {
         if let Some(counts) = out.get_mut(&id) {
-            counts.subtree_count = subtree_count;
+            counts.subtree_count = products.len() as i64;
+            counts.subtree_products = products;
         }
     }
     out

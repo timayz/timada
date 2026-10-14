@@ -2,8 +2,9 @@
 //! store's catalog events. The handler reloads the product's write model from
 //! the store (its snapshot is local too) and rewrites the row, so a repeated
 //! delivery changes nothing. When what a category counts has changed, every
-//! category's counts are worked out again in the same transaction, so the
-//! navigation menu reads them instead of computing them on each page.
+//! category's counts, and the products each one's page lists, are worked out
+//! again in the same transaction, so the menu and a collection page read them
+//! instead of computing them on each request.
 
 use evento::{
     Executor,
@@ -244,7 +245,7 @@ async fn upsert_category(pool: &SqlitePool, category: &CategoryState) -> anyhow:
 }
 
 /// Works out and stores the counts of every category, from the published
-/// products filed under them.
+/// products filed under them, and which products each one's page lists.
 async fn refresh_category_counts(conn: &mut sqlx::SqliteConnection) -> sqlx::Result<()> {
     let links: Vec<CategoryLink> =
         sqlx::query_as("SELECT id, parent_id, archived FROM storefront_categories")
@@ -258,6 +259,9 @@ async fn refresh_category_counts(conn: &mut sqlx::SqliteConnection) -> sqlx::Res
     )
     .fetch_all(&mut *conn)
     .await?;
+    sqlx::query("DELETE FROM storefront_category_products")
+        .execute(&mut *conn)
+        .await?;
     for (id, counts) in category_counts(links, &memberships) {
         sqlx::query(
             "UPDATE storefront_categories SET product_count = ?2, subtree_count = ?3
@@ -268,6 +272,16 @@ async fn refresh_category_counts(conn: &mut sqlx::SqliteConnection) -> sqlx::Res
         .bind(counts.subtree_count)
         .execute(&mut *conn)
         .await?;
+        for product_id in &counts.subtree_products {
+            sqlx::query(
+                "INSERT INTO storefront_category_products (category_id, product_id)
+                 VALUES (?1, ?2)",
+            )
+            .bind(&id)
+            .bind(product_id)
+            .execute(&mut *conn)
+            .await?;
+        }
     }
     Ok(())
 }
