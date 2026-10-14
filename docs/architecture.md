@@ -18,6 +18,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions |
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
 | `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own store |
+| `crates/orders` | `timada-orders` | Carts and the orders placed from them, next to the catalog in a tenant's store |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
 | `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
@@ -26,7 +27,8 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `events.lock` | | Every persisted shape, frozen (see *Evolving events*) |
 
 Dependencies point one way: context crates depend on evento and sqlx only (plus
-`timada-catalog` from the storefront library); the dashboard depends on every crate;
+`timada-catalog` from the storefront library and from `timada-orders`, which prices
+an order from the products it loads); the dashboard depends on every crate;
 nothing depends on the dashboard.
 
 ## Bounded contexts
@@ -58,9 +60,11 @@ Recurring patterns:
 
 ```
 data/timada.db            the platform store: identity + tenancy events, every read-model
-                          table (including the tenants' catalog_products and
-                          catalog_categories), the consensus journal
-data/tenants/<id>.db      one per tenant: its catalog events and its consensus journal
+                          table (including the tenants' catalog_products,
+                          catalog_categories, orders_orders and orders_carts), the
+                          consensus journal
+data/tenants/<id>.db      one per tenant: its catalog, cart and order events and its
+                          consensus journal
 data/media/<id>/          one per tenant: the product pictures, named <image id>.<ext>
 <merchant app>/store.db   a storefront replica: subscription cursor, snapshots, product and
                           category rows
@@ -117,7 +121,12 @@ tenant's products while the events stay isolated by construction.
    tenant (a leased tenant is never evicted) and serves the connection with that
    tenant's executor and nothing else. A key without the `store:write` scope gets that
    executor wrapped by `read_only_store.rs`: appends refused, snapshot saves dropped,
-   subscriber cursors kept under the key's own name. Scopes are strings recorded by the
+   subscriber cursors kept under the key's own name. A key holding `store:checkout`
+   (what a storefront that sells needs) gets the same wrapper with one opening: it
+   may append what a shopper does, filling a cart and asking to pay for it
+   (`timada_orders::is_shopper_event`), and nothing that belongs to the merchant:
+   the catalog, the answer to a request to pay, an order (one exists only once
+   its payment is confirmed to the dashboard). Scopes are strings recorded by the
    `ApiKey::Scoped` event (keys older than it hold read + write). Revoking the key or
    changing its scopes ends its connections; suspending the tenant closes its
    database, and reconnects are refused.
@@ -131,7 +140,8 @@ tenant's products while the events stay isolated by construction.
    carry a sign-in attempt between steps, and the session cookie.
 6. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
-   `/tenants/new` and `/t/{slug}` (members, roles, API keys, products), `/invitations/{token}`,
+   `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
+   orders, open carts), `/invitations/{token}`,
    `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.
 
 Shutdown stops the HTTP server, then the store API (its leases hold tenants open), the
