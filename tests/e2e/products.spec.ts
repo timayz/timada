@@ -48,7 +48,7 @@ test("an owner creates, edits, publishes and archives a product", async ({ page 
   await page.getByLabel("Description").fill("Holds 50 cl of anything hot.");
   await page.getByRole("button", { name: "Save description" }).click();
   await expect(page.locator("[data-product-description]")).toContainText("Holds 50 cl");
-  await page.getByLabel("Name").fill("Big Blue Mug");
+  await page.getByLabel("Name", { exact: true }).fill("Big Blue Mug");
   await page.getByRole("button", { name: "Rename" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Big Blue Mug");
   await page.getByRole("button", { name: "Publish" }).click();
@@ -177,4 +177,82 @@ test("an owner uploads, describes, reorders and removes a product's pictures", a
   await expect(page.locator("[data-image]")).toHaveCount(1);
   await expect(page.getByLabel("Add a picture")).toHaveCount(0);
   await expect(page.locator("[data-image]").first().getByRole("button", { name: "Remove" })).toHaveCount(0);
+});
+
+test("an owner makes a product vary by colour and size, each combination priced", async ({ page }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Variant Shop");
+  await createTenant(page, name);
+
+  await page.goto(`/t/${slug}/products`);
+  await page.getByLabel("Name").fill("Cat Harness");
+  await page.getByRole("button", { name: "Create product" }).click();
+  await expect(page.getByRole("status")).toContainText("Product created.");
+  const productUrl = page.url().split("?")[0];
+  await expect(page.getByText("This product does not vary.")).toBeVisible();
+
+  // Two options, then the combinations they make.
+  await page.getByLabel("Add an option").fill("Colour");
+  await page.getByLabel("Values, one a line").fill("Beige\nBlue");
+  await page.getByRole("button", { name: "Add option" }).click();
+  await expect(page.getByRole("status")).toContainText("Option added.");
+  await page.getByLabel("Add an option").fill("Size");
+  await page.getByLabel("Values, one a line").fill("S\nM");
+  await page.getByRole("button", { name: "Add option" }).click();
+  await expect(page.locator("[data-option]")).toHaveCount(2);
+
+  // Publishing still needs something to charge for.
+  await page.getByRole("button", { name: "Publish" }).click();
+  await expect(page).toHaveURL(/error=product_not_priced/);
+
+  const addVariant = async (colour: string, size: string, amount: string, sku?: string) => {
+    await page.goto(productUrl);
+    await page.getByLabel("Colour", { exact: true }).selectOption(colour);
+    await page.getByLabel("Size", { exact: true }).selectOption(size);
+    await page.getByLabel("Variant price").fill(amount);
+    if (sku) await page.getByLabel("Variant code (optional)").fill(sku);
+    await page.getByRole("button", { name: "Add variant" }).click();
+  };
+  await addVariant("Beige", "S", "22.90", "harness-beige-s");
+  await expect(page.getByRole("status")).toContainText("Variant added.");
+  await addVariant("Beige", "M", "24.90");
+  await addVariant("Blue", "S", "22.90");
+  await expect(page.locator("[data-variants] tbody tr")).toHaveCount(3);
+  await expect(page.locator("[data-variant]").first()).toContainText("Colour: Beige · Size: S");
+
+  // The same combination twice, and a code another variant holds, are both out.
+  await addVariant("Beige", "S", "19.90");
+  await expect(page).toHaveURL(/error=variant_exists/);
+  await addVariant("Blue", "M", "19.90", "HARNESS-BEIGE-S");
+  await expect(page).toHaveURL(/error=sku_taken/);
+
+  // The price a listing shows is what a shopper may pay.
+  await page.goto(productUrl);
+  await expect(page.locator("[data-product-price]")).toContainText("22.90–24.90 EUR");
+
+  // The options are settled now: no way to add one, and no way to edit one.
+  await expect(page.getByLabel("Add an option")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save option" })).toHaveCount(0);
+  await expect(page.getByText("Remove every variant before changing the options.")).toBeVisible();
+
+  // Facts go in the table beside the description.
+  await page.getByLabel("Fact name").fill("Material");
+  await page.getByLabel("Fact value").fill("Nylon");
+  await page.getByRole("button", { name: "Set fact" }).click();
+  await expect(page.getByRole("status")).toContainText("Fact saved.");
+  await expect(page.locator("[data-attribute=Material]")).toContainText("Nylon");
+
+  // A product that varies is published without a price of its own.
+  await page.getByRole("button", { name: "Publish" }).click();
+  await expect(page.getByRole("status")).toContainText("Product published.");
+  await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
+
+  // The list shows the range too, once the read model catches up.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/products`);
+    await expect(page.locator("[data-product=cat-harness] [data-product-price]")).toContainText(
+      "22.90–24.90 EUR",
+      { timeout: 1000 },
+    );
+  }).toPass({ timeout: 15_000 });
 });

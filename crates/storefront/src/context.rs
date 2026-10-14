@@ -91,6 +91,12 @@ pub async fn require_category(cx: &Cx, slug: &str) -> Result<Category> {
         .ok_or_else(|| not_found().into())
 }
 
+/// The live category of `slug` in a menu [`categories`] returned, or 404: a
+/// page that shows the menu anyway finds its category without a query.
+pub fn require_category_in<'a>(menu: &'a [CategoryNode], slug: &str) -> Result<&'a CategoryNode> {
+    crate::query::find_category(menu, slug).ok_or_else(|| not_found().into())
+}
+
 /// The categories above this one, top-level first: a breadcrumb. `menu` is
 /// what [`categories`] returned, so it costs no query.
 pub fn category_path(menu: &[CategoryNode], category: &Category) -> Vec<Category> {

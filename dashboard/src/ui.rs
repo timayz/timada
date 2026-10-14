@@ -122,6 +122,26 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_alt" => "The text describing a picture is at most 200 characters.",
         "image_not_found" => "This picture is no longer on the product.",
         "invalid_image_order" => "The gallery changed while you were reordering it. Try again.",
+        "too_many_options" => "A product varies in at most three ways.",
+        "invalid_option_name" => "An option's name is 1 to 40 characters.",
+        "option_exists" => "This option is already there.",
+        "invalid_option_values" => "An option takes 1 to 20 values, each at most 40 characters.",
+        "option_not_found" => "This option is no longer on the product.",
+        "option_in_use" => {
+            "The options cannot change while the product has variants. Remove them first."
+        }
+        "option_value_in_use" => "A variant still uses one of the values you dropped.",
+        "too_many_variants" => "A product sells at most a hundred variants.",
+        "invalid_selection" => "Choose a value for every option.",
+        "variant_exists" => "This combination is already sold as another variant.",
+        "variant_not_found" => "This variant is no longer on the product.",
+        "currency_mismatch" => "Every price of a product is in the same currency.",
+        "invalid_sku" => "A code is 1 to 64 of letters, digits, dot, dash and underscore.",
+        "sku_taken" => "Another variant already uses this code.",
+        "invalid_attribute" => {
+            "A fact needs a name of at most 40 characters and a value of at most 400."
+        }
+        "too_many_attributes" => "A product's table holds at most thirty facts.",
         "invalid_permission" => "One of the permissions is not known.",
         "already_member" => "This user is already a member.",
         "not_member" => "This user is not a member.",

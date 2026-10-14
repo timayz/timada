@@ -2,6 +2,8 @@
 //! a change of shape is a new variant, never a changed field. Each event
 //! carries who did it, so the stream is its own audit trail.
 
+use crate::value_object::OptionSelection;
+
 /// A product of the tenant's catalog. Its id is a ULID.
 #[evento::aggregate(name = "timada-catalog/Product")]
 pub enum Product {
@@ -76,6 +78,87 @@ pub enum Product {
         image_id: String,
         removed_by: String,
     },
+    /// A way the product varies, with the values it takes: `Colour` being
+    /// beige, blue or grey. A product has at most three.
+    OptionDefined {
+        option_id: String,
+        name: String,
+        values: Vec<String>,
+        defined_by: String,
+    },
+    OptionRenamed {
+        option_id: String,
+        name: String,
+        renamed_by: String,
+    },
+    OptionValuesChanged {
+        option_id: String,
+        values: Vec<String>,
+        changed_by: String,
+    },
+    OptionRemoved {
+        option_id: String,
+        removed_by: String,
+    },
+    /// One combination of the options, with its own price: what a shopper
+    /// actually buys. `selections` names a value for every option, once.
+    VariantDefined {
+        variant_id: String,
+        selections: Vec<OptionSelection>,
+        /// The merchant's own code for it, unique across the tenant.
+        sku: Option<String>,
+        amount_cents: u64,
+        currency: String,
+        /// One of the product's pictures, shown when this variant is picked.
+        image_id: Option<String>,
+        defined_by: String,
+    },
+    VariantPriced {
+        variant_id: String,
+        amount_cents: u64,
+        currency: String,
+        priced_by: String,
+    },
+    VariantSkuChanged {
+        variant_id: String,
+        sku: Option<String>,
+        changed_by: String,
+    },
+    VariantImaged {
+        variant_id: String,
+        image_id: Option<String>,
+        imaged_by: String,
+    },
+    VariantRemoved {
+        variant_id: String,
+        removed_by: String,
+    },
+    /// A fact about the product, for the table beside its description:
+    /// `Material` is `Cotton`. Setting a name that is already there replaces
+    /// its value.
+    AttributeSet {
+        name: String,
+        value: String,
+        set_by: String,
+    },
+    AttributeRemoved {
+        name: String,
+        removed_by: String,
+    },
+}
+
+/// The index `sku → variant`: one stream per code, with the deterministic id
+/// [`product_sku_id`](crate::product_sku_id). A code is the merchant's own
+/// and has to mean one thing across the tenant.
+pub mod sku {
+    #[evento::aggregate(name = "timada-catalog/ProductSku")]
+    pub enum ProductSku {
+        Claimed {
+            product_id: String,
+            variant_id: String,
+        },
+        Released,
+    }
 }
 
 /// The index `slug → product`: one stream per slug, with the deterministic id

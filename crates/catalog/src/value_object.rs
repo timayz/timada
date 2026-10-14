@@ -38,6 +38,104 @@ pub const IMAGE_FORMATS: &[(&str, &str)] = &[
     ("gif", "image/gif"),
 ];
 
+/// How many ways one product varies, at most: a matrix of more than three
+/// is a different product, not a variant.
+pub const MAX_OPTIONS: usize = 3;
+/// How many values one option takes, at most.
+pub const MAX_OPTION_VALUES: usize = 20;
+pub const MAX_OPTION_NAME_LEN: usize = 40;
+/// How many combinations one product sells, at most.
+pub const MAX_VARIANTS: usize = 100;
+pub const MAX_SKU_LEN: usize = 64;
+/// How many facts one product's table holds, at most.
+pub const MAX_ATTRIBUTES: usize = 30;
+pub const MAX_ATTRIBUTE_NAME_LEN: usize = 40;
+pub const MAX_ATTRIBUTE_VALUE_LEN: usize = 400;
+
+/// One option of a variant and the value it takes: `Colour` is `Beige`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct OptionSelection {
+    pub option_id: String,
+    pub value: String,
+}
+
+/// The index stream of a stock code.
+pub fn product_sku_id(sku: &str) -> String {
+    evento::hash_ids(vec!["product-sku", &sku_key(sku)])
+}
+
+/// What two codes are compared by: case and surrounding space do not make
+/// two different codes.
+pub fn sku_key(sku: &str) -> String {
+    sku.trim().to_ascii_uppercase()
+}
+
+/// Trims a stock code and checks it is 1 to 64 of letters, digits, dot,
+/// dash and underscore.
+pub fn normalize_sku(sku: &str) -> Result<String, CatalogError> {
+    let sku = sku.trim();
+    let valid = (1..=MAX_SKU_LEN).contains(&sku.len())
+        && sku
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_');
+    if valid {
+        Ok(sku.to_owned())
+    } else {
+        Err(CatalogError::InvalidSku)
+    }
+}
+
+/// Trims an option's name and checks it is 1 to 40 characters.
+pub fn normalize_option_name(name: &str) -> Result<String, CatalogError> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > MAX_OPTION_NAME_LEN {
+        return Err(CatalogError::InvalidOptionName);
+    }
+    Ok(name.to_owned())
+}
+
+/// Trims an option's values, drops the empty ones and refuses two that
+/// differ only in case. Order is the merchant's.
+pub fn normalize_option_values(values: &[String]) -> Result<Vec<String>, CatalogError> {
+    let mut out: Vec<String> = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if value.chars().count() > MAX_OPTION_NAME_LEN {
+            return Err(CatalogError::InvalidOptionValues);
+        }
+        if out.iter().any(|kept| kept.eq_ignore_ascii_case(value)) {
+            continue;
+        }
+        out.push(value.to_owned());
+    }
+    if out.is_empty() || out.len() > MAX_OPTION_VALUES {
+        return Err(CatalogError::InvalidOptionValues);
+    }
+    Ok(out)
+}
+
+/// Trims a fact's name and value and checks their lengths.
+pub fn normalize_attribute(name: &str, value: &str) -> Result<(String, String), CatalogError> {
+    let name = name.trim();
+    let value = value.trim();
+    if name.is_empty()
+        || name.chars().count() > MAX_ATTRIBUTE_NAME_LEN
+        || value.is_empty()
+        || value.chars().count() > MAX_ATTRIBUTE_VALUE_LEN
+    {
+        return Err(CatalogError::InvalidAttribute);
+    }
+    Ok((name.to_owned(), value.to_owned()))
+}
+
+/// A fresh id for a variant or an option.
+pub fn new_part_id() -> String {
+    ulid::Ulid::generate().to_string()
+}
+
 /// A fresh id for a picture. It names the stored file and travels in its
 /// address, so it is a ULID: unguessable, and sortable by when it was made.
 pub fn new_image_id() -> String {

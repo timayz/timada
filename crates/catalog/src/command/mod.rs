@@ -4,6 +4,7 @@
 //! version it observes, and `write()` sends as `original_version`, never goes
 //! stale. None of them is snapshotted: a product stream is a handful of events.
 
+mod attribute;
 mod categorize;
 mod category;
 mod category_slug_index;
@@ -11,7 +12,10 @@ mod create;
 mod edit;
 mod image;
 mod lifecycle;
+mod option;
+mod sku_index;
 mod slug_index;
+mod variant;
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -20,6 +24,7 @@ use std::ops::Deref;
 pub use category::*;
 pub use create::*;
 pub use image::*;
+pub use variant::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
@@ -28,12 +33,18 @@ use crate::aggregator::category::{
     Described as CategoryDescribed, Moved as CategoryMoved, Positioned as CategoryPositioned,
     Released as CategorySlugReleased, Renamed as CategoryRenamed,
 };
+use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
-    Archived, Categorized, Claimed, Created, Described, ImageAdded, ImageAltChanged, ImageRemoved,
-    ImagesReordered, Priced, Published, Released, Renamed, Uncategorized, Unpublished,
+    Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Described, ImageAdded,
+    ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionRemoved, OptionRenamed,
+    OptionValuesChanged, Priced, Published, Released, Renamed, Uncategorized, Unpublished,
+    VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
 };
 use crate::error::CatalogError;
-use crate::value_object::{MAX_CATEGORY_DEPTH, category_slug_id, format_money, product_slug_id};
+use crate::value_object::{
+    MAX_CATEGORY_DEPTH, OptionSelection, category_slug_id, format_money, product_sku_id,
+    product_slug_id,
+};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor>(pub E);
@@ -108,6 +119,50 @@ impl ProductImage {
     }
 }
 
+/// A way a product varies, and the values it takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductOption {
+    pub id: String,
+    pub name: String,
+    pub values: Vec<String>,
+}
+
+/// One combination of the options, with its own price: what a shopper buys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductVariant {
+    pub id: String,
+    /// A value for every option of the product, in the options' order.
+    pub selections: Vec<OptionSelection>,
+    pub sku: Option<String>,
+    pub price: Price,
+    /// One of the product's pictures, shown when this variant is picked.
+    pub image_id: Option<String>,
+}
+
+impl ProductVariant {
+    /// Whether this variant is the one those selections name, whatever
+    /// order they come in.
+    pub fn matches(&self, selections: &[OptionSelection]) -> bool {
+        self.selections.len() == selections.len()
+            && self.selections.iter().all(|mine| selections.contains(mine))
+    }
+
+    /// The value it takes for an option, if it names one.
+    pub fn value_of(&self, option_id: &str) -> Option<&str> {
+        self.selections
+            .iter()
+            .find(|s| s.option_id == option_id)
+            .map(|s| s.value.as_str())
+    }
+}
+
+/// A fact about a product, for the table beside its description.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductAttribute {
+    pub name: String,
+    pub value: String,
+}
+
 /// A price: minor units of a currency.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Price {
@@ -136,6 +191,12 @@ pub struct ProductState {
     /// Its pictures, in the order they are shown; the first is the one a
     /// listing uses.
     pub images: Vec<ProductImage>,
+    /// The ways it varies, in the order a page shows the menus.
+    pub options: Vec<ProductOption>,
+    /// The combinations it sells, each with its own price.
+    pub variants: Vec<ProductVariant>,
+    /// The facts in its table, in the order they were set.
+    pub attributes: Vec<ProductAttribute>,
     pub created_by: String,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -150,6 +211,48 @@ impl ProductState {
 
     pub fn is_archived(&self) -> bool {
         self.status == ProductStatus::Archived
+    }
+
+    /// The currency everything about this product is priced in, once
+    /// anything is: its own price, else its first variant's.
+    pub fn currency(&self) -> Option<&str> {
+        self.price
+            .as_ref()
+            .map(|price| price.currency.as_str())
+            .or_else(|| self.variants.first().map(|v| v.price.currency.as_str()))
+    }
+
+    /// Whether a shopper could be charged for it: a plain price, or at least
+    /// one variant to pick.
+    pub fn is_priced(&self) -> bool {
+        self.price.is_some() || !self.variants.is_empty()
+    }
+
+    /// What a listing shows: the cheapest and dearest a shopper may pay. The
+    /// two are equal when nothing varies.
+    pub fn price_range(&self) -> Option<(u64, u64, &str)> {
+        if self.variants.is_empty() {
+            let price = self.price.as_ref()?;
+            return Some((price.amount_cents, price.amount_cents, &price.currency));
+        }
+        let currency = self.currency()?;
+        let amounts = self.variants.iter().map(|v| v.price.amount_cents);
+        Some((amounts.clone().min()?, amounts.max()?, currency))
+    }
+
+    /// The variant those selections name, if it is one the product sells.
+    pub fn variant_for(&self, selections: &[OptionSelection]) -> Option<&ProductVariant> {
+        self.variants.iter().find(|v| v.matches(selections))
+    }
+
+    /// One of the ways it varies, by id.
+    pub fn option(&self, option_id: &str) -> Option<&ProductOption> {
+        self.options.iter().find(|o| o.id == option_id)
+    }
+
+    /// One of the combinations it sells, by id.
+    pub fn variant(&self, variant_id: &str) -> Option<&ProductVariant> {
+        self.variants.iter().find(|v| v.id == variant_id)
     }
 }
 
@@ -168,6 +271,17 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_image_alt_changed())
         .handler(on_images_reordered())
         .handler(on_image_removed())
+        .handler(on_option_defined())
+        .handler(on_option_renamed())
+        .handler(on_option_values_changed())
+        .handler(on_option_removed())
+        .handler(on_variant_defined())
+        .handler(on_variant_priced())
+        .handler(on_variant_sku_changed())
+        .handler(on_variant_imaged())
+        .handler(on_variant_removed())
+        .handler(on_attribute_set())
+        .handler(on_attribute_removed())
         .strict()
 }
 
@@ -351,7 +465,227 @@ async fn on_image_removed(
     product
         .images
         .retain(|image| image.id != event.data.image_id);
+    // A picture that goes takes its place on any variant that showed it.
+    for variant in &mut product.variants {
+        if variant.image_id.as_deref() == Some(event.data.image_id.as_str()) {
+            variant.image_id = None;
+        }
+    }
     product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_option_defined(
+    event: Event<OptionDefined>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.options.push(ProductOption {
+        id: event.data.option_id.to_owned(),
+        name: event.data.name.to_owned(),
+        values: event.data.values.to_owned(),
+    });
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_option_renamed(
+    event: Event<OptionRenamed>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(option) = product
+        .options
+        .iter_mut()
+        .find(|option| option.id == event.data.option_id)
+    {
+        option.name = event.data.name.to_owned();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_option_values_changed(
+    event: Event<OptionValuesChanged>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(option) = product
+        .options
+        .iter_mut()
+        .find(|option| option.id == event.data.option_id)
+    {
+        option.values = event.data.values.to_owned();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_option_removed(
+    event: Event<OptionRemoved>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product
+        .options
+        .retain(|option| option.id != event.data.option_id);
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_variant_defined(
+    event: Event<VariantDefined>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.variants.push(ProductVariant {
+        id: event.data.variant_id.to_owned(),
+        selections: event.data.selections.to_owned(),
+        sku: event.data.sku.to_owned(),
+        price: Price {
+            amount_cents: event.data.amount_cents,
+            currency: event.data.currency.to_owned(),
+        },
+        image_id: event.data.image_id.to_owned(),
+    });
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_variant_priced(
+    event: Event<VariantPriced>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(variant) = product
+        .variants
+        .iter_mut()
+        .find(|variant| variant.id == event.data.variant_id)
+    {
+        variant.price = Price {
+            amount_cents: event.data.amount_cents,
+            currency: event.data.currency.to_owned(),
+        };
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_variant_sku_changed(
+    event: Event<VariantSkuChanged>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(variant) = product
+        .variants
+        .iter_mut()
+        .find(|variant| variant.id == event.data.variant_id)
+    {
+        variant.sku = event.data.sku.to_owned();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_variant_imaged(
+    event: Event<VariantImaged>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(variant) = product
+        .variants
+        .iter_mut()
+        .find(|variant| variant.id == event.data.variant_id)
+    {
+        variant.image_id = event.data.image_id.to_owned();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_variant_removed(
+    event: Event<VariantRemoved>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product
+        .variants
+        .retain(|variant| variant.id != event.data.variant_id);
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_attribute_set(
+    event: Event<AttributeSet>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    match product
+        .attributes
+        .iter_mut()
+        .find(|attribute| attribute.name == event.data.name)
+    {
+        Some(attribute) => attribute.value = event.data.value.to_owned(),
+        None => product.attributes.push(ProductAttribute {
+            name: event.data.name.to_owned(),
+            value: event.data.value.to_owned(),
+        }),
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_attribute_removed(
+    event: Event<AttributeRemoved>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product
+        .attributes
+        .retain(|attribute| attribute.name != event.data.name);
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+// =============================================================================
+// ProductSku (index)
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-catalog/ProductSkuState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct ProductSkuState {
+    pub id: String,
+    pub product_id: String,
+    pub variant_id: String,
+    pub released: bool,
+}
+
+pub fn product_sku_projection<E: Executor>() -> Projection<E, ProductSkuState> {
+    Projection::new::<crate::aggregator::sku::ProductSku>()
+        .handler(on_sku_claimed())
+        .handler(on_sku_released())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_sku_claimed(
+    event: Event<SkuClaimed>,
+    index: &mut ProductSkuState,
+) -> anyhow::Result<()> {
+    index.id = event.aggregate_id.to_owned();
+    index.product_id = event.data.product_id.to_owned();
+    index.variant_id = event.data.variant_id.to_owned();
+    index.released = false;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_sku_released(
+    _event: Event<SkuReleased>,
+    index: &mut ProductSkuState,
+) -> anyhow::Result<()> {
+    index.released = true;
     Ok(())
 }
 
@@ -581,6 +915,24 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<CategorySlugState>> {
         category_slug_projection()
             .load(category_slug_id(slug))
+            .execute(&self.0)
+            .await
+    }
+
+    /// The live index entry of a stock code (released ones are `None`).
+    pub async fn load_sku_index(&self, sku: &str) -> anyhow::Result<Option<ProductSkuState>> {
+        Ok(self
+            .load_sku_index_any(sku)
+            .await?
+            .filter(|index| !index.released))
+    }
+
+    pub(crate) async fn load_sku_index_any(
+        &self,
+        sku: &str,
+    ) -> anyhow::Result<Option<ProductSkuState>> {
+        product_sku_projection()
+            .load(product_sku_id(sku))
             .execute(&self.0)
             .await
     }

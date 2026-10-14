@@ -44,7 +44,60 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 </ul>
             }
             <p>price(product: &product, attrs: attributes! { class="price" })</p>
+
+            if !product.options.is_empty() {
+                // No cart yet, so the menus say what there is and the table
+                // below prices every combination. Both are plain HTML: a
+                // shopper with no JavaScript sees the same thing.
+                <form class="picker">
+                    for option in &product.options {
+                        <p>
+                            <label for=(format!("option-{}", option.id))>(&option.name)</label>
+                            <select id=(format!("option-{}", option.id)) name=(&option.id) data-option=(&option.name)>
+                                for value in &option.values {
+                                    <option value=(value)>(value)</option>
+                                }
+                            </select>
+                        </p>
+                    }
+                </form>
+                <table class="variants" data-variants="">
+                    <thead>
+                        <tr>
+                            for option in &product.options {
+                                <th scope="col">(&option.name)</th>
+                            }
+                            <th scope="col">"Price"</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        for variant in &product.variants {
+                            <tr data-variant=(&variant.id) data-price=(variant.amount_cents)>
+                                for option in &product.options {
+                                    <td>(variant.value_of(&option.id).unwrap_or("—"))</td>
+                                }
+                                <td class="price">(variant.price())</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
             <p class="description">(&product.description)</p>
+
+            if !product.attributes.is_empty() {
+                <h2>"Additional information"</h2>
+                <table class="attributes" data-attributes="">
+                    <tbody>
+                        for attribute in &product.attributes {
+                            <tr data-attribute=(&attribute.name)>
+                                <th scope="row">(&attribute.name)</th>
+                                <td>(&attribute.value)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
             if !related.is_empty() {
                 <section class="related">
                     <h2>"You may also like"</h2>

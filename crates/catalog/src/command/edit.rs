@@ -58,8 +58,9 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Sets the price in minor units of a known currency; the same price is
-    /// a no-op.
+    /// Sets the price in minor units of a known currency. A product whose
+    /// variants are priced in another currency is refused: a range across
+    /// two of them would mean nothing. The same price is a no-op.
     pub async fn price_product(
         &self,
         actor: &str,
@@ -79,6 +80,13 @@ impl<E: Executor> super::Command<E> {
         };
         if product.price.as_ref() == Some(&price) {
             return Ok(());
+        }
+        if product
+            .variants
+            .first()
+            .is_some_and(|variant| variant.price.currency != currency)
+        {
+            return Err(CatalogError::CurrencyMismatch);
         }
         product
             .write()?

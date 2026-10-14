@@ -11,6 +11,8 @@ event timada-catalog/Category::Renamed { name: String, renamed_by: String }
 event timada-catalog/CategorySlug::Claimed { category_id: String }
 event timada-catalog/CategorySlug::Released unit
 event timada-catalog/Product::Archived { archived_by: String }
+event timada-catalog/Product::AttributeRemoved { name: String, removed_by: String }
+event timada-catalog/Product::AttributeSet { name: String, value: String, set_by: String }
 event timada-catalog/Product::Categorized { category_id: String, categorized_by: String }
 event timada-catalog/Product::Created { slug: String, name: String, created_by: String }
 event timada-catalog/Product::Described { description: String, described_by: String }
@@ -18,11 +20,22 @@ event timada-catalog/Product::ImageAdded { image_id: String, ext: String, mime: 
 event timada-catalog/Product::ImageAltChanged { image_id: String, alt: String, changed_by: String }
 event timada-catalog/Product::ImageRemoved { image_id: String, removed_by: String }
 event timada-catalog/Product::ImagesReordered { image_ids: Vec<String>, reordered_by: String }
+event timada-catalog/Product::OptionDefined { option_id: String, name: String, values: Vec<String>, defined_by: String }
+event timada-catalog/Product::OptionRemoved { option_id: String, removed_by: String }
+event timada-catalog/Product::OptionRenamed { option_id: String, name: String, renamed_by: String }
+event timada-catalog/Product::OptionValuesChanged { option_id: String, values: Vec<String>, changed_by: String }
 event timada-catalog/Product::Priced { amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::Published { published_by: String }
 event timada-catalog/Product::Renamed { name: String, renamed_by: String }
 event timada-catalog/Product::Uncategorized { category_id: String, uncategorized_by: String }
 event timada-catalog/Product::Unpublished { unpublished_by: String }
+event timada-catalog/Product::VariantDefined { variant_id: String, selections: Vec<OptionSelection>, sku: Option<String>, amount_cents: u64, currency: String, image_id: Option<String>, defined_by: String }
+event timada-catalog/Product::VariantImaged { variant_id: String, image_id: Option<String>, imaged_by: String }
+event timada-catalog/Product::VariantPriced { variant_id: String, amount_cents: u64, currency: String, priced_by: String }
+event timada-catalog/Product::VariantRemoved { variant_id: String, removed_by: String }
+event timada-catalog/Product::VariantSkuChanged { variant_id: String, sku: Option<String>, changed_by: String }
+event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: String }
+event timada-catalog/ProductSku::Released unit
 event timada-catalog/ProductSlug::Claimed { product_id: String }
 event timada-catalog/ProductSlug::Released unit
 event timada-identity/EmailAccount::Claimed { user_id: String, email: String }
@@ -74,5 +87,6 @@ event timada-tenancy/Tenant::Suspended { reason: String }
 event timada-tenancy/TenantSlug::Claimed { tenant_id: String }
 event timada-tenancy/TenantSlug::Released unit
 
+type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
 type timada_identity::value_object::ChallengePurpose enum { Register, SignIn, ResetPassword }
 type timada_identity::value_object::SignInMethod enum { OAuth2, Passkey }
