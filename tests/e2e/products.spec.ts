@@ -4,9 +4,15 @@ import { invite, inviteLink } from "./invitations";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // The catalog: an owner creates a product under /t/{slug}/products, edits it
-// on its page, publishes and archives it; the list (a read model, a moment
-// behind) follows; a member whose role lacks `products:read` cannot open the
-// pages.
+// on its page, uploads its pictures, publishes and archives it; the list (a
+// read model, a moment behind) follows; a member whose role lacks
+// `products:read` cannot open the pages.
+
+/// A 1x1 PNG, as the bytes a browser posts when a file is chosen.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 test("an owner creates, edits, publishes and archives a product", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));
@@ -100,4 +106,75 @@ test("the products pages need products:read", async ({ browser, request }) => {
 
   await ownerContext.close();
   await viewerContext.close();
+});
+
+test("an owner uploads, describes, reorders and removes a product's pictures", async ({ page, request }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Picture Shop");
+  await createTenant(page, name);
+
+  await page.getByRole("link", { name: "Products", exact: true }).click();
+  await page.getByLabel("Name").fill("Blue Mug");
+  await page.getByRole("button", { name: "Create product" }).click();
+  await expect(page.getByRole("status")).toContainText("Product created.");
+  const productUrl = page.url().split("?")[0];
+  await expect(page.getByText("No picture yet.")).toBeVisible();
+
+  // Anything that is not a picture is refused, whatever it is called.
+  await page.getByLabel("Add a picture").setInputFiles({
+    name: "mug.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("this is not a picture at all"),
+  });
+  await page.getByRole("button", { name: "Upload" }).click();
+  await expect(page).toHaveURL(/error=unsupported_image/);
+  await expect(page.getByRole("alert")).toContainText("JPEG, PNG, WebP or GIF");
+
+  // A real one is taken, shown, and served from the picture address.
+  await page.getByLabel("Add a picture").setInputFiles({ name: "front.png", mimeType: "image/png", buffer: PNG });
+  await page.getByLabel("What it shows (optional)").fill("A blue mug, seen from the front");
+  await page.getByRole("button", { name: "Upload" }).click();
+  await expect(page.getByRole("status")).toContainText("Picture added.");
+  const first = page.locator("[data-image]").first();
+  await expect(first.locator("img")).toHaveAttribute("alt", "A blue mug, seen from the front");
+  await expect(first.locator("[data-image-first]")).toBeVisible();
+  const src = await first.locator("img").getAttribute("src");
+  expect(src).toMatch(/\/media\/[0-9A-Z]{26}\/[0-9A-Z]{26}\.png$/);
+  const served = await request.get(src!);
+  expect(served.status()).toBe(200);
+  expect(served.headers()["content-type"]).toContain("image/png");
+  expect(served.headers()["cache-control"]).toContain("immutable");
+
+  // A second one goes last, and the two can swap.
+  await page.getByLabel("Add a picture").setInputFiles({ name: "side.png", mimeType: "image/png", buffer: PNG });
+  await page.getByLabel("What it shows (optional)").fill("The same mug from the side");
+  await page.getByRole("button", { name: "Upload" }).click();
+  await expect(page.getByRole("status")).toContainText("Picture added.");
+  await expect(page.locator("[data-image]")).toHaveCount(2);
+  const second = page.locator("[data-image]").nth(1);
+  await expect(second.locator("img")).toHaveAttribute("alt", "The same mug from the side");
+  const secondId = await second.getAttribute("data-image");
+  await second.getByRole("button", { name: "Move earlier" }).click();
+  await expect(page.getByRole("status")).toContainText("Gallery reordered.");
+  await expect(page.locator("[data-image]").first()).toHaveAttribute("data-image", secondId!);
+
+  // The description of one picture changes on its own.
+  await page.locator("[data-image]").first().getByLabel("What it shows").fill("Now the first one");
+  await page.locator("[data-image]").first().getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toContainText("Picture description saved.");
+  await expect(page.locator("[data-image]").first().locator("img")).toHaveAttribute("alt", "Now the first one");
+
+  // Removing takes the file with it.
+  await page.locator("[data-image]").first().getByRole("button", { name: "Remove" }).click();
+  await expect(page.getByRole("status")).toContainText("Picture removed.");
+  await expect(page.locator("[data-image]")).toHaveCount(1);
+  await expect(page.locator("[data-image]").first().locator("img")).toHaveAttribute("src", src!);
+
+  // An archived product keeps the gallery it had, with no way to change it.
+  await page.goto(productUrl);
+  await page.getByRole("button", { name: "Archive" }).click();
+  await expect(page.getByRole("status")).toContainText("Product archived.");
+  await expect(page.locator("[data-image]")).toHaveCount(1);
+  await expect(page.getByLabel("Add a picture")).toHaveCount(0);
+  await expect(page.locator("[data-image]").first().getByRole("button", { name: "Remove" })).toHaveCount(0);
 });

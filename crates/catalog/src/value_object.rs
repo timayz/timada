@@ -24,6 +24,44 @@ pub const MAX_CATEGORY_DEPTH: usize = 3;
 pub const FALLBACK_CATEGORY_SLUG: &str = "category";
 /// How many categories one product belongs to, at most.
 pub const MAX_CATEGORIES_PER_PRODUCT: usize = 10;
+/// How many pictures one product carries, at most.
+pub const MAX_IMAGES_PER_PRODUCT: usize = 20;
+/// The largest picture, in bytes.
+pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_ALT_LEN: usize = 200;
+/// The picture formats a browser shows everywhere, as `(extension, type)`.
+/// The extension is what the stored file is named with.
+pub const IMAGE_FORMATS: &[(&str, &str)] = &[
+    ("jpg", "image/jpeg"),
+    ("png", "image/png"),
+    ("webp", "image/webp"),
+    ("gif", "image/gif"),
+];
+
+/// A fresh id for a picture. It names the stored file and travels in its
+/// address, so it is a ULID: unguessable, and sortable by when it was made.
+pub fn new_image_id() -> String {
+    ulid::Ulid::generate().to_string()
+}
+
+/// The media type of a known extension.
+pub fn image_mime(ext: &str) -> Option<&'static str> {
+    IMAGE_FORMATS
+        .iter()
+        .find(|(known, _)| *known == ext)
+        .map(|(_, mime)| *mime)
+}
+
+/// Trims the text describing a picture and checks it is at most 200
+/// characters. Empty is fine: a picture that adds nothing to the name is
+/// better left undescribed than described badly.
+pub fn normalize_alt(alt: &str) -> Result<String, CatalogError> {
+    let alt = alt.trim();
+    if alt.chars().count() > MAX_ALT_LEN {
+        return Err(CatalogError::InvalidAlt);
+    }
+    Ok(alt.to_owned())
+}
 
 /// The index stream of a product slug.
 pub fn product_slug_id(slug: &str) -> String {

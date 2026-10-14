@@ -28,25 +28,39 @@ test.afterEach(async () => {
   }
 });
 
-/// Mints a key on the tenant's page and shows it once.
-async function mintKey(page: Page, slug: string): Promise<string> {
+/// A 1x1 PNG, as the bytes a browser posts when a file is chosen.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+/// Mints a key on the tenant's page and reads it, with the address the
+/// tenant's pictures are served from.
+async function mintKey(page: Page, slug: string): Promise<{ token: string; mediaUrl: string }> {
   await page.goto(`/t/${slug}/api-keys`);
   await page.getByLabel("Label").fill("Example storefront");
   await page.getByRole("button", { name: "Create key" }).click();
   const token = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
   expect(token).toMatch(/^tk_/);
-  return token;
+  const mediaUrl = (await page.locator("[data-media-url]").textContent())?.trim() ?? "";
+  expect(mediaUrl).toContain("/media/");
+  return { token, mediaUrl };
 }
 
 /// Boots the example storefront with `token` and waits for it to have synced
 /// at least `products` products.
-async function startStorefront(request: APIRequestContext, token: string, products: number) {
+async function startStorefront(
+  request: APIRequestContext,
+  { token, mediaUrl }: { token: string; mediaUrl: string },
+  products: number,
+) {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "timada-storefront-"));
   child = spawn(path.resolve("target/debug/storefront"), [], {
     env: {
       ...process.env,
       STORE_ADDR,
       STORE_TOKEN: token,
+      STORE_MEDIA_URL: mediaUrl,
       STORE_DB: path.join(dir, "storefront.db"),
       HOST: "127.0.0.1",
       PORT: String(STOREFRONT_PORT),
@@ -102,23 +116,35 @@ test("a storefront serves the tenant's published catalog with its key", async ({
   await page.getByRole("button", { name: "Set price" }).click();
   await page.getByLabel("Description").fill("Holds 50 cl of anything hot.");
   await page.getByRole("button", { name: "Save description" }).click();
+  await page.getByLabel("Add a picture").setInputFiles({ name: "mug.png", mimeType: "image/png", buffer: PNG });
+  await page.getByLabel("What it shows (optional)").fill("A blue mug");
+  await page.getByRole("button", { name: "Upload" }).click();
+  await expect(page.getByRole("status")).toContainText("Picture added.");
   await page.getByRole("button", { name: "Publish" }).click();
   await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
   const productUrl = page.url().split("?")[0];
 
   // A key, shown once; the storefront boots with it and syncs the catalog
   // into its own file.
-  const token = await mintKey(page, slug);
-  await startStorefront(request, token, 1);
+  const key = await mintKey(page, slug);
+  await startStorefront(request, key, 1);
 
   await page.goto(`${STOREFRONT}/`);
   const card = page.locator("[data-product=blue-mug]");
   await expect(card).toContainText("Blue Mug");
   await expect(card.locator("[data-price]")).toHaveText("12.50 EUR");
+  await expect(card.locator("img.thumb")).toHaveAttribute("alt", "A blue mug");
   await card.getByRole("link", { name: "Blue Mug" }).click();
   await expect(page).toHaveURL(`${STOREFRONT}/p/blue-mug`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Blue Mug");
   await expect(page.locator(".description")).toContainText("Holds 50 cl");
+
+  // The picture is loaded from the dashboard's media address, not the
+  // storefront's own, and the browser really fetches it.
+  const photo = page.locator("[data-gallery] img").first();
+  await expect(photo).toHaveAttribute("alt", "A blue mug");
+  await expect(photo).toHaveAttribute("src", /timada\.localhost\/media\//);
+  await expect(photo).toHaveJSProperty("naturalWidth", 1);
   expect((await page.goto(`${STOREFRONT}/p/nothing-here`))?.status()).toBe(404);
 
   // Taken off sale in the dashboard, gone from the storefront.
@@ -161,8 +187,8 @@ test("a storefront browses the categories its products are filed under", async (
   await publishProduct(page, slug, "Wool Mat", "19.90", "Mats");
   await publishProduct(page, slug, "Feather Wand", "9.90", "Toys");
 
-  const token = await mintKey(page, slug);
-  await startStorefront(request, token, 3);
+  const key = await mintKey(page, slug);
+  await startStorefront(request, key, 3);
 
   // The menu carries the tree with its counts; Bedding counts its subtree.
   await expect(async () => {

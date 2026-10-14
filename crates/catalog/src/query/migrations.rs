@@ -5,7 +5,7 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "catalog";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Products0001, Categories0002]
+    vec_box![Products0001, Categories0002, ProductImages0003]
 }
 
 pub struct Products0001;
@@ -93,6 +93,25 @@ sqlx_migrator::sqlite_migration!(
             "CREATE INDEX catalog_product_categories_category
                 ON catalog_product_categories (tenant_id, category_id)",
             "DROP INDEX catalog_product_categories_category"
+        ),
+    ]
+);
+
+pub struct ProductImages0003;
+sqlx_migrator::sqlite_migration!(
+    ProductImages0003,
+    "catalog",
+    "0003_product_images",
+    vec_box![("catalog", "0002_categories")],
+    vec_box![
+        (
+            // The first picture's file name, for a listing's thumbnail.
+            "ALTER TABLE catalog_products ADD COLUMN thumbnail TEXT",
+            "ALTER TABLE catalog_products DROP COLUMN thumbnail"
+        ),
+        (
+            "ALTER TABLE catalog_products ADD COLUMN image_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE catalog_products DROP COLUMN image_count"
         ),
     ]
 );

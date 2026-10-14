@@ -22,18 +22,34 @@ pub fn store(cx: &Cx) -> &Store {
     app_context::<Store>(cx)
 }
 
+/// Where this store's product pictures are loaded from, when the host set
+/// [`StoreConfig::media_url`](crate::StoreConfig::media_url).
+pub fn media_url(cx: &Cx) -> Option<&str> {
+    store(cx).media_url()
+}
+
 /// A page of the published catalog.
 pub async fn products(cx: &Cx, query: &ProductQuery) -> Result<ProductPage> {
-    published_products(store(cx).pool(), query)
+    let store = store(cx);
+    let mut page = published_products(store.pool(), query)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(|err| Error::from_anyhow(err.into()))?;
+    for product in &mut page.items {
+        product.fill_urls(store.media_url());
+    }
+    Ok(page)
 }
 
 /// A published product by slug, if any.
 pub async fn product_by_slug(cx: &Cx, slug: &str) -> Result<Option<Product>> {
-    published_product_by_slug(store(cx).pool(), slug)
+    let store = store(cx);
+    let mut product = published_product_by_slug(store.pool(), slug)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(|err| Error::from_anyhow(err.into()))?;
+    if let Some(product) = &mut product {
+        product.fill_urls(store.media_url());
+    }
+    Ok(product)
 }
 
 /// A published product by slug, or 404.
@@ -92,7 +108,12 @@ pub async fn product_categories(cx: &Cx, product: &Product) -> Result<Vec<Catego
 /// Published products sharing a category with this one, newest first, at most
 /// `limit` of them and never the product itself.
 pub async fn related_products(cx: &Cx, product: &Product, limit: u32) -> Result<Vec<Product>> {
-    crate::query::published_related_products(store(cx).pool(), product, limit)
+    let store = store(cx);
+    let mut related = crate::query::published_related_products(store.pool(), product, limit)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(|err| Error::from_anyhow(err.into()))?;
+    for product in &mut related {
+        product.fill_urls(store.media_url());
+    }
+    Ok(related)
 }

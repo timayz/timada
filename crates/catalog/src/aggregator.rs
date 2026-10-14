@@ -45,6 +45,37 @@ pub enum Product {
         category_id: String,
         uncategorized_by: String,
     },
+    /// A picture of the product. The bytes live outside the store, under the
+    /// id and extension recorded here; the host decides the address they are
+    /// served from.
+    ImageAdded {
+        image_id: String,
+        /// Lowercase, no dot: `jpg`, `png`, `webp`, `gif`.
+        ext: String,
+        mime: String,
+        /// In bytes.
+        size: u64,
+        width: Option<u32>,
+        height: Option<u32>,
+        /// What the picture shows, for a reader who cannot see it.
+        alt: String,
+        added_by: String,
+    },
+    ImageAltChanged {
+        image_id: String,
+        alt: String,
+        changed_by: String,
+    },
+    /// The whole order, every image of the product exactly once. The first
+    /// is the one a listing shows.
+    ImagesReordered {
+        image_ids: Vec<String>,
+        reordered_by: String,
+    },
+    ImageRemoved {
+        image_id: String,
+        removed_by: String,
+    },
 }
 
 /// The index `slug → product`: one stream per slug, with the deterministic id

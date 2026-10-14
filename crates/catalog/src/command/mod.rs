@@ -9,6 +9,7 @@ mod category;
 mod category_slug_index;
 mod create;
 mod edit;
+mod image;
 mod lifecycle;
 mod slug_index;
 
@@ -18,6 +19,7 @@ use std::ops::Deref;
 
 pub use category::*;
 pub use create::*;
+pub use image::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
@@ -27,8 +29,8 @@ use crate::aggregator::category::{
     Released as CategorySlugReleased, Renamed as CategoryRenamed,
 };
 use crate::aggregator::{
-    Archived, Categorized, Claimed, Created, Described, Priced, Published, Released, Renamed,
-    Uncategorized, Unpublished,
+    Archived, Categorized, Claimed, Created, Described, ImageAdded, ImageAltChanged, ImageRemoved,
+    ImagesReordered, Priced, Published, Released, Renamed, Uncategorized, Unpublished,
 };
 use crate::error::CatalogError;
 use crate::value_object::{MAX_CATEGORY_DEPTH, category_slug_id, format_money, product_slug_id};
@@ -84,6 +86,28 @@ impl fmt::Display for ProductStatus {
     }
 }
 
+/// A picture of a product. The bytes live outside the store; `file` is what
+/// the host serves them under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductImage {
+    pub id: String,
+    /// Lowercase, no dot.
+    pub ext: String,
+    pub mime: String,
+    /// In bytes.
+    pub size: u64,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub alt: String,
+}
+
+impl ProductImage {
+    /// The file name the bytes are stored under: `<id>.<ext>`.
+    pub fn file(&self) -> String {
+        format!("{}.{}", self.id, self.ext)
+    }
+}
+
 /// A price: minor units of a currency.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Price {
@@ -109,6 +133,9 @@ pub struct ProductState {
     pub status: ProductStatus,
     /// The categories it belongs to, by id.
     pub categories: BTreeSet<String>,
+    /// Its pictures, in the order they are shown; the first is the one a
+    /// listing uses.
+    pub images: Vec<ProductImage>,
     pub created_by: String,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -137,6 +164,10 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_archived())
         .handler(on_categorized())
         .handler(on_uncategorized())
+        .handler(on_image_added())
+        .handler(on_image_alt_changed())
+        .handler(on_images_reordered())
+        .handler(on_image_removed())
         .strict()
 }
 
@@ -256,6 +287,71 @@ async fn on_slug_released(
     index: &mut ProductSlugState,
 ) -> anyhow::Result<()> {
     index.released = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_image_added(
+    event: Event<ImageAdded>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.images.push(ProductImage {
+        id: event.data.image_id.to_owned(),
+        ext: event.data.ext.to_owned(),
+        mime: event.data.mime.to_owned(),
+        size: event.data.size,
+        width: event.data.width,
+        height: event.data.height,
+        alt: event.data.alt.to_owned(),
+    });
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_image_alt_changed(
+    event: Event<ImageAltChanged>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(image) = product
+        .images
+        .iter_mut()
+        .find(|image| image.id == event.data.image_id)
+    {
+        image.alt = event.data.alt.to_owned();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_images_reordered(
+    event: Event<ImagesReordered>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    // Anything the order leaves out keeps its place at the end, so a reorder
+    // written against an older gallery cannot lose a picture.
+    product.images.sort_by_key(|image| {
+        event
+            .data
+            .image_ids
+            .iter()
+            .position(|id| *id == image.id)
+            .unwrap_or(usize::MAX)
+    });
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_image_removed(
+    event: Event<ImageRemoved>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product
+        .images
+        .retain(|image| image.id != event.data.image_id);
+    product.updated_at = event.timestamp;
     Ok(())
 }
 

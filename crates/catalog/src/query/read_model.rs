@@ -102,12 +102,13 @@ pub async fn upsert_product(
     .await?;
     sqlx::query(
         "INSERT INTO catalog_products (tenant_id, id, slug, name, description, amount_cents,
-            currency, status, created_by, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            currency, status, created_by, created_at, updated_at, thumbnail, image_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             slug = excluded.slug, name = excluded.name, description = excluded.description,
             amount_cents = excluded.amount_cents, currency = excluded.currency,
-            status = excluded.status, updated_at = excluded.updated_at",
+            status = excluded.status, updated_at = excluded.updated_at,
+            thumbnail = excluded.thumbnail, image_count = excluded.image_count",
     )
     .bind(tenant_id)
     .bind(&product.id)
@@ -120,6 +121,8 @@ pub async fn upsert_product(
     .bind(&product.created_by)
     .bind(product.created_at as i64)
     .bind(product.updated_at as i64)
+    .bind(product.images.first().map(|image| image.file()))
+    .bind(product.images.len() as i64)
     .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM catalog_product_categories WHERE tenant_id = ?1 AND product_id = ?2")

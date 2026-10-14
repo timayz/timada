@@ -3,6 +3,24 @@
 use sqlx::{FromRow, SqlitePool};
 use timada_catalog::{TreeNode, TreeOf, format_money, tree_of};
 
+/// A picture of a product. `url` is where a browser loads it from: absolute
+/// once the host set [`StoreConfig::media_url`](crate::StoreConfig::media_url),
+/// and the bare file name otherwise.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
+pub struct Image {
+    pub id: String,
+    /// `<id>.<ext>`.
+    pub file: String,
+    pub mime: String,
+    /// What the picture shows; may be empty.
+    pub alt: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// Filled in from the store's media address when the product is read.
+    #[serde(default)]
+    pub url: String,
+}
+
 /// A product as the storefront shows it.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq, Hash)]
 pub struct Product {
@@ -14,6 +32,9 @@ pub struct Product {
     pub currency: Option<String>,
     /// Unix seconds of the last change.
     pub updated_at: i64,
+    /// Its pictures, in the order the merchant put them.
+    #[sqlx(json, rename = "images_json")]
+    pub images: Vec<Image>,
 }
 
 impl Product {
@@ -23,6 +44,27 @@ impl Product {
             self.amount_cents? as u64,
             self.currency.as_deref()?,
         ))
+    }
+
+    /// The picture a listing shows, when it has one.
+    pub fn image(&self) -> Option<&Image> {
+        self.images.first()
+    }
+
+    /// Points every picture at `base`, the address the store's pictures are
+    /// served from; without one they keep their bare file name, which a host
+    /// serving them itself can still use.
+    ///
+    /// [`products`](crate::products) and the other context helpers do this
+    /// already. It is public for a host that reads the rows itself with
+    /// [`published_products`] and friends.
+    pub fn fill_urls(&mut self, base: Option<&str>) {
+        for image in &mut self.images {
+            image.url = match base {
+                Some(base) => format!("{base}/{}", image.file),
+                None => image.file.clone(),
+            };
+        }
     }
 }
 
@@ -195,7 +237,7 @@ macro_rules! products_where {
 macro_rules! products_page {
     ($order:literal) => {
         concat!(
-            "SELECT id, slug, name, description, amount_cents, currency, updated_at
+            "SELECT id, slug, name, description, amount_cents, currency, updated_at, images_json
              FROM storefront_products ",
             products_where!(),
             $order,
@@ -274,7 +316,7 @@ pub async fn published_product_by_slug(
     slug: &str,
 ) -> sqlx::Result<Option<Product>> {
     sqlx::query_as(
-        "SELECT id, slug, name, description, amount_cents, currency, updated_at
+        "SELECT id, slug, name, description, amount_cents, currency, updated_at, images_json
          FROM storefront_products WHERE slug = ?1 AND status = 'published'",
     )
     .bind(slug)

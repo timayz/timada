@@ -30,6 +30,16 @@ pub enum CatalogError {
     CategoryTooDeep,
     #[error("a product belongs to at most ten categories")]
     TooManyCategories,
+    #[error("a product carries at most twenty pictures")]
+    TooManyImages,
+    #[error("this is not a picture of a kind the shop accepts")]
+    InvalidImage,
+    #[error("the text describing a picture is at most 200 characters")]
+    InvalidAlt,
+    #[error("picture not found")]
+    ImageNotFound,
+    #[error("the new order must list every picture of the product exactly once")]
+    InvalidImageOrder,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]

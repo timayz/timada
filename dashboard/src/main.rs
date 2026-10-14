@@ -5,6 +5,7 @@ mod cli;
 mod cluster;
 mod config;
 mod db;
+mod media;
 mod store_api;
 mod tenants;
 mod ui;

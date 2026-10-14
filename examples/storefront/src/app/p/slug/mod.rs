@@ -1,4 +1,6 @@
-use timada_storefront::{categories, price, product_categories, related_products, require_product};
+use timada_storefront::{
+    categories, price, product_categories, product_image, related_products, require_product,
+};
 use topcoat::{
     Result,
     context::Cx,
@@ -34,6 +36,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 " / " (&product.name)
             </nav>
             <h1 data-product=(&product.slug)>(&product.name)</h1>
+            if !product.images.is_empty() {
+                <ul class="gallery" data-gallery="">
+                    for image in &product.images {
+                        <li>product_image(image: image, attrs: attributes! { class="photo" })</li>
+                    }
+                </ul>
+            }
             <p>price(product: &product, attrs: attributes! { class="price" })</p>
             <p class="description">(&product.description)</p>
             if !related.is_empty() {

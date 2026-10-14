@@ -18,6 +18,10 @@ url = "sqlite:data/e2e.db"
 dir = "data/e2e-tenants"
 idle_timeout_secs = 2
 
+[media]
+dir = "data/e2e-media"
+public_url = "https://timada.localhost/media"
+
 # The browser suite cannot drive it (the Rust integration test does); it is
 # here so the server under test boots the listener too.
 [store_api]
