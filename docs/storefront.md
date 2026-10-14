@@ -31,8 +31,9 @@ store.shutdown().await;
 ## What lives where
 
 Events stay on the store. The app's SQLite file holds the subscription cursor (key
-`storefront/catalog`, prefixed by the store's region), the projection snapshots and the
-`storefront_products` rows. One file per replica of the app: replicas never fence each
+`storefront/catalog`, prefixed by the store's region), the projection snapshots, the
+`storefront_products` rows and the category tree (`storefront_categories` and
+`storefront_product_categories`). One file per replica of the app: replicas never fence each
 other out of the subscription, nothing accumulates on the store, and a restarted replica
 resumes from its own cursor.
 
@@ -50,9 +51,50 @@ for product in &page.items { /* product.name, product.slug, product.price() */ }
 let product = require_product(cx, slug).await?;   // 404 when not published
 ```
 
-`products` lists published products, most recently changed first, 24 a page (`per_page`,
-at most 100). `product_by_slug` returns `None` for a draft, an archived product or an
-unknown slug; `require_product` turns that into a 404.
+`products` lists published products, 24 a page (`per_page`, at most 100).
+`product_by_slug` returns `None` for a draft, an archived product or an unknown slug;
+`require_product` turns that into a 404.
+
+A query also narrows and orders the list:
+
+```rust
+use timada_storefront::{ProductQuery, ProductSort};
+
+ProductQuery::default()
+    .in_category(category.id.clone())        // this category and everything under it
+    .sort(ProductSort::PriceAsc)             // Newest (the default), PriceAsc, PriceDesc
+    .exclude(product.id.clone())             // never this one
+    .per_page(36)
+```
+
+`ProductSort::parse` reads the value a sort `<select>` posts (`newest`, `price_asc`,
+`price_desc`), and `as_str` writes it back into a link. A product with no price sorts
+last either way.
+
+## Browsing the categories
+
+```rust
+use timada_storefront::{categories, category_path, find_category, product_categories,
+    related_products, require_category};
+
+let menu = categories(cx).await?;                     // live categories as trees
+let category = require_category(cx, slug).await?;     // 404 when archived or unknown
+let crumbs = category_path(&menu, &category);         // its ancestors, read off the menu
+let node = find_category(&menu, &category.slug);      // its node, with children and count
+let also = related_products(cx, &product, 4).await?;  // same category, never itself
+let filed_under = product_categories(cx, &product).await?;
+```
+
+`categories` returns `CategoryNode`s: the category, its children, and `product_count`,
+which counts the published products of the whole subtree, so a top-level entry shows
+everything below it. The count is worked out by the catalog subscription when a product
+is filed, published or archived, or a category is moved, and stored on the category's
+row, so building the menu on every page is one plain query. The same subscription keeps,
+for each category, the products its page lists, so `in_category` filters on one id
+however deep the tree goes, and a page with no search reads its total from the stored
+count instead of counting. `in_categories` is the narrower filter: products filed
+directly under any of the ids, which is what related products use. An archived category
+is in none of this; the products that were in it stay on sale.
 
 ## The one component
 

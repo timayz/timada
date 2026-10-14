@@ -3,7 +3,7 @@
 use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
-use timada_catalog::{Command, CreateProduct, ProductState};
+use timada_catalog::{CategoryState, Command, CreateCategory, CreateProduct, ProductState};
 
 /// A fresh in-memory event store with the read-model schema applied.
 pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
@@ -43,4 +43,35 @@ pub fn create(name: &str) -> CreateProduct {
 
 pub async fn create_product(cmd: &Command<evento::Sqlite>, name: &str) -> ProductState {
     cmd.create_product(ALICE, create(name)).await.unwrap()
+}
+
+pub fn new_category(name: &str) -> CreateCategory {
+    CreateCategory {
+        name: name.to_owned(),
+        ..Default::default()
+    }
+}
+
+pub async fn create_category(cmd: &Command<evento::Sqlite>, name: &str) -> CategoryState {
+    cmd.create_category(ALICE, new_category(name))
+        .await
+        .unwrap()
+}
+
+/// A category under `parent_id`.
+pub async fn create_child(
+    cmd: &Command<evento::Sqlite>,
+    name: &str,
+    parent_id: &str,
+) -> CategoryState {
+    cmd.create_category(
+        ALICE,
+        CreateCategory {
+            name: name.to_owned(),
+            slug: None,
+            parent_id: Some(parent_id.to_owned()),
+        },
+    )
+    .await
+    .unwrap()
 }

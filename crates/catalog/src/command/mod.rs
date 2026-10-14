@@ -4,23 +4,34 @@
 //! version it observes, and `write()` sends as `original_version`, never goes
 //! stale. None of them is snapshotted: a product stream is a handful of events.
 
+mod categorize;
+mod category;
+mod category_slug_index;
 mod create;
 mod edit;
 mod lifecycle;
 mod slug_index;
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::ops::Deref;
 
+pub use category::*;
 pub use create::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
+use crate::aggregator::category::{
+    Archived as CategoryArchived, Claimed as CategorySlugClaimed, Created as CategoryCreated,
+    Described as CategoryDescribed, Moved as CategoryMoved, Positioned as CategoryPositioned,
+    Released as CategorySlugReleased, Renamed as CategoryRenamed,
+};
 use crate::aggregator::{
-    Archived, Claimed, Created, Described, Priced, Published, Released, Renamed, Unpublished,
+    Archived, Categorized, Claimed, Created, Described, Priced, Published, Released, Renamed,
+    Uncategorized, Unpublished,
 };
 use crate::error::CatalogError;
-use crate::value_object::{format_money, product_slug_id};
+use crate::value_object::{MAX_CATEGORY_DEPTH, category_slug_id, format_money, product_slug_id};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor>(pub E);
@@ -96,6 +107,8 @@ pub struct ProductState {
     pub description: String,
     pub price: Option<Price>,
     pub status: ProductStatus,
+    /// The categories it belongs to, by id.
+    pub categories: BTreeSet<String>,
     pub created_by: String,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -122,6 +135,8 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_published())
         .handler(on_unpublished())
         .handler(on_archived())
+        .handler(on_categorized())
+        .handler(on_uncategorized())
         .strict()
 }
 
@@ -184,6 +199,26 @@ async fn on_archived(event: Event<Archived>, product: &mut ProductState) -> anyh
     Ok(())
 }
 
+#[evento::handler]
+async fn on_categorized(
+    event: Event<Categorized>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.categories.insert(event.data.category_id.to_owned());
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_uncategorized(
+    event: Event<Uncategorized>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.categories.remove(&event.data.category_id);
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
 // =============================================================================
 // ProductSlug (index)
 // =============================================================================
@@ -219,6 +254,146 @@ async fn on_slug_claimed(
 async fn on_slug_released(
     _event: Event<Released>,
     index: &mut ProductSlugState,
+) -> anyhow::Result<()> {
+    index.released = true;
+    Ok(())
+}
+
+// =============================================================================
+// Category
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-catalog/CategoryState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct CategoryState {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    /// `None` for a top-level category.
+    pub parent_id: Option<String>,
+    /// Where it sorts among its siblings, lowest first.
+    pub position: u32,
+    pub archived: bool,
+    pub created_by: String,
+    /// Unix seconds of `Created`.
+    pub created_at: u64,
+    /// Unix seconds of the last event.
+    pub updated_at: u64,
+}
+
+pub fn category_projection<E: Executor>() -> Projection<E, CategoryState> {
+    Projection::new::<crate::aggregator::category::Category>()
+        .handler(on_category_created())
+        .handler(on_category_renamed())
+        .handler(on_category_described())
+        .handler(on_category_moved())
+        .handler(on_category_positioned())
+        .handler(on_category_archived())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_category_created(
+    event: Event<CategoryCreated>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.id = event.aggregate_id.to_owned();
+    category.slug = event.data.slug.to_owned();
+    category.name = event.data.name.to_owned();
+    category.parent_id = event.data.parent_id.to_owned();
+    category.created_by = event.data.created_by.to_owned();
+    category.created_at = event.timestamp;
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_renamed(
+    event: Event<CategoryRenamed>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.name = event.data.name.to_owned();
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_described(
+    event: Event<CategoryDescribed>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.description = event.data.description.to_owned();
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_moved(
+    event: Event<CategoryMoved>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.parent_id = event.data.parent_id.to_owned();
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_positioned(
+    event: Event<CategoryPositioned>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.position = event.data.position;
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_archived(
+    event: Event<CategoryArchived>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.archived = true;
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+// =============================================================================
+// CategorySlug (index)
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-catalog/CategorySlugState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct CategorySlugState {
+    pub id: String,
+    pub category_id: String,
+    pub released: bool,
+}
+
+pub fn category_slug_projection<E: Executor>() -> Projection<E, CategorySlugState> {
+    Projection::new::<crate::aggregator::category::CategorySlug>()
+        .handler(on_category_slug_claimed())
+        .handler(on_category_slug_released())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_category_slug_claimed(
+    event: Event<CategorySlugClaimed>,
+    index: &mut CategorySlugState,
+) -> anyhow::Result<()> {
+    index.id = event.aggregate_id.to_owned();
+    index.category_id = event.data.category_id.to_owned();
+    index.released = false;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_slug_released(
+    _event: Event<CategorySlugReleased>,
+    index: &mut CategorySlugState,
 ) -> anyhow::Result<()> {
     index.released = true;
     Ok(())
@@ -274,5 +449,87 @@ impl<E: Executor> Command<E> {
             return Err(CatalogError::Archived);
         }
         Ok(product)
+    }
+}
+
+impl<E: Executor> Command<E> {
+    pub async fn load_category(&self, category_id: &str) -> anyhow::Result<Option<CategoryState>> {
+        category_projection()
+            .load(category_id)
+            .execute(&self.0)
+            .await
+    }
+
+    /// The category a (normalized) slug points at, if any.
+    pub async fn load_category_by_slug(&self, slug: &str) -> anyhow::Result<Option<CategoryState>> {
+        let Some(index) = self.load_category_slug_index(slug).await? else {
+            return Ok(None);
+        };
+        self.load_category(&index.category_id).await
+    }
+
+    /// The live index entry of a category slug (released ones are `None`).
+    pub async fn load_category_slug_index(
+        &self,
+        slug: &str,
+    ) -> anyhow::Result<Option<CategorySlugState>> {
+        Ok(self
+            .load_category_slug_index_any(slug)
+            .await?
+            .filter(|index| !index.released))
+    }
+
+    pub(crate) async fn load_category_slug_index_any(
+        &self,
+        slug: &str,
+    ) -> anyhow::Result<Option<CategorySlugState>> {
+        category_slug_projection()
+            .load(category_slug_id(slug))
+            .execute(&self.0)
+            .await
+    }
+
+    /// The category, as long as it still takes edits.
+    pub(crate) async fn require_live_category(
+        &self,
+        category_id: &str,
+    ) -> Result<CategoryState, CatalogError> {
+        let category = self
+            .load_category(category_id)
+            .await?
+            .ok_or(CatalogError::CategoryNotFound)?;
+        if category.archived {
+            return Err(CatalogError::CategoryArchived);
+        }
+        Ok(category)
+    }
+
+    /// The chain above a category, top-level first: empty for a top-level
+    /// one. Stops at a missing parent, and at a loop after a few more steps
+    /// than the tree allows (the commands refuse loops; this only guards the
+    /// walk).
+    pub async fn ancestors(&self, category_id: &str) -> anyhow::Result<Vec<CategoryState>> {
+        let mut chain = Vec::new();
+        let mut next = self
+            .load_category(category_id)
+            .await?
+            .and_then(|category| category.parent_id);
+        while let Some(parent_id) = next {
+            if chain.len() > MAX_CATEGORY_DEPTH * 2
+                || chain
+                    .iter()
+                    .any(|seen: &CategoryState| seen.id == parent_id)
+                || parent_id == category_id
+            {
+                break;
+            }
+            let Some(parent) = self.load_category(&parent_id).await? else {
+                break;
+            };
+            next = parent.parent_id.clone();
+            chain.push(parent);
+        }
+        chain.reverse();
+        Ok(chain)
     }
 }

@@ -103,6 +103,18 @@ pub fn describe_error(code: &str) -> &'static str {
         "product_not_found" => "This product does not exist.",
         "product_archived" => "This product is archived and cannot change any more.",
         "product_not_priced" => "Set a price before publishing.",
+        "invalid_category_name" => "A category name is 1 to 80 characters.",
+        "invalid_category_slug" => {
+            "A category slug is 2 to 64 lowercase letters, digits and dashes."
+        }
+        "invalid_category_description" => "A category description is at most 2000 characters.",
+        "category_slug_taken" => "Another category already uses this slug.",
+        "category_not_found" => "This category does not exist.",
+        "category_archived" => "This category is archived and cannot change any more.",
+        "category_cycle" => "A category cannot be moved under one of its own sub-categories.",
+        "category_too_deep" => "Categories nest at most three levels deep.",
+        "category_has_children" => "Archive or move its sub-categories first.",
+        "too_many_categories" => "A product belongs to at most ten categories.",
         "invalid_permission" => "One of the permissions is not known.",
         "already_member" => "This user is already a member.",
         "not_member" => "This user is not a member.",
@@ -124,8 +136,8 @@ pub fn describe_permission(permission: &str) -> &'static str {
         }
         "roles:manage" => "Define, edit and remove roles",
         "api-keys:manage" => "Create and revoke the store API keys",
-        "products:read" => "See the products",
-        "products:manage" => "Create, edit, publish and archive products",
+        "products:read" => "See the products and categories",
+        "products:manage" => "Create, edit, publish and archive products; organise the categories",
         _ => "Unknown permission",
     }
 }

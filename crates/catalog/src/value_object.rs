@@ -15,10 +15,43 @@ pub const MAX_AMOUNT_CENTS: u64 = 100_000_000_000;
 /// The currencies a product can be priced in, as ISO-4217 codes. All of them
 /// have two minor digits.
 pub const CURRENCIES: &[&str] = &["EUR", "USD", "GBP", "CHF"];
+pub const MAX_CATEGORY_NAME_LEN: usize = 80;
+pub const MAX_CATEGORY_DESCRIPTION_LEN: usize = 2000;
+/// How deep the category tree goes: a top-level category is at depth 1, so
+/// `Bedding > Mats > Cooling mats` is the most.
+pub const MAX_CATEGORY_DEPTH: usize = 3;
+/// The slug of a category name with no usable characters.
+pub const FALLBACK_CATEGORY_SLUG: &str = "category";
+/// How many categories one product belongs to, at most.
+pub const MAX_CATEGORIES_PER_PRODUCT: usize = 10;
 
-/// The index stream of a slug.
+/// The index stream of a product slug.
 pub fn product_slug_id(slug: &str) -> String {
     evento::hash_ids(vec!["product-slug", slug])
+}
+
+/// The index stream of a category slug. Its own kind: a product and a
+/// category may share a slug, they live under different paths.
+pub fn category_slug_id(slug: &str) -> String {
+    evento::hash_ids(vec!["category-slug", slug])
+}
+
+/// Trims a category name and checks it is 1 to 80 characters.
+pub fn normalize_category_name(name: &str) -> Result<String, CatalogError> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > MAX_CATEGORY_NAME_LEN {
+        return Err(CatalogError::InvalidName);
+    }
+    Ok(name.to_owned())
+}
+
+/// Trims a category description and checks it is at most 2000 characters.
+pub fn normalize_category_description(description: &str) -> Result<String, CatalogError> {
+    let description = description.trim();
+    if description.chars().count() > MAX_CATEGORY_DESCRIPTION_LEN {
+        return Err(CatalogError::InvalidDescription);
+    }
+    Ok(description.to_owned())
 }
 
 /// Trims a display name and checks it is 1 to 120 characters.
@@ -61,6 +94,11 @@ pub fn normalize_slug(slug: &str) -> Result<String, CatalogError> {
 /// else collapsed into one dash, cut to [`MAX_SLUG_LEN`]. A name with nothing
 /// usable gives [`FALLBACK_SLUG`].
 pub fn slugify(name: &str) -> String {
+    slugify_or(name, FALLBACK_SLUG)
+}
+
+/// [`slugify`] with the fallback of the caller's kind of thing.
+pub fn slugify_or(name: &str, fallback: &str) -> String {
     let ascii = deunicode::deunicode(name).to_ascii_lowercase();
     let mut slug = String::with_capacity(ascii.len());
     for c in ascii.chars() {
@@ -72,7 +110,7 @@ pub fn slugify(name: &str) -> String {
     }
     let slug = truncate_slug(&slug, MAX_SLUG_LEN);
     if slug.len() < MIN_SLUG_LEN {
-        FALLBACK_SLUG.to_owned()
+        fallback.to_owned()
     } else {
         slug
     }

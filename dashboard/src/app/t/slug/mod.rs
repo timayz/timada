@@ -3,6 +3,7 @@
 //! and then asks the [`TenantAccess`] for the permission it needs.
 
 pub mod api_keys;
+pub mod categories;
 pub mod members;
 pub mod products;
 pub mod rename;
@@ -133,6 +134,7 @@ pub fn tenant_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str
 /// The navigation every tenant page shares: the sections the member may see.
 pub struct TenantNav {
     pub products: bool,
+    pub categories: bool,
     pub members: bool,
     pub roles: bool,
     pub api_keys: bool,
@@ -140,8 +142,12 @@ pub struct TenantNav {
 
 impl TenantNav {
     pub async fn of(cx: &Cx, access: &TenantAccess) -> Result<Self> {
+        let products = access.can(cx, PERMISSION_PRODUCTS_READ).await?;
         Ok(Self {
-            products: access.can(cx, PERMISSION_PRODUCTS_READ).await?,
+            products,
+            // The catalog is one section of the back office: whoever sees the
+            // products sees the categories they are filed under.
+            categories: products,
             members: access.can(cx, PERMISSION_MEMBERS_READ).await?,
             roles: access.can(cx, PERMISSION_ROLES_MANAGE).await?,
             api_keys: access.can(cx, PERMISSION_API_KEYS_MANAGE).await?,
@@ -151,8 +157,9 @@ impl TenantNav {
 
 /// The header links of a tenant page: the tenant's home, each section the
 /// member may see, the dashboard and the account. `current` names the
-/// section being shown (`"home"`, `"products"`, `"members"`, `"roles"`,
-/// `"api_keys"`, or `""` for a page below a section), which gets no link.
+/// section being shown (`"home"`, `"products"`, `"categories"`, `"members"`,
+/// `"roles"`, `"api_keys"`, or `""` for a page below a section), which gets
+/// no link.
 #[component]
 pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) -> Result<impl View> {
     let slug = tenant.slug.clone();
@@ -163,6 +170,9 @@ pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) ->
             }
             if nav.products && current != "products" {
                 <a class="underline" href=(href!(products::index, Slug(slug.clone())))>"Products"</a>
+            }
+            if nav.categories && current != "categories" {
+                <a class="underline" href=(href!(categories::index, Slug(slug.clone())))>"Categories"</a>
             }
             if nav.members && current != "members" {
                 <a class="underline" href=(href!(members::index, Slug(slug.clone())))>"Members"</a>

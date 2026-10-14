@@ -1,7 +1,7 @@
 //! What a storefront page reads: the published products of the local copy.
 
 use sqlx::{FromRow, SqlitePool};
-use timada_catalog::format_money;
+use timada_catalog::{TreeNode, TreeOf, format_money, tree_of};
 
 /// A product as the storefront shows it.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq, Hash)]
@@ -30,13 +30,57 @@ impl Product {
 pub const DEFAULT_PER_PAGE: u32 = 24;
 pub const MAX_PER_PAGE: u32 = 100;
 
+/// How a page of products is ordered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ProductSort {
+    /// Most recently changed first.
+    #[default]
+    Newest,
+    /// Cheapest first; a product with no price comes last.
+    PriceAsc,
+    /// Most expensive first; a product with no price comes last.
+    PriceDesc,
+}
+
+impl ProductSort {
+    /// The value a sort `<select>` and a query string use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::PriceAsc => "price_asc",
+            Self::PriceDesc => "price_desc",
+        }
+    }
+
+    /// The sort a query string asks for, or [`Newest`](Self::Newest) for
+    /// anything else.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "price_asc" => Self::PriceAsc,
+            "price_desc" => Self::PriceDesc,
+            _ => Self::Newest,
+        }
+    }
+}
+
 /// A page of the catalog: 1-based `page`, `per_page` capped at
-/// [`MAX_PER_PAGE`], and an optional search over name and slug.
+/// [`MAX_PER_PAGE`], an optional search over name and slug, a category whose
+/// page it is, the categories a product must be in (any of them), one product
+/// to leave out and the order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProductQuery {
     pub page: u32,
     pub per_page: u32,
     pub q: Option<String>,
+    /// A category whose page this is: the products in it and in everything
+    /// below it.
+    pub category: Option<String>,
+    /// Products filed directly under any of these; empty means every
+    /// category.
+    pub categories: Vec<String>,
+    /// A product to leave out, by id: what "related products" needs.
+    pub exclude: Option<String>,
+    pub sort: ProductSort,
 }
 
 impl Default for ProductQuery {
@@ -45,6 +89,10 @@ impl Default for ProductQuery {
             page: 1,
             per_page: DEFAULT_PER_PAGE,
             q: None,
+            category: None,
+            categories: Vec::new(),
+            exclude: None,
+            sort: ProductSort::default(),
         }
     }
 }
@@ -63,6 +111,29 @@ impl ProductQuery {
     pub fn search(mut self, q: impl Into<String>) -> Self {
         let q = q.into();
         self.q = (!q.trim().is_empty()).then(|| q.trim().to_owned());
+        self
+    }
+
+    /// Only what the page of this category lists: the products in it and in
+    /// every category below it.
+    pub fn in_category(mut self, id: impl Into<String>) -> Self {
+        self.category = Some(id.into());
+        self
+    }
+
+    /// Only products filed directly under one of these categories.
+    pub fn in_categories(mut self, ids: impl IntoIterator<Item = String>) -> Self {
+        self.categories = ids.into_iter().collect();
+        self
+    }
+
+    pub fn exclude(mut self, id: impl Into<String>) -> Self {
+        self.exclude = Some(id.into());
+        self
+    }
+
+    pub fn sort(mut self, sort: ProductSort) -> Self {
+        self.sort = sort;
         self
     }
 }
@@ -101,7 +172,50 @@ fn contains(q: &str) -> String {
     format!("%{escaped}%")
 }
 
-/// The published products, most recently changed first.
+/// What a page of products is filtered by, shared by the count and the list
+/// so the two never disagree. `?1` is the search pattern, `?2` the JSON array
+/// of category ids (`[]` for every category), `?3` a product to leave out,
+/// `?4` a category whose page it is (read from what the subscription stored
+/// for it, so a sub-category costs nothing more).
+macro_rules! products_where {
+    () => {
+        "WHERE status = 'published'
+           AND (?1 IS NULL OR slug LIKE ?1 ESCAPE '\\' OR name LIKE ?1 ESCAPE '\\')
+           AND (?2 = '[]' OR id IN (SELECT product_id FROM storefront_product_categories
+                WHERE category_id IN (SELECT value FROM json_each(?2))))
+           AND (?3 IS NULL OR id <> ?3)
+           AND (?4 IS NULL OR id IN (SELECT product_id FROM storefront_category_products
+                WHERE category_id = ?4)) "
+    };
+}
+
+/// One page of the list, ordered by `$order`. The SQL has to be a literal
+/// (sqlx refuses a built string), so each order is its own statement over the
+/// same filter.
+macro_rules! products_page {
+    ($order:literal) => {
+        concat!(
+            "SELECT id, slug, name, description, amount_cents, currency, updated_at
+             FROM storefront_products ",
+            products_where!(),
+            $order,
+            " LIMIT ?5 OFFSET ?6"
+        )
+    };
+}
+
+const PAGE_NEWEST: &str = products_page!("ORDER BY updated_at DESC, id DESC");
+/// A product with no price sorts last either way.
+const PAGE_PRICE_ASC: &str =
+    products_page!("ORDER BY amount_cents IS NULL, amount_cents ASC, id DESC");
+const PAGE_PRICE_DESC: &str =
+    products_page!("ORDER BY amount_cents IS NULL, amount_cents DESC, id DESC");
+const COUNT: &str = concat!(
+    "SELECT count(*) FROM storefront_products ",
+    products_where!()
+);
+
+/// The published products a query matches, in the order it asks for.
 pub async fn published_products(
     pool: &SqlitePool,
     query: &ProductQuery,
@@ -109,27 +223,43 @@ pub async fn published_products(
     let per_page = i64::from(query.per_page.clamp(1, MAX_PER_PAGE));
     let page = query.page.max(1);
     let pattern = query.q.as_deref().map(contains);
-    let total: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM storefront_products
-         WHERE status = 'published'
-           AND (?1 IS NULL OR slug LIKE ?1 ESCAPE '\\' OR name LIKE ?1 ESCAPE '\\')",
-    )
-    .bind(&pattern)
-    .fetch_one(pool)
-    .await?;
-    let items = sqlx::query_as(
-        "SELECT id, slug, name, description, amount_cents, currency, updated_at
-         FROM storefront_products
-         WHERE status = 'published'
-           AND (?1 IS NULL OR slug LIKE ?1 ESCAPE '\\' OR name LIKE ?1 ESCAPE '\\')
-         ORDER BY updated_at DESC, id DESC
-         LIMIT ?2 OFFSET ?3",
-    )
-    .bind(&pattern)
-    .bind(per_page)
-    .bind(i64::from(page - 1) * per_page)
-    .fetch_all(pool)
-    .await?;
+    // A JSON array, read back by `json_each`: one bind for any number of ids.
+    let categories = serde_json::to_string(&query.categories).unwrap_or_else(|_| "[]".to_owned());
+    let total: i64 = match query.category.as_deref() {
+        // A category's page as it is: the count the subscription stored.
+        Some(category)
+            if pattern.is_none() && query.categories.is_empty() && query.exclude.is_none() =>
+        {
+            sqlx::query_scalar("SELECT subtree_count FROM storefront_categories WHERE id = ?1")
+                .bind(category)
+                .fetch_optional(pool)
+                .await?
+                .unwrap_or(0)
+        }
+        _ => {
+            sqlx::query_scalar(COUNT)
+                .bind(&pattern)
+                .bind(&categories)
+                .bind(query.exclude.as_deref())
+                .bind(query.category.as_deref())
+                .fetch_one(pool)
+                .await?
+        }
+    };
+    let statement = match query.sort {
+        ProductSort::Newest => PAGE_NEWEST,
+        ProductSort::PriceAsc => PAGE_PRICE_ASC,
+        ProductSort::PriceDesc => PAGE_PRICE_DESC,
+    };
+    let items = sqlx::query_as(statement)
+        .bind(&pattern)
+        .bind(&categories)
+        .bind(query.exclude.as_deref())
+        .bind(query.category.as_deref())
+        .bind(per_page)
+        .bind(i64::from(page - 1) * per_page)
+        .fetch_all(pool)
+        .await?;
     Ok(ProductPage {
         items,
         page,
@@ -150,4 +280,175 @@ pub async fn published_product_by_slug(
     .bind(slug)
     .fetch_optional(pool)
     .await
+}
+
+// =============================================================================
+// Categories
+// =============================================================================
+
+/// A category of the store, as a page shows it.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq, Hash)]
+pub struct Category {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    /// `None` for a top-level category.
+    pub parent_id: Option<String>,
+    /// Where it sorts among its siblings, lowest first.
+    pub position: i64,
+}
+
+impl TreeNode for Category {
+    fn node_id(&self) -> &str {
+        &self.id
+    }
+
+    fn node_parent_id(&self) -> Option<&str> {
+        self.parent_id.as_deref()
+    }
+}
+
+/// A category and what hangs under it, with how many published products are
+/// in it and its sub-categories.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CategoryNode {
+    pub category: Category,
+    pub children: Vec<CategoryNode>,
+    /// Distinct published products this category's page lists: those in it
+    /// and in every category below it, each counted once.
+    pub product_count: i64,
+}
+
+impl CategoryNode {
+    /// The categories from this one down to `id`, excluding `id` itself, if
+    /// `id` is in this subtree.
+    fn path_to(&self, id: &str) -> Option<Vec<Category>> {
+        if self.category.id == id {
+            return Some(Vec::new());
+        }
+        self.children.iter().find_map(|child| {
+            let mut path = child.path_to(id)?;
+            path.insert(0, self.category.clone());
+            Some(path)
+        })
+    }
+
+    /// The node of `slug` in this subtree, if any.
+    pub fn find(&self, slug: &str) -> Option<&CategoryNode> {
+        if self.category.slug == slug {
+            return Some(self);
+        }
+        self.children.iter().find_map(|child| child.find(slug))
+    }
+}
+
+/// The node of `slug` among these trees, if any.
+pub fn find_category<'a>(nodes: &'a [CategoryNode], slug: &str) -> Option<&'a CategoryNode> {
+    nodes.iter().find_map(|node| node.find(slug))
+}
+
+/// A category row with the count its page lists, as the subscription stored
+/// it.
+#[derive(FromRow)]
+struct CountedCategory {
+    #[sqlx(flatten)]
+    category: Category,
+    subtree_count: i64,
+}
+
+impl TreeNode for CountedCategory {
+    fn node_id(&self) -> &str {
+        &self.category.id
+    }
+
+    fn node_parent_id(&self) -> Option<&str> {
+        self.category.parent_id.as_deref()
+    }
+}
+
+/// The live categories of the store as trees, each level in its own order,
+/// with how many published products each one's page lists.
+pub async fn published_categories(pool: &SqlitePool) -> sqlx::Result<Vec<CategoryNode>> {
+    let categories: Vec<CountedCategory> = sqlx::query_as(
+        "SELECT id, slug, name, description, parent_id, position, subtree_count
+         FROM storefront_categories WHERE archived = 0
+         ORDER BY position, name, id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(tree_of(categories).into_iter().map(node_of).collect())
+}
+
+/// Turns a tree of counted categories into one of [`CategoryNode`].
+fn node_of(node: TreeOf<CountedCategory>) -> CategoryNode {
+    CategoryNode {
+        category: node.item.category,
+        children: node.children.into_iter().map(node_of).collect(),
+        product_count: node.item.subtree_count,
+    }
+}
+
+/// One live category, by slug.
+pub async fn published_category_by_slug(
+    pool: &SqlitePool,
+    slug: &str,
+) -> sqlx::Result<Option<Category>> {
+    sqlx::query_as(
+        "SELECT id, slug, name, description, parent_id, position
+         FROM storefront_categories WHERE slug = ?1 AND archived = 0",
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await
+}
+
+/// The live categories above `category`, top-level first: a breadcrumb,
+/// read off the menu a page has already loaded. Stops where a parent is
+/// archived, since the tree does.
+pub fn category_ancestors(nodes: &[CategoryNode], category: &Category) -> Vec<Category> {
+    nodes
+        .iter()
+        .find_map(|node| node.path_to(&category.id))
+        .unwrap_or_default()
+}
+
+/// The live categories a product is filed under, in tree order.
+pub async fn published_product_categories(
+    pool: &SqlitePool,
+    product_id: &str,
+) -> sqlx::Result<Vec<Category>> {
+    sqlx::query_as(
+        "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position
+         FROM storefront_categories c
+         JOIN storefront_product_categories pc ON pc.category_id = c.id
+         WHERE pc.product_id = ?1 AND c.archived = 0
+         ORDER BY c.position, c.name, c.id",
+    )
+    .bind(product_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// The published products sharing a category with `product`, newest first,
+/// without `product` itself.
+pub async fn published_related_products(
+    pool: &SqlitePool,
+    product: &Product,
+    limit: u32,
+) -> sqlx::Result<Vec<Product>> {
+    let categories: Vec<(String,)> = sqlx::query_as(
+        "SELECT category_id FROM storefront_product_categories WHERE product_id = ?1",
+    )
+    .bind(&product.id)
+    .fetch_all(pool)
+    .await?;
+    if categories.is_empty() {
+        return Ok(Vec::new());
+    }
+    let query = ProductQuery::default()
+        .per_page(limit)
+        .in_categories(categories.into_iter().map(|(id,)| id))
+        .exclude(product.id.clone());
+    Ok(published_products(pool, &query).await?.items)
 }

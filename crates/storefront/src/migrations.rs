@@ -8,7 +8,7 @@ pub const MIGRATION_APP: &str = "storefront";
 /// applies them with evento's own; a host running its own migrator can add
 /// them to it instead.
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Products0001]
+    vec_box![Products0001, Categories0002]
 }
 
 pub struct Products0001;
@@ -39,6 +39,57 @@ sqlx_migrator::sqlite_migration!(
         (
             "CREATE INDEX storefront_products_published ON storefront_products (status, updated_at)",
             "DROP INDEX storefront_products_published"
+        ),
+    ]
+);
+
+pub struct Categories0002;
+sqlx_migrator::sqlite_migration!(
+    Categories0002,
+    "storefront",
+    "0002_categories",
+    vec_box![("storefront", "0001_products")],
+    vec_box![
+        (
+            "CREATE TABLE storefront_categories (
+                id TEXT PRIMARY KEY,
+                slug TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                parent_id TEXT,
+                position INTEGER NOT NULL,
+                archived INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                product_count INTEGER NOT NULL DEFAULT 0,
+                subtree_count INTEGER NOT NULL DEFAULT 0
+            )",
+            "DROP TABLE storefront_categories"
+        ),
+        (
+            "CREATE UNIQUE INDEX storefront_categories_slug ON storefront_categories (slug)
+                WHERE archived = 0",
+            "DROP INDEX storefront_categories_slug"
+        ),
+        (
+            "CREATE TABLE storefront_product_categories (
+                product_id TEXT NOT NULL,
+                category_id TEXT NOT NULL,
+                PRIMARY KEY (product_id, category_id)
+            )",
+            "DROP TABLE storefront_product_categories"
+        ),
+        (
+            "CREATE INDEX storefront_product_categories_category
+                ON storefront_product_categories (category_id)",
+            "DROP INDEX storefront_product_categories_category"
+        ),
+        (
+            "CREATE TABLE storefront_category_products (
+                category_id TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                PRIMARY KEY (category_id, product_id)
+            )",
+            "DROP TABLE storefront_category_products"
         ),
     ]
 );
