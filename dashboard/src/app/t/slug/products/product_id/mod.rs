@@ -22,7 +22,7 @@ use topcoat::{
 
 use super::{catalog, error_code, status_label};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::auth::user_labels;
 use crate::ui::{document, format_time, notice};
 
@@ -133,14 +133,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     (&product.name)
                     " " <span class="rounded bg-neutral-100 px-2 text-sm font-normal text-neutral-700" data-product-status=(product.status.as_str())>(status_label(product.status))</span>
                 </h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(super::index, Slug(slug.clone())))>"Products"</a>
-                    <a class="underline" href=(href!(crate::app::t::slug::index, Slug(slug.clone())))>(&tenant.name)</a>
-                    if nav.api_keys {
-                        <a class="underline" href=(href!(crate::app::t::slug::api_keys::index, Slug(slug.clone())))>"API keys"</a>
-                    }
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                </nav>
+                tenant_nav(tenant: &tenant, nav: &nav, current: "")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

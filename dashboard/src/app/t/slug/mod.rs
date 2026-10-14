@@ -21,7 +21,7 @@ use topcoat::{
         error::{forbidden, not_found},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, view},
+    view::{View, component, view},
 };
 
 use crate::app::auth::Flash;
@@ -149,6 +149,36 @@ impl TenantNav {
     }
 }
 
+/// The header links of a tenant page: the tenant's home, each section the
+/// member may see, the dashboard and the account. `current` names the
+/// section being shown (`"home"`, `"products"`, `"members"`, `"roles"`,
+/// `"api_keys"`, or `""` for a page below a section), which gets no link.
+#[component]
+pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) -> Result<impl View> {
+    let slug = tenant.slug.clone();
+    Ok(view! {
+        <nav class="flex items-center gap-4 text-sm">
+            if current != "home" {
+                <a class="underline" href=(href!(index, Slug(slug.clone())))>(&tenant.name)</a>
+            }
+            if nav.products && current != "products" {
+                <a class="underline" href=(href!(products::index, Slug(slug.clone())))>"Products"</a>
+            }
+            if nav.members && current != "members" {
+                <a class="underline" href=(href!(members::index, Slug(slug.clone())))>"Members"</a>
+            }
+            if nav.roles && current != "roles" {
+                <a class="underline" href=(href!(roles::index, Slug(slug.clone())))>"Roles"</a>
+            }
+            if nav.api_keys && current != "api_keys" {
+                <a class="underline" href=(href!(api_keys::index, Slug(slug.clone())))>"API keys"</a>
+            }
+            <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
+            <a class="underline" href=(href!(crate::app::auth::account::account))>"Account"</a>
+        </nav>
+    })
+}
+
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
@@ -167,22 +197,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     (&tenant.name)
                     if tenant.is_suspended() { " " <span class="rounded bg-amber-100 px-2 text-sm font-normal text-amber-800">"suspended"</span> }
                 </h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    if nav.products {
-                        <a class="underline" href=(href!(products::index, Slug(tenant.slug.clone())))>"Products"</a>
-                    }
-                    if nav.members {
-                        <a class="underline" href=(href!(members::index, Slug(tenant.slug.clone())))>"Members"</a>
-                    }
-                    if nav.roles {
-                        <a class="underline" href=(href!(roles::index, Slug(tenant.slug.clone())))>"Roles"</a>
-                    }
-                    if nav.api_keys {
-                        <a class="underline" href=(href!(api_keys::index, Slug(tenant.slug.clone())))>"API keys"</a>
-                    }
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                    <a class="underline" href=(href!(crate::app::auth::account::account))>"Account"</a>
-                </nav>
+                tenant_nav(tenant: &tenant, nav: &nav, current: "home")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
