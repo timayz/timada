@@ -2,6 +2,7 @@
 
 pub mod admin;
 pub mod auth;
+pub mod cluster;
 pub mod invitations;
 mod server_errors;
 pub mod t;
@@ -33,7 +34,7 @@ use crate::authz::Authorizer;
 use crate::cluster::Executor;
 use crate::config::Config;
 use crate::db::{ReadPool, WritePool};
-use crate::media::{MEDIA_ROUTE, Media, MediaCache};
+use crate::media::{MEDIA_ROUTE, Media, MediaCache, PEER_ROUTE};
 use crate::store_api::StoreConnections;
 use crate::tenants::Tenants;
 use crate::ui::{document, notice};
@@ -87,6 +88,8 @@ pub fn router(services: Services) -> Router {
         .serve_dir(MEDIA_ROUTE, media.dir().to_path_buf())
         .layer(MediaCache::new())
         .layer(BodyLimit::max(UPLOAD_LIMIT).at("/t"))
+        // A picture another node copies here: the file alone.
+        .layer(BodyLimit::max(UPLOAD_LIMIT).at(PEER_ROUTE))
         // Absolute URLs (the OIDC redirect URI) follow the public address.
         .base_url(config.server.url.as_str())
         // Validated by `Config::load`; `networks` panics on a bad entry.

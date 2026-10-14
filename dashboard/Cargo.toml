@@ -8,6 +8,7 @@ authors.workspace = true
 tokio.workspace = true
 topcoat.workspace = true
 imagesize.workspace = true
+bytes.workspace = true
 sqlx.workspace = true
 sqlx_migrator.workspace = true
 evento.workspace = true

@@ -107,6 +107,16 @@ public_url = "https://timada.localhost/media"
 # peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
 # # Bind address for inbound peer traffic; defaults to peers[node_id].
 # listen = "0.0.0.0:7000"
+# # Each node's web address (server.port) as the other nodes reach it, in the
+# # order of `peers`. Every node keeps a copy of every product picture: an
+# # upload is copied to the other nodes and only saved once a majority of them
+# # hold it, and a node that missed one fetches it from the others. Required
+# # with more than one node.
+# web_peers = ["http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002"]
+# # Shared by every node, at least 32 characters: a node only takes a picture
+# # from a peer presenting it. Set it through TIMADA__CLUSTER__SECRET rather
+# # than in this file. Required with more than one node.
+# secret = ""
 
 [monitoring]
 log_level = "info,sqlx=warn"

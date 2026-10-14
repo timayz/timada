@@ -149,6 +149,19 @@ deletes. So a failure leaves a file nobody references rather than a product poin
 at nothing. `media.public_url` is the address a shopper loads a picture from, shown on
 each tenant's API keys page for its storefront to be configured with.
 
+With several nodes, every node keeps every picture, so a node going down takes none
+with it and `media.public_url` can point at any of them or at a balancer in front.
+The node taking an upload stores the file, copies it to the other nodes
+(`PUT /cluster/media/<tenant>/<file>` on their `cluster.web_peers` address, with
+`cluster.secret` as a bearer token) and commits only once a majority of the cluster
+holds it, the same majority the commit itself needs; short of that the upload is
+refused and the copies are left unreferenced. Copies to the slower nodes carry on
+after the commit. Each node also runs a per-tenant subscription
+(`timada-dashboard/media`) that fetches from a peer's `/media` any picture added that
+it lacks (a node that was down during the upload, or a new one replaying the stream)
+and deletes the pictures removed. It only runs while the tenant is open on that node,
+so a node that missed a picture catches up the next time the tenant opens there.
+
 ## The storefront side
 
 `timada-storefront` runs inside the merchant's app. Its executor is a `Sidecar`:

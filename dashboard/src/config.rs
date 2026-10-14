@@ -197,6 +197,16 @@ pub struct ClusterConfig {
     /// set it to `0.0.0.0:<port>` in a container.
     #[serde(default)]
     pub listen: Option<SocketAddr>,
+    /// Every node's web address as the other nodes reach it, in `peers`
+    /// order, e.g. `http://10.0.0.2:3000`. Product pictures are copied
+    /// between nodes through it. Required with more than one node.
+    #[serde(default)]
+    pub web_peers: Vec<String>,
+    /// Shared by every node: a node only accepts a picture copied from a
+    /// peer that presents it. At least 32 characters; required with more
+    /// than one node.
+    #[serde(default)]
+    pub secret: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -242,7 +252,7 @@ impl Config {
             .build()?
             .try_deserialize()?;
 
-        if let Some(cluster) = &config.cluster {
+        if let Some(cluster) = &mut config.cluster {
             cluster.validate()?;
         }
         config.server.validate()?;
@@ -346,7 +356,7 @@ impl TenantsConfig {
 }
 
 impl ClusterConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
+    fn validate(&mut self) -> Result<(), ConfigError> {
         if self.peers.is_empty() {
             return Err(ConfigError::Message(
                 "cluster.peers must list at least one node".into(),
@@ -358,6 +368,33 @@ impl ClusterConfig {
                 self.node_id,
                 self.peers.len()
             )));
+        }
+        if self.peers.len() == 1 {
+            return Ok(());
+        }
+        if self.web_peers.len() != self.peers.len() {
+            return Err(ConfigError::Message(format!(
+                "cluster.web_peers must list the web address of each of the {} peers, in the same order",
+                self.peers.len()
+            )));
+        }
+        for url in &mut self.web_peers {
+            let trimmed = url.trim_end_matches('/');
+            if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+                return Err(ConfigError::Message(format!(
+                    "cluster.web_peers: '{url}' must start with http:// or https://"
+                )));
+            }
+            *url = trimmed.to_owned();
+        }
+        if self
+            .secret
+            .as_deref()
+            .is_none_or(|secret| secret.len() < 32)
+        {
+            return Err(ConfigError::Message(
+                "cluster.secret must be at least 32 characters with more than one node".into(),
+            ));
         }
         Ok(())
     }
@@ -443,5 +480,52 @@ mod tests {
     fn trusted_proxies_reject_garbage_with_the_value() {
         let err = server(&["10.0.0.0/8", "traefik"]).validate().unwrap_err();
         assert!(err.to_string().contains("'traefik'"), "{err}");
+    }
+
+    fn cluster(nodes: usize, web_peers: &[&str], secret: Option<&str>) -> ClusterConfig {
+        ClusterConfig {
+            node_id: 0,
+            peers: (0..nodes)
+                .map(|i| format!("127.0.0.1:{}", 7000 + i).parse().unwrap())
+                .collect(),
+            listen: None,
+            web_peers: web_peers.iter().map(|s| s.to_string()).collect(),
+            secret: secret.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn several_nodes_need_their_web_addresses_and_a_secret() {
+        const SECRET: &str = "0123456789abcdef0123456789abcdef";
+        assert!(cluster(1, &[], None).validate().is_ok());
+
+        let mut three = cluster(
+            3,
+            &["http://a:3000/", "http://b:3000", "https://c"],
+            Some(SECRET),
+        );
+        assert!(three.validate().is_ok());
+        assert_eq!(three.web_peers[0], "http://a:3000");
+
+        assert!(
+            cluster(3, &["http://a", "http://b"], Some(SECRET))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            cluster(3, &["http://a", "b:3000", "http://c"], Some(SECRET))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            cluster(3, &["http://a", "http://b", "http://c"], None)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            cluster(3, &["http://a", "http://b", "http://c"], Some("short"))
+                .validate()
+                .is_err()
+        );
     }
 }
