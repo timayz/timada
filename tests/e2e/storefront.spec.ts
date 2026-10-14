@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { registerWithEmail, uniqueEmail } from "./email";
+import { FakeStripe, stripeSignature } from "./stripe";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // The headless storefront end to end: a merchant publishes a product and
@@ -11,7 +12,8 @@ import { createTenant, uniqueTenant } from "./tenants";
 // process built on timada-storefront) connects to the store API with the
 // key, shows the product, follows the catalog live, browses the categories
 // the products are filed under, and (with a key that may sell) fills a cart
-// and asks to pay.
+// and pays for it with Stripe (a stand-in, see stripe.ts); the merchant then
+// fulfils the order or cancels and refunds it.
 
 const STORE_ADDR = process.env.E2E_STORE_ADDR ?? "127.0.0.1:4321";
 const STOREFRONT_PORT = Number(process.env.E2E_STOREFRONT_PORT ?? 3456);
@@ -302,4 +304,139 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
   await page.getByRole("button", { name: "Continue to payment" }).click();
   await expect(page.getByRole("alert")).toContainText("Payments are not available", { timeout: 30_000 });
   await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
+});
+
+/// Stripe telling the dashboard a payment went through, as its webhook does.
+async function paymentSucceeded(request: APIRequestContext, webhookUrl: string, paymentId: string, secret: string) {
+  const body = JSON.stringify({
+    id: `evt_${paymentId}`,
+    type: "payment_intent.succeeded",
+    data: { object: { id: paymentId, object: "payment_intent" } },
+  });
+  return request.post(webhookUrl, {
+    data: body,
+    headers: { "content-type": "application/json", "stripe-signature": stripeSignature(body, secret) },
+  });
+}
+
+/// From the cart to the card form: the checkout form filled (or kept from
+/// the last order) and sent.
+async function continueToPayment(page: Page, fill: boolean) {
+  await page.goto(`${STOREFRONT}/cart`);
+  await page.getByRole("link", { name: "Check out" }).click();
+  if (fill) {
+    await page.getByLabel("E-mail").fill("ada@example.org");
+    await page.getByLabel("Full name").fill("Ada Lovelace");
+    await page.getByLabel("Street address").fill("1 rue de la Paix");
+    await page.getByLabel("Postal code").fill("75002");
+    await page.getByLabel("City").fill("Paris");
+    await page.getByLabel("Country code").fill("FR");
+  } else {
+    await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
+  }
+  await page.getByRole("button", { name: "Continue to payment" }).click();
+  await expect(page).toHaveURL(`${STOREFRONT}/checkout/pay`);
+}
+
+test("a shopper pays with Stripe and the merchant fulfils or refunds the order", async ({ page, request }) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Paying Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await publishProduct(page, slug, "Red Plate", "8");
+
+    // The merchant connects a Stripe account; a key Stripe refuses is not saved.
+    await page.getByRole("link", { name: "Payments", exact: true }).click();
+    await expect(page.locator("[data-payments]")).toHaveAttribute("data-payments", "none");
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    expect(webhookUrl).toMatch(/\/stripe\/webhooks\/[0-9A-Z]{26}$/);
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("not-a-key");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page).toHaveURL(/error=invalid_secret_key/);
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await expect(page.locator("[data-publishable-key]")).toHaveText("pk_test_e2e");
+
+    const key = await mintKey(page, slug, true);
+    await startStorefront(request, key, 2);
+
+    // Two mugs, then the card form with the payment the dashboard opened.
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await page.getByLabel("Quantity").fill("2");
+    await page.getByRole("button", { name: "Add to cart" }).click();
+    await continueToPayment(page, true);
+    const intent = stripe.lastIntent()!;
+    expect(intent.amount).toBe(2500);
+    expect(intent.currency).toBe("eur");
+    const form = page.locator("[data-payment-form]");
+    await expect(form).toHaveAttribute("data-publishable-key", "pk_test_e2e");
+    await expect(form).toHaveAttribute("data-client-secret", `${intent.id}_secret_e2e`);
+    await expect(page.locator("[data-payment-total]")).toHaveText("25.00 EUR");
+
+    // Stripe sends the browser back before it tells the dashboard: the page
+    // waits. A webhook that is not Stripe's is refused.
+    await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+    await expect(page.locator("[data-payment-confirming]")).toBeVisible();
+    stripe.pay(intent.id);
+    expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_forged")).status()).toBe(400);
+    expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+    await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+    const reference = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+    expect(reference).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid");
+    await expect(page.locator("[data-order-total]")).toHaveText("25.00 EUR");
+    // Told twice, still one order.
+    expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+    await page.goto(`${STOREFRONT}/cart`);
+    await expect(page.locator("[data-cart-empty]")).toBeVisible();
+
+    // The merchant finds it paid and fulfils it.
+    const row = page.locator(`[data-order="${reference}"]`);
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders`);
+      await expect(row).toHaveAttribute("data-order-status", "paid", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await row.getByRole("link", { name: reference }).click();
+    await expect(page.locator("[data-order-payment]")).toContainText(intent.id);
+    await expect(page.locator("[data-order-address]")).toContainText("Ada Lovelace");
+    await page.getByLabel("Tracking number (optional)").fill("6A12345");
+    await page.getByRole("button", { name: "Mark as fulfilled" }).click();
+    await expect(page.getByRole("status")).toContainText("Order marked as fulfilled.");
+    await expect(page.locator("[data-order-tracking]")).toHaveText("6A12345");
+    await expect(page.getByRole("button", { name: "Cancel and refund" })).toHaveCount(0);
+
+    // A second order is cancelled: the money goes back through Stripe.
+    await page.goto(`${STOREFRONT}/p/red-plate`);
+    await page.getByRole("button", { name: "Add to cart" }).click();
+    await continueToPayment(page, false);
+    const second = stripe.lastIntent()!;
+    expect(second.id).not.toBe(intent.id);
+    stripe.pay(second.id);
+    expect((await paymentSucceeded(request, webhookUrl, second.id, "whsec_e2e")).status()).toBe(204);
+    await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+    await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+    const secondReference = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+    const secondRow = page.locator(`[data-order="${secondReference}"]`);
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders`);
+      await expect(secondRow).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await secondRow.getByRole("link", { name: secondReference }).click();
+    await page.getByLabel("Reason for cancelling").fill("Out of stock");
+    await page.getByRole("button", { name: "Cancel and refund" }).click();
+    await expect(page.getByRole("status")).toContainText("Order cancelled and refunded.");
+    await expect(page.locator("[data-order-refunded]")).toHaveText("8.00 EUR");
+    await expect(page.locator("[data-order-cancel-reason]")).toHaveText("Out of stock");
+    expect(stripe.refunds).toEqual([{ payment_intent: second.id, amount: 800 }]);
+  } finally {
+    await stripe.stop();
+  }
 });

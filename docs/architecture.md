@@ -130,18 +130,30 @@ tenant's products while the events stay isolated by construction.
    `ApiKey::Scoped` event (keys older than it hold read + write). Revoking the key or
    changing its scopes ends its connections; suspending the tenant closes its
    database, and reconnects are refused.
-4. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
+4. **Payments** (`payments/`). Each tenant connects its own Stripe account on
+   `/t/{slug}/payments`; the secret key and the webhook signing secret are recorded
+   in the tenant's platform events sealed with AES-256-GCM under the operator's
+   `[payments] secret_key` (no section, no payments). A storefront asks to pay
+   (`Cart::CheckoutRequested`); the per-tenant subscription `timada-dashboard/payments`
+   prices the cart from the store, opens a PaymentIntent with the tenant's key (the
+   request id is the idempotency key, so every node answering opens one payment) and
+   records it (`Cart::PaymentRequested`) or the refusal. The shopper confirms with
+   Stripe's card form; Stripe calls `POST /stripe/webhooks/{tenant_id}`, any node,
+   which checks the signature, reads the payment back from Stripe and only then
+   creates the order (`place_paid_order`). A second payment of a cart is refunded;
+   cancelling an order refunds it first.
+5. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
    roles as roles. Policies are not loaded at startup: every tenant-scoped request loads
    the tenant's strict state, whose version says which events it reflects, and the
    enforcer re-syncs a tenant's rules when a newer state comes along. Owners bypass.
    `manage` on a resource implies `read`.
-5. **Auth glue** (`auth/`). The web side of the identity context: OIDC discovery and
+6. **Auth glue** (`auth/`). The web side of the identity context: OIDC discovery and
    token exchange, WebAuthn ceremonies, mailed one-time codes, the private cookies that
    carry a sign-in attempt between steps, and the session cookie.
-6. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
+7. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
-   orders, open carts), `/invitations/{token}`,
+   orders, open carts, payments), `/stripe/webhooks/{tenant_id}`, `/invitations/{token}`,
    `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.
 
 Shutdown stops the HTTP server, then the store API (its leases hold tenants open), the

@@ -66,6 +66,18 @@ services:
       - timada-network
     restart: unless-stopped
 
+  # stripe-mock - Stripe's API answered locally, for `make e2e` and the
+  # payments tests (config/e2e.toml points payments.stripe_api_url here).
+  # It answers with fixtures: nothing is charged, nothing is kept.
+  stripe-mock:
+    image: stripe/stripe-mock:v0.206.0
+    container_name: timada-stripe-mock
+    ports:
+      - "12111:12111"
+    networks:
+      - timada-network
+    restart: unless-stopped
+
 networks:
   timada-network:
     driver: bridge

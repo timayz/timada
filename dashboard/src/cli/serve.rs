@@ -32,13 +32,24 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         &config.media,
         config.cluster.as_ref(),
     )?);
+    let gateway = Arc::new(crate::payments::StripeGateway::new(
+        config
+            .payments
+            .as_ref()
+            .and_then(|payments| payments.stripe_api_url.clone()),
+    ));
+    let payments = Arc::new(crate::payments::Payments::new(
+        config.payments.as_ref(),
+        gateway,
+        executor.clone(),
+    ));
     let tenants = Tenants::new(
         cluster.clone(),
         &config.tenants,
         config.server.region.clone(),
         executor.clone(),
         write_pool.clone(),
-        tenant_subscriptions(media.clone()),
+        tenant_subscriptions(media.clone(), payments.clone()),
     );
     let connections = StoreConnections::new();
     let store_api = store_api::serve(
@@ -97,6 +108,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         tenants: tenants.clone(),
         authorizer,
         media,
+        payments,
         store: connections,
         config,
     });
@@ -134,11 +146,23 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 /// fed into the shared database (the catalog's product list, the orders and
 /// carts), and this node's copies of the product pictures. Every
 /// tenant-scoped bounded context registers its subscription here.
-fn tenant_subscriptions(media: Arc<crate::media::Media>) -> Vec<TenantSubscription> {
+fn tenant_subscriptions(
+    media: Arc<crate::media::Media>,
+    payments: Arc<crate::payments::Payments>,
+) -> Vec<TenantSubscription> {
     vec![
-        Arc::new(timada_catalog::read_model_subscription::<Executor>),
-        Arc::new(timada_orders::read_model_subscription::<Executor>),
-        Arc::new(move |_, tenant_id| crate::media::subscription(media.clone(), tenant_id)),
+        Arc::new(|pool, tenant_id, _: &Executor| {
+            timada_catalog::read_model_subscription(pool, tenant_id)
+        }),
+        Arc::new(|pool, tenant_id, _: &Executor| {
+            timada_orders::read_model_subscription(pool, tenant_id)
+        }),
+        Arc::new(move |_, tenant_id, _: &Executor| {
+            crate::media::subscription(media.clone(), tenant_id)
+        }),
+        Arc::new(move |_, tenant_id, executor: &Executor| {
+            crate::payments::subscription(payments.clone(), tenant_id, executor.clone())
+        }),
     ]
 }
 

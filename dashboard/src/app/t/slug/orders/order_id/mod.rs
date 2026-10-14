@@ -44,7 +44,7 @@ pub fn order_url(
 }
 
 /// The order named in the URL, or 404.
-async fn require_order(cx: &Cx, access: &TenantAccess) -> Result<OrderState> {
+pub(crate) async fn require_order(cx: &Cx, access: &TenantAccess) -> Result<OrderState> {
     let id = path_param::<OrderId>(cx);
     orders(access)?
         .load_order(id)
@@ -255,7 +255,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <label class="block text-sm" for="order-cancel-reason">"Reason for cancelling"</label>
                                 <input id="order-cancel-reason" name="reason" type="text" required="" maxlength=(MAX_REASON_LEN)
                                     class="w-full rounded border border-neutral-300 px-3 py-2">
-                                <button class="rounded border border-red-300 px-4 py-2 font-medium text-red-800 hover:bg-red-50">"Cancel the order"</button>
+                                <button class="rounded border border-red-300 px-4 py-2 font-medium text-red-800 hover:bg-red-50">"Cancel and refund"</button>
                             </form>
                         }
                     </div>

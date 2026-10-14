@@ -153,6 +153,14 @@ pub fn describe_error(code: &str) -> &'static str {
         "order_not_found" => "This order does not exist.",
         "order_cancelled" => "A cancelled order cannot be fulfilled.",
         "invalid_publishable_key" => "A publishable key starts with pk_.",
+        "invalid_secret_key" => "A secret key starts with sk_ (or rk_ for a restricted key).",
+        "invalid_webhook_secret" => "A webhook signing secret starts with whsec_.",
+        "stripe_refused_key" => "Stripe did not accept this secret key.",
+        "payments_disabled" => "Payments are not enabled on this platform.",
+        "payments_unavailable" => "This tenant has no payments set up.",
+        "refund_failed" => {
+            "Stripe could not refund the payment: the order is not cancelled. Try again."
+        }
         "not_cancellable" => "A fulfilled order cannot be cancelled.",
         "invalid_tracking" => "A tracking number is at most 200 characters.",
         "invalid_reason" => "Say why the order is cancelled, in at most 500 characters.",
