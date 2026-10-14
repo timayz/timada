@@ -4,8 +4,7 @@ import { ADMIN_STATE } from "./fixtures";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // Tenants: self-service creation, the tenant's own page, and the platform
-// administration (status, suspend, resume). The e2e configuration closes an
-// idle tenant database after 2 seconds, so a test can watch it stop.
+// administration (status, suspend, resume).
 
 test("a user creates a tenant, owns it and renames it", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));
@@ -70,11 +69,11 @@ test("only members see a tenant", async ({ browser }) => {
   await strangerContext.close();
 });
 
-test("the administrator sees tenants stop when idle, suspends and resumes them", async ({ browser }) => {
+test("the administrator sees a tenant running, suspends and resumes it", async ({ browser }) => {
   const ownerContext = await browser.newContext();
   const owner = await ownerContext.newPage();
   await registerWithEmail(owner, uniqueEmail("owner"));
-  const { name, slug } = uniqueTenant("Idle Shop");
+  const { name, slug } = uniqueTenant("Quiet Shop");
   await createTenant(owner, name);
   await expect(owner).toHaveURL(new RegExp(`/t/${slug}`));
 
@@ -91,15 +90,8 @@ test("the administrator sees tenants stop when idle, suspends and resumes them",
   }).toPass({ timeout: 15_000 });
   await expect(row.locator("[data-tenant-status]")).toHaveText("Running");
 
-  // Nobody touches it: the database closes after the idle timeout.
-  await expect(async () => {
-    await admin.reload();
-    await expect(row.locator("[data-tenant-status]")).toHaveText("Stopped", { timeout: 1000 });
-  }).toPass({ timeout: 15_000 });
-
-  // A member's visit opens it again.
-  await owner.goto(`/t/${slug}`);
-  await expect(owner.locator("[data-tenant-status]")).toHaveAttribute("data-tenant-status", "running");
+  // Nobody touches it: it stays open, as nothing needs the room.
+  await admin.waitForTimeout(3000);
   await admin.reload();
   await expect(row.locator("[data-tenant-status]")).toHaveText("Running");
 

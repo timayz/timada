@@ -4305,6 +4305,7 @@ dependencies = [
  "evento-sql",
  "evento-sql-migrator",
  "imagesize",
+ "libc",
  "openidconnect",
  "rcgen",
  "serde",

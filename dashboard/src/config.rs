@@ -100,19 +100,17 @@ pub struct DatabaseConfig {
     pub max_connections: u32,
 }
 
-/// Where tenant databases live and when an idle one is closed.
+/// Where tenant databases live and how many stay open at once.
 #[derive(Debug, Deserialize, Clone)]
 pub struct TenantsConfig {
     /// Directory holding one SQLite file per tenant (its events and its
     /// consensus journal).
     pub dir: PathBuf,
-    /// A tenant whose database saw no request for this long is closed; the
-    /// next request opens it again.
-    pub idle_timeout_secs: u64,
     /// Most tenant databases open at once; beyond it the least recently used
     /// is closed. Each open database holds up to three connections, and
-    /// sqlx-sqlite runs one OS thread per connection.
-    pub max_open: usize,
+    /// sqlx-sqlite runs one OS thread per connection. Unset: worked out from
+    /// the machine at startup ([`crate::limits::auto_max_open`]).
+    pub max_open: Option<usize>,
 }
 
 /// The pictures merchants upload for their products: where the files are
@@ -229,8 +227,6 @@ impl Config {
             .set_default("database.url", "sqlite:data/timada.db")?
             .set_default("database.max_connections", 3)?
             .set_default("tenants.dir", "data/tenants")?
-            .set_default("tenants.idle_timeout_secs", 300)?
-            .set_default("tenants.max_open", 64)?
             .set_default("media.dir", "data/media")?
             .set_default("media.public_url", "https://timada.localhost/media")?
             .set_default("auth.session_lifetime_secs", 14 * 24 * 60 * 60)?
@@ -337,12 +333,7 @@ impl MailConfig {
 
 impl TenantsConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.idle_timeout_secs == 0 {
-            return Err(ConfigError::Message(
-                "tenants.idle_timeout_secs must be greater than 0".into(),
-            ));
-        }
-        if self.max_open == 0 {
+        if self.max_open == Some(0) {
             return Err(ConfigError::Message(
                 "tenants.max_open must be at least 1".into(),
             ));
@@ -350,8 +341,9 @@ impl TenantsConfig {
         Ok(())
     }
 
-    pub fn idle_timeout(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(self.idle_timeout_secs)
+    /// The configured limit, or the one the machine allows.
+    pub fn max_open(&self) -> usize {
+        self.max_open.unwrap_or_else(crate::limits::auto_max_open)
     }
 }
 

@@ -1,6 +1,6 @@
 //! The tenant runtime end to end on one node: a tenant's database is created
 //! on first use, written and read through its own consensus group, closed when
-//! idle or when too many are open, and reopened with its read models resuming
+//! too many are open, and reopened with its read models resuming
 //! where they stopped. The catalog's product list is the real read model fed
 //! this way; a probe subscription records what the runtime delivers.
 //!
@@ -13,6 +13,8 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/limits.rs"]
+mod limits;
 #[path = "../src/tenants.rs"]
 mod tenants;
 
@@ -34,8 +36,6 @@ use timada_tenancy::{Command, CreateTenant, TenantState, read_model_subscription
 use cluster::Cluster;
 use config::TenantsConfig;
 use tenants::{CatchUp, TenantStatus, TenantSubscription, Tenants};
-
-const IDLE: Duration = Duration::from_millis(300);
 
 struct Harness {
     tenants: Arc<Tenants>,
@@ -107,8 +107,7 @@ async fn harness(max_open: usize) -> Harness {
         cluster,
         &TenantsConfig {
             dir: dir.join("tenants"),
-            idle_timeout_secs: 1,
-            max_open,
+            max_open: Some(max_open),
         },
         None,
         platform.clone(),
@@ -196,7 +195,7 @@ fn names_seen(seen: &Mutex<Vec<(String, String)>>, tenant_id: &str) -> Vec<Strin
 }
 
 #[tokio::test]
-async fn a_tenant_database_opens_on_use_closes_when_idle_and_resumes() {
+async fn a_tenant_database_opens_on_use_and_resumes_after_closing() {
     let h = harness(8).await;
     let acme = h.create("acme").await;
     assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
@@ -225,14 +224,13 @@ async fn a_tenant_database_opens_on_use_closes_when_idle_and_resumes() {
         "nothing landed in the platform store"
     );
 
-    // Idle: a sweep before the timeout keeps it, one after closes it.
-    h.tenants.sweep().await;
+    // Unused, it stays open; closed, its file stays.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(matches!(
         h.tenants.status(&acme.id),
         TenantStatus::Running { .. }
     ));
-    tokio::time::sleep(IDLE * 4).await;
-    h.tenants.sweep().await;
+    h.tenants.close(&acme.id).await;
     assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
     assert_eq!(h.tenants.open_count(), 0);
     assert!(h.tenants.path_of(&acme.id).exists(), "the file stays");
@@ -292,15 +290,13 @@ async fn too_many_open_tenants_evicts_the_least_recently_used() {
 }
 
 #[tokio::test]
-async fn a_request_holds_its_tenant_open_past_the_idle_timeout() {
+async fn a_request_holds_its_tenant_against_eviction() {
     let h = harness(1).await;
     let a = h.create("aaa").await;
     let b = h.create("bbb").await;
+    let c = h.create("ccc").await;
 
-    // A request outlives the idle timeout: the sweep leaves its tenant open.
     let hold = h.tenants.hold(&a).await.unwrap();
-    tokio::time::sleep(IDLE * 4).await;
-    h.tenants.sweep().await;
     assert!(
         matches!(
             h.tenants.status(&a.id),
@@ -309,7 +305,7 @@ async fn a_request_holds_its_tenant_open_past_the_idle_timeout() {
         "a request is not shown as a store connection"
     );
 
-    // Nor is it evicted to make room for another tenant.
+    // It is not evicted to make room for another tenant.
     h.tenants.open(&b).await.unwrap();
     assert!(matches!(
         h.tenants.status(&a.id),
@@ -321,9 +317,10 @@ async fn a_request_holds_its_tenant_open_past_the_idle_timeout() {
         .await;
     assert!(probe.is_ok(), "its database is still usable: {probe:?}");
 
-    // Once the request is done, the tenant is idle like any other.
+    // Once the request is done, it can go like any other.
     drop(hold);
-    h.tenants.sweep().await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    h.tenants.open(&c).await.unwrap();
     assert_eq!(h.tenants.status(&a.id), TenantStatus::Stopped);
 
     h.tenants.shutdown().await;
@@ -410,30 +407,35 @@ async fn a_peer_asking_for_a_tenant_the_catalog_learns_late_still_opens_it() {
 }
 
 #[tokio::test]
-async fn a_tenant_written_to_within_the_timeout_is_not_idle() {
-    let h = harness(8).await;
-    let acme = h.create("acme").await;
-    h.write(&acme, "probe", "one", 0).await;
+async fn a_tenant_the_cluster_wrote_to_is_not_evicted_first() {
+    let h = harness(2).await;
+    let a = h.create("aaa").await;
+    let b = h.create("bbb").await;
+    let c = h.create("ccc").await;
 
-    // No request has touched it for longer than the timeout, but its newest
-    // event is recent: on a node taking part in another node's writes, that
-    // is the only sign the tenant is in use.
-    // The harness's idle timeout is one second.
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    sqlx::query("UPDATE event SET timestamp = strftime('%s', 'now')")
-        .execute(&tenant_pool(&h, &acme).await)
+    let executor = h.tenants.open(&a).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    h.tenants.open(&b).await.unwrap();
+    // A write that does not go through `open`, as on a node that only takes
+    // part in another node's writes: no request, but the group moved.
+    evento::append("probe")
+        .original_version(0)
+        .event(&Renamed { name: "one".into() })
+        .commit(&executor)
         .await
         .unwrap();
-    h.tenants.sweep().await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    h.tenants.open(&c).await.unwrap();
+
     assert!(matches!(
-        h.tenants.status(&acme.id),
+        h.tenants.status(&a.id),
         TenantStatus::Running { .. }
     ));
-
-    // Once that write is older than the timeout, it closes.
-    tokio::time::sleep(Duration::from_millis(2200)).await;
-    h.tenants.sweep().await;
-    assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
+    assert_eq!(
+        h.tenants.status(&b.id),
+        TenantStatus::Stopped,
+        "b was the least recently used once a's write counted"
+    );
 
     h.tenants.shutdown().await;
     let _ = std::fs::remove_dir_all(&h.dir);
@@ -469,7 +471,7 @@ const QUICK_CATCH_UP: CatchUp = CatchUp {
 };
 
 #[tokio::test]
-async fn the_catch_up_pass_opens_each_closed_tenant_then_closes_it() {
+async fn the_catch_up_pass_opens_each_closed_tenant_and_keeps_it_open() {
     let h = harness(8).await;
     let acme = h.create("acme").await;
     let beta = h.create("beta").await;
@@ -502,10 +504,12 @@ async fn the_catch_up_pass_opens_each_closed_tenant_then_closes_it() {
         .expect("the pass ends")
         .unwrap();
 
-    assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
-    assert_eq!(h.tenants.status(&beta.id), TenantStatus::Stopped);
-    // The pass did open beta: its database file exists now.
-    assert!(h.tenants.path_of(&beta.id).exists());
+    for tenant in [&acme, &beta] {
+        assert!(matches!(
+            h.tenants.status(&tenant.id),
+            TenantStatus::Running { .. }
+        ));
+    }
     // A suspended tenant is not opened, not even to catch up.
     assert!(!h.tenants.path_of(&gamma.id).exists());
     assert!(matches!(
@@ -515,39 +519,6 @@ async fn the_catch_up_pass_opens_each_closed_tenant_then_closes_it() {
 
     h.tenants.shutdown().await;
     let _ = std::fs::remove_dir_all(&h.dir);
-}
-
-#[tokio::test]
-async fn a_tenant_used_while_catching_up_stays_open() {
-    let h = harness(8).await;
-    let acme = h.create("acme").await;
-
-    let catching_up = tokio::spawn({
-        let tenants = h.tenants.clone();
-        let id = acme.id.clone();
-        async move { tenants.catch_up(&id, QUICK_CATCH_UP).await }
-    });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    // A request arrives during the hold.
-    h.tenants.open(&acme).await.unwrap();
-    assert!(catching_up.await.unwrap(), "the pass opened it");
-
-    assert!(matches!(
-        h.tenants.status(&acme.id),
-        TenantStatus::Running { .. }
-    ));
-
-    h.tenants.shutdown().await;
-    let _ = std::fs::remove_dir_all(&h.dir);
-}
-
-/// A second connection to a tenant's own database file.
-async fn tenant_pool(h: &Harness, tenant: &TenantState) -> SqlitePool {
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(SqliteConnectOptions::new().filename(h.tenants.path_of(&tenant.id)))
-        .await
-        .unwrap()
 }
 
 /// Waits until the shared product list of `tenant` satisfies `ok`.
@@ -609,10 +580,9 @@ async fn a_tenant_read_model_lands_in_the_shared_database() {
             .is_some()
     );
 
-    // Closed when idle, reopened on use: the read model resumes from its
-    // cursor in the tenant's file and updates the same row.
-    tokio::time::sleep(IDLE * 4).await;
-    h.tenants.sweep().await;
+    // Closed, reopened on use: the read model resumes from its cursor in
+    // the tenant's file and updates the same row.
+    h.tenants.close(&acme.id).await;
     assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
     let catalog = timada_catalog::Command(h.tenants.open(&acme).await.unwrap());
     catalog
