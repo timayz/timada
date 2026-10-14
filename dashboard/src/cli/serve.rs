@@ -9,7 +9,7 @@ use crate::cluster::{Cluster, Executor};
 use crate::config::Config;
 use crate::db::{self, ReadPool, WritePool};
 use crate::store_api::{self, StoreConnections};
-use crate::tenants::{TenantSubscription, Tenants};
+use crate::tenants::{CatchUp, TenantSubscription, Tenants};
 
 pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> Result<()> {
     let host = host.unwrap_or_else(|| config.server.host.clone());
@@ -84,6 +84,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         .await?,
     ];
 
+    // A restarted node brings its tenant copies up to date in the background
+    // instead of waiting for something to open each one.
+    let catch_up = tenants.start_catch_up(CatchUp::default());
+
     let router = app::router(Services {
         executor,
         read_pool: ReadPool(read_pool.clone()),
@@ -113,6 +117,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         store_api.shutdown().await;
     }
     sweeper.abort();
+    if let Some(catch_up) = catch_up {
+        catch_up.abort();
+    }
     tenants.shutdown().await;
     for subscription in &read_models {
         subscription.stop();

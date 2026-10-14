@@ -218,6 +218,20 @@ impl Cluster {
         self.host.close(group);
     }
 
+    /// Whether the cluster has other nodes to catch up from.
+    pub fn has_peers(&self) -> bool {
+        self.ids.len() > 1
+    }
+
+    /// A counter that moves whenever the group's applied state advances
+    /// (a write applied here, or events imported from a peer); `None` when the
+    /// group is not open on this node.
+    pub fn group_activity(&self, group: GroupId) -> Option<u64> {
+        self.host
+            .get(group)
+            .map(|node| node.sweep_pressure().activity)
+    }
+
     /// Whether a group has a transaction in flight or applied within the
     /// last moment (its node still holds commands compaction has not dropped
     /// yet). On a node that only takes part in another node's writes, this is

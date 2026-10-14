@@ -13,6 +13,11 @@
 //! evicted (a store with subscriptions is never idle anyway), only by an
 //! administrator or at shutdown. A web request holds a [`RequestHold`] the
 //! same way while it runs, so a slow write is never cut by the sweeper.
+//!
+//! A node that was down missed the writes its peers took meanwhile, and a
+//! closed tenant only fetches them once it opens. [`Tenants::start_catch_up`]
+//! therefore opens every tenant once after a restart, holds it while its
+//! peers send what is missing, and closes it again unless it got used.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -30,8 +35,9 @@ use evento_sql::Sql;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use timada_tenancy::aggregator::Created;
-use timada_tenancy::{Command, TenantState, group_of, tenant_by_group};
-use tokio::task::JoinHandle;
+use timada_tenancy::{Command, TenantState, active_tenant_ids, group_of, tenant_by_group};
+use tokio::sync::Semaphore;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::cluster::{Cluster, Executor, PENDING_TTL};
 use crate::config::TenantsConfig;
@@ -118,6 +124,33 @@ impl RequestHold {
 impl Drop for RequestHold {
     fn drop(&mut self) {
         self.requests.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// How [`Tenants::start_catch_up`] holds each tenant it opens. A freshly
+/// opened group asks a peer for what it is missing every quarter second for
+/// its first three seconds, then every few seconds; the hold covers those
+/// first rounds and lasts while events keep arriving, up to a cap.
+#[derive(Debug, Clone, Copy)]
+pub struct CatchUp {
+    /// Held at least this long.
+    pub min_hold: Duration,
+    /// Released once nothing new has arrived for this long.
+    pub quiet: Duration,
+    /// Released after this long, whatever is still arriving.
+    pub max_hold: Duration,
+    /// Tenants caught up at once.
+    pub parallel: usize,
+}
+
+impl Default for CatchUp {
+    fn default() -> Self {
+        Self {
+            min_hold: Duration::from_secs(3),
+            quiet: Duration::from_secs(1),
+            max_hold: Duration::from_secs(60),
+            parallel: 4,
+        }
     }
 }
 
@@ -507,6 +540,152 @@ impl Tenants {
         };
         if let Err(err) = self.open(&tenant).await {
             tracing::warn!(tenant = %tenant.slug, %err, "cannot reopen the tenant for a peer");
+        }
+    }
+
+    /// Brings this node's copy of every active tenant up to date with its
+    /// peers, once, in the background. Started with the node: a node that was
+    /// down would otherwise fetch the writes it missed only when something
+    /// opens the tenant here, and until then the cluster holds one copy fewer
+    /// of them. Nothing to do on a node alone.
+    pub fn start_catch_up(self: &Arc<Self>, settings: CatchUp) -> Option<JoinHandle<()>> {
+        if !self.cluster.has_peers() {
+            return None;
+        }
+        let tenants = Arc::clone(self);
+        Some(tokio::spawn(async move {
+            // The catalog is a read model of the platform store, which is
+            // catching up as well: a tenant created while this node was down
+            // is listed only once the platform store has it.
+            tenants.wait_caught_up(GroupId::DEFAULT, settings).await;
+            tenants.catch_up_all(settings).await;
+        }))
+    }
+
+    /// Catches up every tenant the catalog lists as active, a few at a time.
+    pub async fn catch_up_all(self: &Arc<Self>, settings: CatchUp) {
+        let ids = match active_tenant_ids(&self.read_models).await {
+            Ok(ids) => ids,
+            Err(err) => {
+                tracing::warn!(%err, "cannot list the tenants to catch up");
+                return;
+            }
+        };
+        let started = Instant::now();
+        let slots = Arc::new(Semaphore::new(settings.parallel.max(1)));
+        let mut tasks = JoinSet::new();
+        for id in ids {
+            let slot = Arc::clone(&slots)
+                .acquire_owned()
+                .await
+                .expect("the semaphore is never closed");
+            let tenants = Arc::clone(self);
+            tasks.spawn(async move {
+                let _slot = slot;
+                tenants.catch_up(&id, settings).await
+            });
+        }
+        let mut opened = 0;
+        while let Some(done) = tasks.join_next().await {
+            if matches!(done, Ok(true)) {
+                opened += 1;
+            }
+        }
+        tracing::info!(tenants = opened, elapsed = ?started.elapsed(), "tenants caught up");
+    }
+
+    /// Opens one tenant, holds it while its peers send what this node is
+    /// missing, then closes it unless something used it meanwhile. A tenant
+    /// already open is catching up already and is left alone. Whether the
+    /// tenant was opened.
+    pub async fn catch_up(&self, tenant_id: &str, settings: CatchUp) -> bool {
+        if matches!(self.status(tenant_id), TenantStatus::Running { .. }) {
+            return false;
+        }
+        let tenant = match Command(self.platform.clone()).load_tenant(tenant_id).await {
+            Ok(Some(tenant)) if !tenant.is_suspended() => tenant,
+            Ok(_) => return false,
+            Err(err) => {
+                tracing::warn!(tenant = %tenant_id, %err, "cannot load the tenant to catch up");
+                return false;
+            }
+        };
+        let group = GroupId(group_of(&tenant.id));
+        let hold = match self.hold(&tenant).await {
+            Ok(hold) => hold,
+            Err(err) => {
+                tracing::warn!(tenant = %tenant.slug, %err, "cannot open the tenant to catch up");
+                return false;
+            }
+        };
+        let opened = self.last_used(group, &tenant.id);
+        self.wait_caught_up(group, settings).await;
+        drop(hold);
+
+        // Used meanwhile (a request, a store connection, a write anywhere in
+        // the cluster): left open for the sweeper, like any other tenant.
+        let unused = |t: &OpenTenant| {
+            t.tenant_id == tenant.id && Some(t.last_used) == opened && !t.is_held()
+        };
+        let pool = {
+            let open = self.open.lock().expect("open poisoned");
+            open.get(&group)
+                .filter(|t| unused(t))
+                .map(|t| t.pool.clone())
+        };
+        let Some(pool) = pool else {
+            return true;
+        };
+        if self.cluster.group_busy(group) || self.written_recently(&pool).await {
+            return true;
+        }
+        let removed = {
+            let mut open = self.open.lock().expect("open poisoned");
+            if open.get(&group).is_some_and(unused) {
+                open.remove(&group)
+            } else {
+                None
+            }
+        };
+        if let Some(t) = removed {
+            tracing::info!(tenant = %t.tenant_id, group = group.0, "tenant closed (caught up)");
+            self.shut(group, t).await;
+        }
+        true
+    }
+
+    fn last_used(&self, group: GroupId, tenant_id: &str) -> Option<Instant> {
+        let open = self.open.lock().expect("open poisoned");
+        open.get(&group)
+            .filter(|t| t.tenant_id == tenant_id)
+            .map(|t| t.last_used)
+    }
+
+    /// Waits for an open group to stop receiving events: at least
+    /// `min_hold`, then until its applied state has not moved for `quiet`,
+    /// at most `max_hold`. Returns early if the group closes.
+    async fn wait_caught_up(&self, group: GroupId, settings: CatchUp) {
+        const POLL: Duration = Duration::from_millis(100);
+        let start = Instant::now();
+        let mut last = self.cluster.group_activity(group);
+        let mut moved_at = start;
+        loop {
+            tokio::time::sleep(POLL).await;
+            let now = Instant::now();
+            let activity = self.cluster.group_activity(group);
+            if activity.is_none() {
+                return;
+            }
+            if activity != last {
+                last = activity;
+                moved_at = now;
+            }
+            let held = now - start;
+            if held >= settings.max_hold
+                || (held >= settings.min_hold && now - moved_at >= settings.quiet)
+            {
+                return;
+            }
         }
     }
 

@@ -33,7 +33,7 @@ use timada_tenancy::{Command, CreateTenant, TenantState, read_model_subscription
 
 use cluster::Cluster;
 use config::TenantsConfig;
-use tenants::{TenantStatus, TenantSubscription, Tenants};
+use tenants::{CatchUp, TenantStatus, TenantSubscription, Tenants};
 
 const IDLE: Duration = Duration::from_millis(300);
 
@@ -451,6 +451,87 @@ async fn a_new_tenant_opens_as_soon_as_its_creation_arrives() {
         .run_once(&h.platform.0)
         .await
         .unwrap();
+    assert!(matches!(
+        h.tenants.status(&acme.id),
+        TenantStatus::Running { .. }
+    ));
+
+    h.tenants.shutdown().await;
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+/// Short holds, so a pass over a few tenants takes well under a second.
+const QUICK_CATCH_UP: CatchUp = CatchUp {
+    min_hold: Duration::from_millis(300),
+    quiet: Duration::from_millis(100),
+    max_hold: Duration::from_secs(5),
+    parallel: 2,
+};
+
+#[tokio::test]
+async fn the_catch_up_pass_opens_each_closed_tenant_then_closes_it() {
+    let h = harness(8).await;
+    let acme = h.create("acme").await;
+    let beta = h.create("beta").await;
+    let gamma = h.create("gamma").await;
+    let delta = h.create("delta").await;
+    h.platform
+        .suspend_tenant(&gamma.id, "unpaid")
+        .await
+        .unwrap();
+    read_model_subscription::<cluster::Executor>(h.pool.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    // Already open: catching up on its own, so the pass leaves it alone.
+    h.tenants.open(&delta).await.unwrap();
+
+    let pass = tokio::spawn({
+        let tenants = h.tenants.clone();
+        async move { tenants.catch_up_all(QUICK_CATCH_UP).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !matches!(h.tenants.status(&acme.id), TenantStatus::Running { .. }) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the pass opens a closed tenant");
+    tokio::time::timeout(Duration::from_secs(10), pass)
+        .await
+        .expect("the pass ends")
+        .unwrap();
+
+    assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
+    assert_eq!(h.tenants.status(&beta.id), TenantStatus::Stopped);
+    // The pass did open beta: its database file exists now.
+    assert!(h.tenants.path_of(&beta.id).exists());
+    // A suspended tenant is not opened, not even to catch up.
+    assert!(!h.tenants.path_of(&gamma.id).exists());
+    assert!(matches!(
+        h.tenants.status(&delta.id),
+        TenantStatus::Running { .. }
+    ));
+
+    h.tenants.shutdown().await;
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+#[tokio::test]
+async fn a_tenant_used_while_catching_up_stays_open() {
+    let h = harness(8).await;
+    let acme = h.create("acme").await;
+
+    let catching_up = tokio::spawn({
+        let tenants = h.tenants.clone();
+        let id = acme.id.clone();
+        async move { tenants.catch_up(&id, QUICK_CATCH_UP).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // A request arrives during the hold.
+    h.tenants.open(&acme).await.unwrap();
+    assert!(catching_up.await.unwrap(), "the pass opened it");
+
     assert!(matches!(
         h.tenants.status(&acme.id),
         TenantStatus::Running { .. }
