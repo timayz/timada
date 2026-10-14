@@ -131,12 +131,13 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 }
 
 /// What follows each tenant's own stream while it is open: the read models
-/// fed into the shared database (the catalog's product list), and this
-/// node's copies of the product pictures. Every tenant-scoped bounded
-/// context registers its subscription here.
+/// fed into the shared database (the catalog's product list, the orders and
+/// carts), and this node's copies of the product pictures. Every
+/// tenant-scoped bounded context registers its subscription here.
 fn tenant_subscriptions(media: Arc<crate::media::Media>) -> Vec<TenantSubscription> {
     vec![
         Arc::new(timada_catalog::read_model_subscription::<Executor>),
+        Arc::new(timada_orders::read_model_subscription::<Executor>),
         Arc::new(move |_, tenant_id| crate::media::subscription(media.clone(), tenant_id)),
     ]
 }

@@ -35,8 +35,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
 use timada_tenancy::aggregator::Renamed;
 use timada_tenancy::{
-    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenantState,
-    read_model_subscription,
+    Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, SCOPE_STORE_WRITE,
+    TenantState, read_model_subscription,
 };
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -179,6 +179,10 @@ impl Harness {
     }
 
     async fn key_with(&self, tenant: &TenantState, scope: &str) -> (String, String) {
+        self.key_with_scopes(tenant, &[scope]).await
+    }
+
+    async fn key_with_scopes(&self, tenant: &TenantState, scopes: &[&str]) -> (String, String) {
         let created = self
             .platform
             .create_api_key(
@@ -186,7 +190,7 @@ impl Harness {
                 CreateApiKey {
                     tenant_id: tenant.id.clone(),
                     label: "Shop".into(),
-                    scopes: vec![scope.into()],
+                    scopes: scopes.iter().map(|s| s.to_string()).collect(),
                 },
                 NOW,
             )
@@ -453,6 +457,107 @@ async fn a_read_only_key_cannot_change_the_store() {
     let client = h.connect(&token).await.unwrap();
     assert_eq!(probe(&client, "s1", 1).await, 2);
     drop((client, writer));
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_checkout_key_sells_and_does_nothing_else() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (writer_token, _) = h.key(&acme).await;
+    let (token, _) = h
+        .key_with_scopes(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
+        .await;
+    let merchant = evento::Evento::new(h.connect(&writer_token).await.unwrap());
+    let catalog = timada_catalog::Command(merchant.clone());
+    let mug = catalog
+        .create_product(
+            "alice",
+            timada_catalog::CreateProduct {
+                name: "Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &mug.id).await.unwrap();
+
+    let shop = evento::Evento::new(h.connect(&token).await.unwrap());
+    let orders = timada_orders::Command(shop.clone());
+    let cart_id = orders
+        .create_cart(timada_orders::STOREFRONT_ACTOR)
+        .await
+        .unwrap();
+    orders
+        .add_to_cart(
+            timada_orders::STOREFRONT_ACTOR,
+            &cart_id,
+            timada_orders::CartItem {
+                product_id: mug.id.clone(),
+                variant_id: None,
+                quantity: 2,
+            },
+        )
+        .await
+        .unwrap();
+    let placed = orders
+        .place_order(
+            timada_orders::STOREFRONT_ACTOR,
+            &cart_id,
+            timada_orders::Checkout {
+                email: "ada@example.org".into(),
+                shipping: timada_orders::ShippingAddress {
+                    name: "Ada".into(),
+                    line1: "1 rue de la Paix".into(),
+                    postal_code: "75002".into(),
+                    city: "Paris".into(),
+                    country: "FR".into(),
+                    ..Default::default()
+                },
+                note: None,
+                expected_total_cents: Some(2500),
+            },
+        )
+        .await
+        .unwrap();
+
+    // What only the merchant does is refused: moving the order along,
+    // touching the catalog.
+    let paid = orders
+        .mark_order_paid("storefront", &placed.order_id)
+        .await
+        .unwrap_err();
+    assert!(format!("{paid}").contains("store:checkout"), "{paid}");
+    let repriced = timada_catalog::Command(shop.clone())
+        .price_product("storefront", &mug.id, 1, "EUR")
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{repriced}").contains("store:checkout"),
+        "{repriced}"
+    );
+
+    // The merchant sees the order as placed, unpaid, at the catalog's price.
+    let order = timada_orders::Command(merchant.clone())
+        .load_order(&placed.order_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.status, timada_orders::OrderStatus::AwaitingPayment);
+    assert_eq!(order.total_cents, 2500);
+    let product = catalog.load_product(&mug.id).await.unwrap().unwrap();
+    assert_eq!(product.price.unwrap().amount_cents, 1250);
+
+    // A key with write may still do it all.
+    timada_orders::Command(merchant.clone())
+        .mark_order_paid("alice", &placed.order_id)
+        .await
+        .unwrap();
+    drop((shop, merchant, orders, catalog));
     h.finish().await;
 }
 

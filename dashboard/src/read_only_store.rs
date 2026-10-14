@@ -1,7 +1,10 @@
 //! The executor a key without `store:write` is served: the tenant's own, with
-//! every way of changing the tenant's store taken away.
+//! every way of changing the tenant's store taken away, or all but one.
 //!
-//! - Appends are refused: the client's commit fails with the reason.
+//! - Appends are refused: the client's commit fails with the reason. A key
+//!   holding `store:checkout` may append what a shopper does (carts, placing
+//!   an order: [`timada_orders::is_shopper_event`]) and nothing else; one
+//!   event outside that list refuses the whole append.
 //! - Snapshots the client saves or deletes are dropped. A snapshot is state
 //!   the dashboard trusts when it loads the same view, so letting a read-only
 //!   client write one would be a write; dropping (rather than refusing) keeps
@@ -17,12 +20,31 @@ use evento::cursor::{Args, ReadResult, Value};
 use evento::{Event, EventFilter, Evento, Executor, RoutingKey, SubscriberStatus, WriteError};
 use ulid::Ulid;
 
-/// Wraps `inner` for the key `key_id`; keeps its default routing key.
+/// What a guarded connection may append.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Appends {
+    Nothing,
+    ShopperEvents,
+}
+
+/// Wraps `inner` for the key `key_id`, refusing every append; keeps its
+/// default routing key.
 pub fn read_only(inner: Evento, key_id: &str) -> Evento {
+    guarded(inner, key_id, Appends::Nothing)
+}
+
+/// Wraps `inner` for the key `key_id`, letting through only what a shopper
+/// writes (the `store:checkout` scope); keeps its default routing key.
+pub fn checkout_only(inner: Evento, key_id: &str) -> Evento {
+    guarded(inner, key_id, Appends::ShopperEvents)
+}
+
+fn guarded(inner: Evento, key_id: &str, appends: Appends) -> Evento {
     let routing_key = Executor::default_routing_key(&inner).map(str::to_owned);
     let executor = Evento::new(ReadOnly {
         inner,
         cursor_prefix: format!("store-api/{key_id}/"),
+        appends,
     });
     match routing_key {
         Some(key) => executor.default_routing_key(key),
@@ -33,6 +55,7 @@ pub fn read_only(inner: Evento, key_id: &str) -> Evento {
 struct ReadOnly {
     inner: Evento,
     cursor_prefix: String,
+    appends: Appends,
 }
 
 impl ReadOnly {
@@ -40,10 +63,24 @@ impl ReadOnly {
         format!("{}{key}", self.cursor_prefix)
     }
 
-    fn refused() -> WriteError {
-        WriteError::Unknown(anyhow::anyhow!(
-            "this API key may not write events (it lacks the store:write scope)"
-        ))
+    /// Lets an append through when every event of it is allowed.
+    fn check(&self, events: &[Event]) -> Result<(), WriteError> {
+        match self.appends {
+            Appends::Nothing => Err(WriteError::Unknown(anyhow::anyhow!(
+                "this API key may not write events (it lacks the store:write scope)"
+            ))),
+            Appends::ShopperEvents => match events
+                .iter()
+                .find(|e| !timada_orders::is_shopper_event(&e.aggregate_type, &e.name))
+            {
+                None => Ok(()),
+                Some(event) => Err(WriteError::Unknown(anyhow::anyhow!(
+                    "this API key may only fill carts and place orders (store:checkout), not write {}::{}",
+                    event.aggregate_type,
+                    event.name
+                ))),
+            },
+        }
     }
 }
 
@@ -53,12 +90,14 @@ impl Executor for ReadOnly {
         Executor::default_routing_key(&self.inner)
     }
 
-    async fn write(&self, _events: Vec<Event>) -> Result<(), WriteError> {
-        Err(Self::refused())
+    async fn write(&self, events: Vec<Event>) -> Result<(), WriteError> {
+        self.check(&events)?;
+        self.inner.write(events).await
     }
 
-    async fn replicate(&self, _events: Vec<Event>) -> Result<(), WriteError> {
-        Err(Self::refused())
+    async fn replicate(&self, events: Vec<Event>) -> Result<(), WriteError> {
+        self.check(&events)?;
+        self.inner.replicate(events).await
     }
 
     fn write_watch(&self) -> Option<tokio::sync::watch::Receiver<u64>> {

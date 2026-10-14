@@ -4314,6 +4314,7 @@ dependencies = [
  "sqlx_migrator",
  "timada-catalog",
  "timada-identity",
+ "timada-orders",
  "timada-storefront",
  "timada-tenancy",
  "tokio",
@@ -4338,6 +4339,23 @@ dependencies = [
  "sqlx",
  "sqlx_migrator",
  "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "timada-orders"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "rand 0.9.5",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror 2.0.21",
+ "timada-catalog",
  "tokio",
  "tracing",
  "ulid",
