@@ -53,8 +53,7 @@ CLI and an internet connection.
 2. **Forward Stripe's webhooks to your machine:**
 
    ```sh
-   nix shell nixpkgs#stripe-cli
-   stripe login
+   stripe login   # the Stripe CLI comes with `nix develop`
    stripe listen --events payment_intent.succeeded \
      --forward-to http://localhost:3000/stripe/webhooks/<tenant_id>
    ```
