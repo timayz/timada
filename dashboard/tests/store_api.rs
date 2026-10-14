@@ -12,6 +12,8 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/limits.rs"]
+mod limits;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
 #[path = "../src/store_api.rs"]
@@ -108,8 +110,7 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         cluster,
         &TenantsConfig {
             dir: dir.join("tenants"),
-            idle_timeout_secs: 1,
-            max_open: 4,
+            max_open: Some(4),
         },
         None,
         platform.clone(),
@@ -281,9 +282,14 @@ async fn a_store_connects_with_its_key_and_leases_its_tenant() {
     assert_eq!(h.leases(&zeta), Some(1));
     drop(other);
 
-    // Leased: idle sweeps leave it open.
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    h.tenants.sweep().await;
+    // Leased: filling the node with other tenants leaves it open.
+    let mut fillers = Vec::new();
+    for i in 0..4 {
+        fillers.push(h.create(&format!("filler-{i}")).await);
+    }
+    for filler in &fillers {
+        h.tenants.open(filler).await.unwrap();
+    }
     assert_eq!(
         h.leases(&acme),
         Some(1),
@@ -291,12 +297,13 @@ async fn a_store_connects_with_its_key_and_leases_its_tenant() {
     );
     assert_eq!(count(&client).await.unwrap(), 2);
 
-    // Disconnected: the lease goes, the next idle sweep closes it.
+    // Disconnected: the lease goes, and the next tenants opened evict it.
     drop(client);
     h.wait_for("lease released", |h| h.leases(&acme) == Some(0))
         .await;
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    h.tenants.sweep().await;
+    for filler in &fillers {
+        h.tenants.open(filler).await.unwrap();
+    }
     assert_eq!(h.leases(&acme), None);
 
     // Reconnecting finds the events again.

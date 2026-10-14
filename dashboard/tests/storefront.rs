@@ -13,6 +13,8 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/limits.rs"]
+mod limits;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
 #[path = "../src/store_api.rs"]
@@ -116,8 +118,7 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         cluster,
         &TenantsConfig {
             dir: dir.join("tenants"),
-            idle_timeout_secs: 1,
-            max_open: 4,
+            max_open: Some(4),
         },
         None,
         platform.clone(),

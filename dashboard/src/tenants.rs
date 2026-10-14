@@ -1,23 +1,24 @@
 //! The tenant runtime: one event database per tenant, opened on activity and
-//! closed when idle.
+//! kept open while the machine has room for it.
 //!
 //! A tenant is "up" while its database is open: its consensus group runs on
 //! this node and its read-model subscriptions follow its stream into the
 //! shared database. Every tenant-scoped request goes through [`Tenants::open`],
-//! which is the activity signal; [`Tenants::sweep`] closes what has not been
-//! asked for in `tenants.idle_timeout_secs`, and a bounded number stay open at
-//! once. A peer that talks about a group this node has closed triggers
-//! [`Tenants::reopen`], which opens it only if the catalog knows the tenant:
-//! the wire cannot create one. A storefront connected through the store API
-//! holds a [`TenantLease`]: a leased tenant is neither closed as idle nor
-//! evicted (a store with subscriptions is never idle anyway), only by an
-//! administrator or at shutdown. A web request holds a [`RequestHold`] the
-//! same way while it runs, so a slow write is never cut by the sweeper.
+//! which is the activity signal. At most `tenants.max_open` stay open at once
+//! (worked out from the machine when unset): opening one more closes the
+//! least recently used, where a write the cluster applied here counts as use
+//! as much as a request does. A peer that talks about a group this node has
+//! closed triggers [`Tenants::reopen`], which opens it only if the catalog
+//! knows the tenant: the wire cannot create one. A storefront connected
+//! through the store API holds a [`TenantLease`]: a leased tenant is never
+//! evicted, only closed by an administrator or at shutdown. A web request
+//! holds a [`RequestHold`] the same way while it runs, so a slow write is
+//! never cut by an eviction.
 //!
 //! A node that was down missed the writes its peers took meanwhile, and a
 //! closed tenant only fetches them once it opens. [`Tenants::start_catch_up`]
-//! therefore opens every tenant once after a restart, holds it while its
-//! peers send what is missing, and closes it again unless it got used.
+//! therefore opens every tenant once after a restart and holds it while its
+//! peers send what is missing.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -68,6 +69,9 @@ struct OpenTenant {
     subscriptions: Vec<Subscription>,
     opened_at: SystemTime,
     last_used: Instant,
+    /// The group's applied-state counter when `last_used` was last set: a
+    /// move means the cluster wrote to it, which counts as use.
+    activity: Option<u64>,
     /// Live [`TenantLease`]s; shared with each lease so a drop needs no lookup.
     leases: Arc<AtomicUsize>,
     /// Requests running against it, each holding a [`RequestHold`]. Kept
@@ -108,8 +112,7 @@ impl Drop for TenantLease {
 }
 
 /// A web request's hold on an open tenant, released on drop: while it lives
-/// the tenant is neither closed as idle nor evicted, so a write that takes
-/// longer than the idle timeout still has its database.
+/// the tenant is not evicted, so a slow write keeps its database.
 pub struct RequestHold {
     executor: Executor,
     requests: Arc<AtomicUsize>,
@@ -157,7 +160,6 @@ impl Default for CatchUp {
 pub struct Tenants {
     cluster: Arc<Cluster>,
     dir: PathBuf,
-    idle_timeout: Duration,
     max_open: usize,
     region: Option<String>,
     /// The platform store, to check the catalog before opening on a peer's word.
@@ -186,8 +188,7 @@ impl Tenants {
         let tenants = Arc::new(Self {
             cluster: cluster.clone(),
             dir: config.dir.clone(),
-            idle_timeout: config.idle_timeout(),
-            max_open: config.max_open.max(1),
+            max_open: config.max_open().max(1),
             region,
             platform,
             read_models,
@@ -300,24 +301,38 @@ impl Tenants {
                     subscriptions,
                     opened_at: SystemTime::now(),
                     last_used: Instant::now(),
+                    activity: self.cluster.group_activity(group),
                     leases: Arc::new(AtomicUsize::new(0)),
                     requests: Arc::new(AtomicUsize::new(0)),
                 },
             );
             let mut evicted = Vec::new();
+            if open.len() > self.max_open {
+                // A node that only takes part in another node's writes sees
+                // no request for the tenant: what the cluster applied here
+                // since the last look counts as use.
+                let now = Instant::now();
+                for (g, t) in open.iter_mut() {
+                    let activity = self.cluster.group_activity(*g);
+                    if activity != t.activity {
+                        t.activity = activity;
+                        t.last_used = now;
+                    }
+                }
+            }
             while open.len() > self.max_open {
-                // Only a tenant nothing holds can go; when every one is held
-                // the limit is exceeded rather than a live connection or a
-                // running request cut.
+                // Only a tenant nothing holds and with no write in flight can
+                // go; when none qualifies the limit is exceeded rather than a
+                // live connection, a running request or a write cut.
                 let Some((&victim, _)) = open
                     .iter()
-                    .filter(|(g, t)| **g != group && !t.is_held())
+                    .filter(|(g, t)| **g != group && !t.is_held() && !self.cluster.group_busy(**g))
                     .min_by_key(|(_, t)| t.last_used)
                 else {
                     tracing::warn!(
                         open = open.len(),
                         max_open = self.max_open,
-                        "every open tenant is held by a store connection or a request; over the limit"
+                        "every open tenant is held or being written to; over the limit"
                     );
                     break;
                 };
@@ -336,7 +351,7 @@ impl Tenants {
     }
 
     /// Holds a tenant open for a store connection: [`open`](Self::open), then
-    /// a lease that keeps the sweeper and the eviction away until it drops.
+    /// a lease that keeps the eviction away until it drops.
     pub async fn lease(&self, tenant: &TenantState) -> Result<TenantLease> {
         let executor = self.open(tenant).await?;
         let leases = self.counter_of(tenant, |t| &t.leases)?;
@@ -348,8 +363,8 @@ impl Tenants {
     }
 
     /// Holds a tenant open for one request: [`open`](Self::open), then a hold
-    /// that keeps the sweeper and the eviction away until it drops. Counts as
-    /// activity, as `open` does.
+    /// that keeps the eviction away until it drops. Counts as activity, as
+    /// `open` does.
     pub async fn hold(&self, tenant: &TenantState) -> Result<RequestHold> {
         let executor = self.open(tenant).await?;
         let requests = self.counter_of(tenant, |t| &t.requests)?;
@@ -369,7 +384,7 @@ impl Tenants {
             .filter(|t| t.tenant_id == tenant.id)
             .map(|t| Arc::clone(pick(t)))
             .with_context(|| format!("tenant {} closed while being held", tenant.slug))?;
-        // Under the lock, so the sweeper cannot pick the tenant between the
+        // Under the lock, so an eviction cannot pick the tenant between the
         // lookup and the count.
         counter.fetch_add(1, Ordering::AcqRel);
         Ok(counter)
@@ -398,88 +413,6 @@ impl Tenants {
             tracing::info!(tenant = %t.tenant_id, group = group.0, "tenant closed");
             self.shut(group, t).await;
         }
-    }
-
-    /// Closes every tenant idle for longer than the timeout. A tenant with a
-    /// write in flight, or written to within the timeout, is not idle,
-    /// whichever node took the write: a node that only takes part in another
-    /// node's writes sees no request for the tenant, and closing it would
-    /// leave those writes short of a quorum.
-    pub async fn sweep(&self) {
-        let candidates: Vec<(GroupId, String, SqlitePool)> = {
-            let open = self.open.lock().expect("open poisoned");
-            let cutoff = Instant::now() - self.idle_timeout;
-            open.iter()
-                .filter(|(_, t)| t.last_used <= cutoff && !t.is_held())
-                .map(|(g, t)| (*g, t.tenant_id.clone(), t.pool.clone()))
-                .collect()
-        };
-        let mut idle = Vec::new();
-        for (group, tenant_id, pool) in candidates {
-            if self.cluster.group_busy(group) || self.written_recently(&pool).await {
-                self.touch(group, &tenant_id);
-            } else {
-                idle.push(group);
-            }
-        }
-        let idle = {
-            let mut open = self.open.lock().expect("open poisoned");
-            let cutoff = Instant::now() - self.idle_timeout;
-            // Used again or held while the events were being looked at: kept.
-            let still_idle: Vec<GroupId> = idle
-                .into_iter()
-                .filter(|g| {
-                    open.get(g)
-                        .is_some_and(|t| t.last_used <= cutoff && !t.is_held())
-                })
-                .collect();
-            still_idle
-                .into_iter()
-                .filter_map(|g| open.remove(&g).map(|t| (g, t)))
-                .collect::<Vec<_>>()
-        };
-        for (group, t) in idle {
-            tracing::info!(tenant = %t.tenant_id, group = group.0, "tenant closed (idle)");
-            self.shut(group, t).await;
-        }
-    }
-
-    /// Whether the tenant's newest event is younger than the idle timeout.
-    /// Every node applies every write to its own copy, so this sees writes
-    /// taken anywhere. A failed query counts as recent: keeping a tenant open
-    /// one sweep longer costs less than closing it under a write.
-    async fn written_recently(&self, pool: &SqlitePool) -> bool {
-        let newest: Result<Option<i64>, sqlx::Error> =
-            sqlx::query_scalar("SELECT MAX(timestamp) FROM event")
-                .fetch_one(pool)
-                .await;
-        let Ok(newest) = newest else {
-            return true;
-        };
-        let Some(newest) = newest else {
-            return false;
-        };
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(i64::MAX);
-        // Whole seconds: an event stamped `newest` may be up to a second younger.
-        now.saturating_sub(newest) <= self.idle_timeout.as_secs() as i64
-    }
-
-    /// Runs [`sweep`](Self::sweep) periodically until the task is aborted.
-    pub fn start_sweeper(self: &Arc<Self>) -> JoinHandle<()> {
-        let tenants = Arc::clone(self);
-        let every =
-            (self.idle_timeout / 4).clamp(Duration::from_millis(50), Duration::from_secs(30));
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(every);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                interval.tick().await;
-                tenants.sweep().await;
-            }
-        })
     }
 
     /// The transport's unrouted-group hook: a peer sent frames for a group this
@@ -594,10 +527,10 @@ impl Tenants {
         tracing::info!(tenants = opened, elapsed = ?started.elapsed(), "tenants caught up");
     }
 
-    /// Opens one tenant, holds it while its peers send what this node is
-    /// missing, then closes it unless something used it meanwhile. A tenant
-    /// already open is catching up already and is left alone. Whether the
-    /// tenant was opened.
+    /// Opens one tenant and holds it while its peers send what this node is
+    /// missing. It stays open afterwards, like any other tenant, until an
+    /// eviction makes room. A tenant already open is catching up already and
+    /// is left alone. Whether the tenant was opened.
     pub async fn catch_up(&self, tenant_id: &str, settings: CatchUp) -> bool {
         if matches!(self.status(tenant_id), TenantStatus::Running { .. }) {
             return false;
@@ -610,7 +543,6 @@ impl Tenants {
                 return false;
             }
         };
-        let group = GroupId(group_of(&tenant.id));
         let hold = match self.hold(&tenant).await {
             Ok(hold) => hold,
             Err(err) => {
@@ -618,47 +550,10 @@ impl Tenants {
                 return false;
             }
         };
-        let opened = self.last_used(group, &tenant.id);
-        self.wait_caught_up(group, settings).await;
+        self.wait_caught_up(GroupId(group_of(&tenant.id)), settings)
+            .await;
         drop(hold);
-
-        // Used meanwhile (a request, a store connection, a write anywhere in
-        // the cluster): left open for the sweeper, like any other tenant.
-        let unused = |t: &OpenTenant| {
-            t.tenant_id == tenant.id && Some(t.last_used) == opened && !t.is_held()
-        };
-        let pool = {
-            let open = self.open.lock().expect("open poisoned");
-            open.get(&group)
-                .filter(|t| unused(t))
-                .map(|t| t.pool.clone())
-        };
-        let Some(pool) = pool else {
-            return true;
-        };
-        if self.cluster.group_busy(group) || self.written_recently(&pool).await {
-            return true;
-        }
-        let removed = {
-            let mut open = self.open.lock().expect("open poisoned");
-            if open.get(&group).is_some_and(unused) {
-                open.remove(&group)
-            } else {
-                None
-            }
-        };
-        if let Some(t) = removed {
-            tracing::info!(tenant = %t.tenant_id, group = group.0, "tenant closed (caught up)");
-            self.shut(group, t).await;
-        }
         true
-    }
-
-    fn last_used(&self, group: GroupId, tenant_id: &str) -> Option<Instant> {
-        let open = self.open.lock().expect("open poisoned");
-        open.get(&group)
-            .filter(|t| t.tenant_id == tenant_id)
-            .map(|t| t.last_used)
     }
 
     /// Waits for an open group to stop receiving events: at least
