@@ -10,7 +10,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         Invitations0002,
         ApiKeys0003,
         TenantSearch0004,
-        TenantList0005
+        TenantList0005,
+        ApiKeyScopes0006
     ]
 }
 
@@ -170,4 +171,19 @@ sqlx_migrator::sqlite_migration!(
             "DELETE FROM tenancy_totals"
         ),
     ]
+);
+
+/// The scopes of each key. A key created before scopes existed has no
+/// `Scoped` event and holds the legacy full access, which is the default.
+pub struct ApiKeyScopes0006;
+sqlx_migrator::sqlite_migration!(
+    ApiKeyScopes0006,
+    "tenancy",
+    "0006_api_key_scopes",
+    vec_box![("tenancy", "0005_tenant_list")],
+    vec_box![(
+        "ALTER TABLE tenancy_api_keys
+            ADD COLUMN scopes TEXT NOT NULL DEFAULT 'store:read store:write'",
+        "ALTER TABLE tenancy_api_keys DROP COLUMN scopes"
+    )]
 );

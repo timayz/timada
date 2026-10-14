@@ -6,6 +6,7 @@ mod cluster;
 mod config;
 mod db;
 mod media;
+mod read_only_store;
 mod store_api;
 mod tenants;
 mod ui;

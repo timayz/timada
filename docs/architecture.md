@@ -113,8 +113,12 @@ tenant's products while the events stay isolated by construction.
 3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens
    with an API key token; the resolver loads the key by the token's hash, leases the
    tenant (a leased tenant is never closed as idle) and serves the connection with that
-   tenant's executor and nothing else. Revoking the key ends its connections; suspending
-   the tenant closes its database, and reconnects are refused.
+   tenant's executor and nothing else. A key without the `store:write` scope gets that
+   executor wrapped by `read_only_store.rs`: appends refused, snapshot saves dropped,
+   subscriber cursors kept under the key's own name. Scopes are strings recorded by the
+   `ApiKey::Scoped` event (keys older than it hold read + write). Revoking the key or
+   changing its scopes ends its connections; suspending the tenant closes its
+   database, and reconnects are refused.
 4. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
    roles as roles. Policies are not loaded at startup: every tenant-scoped request loads
    the tenant's strict state, whose version says which events it reflects, and the

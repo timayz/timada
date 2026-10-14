@@ -4,8 +4,10 @@
 //! Every connection opens with the key's token. The resolver authenticates
 //! it against the platform store, leases the tenant (opening its database
 //! if needed: a store connection is tenant activity) and serves the
-//! connection with that tenant's executor and nothing else. Revoking a key
-//! ends its live connections through [`StoreConnections`]; suspending the
+//! connection with that tenant's executor and nothing else, read-only unless
+//! the key holds `store:write` (see [`read_only_store`](crate::read_only_store)). Revoking a key or
+//! changing its scopes ends its live connections through
+//! [`StoreConnections`] (a reconnect gets the new scopes); suspending the
 //! tenant closes its database, which breaks them, and their reconnects are
 //! refused.
 
@@ -17,7 +19,7 @@ use anyhow::{Context, Result};
 use evento::remote::{
     Hello, Rejection, Resolver, ServerHandle, Session, serve_tls_with, serve_with,
 };
-use timada_tenancy::{Command, TenancyError};
+use timada_tenancy::{Command, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
@@ -42,6 +44,8 @@ impl StoreConnections {
     }
 
     /// Ends every connection opened with `key_id`; how many there were.
+    /// After a revocation, or a scope change so the store reconnects under
+    /// the new scopes.
     pub fn close_key(&self, key_id: &str) -> usize {
         let senders = self
             .by_key
@@ -145,15 +149,25 @@ impl Resolver for StoreResolver {
                 ));
             }
         };
+        if !access.key.allows(SCOPE_STORE_READ) {
+            tracing::warn!(peer = %hello.peer, key = %access.key.hint, "store connection refused: the key may not read");
+            return Err(Rejection::Unauthorized);
+        }
         let lease = self.tenants.lease(&access.tenant).await.map_err(|err| {
             tracing::warn!(tenant = %access.tenant.slug, %err, "store connection refused: tenant not opened");
             Rejection::Unavailable("this tenant's store cannot be opened right now".into())
         })?;
-        let executor = lease.executor().clone();
+        let can_write = access.key.allows(SCOPE_STORE_WRITE);
+        let executor = if can_write {
+            lease.executor().clone()
+        } else {
+            crate::read_only_store::read_only(lease.executor().clone(), &access.key.id)
+        };
         let (guard, close) = self.connections.register(&access.key.id, lease);
         tracing::info!(
             tenant = %access.tenant.slug,
             key = %access.key.hint,
+            can_write,
             peer = %hello.peer,
             "store connected"
         );

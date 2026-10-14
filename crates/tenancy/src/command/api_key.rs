@@ -1,15 +1,15 @@
-//! Store API keys: a member with `api-keys:manage` creates one and gets the
-//! token once; a storefront presenting it is served the tenant's event
-//! store. The stream is keyed by the hash of the token, so the store never
+//! Store API keys: a member with `api-keys:manage` creates one with its
+//! scopes and gets the token once; a storefront presenting it is served the
+//! tenant's event store, as far as the scopes allow. The stream is keyed by the hash of the token, so the store never
 //! holds anything a connection could be made from.
 
 use evento::{Executor, ProjectionAggregate, WriteError};
 
-use crate::aggregator::api_key::{Created, Revoked};
+use crate::aggregator::api_key::{Created, Revoked, Scoped};
 use crate::error::TenancyError;
 use crate::value_object::{
     PERMISSION_API_KEYS_MANAGE, api_key_hint, api_key_id, generate_api_key_token,
-    normalize_api_key_label,
+    normalize_api_key_label, normalize_api_key_scopes,
 };
 
 use super::{ApiKeyState, TenantState};
@@ -18,6 +18,8 @@ use super::{ApiKeyState, TenantState};
 pub struct CreateApiKey {
     pub tenant_id: String,
     pub label: String,
+    /// From [`API_KEY_SCOPES`](crate::API_KEY_SCOPES); at least one.
+    pub scopes: Vec<String>,
 }
 
 /// A created key with its token. The plaintext token exists only in this
@@ -55,6 +57,7 @@ impl<E: Executor> super::Command<E> {
         routing_key: Option<String>,
     ) -> Result<CreatedApiKey, TenancyError> {
         let label = normalize_api_key_label(&cmd.label)?;
+        let scopes = normalize_api_key_scopes(&cmd.scopes)?;
         let tenant = self.require_active(&cmd.tenant_id).await?;
         if !tenant.can(actor_user_id, PERMISSION_API_KEYS_MANAGE) {
             return Err(TenancyError::Forbidden);
@@ -71,6 +74,11 @@ impl<E: Executor> super::Command<E> {
                 hint: api_key_hint(&token),
                 created_by: actor_user_id.to_owned(),
                 created_at: now,
+            })
+            .event(&Scoped {
+                scopes: scopes.into_iter().collect(),
+                scoped_by: actor_user_id.to_owned(),
+                scoped_at: now,
             })
             .commit(&self.0)
             .await
@@ -113,6 +121,44 @@ impl<E: Executor> super::Command<E> {
             .event(&Revoked {
                 revoked_by: actor_user_id.to_owned(),
                 revoked_at: now,
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Replaces the scopes of an active key. Needs `api-keys:manage` on its
+    /// tenant. Connections already open keep what they were opened with:
+    /// the caller ends them so they reconnect under the new scopes.
+    pub async fn change_api_key_scopes(
+        &self,
+        actor_user_id: &str,
+        key_id: &str,
+        scopes: Vec<String>,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let scopes = normalize_api_key_scopes(&scopes)?;
+        let key = self
+            .load_api_key(key_id)
+            .await?
+            .ok_or(TenancyError::ApiKeyInvalid)?;
+        let tenant = self.require_active(&key.tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_API_KEYS_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        if !key.is_active() {
+            return Err(TenancyError::ApiKeyInvalid);
+        }
+        if key.scopes == scopes {
+            return Ok(());
+        }
+        key.write()?
+            .routing_key_opt(routing_key)
+            .event(&Scoped {
+                scopes: scopes.into_iter().collect(),
+                scoped_by: actor_user_id.to_owned(),
+                scoped_at: now,
             })
             .commit(&self.0)
             .await?;

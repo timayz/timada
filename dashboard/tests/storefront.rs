@@ -13,6 +13,8 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/read_only_store.rs"]
+mod read_only_store;
 #[path = "../src/store_api.rs"]
 mod store_api;
 #[path = "../src/tenants.rs"]
@@ -37,7 +39,9 @@ use timada_storefront::{
     published_category_by_slug, published_product_by_slug, published_product_categories,
     published_products, published_related_products,
 };
-use timada_tenancy::{Command, CreateApiKey, CreateTenant, TenantState, read_model_subscription};
+use timada_tenancy::{
+    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, TenantState, read_model_subscription,
+};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
@@ -185,6 +189,7 @@ impl Harness {
                 CreateApiKey {
                     tenant_id: tenant.id.clone(),
                     label: "Shop".into(),
+                    scopes: vec![SCOPE_STORE_READ.into()],
                 },
                 NOW,
             )

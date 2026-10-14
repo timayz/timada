@@ -148,6 +148,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "last_owner" => "A tenant keeps at least one owner.",
         "invitation_invalid" => "This invitation is no longer valid.",
         "invalid_api_key_label" => "A key label is 1 to 40 characters.",
+        "invalid_api_key_scopes" => "Choose at least one scope for the key.",
         "api_key_invalid" => "This API key does not exist or is already revoked.",
         _ => "Something went wrong. Please try again.",
     }
@@ -166,6 +167,14 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "products:read" => "See the products and categories",
         "products:manage" => "Create, edit, publish and archive products; organise the categories",
         _ => "Unknown permission",
+    }
+}
+
+pub fn describe_api_key_scope(scope: &str) -> &'static str {
+    match scope {
+        "store:read" => "Read the events and run subscriptions over them",
+        "store:write" => "Write events (includes reading)",
+        _ => "Unknown scope",
     }
 }
 

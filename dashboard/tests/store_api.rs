@@ -12,6 +12,8 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/read_only_store.rs"]
+mod read_only_store;
 #[path = "../src/store_api.rs"]
 mod store_api;
 #[path = "../src/tenants.rs"]
@@ -23,14 +25,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use evento::Executor as _;
-use evento::cursor::Args;
+use evento::cursor::{Args, Value};
 use evento::migrator::Migrate;
 use evento::remote::{Client, ServerHandle};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
 use timada_tenancy::aggregator::Renamed;
-use timada_tenancy::{Command, CreateApiKey, CreateTenant, TenantState, read_model_subscription};
+use timada_tenancy::{
+    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenantState,
+    read_model_subscription,
+};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
@@ -169,6 +174,10 @@ impl Harness {
     }
 
     async fn key(&self, tenant: &TenantState) -> (String, String) {
+        self.key_with(tenant, SCOPE_STORE_WRITE).await
+    }
+
+    async fn key_with(&self, tenant: &TenantState, scope: &str) -> (String, String) {
         let created = self
             .platform
             .create_api_key(
@@ -176,6 +185,7 @@ impl Harness {
                 CreateApiKey {
                     tenant_id: tenant.id.clone(),
                     label: "Shop".into(),
+                    scopes: vec![scope.into()],
                 },
                 NOW,
             )
@@ -356,6 +366,86 @@ async fn revoking_a_key_ends_its_connections() {
     let err = h.refused(Some(&token)).await;
     assert!(err.contains("unauthorized"), "{err}");
     drop(client);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_read_only_key_cannot_change_the_store() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (writer_token, _) = h.key(&acme).await;
+    let (token, key_id) = h.key_with(&acme, SCOPE_STORE_READ).await;
+    let writer = h.connect(&writer_token).await.unwrap();
+    assert_eq!(probe(&writer, "s1", 0).await, 1);
+
+    let client = h.connect(&token).await.unwrap();
+    assert_eq!(count(&client).await.unwrap(), 1, "it reads");
+    let err = evento::append("s1")
+        .original_version(1)
+        .event(&Renamed {
+            name: "nope".into(),
+        })
+        .commit(&client)
+        .await
+        .unwrap_err();
+    assert!(format!("{err}").contains("store:write"), "{err}");
+    assert_eq!(count(&writer).await.unwrap(), 1, "nothing was written");
+
+    // A snapshot it saves is dropped, not refused.
+    client
+        .save_snapshot(
+            "t".into(),
+            "p".into(),
+            "1".into(),
+            "s1".into(),
+            vec![1, 2, 3],
+            Value("c".into()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        writer
+            .get_snapshot("t".into(), "p".into(), "1".into(), "s1".into())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Its subscriber cursors are its own: the tenant's worker of the same
+    // name is not fenced out.
+    let tenant_worker = ulid::Ulid::generate();
+    writer
+        .upsert_subscriber("read-models".into(), tenant_worker)
+        .await
+        .unwrap();
+    let its_worker = ulid::Ulid::generate();
+    client
+        .upsert_subscriber("read-models".into(), its_worker)
+        .await
+        .unwrap();
+    assert!(
+        client
+            .is_subscriber_running("read-models".into(), its_worker)
+            .await
+            .unwrap()
+    );
+    assert!(
+        writer
+            .is_subscriber_running("read-models".into(), tenant_worker)
+            .await
+            .unwrap()
+    );
+
+    // Granted write, the key's connections end and the reconnect writes.
+    h.platform
+        .change_api_key_scopes("alice", &key_id, vec![SCOPE_STORE_WRITE.into()], NOW + 1)
+        .await
+        .unwrap();
+    assert_eq!(h.connections.close_key(&key_id), 1);
+    drop(client);
+    let client = h.connect(&token).await.unwrap();
+    assert_eq!(probe(&client, "s1", 1).await, 2);
+    drop((client, writer));
     h.finish().await;
 }
 

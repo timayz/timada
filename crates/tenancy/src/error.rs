@@ -42,6 +42,8 @@ pub enum TenancyError {
     InvitationInvalid,
     #[error("a key label is 1 to 40 characters")]
     InvalidApiKeyLabel,
+    #[error("choose at least one known scope for the key")]
+    InvalidApiKeyScopes,
     #[error("this API key is not valid")]
     ApiKeyInvalid,
     #[error(transparent)]
