@@ -30,7 +30,7 @@ use crate::app::tenants::tenancy;
 use crate::auth::{require_user, unix_seconds};
 use crate::authz::Authorizer;
 use crate::cluster::Executor;
-use crate::tenants::{TenantStatus, Tenants};
+use crate::tenants::{RequestHold, TenantStatus, Tenants};
 use crate::ui::{document, format_time, notice};
 
 module_param!(pub slug);
@@ -42,8 +42,9 @@ pub struct TenantAccess {
     pub user_id: String,
     /// The role the signed-in user holds in it.
     pub role: String,
-    /// The tenant's event store, open while it is not suspended.
-    executor: Option<Executor>,
+    /// The tenant's event store, open while it is not suspended, and held
+    /// open until the request is done with it.
+    hold: Option<RequestHold>,
 }
 
 impl TenantAccess {
@@ -71,7 +72,10 @@ impl TenantAccess {
     /// The tenant's executor, or 403 while the tenant is suspended: every
     /// write to the tenant's own data (its catalog) goes through it.
     pub fn executor(&self) -> Result<&Executor> {
-        self.executor.as_ref().ok_or_else(|| forbidden().into())
+        self.hold
+            .as_ref()
+            .map(RequestHold::executor)
+            .ok_or_else(|| forbidden().into())
     }
 }
 
@@ -92,12 +96,12 @@ pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
         return Err(forbidden().into());
     };
     let role = role.to_owned();
-    let executor = if tenant.is_suspended() {
+    let hold = if tenant.is_suspended() {
         None
     } else {
         Some(
             app_context::<Arc<Tenants>>(cx)
-                .open(&tenant)
+                .hold(&tenant)
                 .await
                 .map_err(topcoat::Error::from_anyhow)?,
         )
@@ -106,7 +110,7 @@ pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
         tenant,
         user_id: user.id.clone(),
         role,
-        executor,
+        hold,
     })
 }
 
