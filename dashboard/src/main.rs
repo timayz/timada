@@ -5,6 +5,7 @@ mod cli;
 mod cluster;
 mod config;
 mod db;
+mod limits;
 mod media;
 mod read_only_store;
 mod store_api;

@@ -64,12 +64,11 @@ smtp_url = "smtp://localhost:1025"
 # Directory holding one database per tenant (its events and its consensus
 # journal). Created on demand.
 dir = "data/tenants"
-# A tenant's database is closed after this long without a request, in seconds;
-# the next request opens it again.
-idle_timeout_secs = 300
 # Most tenant databases open at once; beyond it the least recently used is
-# closed. Each open database may hold three connections (one OS thread each).
-max_open = 64
+# closed, and the next request opens it again. Each open database may hold
+# three connections (one OS thread each). Unset, it is worked out at startup
+# from the open-file limit and the available memory, and written to the log.
+# max_open = 64
 
 [media]
 # Directory holding the pictures merchants upload for their products, one

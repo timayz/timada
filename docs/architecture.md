@@ -88,10 +88,13 @@ tenant's products while the events stay isolated by construction.
 2. **Tenants** (`tenants.rs`). A tenant is *up* while its database is open: its
    consensus group runs and its read-model subscriptions follow its stream. Every
    tenant-scoped request goes through `Tenants::open`, which is the activity signal.
-   A sweeper closes what has been idle longer than `tenants.idle_timeout_secs` and
-   evicts the least recently used beyond `tenants.max_open`. Requests are not the only
-   use: a node taking part in writes another node coordinates sees none, so a tenant
-   with a transaction in flight or an event younger than the timeout is not idle. A
+   A tenant stays open until opening another one goes past `tenants.max_open`; then
+   the least recently used is evicted. Left unset, `max_open` is worked out at
+   startup (`limits.rs`) from the open-file limit (raised to its hard maximum first)
+   and the available memory, and logged. Requests are not the only use: a node
+   taking part in writes another node coordinates sees none, so a group whose applied
+   state moved since the last look counts as just used, and one with a transaction
+   in flight is never evicted, nor is one held by a store connection or a request. A
    new tenant opens on every node as soon as its creation reaches it (a platform
    subscription, `creation_subscription`; creations older than a minute are history
    being replayed and are skipped), so its group already runs everywhere when the
@@ -106,13 +109,12 @@ tenant's products while the events stay isolated by construction.
    down would fetch the writes it missed only once something opens the tenant there:
    at startup in a cluster, `start_catch_up` waits for the platform store to settle,
    then opens every active tenant (four at a time), holds it until events stop
-   arriving from its peers, and closes it again unless it got used or was written to
-   within the idle timeout. The list of
+   arriving from its peers, and leaves it open for the eviction to manage. The list of
    per-tenant read models is `tenant_subscriptions()` in `serve.rs`; adding a
    tenant-scoped context means adding one entry there.
 3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens
    with an API key token; the resolver loads the key by the token's hash, leases the
-   tenant (a leased tenant is never closed as idle) and serves the connection with that
+   tenant (a leased tenant is never evicted) and serves the connection with that
    tenant's executor and nothing else. A key without the `store:write` scope gets that
    executor wrapped by `read_only_store.rs`: appends refused, snapshot saves dropped,
    subscriber cursors kept under the key's own name. Scopes are strings recorded by the
@@ -235,7 +237,7 @@ operators: it names what things do, not the libraries behind them.
 
 - `cargo test --workspace` (inside `nix develop`): the crates' domain tests over a
   temporary store, and the dashboard's integration tests, which boot the runtime in
-  process: `tenants_runtime` (open, idle, evict, reopen, catch-up), `tenants_cluster`
+  process: `tenants_runtime` (open, evict, reopen, catch-up), `tenants_cluster`
   (three nodes in one process: a node that missed writes catches up), `store_api` (TCP, keys, TLS),
   `storefront` (the library against a live store), `events_lock`.
 - `make e2e`: `scripts/e2e.sh` builds the dashboard and the example storefront, resets

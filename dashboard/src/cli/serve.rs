@@ -40,7 +40,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         write_pool.clone(),
         tenant_subscriptions(media.clone()),
     );
-    let sweeper = tenants.start_sweeper();
     let connections = StoreConnections::new();
     let store_api = store_api::serve(
         config.store_api.as_ref(),
@@ -116,7 +115,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     if let Some(store_api) = store_api {
         store_api.shutdown().await;
     }
-    sweeper.abort();
     if let Some(catch_up) = catch_up {
         catch_up.abort();
     }
