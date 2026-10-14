@@ -119,7 +119,14 @@ pub async fn list_tenants(
         .await
 }
 
+/// How many tenants [`list_tenants`] would list: with no search, the total
+/// the subscription keeps; with one, the matches counted.
 pub async fn count_tenants(pool: &SqlitePool, q: Option<&str>) -> sqlx::Result<i64> {
+    if q.is_none() {
+        return sqlx::query_scalar("SELECT tenants FROM tenancy_totals WHERE id = 1")
+            .fetch_one(pool)
+            .await;
+    }
     let (search, indexed) = search_of(q);
     let statement = if indexed {
         concat!("SELECT COUNT(*) ", tenants_from!(phrase))

@@ -99,6 +99,13 @@ async fn upsert_user(pool: &SqlitePool, user: &UserState) -> anyhow::Result<()> 
     .bind(user.password.is_some())
     .execute(&mut *tx)
     .await?;
+    // A new row is one more user to the administrator's list; a repeated
+    // delivery finds the row there and counts nothing.
+    if was.is_none() {
+        sqlx::query("UPDATE identity_totals SET users = users + 1 WHERE id = 1")
+            .execute(&mut *tx)
+            .await?;
+    }
     // A sign-in changes the row but not what a search finds it by.
     if was
         .as_ref()

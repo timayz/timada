@@ -9,7 +9,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         ReadModels0001,
         Invitations0002,
         ApiKeys0003,
-        TenantSearch0004
+        TenantSearch0004,
+        TenantList0005
     ]
 }
 
@@ -134,6 +135,39 @@ sqlx_migrator::sqlite_migration!(
             "INSERT INTO tenancy_tenants_fts (rowid, slug, name)
                 SELECT rowid, slug, name FROM tenancy_tenants",
             "DELETE FROM tenancy_tenants_fts"
+        ),
+    ]
+);
+
+/// What the administrator's list of tenants reads on every page: an index in
+/// its own order (the old one compared case-sensitively, so the list sorted
+/// every tenant to show one page), and how many tenants there are, kept by
+/// the subscription instead of counted.
+pub struct TenantList0005;
+sqlx_migrator::sqlite_migration!(
+    TenantList0005,
+    "tenancy",
+    "0005_tenant_list",
+    vec_box![("tenancy", "0004_tenant_search")],
+    vec_box![
+        (
+            "DROP INDEX tenancy_tenants_name",
+            "CREATE INDEX tenancy_tenants_name ON tenancy_tenants (name)"
+        ),
+        (
+            "CREATE INDEX tenancy_tenants_list ON tenancy_tenants (name COLLATE NOCASE, id)",
+            "DROP INDEX tenancy_tenants_list"
+        ),
+        (
+            "CREATE TABLE tenancy_totals (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                tenants INTEGER NOT NULL
+            )",
+            "DROP TABLE tenancy_totals"
+        ),
+        (
+            "INSERT INTO tenancy_totals (id, tenants) SELECT 1, count(*) FROM tenancy_tenants",
+            "DELETE FROM tenancy_totals"
         ),
     ]
 );
