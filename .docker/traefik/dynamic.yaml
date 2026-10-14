@@ -19,7 +19,16 @@ http:
         - https
 
   services:
+    # The three nodes of the local cluster (`cluster.web_peers` in
+    # config/default.toml). Nodes that are not running fail the health check
+    # and are left out, so a single `make dev` on port 3000 still works.
     timada-dev:
       loadBalancer:
         servers:
           - url: "http://host.docker.internal:3000"
+          - url: "http://host.docker.internal:3001"
+          - url: "http://host.docker.internal:3002"
+        healthCheck:
+          path: /auth/login
+          interval: 2s
+          timeout: 1s
