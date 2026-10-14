@@ -11,6 +11,7 @@ use evento::{
 };
 use sqlx::SqlitePool;
 
+use super::api_keys::join_scopes;
 use crate::aggregator::api_key::ApiKey;
 use crate::aggregator::{Invitation, Tenant};
 use crate::command::{
@@ -183,10 +184,11 @@ async fn on_api_key_event<E: Executor>(
 async fn upsert_api_key(pool: &SqlitePool, key: &ApiKeyState) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO tenancy_api_keys (id, tenant_id, label, hint, created_by, created_at,
-            revoked_by, revoked_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            revoked_by, revoked_at, scopes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT (id) DO UPDATE SET
-            revoked_by = excluded.revoked_by, revoked_at = excluded.revoked_at",
+            revoked_by = excluded.revoked_by, revoked_at = excluded.revoked_at,
+            scopes = excluded.scopes",
     )
     .bind(&key.id)
     .bind(&key.tenant_id)
@@ -196,6 +198,7 @@ async fn upsert_api_key(pool: &SqlitePool, key: &ApiKeyState) -> anyhow::Result<
     .bind(key.created_at as i64)
     .bind(key.revoked_by.as_deref())
     .bind(key.revoked_at.map(|at| at as i64))
+    .bind(join_scopes(&key.scopes))
     .execute(pool)
     .await?;
     Ok(())

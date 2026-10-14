@@ -35,6 +35,18 @@ pub const PERMISSION_API_KEYS_MANAGE: &str = "api-keys:manage";
 pub const PERMISSION_PRODUCTS_READ: &str = "products:read";
 pub const PERMISSION_PRODUCTS_MANAGE: &str = "products:manage";
 
+/// Every scope a store API key can hold, as `resource:action`. The list only
+/// grows: a stored key may name any of them. `write` on a resource implies
+/// `read` on it (see [`api_key_scope_implies`]).
+pub const API_KEY_SCOPES: &[&str] = &[SCOPE_STORE_READ, SCOPE_STORE_WRITE];
+/// Read the tenant's events and run subscriptions over them.
+pub const SCOPE_STORE_READ: &str = "store:read";
+/// Append events to the tenant's store.
+pub const SCOPE_STORE_WRITE: &str = "store:write";
+/// What a key created before scopes existed holds: everything there was then.
+/// Frozen: a scope added later is never granted to those keys silently.
+pub const LEGACY_API_KEY_SCOPES: &[&str] = &[SCOPE_STORE_READ, SCOPE_STORE_WRITE];
+
 pub const MAX_ROLE_LABEL_LEN: usize = 40;
 pub const MAX_API_KEY_LABEL_LEN: usize = 40;
 /// Every store API token starts with it, so one is recognizable in a config.
@@ -226,6 +238,42 @@ pub fn generate_invitation_token() -> String {
 }
 
 /// The stream of a store API key, from the token a storefront presents.
+/// Whether holding the scope `held` grants `wanted`: the same scope, or
+/// `write` on the resource `wanted` only reads.
+pub fn api_key_scope_implies(held: &str, wanted: &str) -> bool {
+    if held == wanted {
+        return true;
+    }
+    match (held.split_once(':'), wanted.split_once(':')) {
+        (Some((resource, "write")), Some((wanted_resource, "read"))) => resource == wanted_resource,
+        _ => false,
+    }
+}
+
+/// Deduplicates and checks a scope list against [`API_KEY_SCOPES`]; a key
+/// holds at least one.
+pub fn normalize_api_key_scopes<I>(scopes: I) -> Result<BTreeSet<String>, crate::TenancyError>
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    let scopes = scopes
+        .into_iter()
+        .map(|s| {
+            let s = s.as_ref().trim();
+            if API_KEY_SCOPES.contains(&s) {
+                Ok(s.to_owned())
+            } else {
+                Err(crate::TenancyError::InvalidApiKeyScopes)
+            }
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if scopes.is_empty() {
+        return Err(crate::TenancyError::InvalidApiKeyScopes);
+    }
+    Ok(scopes)
+}
+
 pub fn api_key_id(token: &str) -> String {
     evento::hash_ids(vec!["api-key", token])
 }
@@ -324,6 +372,22 @@ mod tests {
     fn slug_ids_are_hashed() {
         assert_eq!(tenant_slug_id("acme").len(), 64);
         assert_ne!(tenant_slug_id("acme"), tenant_slug_id("acme2"));
+    }
+
+    #[test]
+    fn api_key_scopes_are_checked_and_write_implies_read() {
+        let set = normalize_api_key_scopes([" store:write ", "store:read", "store:write"]).unwrap();
+        assert_eq!(set.len(), 2);
+        assert!(normalize_api_key_scopes(Vec::<String>::new()).is_err());
+        assert!(normalize_api_key_scopes(["store:delete"]).is_err());
+        assert!(api_key_scope_implies(SCOPE_STORE_WRITE, SCOPE_STORE_READ));
+        assert!(!api_key_scope_implies(SCOPE_STORE_READ, SCOPE_STORE_WRITE));
+        assert!(!api_key_scope_implies("catalog:write", SCOPE_STORE_READ));
+        assert!(
+            LEGACY_API_KEY_SCOPES
+                .iter()
+                .all(|s| API_KEY_SCOPES.contains(s))
+        );
     }
 
     #[test]
