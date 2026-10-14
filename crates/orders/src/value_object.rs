@@ -89,14 +89,14 @@ pub fn order_reference_id(reference: &str) -> String {
     evento::hash_ids(vec!["order-reference", reference])
 }
 
-/// A fresh random reference, `XXX-XXXX`: 40 bits, short enough to read out
+/// A fresh random reference, `XXXX-XXXX`: 40 bits, short enough to read out
 /// on the phone. Uniqueness is the index's job, not chance's.
 pub fn new_reference() -> String {
     let mut rng = rand::rng();
     let chars: String = (0..REFERENCE_LEN)
         .map(|_| REFERENCE_ALPHABET[rng.random_range(0..REFERENCE_ALPHABET.len())] as char)
         .collect();
-    format!("{}-{}", &chars[..3], &chars[3..])
+    format!("{}-{}", &chars[..4], &chars[4..])
 }
 
 /// The canonical form of an address: trimmed, lower-cased, one `@` with
@@ -194,7 +194,7 @@ mod tests {
         for _ in 0..100 {
             let reference = new_reference();
             assert_eq!(reference.len(), REFERENCE_LEN + 1);
-            assert_eq!(reference.as_bytes()[3], b'-');
+            assert_eq!(reference.as_bytes()[4], b'-');
             assert!(
                 reference
                     .bytes()

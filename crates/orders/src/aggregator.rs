@@ -47,7 +47,7 @@ pub enum Cart {
 pub enum Order {
     /// Everything about the sale, copied at the moment it was made.
     Placed {
-        /// The short code a shopper and the merchant read (`K7Q-4MZP`).
+        /// The short code a shopper and the merchant read (`K7Q4-MZP2`).
         reference: String,
         cart_id: String,
         email: String,

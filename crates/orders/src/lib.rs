@@ -10,7 +10,7 @@
 //! product's name, the variant, its code and its price at the moment the
 //! order is placed, so a later change to the catalog never rewrites an order.
 //! The order of a cart has a deterministic id, so placing it twice lands on
-//! the same stream. Its short reference (`K7Q-4MZP`) is unique within the
+//! the same stream. Its short reference (`K7Q4-MZP2`) is unique within the
 //! tenant through an index aggregate, like a product's slug.
 
 pub mod aggregator;
