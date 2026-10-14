@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod auth;
 pub mod invitations;
+mod server_errors;
 pub mod t;
 pub mod tenants;
 
@@ -113,6 +114,8 @@ pub fn router(services: Services) -> Router {
         .app_context(config)
         .assets(assets)
         .runtime()
+        // Outside every other layer, so it sees what any of them failed with.
+        .layer(server_errors::LogServerErrors)
         .build()
 }
 
