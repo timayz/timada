@@ -1,8 +1,12 @@
-//! `/checkout`: the cart's summary and the guest's details (GET), and
-//! placing the order (POST). The total the page showed travels with the
-//! form, so an order is never placed at a price the shopper did not see.
+//! `/checkout`: the cart's summary and the guest's details (GET), then
+//! asking to pay (POST), which leads to the card form at `/checkout/pay`.
+//! The total the page showed travels with the form, so a price the shopper
+//! did not see is never charged.
 
-use timada_storefront::{Checkout, OrdersError, categories, format_money, place_order};
+pub mod complete;
+pub mod pay;
+
+use timada_storefront::{Checkout, OrdersError, categories, format_money, start_payment};
 use topcoat::{
     Result,
     context::Cx,
@@ -17,7 +21,8 @@ use topcoat::{
 use crate::app::cart::{cart_url, current_cart};
 use crate::app::{document, say};
 use crate::shopper::{
-    CheckoutDraft, cart_id, checkout_draft, forget_cart, remember_order, save_checkout_draft,
+    CheckoutDraft, PaymentInProgress, cart_id, checkout_draft, save_checkout_draft,
+    set_payment_in_progress,
 };
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -25,7 +30,7 @@ struct CheckoutQuery {
     error: Option<String>,
 }
 
-fn checkout_url(cx: &Cx, error: Option<&str>) -> String {
+pub fn checkout_url(cx: &Cx, error: Option<&str>) -> String {
     #[derive(serde::Serialize)]
     struct Link<'a> {
         error: Option<&'a str>,
@@ -68,7 +73,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 </tbody>
             </table>
             <p>"Total: " <strong class="price" data-checkout-total="">(cart.total().unwrap_or_default())</strong></p>
-            <p>"You pay once the shop confirms your order: nothing is charged now."</p>
 
             <form class="checkout" method="post" action=(href!(place))>
                 <input type="hidden" name="expected_total_cents" value=(cart.total_cents)>
@@ -90,7 +94,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <input id="checkout-phone" name="phone" type="tel" autocomplete="tel" value=(&draft.phone)>
                 <label for="checkout-note">"Note for the shop (optional)"</label>
                 <textarea id="checkout-note" name="note" rows="3">(&draft.note)</textarea>
-                <button class="primary">"Place order"</button>
+                <button class="primary">"Continue to payment"</button>
             </form>
         )
     })
@@ -104,9 +108,9 @@ pub struct CheckoutForm {
     draft: CheckoutDraft,
 }
 
-/// Places the cart as an order. The details are kept first, so a refused
-/// form comes back filled in; once placed, the browser forgets the cart
-/// and remembers the order.
+/// Asks to pay for the cart. The details are kept first, so a refused form
+/// comes back filled in; the payment opened for it is remembered for the
+/// card form's page.
 #[route(POST)]
 pub async fn place(cx: &Cx, Form(form): Form<CheckoutForm>) -> Result<SeeOther> {
     let Some(cart_id) = cart_id(cx) else {
@@ -121,25 +125,16 @@ pub async fn place(cx: &Cx, Form(form): Form<CheckoutForm>) -> Result<SeeOther> 
         // Unreadable means not shown: treat it as a price that moved.
         expected_total_cents: Some(form.expected_total_cents.trim().parse().unwrap_or(u64::MAX)),
     };
-    match place_order(cx, &cart_id, checkout).await? {
-        Ok(placed) => {
-            forget_cart(cx);
-            remember_order(cx, &placed.order_id)?;
-            // The address stays for the next order; the note was for this one.
-            save_checkout_draft(
+    match start_payment(cx, &cart_id, checkout).await? {
+        Ok(session) => {
+            set_payment_in_progress(
                 cx,
-                CheckoutDraft {
-                    note: String::new(),
-                    ..draft
+                PaymentInProgress {
+                    cart_id,
+                    request_id: session.request_id,
                 },
             )?;
-            Ok(see_other(
-                href!(
-                    crate::app::orders::order_id::index,
-                    crate::app::orders::order_id::OrderId(placed.order_id)
-                )
-                .resolve(cx),
-            ))
+            Ok(see_other(href!(pay::index).resolve(cx)))
         }
         Err(err @ (OrdersError::EmptyCart | OrdersError::Unavailable { .. })) => {
             Ok(see_other(cart_url(cx, err.code())))

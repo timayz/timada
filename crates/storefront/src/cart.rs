@@ -4,9 +4,16 @@
 //! an order are written to the store and read back from it, so a page shows
 //! a change at once; a cart's prices are worked out from the products in the
 //! store too ([`timada_orders::Command::quote_cart`]), so the total a cart
-//! page shows is exactly what [`place_order`] charges. The local copy only
+//! page shows is exactly what a payment asked for now charges. The local copy only
 //! adds what a page needs to link and illustrate a line (its slug and
 //! picture).
+//!
+//! Paying goes through the dashboard, which holds the merchant's payment
+//! provider account: [`start_payment`] asks to pay and waits for the
+//! dashboard to open a payment (or refuse), the shopper's browser confirms
+//! it with the provider's card form, and the order exists once the provider
+//! tells the dashboard it went through ([`order_of_cart`]). A storefront
+//! never creates an order itself.
 //!
 //! Writing needs a key holding `store:checkout` (or `store:write`); with a
 //! read-only key every call here fails.
@@ -23,14 +30,45 @@ use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
 pub use timada_catalog::format_money;
-use timada_orders::{CartItem, CartLine, Command, STOREFRONT_ACTOR};
+use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
 pub use timada_orders::{
-    Checkout, OrderLine, OrderState, OrderStatus, OrdersError, PlacedOrder, ShippingAddress,
+    Checkout, OrderLine, OrderState, OrderStatus, OrdersError, PAYMENTS_UNAVAILABLE,
+    ShippingAddress,
 };
 
 use crate::context::store;
 use crate::query::{Product, published_products_by_ids};
 use crate::store::Store;
+
+/// How long [`start_payment`] waits for the dashboard's answer.
+const PAYMENT_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// How often it looks again when no write wakes it.
+const PAYMENT_ANSWER_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// A payment open with the merchant's provider: what the card form needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaymentSession {
+    /// The request it answers; [`payment_session`] reads it back by it.
+    pub request_id: String,
+    /// `stripe`.
+    pub provider: String,
+    pub payment_id: String,
+    /// What the browser confirms the payment with.
+    pub client_secret: String,
+    /// The merchant's public key the card form loads with.
+    pub publishable_key: String,
+    /// What the order will hold, priced.
+    pub lines: Vec<OrderLine>,
+    pub currency: String,
+    pub total_cents: u64,
+}
+
+impl PaymentSession {
+    /// The total as a person reads it (`24.00 EUR`).
+    pub fn total(&self) -> String {
+        timada_catalog::format_money(self.total_cents, &self.currency)
+    }
+}
 
 /// A refusal to show the shopper, or the outcome.
 pub type Refusable<T> = std::result::Result<T, OrdersError>;
@@ -84,7 +122,7 @@ impl CartView {
         Some(timada_catalog::format_money(self.total_cents, currency))
     }
 
-    /// Whether [`place_order`] can go ahead: something to sell, nothing off
+    /// Whether [`start_payment`] can go ahead: something to sell, nothing off
     /// sale left in it, not ordered already.
     pub fn can_check_out(&self) -> bool {
         !self.lines.is_empty() && self.unavailable.is_empty() && self.order_id.is_none()
@@ -223,17 +261,89 @@ impl Store {
         )
     }
 
-    /// See [`place_order`].
-    pub async fn place_order(
+    /// See [`start_payment`].
+    pub async fn start_payment(
         &self,
         cart_id: &str,
         checkout: Checkout,
-    ) -> anyhow::Result<Refusable<PlacedOrder>> {
-        refusable(
-            self.orders()
-                .place_order(STOREFRONT_ACTOR, cart_id, checkout)
-                .await,
-        )
+    ) -> anyhow::Result<Refusable<PaymentSession>> {
+        let orders = self.orders();
+        let request_id = match orders
+            .request_checkout(STOREFRONT_ACTOR, cart_id, checkout)
+            .await
+        {
+            Ok(id) => id,
+            Err(err) => return refusable(Err(err)),
+        };
+        let mut watch = evento::Executor::write_watch(self.executor());
+        let deadline = tokio::time::Instant::now() + PAYMENT_ANSWER_TIMEOUT;
+        loop {
+            match self.payment_answer(cart_id, &request_id).await? {
+                Some(answer) => return Ok(answer),
+                None if tokio::time::Instant::now() >= deadline => {
+                    tracing::warn!(cart_id, request_id, "no answer to a request to pay");
+                    return Ok(Err(OrdersError::PaymentRefused {
+                        code: PAYMENTS_UNAVAILABLE.to_owned(),
+                    }));
+                }
+                None => {}
+            }
+            // A write to the store wakes us; the poll covers a missed one.
+            let wait = PAYMENT_ANSWER_POLL;
+            match watch.as_mut() {
+                Some(watch) => {
+                    let _ = tokio::time::timeout(wait, watch.changed()).await;
+                }
+                None => tokio::time::sleep(wait).await,
+            }
+        }
+    }
+
+    /// See [`payment_session`].
+    pub async fn payment_session(
+        &self,
+        cart_id: &str,
+        request_id: &str,
+    ) -> anyhow::Result<Option<PaymentSession>> {
+        Ok(self
+            .payment_answer(cart_id, request_id)
+            .await?
+            .and_then(Result::ok))
+    }
+
+    /// The answer to a request to pay, once there is one.
+    async fn payment_answer(
+        &self,
+        cart_id: &str,
+        request_id: &str,
+    ) -> anyhow::Result<Option<Refusable<PaymentSession>>> {
+        let Some(cart) = self.orders().load_cart(cart_id).await? else {
+            return Ok(None);
+        };
+        let Some(request) = cart.request(request_id) else {
+            return Ok(None);
+        };
+        Ok(match &request.answer {
+            None => None,
+            Some(PaymentAnswer::Refused(code)) => {
+                Some(Err(OrdersError::PaymentRefused { code: code.clone() }))
+            }
+            Some(PaymentAnswer::Requested(payment)) => Some(Ok(PaymentSession {
+                request_id: request.request_id.clone(),
+                provider: payment.provider.clone(),
+                payment_id: payment.payment_id.clone(),
+                client_secret: payment.client_secret.clone(),
+                publishable_key: payment.publishable_key.clone(),
+                lines: payment.lines.clone(),
+                currency: payment.currency.clone(),
+                total_cents: payment.total_cents,
+            })),
+        })
+    }
+
+    /// See [`order_of_cart`].
+    pub async fn order_of_cart(&self, cart_id: &str) -> anyhow::Result<Option<OrderState>> {
+        self.orders().load_order_of_cart(cart_id).await
     }
 
     /// See [`order`].
@@ -298,17 +408,46 @@ pub async fn remove_from_cart(
     set_cart_quantity(cx, cart_id, product_id, variant_id, 0).await
 }
 
-/// Places the cart as an order awaiting payment. Pass the total the shopper
-/// was shown as [`Checkout::expected_total_cents`]: a price that moved since
-/// is refused ([`OrdersError::PriceChanged`]) rather than charged unseen.
-/// Placing a cart already ordered returns that order.
-pub async fn place_order(
+/// Asks to pay for the cart, shipping where `checkout` says, and waits (up
+/// to fifteen seconds) for the dashboard to open a payment with the
+/// merchant's provider: the session is what the page loads the card form
+/// with. Pass the total the shopper was shown as
+/// [`Checkout::expected_total_cents`]: a price that moved since is refused
+/// (`price_changed`) rather than charged unseen. A refusal from the
+/// dashboard is [`OrdersError::PaymentRefused`], its code what to word
+/// (`payments_unavailable` when the merchant takes no payments, the provider
+/// failed or nobody answered).
+pub async fn start_payment(
     cx: &Cx,
     cart_id: &str,
     checkout: Checkout,
-) -> Result<Refusable<PlacedOrder>> {
+) -> Result<Refusable<PaymentSession>> {
     store(cx)
-        .place_order(cart_id, checkout)
+        .start_payment(cart_id, checkout)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// The open payment of a request [`start_payment`] made, for a page shown
+/// after it (the card form's page, typically); `None` once the request is
+/// unknown or was refused.
+pub async fn payment_session(
+    cx: &Cx,
+    cart_id: &str,
+    request_id: &str,
+) -> Result<Option<PaymentSession>> {
+    store(cx)
+        .payment_session(cart_id, request_id)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// The order the cart became, once its payment went through. The provider
+/// tells the dashboard, not the shopper's browser, so a page coming back
+/// from the card form may have to wait a moment for it.
+pub async fn order_of_cart(cx: &Cx, cart_id: &str) -> Result<Option<OrderState>> {
+    store(cx)
+        .order_of_cart(cart_id)
         .await
         .map_err(Error::from_anyhow)
 }

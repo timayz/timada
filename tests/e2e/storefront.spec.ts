@@ -10,8 +10,8 @@ import { createTenant, uniqueTenant } from "./tenants";
 // mints an API key in the dashboard; the example storefront (a separate
 // process built on timada-storefront) connects to the store API with the
 // key, shows the product, follows the catalog live, browses the categories
-// the products are filed under, and (with a key that may sell) takes an order
-// the merchant then moves along in the dashboard.
+// the products are filed under, and (with a key that may sell) fills a cart
+// and asks to pay.
 
 const STORE_ADDR = process.env.E2E_STORE_ADDR ?? "127.0.0.1:4321";
 const STOREFRONT_PORT = Number(process.env.E2E_STOREFRONT_PORT ?? 3456);
@@ -247,7 +247,8 @@ test("a storefront browses the categories its products are filed under", async (
   await expect(related.locator("[data-product=cooling-mat]")).toHaveCount(0);
 });
 
-test("a shopper orders from the storefront and the merchant fulfils it", async ({ page, request }) => {
+test("a shopper fills a cart and checks out, refused while the shop takes no payments", async ({ page, request }) => {
+  test.setTimeout(60_000);
   await registerWithEmail(page, uniqueEmail("merchant"));
   const { name, slug } = uniqueTenant("Order Shop");
   await createTenant(page, name);
@@ -267,7 +268,7 @@ test("a shopper orders from the storefront and the merchant fulfils it", async (
   await page.getByRole("button", { name: "Add to cart" }).click();
   await expect(page.locator("[data-cart-total]")).toHaveText("33.00 EUR");
 
-  // Change a quantity, then take a line out and put it back.
+  // Change a quantity, then take a line out.
   await page.getByLabel("Quantity of Blue Mug").fill("3");
   await page.locator("[data-cart-line='Blue Mug']").getByRole("button", { name: "Update" }).click();
   await expect(page.locator("[data-cart-total]")).toHaveText("45.50 EUR");
@@ -281,7 +282,8 @@ test("a shopper orders from the storefront and the merchant fulfils it", async (
     await expect(page.locator("[data-cart-items]").first()).toHaveText("3", { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
 
-  // Checkout: a bad country is refused and the form comes back filled in.
+  // Checkout: a bad country is refused at once and the form comes back
+  // filled in.
   await page.goto(`${STOREFRONT}/cart`);
   await page.getByRole("link", { name: "Check out" }).click();
   await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
@@ -291,66 +293,13 @@ test("a shopper orders from the storefront and the merchant fulfils it", async (
   await page.getByLabel("Postal code").fill("75002");
   await page.getByLabel("City").fill("Paris");
   await page.getByLabel("Country code").fill("F1");
-  await page.getByLabel("Note for the shop (optional)").fill("Leave it at the door");
-  await page.getByRole("button", { name: "Place order" }).click();
+  await page.getByRole("button", { name: "Continue to payment" }).click();
   await expect(page.getByRole("alert")).toContainText("two-letter code");
   await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
+
+  // Nothing answers the request to pay: the shop takes no payments yet.
   await page.getByLabel("Country code").fill("FR");
-  await page.getByRole("button", { name: "Place order" }).click();
-
-  // The confirmation, for this browser only.
-  await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`));
-  const reference = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
-  expect(reference).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-  await expect(page.locator("[data-order-total]")).toHaveText("37.50 EUR");
-  await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "awaiting_payment");
-  const confirmation = page.url();
-  const stranger = await page.context().browser()!.newContext();
-  expect((await (await stranger.newPage()).goto(confirmation))?.status()).toBe(404);
-  await stranger.close();
-  // The cart is spent: the next one starts empty.
-  await page.goto(`${STOREFRONT}/cart`);
-  await expect(page.locator("[data-cart-empty]")).toBeVisible();
-
-  // The merchant finds it, marks it paid, then fulfilled.
-  const row = page.locator(`[data-order="${reference}"]`);
-  await expect(async () => {
-    await page.goto(`/t/${slug}/orders`);
-    await expect(row).toHaveAttribute("data-order-status", "awaiting_payment", { timeout: 1000 });
-  }).toPass({ timeout: 15_000 });
-  await expect(row.locator("[data-order-total]")).toHaveText("37.50 EUR");
-  await row.getByRole("link", { name: reference }).click();
-  await expect(page.locator("[data-order-note]")).toHaveText("Leave it at the door");
-  await expect(page.locator("[data-order-address]")).toContainText("Ada Lovelace");
-  await expect(page.locator("[data-order-line='Blue Mug']")).toContainText("12.50 EUR");
-  await page.getByRole("button", { name: "Mark as paid" }).click();
-  await expect(page.getByRole("status")).toContainText("Order marked as paid.");
-  await expect(page.locator("dd[data-order-status]")).toHaveAttribute("data-order-status", "paid");
-  await page.getByLabel("Tracking number (optional)").fill("6A12345");
-  await page.getByRole("button", { name: "Mark as fulfilled" }).click();
-  await expect(page.getByRole("status")).toContainText("Order marked as fulfilled.");
-  await expect(page.locator("[data-order-tracking]")).toHaveText("6A12345");
-  await expect(page.getByRole("button", { name: "Cancel the order" })).toHaveCount(0);
-
-  // The shopper sees it on its way.
-  await page.goto(confirmation);
-  await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "fulfilled");
-
-  // A second order is cancelled with a reason.
-  await page.goto(`${STOREFRONT}/p/red-plate`);
-  await page.getByRole("button", { name: "Add to cart" }).click();
-  await page.getByRole("link", { name: "Check out" }).click();
-  await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
-  await page.getByRole("button", { name: "Place order" }).click();
-  const second = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
-  const secondRow = page.locator(`[data-order="${second}"]`);
-  await expect(async () => {
-    await page.goto(`/t/${slug}/orders`);
-    await expect(secondRow).toHaveCount(1, { timeout: 1000 });
-  }).toPass({ timeout: 15_000 });
-  await secondRow.getByRole("link", { name: second }).click();
-  await page.getByLabel("Reason for cancelling").fill("Out of stock");
-  await page.getByRole("button", { name: "Cancel the order" }).click();
-  await expect(page.getByRole("status")).toContainText("Order cancelled.");
-  await expect(page.locator("[data-order-cancel-reason]")).toHaveText("Out of stock");
+  await page.getByRole("button", { name: "Continue to payment" }).click();
+  await expect(page.getByRole("alert")).toContainText("Payments are not available", { timeout: 30_000 });
+  await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
 });

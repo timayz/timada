@@ -26,10 +26,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let nav = categories(cx).await?;
     let status = match order.status {
-        OrderStatus::AwaitingPayment => "Awaiting payment: the shop will be in touch to settle it.",
         OrderStatus::Paid => "Paid: the shop is preparing it.",
         OrderStatus::Fulfilled => "On its way.",
-        OrderStatus::Cancelled => "Cancelled.",
+        OrderStatus::Cancelled => "Cancelled, and the payment given back.",
     };
     let title = format!("Order {}", order.reference);
     let currency = order.currency.clone();

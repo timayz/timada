@@ -162,11 +162,17 @@ everything a page shows is the merchant's own `view!` around `Product` values.
 With a key holding `store:checkout`, a page sells as well as shows. Carts and orders
 are not copied locally: each call writes to the store and reads back from it, so a
 page shows its change at once, and a cart's prices come from the products in the
-store, so the total a cart page shows is exactly what checkout charges. The local
-copy only adds each line's slug and picture.
+store, so the total a cart page shows is what the payment charges. The local copy
+only adds each line's slug and picture.
+
+Paying goes through the dashboard, which holds the merchant's payment provider
+account (Stripe): a storefront asks to pay, the dashboard opens a payment and hands
+back what the provider's card form needs, the shopper's browser confirms it with the
+provider, and the provider tells the dashboard. The order exists only then. A
+storefront never creates an order, and its key cannot.
 
 ```rust
-use timada_storefront::{add_to_cart, cart, place_order, order, Checkout, ShippingAddress};
+use timada_storefront::{add_to_cart, cart, start_payment, order_of_cart, Checkout};
 
 // The first add makes the cart; keep its id (a cookie, typically).
 let cart_id = match add_to_cart(cx, current_id.as_deref(), &product.id, variant_id, 2).await? {
@@ -174,10 +180,13 @@ let cart_id = match add_to_cart(cx, current_id.as_deref(), &product.id, variant_
     Err(refusal) => return show(refusal.code()),   // e.g. "variant_required"
 };
 let view = cart(cx, &cart_id).await?;              // lines, total, unavailable lines
-let placed = place_order(cx, &cart_id, Checkout {
+let session = start_payment(cx, &cart_id, Checkout {
     email, shipping, note,
     expected_total_cents: Some(view.total_cents),   // the total the shopper saw
 }).await?;
+// Ok(session): mount Stripe's Payment Element with session.publishable_key and
+// session.client_secret; confirmPayment returns the browser to your page, which
+// waits for order_of_cart(cx, &cart_id) to be Some.
 ```
 
 - Every call returns `Result<Result<T, OrdersError>>`: the outer error is the store
@@ -189,13 +198,17 @@ let placed = place_order(cx, &cart_id, Checkout {
 - A product that sells variants needs one (`variant_required`); one cart is one
   currency. A line whose product went off sale shows in `CartView::unavailable`, and
   checkout waits until it is removed.
-- `place_order` refuses an order whose total moved since the page showed it
-  (`price_changed`) rather than charging it unseen. Placing a cart twice returns the
-  same order. The order waits for payment; the merchant marks it paid, fulfilled or
-  cancelled in the dashboard. Its `reference` (`K7Q4-MZP2`) is what a shopper quotes.
+- `start_payment` waits up to fifteen seconds for the dashboard's answer. A refusal is
+  `OrdersError::PaymentRefused`: `price_changed` when the total moved since the page
+  showed it, `product_unavailable`, or `payments_unavailable` when the merchant has set
+  up no payments, the provider failed or nobody answered. `payment_session` reads an
+  open payment back by its request id for the page after the redirect.
+- The order (`order_of_cart`, `order`) arrives once the provider confirmed the payment
+  to the dashboard, usually a second after the browser comes back. Its `reference`
+  (`K7Q4-MZP2`) is what a shopper quotes.
 - Who a shopper is, and which orders a browser may look at, is the host's call: the
-  library hands out any order by id. The example keeps the cart id, the browser's
-  orders and its last address in private cookies.
+  library hands out any order by id. The example keeps the cart id, the payment in
+  progress, the browser's orders and its last address in private cookies.
 
 ## `GET /store/status`
 
@@ -210,8 +223,8 @@ counts the published rows of the local copy.
 ## The example
 
 `examples/storefront` is a complete app on the library: a catalog page, a category
-page, a product page with an add-to-cart form, a cart, a checkout and an order
-confirmation, inline styles, no asset bundle. Against a dashboard whose
+page, a product page with an add-to-cart form, a cart, a checkout, a payment page
+with Stripe's card form, an order confirmation, inline styles, no asset bundle. Against a dashboard whose
 `[store_api]` listens on `127.0.0.1:4321`:
 
 ```sh
@@ -226,4 +239,4 @@ default) are the other knobs, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypt
 shopper cookies; unset, a random key is made at startup and the cookies do not survive
 a restart. To sell, tick `store:checkout` on the key. The browser suite
 (`tests/e2e/storefront.spec.ts`) boots it with a key minted in the dashboard, checks the
-catalog follows live, then places an order the merchant marks paid and fulfilled.
+catalog follows live, then fills a cart and checks out.

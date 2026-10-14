@@ -122,3 +122,32 @@ pub fn save_checkout_draft(cx: &Cx, draft: CheckoutDraft) -> topcoat::Result<()>
     checkout_store(cx).set(draft).commit()?;
     Ok(())
 }
+
+/// The request to pay this browser is going through: the card form's page
+/// reads its payment back by it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentInProgress {
+    pub cart_id: String,
+    pub request_id: String,
+}
+
+fn payment_store(cx: &Cx) -> UnparsedCookieStore<PaymentInProgress, impl Cookies + '_> {
+    cookie_store(jar(cx), "payment")
+}
+
+pub fn payment_in_progress(cx: &Cx) -> Option<PaymentInProgress> {
+    payment_store(cx)
+        .parse()
+        .ok()
+        .flatten()
+        .map(|store| store.get())
+}
+
+pub fn set_payment_in_progress(cx: &Cx, payment: PaymentInProgress) -> topcoat::Result<()> {
+    payment_store(cx).set(payment).commit()?;
+    Ok(())
+}
+
+pub fn forget_payment(cx: &Cx) {
+    payment_store(cx).remove();
+}

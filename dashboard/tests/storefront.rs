@@ -1048,6 +1048,64 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
     store.shutdown().await;
 }
 
+/// Answers the next request to pay of a cart as the dashboard does: a
+/// payment for it, or the refusal it gets; returns the payment opened.
+async fn answer_as_dashboard(
+    merchant: &timada_orders::Command<cluster::Executor>,
+    cart_id: &str,
+) -> Option<timada_orders::Payment> {
+    let mut request = None;
+    eventually("the shopper asks to pay", async || {
+        let cart = merchant.load_cart(cart_id).await.unwrap().unwrap();
+        request = cart
+            .requests
+            .iter()
+            .find(|r| r.answer.is_none())
+            .map(|r| r.request_id.clone());
+        request.is_some()
+    })
+    .await;
+    let request_id = request.unwrap();
+    match merchant.pending_payment(cart_id, &request_id).await {
+        Ok(Some(pending)) => {
+            let payment = timada_orders::Payment {
+                provider: "stripe".into(),
+                payment_id: format!("pi_{request_id}"),
+                amount_cents: pending.total_cents,
+                currency: pending.currency.clone(),
+            };
+            merchant
+                .record_payment_request(
+                    "timada-dashboard",
+                    cart_id,
+                    pending,
+                    timada_orders::OpenedPayment {
+                        provider: "stripe".into(),
+                        payment_id: payment.payment_id.clone(),
+                        client_secret: "secret_for_test".into(),
+                        publishable_key: "pk_test".into(),
+                    },
+                )
+                .await
+                .unwrap();
+            Some(payment)
+        }
+        Ok(None) => None,
+        Err(err) => {
+            merchant
+                .refuse_payment_request(
+                    "timada-dashboard",
+                    cart_id,
+                    &request_id,
+                    err.code().unwrap(),
+                )
+                .await
+                .unwrap();
+            None
+        }
+    }
+}
+
 /// What the back office would show for each category, by slug: the same
 /// counting the shop does, read from the platform's own read model.
 async fn dashboard_counts(h: &Harness, tenant: &TenantState) -> Vec<(String, i64)> {
@@ -1232,8 +1290,8 @@ async fn a_store_with_a_checkout_key_sells() {
     assert_eq!(cart.lines[0].slug.as_deref(), Some("blue-mug"));
     assert!(cart.can_check_out());
 
-    // The price moves: the total the shopper saw is refused, the new one
-    // goes through.
+    // The price moves: the total the shopper saw is refused by the
+    // dashboard, the new one gets a payment to confirm.
     catalog
         .price_product("alice", &mug.id, 1300, "EUR")
         .await
@@ -1251,25 +1309,48 @@ async fn a_store_with_a_checkout_key_sells() {
         note: None,
         expected_total_cents: Some(expected),
     };
-    let moved = store
-        .place_order(&cart_id, checkout(cart.total_cents))
-        .await
-        .unwrap();
+    let merchant = timada_orders::Command(catalog.0.clone());
+    let asking = tokio::spawn({
+        let store = store.clone();
+        let cart_id = cart_id.clone();
+        let checkout = checkout(cart.total_cents);
+        async move { store.start_payment(&cart_id, checkout).await }
+    });
+    answer_as_dashboard(&merchant, &cart_id).await;
+    let moved = asking.await.unwrap().unwrap();
     assert!(
-        matches!(
-            moved,
-            Err(timada_storefront::OrdersError::PriceChanged { total_cents: 3900 })
-        ),
+        matches!(&moved, Err(err) if err.code() == Some("price_changed")),
         "{moved:?}"
     );
-    let placed = store
-        .place_order(&cart_id, checkout(3900))
+    let asking = tokio::spawn({
+        let store = store.clone();
+        let cart_id = cart_id.clone();
+        let checkout = checkout(3900);
+        async move { store.start_payment(&cart_id, checkout).await }
+    });
+    let payment = answer_as_dashboard(&merchant, &cart_id).await.unwrap();
+    let session = asking.await.unwrap().unwrap().unwrap();
+    assert_eq!(session.total(), "39.00 EUR");
+    assert_eq!(session.client_secret, "secret_for_test");
+    assert_eq!(
+        store
+            .payment_session(&cart_id, &session.request_id)
+            .await
+            .unwrap()
+            .as_ref(),
+        Some(&session)
+    );
+    assert!(store.order_of_cart(&cart_id).await.unwrap().is_none());
+
+    // The provider confirms to the dashboard: the order exists, paid.
+    let placed = merchant
+        .place_paid_order("timada-dashboard", &cart_id, payment)
         .await
-        .unwrap()
         .unwrap();
-    let order = store.order(&placed.order_id).await.unwrap().unwrap();
+    let order = store.order_of_cart(&cart_id).await.unwrap().unwrap();
     assert_eq!(order.reference, placed.reference);
     assert_eq!(order.total_cents, 3900);
+    assert_eq!(order.status, timada_orders::OrderStatus::Paid);
     let cart = store.cart(&cart_id).await.unwrap().unwrap();
     assert_eq!(cart.order_id.as_deref(), Some(placed.order_id.as_str()));
     // A cart already ordered: the next add starts a new one.
