@@ -181,7 +181,7 @@ test("a storefront browses the categories its products are filed under", async (
   ]) {
     await expect(page.locator(`[data-category=${category}] [data-category-count]`)).toHaveText(count);
   }
-  await expect(page.locator("[data-category=bedding] [data-category-direct]")).toHaveText("0");
+  await expect(page.locator("[data-category=bedding] [data-category-direct]")).toHaveAttribute("data-category-direct", "0");
   await page.goto(`${STOREFRONT}/`);
 
   // A top-level category lists what is under it, newest first by default.
