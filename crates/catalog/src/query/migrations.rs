@@ -64,6 +64,8 @@ sqlx_migrator::sqlite_migration!(
                 created_by TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
+                product_count INTEGER NOT NULL DEFAULT 0,
+                subtree_count INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (tenant_id, id)
             )",
             "DROP TABLE catalog_categories"

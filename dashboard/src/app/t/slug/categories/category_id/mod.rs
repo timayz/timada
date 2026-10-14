@@ -135,7 +135,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let on_its_page = rows
         .iter()
         .find(|row| row.category.id == category.id)
-        .map(|row| row.subtree_count)
+        .map(|row| row.category.subtree_count)
         .unwrap_or(filed_here);
     let children = live_child_count(pool, &tenant.id, &category.id).await?;
     let descendants: Vec<&str> = {

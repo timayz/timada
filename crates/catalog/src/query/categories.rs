@@ -1,7 +1,10 @@
 //! Queries over `catalog_categories`, for the category pages of a tenant.
 //!
 //! The tree is assembled in memory: a tenant has tens of categories, not
-//! thousands, and one flat query beats a recursive one.
+//! thousands, and one flat query beats a recursive one. The counts a page
+//! shows are not: they are worked out when a product or a category changes
+//! ([`category_counts`], called by the read-model subscription) and stored on
+//! the row, so reading a category costs one plain `SELECT`.
 
 use sqlx::{FromRow, SqlitePool};
 
@@ -23,6 +26,10 @@ pub struct CategoryRow {
     pub updated_at: i64,
     /// Products of this very category that are not archived.
     pub product_count: i64,
+    /// Distinct products that are not archived in it and in every live
+    /// category below it: what its storefront page lists. Equal to
+    /// `product_count` for a category with nothing below it.
+    pub subtree_count: i64,
 }
 
 /// What a tree is built of: anything that knows its id, its parent and where
@@ -129,23 +136,6 @@ fn depth_of(
     depth
 }
 
-/// Every `(category id, product id)` of a tenant whose product is not
-/// archived: what [`subtree_counts`] needs to count a category's page.
-pub async fn memberships_of_tenant(
-    pool: &SqlitePool,
-    tenant_id: &str,
-) -> sqlx::Result<Vec<(String, String)>> {
-    sqlx::query_as(
-        "SELECT pc.category_id, pc.product_id
-         FROM catalog_product_categories pc
-         JOIN catalog_products p ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
-         WHERE pc.tenant_id = ?1 AND p.status <> 'archived'",
-    )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await
-}
-
 /// How many distinct products each category's page lists: those filed under
 /// it and under everything below it, each counted once however many of the
 /// categories it belongs to.
@@ -188,21 +178,114 @@ fn count_subtree<T: TreeNode>(
     products
 }
 
-/// The live categories of a tenant, parents before children, each level in
-/// its own order. `product_count` counts the products filed under that very
-/// category that are not archived; what its page lists is
-/// [`subtree_counts`].
+/// A category as far as counting goes: where it hangs, and whether it is
+/// still in the tree.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct CategoryLink {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub archived: bool,
+}
+
+impl TreeNode for CategoryLink {
+    fn node_id(&self) -> &str {
+        &self.id
+    }
+
+    fn node_parent_id(&self) -> Option<&str> {
+        self.parent_id.as_deref()
+    }
+}
+
+/// The two numbers stored on a category row.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CategoryCounts {
+    /// Products filed under that very category.
+    pub product_count: i64,
+    /// Distinct products in it and in every live category below it.
+    pub subtree_count: i64,
+}
+
+/// The counts of every category in `links`, from the `(category id, product
+/// id)` pairs of the products that count. An archived category is out of the
+/// tree: its page lists nothing below it, so both its numbers are what is
+/// filed under it.
+pub fn category_counts(
+    links: Vec<CategoryLink>,
+    memberships: &[(String, String)],
+) -> std::collections::HashMap<String, CategoryCounts> {
+    let mut direct: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    for (category_id, _) in memberships {
+        *direct.entry(category_id.as_str()).or_default() += 1;
+    }
+    let mut out: std::collections::HashMap<String, CategoryCounts> = links
+        .iter()
+        .map(|link| {
+            let product_count = direct.get(link.id.as_str()).copied().unwrap_or(0);
+            (
+                link.id.clone(),
+                CategoryCounts {
+                    product_count,
+                    subtree_count: product_count,
+                },
+            )
+        })
+        .collect();
+    let live: Vec<CategoryLink> = links.into_iter().filter(|link| !link.archived).collect();
+    for (id, subtree_count) in subtree_counts(&tree_of(live), memberships) {
+        if let Some(counts) = out.get_mut(&id) {
+            counts.subtree_count = subtree_count;
+        }
+    }
+    out
+}
+
+/// Works out and stores the counts of every category of a tenant, inside the
+/// transaction that changed what they count.
+pub async fn refresh_category_counts(
+    conn: &mut sqlx::SqliteConnection,
+    tenant_id: &str,
+) -> sqlx::Result<()> {
+    let links: Vec<CategoryLink> = sqlx::query_as(
+        "SELECT id, parent_id, archived FROM catalog_categories WHERE tenant_id = ?1",
+    )
+    .bind(tenant_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let memberships: Vec<(String, String)> = sqlx::query_as(
+        "SELECT pc.category_id, pc.product_id
+         FROM catalog_product_categories pc
+         JOIN catalog_products p ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
+         WHERE pc.tenant_id = ?1 AND p.status <> 'archived'",
+    )
+    .bind(tenant_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    for (id, counts) in category_counts(links, &memberships) {
+        sqlx::query(
+            "UPDATE catalog_categories SET product_count = ?3, subtree_count = ?4
+             WHERE tenant_id = ?1 AND id = ?2
+               AND (product_count <> ?3 OR subtree_count <> ?4)",
+        )
+        .bind(tenant_id)
+        .bind(&id)
+        .bind(counts.product_count)
+        .bind(counts.subtree_count)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
+
+/// The live categories of a tenant, each level in its own order, with their
+/// stored counts.
 pub async fn categories_of_tenant(
     pool: &SqlitePool,
     tenant_id: &str,
 ) -> sqlx::Result<Vec<CategoryRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, slug, name, description, parent_id, position, archived,
-            created_by, created_at, updated_at,
-            (SELECT count(*) FROM catalog_product_categories pc
-                JOIN catalog_products p ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
-                WHERE pc.tenant_id = c.tenant_id AND pc.category_id = c.id
-                  AND p.status <> 'archived') AS product_count
+            created_by, created_at, updated_at, product_count, subtree_count
          FROM catalog_categories c
          WHERE tenant_id = ?1 AND archived = 0
          ORDER BY position, name, id",
@@ -220,11 +303,7 @@ pub async fn category_by_id(
 ) -> sqlx::Result<Option<CategoryRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, slug, name, description, parent_id, position, archived,
-            created_by, created_at, updated_at,
-            (SELECT count(*) FROM catalog_product_categories pc
-                JOIN catalog_products p ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
-                WHERE pc.tenant_id = c.tenant_id AND pc.category_id = c.id
-                  AND p.status <> 'archived') AS product_count
+            created_by, created_at, updated_at, product_count, subtree_count
          FROM catalog_categories c
          WHERE tenant_id = ?1 AND id = ?2",
     )
@@ -255,11 +334,7 @@ pub async fn categories_of_product(
 ) -> sqlx::Result<Vec<CategoryRow>> {
     sqlx::query_as(
         "SELECT c.tenant_id, c.id, c.slug, c.name, c.description, c.parent_id, c.position,
-            c.archived, c.created_by, c.created_at, c.updated_at,
-            (SELECT count(*) FROM catalog_product_categories pc2
-                JOIN catalog_products p ON p.tenant_id = pc2.tenant_id AND p.id = pc2.product_id
-                WHERE pc2.tenant_id = c.tenant_id AND pc2.category_id = c.id
-                  AND p.status <> 'archived') AS product_count
+            c.archived, c.created_by, c.created_at, c.updated_at, c.product_count, c.subtree_count
          FROM catalog_categories c
          JOIN catalog_product_categories pc
             ON pc.tenant_id = c.tenant_id AND pc.category_id = c.id

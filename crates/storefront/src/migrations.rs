@@ -59,7 +59,9 @@ sqlx_migrator::sqlite_migration!(
                 parent_id TEXT,
                 position INTEGER NOT NULL,
                 archived INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                product_count INTEGER NOT NULL DEFAULT 0,
+                subtree_count INTEGER NOT NULL DEFAULT 0
             )",
             "DROP TABLE storefront_categories"
         ),
