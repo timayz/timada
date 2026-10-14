@@ -4372,6 +4372,7 @@ dependencies = [
  "sqlx",
  "sqlx_migrator",
  "timada-catalog",
+ "timada-orders",
  "tokio",
  "tokio-rustls",
  "topcoat-core",
