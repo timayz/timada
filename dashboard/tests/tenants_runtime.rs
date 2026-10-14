@@ -292,6 +292,45 @@ async fn too_many_open_tenants_evicts_the_least_recently_used() {
 }
 
 #[tokio::test]
+async fn a_request_holds_its_tenant_open_past_the_idle_timeout() {
+    let h = harness(1).await;
+    let a = h.create("aaa").await;
+    let b = h.create("bbb").await;
+
+    // A request outlives the idle timeout: the sweep leaves its tenant open.
+    let hold = h.tenants.hold(&a).await.unwrap();
+    tokio::time::sleep(IDLE * 4).await;
+    h.tenants.sweep().await;
+    assert!(
+        matches!(
+            h.tenants.status(&a.id),
+            TenantStatus::Running { leases: 0, .. }
+        ),
+        "a request is not shown as a store connection"
+    );
+
+    // Nor is it evicted to make room for another tenant.
+    h.tenants.open(&b).await.unwrap();
+    assert!(matches!(
+        h.tenants.status(&a.id),
+        TenantStatus::Running { .. }
+    ));
+    let probe = timada_tenancy::tenant_projection::<cluster::Executor>()
+        .load("probe")
+        .execute(hold.executor())
+        .await;
+    assert!(probe.is_ok(), "its database is still usable: {probe:?}");
+
+    // Once the request is done, the tenant is idle like any other.
+    drop(hold);
+    h.tenants.sweep().await;
+    assert_eq!(h.tenants.status(&a.id), TenantStatus::Stopped);
+
+    h.tenants.shutdown().await;
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+#[tokio::test]
 async fn suspended_and_unknown_tenants_are_not_opened() {
     let h = harness(8).await;
     let acme = h.create("acme").await;
