@@ -52,6 +52,7 @@
     #strong(d.buyer_address.first()) \
     #address(d.buyer_address.slice(1)) \
     #muted[#d.buyer_email]
+    #if d.buyer_vat != "" [ \ N° TVA client : #d.buyer_vat]
   ],
   if d.delivery_address.len() > 0 [
     #muted[Adresse de livraison] \

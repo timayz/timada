@@ -90,6 +90,12 @@ public_url = "https://timada.localhost/media"
 # # Where Stripe's API is reached; Stripe's own address when unset.
 # stripe_api_url = "http://localhost:12111"
 
+# Invoices. A business buyer's EU VAT number is checked with VIES, the
+# European Commission's service, before an invoice goes without VAT.
+# [invoicing]
+# # Where VIES is reached; the Commission's own address when unset.
+# vies_url = "https://ec.europa.eu/taxation_customs/vies/rest-api"
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events. A connected storefront keeps its tenant's database open.

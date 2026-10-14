@@ -92,6 +92,10 @@ pub struct CheckoutDraft {
     pub country: String,
     pub phone: String,
     pub note: String,
+    /// A business buyer's EU VAT number; absent from drafts kept before it
+    /// existed.
+    #[serde(default)]
+    pub vat_number: String,
 }
 
 impl CheckoutDraft {

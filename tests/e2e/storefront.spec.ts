@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { FakeStripe, stripeSignature } from "./stripe";
+import { FakeVies } from "./vies";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 
 // The headless storefront end to end: a merchant publishes a product and
@@ -361,7 +362,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     // VAT-registered, so a product says what kind of goods it is.
     await page.goto(plateUrl);
     await expect(page.locator("[data-product-vat]")).toHaveText("Standard");
-    await page.getByLabel("Kind of goods, for VAT").selectOption({ label: "Food" });
+    await page.getByLabel("Kind of goods, for VAT").selectOption("food");
     await page.getByRole("button", { name: "Set kind" }).click();
     await expect(page.getByRole("status")).toContainText("Kind of goods set.");
     await expect(page.locator("[data-product-vat]")).toHaveText("Food");
@@ -486,6 +487,118 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     }).toPass({ timeout: 15_000 });
     await expect(page.locator(`[data-document="A${year}-000001"]`)).toContainText("Credit note");
   } finally {
+    await stripe.stop();
+  }
+});
+
+/// From the cart to the card form, shipping to `country`, as a business
+/// when a VAT number is given.
+async function checkoutTo(page: Page, country: string, postalCode: string, vatNumber = "") {
+  await page.goto(`${STOREFRONT}/cart`);
+  await page.getByRole("link", { name: "Check out" }).click();
+  await expect(page.locator("[data-import-notice]")).toBeVisible();
+  await page.getByLabel("E-mail").fill("ada@example.org");
+  await page.getByLabel("Full name").fill("Ada Lovelace");
+  await page.getByLabel("Street address").fill("1 Main Street");
+  await page.getByLabel("Postal code").fill(postalCode);
+  await page.getByLabel("City").fill("Somewhere");
+  await page.getByLabel("Country code").fill(country);
+  await page.getByLabel("EU company VAT number (optional, for an invoice without VAT)").fill(vatNumber);
+  await page.getByRole("button", { name: "Continue to payment" }).click();
+  await expect(page).toHaveURL(`${STOREFRONT}/checkout/pay`);
+}
+
+test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page, request }) => {
+  const stripe = new FakeStripe();
+  const vies = new FakeVies();
+  await stripe.start();
+  await vies.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Export Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await startStorefront(request, await mintKey(page, slug, true), 1);
+
+    // Each order: a mug, paid, then told to the dashboard.
+    const addMug = async () => {
+      await page.goto(`${STOREFRONT}/p/blue-mug`);
+      await page.getByRole("button", { name: "Add to cart" }).click();
+    };
+    const pay = async () => {
+      const intent = stripe.lastIntent()!;
+      expect(intent.amount).toBe(1250);
+      stripe.pay(intent.id);
+      expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+      await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+      await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+    };
+    const buy = async (country: string, postalCode: string, vatNumber = "") => {
+      await addMug();
+      await checkoutTo(page, country, postalCode, vatNumber);
+      await pay();
+    };
+    const year = new Date().getUTCFullYear();
+    const regimeOf = (number: number) =>
+      page.locator(`[data-document="F${year}-${String(number).padStart(6, "0")}"] [data-document-regime]`);
+    const expectRegime = async (number: number, regime: string) => {
+      await expect(async () => {
+        await page.goto(`/t/${slug}/invoices`);
+        await expect(regimeOf(number)).toHaveAttribute("data-document-regime", regime, { timeout: 1000 });
+      }).toPass({ timeout: 20_000 });
+    };
+
+    // A German business VIES knows: reverse charge. A bad number is refused
+    // at checkout.
+    await addMug();
+    await page.goto(`${STOREFRONT}/cart`);
+    await page.getByRole("link", { name: "Check out" }).click();
+    await page.getByLabel("E-mail").fill("ada@example.org");
+    await page.getByLabel("Full name").fill("Ada Lovelace");
+    await page.getByLabel("Street address").fill("1 Main Street");
+    await page.getByLabel("Postal code").fill("10115");
+    await page.getByLabel("City").fill("Berlin");
+    await page.getByLabel("Country code").fill("DE");
+    await page.getByLabel("EU company VAT number (optional, for an invoice without VAT)").fill("US123");
+    await page.getByRole("button", { name: "Continue to payment" }).click();
+    await expect(page.getByRole("alert")).toContainText("EU VAT number");
+    await checkoutTo(page, "DE", "10115", "DE123456789");
+    await pay();
+    await expectRegime(1, "reverse_charge");
+    expect(vies.checked).toContain("DE123456789");
+
+    // Out of the EU: an export.
+    await buy("US", "10001");
+    await expectRegime(2, "export");
+
+    // Under the threshold a German consumer pays French VAT; once the
+    // merchant joins the One-Stop Shop, German VAT, on the quarter's return.
+    await buy("DE", "10115");
+    await expectRegime(3, "distance_origin");
+    await page.goto(`/t/${slug}/invoices/oss`);
+    await expect(page.locator("[data-oss-empty]")).toBeVisible();
+    await page.goto(`/t/${slug}/invoicing`);
+    await page.getByRole("checkbox", { name: /One-Stop Shop/ }).check();
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Legal identity saved.");
+    await buy("DE", "10115");
+    await expectRegime(4, "oss");
+    await expect(async () => {
+      await page.goto(`/t/${slug}/invoices/oss`);
+      await expect(page.locator(`[data-oss-row="DE-1900"] [data-oss-vat]`)).toHaveText("2,00\u00a0€", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await page.goto(`/t/${slug}/invoicing`);
+    await expect(page.locator("[data-eu-distance]")).toContainText("20,92");
+  } finally {
+    await vies.stop();
     await stripe.stop();
   }
 });

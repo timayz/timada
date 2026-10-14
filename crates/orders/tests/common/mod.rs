@@ -133,6 +133,7 @@ pub fn checkout() -> Checkout {
         },
         note: None,
         expected_total_cents: None,
+        vat_number: None,
     }
 }
 
