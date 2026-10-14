@@ -74,6 +74,14 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             &executor,
         )
         .await?,
+        // Not a read model, but the same lifecycle: every node opens a tenant
+        // as soon as its creation arrives.
+        start_read_model(
+            "new tenants",
+            crate::tenants::creation_subscription(tenants.clone()),
+            &executor,
+        )
+        .await?,
     ];
 
     let router = app::router(Services {

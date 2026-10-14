@@ -89,9 +89,20 @@ tenant's products while the events stay isolated by construction.
    consensus group runs and its read-model subscriptions follow its stream. Every
    tenant-scoped request goes through `Tenants::open`, which is the activity signal.
    A sweeper closes what has been idle longer than `tenants.idle_timeout_secs` and
-   evicts the least recently used beyond `tenants.max_open`. A peer talking about a
-   group this node closed triggers `reopen`, which opens it only if the catalog knows
-   the tenant and it is not suspended: the wire cannot create one. The list of
+   evicts the least recently used beyond `tenants.max_open`. Requests are not the only
+   use: a node taking part in writes another node coordinates sees none, so a tenant
+   with a transaction in flight or an event younger than the timeout is not idle. A
+   new tenant opens on every node as soon as its creation reaches it (a platform
+   subscription, `creation_subscription`; creations older than a minute are history
+   being replayed and are skipped), so its group already runs everywhere when the
+   first write comes, typically a second after the creation. A
+   peer talking about a group this node closed triggers `reopen`, which opens it only
+   if the catalog knows the tenant and it is not suspended: the wire cannot create
+   one. The catalog is a read model, a second behind a tenant created on another
+   node, so the lookup is retried for as long as the transport keeps the frames
+   waiting; nodes also wait three seconds (`recovery_timeout`) before taking over a
+   transaction, so a peer that opens late joins the write instead of recovering it
+   from under its coordinator. The list of
    per-tenant read models is `tenant_subscriptions()` in `serve.rs`; adding a
    tenant-scoped context means adding one entry there.
 3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens

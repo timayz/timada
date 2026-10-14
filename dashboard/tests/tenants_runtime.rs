@@ -371,6 +371,104 @@ async fn suspended_and_unknown_tenants_are_not_opened() {
     let _ = std::fs::remove_dir_all(&h.dir);
 }
 
+#[tokio::test]
+async fn a_peer_asking_for_a_tenant_the_catalog_learns_late_still_opens_it() {
+    let h = harness(8).await;
+    let acme = h.create("acme").await;
+    let group = timada_tenancy::group_of(&acme.id) as i64;
+
+    // Created on another node a moment ago: its catalog row is not here yet
+    // when the first frames arrive.
+    sqlx::query("UPDATE tenancy_tenants SET group_id = -1 WHERE id = ?1")
+        .bind(&acme.id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    h.tenants.reopen(GroupId(group as u64));
+    // The transport repeats its notice; one lookup is enough.
+    h.tenants.reopen(GroupId(group as u64));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(h.tenants.open_count(), 0);
+
+    // The row lands: the lookup still running finds it and opens the tenant.
+    sqlx::query("UPDATE tenancy_tenants SET group_id = ?1 WHERE id = ?2")
+        .bind(group)
+        .bind(&acme.id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while h.tenants.open_count() == 0 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the retried lookup opens the tenant");
+
+    h.tenants.shutdown().await;
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+#[tokio::test]
+async fn a_tenant_written_to_within_the_timeout_is_not_idle() {
+    let h = harness(8).await;
+    let acme = h.create("acme").await;
+    h.write(&acme, "probe", "one", 0).await;
+
+    // No request has touched it for longer than the timeout, but its newest
+    // event is recent: on a node taking part in another node's writes, that
+    // is the only sign the tenant is in use.
+    // The harness's idle timeout is one second.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    sqlx::query("UPDATE event SET timestamp = strftime('%s', 'now')")
+        .execute(&tenant_pool(&h, &acme).await)
+        .await
+        .unwrap();
+    h.tenants.sweep().await;
+    assert!(matches!(
+        h.tenants.status(&acme.id),
+        TenantStatus::Running { .. }
+    ));
+
+    // Once that write is older than the timeout, it closes.
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    h.tenants.sweep().await;
+    assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
+
+    h.tenants.shutdown().await;
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+#[tokio::test]
+async fn a_new_tenant_opens_as_soon_as_its_creation_arrives() {
+    let h = harness(8).await;
+    let acme = h.create("acme").await;
+    assert_eq!(h.tenants.status(&acme.id), TenantStatus::Stopped);
+
+    // No request asked for it: its creation alone opens it, so its group
+    // runs here before another node's first write needs it.
+    tenants::creation_subscription(h.tenants.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    assert!(matches!(
+        h.tenants.status(&acme.id),
+        TenantStatus::Running { .. }
+    ));
+
+    h.tenants.shutdown().await;
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+/// A second connection to a tenant's own database file.
+async fn tenant_pool(h: &Harness, tenant: &TenantState) -> SqlitePool {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(h.tenants.path_of(&tenant.id)))
+        .await
+        .unwrap()
+}
+
 /// Waits until the shared product list of `tenant` satisfies `ok`.
 async fn wait_products(
     pool: &SqlitePool,

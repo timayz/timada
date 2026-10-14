@@ -40,10 +40,14 @@ pub type Executor = Evento;
 /// this much.
 pub const STABLE_MARGIN: Duration = Duration::from_millis(100);
 
+/// How old an unapplied transaction must be before a node takes it over
+/// from its coordinator; see [`Cluster::build`].
+const RECOVERY_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Frames for a group this node has not opened yet wait this long for it.
 const PENDING_FRAMES_PER_GROUP: usize = 64;
 const PENDING_GROUPS: usize = 1024;
-const PENDING_TTL: Duration = Duration::from_secs(10);
+pub(crate) const PENDING_TTL: Duration = Duration::from_secs(10);
 
 /// One per process: the transport, the sweep task and the group host.
 pub struct Cluster {
@@ -114,9 +118,25 @@ impl Cluster {
         // single-aggregate read wait for the writes a quorum already committed
         // (one consensus round per read). Alone, a node applies its own writes
         // before the commit returns, so the barrier would only add latency.
+        //
+        // A peer opens a tenant's group only once frames for it arrive (see
+        // `Tenants::reopen`), which can take a second when the tenant is new.
+        // The frames wait meanwhile, and a node takes any transaction older than
+        // `recovery_timeout` for one whose coordinator died: with the default
+        // (300 ms) the late peer would take over a write its coordinator is
+        // still running, and the coordinator would answer that write as failed
+        // even though recovery then commits it. Three seconds outlasts the
+        // reopen; a coordinator that really died is recovered that much later.
+        // Alone, a node has no peer to open late and keeps the default.
+        let defaults = NodeConfig::default();
         let node_config = NodeConfig {
             linearizable_reads: ids.len() > 1,
-            ..NodeConfig::default()
+            recovery_timeout: if ids.len() > 1 {
+                RECOVERY_TIMEOUT
+            } else {
+                defaults.recovery_timeout
+            },
+            ..defaults
         };
 
         Ok(Self {
@@ -196,5 +216,15 @@ impl Cluster {
     /// Stops a group's node; the caller closes its pool afterwards.
     pub fn close_group(&self, group: GroupId) {
         self.host.close(group);
+    }
+
+    /// Whether a group has a transaction in flight or applied within the
+    /// last moment (its node still holds commands compaction has not dropped
+    /// yet). On a node that only takes part in another node's writes, this is
+    /// the sign the group is in use.
+    pub fn group_busy(&self, group: GroupId) -> bool {
+        self.host
+            .get(group)
+            .is_some_and(|node| node.command_count() > 0)
     }
 }
