@@ -4,11 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use evento::migrator::Migrate;
 use evento::subscription::Subscription;
 use evento::{Evento, Executor as _, RemoteClient, Sidecar};
 use sqlx::SqlitePool;
-use sqlx_migrator::Info;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -85,18 +83,7 @@ impl Store {
         let local: evento::Sqlite = pool.clone().into();
         let executor = Evento::new(Sidecar::from((client, local)));
 
-        {
-            let mut conn = pool.acquire().await?;
-            let mut migrator =
-                evento::sql_migrator::new::<sqlx::Sqlite>().map_err(anyhow::Error::from)?;
-            migrator
-                .add_migrations(crate::migrations())
-                .map_err(anyhow::Error::from)?;
-            migrator
-                .run(&mut *conn, &evento::migrator::Plan::apply_all())
-                .await
-                .context("cannot prepare the local database")?;
-        }
+        crate::migrate(&pool).await?;
 
         let subscription = catalog_subscription(pool.clone())
             .start(&executor)
