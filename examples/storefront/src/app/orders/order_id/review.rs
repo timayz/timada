@@ -10,14 +10,14 @@ use topcoat::{
 };
 
 use super::{OrderId, order_url};
-use crate::shopper::placed;
+use crate::shopper::holds_order;
 
 /// Hands in the shopper's review of one product of the order, with its
 /// photos, then back to the order's page.
 #[route(POST)]
 pub async fn review(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
     let order_id = path_param::<OrderId>(cx).to_owned();
-    if !placed(cx, &order_id) {
+    if !holds_order(cx, &order_id).await? {
         return Err(not_found().into());
     }
     // The body has to be read to the end whatever happens to it.

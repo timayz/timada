@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { registerWithEmail, uniqueEmail } from "./email";
+import { MAILDEV, latestCode, mailCount, registerWithEmail, uniqueEmail } from "./email";
 import { FakeStripe, fakeStripeJs, stripeSignature } from "./stripe";
 import { FakeVies } from "./vies";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
@@ -1152,6 +1152,150 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
     await expect(page.locator("[data-eu-distance]")).toContainText("20,92");
   } finally {
     await vies.stop();
+    await stripe.stop();
+  }
+});
+
+/// Signs in on the storefront from its sign-in page (already open): the
+/// address, then the code the shop mailed.
+async function signInToShop(page: Page, email: string, firstCode?: string) {
+  const before = await mailCount(page.request, email);
+  await page.getByLabel("E-mail").fill(email);
+  await page.getByRole("button", { name: "Send me a code" }).click();
+  await expect(page).toHaveURL(/\/account\/sign-in\/code/);
+  const code = await latestCode(page.request, email, before);
+  if (firstCode) {
+    await page.getByLabel("Code", { exact: true }).fill(firstCode);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("This is not the code we sent");
+  }
+  await page.getByLabel("Code", { exact: true }).fill(code);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+}
+
+test("a returning shopper signs in with a mailed code and finds their orders and address", async ({
+  page,
+  request,
+  browser,
+}) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Account Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await publishProduct(page, slug, "Red Plate", "8");
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await startStorefront(request, await mintKey(page, slug, true), 2);
+    const shopper = uniqueEmail("shopper");
+
+    const pay = async (shop: Page) => {
+      await expect(shop).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
+      const intent = stripe.lastIntent()!;
+      stripe.pay(intent.id);
+      expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+      await shop.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+      await expect(shop).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+      return shop.url();
+    };
+
+    // A guest order first, as anyone.
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await addToCart(page);
+    await page.goto(`${STOREFRONT}/checkout`);
+    await page.getByLabel("E-mail").fill(shopper);
+    await page.getByLabel("Full name").fill("Ada Lovelace");
+    await page.getByLabel("Street address").fill("1 rue de la Paix");
+    await page.getByLabel("Postal code").fill("75002");
+    await page.getByLabel("City").fill("Paris");
+    await page.getByLabel("Country").selectOption("FR");
+    await page.getByRole("button", { name: "Place order" }).click();
+    const guestOrder = await pay(page);
+
+    // Next time, the checkout offers to sign in, and comes back to it.
+    await page.goto(`${STOREFRONT}/p/red-plate`);
+    await addToCart(page);
+    await page.goto(`${STOREFRONT}/checkout`);
+    await expect(page.locator("[data-signed-in]")).toHaveCount(0);
+    await page.locator("[data-returning]").getByRole("link", { name: "Click here to log in" }).click();
+    await expect(page).toHaveURL(/\/account\/sign-in\?/);
+    await signInToShop(page, shopper);
+    await expect(page).toHaveURL(`${STOREFRONT}/checkout`);
+    await expect(page.locator("[data-signed-in]")).toContainText(shopper);
+    await expect(page.locator("[data-returning]")).toHaveCount(0);
+    await expect(page.getByLabel("E-mail")).toHaveValue(shopper);
+    await expect(page.getByLabel("E-mail")).toHaveAttribute("readonly", "");
+    await expect(page.getByLabel("City")).toHaveValue("Paris");
+    await expect(page.getByLabel("Save this address to my account")).toBeChecked();
+    await page.getByRole("button", { name: "Place order" }).click();
+    await pay(page);
+
+    // The code came from the shop.
+    const mail = (await (await request.get(`${MAILDEV}/email`)).json()) as {
+      to: { address: string }[];
+      subject: string;
+      from: { name: string }[];
+    }[];
+    const sent = mail.filter((m) => m.to.some((to) => to.address === shopper));
+    expect(sent.at(-1)?.subject).toBe(`Your sign-in code for ${name}`);
+    expect(sent.at(-1)?.from[0]?.name).toBe(name);
+
+    // Another device: a wrong code is refused, the right one shows both
+    // orders (the guest one too) and the address kept at checkout.
+    const other = await browser.newContext();
+    try {
+      const device = await other.newPage();
+      await fakeStripeJs(device);
+      await device.goto(`${STOREFRONT}/account`);
+      await expect(device).toHaveURL(/\/account\/sign-in\?/);
+      await signInToShop(device, shopper, "000000");
+      await expect(device).toHaveURL(`${STOREFRONT}/account`);
+      await expect(device.locator("[data-account-email]")).toHaveText(shopper);
+      await expect(async () => {
+        await device.reload();
+        await expect(device.locator("[data-account-order]")).toHaveCount(2, { timeout: 1000 });
+      }).toPass({ timeout: 15_000 });
+      await expect(device.locator("[data-saved-address]")).toHaveCount(1);
+      await expect(device.locator("[data-saved-address=Paris]")).toContainText("1 rue de la Paix");
+
+      // The guest order opens here: it was placed with this address.
+      const guestPath = new URL(guestOrder).pathname;
+      await device.locator(`a[href="${guestPath}"]`).click();
+      await expect(device).toHaveURL(guestOrder);
+      await expect(device.getByRole("heading", { level: 1 })).toBeVisible();
+
+      // Its checkout starts from the saved address.
+      await device.goto(`${STOREFRONT}/p/blue-mug`);
+      await addToCart(device);
+      await device.goto(`${STOREFRONT}/checkout`);
+      await expect(device.getByLabel("E-mail")).toHaveValue(shopper);
+      await expect(device.getByLabel("Full name")).toHaveValue("Ada Lovelace");
+      await expect(device.getByLabel("Street address")).toHaveValue("1 rue de la Paix");
+      await expect(device.getByLabel("City")).toHaveValue("Paris");
+      await expect(device.locator("[data-saved-address=Paris]")).toHaveAttribute("data-current", "");
+
+      // Signed out, an order this browser did not place is not shown.
+      await device.goto(`${STOREFRONT}/account`);
+      await device.getByRole("button", { name: "Sign out" }).click();
+      await expect(device.locator("[data-account-link]")).toHaveText("Sign in");
+      expect((await device.goto(guestOrder))?.status()).toBe(404);
+
+      // Removing an address, back on the first browser.
+      await page.goto(`${STOREFRONT}/account`);
+      await page.locator("[data-saved-address=Paris]").getByRole("button", { name: "Remove" }).click();
+      await expect(page.locator("[data-saved-address]")).toHaveCount(0);
+    } finally {
+      await other.close();
+    }
+  } finally {
     await stripe.stop();
   }
 });

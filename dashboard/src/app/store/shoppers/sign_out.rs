@@ -1,4 +1,4 @@
-//! `POST /store/shoppers/sign-out` with `X-Shopper-Token`: ends that session.
+//! `POST /store/shoppers/sign_out` with `X-Shopper-Token`: ends that session.
 //! 204, whether or not it was still open.
 
 use topcoat::{
