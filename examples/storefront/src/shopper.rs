@@ -112,6 +112,22 @@ pub struct CheckoutDraft {
     /// existed.
     #[serde(default)]
     pub vat_number: String,
+    /// Not empty when the shopper is billed at another address than the
+    /// delivery one; that address follows. All absent from older drafts.
+    #[serde(default)]
+    pub billing_different: String,
+    #[serde(default)]
+    pub billing_name: String,
+    #[serde(default)]
+    pub billing_line1: String,
+    #[serde(default)]
+    pub billing_line2: String,
+    #[serde(default)]
+    pub billing_postal_code: String,
+    #[serde(default)]
+    pub billing_city: String,
+    #[serde(default)]
+    pub billing_country: String,
 }
 
 impl CheckoutDraft {
@@ -139,6 +155,25 @@ impl CheckoutDraft {
             country: self.country.clone(),
             phone: optional(&self.phone),
         }
+    }
+
+    /// Whether the shopper ticked "a different billing address".
+    pub fn bills_elsewhere(&self) -> bool {
+        !self.billing_different.is_empty()
+    }
+
+    /// Where to bill, when not at the delivery address.
+    pub fn billing(&self) -> Option<ShippingAddress> {
+        let optional = |value: &str| (!value.trim().is_empty()).then(|| value.to_owned());
+        self.bills_elsewhere().then(|| ShippingAddress {
+            name: self.billing_name.clone(),
+            line1: self.billing_line1.clone(),
+            line2: optional(&self.billing_line2),
+            postal_code: self.billing_postal_code.clone(),
+            city: self.billing_city.clone(),
+            country: self.billing_country.clone(),
+            phone: None,
+        })
     }
 }
 

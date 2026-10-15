@@ -107,6 +107,14 @@ pub enum Cart {
         amount_cents: u64,
         granted_by: String,
     },
+    /// The shopper is billed at another address than the one the goods go
+    /// to, written with the `CheckoutRequested` of the same request. No
+    /// phone is kept: nobody rings a billing address.
+    BillingAddressGiven {
+        request_id: String,
+        billing: ShippingAddress,
+        given_by: String,
+    },
 }
 
 /// A paid order. Its id derives from the cart it was placed from
@@ -159,6 +167,12 @@ pub enum Order {
         refund_id: String,
         amount_cents: u64,
         refunded_by: String,
+    },
+    /// The order is billed at another address than its `shipping`, written
+    /// with `Placed`; without it, the invoice goes to the shipping address.
+    BillingAddressSet {
+        billing: ShippingAddress,
+        set_by: String,
     },
 }
 

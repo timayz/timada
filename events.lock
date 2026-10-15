@@ -92,6 +92,7 @@ event timada-invoicing/Document::Recorded { book_id: String, label: String }
 event timada-invoicing/Document::Reserved { series: String, year: u16 }
 event timada-orders/BusinessBuyers::BusinessBuyersAccepted { accepted_by: String }
 event timada-orders/BusinessBuyers::BusinessBuyersRefused { refused_by: String }
+event timada-orders/Cart::BillingAddressGiven { request_id: String, billing: ShippingAddress, given_by: String }
 event timada-orders/Cart::BuyerIdentified { request_id: String, vat_number: String, identified_by: String }
 event timada-orders/Cart::CheckedOut { order_id: String, checked_out_by: String }
 event timada-orders/Cart::CheckoutRequested { request_id: String, email: String, shipping: ShippingAddress, note: Option<String>, expected_total_cents: Option<u64>, requested_by: String }
@@ -104,6 +105,7 @@ event timada-orders/Cart::ItemRemoved { product_id: String, variant_id: Option<S
 event timada-orders/Cart::PaymentRefused { request_id: String, code: String, refused_by: String }
 event timada-orders/Cart::PaymentRequested { request_id: String, provider: String, payment_id: String, client_secret: String, publishable_key: String, lines: Vec<OrderLine>, currency: String, total_cents: u64, requested_by: String }
 event timada-orders/Cart::QuantitySet { product_id: String, variant_id: Option<String>, quantity: u32, set_by: String }
+event timada-orders/Order::BillingAddressSet { billing: ShippingAddress, set_by: String }
 event timada-orders/Order::Cancelled { reason: String, cancelled_by: String }
 event timada-orders/Order::Discounted { discount_id: String, code: String, subtotal_cents: u64, amount_cents: u64, discounted_by: String }
 event timada-orders/Order::Fulfilled { tracking: Option<String>, fulfilled_by: String }

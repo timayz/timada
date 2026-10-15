@@ -154,6 +154,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     });
     let status = order.status;
     let address = order.shipping.clone();
+    let billing = order.billing.clone();
     let order_id = order.id.clone();
 
     let can_fulfil = can_manage && status == OrderStatus::Paid;
@@ -302,6 +303,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         if let Some(phone) = &address.phone { <br> (phone) }
                     </address>
                 </div>
+                if let Some(billing) = &billing {
+                    <div class="rounded border border-neutral-200 bg-white p-4">
+                        <h2 class="mb-2 text-lg font-medium">"Bill to"</h2>
+                        <address class="text-sm not-italic" data-order-billing="">
+                            (&billing.name) <br>
+                            (&billing.line1) <br>
+                            if let Some(line2) = &billing.line2 { (line2) <br> }
+                            (&billing.postal_code) " " (&billing.city) <br>
+                            (&billing.country)
+                        </address>
+                    </div>
+                }
                 if let Some(note) = &order.note {
                     <div class="rounded border border-neutral-200 bg-white p-4">
                         <h2 class="mb-2 text-lg font-medium">"Note from the customer"</h2>

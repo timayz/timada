@@ -23,11 +23,11 @@ pub use payment_method::*;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
-    BusinessBuyersAccepted, BusinessBuyersRefused, BuyerIdentified, Cancelled, CheckedOut,
-    CheckoutRequested, Claimed, ConfirmationMailed, Created, DiscountApplied, DiscountGranted,
-    DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved, PaymentRefused,
-    PaymentRequested, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded,
-    StorefrontAddressCleared, StorefrontAddressSet,
+    BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
+    BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, ConfirmationMailed,
+    Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded,
+    ItemRemoved, PaymentRefused, PaymentRequested, PaymentsDisabled, PaymentsEnabled, Placed,
+    QuantitySet, Refunded, StorefrontAddressCleared, StorefrontAddressSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -105,6 +105,8 @@ pub struct CheckoutRequest {
     pub expected_total_cents: Option<u64>,
     /// A business buyer's EU VAT number, as typed (normalized).
     pub vat_number: Option<String>,
+    /// Where to bill, when not at `shipping`.
+    pub billing: Option<ShippingAddress>,
     pub answer: Option<PaymentAnswer>,
 }
 
@@ -190,6 +192,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_checked_out())
         .handler(on_checkout_requested())
         .handler(on_buyer_identified())
+        .handler(on_billing_address_given())
         .handler(on_payment_requested())
         .handler(on_payment_refused())
         .handler(on_discount_applied())
@@ -267,6 +270,7 @@ async fn on_checkout_requested(
         note: event.data.note.to_owned(),
         expected_total_cents: event.data.expected_total_cents,
         vat_number: None,
+        billing: None,
         answer: None,
     });
     cart.updated_at = event.timestamp;
@@ -284,6 +288,21 @@ async fn on_buyer_identified(
         .find(|request| request.request_id == event.data.request_id)
     {
         request.vat_number = Some(event.data.vat_number.to_owned());
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_billing_address_given(
+    event: Event<BillingAddressGiven>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|request| request.request_id == event.data.request_id)
+    {
+        request.billing = Some(event.data.billing.to_owned());
     }
     Ok(())
 }
@@ -428,6 +447,8 @@ pub struct OrderState {
     pub cart_id: String,
     pub email: String,
     pub shipping: ShippingAddress,
+    /// Where it is billed, when not at `shipping`.
+    pub billing: Option<ShippingAddress>,
     pub note: Option<String>,
     pub lines: Vec<OrderLine>,
     pub currency: String,
@@ -461,6 +482,11 @@ impl OrderState {
     pub fn subtotal_cents(&self) -> u64 {
         self.lines.iter().map(OrderLine::amount_cents).sum()
     }
+
+    /// Where the order is billed: its billing address, or else where it goes.
+    pub fn billing_address(&self) -> &ShippingAddress {
+        self.billing.as_ref().unwrap_or(&self.shipping)
+    }
 }
 
 pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
@@ -470,6 +496,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_cancelled())
         .handler(on_refunded())
         .handler(on_discounted())
+        .handler(on_billing_address_set())
         .strict()
 }
 
@@ -499,6 +526,15 @@ async fn on_discounted(event: Event<Discounted>, order: &mut OrderState) -> anyh
         subtotal_cents: event.data.subtotal_cents,
         amount_cents: event.data.amount_cents,
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_billing_address_set(
+    event: Event<BillingAddressSet>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.billing = Some(event.data.billing.to_owned());
     Ok(())
 }
 

@@ -165,24 +165,31 @@ async fn on_placed<E: Executor>(
         }
         _ => (None, None),
     };
-    // A discount code is written with `Placed`, in the same commit.
-    let discount = timada_orders::Command(store.0.clone())
+    // A discount code and a billing address are written with `Placed`, in
+    // the same commit.
+    let order = timada_orders::Command(store.0.clone())
         .load_order(&event.aggregate_id)
-        .await?
-        .and_then(|order| order.discount)
+        .await?;
+    let discount = order
+        .as_ref()
+        .and_then(|order| order.discount.clone())
         .map(|discount| InvoiceDiscount {
             code: discount.code,
             amount_cents: discount.amount_cents,
         });
-    let shipping = &event.data.shipping;
-    let address = Address {
-        name: shipping.name.clone(),
-        line1: shipping.line1.clone(),
-        line2: shipping.line2.clone(),
-        postal_code: shipping.postal_code.clone(),
-        city: shipping.city.clone(),
-        country: shipping.country.clone(),
+    let address = |address: &timada_orders::ShippingAddress| Address {
+        name: address.name.clone(),
+        line1: address.line1.clone(),
+        line2: address.line2.clone(),
+        postal_code: address.postal_code.clone(),
+        city: address.city.clone(),
+        country: address.country.clone(),
     };
+    let delivery = address(&event.data.shipping);
+    let buyer = order
+        .as_ref()
+        .and_then(|order| order.billing.as_ref())
+        .map_or_else(|| delivery.clone(), address);
     let invoice = invoicing
         .issue_invoice(
             NewInvoice {
@@ -194,9 +201,9 @@ async fn on_placed<E: Executor>(
                 paid_at: event.timestamp,
                 payment_method: PAYMENT_METHOD_CARD.to_owned(),
                 seller: seller(&legal),
-                buyer: address.clone(),
+                buyer,
                 buyer_email: event.data.email.clone(),
-                delivery: address,
+                delivery,
                 currency: event.data.currency.clone(),
                 lines,
                 discount,

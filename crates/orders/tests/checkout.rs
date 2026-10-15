@@ -343,6 +343,61 @@ async fn a_business_buyer_gives_its_vat_number_with_the_request() {
 }
 
 #[tokio::test]
+async fn an_order_is_billed_where_the_shopper_says() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+
+    // Checked like a shipping address.
+    let cart = cart_with(&orders, &mug, 1).await;
+    let err = orders
+        .request_checkout(
+            SHOPPER,
+            &cart,
+            Checkout {
+                billing: Some(ShippingAddress {
+                    city: " ".into(),
+                    ..billing()
+                }),
+                ..checkout()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some("invalid_address"));
+
+    let placed = pay(
+        &orders,
+        &cart,
+        Checkout {
+            billing: Some(billing()),
+            ..checkout()
+        },
+    )
+    .await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    let expected = ShippingAddress {
+        name: "Analytical Engines GmbH".into(),
+        line1: "Unter den Linden 1".into(),
+        line2: None,
+        postal_code: "10117".into(),
+        city: "Berlin".into(),
+        country: "DE".into(),
+        // Nobody rings a billing address.
+        phone: None,
+    };
+    assert_eq!(order.billing.as_ref(), Some(&expected));
+    assert_eq!(order.billing_address(), &expected);
+    assert_eq!(order.shipping.city, "Paris");
+
+    // Without one, it is billed where it goes.
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(&orders, &cart, checkout()).await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.billing, None);
+    assert_eq!(order.billing_address(), &order.shipping);
+}
+
+#[tokio::test]
 async fn a_shop_sells_to_businesses_only_once_its_merchant_says_so() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
