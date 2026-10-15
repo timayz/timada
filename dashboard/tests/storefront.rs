@@ -37,7 +37,7 @@ use timada_catalog::{
 };
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
-    SubscriptionState, category_ancestors, find_category, published_categories,
+    SubscriptionState, category_ancestors, find_category, menu_of, published_categories,
     published_category_by_slug, published_product_by_slug, published_product_categories,
     published_products, published_related_products,
 };
@@ -760,6 +760,38 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
             .collect::<Vec<_>>(),
         ["Mats"]
     );
+
+    // Hiding Bedding from the menu takes Mats along; both pages stay.
+    catalog
+        .set_category_in_menu("alice", &bedding.id, false)
+        .await
+        .unwrap();
+    eventually("a hidden category leaves the menu", async || {
+        menu_of(&published_categories(&pool).await.unwrap())
+            .iter()
+            .map(|n| n.category.name.clone())
+            .collect::<Vec<_>>()
+            == ["Toys"]
+    })
+    .await;
+    let tree = published_categories(&pool).await.unwrap();
+    assert_eq!(tree.len(), 2, "the tree still holds it");
+    assert!(find_category(&tree, "mats").is_some());
+    assert!(
+        published_category_by_slug(&pool, "bedding")
+            .await
+            .unwrap()
+            .is_some_and(|c| !c.in_menu),
+        "its page is still found"
+    );
+    catalog
+        .set_category_in_menu("alice", &bedding.id, true)
+        .await
+        .unwrap();
+    eventually("and comes back", async || {
+        menu_of(&published_categories(&pool).await.unwrap()).len() == 2
+    })
+    .await;
 
     // Leaving a category and archiving one both reach the local copy.
     catalog

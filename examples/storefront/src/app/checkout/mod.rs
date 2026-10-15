@@ -13,7 +13,7 @@ pub mod pay;
 pub mod start;
 
 use timada_storefront::{
-    Checkout, OrdersError, VatEstimate, categories, payment_setup, recent_reviews, start_payment,
+    Checkout, OrdersError, VatEstimate, menu, payment_setup, recent_reviews, start_payment,
 };
 use topcoat::{
     Result,
@@ -208,7 +208,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?
         .filter(|cart| cart.can_check_out())
         .ok_or_redirect(cart_url(cx, None))?;
-    let nav = categories(cx).await?;
+    let nav = menu(cx).await?;
     let setup = payment_setup(cx).await?;
     let reviews = recent_reviews(cx, REVIEWS_SHOWN).await?;
     let draft = checkout_draft(cx);

@@ -3,7 +3,7 @@
 //! take a moment longer than the browser's way back: until then the page
 //! says so and looks again.
 
-use timada_storefront::{categories, order_of_cart};
+use timada_storefront::{menu, order_of_cart};
 use topcoat::{
     Result,
     context::Cx,
@@ -54,7 +54,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .resolve(cx);
         return Err(redirect(to).into());
     }
-    let nav = categories(cx).await?;
+    let nav = menu(cx).await?;
 
     Ok(view! {
         document(

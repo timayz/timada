@@ -19,6 +19,8 @@ pub struct CategoryRow {
     pub parent_id: Option<String>,
     pub position: i64,
     pub archived: bool,
+    /// Shown in the shop's menu; a hidden one takes its subtree with it.
+    pub in_menu: bool,
     pub created_by: String,
     /// Unix seconds.
     pub created_at: i64,
@@ -306,7 +308,7 @@ pub async fn categories_of_tenant(
     tenant_id: &str,
 ) -> sqlx::Result<Vec<CategoryRow>> {
     sqlx::query_as(
-        "SELECT tenant_id, id, slug, name, description, parent_id, position, archived,
+        "SELECT tenant_id, id, slug, name, description, parent_id, position, archived, in_menu,
             created_by, created_at, updated_at, product_count, subtree_count
          FROM catalog_categories c
          WHERE tenant_id = ?1 AND archived = 0
@@ -324,7 +326,7 @@ pub async fn category_by_id(
     id: &str,
 ) -> sqlx::Result<Option<CategoryRow>> {
     sqlx::query_as(
-        "SELECT tenant_id, id, slug, name, description, parent_id, position, archived,
+        "SELECT tenant_id, id, slug, name, description, parent_id, position, archived, in_menu,
             created_by, created_at, updated_at, product_count, subtree_count
          FROM catalog_categories c
          WHERE tenant_id = ?1 AND id = ?2",
@@ -356,7 +358,7 @@ pub async fn categories_of_product(
 ) -> sqlx::Result<Vec<CategoryRow>> {
     sqlx::query_as(
         "SELECT c.tenant_id, c.id, c.slug, c.name, c.description, c.parent_id, c.position,
-            c.archived, c.created_by, c.created_at, c.updated_at, c.product_count, c.subtree_count
+            c.archived, c.in_menu, c.created_by, c.created_at, c.updated_at, c.product_count, c.subtree_count
          FROM catalog_categories c
          JOIN catalog_product_categories pc
             ON pc.tenant_id = c.tenant_id AND pc.category_id = c.id

@@ -161,6 +161,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <tr data-category=(&row.category.slug) data-category-depth=(row.depth)>
                                 <td class=(format!("py-2 {}", indent(row.depth)))>
                                     <a class="underline" href=(href!(category_id::index, Slug(slug.clone()), category_id::CategoryId(row.category.id.clone())))>(&row.category.name)</a>
+                                    if !row.category.in_menu {
+                                        " " <span class="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-600" data-hidden-from-menu="">"Hidden from menu"</span>
+                                    }
                                 </td>
                                 <td class="py-2"><code>(&row.category.slug)</code></td>
                                 <td class="py-2">
