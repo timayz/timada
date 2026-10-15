@@ -35,9 +35,10 @@ store.shutdown().await;
 - **TLS** is optional in the library and in the dashboard's `[store_api]` section; without
   it the token travels in clear text, so plain TCP is for trusted networks only.
 - The **dashboard address** (`StoreConfig::api_url`, shown on the API keys page) is
-  where a storefront hands in what comes with files: shoppers' reviews and their
-  photos, over HTTPS with the same key. Without it the store shows reviews but takes
-  none (`Store::takes_reviews`).
+  where a storefront hands in what comes with files (shoppers' reviews and their
+  photos) and signs its shoppers in, over HTTPS with the same key. Without it the store
+  shows reviews but takes none (`Store::takes_reviews`), and nobody signs in
+  (`Store::signs_shoppers_in`).
 - `Store::connect` fails at once when the store is unreachable or refuses the key. It
   applies evento's tables and `storefront_products` to the pool (`timada_storefront::
   migrations()` exists for hosts running their own migrator), then follows the catalog.
@@ -278,6 +279,42 @@ product.review_count;
   `rating_stars()` for whole stars); `ProductSort::TopRated` puts the best rated
   first and products with no review last. `stars(n)` writes `★★★★☆`.
 
+## Shopper accounts
+
+A shopper account belongs to the shop. There is no sign-up and no password: the
+shopper asks for a code, the dashboard mails it from the shop's name, and the first
+code they enter creates the account. The library hands back a token for the host to
+keep in its shopper's browser; it never keeps one itself.
+
+```rust
+use timada_storefront::{
+    request_sign_in_code, save_address, shopper, shopper_orders, sign_in, sign_out,
+};
+
+request_sign_in_code(cx, &email).await?;           // Ok(()) or a ShopperRefusal
+let signed_in = sign_in(cx, &email, &code).await?; // Ok(ShopperSignIn { token, expires_at })
+// keep signed_in.token in a private cookie, then on each request:
+let me = shopper(cx, &token).await?;               // Option<ShopperState>: email, addresses
+let orders = shopper_orders(cx, &token).await?;    // Ok(Vec<ShopperOrder>), newest first
+save_address(cx, &token, &shipping).await?;        // Ok(address id)
+sign_out(cx, &token).await?;
+```
+
+- The codes, the sessions and the addresses go through the dashboard
+  (`/store/shoppers/*` at the dashboard address), with a key that allows
+  `store:checkout`. `shopper` reads the session from the store, so it works on the
+  next request.
+- A refusal is a `ShopperRefusal` to word for the shopper: `wrong_code`,
+  `code_expired`, `too_many_attempts` (five wrong codes), `code_recently_sent` (one a
+  minute), `invalid_email`, an address refusal (`invalid_country`, …),
+  `too_many_addresses` (ten are kept), or `signed_out` (`is_signed_out()`) for a token
+  that no longer signs anyone in: forget it.
+- A shopper's orders are every order placed with their address, guest ones too, read
+  from the dashboard's order list, so one paid a second ago may still be missing. A
+  host may show an order to the shopper signed in with its e-mail address
+  (`order.email == shopper.email`).
+- A session lasts 30 days. Saving an address it already keeps moves it first.
+
 ## `GET /store/status`
 
 ```json
@@ -294,7 +331,9 @@ counts the published rows of the local copy.
 page, a product page with an add-to-cart form and its reviews, a cart, a one-page
 checkout (steps, details, address and Stripe's Payment and Express Checkout elements
 beside an editable cart with its VAT, reassurance and recent reviews), an order
-confirmation where the shopper reviews what they bought, inline styles, no asset
+confirmation where the shopper reviews what they bought, shopper accounts (sign-in
+from the checkout's "Already a customer?" or the header, `/account` with the orders
+and saved addresses, the checkout prefilled from them), inline styles, no asset
 bundle. Against a dashboard whose
 `[store_api]` listens on `127.0.0.1:4321`:
 
@@ -310,4 +349,5 @@ default) are the other knobs, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypt
 shopper cookies; unset, a random key is made at startup and the cookies do not survive
 a restart. To sell, tick `store:checkout` on the key. The browser suite
 (`tests/e2e/storefront.spec.ts`) boots it with a key minted in the dashboard, checks the
-catalog follows live, then fills a cart, checks out and reviews what it bought.
+catalog follows live, then fills a cart, checks out, reviews what it bought, and signs
+a returning shopper in on a second browser.
