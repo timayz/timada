@@ -1292,6 +1292,19 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       await page.goto(`${STOREFRONT}/account`);
       await page.locator("[data-saved-address=Paris]").getByRole("button", { name: "Remove" }).click();
       await expect(page.locator("[data-saved-address]")).toHaveCount(0);
+
+      // The merchant finds the shopper among the shop's customers, with both
+      // orders (the guest one too) and no address left.
+      await page.goto(`/t/${slug}/customers`);
+      const customer = page.locator(`[data-customer="${shopper}"]`);
+      await expect(async () => {
+        await page.reload();
+        await expect(customer.locator("[data-customer-addresses]")).toHaveText("0", { timeout: 1000 });
+      }).toPass({ timeout: 15_000 });
+      await expect(customer.locator("[data-customer-orders]")).toHaveText("2");
+      await customer.getByRole("link", { name: "2" }).click();
+      await expect(page).toHaveURL(new RegExp(`/t/${slug}/orders\\?q=`));
+      await expect(page.locator("[data-order]")).toHaveCount(2);
     } finally {
       await other.close();
     }
