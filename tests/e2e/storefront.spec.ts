@@ -1195,6 +1195,12 @@ test("a returning shopper signs in with a mailed code and finds their orders and
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("status")).toContainText("Stripe connected.");
     await startStorefront(request, await mintKey(page, slug, true), 2);
+    // The confirmations link to the orders on the storefront.
+    await page.goto(`/t/${slug}/api-keys`);
+    await page.getByLabel("Where shoppers find the shop").fill(STOREFRONT);
+    await page.getByRole("button", { name: "Save address" }).click();
+    await expect(page.getByRole("status")).toContainText("Storefront address saved.");
+    await expect(page.getByLabel("Where shoppers find the shop")).toHaveValue(STOREFRONT);
     const shopper = uniqueEmail("shopper");
 
     const pay = async (shop: Page) => {
@@ -1220,6 +1226,26 @@ test("a returning shopper signs in with a mailed code and finds their orders and
     await page.getByRole("button", { name: "Place order" }).click();
     const guestOrder = await pay(page);
 
+    // The shop mailed its confirmation, with a link back to the order.
+    const guestOrderId = new URL(guestOrder).pathname.split("/").at(-1)!;
+    await expect(async () => {
+      const all = (await (await request.get(`${MAILDEV}/email`)).json()) as {
+        to: { address: string }[];
+        subject: string;
+        from: { name: string }[];
+        html?: string;
+      }[];
+      const confirmation = all.find(
+        (m) => m.to.some((to) => to.address === shopper) && m.subject.startsWith(`Your ${name} order `),
+      );
+      expect(confirmation).toBeDefined();
+      expect(confirmation!.from[0]?.name).toBe(name);
+      expect(confirmation!.html).toContain(`${STOREFRONT}/orders/${guestOrderId}`);
+      expect(confirmation!.html).toContain("Blue Mug");
+    }).toPass({ timeout: 15_000 });
+    await page.goto(`/t/${slug}/orders/${guestOrderId}`);
+    await expect(page.locator("[data-order-confirmation]")).toHaveAttribute("data-order-confirmation", "mailed");
+
     // Next time, the checkout offers to sign in, and comes back to it.
     await page.goto(`${STOREFRONT}/p/red-plate`);
     await addToCart(page);
@@ -1244,7 +1270,9 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       subject: string;
       from: { name: string }[];
     }[];
-    const sent = mail.filter((m) => m.to.some((to) => to.address === shopper));
+    const sent = mail.filter(
+      (m) => m.to.some((to) => to.address === shopper) && m.subject.startsWith("Your sign-in code"),
+    );
     expect(sent.at(-1)?.subject).toBe(`Your sign-in code for ${name}`);
     expect(sent.at(-1)?.from[0]?.name).toBe(name);
 
@@ -1282,11 +1310,16 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       await expect(device.getByLabel("City")).toHaveValue("Paris");
       await expect(device.locator("[data-saved-address=Paris]")).toHaveAttribute("data-current", "");
 
-      // Signed out, an order this browser did not place is not shown.
+      // Signed out, an order this browser did not place asks to sign in
+      // first (the confirmation's link, opened elsewhere), then shows.
       await device.goto(`${STOREFRONT}/account`);
       await device.getByRole("button", { name: "Sign out" }).click();
       await expect(device.locator("[data-account-link]")).toHaveText("Sign in");
-      expect((await device.goto(guestOrder))?.status()).toBe(404);
+      await device.goto(guestOrder);
+      await expect(device).toHaveURL(/\/account\/sign-in\?/);
+      await signInToShop(device, shopper);
+      await expect(device).toHaveURL(guestOrder);
+      await expect(device.getByRole("heading", { level: 1 })).toBeVisible();
 
       // Removing an address, back on the first browser.
       await page.goto(`${STOREFRONT}/account`);

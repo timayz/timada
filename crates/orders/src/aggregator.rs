@@ -198,3 +198,31 @@ pub enum BusinessBuyers {
     BusinessBuyersAccepted { accepted_by: String },
     BusinessBuyersRefused { refused_by: String },
 }
+
+/// Where the tenant's storefront lives, so the mails the dashboard sends a
+/// shopper can link back to it. One stream per tenant store, with the id
+/// [`storefront_id`](crate::storefront_id); no stream means no link.
+#[evento::aggregate(name = "timada-orders/Storefront")]
+pub enum Storefront {
+    /// `url` is absolute, without a trailing `/` (`https://shop.example`).
+    StorefrontAddressSet {
+        url: String,
+        set_by: String,
+    },
+    StorefrontAddressCleared {
+        cleared_by: String,
+    },
+}
+
+/// The confirmation mailed to the shopper of one order. One stream per
+/// order, with the id [`order_confirmation_id`](crate::order_confirmation_id):
+/// the node that writes it first is the one that sends, so a shopper gets
+/// one mail however many nodes follow the tenant.
+#[evento::aggregate(name = "timada-orders/OrderConfirmation")]
+pub enum OrderConfirmation {
+    ConfirmationMailed {
+        order_id: String,
+        email: String,
+        mailed_by: String,
+    },
+}

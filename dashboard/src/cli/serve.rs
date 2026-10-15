@@ -43,6 +43,15 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         gateway,
         executor.clone(),
     ));
+    // The confirmations are mailed from the tenants' subscriptions, outside
+    // any request: they get their own transport.
+    let order_mail = {
+        let mailer = auth::mail::build(&config.mail)?;
+        let mut app = topcoat::context::AppContext::new();
+        app.insert(mailer.transport);
+        app.insert(mailer.sender);
+        Arc::new(app)
+    };
     let tenants = Tenants::new(
         cluster.clone(),
         &config.tenants,
@@ -56,6 +65,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             Arc::new(crate::vies::ViesClient::new(
                 config.invoicing.vies_url.clone(),
             )),
+            order_mail,
         ),
     );
     let connections = StoreConnections::new();
@@ -160,14 +170,15 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 /// What follows each tenant's own stream while it is open: the read models
 /// fed into the shared database (the catalog's product list, the orders and
 /// carts, the customers, the invoices, the reviews), this node's copies of the product
-/// pictures and review photos, and the answers the dashboard writes back
-/// (payments, invoices). Every
+/// pictures and review photos, the answers the dashboard writes back
+/// (payments, invoices) and the order confirmations it mails. Every
 /// tenant-scoped bounded context registers its subscription here.
 fn tenant_subscriptions(
     media: Arc<crate::media::Media>,
     payments: Arc<crate::payments::Payments>,
     platform: Executor,
     vies: Arc<dyn crate::vies::Vies>,
+    order_mail: Arc<topcoat::context::AppContext>,
 ) -> Vec<TenantSubscription> {
     vec![
         Arc::new(|pool, tenant_id, _: &Executor| {
@@ -196,6 +207,17 @@ fn tenant_subscriptions(
         }),
         Arc::new(|_, _, executor: &Executor| {
             timada_orders::discount_usage_subscription(executor.clone())
+        }),
+        Arc::new({
+            let platform = platform.clone();
+            move |_, tenant_id, executor: &Executor| {
+                crate::confirmations::subscription(
+                    platform.clone(),
+                    order_mail.clone(),
+                    tenant_id,
+                    executor.clone(),
+                )
+            }
         }),
         Arc::new(move |_, tenant_id, executor: &Executor| {
             crate::invoicing::subscription(

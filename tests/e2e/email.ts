@@ -35,16 +35,18 @@ export async function mailCount(request: APIRequestContext, email: string): Prom
   return (await messagesTo(request, email)).length;
 }
 
-/// The 6-digit code in the newest message to `email`, once more than
-/// `previous` messages have arrived (delivery is asynchronous).
+/// The 6-digit code in the newest message to `email` that carries one, once
+/// more than `previous` messages have arrived (delivery is asynchronous, and
+/// another mail, an order confirmation say, may land in between).
 export async function latestCode(request: APIRequestContext, email: string, previous = 0): Promise<string> {
   let code = "";
   await expect(async () => {
-    const messages = await messagesTo(request, email);
-    expect(messages.length).toBeGreaterThan(previous);
-    const last = messages[messages.length - 1];
-    const match = (last.text ?? last.html ?? "").match(/\b(\d{6})\b/);
-    expect(match, `no code in: ${last.subject}`).not.toBeNull();
+    const messages = (await messagesTo(request, email)).slice(previous);
+    const match = messages
+      .map((m) => (m.text ?? m.html ?? "").match(/\b(\d{6})\b/))
+      .filter((m) => m !== null)
+      .at(-1);
+    expect(match, `no code in ${messages.length} new message(s)`).toBeDefined();
     code = match![1];
   }).toPass({ timeout: 15_000 });
   return code;

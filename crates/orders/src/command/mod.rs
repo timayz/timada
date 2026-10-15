@@ -8,8 +8,10 @@
 mod business_buyers;
 mod cart;
 mod checkout;
+mod confirmation;
 mod lifecycle;
 mod payment_method;
+mod storefront;
 
 use std::fmt;
 use std::ops::Deref;
@@ -22,9 +24,10 @@ use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
     BusinessBuyersAccepted, BusinessBuyersRefused, BuyerIdentified, Cancelled, CheckedOut,
-    CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted, DiscountRemoved,
-    Discounted, Fulfilled, ItemAdded, ItemRemoved, PaymentRefused, PaymentRequested,
-    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded,
+    CheckoutRequested, Claimed, ConfirmationMailed, Created, DiscountApplied, DiscountGranted,
+    DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved, PaymentRefused,
+    PaymentRequested, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded,
+    StorefrontAddressCleared, StorefrontAddressSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -636,6 +639,77 @@ async fn on_business_buyers_refused(
 }
 
 // =============================================================================
+// Storefront
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-orders/StorefrontState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct StorefrontState {
+    pub id: String,
+    /// Absolute, without a trailing `/`.
+    pub url: Option<String>,
+}
+
+pub fn storefront_projection<E: Executor>() -> Projection<E, StorefrontState> {
+    Projection::new::<crate::aggregator::Storefront>()
+        .handler(on_storefront_address_set())
+        .handler(on_storefront_address_cleared())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_storefront_address_set(
+    event: Event<StorefrontAddressSet>,
+    state: &mut StorefrontState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.url = Some(event.data.url.clone());
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_storefront_address_cleared(
+    event: Event<StorefrontAddressCleared>,
+    state: &mut StorefrontState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.url = None;
+    Ok(())
+}
+
+// =============================================================================
+// OrderConfirmation
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-orders/OrderConfirmationState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct OrderConfirmationState {
+    pub id: String,
+    pub email: String,
+    /// Unix seconds.
+    pub mailed_at: u64,
+}
+
+pub fn order_confirmation_projection<E: Executor>() -> Projection<E, OrderConfirmationState> {
+    Projection::new::<crate::aggregator::OrderConfirmation>()
+        .handler(on_confirmation_mailed())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_confirmation_mailed(
+    event: Event<ConfirmationMailed>,
+    state: &mut OrderConfirmationState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.email = event.data.email.clone();
+    state.mailed_at = event.timestamp;
+    Ok(())
+}
+
+// =============================================================================
 // Loads
 // =============================================================================
 
@@ -651,6 +725,24 @@ impl<E: Executor> Command<E> {
     pub async fn load_payment_method(&self) -> anyhow::Result<Option<PaymentMethodState>> {
         payment_method_projection()
             .load(crate::value_object::payment_method_id())
+            .execute(&self.0)
+            .await
+    }
+
+    pub async fn load_storefront(&self) -> anyhow::Result<Option<StorefrontState>> {
+        storefront_projection()
+            .load(crate::value_object::storefront_id())
+            .execute(&self.0)
+            .await
+    }
+
+    /// The confirmation mailed for an order, if one was.
+    pub async fn load_order_confirmation(
+        &self,
+        order_id: &str,
+    ) -> anyhow::Result<Option<OrderConfirmationState>> {
+        order_confirmation_projection()
+            .load(crate::value_object::order_confirmation_id(order_id))
             .execute(&self.0)
             .await
     }

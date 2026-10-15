@@ -1,5 +1,6 @@
 //! The e-mails this application sends: a code that proves an address, an
-//! invitation to join a tenant, and a shop's sign-in code for its shoppers.
+//! invitation to join a tenant, and, speaking for a shop, its shoppers'
+//! sign-in codes and order confirmations.
 
 use anyhow::Context as _;
 use topcoat::{
@@ -7,6 +8,9 @@ use topcoat::{
     context::{Cx, app_context},
     mail::{Mail, MailConfig, Mailbox, SmtpTransport, mail, send},
 };
+
+use timada_catalog::format_money;
+use timada_orders::OrderState;
 
 use crate::auth::cookies::EmailFlowKind;
 use crate::config;
@@ -85,6 +89,92 @@ pub async fn send_shopper_code(cx: &Cx, to: &str, shop_name: &str, code: &str) -
             <p style="font-size: 1.5rem; letter-spacing: 0.25rem;"><strong>(code)</strong></p>
             <p>"It is valid for 10 minutes."</p>
             <p>"If you did not ask for it, you can ignore this message."</p>
+        },
+    }?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
+/// Mails a shop's confirmation of a paid order to its shopper, under the
+/// shop's name. `link` is the order's page on the shop's storefront, when
+/// the merchant said where it lives.
+pub async fn send_order_confirmation(
+    cx: &Cx,
+    shop_name: &str,
+    order: &OrderState,
+    link: Option<&str>,
+) -> Result<()> {
+    let sender = &app_context::<MailSender>(cx).0;
+    let from = Mailbox::named(shop_name, sender.address())?;
+    let subject = format!("Your {shop_name} order {}", order.reference);
+    let currency = &order.currency;
+    let lines: Vec<(String, u32, String)> = order
+        .lines
+        .iter()
+        .map(|line| {
+            let name = match &line.variant_label {
+                Some(variant) => format!("{} · {variant}", line.name),
+                None => line.name.clone(),
+            };
+            (
+                name,
+                line.quantity,
+                format_money(line.amount_cents(), currency),
+            )
+        })
+        .collect();
+    let discount = order.discount.as_ref().map(|discount| {
+        (
+            discount.code.clone(),
+            format!("-{}", format_money(discount.amount_cents, currency)),
+        )
+    });
+    let total = format_money(order.total_cents, currency);
+    let ship = &order.shipping;
+    let city = format!("{} {}", ship.postal_code, ship.city);
+    let mail = mail! {
+        from: from,
+        to: Mailbox::new(&order.email)?,
+        subject: &subject,
+        html: {
+            cx =>
+            <p>"Thank you for your order at " <strong>(shop_name)</strong> "."</p>
+            <p>"Order " <strong>(&order.reference)</strong></p>
+            <table cellpadding="4" style="border-collapse: collapse;">
+                for (name, quantity, amount) in &lines {
+                    <tr>
+                        <td>(name)</td>
+                        <td>"× " (quantity)</td>
+                        <td style="text-align: right;">(amount)</td>
+                    </tr>
+                }
+                if let Some((code, amount)) = &discount {
+                    <tr>
+                        <td colspan="2">"Discount " (code)</td>
+                        <td style="text-align: right;">(amount)</td>
+                    </tr>
+                }
+                <tr>
+                    <td colspan="2"><strong>"Total"</strong></td>
+                    <td style="text-align: right;"><strong>(&total)</strong></td>
+                </tr>
+            </table>
+            <p>
+                "Shipping to:" <br>
+                (&ship.name) <br>
+                (&ship.line1) <br>
+                if let Some(line2) = &ship.line2 {
+                    (line2) <br>
+                }
+                (&city) <br>
+                (&ship.country)
+            </p>
+            if let Some(note) = &order.note {
+                <p>"Your note: " (note)</p>
+            }
+            if let Some(link) = link {
+                <p><a href=(link)>"View your order"</a></p>
+            }
         },
     }?;
     send(cx, mail).await?;
@@ -171,6 +261,83 @@ mod tests {
         let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
         assert!(wire.contains("654321"), "{wire}");
         assert!(!wire.contains("Timada"), "{wire}");
+    }
+
+    fn paid_order() -> OrderState {
+        OrderState {
+            id: "o1".into(),
+            reference: "K7Q4-MZP2".into(),
+            email: "ada@example.com".into(),
+            shipping: timada_orders::ShippingAddress {
+                name: "Ada Lovelace".into(),
+                line1: "1 rue de la Paix".into(),
+                line2: None,
+                postal_code: "75002".into(),
+                city: "Paris".into(),
+                country: "FR".into(),
+                phone: None,
+            },
+            note: Some("Leave it at the door".into()),
+            lines: vec![timada_orders::OrderLine {
+                name: "Mug".into(),
+                variant_label: Some("Blue".into()),
+                unit_amount_cents: 1250,
+                quantity: 2,
+                ..Default::default()
+            }],
+            currency: "EUR".into(),
+            total_cents: 2250,
+            discount: Some(timada_orders::OrderDiscount {
+                code: "WELCOME".into(),
+                subtotal_cents: 2500,
+                amount_cents: 250,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_order_confirmation_comes_from_the_shop() {
+        let transport = MemoryTransport::new();
+        let cx = CxTestBuilder::new()
+            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .build();
+
+        let order = paid_order();
+        send_order_confirmation(
+            &cx,
+            "Acme Tea",
+            &order,
+            Some("https://shop.example/orders/o1"),
+        )
+        .await
+        .unwrap();
+        send_order_confirmation(&cx, "Acme Tea", &order, None)
+            .await
+            .unwrap();
+
+        let sent = transport.sent();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].subject(), "Your Acme Tea order K7Q4-MZP2");
+        assert_eq!(sent[0].to(), [Mailbox::new("ada@example.com").unwrap()]);
+        assert_eq!(sent[0].from().unwrap().name(), Some("Acme Tea"));
+        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        for part in [
+            "K7Q4-MZP2",
+            "Mug",
+            "Blue",
+            "WELCOME",
+            "Ada Lovelace",
+            "Leave it at the door",
+        ] {
+            assert!(wire.contains(part), "{part}: {wire}");
+        }
+        assert!(wire.contains("https://shop.example/orders/o1"), "{wire}");
+        assert!(!wire.contains("Timada"), "{wire}");
+        let wire = String::from_utf8(sent[1].clone().formatted(&cx).unwrap()).unwrap();
+        assert!(!wire.contains("View your order"), "{wire}");
     }
 
     #[tokio::test]
