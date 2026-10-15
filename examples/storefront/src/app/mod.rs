@@ -288,6 +288,9 @@ pub fn say(code: &str) -> &'static str {
         "invalid_vat_number" => {
             "Enter an EU VAT number: its country prefix, then letters and digits."
         }
+        "business_buyers_refused" => {
+            "This shop does not sell to businesses: leave the VAT number blank."
+        }
         "invalid_ship_name" => "Enter the name to ship to.",
         "invalid_address" => "Enter the street, postal code and city.",
         "invalid_country" => "Enter the country as a two-letter code, such as FR.",

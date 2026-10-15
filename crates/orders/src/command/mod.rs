@@ -5,6 +5,7 @@
 //! stale. None of them is snapshotted: a cart or an order is a handful of
 //! events.
 
+mod business_buyers;
 mod cart;
 mod checkout;
 mod lifecycle;
@@ -20,10 +21,10 @@ pub use payment_method::*;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
-    BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, Created, DiscountApplied,
-    DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved,
-    PaymentRefused, PaymentRequested, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet,
-    Refunded,
+    BusinessBuyersAccepted, BusinessBuyersRefused, BuyerIdentified, Cancelled, CheckedOut,
+    CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted, DiscountRemoved,
+    Discounted, Fulfilled, ItemAdded, ItemRemoved, PaymentRefused, PaymentRequested,
+    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -596,6 +597,45 @@ async fn on_payments_disabled(
 }
 
 // =============================================================================
+// BusinessBuyers
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-orders/BusinessBuyersState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct BusinessBuyersState {
+    pub id: String,
+    pub accepted: bool,
+}
+
+pub fn business_buyers_projection<E: Executor>() -> Projection<E, BusinessBuyersState> {
+    Projection::new::<crate::aggregator::BusinessBuyers>()
+        .handler(on_business_buyers_accepted())
+        .handler(on_business_buyers_refused())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_business_buyers_accepted(
+    event: Event<BusinessBuyersAccepted>,
+    state: &mut BusinessBuyersState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.accepted = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_business_buyers_refused(
+    event: Event<BusinessBuyersRefused>,
+    state: &mut BusinessBuyersState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.accepted = false;
+    Ok(())
+}
+
+// =============================================================================
 // Loads
 // =============================================================================
 
@@ -611,6 +651,13 @@ impl<E: Executor> Command<E> {
     pub async fn load_payment_method(&self) -> anyhow::Result<Option<PaymentMethodState>> {
         payment_method_projection()
             .load(crate::value_object::payment_method_id())
+            .execute(&self.0)
+            .await
+    }
+
+    pub async fn load_business_buyers(&self) -> anyhow::Result<Option<BusinessBuyersState>> {
+        business_buyers_projection()
+            .load(crate::value_object::business_buyers_id())
             .execute(&self.0)
             .await
     }

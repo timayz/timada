@@ -36,6 +36,8 @@ pub enum OrdersError {
     InvalidEmail,
     #[error("enter an EU VAT number: its country prefix, then letters and digits")]
     InvalidVatNumber,
+    #[error("this shop does not sell to businesses: leave the VAT number blank")]
+    BusinessBuyersRefused,
     #[error("enter the name to ship to (at most 120 characters)")]
     InvalidName,
     #[error("enter the street, postal code and city of the address")]
@@ -117,6 +119,7 @@ impl OrdersError {
             Self::DuplicatePayment { .. } => "duplicate_payment",
             Self::InvalidEmail => "invalid_email",
             Self::InvalidVatNumber => "invalid_vat_number",
+            Self::BusinessBuyersRefused => "business_buyers_refused",
             Self::InvalidName => "invalid_ship_name",
             Self::InvalidAddress => "invalid_address",
             Self::InvalidCountry => "invalid_country",
