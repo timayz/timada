@@ -1,5 +1,6 @@
 //! Back-office pages under `/admin`, for administrators only.
 
+pub mod companies;
 pub mod tenants;
 pub mod users;
 

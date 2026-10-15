@@ -20,6 +20,20 @@ pub enum TenancyError {
     InvalidVatNumber,
     #[error("the One-Stop Shop needs a VAT number")]
     OssWithoutVatNumber,
+    #[error("company not found")]
+    CompanyNotFound,
+    #[error("a company with this SIREN is already registered: ask its owner to add you")]
+    SirenTaken,
+    #[error("the SIRET of a company keeps its SIREN")]
+    SirenMismatch,
+    #[error("only an owner of the company may do this")]
+    NotCompanyOwner,
+    #[error("a company keeps at least one owner")]
+    LastCompanyOwner,
+    #[error("another tenant of the company numbers its invoices under this code")]
+    SeriesCodeTaken,
+    #[error("a series code is up to 10 letters and digits")]
+    InvalidSeriesCode,
     #[error("fill in every required part of the legal identity, within its length")]
     InvalidLegalIdentity,
     #[error("this tenant is suspended")]

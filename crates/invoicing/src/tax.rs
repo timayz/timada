@@ -113,7 +113,7 @@ pub struct DistanceSales {
 }
 
 /// How one sale is taxed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Decision {
     pub regime: Regime,
     /// The country whose VAT applies (or where the goods go, when none does).
@@ -228,6 +228,16 @@ pub fn rate_bps(country: &str, category: &str) -> u32 {
         }
     };
     (rate * 10_000.0).round() as u32
+}
+
+/// Whether a sale is an EU distance sale (to a consumer in another EU
+/// country): the only kind that counts towards the yearly threshold, and so
+/// the only kind whose decision needs the company's total.
+pub fn is_distance_sale(profile: TaxProfile, destination: &Destination) -> bool {
+    matches!(
+        territory(&destination.country, &destination.postal_code),
+        Territory::Eu(_)
+    ) && !(profile.vat_registered && destination.vat_number.is_some())
 }
 
 /// The tax of a sale whose lines are `(tax category, price VAT included)`,
