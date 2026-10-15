@@ -1,5 +1,6 @@
 use timada_storefront::{
     categories, price, product_categories, product_image, related_products, require_product,
+    reviews_of, stars,
 };
 use topcoat::{
     Result,
@@ -8,19 +9,41 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
-use crate::app::cart::CartQuery;
 use crate::app::cart::add::{OPTION_FIELD_PREFIX, add};
 use crate::app::{catalog_grid, document, say};
 
 module_param!(pub slug);
+
+#[topcoat::router::query_params(error = bad_request)]
+struct ProductPageQuery {
+    /// A refusal from the cart, by code.
+    error: Option<String>,
+    /// The page of reviews, 1-based.
+    reviews: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+struct ReviewsLink {
+    reviews: u32,
+}
 
 /// How many products the "you may also like" row shows.
 const RELATED: u32 = 4;
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let query = query_params::<CartQuery>(cx)?;
+    let query = query_params::<ProductPageQuery>(cx)?;
     let product = require_product(cx, path_param::<Slug>(cx)).await?;
+    let reviews = reviews_of(cx, &product, query.reviews.unwrap_or(1)).await?;
+    let slug = product.slug.clone();
+    let reviews_link = move |page: u32| {
+        format!(
+            "{}#reviews",
+            href!(index, Slug(slug.clone()))
+                .query(ReviewsLink { reviews: page })
+                .resolve(cx)
+        )
+    };
     let nav = categories(cx).await?;
     let related = related_products(cx, &product, RELATED).await?;
     // The first category it is filed under carries the breadcrumb.
@@ -47,6 +70,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 </ul>
             }
             <p>price(product: &product, attrs: attributes! { class="price" })</p>
+            if let (Some(rating), Some(whole)) = (product.rating(), product.rating_stars()) {
+                <p class="rating" data-product-rating=(format!("{rating:.1}"))>
+                    <a href="#reviews">
+                        <span aria-hidden="true">(stars(whole))</span>
+                        " " (format!("{rating:.1}")) " out of 5 · " (product.review_count) (if product.review_count == 1 { " review" } else { " reviews" })
+                    </a>
+                </p>
+            }
 
             if let Some(code) = query.error.as_deref() {
                 <p class="notice" role="alert">(say(code))</p>
@@ -110,6 +141,45 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </tbody>
                 </table>
             }
+            <section class="reviews" id="reviews" data-reviews=(reviews.total)>
+                <h2>"Reviews"</h2>
+                if reviews.items.is_empty() {
+                    <p>"No review yet. Bought it? Review it from your order's page."</p>
+                }
+                <ul>
+                    for review in &reviews.items {
+                        <li data-review=(&review.id)>
+                            <p>
+                                <span class="rating" aria-label=(format!("{} out of 5", review.rating))>(review.stars())</span>
+                                if let Some(title) = &review.title {
+                                    " " <strong>(title)</strong>
+                                }
+                            </p>
+                            <p>(&review.body)</p>
+                            if !review.photos.is_empty() {
+                                <p>
+                                    for photo in &review.photos {
+                                        <a href=(&photo.url)><img src=(&photo.url) alt="A photo from the reviewer" data-review-photo=(&photo.id)></a>
+                                    }
+                                </p>
+                            }
+                            <p>
+                                <small>
+                                    (&review.author_name) " · Verified purchase"
+                                    if let Some(label) = &review.variant_label { " · " (label) }
+                                </small>
+                            </p>
+                        </li>
+                    }
+                </ul>
+                if reviews.pages() > 1 {
+                    <nav class="pages" aria-label="Pages of reviews">
+                        if reviews.page > 1 { <a href=(reviews_link(reviews.page - 1))>"Newer reviews"</a> }
+                        <span>"Page " (reviews.page) " of " (reviews.pages())</span>
+                        if reviews.page < reviews.pages() { <a href=(reviews_link(reviews.page + 1))>"Older reviews"</a> }
+                    </nav>
+                }
+            </section>
             if !related.is_empty() {
                 <section class="related">
                     <h2>"You may also like"</h2>

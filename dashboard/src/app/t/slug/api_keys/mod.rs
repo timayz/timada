@@ -75,6 +75,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let store_api = app_context::<Config>(cx).store_api.clone();
     let keys = api_keys_of_tenant(app_context::<ReadPool>(cx), &tenant.id).await?;
     let media_url = app_context::<std::sync::Arc<Media>>(cx).tenant_url(&tenant.id);
+    let api_url = app_context::<Config>(cx)
+        .server
+        .url
+        .as_str()
+        .trim_end_matches('/')
+        .to_owned();
     let ids: Vec<String> = keys.iter().map(|k| k.created_by.clone()).collect();
     let labels = user_labels(cx, &ids).await?;
     let slug = tenant.slug.clone();
@@ -120,9 +126,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </dd>
                     <dt class="text-neutral-500">"Picture address"</dt>
                     <dd><code data-media-url="">(&media_url)</code></dd>
+                    <dt class="text-neutral-500">"Dashboard address"</dt>
+                    <dd><code data-api-url="">(&api_url)</code></dd>
                 </dl>
                 <p class="mt-3 text-sm text-neutral-500">
-                    "A storefront loads the product pictures from the picture address; set it alongside the key."
+                    "A storefront loads the product pictures from the picture address, and hands in shoppers' reviews at the dashboard address; set both alongside the key."
                 </p>
             </section>
 
