@@ -27,6 +27,11 @@ pub struct OrderRow {
     /// The provider's id of the payment.
     pub payment_id: String,
     pub refunded_cents: i64,
+    /// The discount it was paid with, if any.
+    pub discount_id: Option<String>,
+    pub discount_code: Option<String>,
+    /// What the discount took off; `0` without one.
+    pub discount_cents: i64,
 }
 
 impl OrderRow {
@@ -80,7 +85,8 @@ pub async fn orders_of_tenant(
 ) -> sqlx::Result<Vec<OrderRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, reference, cart_id, status, email, name, country, item_count,
-            total_cents, currency, placed_at, updated_at, payment_id, refunded_cents
+            total_cents, currency, placed_at, updated_at, payment_id, refunded_cents,
+            discount_id, discount_code, discount_cents
          FROM orders_orders
          WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)
            AND (?3 IS NULL OR reference LIKE ?3 ESCAPE '\\' OR email LIKE ?3 ESCAPE '\\'
@@ -123,11 +129,28 @@ pub async fn order_by_id(
 ) -> sqlx::Result<Option<OrderRow>> {
     sqlx::query_as(
         "SELECT tenant_id, id, reference, cart_id, status, email, name, country, item_count,
-            total_cents, currency, placed_at, updated_at, payment_id, refunded_cents
+            total_cents, currency, placed_at, updated_at, payment_id, refunded_cents,
+            discount_id, discount_code, discount_cents
          FROM orders_orders WHERE tenant_id = ?1 AND id = ?2",
     )
     .bind(tenant_id)
     .bind(id)
     .fetch_optional(pool)
     .await
+}
+
+/// How many orders each discount of the tenant was paid with, by discount id
+/// (cancelled ones too: the use was spent).
+pub async fn discount_use_counts(
+    pool: &SqlitePool,
+    tenant_id: &str,
+) -> sqlx::Result<std::collections::HashMap<String, i64>> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT discount_id, count(*) FROM orders_orders
+         WHERE tenant_id = ?1 AND discount_id IS NOT NULL GROUP BY discount_id",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
 }

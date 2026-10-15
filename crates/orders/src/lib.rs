@@ -12,14 +12,20 @@
 //! The order of a cart has a deterministic id, so placing it twice lands on
 //! the same stream. Its short reference (`K7Q4-MZP2`) is unique within the
 //! tenant through an index aggregate, like a product's slug.
+//!
+//! A cart may carry one discount code (`timada-discounts`). It is priced with
+//! the cart each time, so the order holds the lines at full price and the
+//! amount taken off them beside, in a `Discounted` written with `Placed`.
 
 pub mod aggregator;
 mod command;
+mod discount_usage;
 mod error;
 mod query;
 mod value_object;
 
 pub use command::*;
+pub use discount_usage::*;
 pub use error::*;
 pub use query::*;
 pub use value_object::*;

@@ -110,11 +110,13 @@ pub async fn upsert_order(
     sqlx::query(
         "INSERT INTO orders_orders (tenant_id, id, reference, cart_id, status, email, name,
             country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
-            refunded_cents)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            refunded_cents, discount_id, discount_code, discount_cents)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+            ?18)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             status = excluded.status, updated_at = excluded.updated_at,
-            refunded_cents = excluded.refunded_cents",
+            refunded_cents = excluded.refunded_cents, discount_id = excluded.discount_id,
+            discount_code = excluded.discount_code, discount_cents = excluded.discount_cents",
     )
     .bind(tenant_id)
     .bind(&order.id)
@@ -131,6 +133,9 @@ pub async fn upsert_order(
     .bind(order.updated_at as i64)
     .bind(&order.payment.payment_id)
     .bind(order.refunded_cents as i64)
+    .bind(order.discount.as_ref().map(|d| d.discount_id.as_str()))
+    .bind(order.discount.as_ref().map(|d| d.code.as_str()))
+    .bind(order.discount.as_ref().map_or(0, |d| d.amount_cents as i64))
     .execute(pool)
     .await?;
     Ok(())

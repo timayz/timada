@@ -5987,8 +5987,8 @@ dependencies = [
  "sqlx_migrator",
  "thiserror 2.0.21",
  "timada-catalog",
+ "timada-discounts",
  "tokio",
- "tracing",
  "ulid",
 ]
 

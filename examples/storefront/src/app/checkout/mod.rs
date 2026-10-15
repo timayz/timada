@@ -72,6 +72,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                 </tbody>
             </table>
+            if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
+                <p>"Subtotal: " (cart.subtotal().unwrap_or_default())</p>
+                <p data-checkout-discount=(&discount.code)>"Discount " <code>(&discount.code)</code> ": " (amount)</p>
+            }
             <p>"Total: " <strong class="price" data-checkout-total="">(cart.total().unwrap_or_default())</strong></p>
 
             <form class="checkout" method="post" action=(href!(place))>
@@ -141,6 +145,10 @@ pub async fn place(cx: &Cx, Form(form): Form<CheckoutForm>) -> Result<SeeOther> 
             Ok(see_other(href!(pay::index).resolve(cx)))
         }
         Err(err @ (OrdersError::EmptyCart | OrdersError::Unavailable { .. })) => {
+            Ok(see_other(cart_url(cx, err.code())))
+        }
+        // The cart is where the code is changed or taken off.
+        Err(err) if err.code().is_some_and(|code| code.starts_with("discount_")) => {
             Ok(see_other(cart_url(cx, err.code())))
         }
         Err(err) => Ok(see_other(checkout_url(cx, err.code()))),

@@ -86,6 +86,27 @@ pub enum Cart {
         code: String,
         refused_by: String,
     },
+    /// The shopper enters a discount code (normalized), replacing any other:
+    /// a cart takes one. Whether it takes anything off is decided each time
+    /// the cart is priced.
+    DiscountApplied {
+        code: String,
+        applied_by: String,
+    },
+    DiscountRemoved {
+        removed_by: String,
+    },
+    /// The discount the payment of a request is priced with, written with
+    /// its `PaymentRequested`: the lines add up to `subtotal_cents`, the
+    /// payment's total is that less `amount_cents`.
+    DiscountGranted {
+        request_id: String,
+        discount_id: String,
+        code: String,
+        subtotal_cents: u64,
+        amount_cents: u64,
+        granted_by: String,
+    },
 }
 
 /// A paid order. Its id derives from the cart it was placed from
@@ -105,7 +126,8 @@ pub enum Order {
         lines: Vec<OrderLine>,
         /// The ISO-4217 code every line is priced in.
         currency: String,
-        /// The sum of the lines, in minor units.
+        /// What was paid, in minor units: the sum of the lines, less the
+        /// discount of a `Discounted` written with it.
         total_cents: u64,
         /// The payment that paid for it.
         payment: Payment,
@@ -120,6 +142,15 @@ pub enum Order {
     Cancelled {
         reason: String,
         cancelled_by: String,
+    },
+    /// The order was paid with a discount code, written with `Placed`: its
+    /// lines add up to `subtotal_cents`, `amount_cents` came off them.
+    Discounted {
+        discount_id: String,
+        code: String,
+        subtotal_cents: u64,
+        amount_cents: u64,
+        discounted_by: String,
     },
     /// Money went back to the shopper through the provider.
     Refunded {

@@ -492,6 +492,93 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
   }
 });
 
+test("a shopper pays less with a discount code, once", async ({ page, request }) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Promo Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+
+    // 10 % off, once per shopper.
+    await page.goto(`/t/${slug}/discounts`);
+    await page.getByLabel("Code").fill("TEN");
+    await page.getByLabel("Percentage or amount").fill("10");
+    await page.getByLabel("Once per shopper e-mail").check();
+    await page.getByRole("button", { name: "Create discount" }).click();
+    await expect(page.getByRole("status")).toContainText("Discount created.");
+    await startStorefront(request, await mintKey(page, slug, true), 1);
+
+    // A typo is refused at once; the right code takes 2.50 off two mugs.
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await page.getByLabel("Quantity").fill("2");
+    await page.getByRole("button", { name: "Add to cart" }).click();
+    await page.goto(`${STOREFRONT}/cart`);
+    await page.getByLabel("Discount code").fill("TEM");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.getByRole("alert").first()).toContainText("not valid");
+    await page.getByLabel("Discount code").fill("ten");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.locator("[data-cart-subtotal]")).toHaveText("25.00 EUR");
+    await expect(page.locator("[data-cart-discount=TEN] [data-discount-amount]")).toHaveText("-2.50 EUR");
+    await expect(page.locator("[data-cart-total]")).toHaveText("22.50 EUR");
+
+    // Charged the discounted total, and the order and its invoice say so.
+    await continueToPayment(page, true);
+    const intent = stripe.lastIntent()!;
+    expect(intent.amount).toBe(2250);
+    await expect(page.locator("[data-payment-discount=TEN]")).toBeVisible();
+    await expect(page.locator("[data-payment-total]")).toHaveText("22.50 EUR");
+    stripe.pay(intent.id);
+    expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+    await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+    await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+    await expect(page.locator("[data-order-discount=TEN]")).toContainText("2.50 EUR");
+    await expect(page.locator("[data-order-total]")).toHaveText("22.50 EUR");
+    const year = new Date().getUTCFullYear();
+    const invoiceLink = page.locator(`[data-document="F${year}-000001"]`);
+    await expect(async () => {
+      await page.reload();
+      await expect(invoiceLink).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(page.locator("[data-documents] li", { has: invoiceLink })).toContainText("22,50");
+    const reference = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+
+    // The same shopper cannot use it twice: back to the cart, told why.
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await page.getByRole("button", { name: "Add to cart" }).click();
+    await page.goto(`${STOREFRONT}/cart`);
+    await page.getByLabel("Discount code").fill("TEN");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await page.getByRole("link", { name: "Check out" }).click();
+    await page.getByRole("button", { name: "Continue to payment" }).click();
+    await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/cart\\?error=discount_already_used`), { timeout: 30_000 });
+    await expect(page.getByRole("alert").first()).toContainText("already used this discount code");
+
+    // The merchant sees the discount on the order and the use on the code.
+    const row = page.locator(`[data-order="${reference}"]`);
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders`);
+      await expect(row).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await row.getByRole("link", { name: reference }).click();
+    await expect(page.locator("[data-order-discount=TEN]")).toContainText("-2.50 EUR");
+    await page.goto(`/t/${slug}/discounts`);
+    await expect(page.locator("[data-discount=TEN] [data-discount-orders]")).toHaveText("1");
+  } finally {
+    await stripe.stop();
+  }
+});
+
 /// From the cart to the card form, shipping to `country`, as a business
 /// when a VAT number is given.
 async function checkoutTo(page: Page, country: string, postalCode: string, vatNumber = "") {
