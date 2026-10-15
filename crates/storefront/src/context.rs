@@ -123,3 +123,27 @@ pub async fn related_products(cx: &Cx, product: &Product, limit: u32) -> Result<
     }
     Ok(related)
 }
+
+/// Published products to offer beside a cart: sharing a category with what
+/// it holds (the newest products when nothing does), newest first, at most
+/// `limit` of them and never one already in it.
+pub async fn cart_recommendations(
+    cx: &Cx,
+    cart: &crate::cart::CartView,
+    limit: u32,
+) -> Result<Vec<Product>> {
+    let store = store(cx);
+    let ids: Vec<String> = cart
+        .lines
+        .iter()
+        .chain(&cart.unavailable)
+        .map(|line| line.product_id.clone())
+        .collect();
+    let mut offered = crate::query::published_cart_recommendations(store.pool(), &ids, limit)
+        .await
+        .map_err(|err| Error::from_anyhow(err.into()))?;
+    for product in &mut offered {
+        product.fill_urls(store.media_url());
+    }
+    Ok(offered)
+}
