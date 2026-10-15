@@ -131,7 +131,8 @@ export function stripeSignature(body: string, secret: string): string {
 /// nothing (and offer no wallet), and confirming a payment goes straight to
 /// the return page as Stripe does once the shopper paid, with the payment's
 /// client secret in the address. What the page created the elements with is
-/// kept on `window.__stripe`.
+/// kept on `window.__stripe`, the billing details it confirmed with in
+/// `sessionStorage.confirmed`.
 const STRIPE_JS = `
 window.Stripe = (key) => {
   window.__stripe = { key };
@@ -139,9 +140,16 @@ window.Stripe = (key) => {
   return {
     elements(options) {
       window.__stripe.elements = options;
-      return { create: () => element, submit: async () => ({}) };
+      return {
+        create(type, options) {
+          window.__stripe[type] = options ?? {};
+          return element;
+        },
+        submit: async () => ({}),
+      };
     },
     async confirmPayment({ clientSecret, confirmParams }) {
+      sessionStorage.setItem("confirmed", JSON.stringify(confirmParams.payment_method_data ?? null));
       const url = new URL(confirmParams.return_url);
       url.searchParams.set("payment_intent_client_secret", clientSecret);
       url.searchParams.set("redirect_status", "succeeded");

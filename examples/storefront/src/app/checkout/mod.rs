@@ -77,7 +77,11 @@ if (key && window.Stripe) {
     currency: form.dataset.currency,
     appearance: { variables: { colorPrimary: "#e8606a", borderRadius: "6px" } },
   });
-  elements.create("payment").mount("#payment-element");
+  // The details and the address are asked above: Stripe's form asks
+  // nothing again (no second country), and they are handed to it below.
+  elements
+    .create("payment", { fields: { billingDetails: "never" } })
+    .mount("#payment-element");
   const express = elements.create("expressCheckout", { buttonHeight: 44 });
   express.mount("#express-checkout");
   express.on("ready", ({ availablePaymentMethods }) => {
@@ -106,6 +110,25 @@ if (key && window.Stripe) {
   });
 }
 
+// What Stripe's form was told not to ask, from the form's own fields: every
+// one of them, as "never" requires.
+function billingDetails() {
+  const value = (name) => form.elements[name].value.trim();
+  return {
+    name: value("name"),
+    email: value("email"),
+    phone: value("phone"),
+    address: {
+      line1: value("line1"),
+      line2: value("line2"),
+      city: value("city"),
+      postal_code: value("postal_code"),
+      state: "",
+      country: country.value,
+    },
+  };
+}
+
 // Resolves false when the shopper stays on the page.
 async function pay() {
   error.hidden = true;
@@ -128,7 +151,10 @@ async function pay() {
     const { error: refused } = await stripe.confirmPayment({
       elements,
       clientSecret: answer.client_secret,
-      confirmParams: { return_url: new URL(form.dataset.returnPath, location.href).href },
+      confirmParams: {
+        return_url: new URL(form.dataset.returnPath, location.href).href,
+        payment_method_data: { billing_details: billingDetails() },
+      },
     });
     // Only reached when the payment could not be confirmed; otherwise the
     // browser is on its way to the return page.

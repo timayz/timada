@@ -417,6 +417,8 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     expect(await page.evaluate(() => (window as any).__stripe)).toMatchObject({
       key: "pk_test_e2e",
       elements: { mode: "payment", amount: 2500, currency: "eur" },
+      // Asked once, in the form: Stripe's card form asks no country again.
+      payment: { fields: { billingDetails: "never" } },
     });
     await expect(page.locator("[data-checkout-total]")).toHaveText("25.00 EUR");
     await expect(page.locator("[data-checkout-vat]")).toHaveText("(incl. 4.17 EUR VAT FR 20%)");
@@ -440,6 +442,14 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     expect(intent.amount).toBe(2500);
     expect(intent.currency).toBe("eur");
     expect(new URL(page.url()).searchParams.get("payment_intent_client_secret")).toBe(`${intent.id}_secret_e2e`);
+    expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem("confirmed")))!)).toEqual({
+      billing_details: {
+        name: "Ada Lovelace",
+        email: "ada@example.org",
+        phone: "",
+        address: { line1: "1 rue de la Paix", line2: "", city: "Paris", postal_code: "75002", state: "", country: "FR" },
+      },
+    });
 
     // Stripe sends the browser back before it tells the dashboard: the page
     // waits. A webhook that is not Stripe's is refused.
