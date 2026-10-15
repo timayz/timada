@@ -42,6 +42,13 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::InvalidSiret => "invalid_siret",
         TenancyError::InvalidVatNumber => "invalid_vat_number",
         TenancyError::OssWithoutVatNumber => "oss_without_vat_number",
+        TenancyError::CompanyNotFound => "company_not_found",
+        TenancyError::SirenTaken => "siren_taken",
+        TenancyError::SirenMismatch => "siren_mismatch",
+        TenancyError::NotCompanyOwner => "not_company_owner",
+        TenancyError::LastCompanyOwner => "last_company_owner",
+        TenancyError::SeriesCodeTaken => "series_code_taken",
+        TenancyError::InvalidSeriesCode => "invalid_series_code",
         TenancyError::InvalidLegalIdentity => "invalid_legal_identity",
         TenancyError::Write(_) | TenancyError::Other(_) => "failed",
     }

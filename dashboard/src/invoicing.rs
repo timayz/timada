@@ -100,14 +100,24 @@ async fn on_placed<E: Executor>(
     {
         return Ok(());
     }
-    let legal = timada_tenancy::Command(platform.0)
+    let tenancy = timada_tenancy::Command(platform.0.clone());
+    let link = tenancy
         .load_tenant(&tenant.0)
         .await?
-        .and_then(|tenant| tenant.legal);
-    let Some(legal) = legal else {
-        // Only an order paid before invoicing existed: checkout refuses to
-        // take a payment without the legal identity.
-        tracing::warn!(tenant = %tenant.0, order = %event.aggregate_id, "no legal identity: order not invoiced");
+        .and_then(|state| state.company);
+    let company = match &link {
+        Some(link) => tenancy.load_company(&link.company_id).await?,
+        None => None,
+    };
+    let (Some(link), Some(company)) = (link, company) else {
+        // Only an order paid before invoicing existed, or a tenant unlinked
+        // between payment and now: checkout refuses to take a payment
+        // without a company.
+        tracing::warn!(tenant = %tenant.0, order = %event.aggregate_id, "no company: order not invoiced");
+        return Ok(());
+    };
+    let Some(legal) = company.identity.clone() else {
+        tracing::warn!(tenant = %tenant.0, order = %event.aggregate_id, "the company has no identity: order not invoiced");
         return Ok(());
     };
     let vies: Arc<dyn Vies> = context.extract();
@@ -166,6 +176,9 @@ async fn on_placed<E: Executor>(
     let invoice = invoicing
         .issue_invoice(
             NewInvoice {
+                company_id: company.id.clone(),
+                tenant_id: tenant.0.clone(),
+                series_code: link.series_code.clone(),
                 order_id: event.aggregate_id.clone(),
                 order_reference: event.data.reference.clone(),
                 paid_at: event.timestamp,
@@ -185,6 +198,7 @@ async fn on_placed<E: Executor>(
                 buyer_vat_number,
                 vies_reference,
             },
+            &timada_invoicing::Ledger(platform.0.clone()),
             now(),
         )
         .await?;

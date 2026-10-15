@@ -5,7 +5,7 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "invoicing";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Invoicing0001, Invoicing0002]
+    vec_box![Invoicing0001, Invoicing0002, Invoicing0003]
 }
 
 pub struct Invoicing0001;
@@ -86,6 +86,28 @@ sqlx_migrator::sqlite_migration!(
         (
             "CREATE INDEX invoicing_vat_lines_issued ON invoicing_vat_lines (tenant_id, regime, issued_at)",
             "DROP INDEX invoicing_vat_lines_issued"
+        ),
+    ]
+);
+
+pub struct Invoicing0003;
+sqlx_migrator::sqlite_migration!(
+    Invoicing0003,
+    "invoicing",
+    "0003_companies",
+    vec_box![("invoicing", "0002_vat_by_destination")],
+    vec_box![
+        (
+            "ALTER TABLE invoicing_documents ADD COLUMN company_id TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE invoicing_documents DROP COLUMN company_id"
+        ),
+        (
+            "ALTER TABLE invoicing_vat_lines ADD COLUMN company_id TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE invoicing_vat_lines DROP COLUMN company_id"
+        ),
+        (
+            "CREATE INDEX invoicing_vat_lines_company ON invoicing_vat_lines (company_id, regime, issued_at)",
+            "DROP INDEX invoicing_vat_lines_company"
         ),
     ]
 );

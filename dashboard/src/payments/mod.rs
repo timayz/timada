@@ -22,7 +22,7 @@ use std::sync::Arc;
 pub use gateway::*;
 pub use subscription::*;
 
-use timada_tenancy::TenantState;
+use timada_tenancy::{CompanyState, TenantState};
 
 use crate::cluster::Executor;
 use crate::config::PaymentsConfig;
@@ -94,6 +94,13 @@ impl Payments {
             secret_key: sealer.open(&settings.secret_key_sealed)?,
             webhook_secret: sealer.open(&settings.webhook_secret_sealed)?,
         }))
+    }
+
+    /// The company a tenant sells as, once it has an identity.
+    pub async fn company_of(&self, tenant: &TenantState) -> anyhow::Result<Option<CompanyState>> {
+        timada_tenancy::Command(self.platform.clone())
+            .load_company_of(tenant)
+            .await
     }
 
     /// The tenant read from the platform store, unless it is suspended.

@@ -629,3 +629,27 @@ mod legal_tests {
         assert!(normalize_vat_number("FR85120027017", "12002701600092").is_err());
     }
 }
+
+/// The longest series code a tenant numbers its invoices under.
+pub const MAX_SERIES_CODE_LEN: usize = 10;
+
+/// The index stream of a SIREN.
+pub fn company_siren_id(siren: &str) -> String {
+    evento::hash_ids(vec!["company-siren", siren])
+}
+
+/// The index stream of a company's series code (`""` is the plain series).
+pub fn company_series_id(company_id: &str, code: &str) -> String {
+    evento::hash_ids(vec!["company-series", company_id, code])
+}
+
+/// Uppercases a series code: blank is the plain series (`""`), otherwise 1
+/// to [`MAX_SERIES_CODE_LEN`] letters and digits.
+pub fn normalize_series_code(code: Option<&str>) -> Result<String, crate::TenancyError> {
+    let code = code.unwrap_or_default().trim().to_ascii_uppercase();
+    if code.len() <= MAX_SERIES_CODE_LEN && code.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        Ok(code)
+    } else {
+        Err(crate::TenancyError::InvalidSeriesCode)
+    }
+}

@@ -57,6 +57,7 @@ async fn on_invoice_issued<E: Executor>(
             total_cents: data.total_cents,
             currency: &data.currency,
             issued_at: data.issued_at,
+            company_id: &data.company_id,
             regime: &data.regime,
             tax_country: &data.tax_country,
             vat: &data.vat,
@@ -89,6 +90,7 @@ async fn on_credit_note_issued<E: Executor>(
             total_cents: data.total_cents,
             currency: &data.currency,
             issued_at: data.issued_at,
+            company_id: &data.company_id,
             regime: &data.regime,
             tax_country: &data.tax_country,
             vat: &data.vat,
@@ -110,6 +112,7 @@ struct Row<'a> {
     total_cents: u64,
     currency: &'a str,
     issued_at: u64,
+    company_id: &'a str,
     regime: &'a str,
     tax_country: &'a str,
     vat: &'a [VatSubtotal],
@@ -124,8 +127,8 @@ async fn upsert(pool: &SqlitePool, tenant_id: &str, row: Row<'_>) -> anyhow::Res
     for subtotal in row.vat {
         sqlx::query(
             "INSERT INTO invoicing_vat_lines (tenant_id, document_id, kind, regime, country,
-                rate_bps, base_cents, vat_cents, currency, issued_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                rate_bps, base_cents, vat_cents, currency, issued_at, company_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT (tenant_id, document_id, rate_bps) DO NOTHING",
         )
         .bind(tenant_id)
@@ -138,14 +141,15 @@ async fn upsert(pool: &SqlitePool, tenant_id: &str, row: Row<'_>) -> anyhow::Res
         .bind(subtotal.vat_cents as i64)
         .bind(row.currency)
         .bind(row.issued_at as i64)
+        .bind(row.company_id)
         .execute(&mut *tx)
         .await?;
     }
     sqlx::query(
         "INSERT INTO invoicing_documents (tenant_id, id, kind, series, number, label, order_id,
             order_reference, buyer_name, total_cents, currency, issued_at, regime, tax_country,
-            eu_distance_sales_cents, eu_threshold_passed)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+            eu_distance_sales_cents, eu_threshold_passed, company_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT (tenant_id, id) DO NOTHING",
     )
     .bind(tenant_id)
@@ -164,6 +168,7 @@ async fn upsert(pool: &SqlitePool, tenant_id: &str, row: Row<'_>) -> anyhow::Res
     .bind(row.tax_country)
     .bind(row.eu_distance_sales_cents as i64)
     .bind(row.eu_threshold_passed)
+    .bind(row.company_id)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
