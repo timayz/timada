@@ -12,9 +12,11 @@
 
 pub mod addresses;
 pub mod code;
+pub mod delete;
 pub mod orders;
 pub mod session;
 pub mod sign_out;
+pub mod sign_out_everywhere;
 
 use serde_json::{Value, json};
 use timada_shoppers::{ShopperError, ShopperState};
@@ -64,18 +66,23 @@ pub fn answer_error(err: ShopperError) -> Result<Answer> {
     }
 }
 
-/// The shopper whose token the request carries, if it still signs them in.
-pub async fn signed_in(cx: &Cx, executor: &Executor) -> Result<Option<ShopperState>> {
-    let token = headers(cx)
+/// The shopper token the request carries, if any.
+pub fn shopper_token(cx: &Cx) -> Option<String> {
+    headers(cx)
         .get(SHOPPER_TOKEN)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
-        .filter(|token| !token.is_empty());
-    let Some(token) = token else {
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+}
+
+/// The shopper whose token the request carries, if it still signs them in.
+pub async fn signed_in(cx: &Cx, executor: &Executor) -> Result<Option<ShopperState>> {
+    let Some(token) = shopper_token(cx) else {
         return Ok(None);
     };
     let resolved = timada_shoppers::Command(executor.clone())
-        .resolve_session(token, now())
+        .resolve_session(&token, now())
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     Ok(resolved.map(|resolved| resolved.shopper))

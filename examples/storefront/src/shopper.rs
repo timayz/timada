@@ -156,6 +156,10 @@ pub fn save_checkout_draft(cx: &Cx, draft: CheckoutDraft) -> topcoat::Result<()>
     Ok(())
 }
 
+pub fn forget_checkout_draft(cx: &Cx) {
+    checkout_store(cx).remove();
+}
+
 /// The request to pay this browser is going through: the card form's page
 /// reads its payment back by it.
 #[derive(Debug, Clone, Serialize, Deserialize)]

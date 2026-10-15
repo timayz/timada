@@ -1,10 +1,13 @@
 //! `/account`: the signed-in shopper's orders (every order placed with
-//! their address, on any device) and saved addresses. Signed out, it sends
-//! to the sign-in page.
+//! their address, on any device) and saved addresses, a way to sign out
+//! every other browser, and the way to delete the account. Signed out, it
+//! sends to the sign-in page.
 
 pub mod addresses;
+pub mod delete;
 pub mod sign_in;
 pub mod sign_out;
+pub mod sign_out_everywhere;
 
 use timada_storefront::{menu, shopper_orders};
 use topcoat::{
@@ -24,6 +27,7 @@ use crate::shopper::{forget_shopper, shopper_token, signed_in};
 #[topcoat::router::query_params(error = bad_request)]
 struct AccountQuery {
     error: Option<String>,
+    done: Option<String>,
 }
 
 pub fn account_url(cx: &Cx, error: Option<&str>) -> String {
@@ -32,6 +36,23 @@ pub fn account_url(cx: &Cx, error: Option<&str>) -> String {
         error: Option<&'a str>,
     }
     href!(index).query(Link { error }).resolve(cx)
+}
+
+/// The account page, saying what was just `done` (see [`say_done`]).
+pub fn account_done_url(cx: &Cx, done: &str) -> String {
+    #[derive(serde::Serialize)]
+    struct Link<'a> {
+        done: &'a str,
+    }
+    href!(index).query(Link { done }).resolve(cx)
+}
+
+/// What the account page says once something is done.
+fn say_done(code: &str) -> Option<&'static str> {
+    match code {
+        sign_out_everywhere::DONE => Some("Every other browser is signed out."),
+        _ => None,
+    }
 }
 
 #[page]
@@ -63,6 +84,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             </form>
             if let Some(code) = query.error.as_deref() {
                 <p class="notice" role="alert">(say(code))</p>
+            }
+            if let Some(done) = query.done.as_deref().and_then(say_done) {
+                <p class="notice" role="status">(done)</p>
             }
             <section data-account-orders="">
                 <h2>"Your orders"</h2>
@@ -106,6 +130,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     </ul>
                 }
+            </section>
+            <section data-account-sessions="">
+                <h2>"Your sign-ins"</h2>
+                <p>"Signed in on a computer you no longer use? Sign out of every other browser; this one stays signed in."</p>
+                <form method="post" action=(href!(sign_out_everywhere::sign_out_everywhere))>
+                    <button>"Sign out everywhere else"</button>
+                </form>
+            </section>
+            <section data-account-delete="">
+                <h2>"Delete your account"</h2>
+                <p>"Forget your addresses and sign out everywhere. Your orders stay with the shop."</p>
+                <a href=(href!(delete::index))>"Delete your account…"</a>
             </section>
         )
     })

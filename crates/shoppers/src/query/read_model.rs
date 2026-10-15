@@ -2,8 +2,9 @@
 //!
 //! The handler reloads the strict write model of the shopper and rewrites its
 //! row, so delivery may repeat (the subscription is at-least-once) without the
-//! numbers drifting. It runs on the tenant's own executor (its cursor lives
-//! there) and writes into the shared read-model database it is given.
+//! numbers drifting; a shopper who deleted their account loses their row. It
+//! runs on the tenant's own executor (its cursor lives there) and writes into
+//! the shared read-model database it is given.
 
 use evento::{
     Executor,
@@ -50,7 +51,24 @@ async fn on_shopper_event<E: Executor>(
     else {
         return Ok(());
     };
+    if shopper.forgotten {
+        return delete_shopper(&pool, &tenant.0, &shopper.id).await;
+    }
     upsert_shopper(&pool, &tenant.0, &shopper, event.timestamp).await
+}
+
+/// Drops the row of a shopper who deleted their account.
+pub async fn delete_shopper(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    shopper_id: &str,
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM shoppers_shoppers WHERE tenant_id = ?1 AND id = ?2")
+        .bind(tenant_id)
+        .bind(shopper_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Writes the row of a shopper as the write model sees it; `updated_at` is
@@ -66,6 +84,8 @@ pub async fn upsert_shopper(
             updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
+            email = excluded.email,
+            registered_at = excluded.registered_at,
             address_count = excluded.address_count,
             updated_at = MAX(updated_at, excluded.updated_at)",
     )

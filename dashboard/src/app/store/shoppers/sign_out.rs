@@ -4,10 +4,10 @@
 use topcoat::{
     Result,
     context::Cx,
-    router::{StatusCode, request::headers, route},
+    router::{StatusCode, route},
 };
 
-use super::{Answer, SHOPPER_TOKEN, status};
+use super::{Answer, shopper_token, status};
 
 #[route(POST)]
 pub async fn sign_out(cx: &Cx) -> Result<Answer> {
@@ -15,13 +15,7 @@ pub async fn sign_out(cx: &Cx) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let token = headers(cx)
-        .get(SHOPPER_TOKEN)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_owned();
-    if !token.is_empty() {
+    if let Some(token) = shopper_token(cx) {
         let hold = super::super::hold(cx, &access).await?;
         timada_shoppers::Command(hold.executor().clone())
             .sign_out(&token)
