@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { FakeStripe, stripeSignature } from "./stripe";
-import { createTenant, uniqueTenant } from "./tenants";
+import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 
 // The headless storefront end to end: a merchant publishes a product and
 // mints an API key in the dashboard; the example storefront (a separate
@@ -299,10 +299,11 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
   await expect(page.getByRole("alert")).toContainText("two-letter code");
   await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
 
-  // Nothing answers the request to pay: the shop takes no payments yet.
+  // The request to pay is refused: the shop has not said who it is yet, so
+  // it could not issue the invoice.
   await page.getByLabel("Country code").fill("FR");
   await page.getByRole("button", { name: "Continue to payment" }).click();
-  await expect(page.getByRole("alert")).toContainText("Payments are not available", { timeout: 30_000 });
+  await expect(page.getByRole("alert")).toContainText("cannot take orders yet", { timeout: 30_000 });
   await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
 });
 
@@ -348,7 +349,18 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await publishProduct(page, slug, "Blue Mug", "12.50");
     await publishProduct(page, slug, "Red Plate", "8");
 
+    // The merchant says who it is, so its invoices can name it; a SIRET
+    // that fails its check is refused.
+    await page.goto(`/t/${slug}/invoicing`);
+    await expect(page.locator("[data-invoicing]")).toHaveAttribute("data-invoicing", "none");
+    await setLegalIdentity(page, slug);
+    await page.getByLabel("SIRET").fill("12002701600093");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page).toHaveURL(/error=invalid_siret/);
+    await expect(page.locator("[data-invoicing]")).toHaveCount(0);
+
     // The merchant connects a Stripe account; a key Stripe refuses is not saved.
+    await page.goto(`/t/${slug}`);
     await page.getByRole("link", { name: "Payments", exact: true }).click();
     await expect(page.locator("[data-payments]")).toHaveAttribute("data-payments", "none");
     const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";

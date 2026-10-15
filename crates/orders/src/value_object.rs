@@ -75,6 +75,9 @@ pub const PROVIDER_STRIPE: &str = "stripe";
 /// The refusal of a request to pay when the merchant has no payments set up,
 /// or the provider failed.
 pub const PAYMENTS_UNAVAILABLE: &str = "payments_unavailable";
+/// The refusal of a request to pay when the merchant has not said who it is
+/// in law yet: no sale goes ahead without an invoice that can name it.
+pub const INVOICING_NOT_CONFIGURED: &str = "invoicing_not_configured";
 
 impl OrderLine {
     /// The price of the whole line.

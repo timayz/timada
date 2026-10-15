@@ -215,6 +215,9 @@ pub fn say(code: &str) -> &'static str {
             "A price changed since you saw it: check the new total and confirm again."
         }
         "payments_unavailable" => "Payments are not available right now. Please try again later.",
+        "invoicing_not_configured" => {
+            "This shop cannot take orders yet: it has not finished setting up. Please try again later."
+        }
         "payment_failed" => "The payment did not go through. Try again or use another card.",
         "payment_expired" => "This payment is no longer open. Please check out again.",
         "invalid_email" => "Enter a valid e-mail address.",

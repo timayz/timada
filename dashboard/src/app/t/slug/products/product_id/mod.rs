@@ -10,6 +10,7 @@ pub mod options;
 pub mod price;
 pub mod publish;
 pub mod rename;
+pub mod tax_category;
 pub mod uncategorize;
 pub mod unpublish;
 pub mod variants;
@@ -18,7 +19,8 @@ use std::sync::Arc;
 use timada_catalog::{
     CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
     MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS,
-    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, format_money,
+    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, TAX_CATEGORIES,
+    format_money, tax_category_label,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 
@@ -272,6 +274,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(Choice::of)
         .collect();
     let TenantAccess { tenant, .. } = access;
+    // The kind of goods only matters to a merchant who charges VAT.
+    let charges_vat = tenant
+        .legal
+        .as_ref()
+        .is_some_and(|legal| legal.is_vat_registered());
+    let tax_label = if charges_vat {
+        tax_category_label(product.tax_category()).to_owned()
+    } else {
+        "Not charged".to_owned()
+    };
     let slug = tenant.slug.clone();
     let current_currency = product
         .price
@@ -302,6 +314,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dt class="text-neutral-500">"Slug"</dt><dd><code>(&product.slug)</code></dd>
                     <dt class="text-neutral-500">"Price"</dt>
                     <dd data-product-price="" data-product-price-range=(&price_label)>(&price_label)</dd>
+                    <dt class="text-neutral-500">"VAT"</dt>
+                    <dd data-product-vat="">(&tax_label)</dd>
                     <dt class="text-neutral-500">"Description"</dt>
                     <dd data-product-description="" class="whitespace-pre-line">(if product.description.is_empty() { "—" } else { product.description.as_str() })</dd>
                     <dt class="text-neutral-500">"Created"</dt>
@@ -643,6 +657,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </div>
                         <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Set price"</button>
                     </form>
+                    if charges_vat {
+                        <form method="post" action=(href!(tax_category::tax_category, Slug(slug.clone()), ProductId(product.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
+                            <label class="block text-sm font-medium" for="product-tax">"Kind of goods, for VAT"</label>
+                            <select id="product-tax" name="category" class="mt-1 rounded border border-neutral-300 px-3 py-2">
+                                for (key, label) in TAX_CATEGORIES.iter().copied() {
+                                    <option value=(key) selected=(product.tax_category() == key)>(label)</option>
+                                }
+                            </select>
+                            <p class="mt-1 text-xs text-neutral-500">"Each country taxes a kind at its own rate; most goods are standard."</p>
+                            <button class="mt-3 block rounded border border-neutral-300 px-3 py-1 text-sm">"Set kind"</button>
+                        </form>
+                    }
                     <form method="post" action=(href!(describe::describe, Slug(slug.clone()), ProductId(product.id.clone()))) class="rounded border border-neutral-200 bg-white p-4 md:col-span-2">
                         <label class="block text-sm font-medium" for="product-description">"Description"</label>
                         <textarea id="product-description" name="description" rows="5" maxlength=(MAX_DESCRIPTION_LEN)
@@ -685,4 +711,10 @@ pub struct DescribeForm {
 pub struct PriceForm {
     pub amount: String,
     pub currency: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct TaxCategoryForm {
+    /// A key of `TAX_CATEGORIES`.
+    pub category: String,
 }

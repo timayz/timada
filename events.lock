@@ -27,6 +27,7 @@ event timada-catalog/Product::OptionValuesChanged { option_id: String, values: V
 event timada-catalog/Product::Priced { amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::Published { published_by: String }
 event timada-catalog/Product::Renamed { name: String, renamed_by: String }
+event timada-catalog/Product::TaxCategorySet { category: Option<String>, set_by: String }
 event timada-catalog/Product::Uncategorized { category_id: String, uncategorized_by: String }
 event timada-catalog/Product::Unpublished { unpublished_by: String }
 event timada-catalog/Product::VariantDefined { variant_id: String, selections: Vec<OptionSelection>, sku: Option<String>, amount_cents: u64, currency: String, image_id: Option<String>, defined_by: String }
@@ -89,6 +90,7 @@ event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }
 event timada-tenancy/Tenant::Created { slug: String, name: String, created_by: String }
+event timada-tenancy/Tenant::LegalIdentitySet { legal_name: String, legal_form: String, share_capital_cents: Option<u64>, siret: String, rcs_city: Option<String>, line1: String, line2: Option<String>, postal_code: String, city: String, country: String, contact_email: String, vat_number: Option<String>, oss_registered: bool, set_by: String }
 event timada-tenancy/Tenant::MemberGranted { user_id: String, role: String }
 event timada-tenancy/Tenant::MemberRevoked { user_id: String }
 event timada-tenancy/Tenant::MemberRoleChanged { user_id: String, role: String }

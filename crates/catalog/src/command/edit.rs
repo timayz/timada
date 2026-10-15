@@ -1,8 +1,11 @@
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{Described, Priced, Renamed};
+use crate::aggregator::{Described, Priced, Renamed, TaxCategorySet};
 use crate::error::CatalogError;
-use crate::value_object::{normalize_currency, normalize_description, normalize_name};
+use crate::value_object::{
+    TAX_CATEGORIES, TAX_CATEGORY_STANDARD, normalize_currency, normalize_description,
+    normalize_name,
+};
 
 use super::Price;
 
@@ -95,6 +98,39 @@ impl<E: Executor> super::Command<E> {
                 amount_cents,
                 currency,
                 priced_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Sets what kind of goods the product is for VAT, one of
+    /// [`TAX_CATEGORIES`]; `standard` (or `None`) is the default. The same
+    /// category is a no-op.
+    pub async fn set_product_tax_category(
+        &self,
+        actor: &str,
+        product_id: &str,
+        category: Option<&str>,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let category = match category.map(str::trim) {
+            None | Some("") | Some(TAX_CATEGORY_STANDARD) => None,
+            Some(key) if TAX_CATEGORIES.iter().any(|(known, _)| *known == key) => {
+                Some(key.to_owned())
+            }
+            Some(_) => return Err(CatalogError::InvalidTaxCategory),
+        };
+        let product = self.require_editable(product_id).await?;
+        if product.tax_category == category {
+            return Ok(());
+        }
+        product
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&TaxCategorySet {
+                category,
+                set_by: actor.to_owned(),
             })
             .commit(&self.0)
             .await?;

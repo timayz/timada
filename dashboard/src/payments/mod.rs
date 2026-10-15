@@ -96,14 +96,11 @@ impl Payments {
         }))
     }
 
-    /// [`account_of`](Self::account_of) a tenant read from the platform store.
-    pub async fn account(&self, tenant_id: &str) -> anyhow::Result<Option<Account>> {
+    /// The tenant read from the platform store, unless it is suspended.
+    pub async fn active_tenant(&self, tenant_id: &str) -> anyhow::Result<Option<TenantState>> {
         let tenant = timada_tenancy::Command(self.platform.clone())
             .load_tenant(tenant_id)
             .await?;
-        match tenant {
-            Some(tenant) if !tenant.is_suspended() => self.account_of(&tenant),
-            _ => Ok(None),
-        }
+        Ok(tenant.filter(|tenant| !tenant.is_suspended()))
     }
 }

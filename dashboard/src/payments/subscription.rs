@@ -9,7 +9,9 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_orders::aggregator::CheckoutRequested;
-use timada_orders::{OpenedPayment, OrdersError, PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE};
+use timada_orders::{
+    INVOICING_NOT_CONFIGURED, OpenedPayment, OrdersError, PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
+};
 
 use super::{DASHBOARD_ACTOR, NewPayment, Payments};
 
@@ -80,7 +82,16 @@ async fn on_checkout_requested<E: Executor>(
         refuse(PAYMENTS_UNAVAILABLE).await?;
         return Ok(());
     }
-    let Some(account) = payments.account(&tenant.0).await? else {
+    let Some(merchant) = payments.active_tenant(&tenant.0).await? else {
+        refuse(PAYMENTS_UNAVAILABLE).await?;
+        return Ok(());
+    };
+    // No sale without an invoice that can name the merchant.
+    if merchant.legal.is_none() {
+        refuse(INVOICING_NOT_CONFIGURED).await?;
+        return Ok(());
+    }
+    let Some(account) = payments.account_of(&merchant)? else {
         refuse(PAYMENTS_UNAVAILABLE).await?;
         return Ok(());
     };

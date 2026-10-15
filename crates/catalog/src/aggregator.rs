@@ -145,6 +145,13 @@ pub enum Product {
         name: String,
         removed_by: String,
     },
+    /// What kind of goods it is for VAT ([`TAX_CATEGORIES`](crate::TAX_CATEGORIES)),
+    /// for every variant alike: each country taxes a kind at its own rate.
+    /// `None` is `standard`.
+    TaxCategorySet {
+        category: Option<String>,
+        set_by: String,
+    },
 }
 
 /// The index `sku → variant`: one stream per code, with the deterministic id

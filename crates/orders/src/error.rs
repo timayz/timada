@@ -72,6 +72,7 @@ const KNOWN_CODES: &[&str] = &[
     "empty_cart",
     "price_changed",
     crate::PAYMENTS_UNAVAILABLE,
+    crate::INVOICING_NOT_CONFIGURED,
 ];
 
 impl OrdersError {

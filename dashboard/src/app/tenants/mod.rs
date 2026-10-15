@@ -39,6 +39,10 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::InvalidApiKeyScopes => "invalid_api_key_scopes",
         TenancyError::ApiKeyInvalid => "api_key_invalid",
         TenancyError::InvalidPublishableKey => "invalid_publishable_key",
+        TenancyError::InvalidSiret => "invalid_siret",
+        TenancyError::InvalidVatNumber => "invalid_vat_number",
+        TenancyError::OssWithoutVatNumber => "oss_without_vat_number",
+        TenancyError::InvalidLegalIdentity => "invalid_legal_identity",
         TenancyError::Write(_) | TenancyError::Other(_) => "failed",
     }
 }

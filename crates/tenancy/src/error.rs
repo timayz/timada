@@ -14,6 +14,14 @@ pub enum TenancyError {
     Forbidden,
     #[error("a publishable key starts with pk_")]
     InvalidPublishableKey,
+    #[error("a SIRET is 14 digits that pass the check")]
+    InvalidSiret,
+    #[error("the VAT number must be FR, its two-digit key and the SIREN")]
+    InvalidVatNumber,
+    #[error("the One-Stop Shop needs a VAT number")]
+    OssWithoutVatNumber,
+    #[error("fill in every required part of the legal identity, within its length")]
+    InvalidLegalIdentity,
     #[error("this tenant is suspended")]
     Suspended,
     #[error("this tenant is not suspended")]
