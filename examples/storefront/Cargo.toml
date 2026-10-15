@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 timada-storefront = { path = "../../crates/storefront" }
-topcoat = { version = "=0.10.0", features = ["anyhow"] }
+topcoat = { version = "=0.10.0", features = ["anyhow", "multipart"] }
 tokio.workspace = true
 sqlx.workspace = true
 anyhow.workspace = true
