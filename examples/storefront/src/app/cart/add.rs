@@ -11,15 +11,16 @@ use topcoat::{
     },
 };
 
-use super::cart_url;
+use super::drawer_url;
 use crate::shopper::{cart_id, set_cart_id};
 
 /// The form field of an option's menu: `option:<option id>`.
 pub const OPTION_FIELD_PREFIX: &str = "option:";
 
 /// Adds what the product page's form names: `slug`, `quantity`, and one
-/// `option:<id>` per menu, which pick the variant. A refusal goes back to
-/// the product page.
+/// `option:<id>` per menu, which pick the variant. The shopper comes back to
+/// `from` (the product page when absent) with the cart drawer open; a
+/// refusal goes back to the product page.
 #[route(POST)]
 pub async fn add(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<SeeOther> {
     let slug = form.get("slug").cloned().unwrap_or_default();
@@ -62,7 +63,13 @@ pub async fn add(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<S
             if current.as_deref() != Some(cart_id.as_str()) {
                 set_cart_id(cx, &cart_id)?;
             }
-            Ok(see_other(cart_url(cx, None)))
+            let product_page =
+                href!(crate::app::p::slug::index, crate::app::p::slug::Slug(slug)).resolve(cx);
+            let from = form
+                .get("from")
+                .filter(|from| !from.is_empty())
+                .unwrap_or(&product_page);
+            Ok(see_other(drawer_url(from, None)))
         }
         Err(err) => {
             #[derive(serde::Serialize)]
