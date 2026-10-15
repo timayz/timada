@@ -96,6 +96,12 @@ public_url = "https://timada.localhost/media"
 # # Where VIES is reached; the Commission's own address when unset.
 # vies_url = "https://ec.europa.eu/taxation_customs/vies/rest-api"
 
+# Reviews. Some days after an order is fulfilled (each shop picks how many
+# on its Reviews page), its buyer gets a mail asking for a review.
+# [reviews]
+# # How often, in seconds, this node looks for buyers due that mail.
+# request_check_secs = 3600
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events. A connected storefront keeps its tenant's database open.

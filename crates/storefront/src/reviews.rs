@@ -282,6 +282,18 @@ impl Store {
             .await
     }
 
+    /// The order a mailed review link opens, while the link is valid: the
+    /// host then treats its visitor as holding that order. `None` for an
+    /// unknown or expired token.
+    pub async fn review_link(&self, token: &str) -> anyhow::Result<Option<String>> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs());
+        timada_reviews::Command(self.executor().clone())
+            .resolve_review_link(token, now)
+            .await
+    }
+
     /// A page of the published reviews of a product, with the photos'
     /// addresses filled in.
     pub async fn reviews_of(&self, product_id: &str, page: u32) -> anyhow::Result<ReviewPage> {
@@ -321,6 +333,14 @@ pub async fn submit_review(
 pub async fn review_of(cx: &Cx, order_id: &str, product_id: &str) -> Result<Option<ReviewState>> {
     store(cx)
         .review_of(order_id, product_id)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// The order a mailed review link opens; see [`Store::review_link`].
+pub async fn review_link(cx: &Cx, token: &str) -> Result<Option<String>> {
+    store(cx)
+        .review_link(token)
         .await
         .map_err(Error::from_anyhow)
 }

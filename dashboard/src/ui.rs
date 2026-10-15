@@ -205,6 +205,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "review_not_found" => "This review does not exist.",
         "review_rejected" => "This review was rejected and cannot change any more.",
         "review_photo_not_found" => "This photo is no longer on the review.",
+        "review_request_delay_too_long" => "Enter a number of days from 0 to 60.",
         "invoicing_not_configured" => {
             "Shoppers cannot pay until the legal identity on the Invoicing page is filled in."
         }

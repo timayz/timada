@@ -1,6 +1,6 @@
 //! The e-mails this application sends: a code that proves an address, an
 //! invitation to join a tenant, and, speaking for a shop, its shoppers'
-//! sign-in codes and order confirmations.
+//! sign-in codes, order confirmations and requests for a review.
 
 use anyhow::Context as _;
 use topcoat::{
@@ -181,6 +181,41 @@ pub async fn send_order_confirmation(
     Ok(())
 }
 
+/// Asks the buyer of a fulfilled order, under the shop's name, what they
+/// think of `products` (the names of the ones not reviewed yet). `link` opens
+/// the order's review forms on the storefront without signing in.
+pub async fn send_review_request(
+    cx: &Cx,
+    shop_name: &str,
+    order: &OrderState,
+    products: &[String],
+    link: &str,
+) -> Result<()> {
+    let sender = &app_context::<MailSender>(cx).0;
+    let from = Mailbox::named(shop_name, sender.address())?;
+    let subject = format!("How was your {shop_name} order {}?", order.reference);
+    let mail = mail! {
+        from: from,
+        to: Mailbox::new(&order.email)?,
+        subject: &subject,
+        html: {
+            cx =>
+            <p>"Thank you again for your order " <strong>(&order.reference)</strong>
+                " at " <strong>(shop_name)</strong> "."</p>
+            <p>"Now that it has reached you, how do you like it? A few words help other shoppers choose:"</p>
+            <ul>
+                for name in products {
+                    <li>(name)</li>
+                }
+            </ul>
+            <p><a href=(link)>"Review your purchase"</a></p>
+            <p>"The link opens your order on the shop for 60 days."</p>
+        },
+    }?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
 fn subject(kind: EmailFlowKind) -> &'static str {
     match kind {
         EmailFlowKind::Register | EmailFlowKind::AddEmail => {
@@ -338,6 +373,36 @@ mod tests {
         assert!(!wire.contains("Timada"), "{wire}");
         let wire = String::from_utf8(sent[1].clone().formatted(&cx).unwrap()).unwrap();
         assert!(!wire.contains("View your order"), "{wire}");
+    }
+
+    #[tokio::test]
+    async fn the_review_request_links_to_the_order() {
+        let transport = MemoryTransport::new();
+        let cx = CxTestBuilder::new()
+            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .build();
+
+        send_review_request(
+            &cx,
+            "Acme Tea",
+            &paid_order(),
+            &["Mug".to_owned(), "Teapot".to_owned()],
+            "https://shop.example/reviews/t0k3n",
+        )
+        .await
+        .unwrap();
+
+        let sent = transport.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].subject(), "How was your Acme Tea order K7Q4-MZP2?");
+        assert_eq!(sent[0].to(), [Mailbox::new("ada@example.com").unwrap()]);
+        assert_eq!(sent[0].from().unwrap().name(), Some("Acme Tea"));
+        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        for part in ["Mug", "Teapot", "https://shop.example/reviews/t0k3n"] {
+            assert!(wire.contains(part), "{part}: {wire}");
+        }
+        assert!(!wire.contains("Timada"), "{wire}");
     }
 
     #[tokio::test]

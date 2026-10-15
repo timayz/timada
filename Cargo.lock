@@ -6063,8 +6063,10 @@ name = "timada-reviews"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bitcode",
  "evento",
+ "rand 0.9.5",
  "sqlx",
  "sqlx_migrator",
  "thiserror 2.0.21",

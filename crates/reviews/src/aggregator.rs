@@ -37,3 +37,45 @@ pub enum Review {
         removed_by: String,
     },
 }
+
+/// Whether the shop mails its buyers a link to review what they bought, and
+/// how long after the order is fulfilled. One stream per tenant store, with
+/// the id [`review_requests_id`](crate::review_requests_id); no stream means
+/// the default ([`DEFAULT_REQUEST_DELAY_DAYS`](crate::DEFAULT_REQUEST_DELAY_DAYS)).
+#[evento::aggregate(name = "timada-reviews/ReviewRequests")]
+pub enum ReviewRequests {
+    /// On, `days` after fulfilment.
+    RequestDelaySet {
+        days: u8,
+        set_by: String,
+    },
+    RequestsDisabled {
+        disabled_by: String,
+    },
+}
+
+/// The review request mailed for one order. One stream per order, with the
+/// id [`review_request_id`](crate::review_request_id): the node that writes
+/// it first is the one that sends, so a buyer gets one mail however many
+/// nodes follow the tenant.
+#[evento::aggregate(name = "timada-reviews/ReviewRequest")]
+pub enum ReviewRequest {
+    RequestMailed {
+        order_id: String,
+        email: String,
+        mailed_by: String,
+    },
+}
+
+/// A mailed link that opens an order's review forms without the browser that
+/// placed it. Its id is [`review_link_id`](crate::review_link_id) of the
+/// token: the store never holds the token itself.
+#[evento::aggregate(name = "timada-reviews/ReviewLink")]
+pub enum ReviewLink {
+    LinkIssued {
+        order_id: String,
+        /// Unix seconds.
+        expires_at: u64,
+        issued_by: String,
+    },
+}

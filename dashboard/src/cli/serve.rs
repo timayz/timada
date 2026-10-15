@@ -65,7 +65,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             Arc::new(crate::vies::ViesClient::new(
                 config.invoicing.vies_url.clone(),
             )),
-            order_mail,
+            order_mail.clone(),
         ),
     );
     let connections = StoreConnections::new();
@@ -122,6 +122,16 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // A restarted node brings its tenant copies up to date in the background
     // instead of waiting for something to open each one.
     let catch_up = tenants.start_catch_up(CatchUp::default());
+    // A few days after an order left, its buyer is asked for a review.
+    let review_requests = crate::review_requests::ReviewRequests::new(
+        read_pool.clone(),
+        executor.clone(),
+        tenants.clone(),
+        order_mail,
+    )
+    .start(std::time::Duration::from_secs(
+        config.reviews.request_check_secs.max(1),
+    ));
 
     let router = app::router(Services {
         executor,
@@ -155,6 +165,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     if let Some(catch_up) = catch_up {
         catch_up.abort();
     }
+    review_requests.abort();
     tenants.shutdown().await;
     for subscription in &read_models {
         subscription.stop();

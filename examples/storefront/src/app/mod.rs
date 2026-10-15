@@ -10,6 +10,7 @@ pub mod checkout;
 pub mod menu;
 pub mod orders;
 pub mod p;
+pub mod reviews;
 
 use timada_storefront::{
     CategoryNode, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, menu, price,

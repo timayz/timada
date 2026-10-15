@@ -8,6 +8,14 @@ pub const MAX_BODY_LEN: usize = 2000;
 pub const MAX_PHOTOS: usize = 3;
 pub const MAX_REASON_LEN: usize = 300;
 
+/// How many days after fulfilment a shop mails its buyers, until the
+/// merchant says otherwise.
+pub const DEFAULT_REQUEST_DELAY_DAYS: u8 = 7;
+/// The longest a merchant may wait before asking.
+pub const MAX_REQUEST_DELAY_DAYS: u8 = 60;
+/// How long a mailed review link opens its order, in seconds.
+pub const REVIEW_LINK_TTL_SECS: u64 = 60 * 24 * 60 * 60;
+
 /// A photo of a review, as the upload that took it found it. Frozen in
 /// `events.lock`: the fields never change. The file is
 /// `<tenant>/<id>.<ext>` wherever the shop keeps its pictures.
@@ -72,6 +80,33 @@ impl fmt::Display for ReviewStatus {
 /// and order.
 pub fn review_id(order_id: &str, product_id: &str) -> String {
     evento::hash_ids(vec!["review", order_id, product_id])
+}
+
+/// Aggregate id of the shop's review-request policy: one per tenant store.
+pub fn review_requests_id() -> String {
+    evento::hash_ids(vec!["review-requests"])
+}
+
+/// Aggregate id of the review request mailed for an order.
+pub fn review_request_id(order_id: &str) -> String {
+    evento::hash_ids(vec!["review-request", order_id])
+}
+
+/// Aggregate id of the link a token opens. Anyone reading the store sees
+/// only this, never the token.
+pub fn review_link_id(token: &str) -> String {
+    evento::hash_ids(vec!["review-link", token])
+}
+
+/// A fresh link token: 32 random bytes as URL-safe base64 without padding
+/// (43 characters).
+pub(crate) fn generate_token() -> String {
+    use base64::Engine;
+    use rand::RngCore;
+
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// How a review is signed, from the name an order was shipped to: the first

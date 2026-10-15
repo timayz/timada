@@ -126,6 +126,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .load_order_confirmation(&order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    let review_request = crate::app::t::slug::reviews::reviews(&access)?
+        .load_review_request(&order.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let lines: Vec<LineRow> = order
@@ -209,6 +213,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dt class="text-neutral-500">"Confirmation"</dt>
                     <dd data-order-confirmation=(if confirmation.is_some() { "mailed" } else { "none" })>
                         if let Some(mailed) = &confirmation {
+                            "Mailed " <time datetime=(mailed.mailed_at)>(format_time(mailed.mailed_at))</time>
+                        } else {
+                            "Not mailed"
+                        }
+                    </dd>
+                    <dt class="text-neutral-500">"Review request"</dt>
+                    <dd data-order-review-request=(if review_request.is_some() { "mailed" } else { "none" })>
+                        if let Some(mailed) = &review_request {
                             "Mailed " <time datetime=(mailed.mailed_at)>(format_time(mailed.mailed_at))</time>
                         } else {
                             "Not mailed"

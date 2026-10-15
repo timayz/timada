@@ -143,6 +143,33 @@ pub async fn orders_of_email(
     .await
 }
 
+/// An order that left, across every tenant this node follows.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct FulfilledOrder {
+    pub tenant_id: String,
+    pub id: String,
+    /// Unix seconds.
+    pub fulfilled_at: i64,
+}
+
+/// The orders of every tenant fulfilled in `[from, to)` (Unix seconds),
+/// grouped by tenant.
+pub async fn fulfilled_between(
+    pool: &SqlitePool,
+    from: i64,
+    to: i64,
+) -> sqlx::Result<Vec<FulfilledOrder>> {
+    sqlx::query_as(
+        "SELECT tenant_id, id, fulfilled_at FROM orders_orders
+         WHERE fulfilled_at >= ?1 AND fulfilled_at < ?2 AND status = 'fulfilled'
+         ORDER BY tenant_id, fulfilled_at, id",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+}
+
 /// One order of a tenant, by id.
 pub async fn order_by_id(
     pool: &SqlitePool,
