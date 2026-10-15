@@ -248,6 +248,7 @@ fn checkout(expected_total_cents: Option<u64>) -> Checkout {
         note: None,
         expected_total_cents,
         vat_number: None,
+        billing: None,
     }
 }
 
@@ -947,5 +948,53 @@ async fn invoices_follow_where_the_goods_go() {
     assert_eq!(invoice.regime, timada_invoicing::tax::Regime::Export);
     assert_eq!(invoice.total_cents, 2500);
     assert_eq!(invoice.total_excl_vat_cents, 2500);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn an_invoice_is_addressed_where_the_order_is_billed() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let invoicing = timada_invoicing::Command(h.store(&acme).await);
+
+    // Billed in Paris, shipped to New York: addressed to Paris, taxed as
+    // an export, since VAT follows the goods.
+    let order_id = h
+        .buy(
+            &acme,
+            Checkout {
+                shipping: ShippingAddress {
+                    line1: "350 Fifth Avenue".into(),
+                    postal_code: "10118".into(),
+                    city: "New York".into(),
+                    country: "US".into(),
+                    ..checkout(None).shipping
+                },
+                billing: Some(ShippingAddress {
+                    name: "Ada Corp".into(),
+                    ..checkout(None).shipping
+                }),
+                ..checkout(None)
+            },
+        )
+        .await;
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(invoice.buyer.name, "Ada Corp");
+    assert_eq!(invoice.buyer.city, "Paris");
+    let delivery = invoice
+        .delivery
+        .expect("an invoice says where the goods went");
+    assert_eq!(delivery.city, "New York");
+    assert_eq!(delivery.name, "Ada");
+    assert_eq!(invoice.regime, timada_invoicing::tax::Regime::Export);
+
+    // Without a billing address, both are the shipping address.
+    let order_id = h.buy(&acme, checkout(None)).await;
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(invoice.buyer.name, "Ada");
+    assert_eq!(invoice.delivery.as_ref(), Some(&invoice.buyer));
     h.finish().await;
 }

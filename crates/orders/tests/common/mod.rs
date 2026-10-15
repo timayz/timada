@@ -137,6 +137,20 @@ pub fn checkout() -> Checkout {
         note: None,
         expected_total_cents: None,
         vat_number: None,
+        billing: None,
+    }
+}
+
+/// A company's address elsewhere than the parcel, as typed.
+pub fn billing() -> ShippingAddress {
+    ShippingAddress {
+        name: " Analytical Engines GmbH ".into(),
+        line1: "Unter den Linden 1".into(),
+        line2: Some(" ".into()),
+        postal_code: "10117".into(),
+        city: "Berlin".into(),
+        country: "de".into(),
+        phone: Some("+49 30 123456".into()),
     }
 }
 
