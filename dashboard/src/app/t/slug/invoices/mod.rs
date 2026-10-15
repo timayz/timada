@@ -4,7 +4,6 @@
 //! downloads as the PDF it was issued as.
 
 pub mod document_id;
-pub mod oss;
 
 use timada_invoicing::{count_documents, documents_of_tenant};
 use timada_tenancy::PERMISSION_ORDERS_READ;
@@ -97,8 +96,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <p class="mb-4 text-sm text-neutral-600">
-                    "Every paid order gets an invoice, every refund a credit note, numbered in one series per year and kind. They never change once issued. "
-                    <a class="underline" href=(href!(oss::oss, Slug(slug.clone())))>"One-Stop Shop return"</a>
+                    "Every paid order gets an invoice, every refund a credit note, numbered in one series per year and kind. They never change once issued. The company's One-Stop Shop return is on its page."
                 </p>
                 <table class="w-full text-left text-sm">
                     <thead>

@@ -46,3 +46,9 @@ pub async fn create_tenant(cmd: &Command<evento::Sqlite>, name: &str, owner: &st
 pub fn new_id() -> String {
     ulid::Ulid::generate().to_string()
 }
+
+/// The gateway and the read-model database behind it.
+pub async fn command_with_pool() -> (Command<evento::Sqlite>, sqlx::SqlitePool) {
+    let (executor, pool) = executor_with_pool().await;
+    (Command(executor), pool)
+}

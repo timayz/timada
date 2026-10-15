@@ -6,12 +6,14 @@
 //! stream, and [`tenants`] / [`invitations`] / [`api_keys`] query them.
 
 mod api_keys;
+mod companies;
 mod invitations;
 mod migrations;
 mod read_model;
 mod tenants;
 
 pub use api_keys::*;
+pub use companies::*;
 pub use invitations::*;
 pub use migrations::*;
 pub use read_model::*;

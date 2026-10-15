@@ -38,6 +38,8 @@ pub enum Book {
         /// [`TEMPLATE_VERSION`](crate::TEMPLATE_VERSION) when issued.
         template: u16,
         issued_by: String,
+        /// The company that issued it (the seller), whichever tenant sold.
+        company_id: String,
         /// How it is taxed ([`Regime`](crate::tax::Regime) as text).
         regime: String,
         /// The country whose VAT applies, or where the goods went.
@@ -78,6 +80,7 @@ pub enum Book {
         template: u16,
         issued_by: String,
         /// Copied from the invoice it corrects.
+        company_id: String,
         regime: String,
         tax_country: String,
         buyer_vat_number: Option<String>,
@@ -91,10 +94,36 @@ pub enum Book {
 pub enum Document {
     /// Taken first, before a number: the series the document goes in, so
     /// that a retry looks there, and the one writer that goes ahead.
-    Reserved { series: String },
+    Reserved {
+        series: String,
+        /// The calendar year of the series.
+        year: u16,
+    },
     Recorded {
         book_id: String,
         /// `F2026-000042`.
         label: String,
+    },
+}
+
+/// A company's EU distance sales of one year (sales to consumers in other EU
+/// countries), one stream per company, year and chunk, id =
+/// [`ledger_id`](crate::ledger_id). It lives in the platform store, next to
+/// the company, so every tenant of the company counts against one total.
+#[evento::aggregate(name = "timada-invoicing/DistanceLedger")]
+pub enum DistanceLedger {
+    /// One sale counted, with the decision it got, so a retry gets the same.
+    Counted {
+        /// The invoice's index stream (in its tenant's store).
+        document_id: String,
+        tenant_id: String,
+        /// [`Regime`](crate::tax::Regime) as text.
+        regime: String,
+        tax_country: String,
+        /// The rate of each line, in basis points.
+        rates: Vec<Option<u32>>,
+        /// The year's total excluding VAT, this sale included.
+        sales_cents: u64,
+        passed: bool,
     },
 }

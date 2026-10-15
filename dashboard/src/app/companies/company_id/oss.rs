@@ -1,9 +1,9 @@
-//! `/t/{slug}/invoices/oss`: what to declare on the quarterly One-Stop Shop
-//! return: the VAT of other EU countries charged to their consumers, by
-//! country and rate, credit notes deducted. From the shared read model.
+//! `/companies/{company_id}/oss`: what the company declares on its quarterly
+//! One-Stop Shop return: the VAT of other EU countries charged to their
+//! consumers by every tenant of it, by country and rate, credit notes
+//! deducted. From the shared read model.
 
 use timada_invoicing::{format_amount_fr, format_rate_fr, oss_return, quarter_bounds, quarter_of};
-use timada_tenancy::PERMISSION_ORDERS_READ;
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -11,7 +11,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use super::{CompanyId, require_owned};
 use crate::db::ReadPool;
 use crate::ui::document;
 
@@ -35,10 +35,7 @@ fn step(quarter: &str, forward: bool) -> String {
 
 #[page]
 pub async fn oss(cx: &Cx) -> Result<impl View> {
-    let access = require_tenant(cx).await?;
-    access
-        .require_permission(cx, PERMISSION_ORDERS_READ)
-        .await?;
+    let (company, _) = require_owned(cx).await?;
     let query = query_params::<OssQuery>(cx)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -49,25 +46,25 @@ pub async fn oss(cx: &Cx) -> Result<impl View> {
         .filter(|quarter| quarter_bounds(quarter).is_some())
         .unwrap_or_else(|| quarter_of(now));
     let (from, to) = quarter_bounds(&quarter).unwrap_or_default();
-    let nav = TenantNav::of(cx, &access).await?;
-    let TenantAccess { tenant, .. } = access;
-    let rows = oss_return(app_context::<ReadPool>(cx), &tenant.id, from, to).await?;
-    let slug = tenant.slug.clone();
+    let rows = oss_return(app_context::<ReadPool>(cx), &company.id, from, to).await?;
+    let id = company.id.clone();
     let link = |quarter: String| {
-        href!(oss, Slug(slug.clone()))
+        href!(oss, CompanyId(id.clone()))
             .query(OssLink { quarter })
             .resolve(cx)
     };
     let previous = link(step(&quarter, false));
     let next = link(step(&quarter, true));
-    let title = format!("One-Stop Shop {quarter} · {}", tenant.name);
+    let title = format!("One-Stop Shop {quarter} · {}", company.name());
 
     Ok(view! {
         document(
             title: &title,
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"One-Stop Shop return"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "")
+                <nav class="flex items-center gap-4 text-sm">
+                    <a class="underline" href=(href!(super::index, CompanyId(company.id.clone())))>(company.name())</a>
+                </nav>
             </header>
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <p class="mb-4 flex items-center gap-4 text-sm">
@@ -76,7 +73,7 @@ pub async fn oss(cx: &Cx) -> Result<impl View> {
                     <a class="underline" href=(next)>"Next quarter"</a>
                 </p>
                 <p class="mb-4 text-sm text-neutral-600">
-                    "Sales to consumers in other EU countries taxed at their rates, as invoiced in the quarter (UTC), credit notes deducted. Declare them on the OSS return of impots.gouv.fr."
+                    "Sales of every tenant of the company to consumers in other EU countries, taxed at their rates, as invoiced in the quarter (UTC), credit notes deducted. Declare them on the OSS return of impots.gouv.fr."
                 </p>
                 <table class="w-full text-left text-sm">
                     <thead>

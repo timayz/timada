@@ -13,10 +13,11 @@ use sqlx::SqlitePool;
 
 use super::api_keys::join_scopes;
 use crate::aggregator::api_key::ApiKey;
+use crate::aggregator::company::Company;
 use crate::aggregator::{Invitation, Tenant};
 use crate::command::{
-    ApiKeyState, InvitationState, TenantState, api_key_projection, invitation_projection,
-    tenant_projection,
+    ApiKeyState, CompanyState, InvitationState, TenantState, api_key_projection,
+    company_projection, invitation_projection, tenant_projection,
 };
 use crate::value_object::group_of;
 
@@ -32,6 +33,7 @@ pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBui
         .handler(on_tenant_event())
         .handler(on_invitation_event())
         .handler(on_api_key_event())
+        .handler(on_company_event())
         .any_routing_key()
 }
 
@@ -49,6 +51,50 @@ async fn on_tenant_event<E: Executor>(
         return Ok(());
     };
     upsert_tenant(&pool, &tenant).await
+}
+
+#[evento::subscription_all]
+async fn on_company_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<Company>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let Some(company) = company_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_company(&pool, &company).await
+}
+
+async fn upsert_company(pool: &SqlitePool, company: &CompanyState) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO tenancy_companies (id, siren, legal_name, created_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (id) DO UPDATE SET legal_name = excluded.legal_name",
+    )
+    .bind(&company.id)
+    .bind(&company.siren)
+    .bind(company.name())
+    .bind(company.created_at as i64)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM tenancy_company_owners WHERE company_id = ?1")
+        .bind(&company.id)
+        .execute(&mut *tx)
+        .await?;
+    for owner in &company.owners {
+        sqlx::query("INSERT INTO tenancy_company_owners (company_id, user_id) VALUES (?1, ?2)")
+            .bind(&company.id)
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 async fn upsert_tenant(pool: &SqlitePool, tenant: &TenantState) -> anyhow::Result<()> {
@@ -78,6 +124,17 @@ async fn upsert_tenant(pool: &SqlitePool, tenant: &TenantState) -> anyhow::Resul
     .bind(tenant.members.len() as i64)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE tenancy_tenants SET company_id = ?2, series_code = ?3 WHERE id = ?1")
+        .bind(&tenant.id)
+        .bind(tenant.company.as_ref().map(|link| link.company_id.as_str()))
+        .bind(
+            tenant
+                .company
+                .as_ref()
+                .map(|link| link.series_code.as_str()),
+        )
+        .execute(&mut *tx)
+        .await?;
     // A new row is one more tenant to the administrator's list; a repeated
     // delivery finds the row there and counts nothing.
     if was.is_none() {

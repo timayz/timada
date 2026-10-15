@@ -260,31 +260,53 @@ impl Harness {
         tenant
     }
 
-    /// Says who the merchant is, which a sale needs.
+    /// Makes the tenant sell as Acme SAS (registered on first use), which a
+    /// sale needs.
     async fn set_legal(&self, tenant: &TenantState) {
-        self.platform
-            .set_legal_identity(
-                "alice",
-                &tenant.id,
-                LegalIdentity {
-                    legal_name: "Acme SAS".into(),
-                    legal_form: "SAS".into(),
-                    siret: "12002701600092".into(),
-                    line1: "1 rue de la Paix".into(),
-                    postal_code: "75002".into(),
-                    city: "Paris".into(),
-                    country: "FR".into(),
-                    contact_email: "shop@example.org".into(),
-                    vat_number: Some("FR85120027016".into()),
-                    oss_registered: false,
-                    ..Default::default()
-                },
-            )
+        let identity = LegalIdentity {
+            legal_name: "Acme SAS".into(),
+            legal_form: "SAS".into(),
+            siret: "12002701600092".into(),
+            line1: "1 rue de la Paix".into(),
+            postal_code: "75002".into(),
+            city: "Paris".into(),
+            country: "FR".into(),
+            contact_email: "shop@example.org".into(),
+            vat_number: Some("FR85120027016".into()),
+            oss_registered: false,
+            ..Default::default()
+        };
+        let company_id = match self.platform.create_company("alice", identity).await {
+            Ok(company) => company.id,
+            Err(_) => {
+                self.platform
+                    .load_company_siren("120027016")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .company_id
+            }
+        };
+        if self
+            .platform
+            .link_tenant("alice", &company_id, &tenant.id, None)
             .await
-            .unwrap();
+            .is_err()
+        {
+            let code: String = tenant
+                .slug
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .take(10)
+                .collect();
+            self.platform
+                .link_tenant("alice", &company_id, &tenant.id, Some(&code))
+                .await
+                .unwrap();
+        }
     }
 
-    /// Sets the legal identity too, unless it is there already.
+    /// Links the tenant to its company too.
     async fn connect_stripe(&self, tenant: &TenantState) -> TenantState {
         self.set_legal(tenant).await;
         self.platform

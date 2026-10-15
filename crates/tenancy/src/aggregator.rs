@@ -64,35 +64,17 @@ pub enum Tenant {
     PaymentsRemoved {
         removed_by: String,
     },
-    /// Who the merchant is in law, as its invoices must say: replaced as a
-    /// whole on every change. An invoice copies it when issued, so a change
-    /// never rewrites one already issued.
-    LegalIdentitySet {
-        /// The registered name (raison sociale), or the trader's own name.
-        legal_name: String,
-        /// `SAS`, `SARL`, `EI`…
-        legal_form: String,
-        /// In euro cents; `None` for a form without one (sole trader).
-        share_capital_cents: Option<u64>,
-        /// 14 digits; the first nine are the SIREN.
-        siret: String,
-        /// The city of the trade register (RCS) it is entered in, if any.
-        rcs_city: Option<String>,
-        line1: String,
-        line2: Option<String>,
-        postal_code: String,
-        city: String,
-        /// ISO 3166-1 alpha-2, uppercase.
-        country: String,
-        contact_email: String,
-        /// The intra-community VAT number; `None` under the VAT exemption
-        /// for small businesses (franchise en base, art. 293 B du CGI).
-        vat_number: Option<String>,
-        /// Registered for the EU One-Stop Shop: sales to consumers in other
-        /// EU countries carry their VAT from the first euro, not only past
-        /// the yearly threshold. Needs a `vat_number`.
-        oss_registered: bool,
-        set_by: String,
+    /// The tenant sells as this company ([`company`]): its invoices name
+    /// the company and are numbered in the company's series `series_code`
+    /// (`""` is the plain series, `F2026-…`; `PRO` gives `PRO-F2026-…`).
+    CompanyLinked {
+        company_id: String,
+        series_code: String,
+        linked_by: String,
+    },
+    /// The tenant stops selling until linked again.
+    CompanyUnlinked {
+        unlinked_by: String,
     },
 }
 
@@ -165,5 +147,74 @@ pub mod api_key {
             /// Unix seconds.
             scoped_at: u64,
         },
+    }
+}
+
+/// A company: who sells in law, behind one or more tenants. Its own owners
+/// manage it. Its id is a ULID; its SIREN is unique across the platform
+/// ([`company_siren`]).
+pub mod company {
+    #[evento::aggregate(name = "timada-tenancy/Company")]
+    pub enum Company {
+        Created {
+            /// The nine digits every SIRET of the company starts with.
+            siren: String,
+            created_by: String,
+        },
+        /// What its invoices must say about it, replaced as a whole. An
+        /// invoice copies it when issued, so a change never rewrites one.
+        IdentitySet {
+            /// The registered name (raison sociale), or the trader's own name.
+            legal_name: String,
+            /// `SAS`, `SARL`, `EI`…
+            legal_form: String,
+            /// In euro cents; `None` for a form without one.
+            share_capital_cents: Option<u64>,
+            /// 14 digits, starting with the SIREN.
+            siret: String,
+            /// The city of the trade register (RCS) it is entered in, if any.
+            rcs_city: Option<String>,
+            line1: String,
+            line2: Option<String>,
+            postal_code: String,
+            city: String,
+            /// ISO 3166-1 alpha-2, uppercase.
+            country: String,
+            contact_email: String,
+            /// `None` under the VAT exemption for small businesses.
+            vat_number: Option<String>,
+            /// Registered for the EU One-Stop Shop. Needs a `vat_number`.
+            oss_registered: bool,
+            set_by: String,
+        },
+        OwnerAdded {
+            user_id: String,
+            added_by: String,
+        },
+        OwnerRemoved {
+            user_id: String,
+            removed_by: String,
+        },
+    }
+}
+
+/// Index: `SIREN → company`, one stream per SIREN, id =
+/// [`company_siren_id`](crate::company_siren_id). A platform administrator
+/// releases a SIREN someone claimed who is not that company.
+pub mod company_siren {
+    #[evento::aggregate(name = "timada-tenancy/CompanySiren")]
+    pub enum CompanySiren {
+        Claimed { company_id: String },
+        Released { released_by: String },
+    }
+}
+
+/// Index: `(company, series code) → tenant`, id =
+/// [`company_series_id`](crate::company_series_id). Never released: a code
+/// that numbered invoices never numbers another tenant's.
+pub mod company_series {
+    #[evento::aggregate(name = "timada-tenancy/CompanySeries")]
+    pub enum CompanySeries {
+        Claimed { tenant_id: String },
     }
 }

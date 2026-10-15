@@ -1,14 +1,12 @@
-//! `/t/{slug}/invoicing`: who the merchant is in law, for members with
-//! `tenant:manage`. Every invoice copies it when issued, so it must be set
-//! before shoppers can pay: the legal name and form, the SIRET, the address,
-//! and either a VAT number with the default rate or the exemption for small
-//! businesses, and whether it is registered for the EU One-Stop Shop.
+//! `/t/{slug}/invoicing`: the company the tenant sells as, for members with
+//! `tenant:manage`. Its invoices name that company and count with its other
+//! tenants' towards its VAT obligations, numbered in a series of the
+//! tenant's own (its code). Shoppers cannot pay until it is linked.
 
-pub mod save;
+pub mod link;
+pub mod unlink;
 
-use timada_invoicing::tax::EU_DISTANCE_THRESHOLD_CENTS;
-use timada_invoicing::{civil_date, eu_distance_sales, format_amount_fr};
-use timada_tenancy::{LegalIdentity, PERMISSION_TENANT_MANAGE};
+use timada_tenancy::{PERMISSION_TENANT_MANAGE, companies_of_user};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -18,6 +16,8 @@ use topcoat::{
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::app::auth::Flash;
+use crate::app::companies::{company_id, new::new_company_url};
+use crate::app::tenants::tenancy;
 use crate::db::ReadPool;
 use crate::ui::{document, notice};
 
@@ -33,15 +33,6 @@ pub fn invoicing_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&
         .resolve(cx)
 }
 
-/// `1000050` cents as `10000.50`, what the form shows back.
-fn format_capital(cents: u64) -> String {
-    if cents.is_multiple_of(100) {
-        (cents / 100).to_string()
-    } else {
-        format!("{}.{:02}", cents / 100, cents % 100)
-    }
-}
-
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
@@ -50,28 +41,30 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let query = query_params::<InvoicingQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
+    let user_id = access.user_id.clone();
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
-    let set = tenant.legal.is_some();
-    let legal = tenant.legal.clone().unwrap_or_else(|| LegalIdentity {
-        country: "FR".to_owned(),
-        ..LegalIdentity::default()
-    });
-    let capital = legal
-        .share_capital_cents
-        .map(format_capital)
+    let company = match &tenant.company {
+        Some(link) => tenancy(cx)
+            .load_company(&link.company_id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?,
+        None => None,
+    };
+    let code = tenant
+        .company
+        .as_ref()
+        .map(|link| link.series_code.clone())
         .unwrap_or_default();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs());
-    let year = civil_date(now).0;
-    let (distance_cents, distance_passed) =
-        eu_distance_sales(app_context::<ReadPool>(cx), &tenant.id, year)
-            .await?
-            .unwrap_or_default();
-    let distance = format_amount_fr(distance_cents.max(0) as u64, "EUR");
-    let threshold = format_amount_fr(EU_DISTANCE_THRESHOLD_CENTS, "EUR");
-    let exempt_past_threshold = distance_passed && set && !legal.is_vat_registered();
+    let owns = company.as_ref().is_some_and(|c| c.is_owner(&user_id));
+    let mine = companies_of_user(app_context::<ReadPool>(cx), &user_id).await?;
+    let create = new_company_url(cx, None, Some(&slug));
+    let year = timada_invoicing::civil_date(crate::app::companies::company_id::now()).0;
+    let first_number = if code.is_empty() {
+        format!("F{year}-000001…")
+    } else {
+        format!("{code}-F{year}-000001…")
+    };
     let title = format!("Invoicing · {}", tenant.name);
 
     Ok(view! {
@@ -83,87 +76,57 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            if !set {
+            if let Some(company) = &company {
+                <section class="mb-6 rounded border border-neutral-200 bg-white p-4 text-sm" data-invoicing="linked">
+                    <h2 class="mb-2 text-lg font-medium">"Sells as"</h2>
+                    <dl class="grid grid-cols-[10rem_1fr] gap-y-1">
+                        <dt class="text-neutral-500">"Company"</dt>
+                        <dd data-linked-company=(&company.siren)>
+                            if owns {
+                                <a class="underline" href=(href!(company_id::index, company_id::CompanyId(company.id.clone())))>(company.name())</a>
+                            } else {
+                                (company.name())
+                            }
+                        </dd>
+                        <dt class="text-neutral-500">"SIREN"</dt><dd class="font-mono">(&company.siren)</dd>
+                        <dt class="text-neutral-500">"Invoice numbers"</dt>
+                        <dd class="font-mono" data-series=(&code)>
+                            (&first_number)
+                        </dd>
+                    </dl>
+                    <form method="post" action=(href!(unlink::unlink, Slug(slug.clone()))) class="mt-3">
+                        <button class="rounded border border-red-300 px-3 py-1 text-red-800 hover:bg-red-50">"Stop selling as this company"</button>
+                    </form>
+                </section>
+            } else {
                 <p role="alert" data-invoicing="none" class="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                    "Not set up: shoppers cannot pay until the invoices can name you."
+                    "Not set up: shoppers cannot pay until the tenant sells as a company its invoices can name."
                 </p>
             }
 
-            <section class="mb-6 rounded border border-neutral-200 bg-white p-4 text-sm" data-eu-distance=(distance_cents)>
-                <h2 class="mb-1 text-lg font-medium">"Sales to EU consumers abroad, " (year)</h2>
-                <p>
-                    <strong>(&distance)</strong> " excluding VAT, of the " (&threshold) " a year above which their countries' VAT applies."
-                    if distance_passed { " " <strong data-eu-threshold-passed="">"Threshold passed: their VAT applies for the rest of the year and all of next."</strong> }
-                </p>
-                if exempt_past_threshold {
-                    <p role="alert" class="mt-2 rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
-                        "Past the threshold, the exemption no longer covers these sales: register for VAT and the One-Stop Shop, then enter the VAT number below."
-                    </p>
+            <section class="rounded border border-neutral-200 bg-white p-4 text-sm">
+                <h2 class="mb-2 text-lg font-medium">
+                    if company.is_some() { "Sell as another company, or under another code" } else { "Sell as a company" }
+                </h2>
+                if mine.is_empty() {
+                    <p class="mb-2 text-neutral-600">"You own no company yet."</p>
+                } else {
+                    <form method="post" action=(href!(link::link, Slug(slug.clone()))) class="mb-4 space-y-3">
+                        <label class="block" for="link-company">"Company"</label>
+                        <select id="link-company" name="company_id" class="rounded border border-neutral-300 px-3 py-2">
+                            for row in &mine {
+                                <option value=(&row.id)>(&row.legal_name) " (" (&row.siren) ")"</option>
+                            }
+                        </select>
+                        <label class="block" for="link-code">"Series code (blank for the company's first tenant)"</label>
+                        <input id="link-code" name="series_code" maxlength="10" placeholder="PRO" value=(&code)
+                            class="w-40 rounded border border-neutral-300 px-3 py-2 font-mono uppercase">
+                        <p class="text-xs text-neutral-500">"Each tenant of a company numbers its invoices in its own series: PRO gives PRO-F2026-000001. A code stays the tenant's for good."</p>
+                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Link"</button>
+                    </form>
                 }
+                <a class="underline" href=(&create)>"Register a new company"</a>
             </section>
-
-            <form method="post" action=(href!(save::save, Slug(slug.clone()))) class="space-y-6">
-                <fieldset class="space-y-3 rounded border border-neutral-200 bg-white p-4">
-                    <legend class="px-1 text-lg font-medium">"Company"</legend>
-                    <label class="block text-sm" for="legal-name">"Legal name"</label>
-                    <input id="legal-name" name="legal_name" required="" maxlength="120" value=(&legal.legal_name)
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                    <label class="block text-sm" for="legal-form">"Legal form (SAS, SARL, EI…)"</label>
-                    <input id="legal-form" name="legal_form" required="" maxlength="40" value=(&legal.legal_form)
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                    <label class="block text-sm" for="legal-capital">"Share capital in euros (blank for none)"</label>
-                    <input id="legal-capital" name="share_capital" inputmode="decimal" value=(&capital)
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                    <label class="block text-sm" for="legal-siret">"SIRET"</label>
-                    <input id="legal-siret" name="siret" required="" inputmode="numeric" value=(&legal.siret)
-                        class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                    <label class="block text-sm" for="legal-rcs">"RCS city (blank if not registered)"</label>
-                    <input id="legal-rcs" name="rcs_city" maxlength="100" value=(legal.rcs_city.as_deref().unwrap_or(""))
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                    <label class="block text-sm" for="legal-email">"Contact e-mail"</label>
-                    <input id="legal-email" name="contact_email" type="email" required="" value=(&legal.contact_email)
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                </fieldset>
-
-                <fieldset class="space-y-3 rounded border border-neutral-200 bg-white p-4">
-                    <legend class="px-1 text-lg font-medium">"Registered address"</legend>
-                    <label class="block text-sm" for="legal-line1">"Address"</label>
-                    <input id="legal-line1" name="line1" required="" maxlength="200" value=(&legal.line1)
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                    <label class="block text-sm" for="legal-line2">"Address, line 2"</label>
-                    <input id="legal-line2" name="line2" maxlength="200" value=(legal.line2.as_deref().unwrap_or(""))
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                    <label class="block text-sm" for="legal-postal">"Postal code"</label>
-                    <input id="legal-postal" name="postal_code" required="" maxlength="20" value=(&legal.postal_code)
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                    <label class="block text-sm" for="legal-city">"City"</label>
-                    <input id="legal-city" name="city" required="" maxlength="100" value=(&legal.city)
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                    <label class="block text-sm" for="legal-country">"Country (two letters)"</label>
-                    <input id="legal-country" name="country" required="" maxlength="2" value=(&legal.country)
-                        class="w-24 rounded border border-neutral-300 px-3 py-2 uppercase">
-                </fieldset>
-
-                <fieldset class="space-y-3 rounded border border-neutral-200 bg-white p-4">
-                    <legend class="px-1 text-lg font-medium">"VAT"</legend>
-                    <p class="text-sm text-neutral-600">
-                        "Prices in the catalog include VAT. Without a VAT number, invoices say "
-                        <q>"TVA non applicable, art. 293 B du CGI"</q>"."
-                    </p>
-                    <label class="block text-sm" for="legal-vat">"Intra-community VAT number (blank under the exemption)"</label>
-                    <input id="legal-vat" name="vat_number" maxlength="40" placeholder="FR00123456789" value=(legal.vat_number.as_deref().unwrap_or(""))
-                        class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                    <label class="flex items-center gap-2 text-sm">
-                        <input type="checkbox" name="oss_registered" value="on" checked=(legal.oss_registered)>
-                        "Registered for the EU One-Stop Shop (OSS): charge other EU countries' VAT to their consumers from the first euro"
-                    </label>
-                    <p class="text-sm text-neutral-600">
-                        "Without it, other EU countries' VAT applies once your sales to their consumers pass €10,000 in the year."
-                    </p>
-                </fieldset>
-
-                <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save"</button>
-            </form>
         )
     })
 }

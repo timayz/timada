@@ -14,6 +14,10 @@
 //!    never takes a second one.
 //! 3. *Record*: the index points at the book.
 
+mod ledger;
+
+pub use ledger::*;
+
 use std::collections::BTreeMap;
 use std::ops::Deref;
 
@@ -21,13 +25,11 @@ use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Ev
 
 use crate::aggregator::{CreditNoteIssued, InvoiceIssued, Recorded, Reserved};
 use crate::error::InvoicingError;
-use crate::tax::{
-    Destination, DistanceSales, EU_DISTANCE_THRESHOLD_CENTS, Regime, TaxProfile, decide,
-};
+use crate::tax::{Destination, DistanceSales, Regime, TaxProfile, decide, is_distance_sale};
 use crate::value_object::{
     Address, BOOK_CHUNK, CREDIT_NOTE_PREFIX, INVOICE_PREFIX, InvoiceLine, Seller, TEMPLATE_VERSION,
     VatSubtotal, book_id, credit_note_id, document_label, invoice_id, lines_breakdown, prorate,
-    series_of,
+    series_code, series_of, year_of,
 };
 
 /// How often a write lost to another writer is tried again.
@@ -75,6 +77,8 @@ impl DocumentKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IssuedDocument {
     pub document_id: String,
+    /// The company that issued it.
+    pub company_id: String,
     pub kind: DocumentKind,
     pub series: String,
     pub number: u64,
@@ -129,8 +133,6 @@ pub struct BookState {
     pub last_number: u64,
     /// Its documents, by index stream.
     pub documents: BTreeMap<String, IssuedDocument>,
-    /// The year's EU distance sales as of its last invoice.
-    pub distance: DistanceSales,
 }
 
 pub fn book_projection<E: Executor>() -> Projection<E, BookState> {
@@ -152,6 +154,7 @@ async fn on_invoice_issued(
         data.document_id.to_owned(),
         IssuedDocument {
             document_id: data.document_id.to_owned(),
+            company_id: data.company_id.to_owned(),
             kind: DocumentKind::Invoice,
             series: data.series.to_owned(),
             number: data.number,
@@ -181,10 +184,6 @@ async fn on_invoice_issued(
             ..IssuedDocument::default()
         },
     );
-    book.distance = DistanceSales {
-        sales_cents: data.eu_distance_sales_cents,
-        passed: data.eu_threshold_passed,
-    };
     Ok(())
 }
 
@@ -200,6 +199,7 @@ async fn on_credit_note_issued(
         data.document_id.to_owned(),
         IssuedDocument {
             document_id: data.document_id.to_owned(),
+            company_id: data.company_id.to_owned(),
             kind: DocumentKind::CreditNote,
             series: data.series.to_owned(),
             number: data.number,
@@ -239,6 +239,8 @@ pub struct DocumentState {
     pub id: String,
     /// The series it was reserved in.
     pub series: String,
+    /// The calendar year of that series.
+    pub year: u16,
     /// The book holding it, once recorded.
     pub book_id: Option<String>,
     pub label: Option<String>,
@@ -255,6 +257,7 @@ pub fn document_projection<E: Executor>() -> Projection<E, DocumentState> {
 async fn on_reserved(event: Event<Reserved>, document: &mut DocumentState) -> anyhow::Result<()> {
     document.id = event.aggregate_id.to_owned();
     document.series = event.data.series.to_owned();
+    document.year = event.data.year;
     Ok(())
 }
 
@@ -292,6 +295,11 @@ impl NewInvoiceLine {
 /// crate decides its VAT (see [`crate::tax`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NewInvoice {
+    /// The company selling, and the tenant of it that sold.
+    pub company_id: String,
+    pub tenant_id: String,
+    /// The tenant's series code in the company (`""` for the plain series).
+    pub series_code: String,
     pub order_id: String,
     pub order_reference: String,
     pub paid_at: u64,
@@ -333,10 +341,13 @@ struct OpenBook {
 
 impl<E: Executor> Command<E> {
     /// Issues the invoice of a paid order at `now` (Unix seconds); an order
-    /// already invoiced returns its invoice unchanged.
-    pub async fn issue_invoice(
+    /// already invoiced returns its invoice unchanged. An EU distance sale
+    /// is decided against its company's yearly total, kept in `ledger`
+    /// (the platform store).
+    pub async fn issue_invoice<P: Executor>(
         &self,
         invoice: NewInvoice,
+        ledger: &Ledger<P>,
         now: u64,
     ) -> Result<IssuedDocument, InvoicingError> {
         if invoice.lines.is_empty() {
@@ -346,6 +357,20 @@ impl<E: Executor> Command<E> {
         if total != invoice.total_cents {
             return Err(InvoicingError::TotalMismatch);
         }
+        let document_id = invoice_id(&invoice.order_id);
+        let index = self
+            .reserve(
+                &document_id,
+                series_of(INVOICE_PREFIX, &invoice.series_code, now),
+                year_of(now),
+            )
+            .await?;
+        if let Some(book) = &index.book_id {
+            return self.document_in(book, &document_id).await;
+        }
+
+        // The VAT, fixed before the number: for a distance sale, counted
+        // in the company's ledger (a retry gets the same decision back).
         let destination = Destination {
             country: invoice.delivery.country.clone(),
             postal_code: invoice.delivery.postal_code.clone(),
@@ -356,77 +381,78 @@ impl<E: Executor> Command<E> {
             .iter()
             .map(|line| (line.tax_category.as_str(), line.total_cents()))
             .collect();
-        let document_id = invoice_id(&invoice.order_id);
-        self.issue(
-            &document_id,
-            INVOICE_PREFIX,
-            now,
-            |book, series, number, distance| {
-                // Decided against the series as read: a writer that read it
-                // stale loses the append and decides again.
-                let decision = decide(
-                    invoice.tax,
-                    &destination,
-                    &sold,
-                    &invoice.currency,
-                    distance,
-                );
-                let lines: Vec<InvoiceLine> = invoice
-                    .lines
-                    .iter()
-                    .zip(&decision.rates)
-                    .map(|(line, rate)| InvoiceLine {
-                        name: line.name.clone(),
-                        variant_label: line.variant_label.clone(),
-                        sku: line.sku.clone(),
-                        quantity: line.quantity,
-                        unit_amount_cents: line.unit_amount_cents,
-                        vat_rate_bps: *rate,
-                    })
-                    .collect();
-                let vat = lines_breakdown(&lines);
-                let total_vat_cents: u64 = vat.iter().map(|subtotal| subtotal.vat_cents).sum();
-                let reverse_charge = decision.regime == Regime::ReverseCharge;
-                evento::append(book)
-                    .event(&InvoiceIssued {
-                        document_id: document_id.clone(),
-                        series: series.to_owned(),
-                        number,
-                        issued_at: now,
-                        order_id: invoice.order_id.clone(),
-                        order_reference: invoice.order_reference.clone(),
-                        paid_at: invoice.paid_at,
-                        payment_method: invoice.payment_method.clone(),
-                        seller: invoice.seller.clone(),
-                        buyer: invoice.buyer.clone(),
-                        buyer_email: invoice.buyer_email.clone(),
-                        delivery: invoice.delivery.clone(),
-                        currency: invoice.currency.clone(),
-                        lines,
-                        vat,
-                        total_excl_vat_cents: total - total_vat_cents,
-                        total_vat_cents,
-                        total_cents: total,
-                        template: TEMPLATE_VERSION,
-                        issued_by: invoice.issued_by.clone(),
-                        regime: decision.regime.as_str().to_owned(),
-                        tax_country: decision.tax_country,
-                        buyer_vat_number: invoice
-                            .buyer_vat_number
-                            .clone()
-                            .filter(|_| reverse_charge),
-                        vies_reference: invoice.vies_reference.clone().filter(|_| reverse_charge),
-                        eu_distance_sales_cents: decision.distance.sales_cents,
-                        eu_threshold_passed: decision.distance.passed,
-                    })
-                    .to_owned()
-            },
-        )
+        let decide_with = |before: DistanceSales| {
+            decide(invoice.tax, &destination, &sold, &invoice.currency, before)
+        };
+        let decision = if is_distance_sale(invoice.tax, &destination) {
+            ledger
+                .count(
+                    &invoice.company_id,
+                    i64::from(index.year),
+                    &document_id,
+                    &invoice.tenant_id,
+                    decide_with,
+                )
+                .await?
+        } else {
+            decide_with(DistanceSales::default())
+        };
+
+        let lines: Vec<InvoiceLine> = invoice
+            .lines
+            .iter()
+            .zip(&decision.rates)
+            .map(|(line, rate)| InvoiceLine {
+                name: line.name.clone(),
+                variant_label: line.variant_label.clone(),
+                sku: line.sku.clone(),
+                quantity: line.quantity,
+                unit_amount_cents: line.unit_amount_cents,
+                vat_rate_bps: *rate,
+            })
+            .collect();
+        let vat = lines_breakdown(&lines);
+        let total_vat_cents: u64 = vat.iter().map(|subtotal| subtotal.vat_cents).sum();
+        let reverse_charge = decision.regime == Regime::ReverseCharge;
+        self.issue_reserved(&document_id, |book, series, number| {
+            evento::append(book)
+                .event(&InvoiceIssued {
+                    document_id: document_id.clone(),
+                    series: series.to_owned(),
+                    number,
+                    issued_at: now,
+                    order_id: invoice.order_id.clone(),
+                    order_reference: invoice.order_reference.clone(),
+                    paid_at: invoice.paid_at,
+                    payment_method: invoice.payment_method.clone(),
+                    seller: invoice.seller.clone(),
+                    buyer: invoice.buyer.clone(),
+                    buyer_email: invoice.buyer_email.clone(),
+                    delivery: invoice.delivery.clone(),
+                    currency: invoice.currency.clone(),
+                    lines: lines.clone(),
+                    vat: vat.clone(),
+                    total_excl_vat_cents: total - total_vat_cents,
+                    total_vat_cents,
+                    total_cents: total,
+                    template: TEMPLATE_VERSION,
+                    issued_by: invoice.issued_by.clone(),
+                    company_id: invoice.company_id.clone(),
+                    regime: decision.regime.as_str().to_owned(),
+                    tax_country: decision.tax_country.clone(),
+                    buyer_vat_number: invoice.buyer_vat_number.clone().filter(|_| reverse_charge),
+                    vies_reference: invoice.vies_reference.clone().filter(|_| reverse_charge),
+                    eu_distance_sales_cents: decision.distance.sales_cents,
+                    eu_threshold_passed: decision.distance.passed,
+                })
+                .to_owned()
+        })
         .await
     }
 
     /// Issues the credit note of a refund at `now`, against the order's
-    /// invoice; a refund already credited returns its credit note unchanged.
+    /// invoice and in the credit-note series of the invoice's code; a
+    /// refund already credited returns its credit note unchanged.
     pub async fn issue_credit_note(
         &self,
         credit: NewCreditNote,
@@ -442,77 +468,98 @@ impl<E: Executor> Command<E> {
         let vat = prorate(&invoice.vat, credit.amount_cents);
         let total_vat_cents: u64 = vat.iter().map(|subtotal| subtotal.vat_cents).sum();
         let document_id = credit_note_id(&credit.refund_id);
-        self.issue(
-            &document_id,
-            CREDIT_NOTE_PREFIX,
-            now,
-            |book, series, number, _| {
-                evento::append(book)
-                    .event(&CreditNoteIssued {
-                        document_id: document_id.clone(),
-                        series: series.to_owned(),
-                        number,
-                        issued_at: now,
-                        invoice_document_id: invoice.document_id.clone(),
-                        invoice_label: invoice.label.clone(),
-                        order_id: invoice.order_id.clone(),
-                        order_reference: invoice.order_reference.clone(),
-                        refund_id: credit.refund_id.clone(),
-                        seller: invoice.seller.clone(),
-                        buyer: invoice.buyer.clone(),
-                        buyer_email: invoice.buyer_email.clone(),
-                        currency: invoice.currency.clone(),
-                        vat: vat.clone(),
-                        total_excl_vat_cents: credit.amount_cents - total_vat_cents,
-                        total_vat_cents,
-                        total_cents: credit.amount_cents,
-                        template: TEMPLATE_VERSION,
-                        issued_by: credit.issued_by.clone(),
-                        regime: invoice.regime.as_str().to_owned(),
-                        tax_country: invoice.tax_country.clone(),
-                        buyer_vat_number: invoice.buyer_vat_number.clone(),
-                    })
-                    .to_owned()
-            },
-        )
+        let index = self
+            .reserve(
+                &document_id,
+                series_of(CREDIT_NOTE_PREFIX, series_code(&invoice.series), now),
+                year_of(now),
+            )
+            .await?;
+        if let Some(book) = &index.book_id {
+            return self.document_in(book, &document_id).await;
+        }
+        self.issue_reserved(&document_id, |book, series, number| {
+            evento::append(book)
+                .event(&CreditNoteIssued {
+                    document_id: document_id.clone(),
+                    series: series.to_owned(),
+                    number,
+                    issued_at: now,
+                    invoice_document_id: invoice.document_id.clone(),
+                    invoice_label: invoice.label.clone(),
+                    order_id: invoice.order_id.clone(),
+                    order_reference: invoice.order_reference.clone(),
+                    refund_id: credit.refund_id.clone(),
+                    seller: invoice.seller.clone(),
+                    buyer: invoice.buyer.clone(),
+                    buyer_email: invoice.buyer_email.clone(),
+                    currency: invoice.currency.clone(),
+                    vat: vat.clone(),
+                    total_excl_vat_cents: credit.amount_cents - total_vat_cents,
+                    total_vat_cents,
+                    total_cents: credit.amount_cents,
+                    template: TEMPLATE_VERSION,
+                    issued_by: credit.issued_by.clone(),
+                    company_id: invoice.company_id.clone(),
+                    regime: invoice.regime.as_str().to_owned(),
+                    tax_country: invoice.tax_country.clone(),
+                    buyer_vat_number: invoice.buyer_vat_number.clone(),
+                })
+                .to_owned()
+        })
         .await
     }
 
-    /// The three steps of the module doc. `event` builds the write of the
-    /// document numbered `number` in `series` to the book stream it is
-    /// given (the version is set here), knowing the year's EU distance
-    /// sales before it (invoices only; credit notes get the default).
-    async fn issue<F>(
+    /// Step 1 of the module doc: the document's index, reserved in `series`
+    /// unless it was already (then in the series it was reserved in).
+    async fn reserve(
         &self,
         document_id: &str,
-        prefix: &str,
-        now: u64,
-        event: F,
-    ) -> Result<IssuedDocument, InvoicingError>
-    where
-        F: Fn(&str, &str, u64, DistanceSales) -> evento::WriteBuilder,
-    {
+        series: String,
+        year: u16,
+    ) -> Result<DocumentState, InvoicingError> {
         for _ in 0..ATTEMPTS {
-            // 1. Reserve.
-            let index = match document_projection()
+            if let Some(index) = document_projection()
                 .load(document_id)
                 .execute(&self.0)
                 .await?
             {
-                Some(index) => index,
-                None => {
-                    let reserved = evento::append(document_id)
-                        .original_version(0)
-                        .event(&Reserved {
-                            series: series_of(prefix, now),
-                        })
-                        .commit(&self.0)
-                        .await;
-                    match reserved {
-                        Ok(_) | Err(WriteError::InvalidOriginalVersion) => continue,
-                        Err(err) => return Err(err.into()),
-                    }
-                }
+                return Ok(index);
+            }
+            let reserved = evento::append(document_id)
+                .original_version(0)
+                .event(&Reserved {
+                    series: series.clone(),
+                    year,
+                })
+                .commit(&self.0)
+                .await;
+            match reserved {
+                Ok(_) | Err(WriteError::InvalidOriginalVersion) => continue,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(InvoicingError::Busy)
+    }
+
+    /// Steps 2 and 3 of the module doc for a reserved document. `event`
+    /// builds the write of the document numbered `number` in `series` to
+    /// the book stream it is given (the version is set here).
+    async fn issue_reserved<F>(
+        &self,
+        document_id: &str,
+        event: F,
+    ) -> Result<IssuedDocument, InvoicingError>
+    where
+        F: Fn(&str, &str, u64) -> evento::WriteBuilder,
+    {
+        for _ in 0..ATTEMPTS {
+            let Some(index) = document_projection()
+                .load(document_id)
+                .execute(&self.0)
+                .await?
+            else {
+                return Err(anyhow::anyhow!("document {document_id} is not reserved").into());
             };
             if let Some(book) = &index.book_id {
                 return self.document_in(book, document_id).await;
@@ -534,13 +581,7 @@ impl<E: Executor> Command<E> {
             }
 
             // 2. Issue.
-            let distance = if prefix == INVOICE_PREFIX {
-                self.distance_before(&index.series, &open, previous.as_ref())
-                    .await?
-            } else {
-                DistanceSales::default()
-            };
-            let committed = event(&open.id, &index.series, open.next, distance)
+            let committed = event(&open.id, &index.series, open.next)
                 .original_version(
                     open.state
                         .as_ref()
@@ -560,38 +601,6 @@ impl<E: Executor> Command<E> {
             return self.document_in(&open.id, document_id).await;
         }
         Err(InvoicingError::Busy)
-    }
-
-    /// The year's EU distance sales before the next invoice of `series`:
-    /// as of the last invoice of the series, or, for the first of a year,
-    /// none so far, destination VAT applying all year if the year before
-    /// passed the threshold.
-    async fn distance_before(
-        &self,
-        series: &str,
-        open: &OpenBook,
-        previous: Option<&BookState>,
-    ) -> Result<DistanceSales, InvoicingError> {
-        if let Some(book) = open.state.as_ref().or(previous) {
-            return Ok(book.distance);
-        }
-        let Some(year) = series
-            .strip_prefix(INVOICE_PREFIX)
-            .and_then(|year| year.parse::<i64>().ok())
-        else {
-            return Ok(DistanceSales::default());
-        };
-        let last_year = format!("{INVOICE_PREFIX}{}", year - 1);
-        let (open, previous) = self.open_book(&last_year).await?;
-        let passed = open
-            .state
-            .as_ref()
-            .or(previous.as_ref())
-            .is_some_and(|book| book.distance.sales_cents > EU_DISTANCE_THRESHOLD_CENTS);
-        Ok(DistanceSales {
-            sales_cents: 0,
-            passed,
-        })
     }
 
     /// Points the index at its book; another writer having done it already

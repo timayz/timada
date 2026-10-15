@@ -11,7 +11,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         ApiKeys0003,
         TenantSearch0004,
         TenantList0005,
-        ApiKeyScopes0006
+        ApiKeyScopes0006,
+        Companies0007
     ]
 }
 
@@ -186,4 +187,48 @@ sqlx_migrator::sqlite_migration!(
             ADD COLUMN scopes TEXT NOT NULL DEFAULT 'store:read store:write'",
         "ALTER TABLE tenancy_api_keys DROP COLUMN scopes"
     )]
+);
+
+/// Companies, their owners, and the company each tenant sells as.
+pub struct Companies0007;
+sqlx_migrator::sqlite_migration!(
+    Companies0007,
+    "tenancy",
+    "0007_companies",
+    vec_box![("tenancy", "0006_api_key_scopes")],
+    vec_box![
+        (
+            "CREATE TABLE tenancy_companies (
+                id TEXT PRIMARY KEY,
+                siren TEXT NOT NULL,
+                legal_name TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )",
+            "DROP TABLE tenancy_companies"
+        ),
+        (
+            "CREATE TABLE tenancy_company_owners (
+                company_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                PRIMARY KEY (company_id, user_id)
+            )",
+            "DROP TABLE tenancy_company_owners"
+        ),
+        (
+            "CREATE INDEX tenancy_company_owners_user ON tenancy_company_owners (user_id)",
+            "DROP INDEX tenancy_company_owners_user"
+        ),
+        (
+            "ALTER TABLE tenancy_tenants ADD COLUMN company_id TEXT",
+            "ALTER TABLE tenancy_tenants DROP COLUMN company_id"
+        ),
+        (
+            "ALTER TABLE tenancy_tenants ADD COLUMN series_code TEXT",
+            "ALTER TABLE tenancy_tenants DROP COLUMN series_code"
+        ),
+        (
+            "CREATE INDEX tenancy_tenants_company ON tenancy_tenants (company_id)",
+            "DROP INDEX tenancy_tenants_company"
+        ),
+    ]
 );

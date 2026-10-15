@@ -170,6 +170,18 @@ pub fn describe_error(code: &str) -> &'static str {
         }
         "invalid_tax_category" => "Choose one of the tax categories.",
         "oss_without_vat_number" => "The One-Stop Shop needs a VAT number.",
+        "company_not_found" => "This company does not exist.",
+        "siren_taken" => {
+            "A company with this SIREN is already registered: ask one of its owners to add you."
+        }
+        "siren_mismatch" => "A company's SIRET keeps its SIREN (the first nine digits).",
+        "not_company_owner" => "Only an owner of the company may do this.",
+        "last_company_owner" => "A company keeps at least one owner.",
+        "series_code_taken" => {
+            "Another tenant of the company numbers its invoices under this code: choose another."
+        }
+        "invalid_series_code" => "A series code is up to 10 letters and digits.",
+        "unknown_user" => "No registered user has this e-mail address.",
         "invalid_legal_identity" => {
             "Fill in the legal name, form, address and e-mail, each within its length."
         }

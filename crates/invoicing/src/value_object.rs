@@ -36,10 +36,37 @@ pub fn book_id(series: &str, chunk: u32) -> String {
     ])
 }
 
-/// The series of a document issued at `at` (Unix seconds): its prefix and
-/// the calendar year, in UTC.
-pub fn series_of(prefix: &str, at: u64) -> String {
-    format!("{prefix}{}", civil_date(at).0)
+/// The series of a document issued at `at` (Unix seconds) by a tenant
+/// numbering under `code` (`""` for the plain series): `F2026`, or
+/// `PRO-F2026`; the calendar year is UTC's.
+pub fn series_of(prefix: &str, code: &str, at: u64) -> String {
+    let year = civil_date(at).0;
+    if code.is_empty() {
+        format!("{prefix}{year}")
+    } else {
+        format!("{code}-{prefix}{year}")
+    }
+}
+
+/// The UTC calendar year of Unix seconds.
+pub fn year_of(at: u64) -> u16 {
+    civil_date(at).0 as u16
+}
+
+/// The code a series is numbered under: `PRO` of `PRO-F2026`, `""` of
+/// `F2026`.
+pub fn series_code(series: &str) -> &str {
+    series.rsplit_once('-').map_or("", |(code, _)| code)
+}
+
+/// The stream of one chunk of a company's EU distance sales of a year.
+pub fn ledger_id(company_id: &str, year: i64, chunk: u32) -> String {
+    evento::hash_ids(vec![
+        "distance-ledger".to_owned(),
+        company_id.to_owned(),
+        year.to_string(),
+        chunk.to_string(),
+    ])
 }
 
 /// What a document's number reads as: `F2026-000042`.
@@ -356,7 +383,10 @@ mod tests {
         assert_eq!(format_rate_fr(2000), "20\u{a0}%");
         // 2026-10-14T21:00:00Z
         assert_eq!(format_date_fr(1_792_011_600), "14/10/2026");
-        assert_eq!(series_of(INVOICE_PREFIX, 1_792_011_600), "F2026");
+        assert_eq!(series_of(INVOICE_PREFIX, "", 1_792_011_600), "F2026");
+        assert_eq!(series_of(INVOICE_PREFIX, "PRO", 1_792_011_600), "PRO-F2026");
+        assert_eq!(series_code("PRO-F2026"), "PRO");
+        assert_eq!(series_code("F2026"), "");
         assert_eq!(civil_date(0), (1970, 1, 1));
         assert_eq!(civil_date(951_782_400), (2000, 2, 29));
         assert_eq!(unix_of_date(2000, 2, 29), 951_782_400);

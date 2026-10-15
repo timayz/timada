@@ -87,7 +87,7 @@ async fn on_checkout_requested<E: Executor>(
         return Ok(());
     };
     // No sale without an invoice that can name the merchant.
-    if merchant.legal.is_none() {
+    if payments.company_of(&merchant).await?.is_none() {
         refuse(INVOICING_NOT_CONFIGURED).await?;
         return Ok(());
     }

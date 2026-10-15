@@ -277,9 +277,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .collect();
     let TenantAccess { tenant, .. } = access;
     // The kind of goods only matters to a merchant who charges VAT.
-    let charges_vat = tenant
-        .legal
-        .as_ref()
+    let charges_vat = crate::app::tenants::tenancy(cx)
+        .load_company_of(&tenant)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .and_then(|company| company.identity)
         .is_some_and(|legal| legal.is_vat_registered());
     let tax_label = if charges_vat {
         tax_category_label(product.tax_category()).to_owned()

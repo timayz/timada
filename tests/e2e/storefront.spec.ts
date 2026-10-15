@@ -350,15 +350,16 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await publishProduct(page, slug, "Blue Mug", "12.50");
     const plateUrl = await publishProduct(page, slug, "Red Plate", "8");
 
-    // The merchant says who it is, so its invoices can name it; a SIRET
-    // that fails its check is refused.
+    // The merchant registers its company and the shop sells as it; a SIRET
+    // that fails its check is refused on the company's page.
     await page.goto(`/t/${slug}/invoicing`);
     await expect(page.locator("[data-invoicing]")).toHaveAttribute("data-invoicing", "none");
-    await setLegalIdentity(page, slug);
+    const company = await setLegalIdentity(page, slug);
+    await expect(page.locator("[data-invoicing]")).toHaveAttribute("data-invoicing", "linked");
+    await page.goto(company.companyUrl);
     await page.getByLabel("SIRET").fill("12002701600093");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page).toHaveURL(/error=invalid_siret/);
-    await expect(page.locator("[data-invoicing]")).toHaveCount(0);
     // VAT-registered, so a product says what kind of goods it is.
     await page.goto(plateUrl);
     await expect(page.locator("[data-product-vat]")).toHaveText("Standard");
@@ -518,7 +519,7 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
     const { name, slug } = uniqueTenant("Export Shop");
     await createTenant(page, name);
     await publishProduct(page, slug, "Blue Mug", "12.50");
-    await setLegalIdentity(page, slug);
+    const company = await setLegalIdentity(page, slug);
     await page.goto(`/t/${slug}/payments`);
     const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
     await page.getByLabel("Publishable key").fill("pk_test_e2e");
@@ -583,19 +584,19 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
     // merchant joins the One-Stop Shop, German VAT, on the quarter's return.
     await buy("DE", "10115");
     await expectRegime(3, "distance_origin");
-    await page.goto(`/t/${slug}/invoices/oss`);
+    await page.goto(`${company.companyUrl}/oss`);
     await expect(page.locator("[data-oss-empty]")).toBeVisible();
-    await page.goto(`/t/${slug}/invoicing`);
+    await page.goto(company.companyUrl);
     await page.getByRole("checkbox", { name: /One-Stop Shop/ }).check();
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("status")).toContainText("Legal identity saved.");
     await buy("DE", "10115");
     await expectRegime(4, "oss");
     await expect(async () => {
-      await page.goto(`/t/${slug}/invoices/oss`);
+      await page.goto(`${company.companyUrl}/oss`);
       await expect(page.locator(`[data-oss-row="DE-1900"] [data-oss-vat]`)).toHaveText("2,00\u00a0€", { timeout: 1000 });
     }).toPass({ timeout: 15_000 });
-    await page.goto(`/t/${slug}/invoicing`);
+    await page.goto(company.companyUrl);
     await expect(page.locator("[data-eu-distance]")).toContainText("20,92");
   } finally {
     await vies.stop();

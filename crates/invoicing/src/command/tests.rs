@@ -27,8 +27,32 @@ async fn command() -> Command<evento::Sqlite> {
 /// 2026-10-14T21:00:00Z.
 const NOW: u64 = 1_792_011_600;
 
+/// Issues with the tenant's own store as the platform store too: one
+/// tenant, one company.
+trait IssueHere {
+    async fn issue_invoice_here(
+        &self,
+        invoice: NewInvoice,
+        now: u64,
+    ) -> Result<IssuedDocument, InvoicingError>;
+}
+
+impl IssueHere for Command<evento::Sqlite> {
+    async fn issue_invoice_here(
+        &self,
+        invoice: NewInvoice,
+        now: u64,
+    ) -> Result<IssuedDocument, InvoicingError> {
+        self.issue_invoice(invoice, &Ledger(self.0.clone()), now)
+            .await
+    }
+}
+
 fn invoice(order_id: &str) -> NewInvoice {
     NewInvoice {
+        company_id: "company-1".into(),
+        tenant_id: "tenant-1".into(),
+        series_code: String::new(),
         order_id: order_id.to_owned(),
         order_reference: "K7Q4-MZP2".to_owned(),
         paid_at: NOW - 5,
@@ -107,16 +131,19 @@ fn to_germany(order_id: &str, amount_cents: u64) -> NewInvoice {
 #[tokio::test]
 async fn invoices_are_numbered_in_turn_and_once_per_order() {
     let cmd = command().await;
-    let first = cmd.issue_invoice(invoice("o1"), NOW).await.unwrap();
+    let first = cmd.issue_invoice_here(invoice("o1"), NOW).await.unwrap();
     assert_eq!(first.label, "F2026-000001");
     assert_eq!(first.total_cents, 4499);
     assert_eq!(first.vat.len(), 2);
     assert_eq!(first.total_excl_vat_cents + first.total_vat_cents, 4499);
 
     // The same order again: the same invoice, no number taken.
-    let again = cmd.issue_invoice(invoice("o1"), NOW + 60).await.unwrap();
+    let again = cmd
+        .issue_invoice_here(invoice("o1"), NOW + 60)
+        .await
+        .unwrap();
     assert_eq!(again, first);
-    let second = cmd.issue_invoice(invoice("o2"), NOW).await.unwrap();
+    let second = cmd.issue_invoice_here(invoice("o2"), NOW).await.unwrap();
     assert_eq!(second.label, "F2026-000002");
     assert_eq!(
         cmd.load_invoice_of_order("o2").await.unwrap().unwrap(),
@@ -129,7 +156,7 @@ async fn invoices_are_numbered_in_turn_and_once_per_order() {
         ..invoice("o3")
     };
     assert!(matches!(
-        cmd.issue_invoice(wrong, NOW).await.unwrap_err(),
+        cmd.issue_invoice_here(wrong, NOW).await.unwrap_err(),
         InvoicingError::TotalMismatch
     ));
 }
@@ -140,7 +167,7 @@ async fn books_fill_and_the_series_carries_on_in_the_next() {
     let mut labels = Vec::new();
     for i in 0..8 {
         let document = cmd
-            .issue_invoice(invoice(&format!("o{i}")), NOW)
+            .issue_invoice_here(invoice(&format!("o{i}")), NOW)
             .await
             .unwrap();
         labels.push(document.label);
@@ -164,16 +191,19 @@ async fn books_fill_and_the_series_carries_on_in_the_next() {
 #[tokio::test]
 async fn a_new_year_starts_a_new_series() {
     let cmd = command().await;
-    cmd.issue_invoice(invoice("o1"), NOW).await.unwrap();
+    cmd.issue_invoice_here(invoice("o1"), NOW).await.unwrap();
     let next_year = NOW + 90 * 86_400;
-    let document = cmd.issue_invoice(invoice("o2"), next_year).await.unwrap();
+    let document = cmd
+        .issue_invoice_here(invoice("o2"), next_year)
+        .await
+        .unwrap();
     assert_eq!(document.label, "F2027-000001");
 }
 
 #[tokio::test]
 async fn a_crash_after_the_number_never_takes_a_second_one() {
     let cmd = command().await;
-    cmd.issue_invoice(invoice("o1"), NOW).await.unwrap();
+    cmd.issue_invoice_here(invoice("o1"), NOW).await.unwrap();
     // A writer reserved o2 and wrote it into the book, then stopped before
     // recording the index.
     let document_id = invoice_id("o2");
@@ -181,6 +211,7 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
         .original_version(0)
         .event(&Reserved {
             series: "F2026".into(),
+            year: 2026,
         })
         .commit(&cmd.0)
         .await
@@ -215,6 +246,7 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
             total_cents: 4499,
             template: TEMPLATE_VERSION,
             issued_by: data.issued_by,
+            company_id: data.company_id,
             regime: "domestic".into(),
             tax_country: "FR".into(),
             buyer_vat_number: None,
@@ -230,11 +262,11 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
     // The retry finds it and records it, in the series it reserved, even a
     // year later.
     let retried = cmd
-        .issue_invoice(invoice("o2"), NOW + 365 * 86_400)
+        .issue_invoice_here(invoice("o2"), NOW + 365 * 86_400)
         .await
         .unwrap();
     assert_eq!(retried.label, "F2026-000002");
-    let third = cmd.issue_invoice(invoice("o3"), NOW).await.unwrap();
+    let third = cmd.issue_invoice_here(invoice("o3"), NOW).await.unwrap();
     assert_eq!(third.label, "F2026-000003");
 }
 
@@ -246,7 +278,7 @@ async fn writers_racing_never_share_or_skip_a_number() {
         async move {
             // Two writers per order, as when two nodes answer the same event.
             let order = format!("o{}", i / 2);
-            cmd.issue_invoice(invoice(&order), NOW).await.unwrap()
+            cmd.issue_invoice_here(invoice(&order), NOW).await.unwrap()
         }
     });
     let documents = futures_join(issues).await;
@@ -290,7 +322,7 @@ async fn a_refund_is_credited_against_the_invoice() {
             .unwrap_err(),
         InvoicingError::InvoiceNotFound
     ));
-    let invoice = cmd.issue_invoice(invoice("o1"), NOW).await.unwrap();
+    let invoice = cmd.issue_invoice_here(invoice("o1"), NOW).await.unwrap();
     let credit = cmd.issue_credit_note(missing.clone(), NOW).await.unwrap();
     assert_eq!(credit.label, "A2026-000001");
     assert_eq!(credit.kind, DocumentKind::CreditNote);
@@ -330,20 +362,20 @@ async fn eu_distance_sales_pass_the_threshold_in_the_series_order() {
     // 6,000 € then 4,800 € excluding VAT: French VAT, then the one that
     // passes 10,000 € is German already, and so is every one after.
     let first = cmd
-        .issue_invoice(to_germany("o1", 720_000), NOW)
+        .issue_invoice_here(to_germany("o1", 720_000), NOW)
         .await
         .unwrap();
     assert_eq!(first.regime, Regime::DistanceOrigin);
     assert_eq!(first.vat[0].rate_bps, 2000);
     assert_eq!(first.eu_distance_sales_cents, 600_000);
-    let domestic = cmd.issue_invoice(invoice("o2"), NOW).await.unwrap();
+    let domestic = cmd.issue_invoice_here(invoice("o2"), NOW).await.unwrap();
     assert_eq!(domestic.regime, Regime::Domestic);
     assert_eq!(
-        domestic.eu_distance_sales_cents, 600_000,
+        domestic.eu_distance_sales_cents, 0,
         "a French sale does not count"
     );
     let second = cmd
-        .issue_invoice(to_germany("o3", 600_000), NOW)
+        .issue_invoice_here(to_germany("o3", 600_000), NOW)
         .await
         .unwrap();
     assert_eq!(second.regime, Regime::Oss);
@@ -351,7 +383,7 @@ async fn eu_distance_sales_pass_the_threshold_in_the_series_order() {
     assert_eq!(second.vat[0].rate_bps, 1900);
     assert!(second.eu_threshold_passed);
     let small = cmd
-        .issue_invoice(to_germany("o4", 1_000), NOW)
+        .issue_invoice_here(to_germany("o4", 1_000), NOW)
         .await
         .unwrap();
     assert_eq!(small.regime, Regime::Oss);
@@ -359,7 +391,7 @@ async fn eu_distance_sales_pass_the_threshold_in_the_series_order() {
     // Passed this year: German VAT all next year too, counting from zero.
     let next_year = NOW + 90 * 86_400;
     let january = cmd
-        .issue_invoice(to_germany("o5", 1_000), next_year)
+        .issue_invoice_here(to_germany("o5", 1_000), next_year)
         .await
         .unwrap();
     assert!(january.label.starts_with("F2027-"));
@@ -373,7 +405,7 @@ async fn racing_writers_count_every_distance_sale_once() {
     let issues = (0..6).map(|i| {
         let cmd = Command(cmd.0.clone());
         async move {
-            cmd.issue_invoice(to_germany(&format!("o{i}"), 240_000), NOW)
+            cmd.issue_invoice_here(to_germany(&format!("o{i}"), 240_000), NOW)
                 .await
                 .unwrap()
         }
@@ -400,7 +432,7 @@ async fn a_valid_business_number_reverse_charges_and_its_credit_note_too() {
         vies_reference: Some("WAPIAAAAW1".into()),
         ..to_germany("o1", 12_000)
     };
-    let invoice = cmd.issue_invoice(business, NOW).await.unwrap();
+    let invoice = cmd.issue_invoice_here(business, NOW).await.unwrap();
     assert_eq!(invoice.regime, Regime::ReverseCharge);
     assert!(invoice.vat.is_empty());
     assert_eq!(invoice.total_excl_vat_cents, 12_000);
@@ -433,11 +465,128 @@ async fn a_valid_business_number_reverse_charges_and_its_credit_note_too() {
         },
         ..invoice_for_export()
     };
-    let export = cmd.issue_invoice(export, NOW).await.unwrap();
+    let export = cmd.issue_invoice_here(export, NOW).await.unwrap();
     assert_eq!(export.regime, Regime::Export);
     assert!(export.vat.is_empty());
 }
 
 fn invoice_for_export() -> NewInvoice {
     invoice("o2")
+}
+
+#[tokio::test]
+async fn tenants_of_one_company_share_its_threshold_in_series_of_their_own() {
+    let shop = command().await;
+    let pro = command().await;
+    let platform = Ledger(command().await.0);
+    let of = |tenant: &str, code: &str, order: &str, amount: u64| NewInvoice {
+        tenant_id: tenant.into(),
+        series_code: code.into(),
+        ..to_germany(order, amount)
+    };
+
+    // 6,000 € from one shop, then 5,000 € from the other: the company
+    // passed 10,000 € with the second, which is taxed in Germany.
+    let first = shop
+        .issue_invoice(of("shop", "", "o1", 720_000), &platform, NOW)
+        .await
+        .unwrap();
+    assert_eq!(first.label, "F2026-000001");
+    assert_eq!(first.regime, Regime::DistanceOrigin);
+    let second = pro
+        .issue_invoice(of("pro", "PRO", "o1", 600_000), &platform, NOW)
+        .await
+        .unwrap();
+    assert_eq!(second.label, "PRO-F2026-000001");
+    assert_eq!(second.regime, Regime::Oss);
+    assert_eq!(second.eu_distance_sales_cents, 600_000 + 504_202);
+
+    // Their credit notes follow their invoices' series.
+    let credit = pro
+        .issue_credit_note(
+            NewCreditNote {
+                order_id: "o1".into(),
+                refund_id: "re_1".into(),
+                amount_cents: 100,
+                issued_by: "test".into(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(credit.label, "PRO-A2026-000001");
+    assert_eq!(credit.company_id, "company-1");
+
+    let total = platform.total("company-1", 2026).await.unwrap();
+    assert!(total.passed);
+    // Another company counts on its own.
+    let other = platform.total("company-2", 2026).await.unwrap();
+    assert_eq!(other, DistanceSales::default());
+}
+
+#[tokio::test]
+async fn tenants_racing_for_one_ledger_count_every_sale_once() {
+    let platform = command().await.0;
+    let issues = (0..6).map(|i| {
+        let tenant = command();
+        let platform = platform.clone();
+        async move {
+            let tenant = tenant.await;
+            let invoice = NewInvoice {
+                tenant_id: format!("t{i}"),
+                series_code: format!("T{i}"),
+                ..to_germany(&format!("o{i}"), 240_000)
+            };
+            tenant
+                .issue_invoice(invoice, &Ledger(platform), NOW)
+                .await
+                .unwrap()
+        }
+    });
+    let mut documents = futures_join(issues).await;
+    documents.sort_by_key(|document| document.eu_distance_sales_cents);
+    let totals: Vec<u64> = documents
+        .iter()
+        .map(|d| d.eu_distance_sales_cents)
+        .collect();
+    assert_eq!(
+        totals,
+        [200_000, 400_000, 600_000, 800_000, 1_000_000, 1_201_681]
+    );
+    assert_eq!(
+        documents.iter().filter(|d| d.regime == Regime::Oss).count(),
+        1,
+        "only the sale that passes 10,000 € is taxed at destination"
+    );
+}
+
+#[tokio::test]
+async fn a_crash_after_counting_reuses_the_decision() {
+    let cmd = command().await;
+    let platform = Ledger(cmd.0.clone());
+    // Counted in the ledger (with the decision of the time), then nothing.
+    platform
+        .count("company-1", 2026, &invoice_id("o1"), "tenant-1", |_| {
+            crate::tax::Decision {
+                regime: Regime::Oss,
+                tax_country: "DE".into(),
+                rates: vec![Some(1900)],
+                distance: DistanceSales {
+                    sales_cents: 1_100_000,
+                    passed: true,
+                },
+            }
+        })
+        .await
+        .unwrap();
+    let invoice = cmd
+        .issue_invoice(to_germany("o1", 12_000), &platform, NOW)
+        .await
+        .unwrap();
+    assert_eq!(invoice.regime, Regime::Oss);
+    assert_eq!(invoice.eu_distance_sales_cents, 1_100_000);
+    assert_eq!(
+        platform.total("company-1", 2026).await.unwrap().sales_cents,
+        1_100_000
+    );
 }

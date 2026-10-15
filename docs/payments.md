@@ -32,14 +32,10 @@ Cancelling an order in the dashboard refunds it through Stripe first.
   # stripe_api_url = "http://localhost:12111"   # tests only; Stripe itself when unset
   ```
 
-- **Merchant, first.** On `/t/<slug>/invoicing` (permission `tenant:manage`), the
-  legal identity every invoice names: legal name and form, share capital, SIRET,
-  RCS city, registered address, and either the VAT number (with whether it is
-  registered for the EU One-Stop Shop) or nothing (the exemption for small
-  businesses, art. 293 B du CGI). Until it is set, every request to pay is refused
-  with `invoicing_not_configured`. A VAT-registered merchant then sets each
-  product's kind of goods (standard, books, food, medicines, press), which decides
-  its rate in each country; catalog prices include VAT.
+- **Merchant, first.** The tenant sells as a company: on `/t/<slug>/invoicing`
+  (permission `tenant:manage`), link it to a company the member owns, or register
+  one. See `docs/invoicing.md`. Until then, every request to pay is refused with
+  `invoicing_not_configured`.
 
 - **Merchant.** On `/t/<slug>/payments` (permission `payments:manage`):
   1. Paste the publishable key and the secret key from Stripe (Developers › API keys).
