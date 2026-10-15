@@ -121,6 +121,28 @@ pub async fn count_orders(
     .await
 }
 
+/// The latest orders of a tenant placed with a normalized address, newest
+/// first: what a signed-in shopper sees as their history.
+pub async fn orders_of_email(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    email: &str,
+    limit: i64,
+) -> sqlx::Result<Vec<OrderRow>> {
+    sqlx::query_as(
+        "SELECT tenant_id, id, reference, cart_id, status, email, name, country, item_count,
+            total_cents, currency, placed_at, updated_at, payment_id, refunded_cents,
+            discount_id, discount_code, discount_cents
+         FROM orders_orders WHERE tenant_id = ?1 AND email = ?2
+         ORDER BY placed_at DESC, id DESC LIMIT ?3",
+    )
+    .bind(tenant_id)
+    .bind(email)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
 /// One order of a tenant, by id.
 pub async fn order_by_id(
     pool: &SqlitePool,
