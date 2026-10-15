@@ -164,6 +164,19 @@ pub fn describe_error(code: &str) -> &'static str {
         "not_cancellable" => "A fulfilled order cannot be cancelled.",
         "invalid_tracking" => "A tracking number is at most 200 characters.",
         "invalid_reason" => "Say why the order is cancelled, in at most 500 characters.",
+        "invalid_siret" => "A SIRET is 14 digits; check it against your registration.",
+        "invalid_vat_number" => {
+            "A French VAT number is FR, a two-digit key and the SIREN (the SIRET's first nine digits)."
+        }
+        "invalid_tax_category" => "Choose one of the tax categories.",
+        "oss_without_vat_number" => "The One-Stop Shop needs a VAT number.",
+        "invalid_legal_identity" => {
+            "Fill in the legal name, form, address and e-mail, each within its length."
+        }
+        "invalid_share_capital" => "Enter the share capital in euros, like 1000 or 1000.50.",
+        "invoicing_not_configured" => {
+            "Shoppers cannot pay until the legal identity on the Invoicing page is filled in."
+        }
         _ => "Something went wrong. Please try again.",
     }
 }
