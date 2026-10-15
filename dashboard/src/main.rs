@@ -4,6 +4,7 @@ mod authz;
 mod cli;
 mod cluster;
 mod config;
+mod confirmations;
 mod db;
 mod invoicing;
 mod limits;

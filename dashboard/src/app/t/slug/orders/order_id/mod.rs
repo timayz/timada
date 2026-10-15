@@ -122,6 +122,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
         documents.extend(note);
     }
+    let confirmation = orders(&access)?
+        .load_order_confirmation(&order.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let lines: Vec<LineRow> = order
@@ -202,6 +206,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                     <dt class="text-neutral-500">"E-mail"</dt>
                     <dd><a class="underline" href=(format!("mailto:{}", order.email))>(&order.email)</a></dd>
+                    <dt class="text-neutral-500">"Confirmation"</dt>
+                    <dd data-order-confirmation=(if confirmation.is_some() { "mailed" } else { "none" })>
+                        if let Some(mailed) = &confirmation {
+                            "Mailed " <time datetime=(mailed.mailed_at)>(format_time(mailed.mailed_at))</time>
+                        } else {
+                            "Not mailed"
+                        }
+                    </dd>
                 </dl>
             </section>
 

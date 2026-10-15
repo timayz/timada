@@ -174,6 +174,9 @@ pub fn describe_error(code: &str) -> &'static str {
             "Stripe could not refund the payment: the order is not cancelled. Try again."
         }
         "not_cancellable" => "A fulfilled order cannot be cancelled.",
+        "invalid_storefront_url" => {
+            "A storefront address starts with https:// and is at most 200 characters."
+        }
         "invalid_tracking" => "A tracking number is at most 200 characters.",
         "invalid_reason" => "Say why the order is cancelled, in at most 500 characters.",
         "invalid_siret" => "A SIRET is 14 digits; check it against your registration.",

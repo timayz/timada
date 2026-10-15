@@ -129,6 +129,30 @@ pub fn business_buyers_id() -> String {
     evento::hash_ids(vec!["business-buyers"])
 }
 
+/// The stream of where the tenant's storefront lives: one per tenant store.
+pub fn storefront_id() -> String {
+    evento::hash_ids(vec!["storefront"])
+}
+
+/// The stream of the confirmation mailed for an order.
+pub fn order_confirmation_id(order_id: &str) -> String {
+    evento::hash_ids(vec!["order-confirmation", order_id])
+}
+
+/// The address of a storefront as the merchant typed it, absolute and
+/// without a trailing `/`.
+pub fn normalize_storefront_url(url: &str) -> Result<String, OrdersError> {
+    let url = url.trim().trim_end_matches('/');
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .ok_or(OrdersError::InvalidStorefrontUrl)?;
+    if rest.is_empty() || url.len() > 200 || url.chars().any(char::is_whitespace) {
+        return Err(OrdersError::InvalidStorefrontUrl);
+    }
+    Ok(url.to_owned())
+}
+
 /// The index stream of an order reference.
 pub fn order_reference_id(reference: &str) -> String {
     evento::hash_ids(vec!["order-reference", reference])
@@ -330,6 +354,40 @@ mod tests {
         assert!(!is_shopper_event("timada-orders/Order", "Placed"));
         assert!(!is_shopper_event("timada-orders/Order", "Cancelled"));
         assert!(!is_shopper_event("timada-catalog/Product", "Priced"));
+        assert!(!is_shopper_event(
+            "timada-orders/Storefront",
+            "StorefrontAddressSet"
+        ));
+        assert!(!is_shopper_event(
+            "timada-orders/OrderConfirmation",
+            "ConfirmationMailed"
+        ));
+    }
+
+    #[test]
+    fn storefront_addresses_are_absolute() {
+        assert_eq!(
+            normalize_storefront_url(" https://shop.example/ ").unwrap(),
+            "https://shop.example"
+        );
+        assert_eq!(
+            normalize_storefront_url("http://localhost:4000").unwrap(),
+            "http://localhost:4000"
+        );
+        for bad in [
+            "shop.example",
+            "ftp://shop.example",
+            "https://",
+            "https://a b",
+        ] {
+            assert!(
+                matches!(
+                    normalize_storefront_url(bad),
+                    Err(OrdersError::InvalidStorefrontUrl)
+                ),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

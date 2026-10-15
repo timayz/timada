@@ -1,6 +1,7 @@
 //! `/orders/{order_id}`: an order this browser placed, or one the shopper
-//! signed in on it placed with their address, read from the store. Any other
-//! order is a 404: an order id is not a password.
+//! signed in on it placed with their address, read from the store. Anyone
+//! else is sent to sign in first (the link in the order's confirmation mail
+//! may be opened on another device): an order id is not a password.
 
 pub mod documents;
 pub mod review;
@@ -13,10 +14,14 @@ use timada_storefront::{
 use topcoat::{
     Result,
     context::Cx,
-    router::{error::not_found, href, module_param, page, path_param, query_params},
+    router::{
+        error::{not_found, redirect},
+        href, module_param, page, path_param, query_params,
+    },
     view::{View, view},
 };
 
+use crate::app::account::sign_in::sign_in_url;
 use crate::app::{document, say};
 use crate::shopper::holds_order;
 
@@ -66,12 +71,13 @@ struct LineReview {
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let order_id = path_param::<OrderId>(cx);
-    if !holds_order(cx, order_id).await? {
-        return Err(not_found().into());
-    }
     let Some(order) = order(cx, order_id).await? else {
         return Err(not_found().into());
     };
+    if !holds_order(cx, order_id).await? {
+        let here = href!(index, OrderId(order_id.to_owned())).resolve(cx);
+        return Err(redirect(sign_in_url(cx, Some(&here), None)).into());
+    }
     let query = query_params::<OrderQuery>(cx)?;
     let nav = menu(cx).await?;
     let documents = order_documents(cx, order_id).await?;
