@@ -5,6 +5,7 @@
 pub mod api_keys;
 pub mod carts;
 pub mod categories;
+pub mod discounts;
 pub mod invoices;
 pub mod invoicing;
 pub mod members;
@@ -17,9 +18,9 @@ pub mod roles;
 use std::sync::Arc;
 
 use timada_tenancy::{
-    PERMISSION_API_KEYS_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ORDERS_READ,
-    PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_ROLES_MANAGE,
-    PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
+    PERMISSION_API_KEYS_MANAGE, PERMISSION_DISCOUNTS_READ, PERMISSION_MEMBERS_READ,
+    PERMISSION_ORDERS_READ, PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ,
+    PERMISSION_ROLES_MANAGE, PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
 };
 use topcoat::{
     Result,
@@ -147,6 +148,7 @@ pub struct TenantNav {
     pub categories: bool,
     pub orders: bool,
     pub carts: bool,
+    pub discounts: bool,
     pub invoices: bool,
     pub payments: bool,
     pub invoicing: bool,
@@ -168,6 +170,7 @@ impl TenantNav {
             // placed yet.
             orders,
             carts: orders,
+            discounts: access.can(cx, PERMISSION_DISCOUNTS_READ).await?,
             // Invoices are what the orders were billed as.
             invoices: orders,
             payments: access.can(cx, PERMISSION_PAYMENTS_MANAGE).await?,
@@ -182,7 +185,7 @@ impl TenantNav {
 /// The header links of a tenant page: the tenant's home, each section the
 /// member may see, the dashboard and the account. `current` names the
 /// section being shown (`"home"`, `"products"`, `"categories"`, `"orders"`,
-/// `"carts"`, `"invoices"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
+/// `"carts"`, `"discounts"`, `"invoices"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
 /// section), which gets
 /// no link.
 #[component]
@@ -204,6 +207,9 @@ pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) ->
             }
             if nav.carts && current != "carts" {
                 <a class="underline" href=(href!(carts::index, Slug(slug.clone())))>"Carts"</a>
+            }
+            if nav.discounts && current != "discounts" {
+                <a class="underline" href=(href!(discounts::index, Slug(slug.clone())))>"Discounts"</a>
             }
             if nav.invoices && current != "invoices" {
                 <a class="underline" href=(href!(invoices::index, Slug(slug.clone())))>"Invoices"</a>
