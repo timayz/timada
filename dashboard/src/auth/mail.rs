@@ -1,5 +1,5 @@
-//! The e-mails this application sends: a code that proves an address, and
-//! an invitation to join a tenant.
+//! The e-mails this application sends: a code that proves an address, an
+//! invitation to join a tenant, and a shop's sign-in code for its shoppers.
 
 use anyhow::Context as _;
 use topcoat::{
@@ -69,6 +69,28 @@ pub async fn send_invitation(
     Ok(())
 }
 
+/// Mails a shop's sign-in code to one of its shoppers. The mail speaks for
+/// the shop, not for the platform: the shop's name is the sender's.
+pub async fn send_shopper_code(cx: &Cx, to: &str, shop_name: &str, code: &str) -> Result<()> {
+    let sender = &app_context::<MailSender>(cx).0;
+    let from = Mailbox::named(shop_name, sender.address())?;
+    let subject = format!("Your sign-in code for {shop_name}");
+    let mail = mail! {
+        from: from,
+        to: Mailbox::new(to)?,
+        subject: &subject,
+        html: {
+            cx =>
+            <p>"Enter this code to sign in to " <strong>(shop_name)</strong> ":"</p>
+            <p style="font-size: 1.5rem; letter-spacing: 0.25rem;"><strong>(code)</strong></p>
+            <p>"It is valid for 10 minutes."</p>
+            <p>"If you did not ask for it, you can ignore this message."</p>
+        },
+    }?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
 fn subject(kind: EmailFlowKind) -> &'static str {
     match kind {
         EmailFlowKind::Register | EmailFlowKind::AddEmail => {
@@ -127,6 +149,28 @@ mod tests {
         let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
         assert!(wire.contains("123456"), "{wire}");
         assert!(wire.contains("valid for 10 minutes"), "{wire}");
+    }
+
+    #[tokio::test]
+    async fn the_shopper_code_comes_from_the_shop() {
+        let transport = MemoryTransport::new();
+        let cx = CxTestBuilder::new()
+            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .build();
+
+        send_shopper_code(&cx, "ada@example.com", "Acme Tea", "654321")
+            .await
+            .unwrap();
+
+        let sent = transport.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].subject(), "Your sign-in code for Acme Tea");
+        assert_eq!(sent[0].from().unwrap().name(), Some("Acme Tea"));
+        assert_eq!(sent[0].from().unwrap().address(), "no-reply@example.com");
+        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        assert!(wire.contains("654321"), "{wire}");
+        assert!(!wire.contains("Timada"), "{wire}");
     }
 
     #[tokio::test]

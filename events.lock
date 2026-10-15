@@ -116,6 +116,14 @@ event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String
 event timada-reviews/Review::Published { published_by: String }
 event timada-reviews/Review::Rejected { reason: String, rejected_by: String }
 event timada-reviews/Review::Submitted { order_id: String, product_id: String, variant_label: Option<String>, rating: u8, title: Option<String>, body: String, author_name: String, photos: Vec<ReviewPhoto>, submitted_by: String }
+event timada-shoppers/Shopper::AddressRemoved { address_id: String }
+event timada-shoppers/Shopper::AddressSaved { address_id: String, address: ShippingAddress }
+event timada-shoppers/Shopper::Registered { email: String }
+event timada-shoppers/ShopperChallenge::AttemptFailed unit
+event timada-shoppers/ShopperChallenge::CodeConsumed unit
+event timada-shoppers/ShopperChallenge::CodeIssued { code_hash: String, issued_at: u64, expires_at: u64 }
+event timada-shoppers/ShopperSession::SessionEnded unit
+event timada-shoppers/ShopperSession::SessionStarted { shopper_id: String, expires_at: u64 }
 event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, created_by: String, created_at: u64 }
 event timada-tenancy/ApiKey::Revoked { revoked_by: String, revoked_at: u64 }
 event timada-tenancy/ApiKey::Scoped { scopes: Vec<String>, scoped_by: String, scoped_at: u64 }
