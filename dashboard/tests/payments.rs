@@ -249,6 +249,7 @@ fn checkout(expected_total_cents: Option<u64>) -> Checkout {
         expected_total_cents,
         vat_number: None,
         billing: None,
+        shipping_method: None,
     }
 }
 
@@ -996,5 +997,58 @@ async fn an_invoice_is_addressed_where_the_order_is_billed() {
         eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
     assert_eq!(invoice.buyer.name, "Ada");
     assert_eq!(invoice.delivery.as_ref(), Some(&invoice.buyer));
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn shipping_is_paid_and_invoiced_at_the_rates_of_the_goods() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command(h.store(&acme).await);
+    let method_id = orders
+        .add_shipping_method(
+            "alice",
+            timada_orders::NewShippingMethod {
+                name: "Tracked delivery".into(),
+                price_cents: 490,
+                currency: "EUR".into(),
+                countries: vec!["FR".into()],
+                free_above_cents: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Without a method picked, the request is refused.
+    let (cart_id, _) = h.cart(&acme).await;
+    let PaymentAnswer::Refused(code) = h.ask_with(&acme, &cart_id, checkout(None)).await else {
+        panic!("a shop with methods needs one picked");
+    };
+    assert_eq!(code, "shipping_unavailable");
+
+    let order_id = h
+        .buy(
+            &acme,
+            Checkout {
+                shipping_method: Some(method_id),
+                ..checkout(Some(2500 + 490))
+            },
+        )
+        .await;
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.total_cents, 2990);
+    assert_eq!(order.payment.amount_cents, 2990);
+    assert_eq!(order.shipping_charge.unwrap().name, "Tracked delivery");
+
+    let invoicing = timada_invoicing::Command(h.store(&acme).await);
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(invoice.total_cents, 2990);
+    assert_eq!(invoice.shipping.unwrap().amount_cents, 490);
+    // The mug is standard goods: shipping is at 20 % with it.
+    assert_eq!(invoice.vat.len(), 1);
+    assert_eq!(invoice.vat[0].rate_bps, 2000);
+    assert_eq!(invoice.vat[0].base_cents + invoice.vat[0].vat_cents, 2990);
     h.finish().await;
 }

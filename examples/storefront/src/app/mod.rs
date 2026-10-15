@@ -181,6 +181,13 @@ pub async fn document(
                     "form.checkout label.check { display: flex; gap: .5rem; align-items: center; }"
                     "form.checkout label.check input { width: auto; }"
                     "form.checkout fieldset.billing { border: 0; padding: 0; margin: .5rem 0 0; }"
+                    "form.checkout fieldset.shipping-methods { border: 0; padding: 0; margin: 1rem 0 .5rem; display: grid; gap: .5rem; }"
+                    "form.checkout fieldset.shipping-methods legend { font-weight: 600; margin-bottom: .5rem; }"
+                    "form.checkout label.method { display: flex; gap: .75rem; align-items: center; border: 1px solid #ddd; border-radius: .4rem; padding: .7rem .9rem; cursor: pointer; }"
+                    "form.checkout label.method:has(input:checked) { border-color: #e8606a; background: #fff6f6; }"
+                    "form.checkout label.method input { width: auto; margin: 0; }"
+                    "form.checkout label.method .name { flex: 1; }"
+                    "form.checkout label.method .price { font-weight: 600; }"
                     "form.sign-in label { display: block; margin-top: .75rem; }"
                     "form.sign-in input { padding: .5rem; width: 100%; max-width: 20rem; }"
                     "table.history { border-collapse: collapse; width: 100%; }"
@@ -312,6 +319,7 @@ pub fn say(code: &str) -> &'static str {
         "invalid_vat_number" => {
             "Enter an EU VAT number: its country prefix, then letters and digits."
         }
+        "shipping_unavailable" => "Choose a delivery method that ships to your country.",
         "business_buyers_refused" => {
             "This shop does not sell to businesses: leave the VAT number blank."
         }

@@ -1342,6 +1342,7 @@ async fn a_store_with_a_checkout_key_sells() {
         expected_total_cents: Some(expected),
         vat_number: None,
         billing: None,
+        shipping_method: None,
     };
     let merchant = timada_orders::Command(catalog.0.clone());
     let asking = tokio::spawn({

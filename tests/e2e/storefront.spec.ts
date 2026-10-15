@@ -795,6 +795,102 @@ test("a shopper pays less with a discount code, once", async ({ page, request })
   }
 });
 
+test("a shopper picks a delivery method that ships to their country, and pays for it", async ({ page, request }) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Ship Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+
+    // Tracked to France and Belgium, free from 50.00; VIP to France only.
+    await page.goto(`/t/${slug}/shipping`);
+    await page.getByLabel("Name").fill("Tracked delivery");
+    await page.getByLabel("Price").fill("4.90");
+    await page.getByLabel("Free from (optional)").fill("50");
+    await page.getByLabel("Countries (optional)").fill("FR, BE");
+    await page.getByRole("button", { name: "Add shipping method" }).click();
+    await expect(page.getByRole("status")).toContainText("Shipping method added.");
+    await page.getByLabel("Name").fill("VIP");
+    await page.getByLabel("Price").fill("6.90");
+    await page.getByLabel("Countries (optional)").fill("FR");
+    await page.getByRole("button", { name: "Add shipping method" }).click();
+    await expect(page.getByRole("status")).toContainText("Shipping method added.");
+    await startStorefront(request, await mintKey(page, slug, true), 1);
+
+    // Two mugs: the first method is picked, its price on top.
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await page.getByLabel("Quantity").fill("2");
+    await addToCart(page);
+    await page.goto(`${STOREFRONT}/cart`);
+    await page.getByRole("link", { name: "Check out" }).click();
+    const tracked = page.getByRole("radio", { name: /Tracked delivery/ });
+    const vip = page.getByRole("radio", { name: /VIP/ });
+    await expect(tracked).toBeChecked();
+    await expect(page.locator("[data-checkout-shipping]")).toHaveText("4.90 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("29.90 EUR");
+    await expect(page.locator("[data-checkout-vat]")).toContainText("VAT FR 20%");
+    expect(await page.evaluate(() => (window as any).__stripe.elements.amount)).toBe(2990);
+
+    // VIP costs more; Belgium has only the tracked parcel; the US nothing.
+    await vip.check();
+    await expect(page.locator("[data-checkout-shipping]")).toHaveText("6.90 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("31.90 EUR");
+    expect(await page.evaluate(() => (window as any).__stripe.elements.amount)).toBe(3190);
+    await page.getByLabel("Country", { exact: true }).selectOption("BE");
+    await expect(vip).toBeHidden();
+    await expect(tracked).toBeChecked();
+    await expect(page.locator("[data-checkout-total]")).toHaveText("29.90 EUR");
+    await page.getByLabel("Country", { exact: true }).selectOption("US");
+    await expect(tracked).toBeHidden();
+    await expect(page.locator("[data-no-shipping]")).toBeVisible();
+    await expect(page.locator("[data-checkout-total]")).toHaveText("25.00 EUR");
+
+    // Back to France with VIP: charged on top, on the order and its invoice.
+    await fillCheckout(page, true);
+    await vip.check();
+    await expect(page.locator("[data-checkout-total]")).toHaveText("31.90 EUR");
+    await page.getByRole("button", { name: "Place order" }).click();
+    await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
+    const intent = stripe.lastIntent()!;
+    expect(intent.amount).toBe(3190);
+    stripe.pay(intent.id);
+    expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+    await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+    await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+    await expect(page.locator("[data-order-shipping=VIP]")).toContainText("6.90 EUR");
+    await expect(page.locator("[data-order-total]")).toHaveText("31.90 EUR");
+    const year = new Date().getUTCFullYear();
+    const invoiceLink = page.locator(`[data-document="F${year}-000001"]`);
+    await expect(async () => {
+      await page.reload();
+      await expect(invoiceLink).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(page.locator("[data-documents] li", { has: invoiceLink })).toContainText("31,90");
+    const reference = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+
+    // The merchant sees what shipping was paid.
+    const row = page.locator(`[data-order="${reference}"]`);
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders`);
+      await expect(row).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await row.getByRole("link", { name: reference }).click();
+    await expect(page.locator("[data-order-shipping=VIP]")).toContainText("6.90 EUR");
+  } finally {
+    await stripe.stop();
+  }
+});
+
 /// A review as a storefront hands it in: multipart, with the key.
 function reviewForm(orderId: string, productId: string, body: string, photos: Buffer[]): FormData {
   const form = new FormData();
