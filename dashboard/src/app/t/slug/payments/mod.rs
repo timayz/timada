@@ -35,6 +35,23 @@ pub fn payments_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&s
         .resolve(cx)
 }
 
+/// Tells the tenant's store what its payment settings now are, so a
+/// storefront shows the payment form (or stops) at once. A failure only
+/// delays it: the payment-setup subscription writes it too.
+pub async fn publish_setup(cx: &Cx, access: &TenantAccess) {
+    let payments = app_context::<Arc<Payments>>(cx);
+    let published = async {
+        let Some(tenant) = payments.active_tenant(&access.tenant.id).await? else {
+            return Ok(());
+        };
+        let executor = access.executor().map_err(|err| anyhow::anyhow!("{err}"))?;
+        crate::payments::publish_setup(payments, &tenant, executor.clone()).await
+    };
+    if let Err(err) = published.await {
+        tracing::warn!(tenant = %access.tenant.slug, %err, "cannot tell the store how its shoppers pay");
+    }
+}
+
 /// Where Stripe sends this tenant's payment notices.
 pub fn webhook_url(cx: &Cx, tenant_id: &str) -> String {
     format!(

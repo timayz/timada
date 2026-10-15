@@ -36,10 +36,11 @@ use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
 pub use timada_catalog::format_money;
+use timada_invoicing::tax;
 use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
 pub use timada_orders::{
     Checkout, OrderDiscount, OrderLine, OrderState, OrderStatus, OrdersError, PAYMENTS_UNAVAILABLE,
-    ShippingAddress,
+    PaymentSetup, ShippingAddress,
 };
 
 use crate::context::store;
@@ -106,6 +107,8 @@ pub struct CartLineView {
     /// The variant's picture, else the product's first one.
     pub image_url: Option<String>,
     pub quantity: u32,
+    /// What kind of goods it is for VAT (`standard`, `books`, …).
+    pub tax_category: String,
     /// `None` on a line that cannot be sold any more.
     pub unit_amount_cents: Option<u64>,
     pub amount_cents: Option<u64>,
@@ -167,10 +170,96 @@ impl CartView {
         ))
     }
 
+    /// The VAT the total includes when the goods go to `country` (ISO
+    /// 3166-1 alpha-2), at that destination's rates for what each line is.
+    /// An estimate for a page to show: the invoice decides, from the
+    /// merchant's VAT standing, the year's sales abroad, the postal code and
+    /// the buyer's VAT number. `None` when no VAT would apply (outside the
+    /// EU) or the cart has nothing priced.
+    pub fn vat_estimate(&self, country: &str) -> Option<VatEstimate> {
+        let currency = self.currency.as_deref()?;
+        let lines: Vec<(&str, u64)> = self
+            .lines
+            .iter()
+            .map(|line| {
+                (
+                    line.tax_category.as_str(),
+                    line.amount_cents.unwrap_or_default(),
+                )
+            })
+            .collect();
+        let decision = tax::decide(
+            tax::TaxProfile {
+                vat_registered: true,
+                oss_registered: false,
+            },
+            &tax::Destination {
+                country: country.to_ascii_uppercase(),
+                ..Default::default()
+            },
+            &lines,
+            currency,
+            tax::DistanceSales::default(),
+        );
+        let sums: Vec<(u32, u64)> = decision
+            .rates
+            .iter()
+            .zip(&lines)
+            .filter_map(|(rate, (_, amount))| rate.map(|rate| (rate, *amount)))
+            .collect();
+        if sums.is_empty() {
+            return None;
+        }
+        // The discount comes off every rate in proportion.
+        let subtotals =
+            timada_invoicing::prorate(&timada_invoicing::vat_breakdown(sums), self.total_cents);
+        let rate_bps = match subtotals.as_slice() {
+            [only] => Some(only.rate_bps),
+            _ => None,
+        };
+        Some(VatEstimate {
+            country: decision.tax_country,
+            rate_bps,
+            vat_cents: subtotals.iter().map(|subtotal| subtotal.vat_cents).sum(),
+            currency: currency.to_owned(),
+        })
+    }
+
     /// Whether [`start_payment`] can go ahead: something to sell, nothing off
     /// sale left in it, not ordered already.
     pub fn can_check_out(&self) -> bool {
         !self.lines.is_empty() && self.unavailable.is_empty() && self.order_id.is_none()
+    }
+}
+
+/// The VAT a cart's total includes, as [`CartView::vat_estimate`] works it out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VatEstimate {
+    /// The country whose VAT applies (`FR`).
+    pub country: String,
+    /// In basis points; `None` when the lines are taxed at several rates.
+    pub rate_bps: Option<u32>,
+    pub vat_cents: u64,
+    pub currency: String,
+}
+
+impl VatEstimate {
+    /// The VAT as a person reads it (`9.97 EUR`).
+    pub fn amount(&self) -> String {
+        timada_catalog::format_money(self.vat_cents, &self.currency)
+    }
+
+    /// `VAT FR 20%`, or `VAT FR` over several rates.
+    pub fn label(&self) -> String {
+        match self.rate_bps {
+            Some(rate) if rate % 100 == 0 => format!("VAT {} {}%", self.country, rate / 100),
+            Some(rate) => format!(
+                "VAT {} {}%",
+                self.country,
+                format!("{:.2}", f64::from(rate) / 100.0).trim_end_matches('0')
+            ),
+            None => format!("VAT {}", self.country),
+        }
     }
 }
 
@@ -207,7 +296,8 @@ impl Store {
         let lines = quote
             .lines
             .iter()
-            .map(|line| {
+            .zip(&quote.tax_categories)
+            .map(|(line, tax_category)| {
                 let local = product(&line.product_id);
                 CartLineView {
                     product_id: line.product_id.clone(),
@@ -218,6 +308,7 @@ impl Store {
                     slug: local.map(|p| p.slug.clone()),
                     image_url: local.and_then(|p| picture(p, line.variant_id.as_deref())),
                     quantity: line.quantity,
+                    tax_category: tax_category.clone(),
                     unit_amount_cents: Some(line.unit_amount_cents),
                     amount_cents: Some(line.amount_cents()),
                 }
@@ -237,6 +328,7 @@ impl Store {
                     slug: local.map(|p| p.slug.clone()),
                     image_url: local.and_then(|p| picture(p, None)),
                     quantity: line.quantity,
+                    tax_category: timada_catalog::TAX_CATEGORY_STANDARD.to_owned(),
                     unit_amount_cents: None,
                     amount_cents: None,
                 }
@@ -366,6 +458,11 @@ impl Store {
                 None => tokio::time::sleep(wait).await,
             }
         }
+    }
+
+    /// See [`payment_setup`].
+    pub async fn payment_setup(&self) -> anyhow::Result<Option<PaymentSetup>> {
+        self.orders().payment_setup().await
     }
 
     /// See [`payment_session`].
@@ -544,4 +641,11 @@ pub async fn order_of_cart(cx: &Cx, cart_id: &str) -> Result<Option<OrderState>>
 /// host decides who may (the browser that placed it, typically).
 pub async fn order(cx: &Cx, order_id: &str) -> Result<Option<OrderState>> {
     store(cx).order(order_id).await.map_err(Error::from_anyhow)
+}
+
+/// How the shop's shoppers pay (the provider and the merchant's public key),
+/// so a page can show the payment form before asking to pay; `None` while
+/// the shop takes no payments.
+pub async fn payment_setup(cx: &Cx) -> Result<Option<PaymentSetup>> {
+    store(cx).payment_setup().await.map_err(Error::from_anyhow)
 }

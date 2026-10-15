@@ -13,6 +13,7 @@
 
 mod gateway;
 pub mod seal;
+mod setup;
 pub mod signature;
 mod subscription;
 pub mod webhook;
@@ -20,6 +21,7 @@ pub mod webhook;
 use std::sync::Arc;
 
 pub use gateway::*;
+pub use setup::*;
 pub use subscription::*;
 
 use timada_tenancy::{CompanyState, TenantState};

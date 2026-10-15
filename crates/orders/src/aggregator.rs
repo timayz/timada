@@ -168,3 +168,23 @@ pub enum Order {
 pub enum OrderReference {
     Claimed { order_id: String },
 }
+
+/// How the tenant's shoppers pay, as their browsers need to know it before
+/// any payment is open: the provider and the merchant's public key. One
+/// stream per tenant store, with the id [`payment_method_id`](crate::payment_method_id).
+/// The dashboard keeps it in step with the merchant's account; the secrets
+/// never come here.
+#[evento::aggregate(name = "timada-orders/PaymentMethod")]
+pub enum PaymentMethod {
+    /// Replaces what was there.
+    PaymentsEnabled {
+        /// `stripe`.
+        provider: String,
+        /// Public: what a shopper's browser loads the payment form with.
+        publishable_key: String,
+        enabled_by: String,
+    },
+    PaymentsDisabled {
+        disabled_by: String,
+    },
+}

@@ -191,10 +191,17 @@ let session = start_payment(cx, &cart_id, Checkout {
     email, shipping, note,
     expected_total_cents: Some(view.total_cents),   // the total the shopper saw
 }).await?;
-// Ok(session): mount Stripe's Payment Element with session.publishable_key and
-// session.client_secret; confirmPayment returns the browser to your page, which
-// waits for order_of_cart(cx, &cart_id) to be Some.
+// Ok(session): confirm with Stripe using session.client_secret; confirmPayment
+// returns the browser to your page, which waits for order_of_cart(cx, &cart_id).
 ```
+
+The payment form can show before any payment is open, with the cart and the
+address on one page: `payment_setup(cx)` gives the provider and the merchant's
+publishable key (`None` while the shop takes no payments), enough for Stripe's
+Payment Element in its deferred mode (`elements({ mode: "payment", amount,
+currency })`). On submit, call `elements.submit()`, then `start_payment`, then
+`confirmPayment` with the client secret it returned. The dashboard copies the key
+into the tenant's store whenever the merchant changes the Stripe settings.
 
 - Every call returns `Result<Result<T, OrdersError>>`: the outer error is the store
   failing (`?` makes it a 500), the inner one a refusal to word for the shopper;
@@ -210,6 +217,10 @@ let session = start_payment(cx, &cart_id, Checkout {
   showed it, `product_unavailable`, or `payments_unavailable` when the merchant has set
   up no payments, the provider failed or nobody answered. `payment_session` reads an
   open payment back by its request id for the page after the redirect.
+- Each `CartLineView` carries its `tax_category`. `CartView::vat_estimate(country)`
+  gives the VAT the total includes when shipped there (`VatEstimate::label()` reads
+  `VAT FR 20%`), or `None` outside the EU. It is an estimate for display: the invoice
+  decides, from the merchant's VAT standing, the postal code and a buyer's VAT number.
 - The order (`order_of_cart`, `order`) arrives once the provider confirmed the payment
   to the dashboard, usually a second after the browser comes back. Its `reference`
   (`K7Q4-MZP2`) is what a shopper quotes.
@@ -261,6 +272,8 @@ product.review_count;
 - Nothing shows until the merchant publishes it in the dashboard; a rejected review
   leaves the shop for good, photos included. `review_of` reads the store, so the
   shopper sees their review waiting at once, and the reason if it was rejected.
+- `recent_reviews(cx, n)` gives the shop's latest published reviews, for a checkout
+  or home page.
 - Every `Product` carries `review_count` and its average (`rating()`, or
   `rating_stars()` for whole stars); `ProductSort::TopRated` puts the best rated
   first and products with no review last. `stars(n)` writes `★★★★☆`.
@@ -278,9 +291,11 @@ counts the published rows of the local copy.
 ## The example
 
 `examples/storefront` is a complete app on the library: a catalog page, a category
-page, a product page with an add-to-cart form and its reviews, a cart, a checkout, a
-payment page with Stripe's card form, an order confirmation where the shopper reviews
-what they bought, inline styles, no asset bundle. Against a dashboard whose
+page, a product page with an add-to-cart form and its reviews, a cart, a one-page
+checkout (steps, details, address and Stripe's Payment and Express Checkout elements
+beside an editable cart with its VAT, reassurance and recent reviews), an order
+confirmation where the shopper reviews what they bought, inline styles, no asset
+bundle. Against a dashboard whose
 `[store_api]` listens on `127.0.0.1:4321`:
 
 ```sh

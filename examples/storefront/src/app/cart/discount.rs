@@ -9,7 +9,7 @@ use topcoat::{
     },
 };
 
-use super::cart_url;
+use super::{back_url, cart_url};
 use crate::shopper::cart_id;
 
 #[derive(serde::Deserialize)]
@@ -19,6 +19,9 @@ pub struct DiscountForm {
     /// Set by the button that takes the code off.
     #[serde(default)]
     pub remove: Option<String>,
+    /// `checkout` when sent from the checkout's summary.
+    #[serde(default)]
+    pub back: String,
 }
 
 /// Puts a discount code on the cart, or takes it off.
@@ -32,5 +35,5 @@ pub async fn discount(cx: &Cx, Form(form): Form<DiscountForm>) -> Result<SeeOthe
         None => apply_discount(cx, &cart_id, &form.code).await?,
     };
     let error = outcome.err().and_then(|err| err.code());
-    Ok(see_other(cart_url(cx, error)))
+    Ok(see_other(back_url(cx, &form.back, error)))
 }

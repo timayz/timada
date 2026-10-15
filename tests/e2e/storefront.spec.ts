@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { registerWithEmail, uniqueEmail } from "./email";
-import { FakeStripe, stripeSignature } from "./stripe";
+import { FakeStripe, fakeStripeJs, stripeSignature } from "./stripe";
 import { FakeVies } from "./vies";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 
@@ -22,6 +22,10 @@ const STOREFRONT = `http://127.0.0.1:${STOREFRONT_PORT}`;
 
 let child: ChildProcess | undefined;
 let dir: string | undefined;
+
+test.beforeEach(async ({ page }) => {
+  await fakeStripeJs(page);
+});
 
 test.afterEach(async () => {
   child?.kill();
@@ -292,26 +296,25 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
     await expect(page.locator("[data-cart-items]").first()).toHaveText("3", { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
 
-  // Checkout: a bad country is refused at once and the form comes back
-  // filled in.
+  // Checkout: one page, the cart beside the form. The shop takes no card
+  // payments, so there is no card form.
   await page.goto(`${STOREFRONT}/cart`);
   await page.getByRole("link", { name: "Check out" }).click();
+  await expect(page.locator("ol.steps [aria-current=step]")).toHaveText("Shipping & payment");
   await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
+  await expect(page.locator("[data-payments-off]")).toBeVisible();
   await page.getByLabel("E-mail").fill("ada@example.org");
   await page.getByLabel("Full name").fill("Ada Lovelace");
   await page.getByLabel("Street address").fill("1 rue de la Paix");
   await page.getByLabel("Postal code").fill("75002");
   await page.getByLabel("City").fill("Paris");
-  await page.getByLabel("Country code").fill("F1");
-  await page.getByRole("button", { name: "Continue to payment" }).click();
-  await expect(page.getByRole("alert")).toContainText("two-letter code");
-  await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
+  await page.getByLabel("Country").selectOption("FR");
 
-  // The request to pay is refused: the shop has not said who it is yet, so
-  // it could not issue the invoice.
-  await page.getByLabel("Country code").fill("FR");
-  await page.getByRole("button", { name: "Continue to payment" }).click();
+  // The request to pay is refused, the form still filled in: the shop has
+  // not said who it is yet, so it could not issue the invoice.
+  await page.getByRole("button", { name: "Place order" }).click();
   await expect(page.getByRole("alert")).toContainText("cannot take orders yet", { timeout: 30_000 });
+  await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
   await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
 });
 
@@ -328,23 +331,29 @@ async function paymentSucceeded(request: APIRequestContext, webhookUrl: string, 
   });
 }
 
-/// From the cart to the card form: the checkout form filled (or kept from
-/// the last order) and sent.
-async function continueToPayment(page: Page, fill: boolean) {
-  await page.goto(`${STOREFRONT}/cart`);
-  await page.getByRole("link", { name: "Check out" }).click();
+/// The checkout's details filled in (or checked kept from the last order).
+async function fillCheckout(page: Page, fill: boolean) {
   if (fill) {
     await page.getByLabel("E-mail").fill("ada@example.org");
     await page.getByLabel("Full name").fill("Ada Lovelace");
     await page.getByLabel("Street address").fill("1 rue de la Paix");
     await page.getByLabel("Postal code").fill("75002");
     await page.getByLabel("City").fill("Paris");
-    await page.getByLabel("Country code").fill("FR");
+    await page.getByLabel("Country").selectOption("FR");
   } else {
     await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
   }
-  await page.getByRole("button", { name: "Continue to payment" }).click();
-  await expect(page).toHaveURL(`${STOREFRONT}/checkout/pay`);
+}
+
+/// From the cart to Stripe's return page: the checkout filled in (or kept
+/// from the last order), the order placed and the payment confirmed (by the
+/// fake Stripe.js, see stripe.ts).
+async function placeOrder(page: Page, fill: boolean) {
+  await page.goto(`${STOREFRONT}/cart`);
+  await page.getByRole("link", { name: "Check out" }).click();
+  await fillCheckout(page, fill);
+  await page.getByRole("button", { name: "Place order" }).click();
+  await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
 }
 
 test("a shopper pays with Stripe and the merchant fulfils or refunds the order", async ({ page, request }) => {
@@ -396,18 +405,51 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     const key = await mintKey(page, slug, true);
     await startStorefront(request, key, 2);
 
-    // Two mugs, then the card form with the payment the dashboard opened.
+    // Two mugs. The checkout shows Stripe's form for the total before any
+    // payment is open, and the VAT the total includes where the goods go.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
     await page.getByLabel("Quantity").fill("2");
     await page.getByRole("button", { name: "Add to cart" }).click();
-    await continueToPayment(page, true);
+    await page.goto(`${STOREFRONT}/cart`);
+    await page.getByRole("link", { name: "Check out" }).click();
+    const form = page.locator("[data-checkout-form]");
+    await expect(form).toHaveAttribute("data-publishable-key", "pk_test_e2e");
+    expect(await page.evaluate(() => (window as any).__stripe)).toMatchObject({
+      key: "pk_test_e2e",
+      elements: { mode: "payment", amount: 2500, currency: "eur" },
+      // Asked once, in the form: Stripe's card form asks no country again.
+      payment: { fields: { billingDetails: "never" }, wallets: { link: "never" } },
+    });
+    await expect(page.locator("[data-checkout-total]")).toHaveText("25.00 EUR");
+    await expect(page.locator("[data-checkout-vat]")).toHaveText("(incl. 4.17 EUR VAT FR 20%)");
+    await page.getByLabel("Country").selectOption("US");
+    await expect(page.locator("[data-checkout-vat]")).toBeHidden();
+    await page.getByLabel("Country").selectOption("FR");
+    await expect(page.locator("[data-checkout-vat]")).toBeVisible();
+
+    // The cart changes from the checkout and stays there.
+    await page.getByRole("button", { name: "One more Blue Mug" }).click();
+    await expect(page).toHaveURL(`${STOREFRONT}/checkout`);
+    await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
+    await page.getByRole("button", { name: "One less Blue Mug" }).click();
+    await expect(page.locator("[data-checkout-total]")).toHaveText("25.00 EUR");
+
+    // Placing the order opens the payment and confirms it with Stripe.
+    await fillCheckout(page, true);
+    await page.getByRole("button", { name: "Place order" }).click();
+    await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
     const intent = stripe.lastIntent()!;
     expect(intent.amount).toBe(2500);
     expect(intent.currency).toBe("eur");
-    const form = page.locator("[data-payment-form]");
-    await expect(form).toHaveAttribute("data-publishable-key", "pk_test_e2e");
-    await expect(form).toHaveAttribute("data-client-secret", `${intent.id}_secret_e2e`);
-    await expect(page.locator("[data-payment-total]")).toHaveText("25.00 EUR");
+    expect(new URL(page.url()).searchParams.get("payment_intent_client_secret")).toBe(`${intent.id}_secret_e2e`);
+    expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem("confirmed")))!)).toEqual({
+      billing_details: {
+        name: "Ada Lovelace",
+        email: "ada@example.org",
+        phone: "",
+        address: { line1: "1 rue de la Paix", line2: "", city: "Paris", postal_code: "75002", state: "", country: "FR" },
+      },
+    });
 
     // Stripe sends the browser back before it tells the dashboard: the page
     // waits. A webhook that is not Stripe's is refused.
@@ -457,7 +499,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     // A second order is cancelled: the money goes back through Stripe.
     await page.goto(`${STOREFRONT}/p/red-plate`);
     await page.getByRole("button", { name: "Add to cart" }).click();
-    await continueToPayment(page, false);
+    await placeOrder(page, false);
     const second = stripe.lastIntent()!;
     expect(second.id).not.toBe(intent.id);
     stripe.pay(second.id);
@@ -540,11 +582,12 @@ test("a shopper pays less with a discount code, once", async ({ page, request })
     await expect(page.locator("[data-cart-total]")).toHaveText("22.50 EUR");
 
     // Charged the discounted total, and the order and its invoice say so.
-    await continueToPayment(page, true);
+    await page.getByRole("link", { name: "Check out" }).click();
+    await expect(page.locator("[data-checkout-discount=TEN]")).toHaveText("-2.50 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("22.50 EUR");
+    await placeOrder(page, true);
     const intent = stripe.lastIntent()!;
     expect(intent.amount).toBe(2250);
-    await expect(page.locator("[data-payment-discount=TEN]")).toBeVisible();
-    await expect(page.locator("[data-payment-total]")).toHaveText("22.50 EUR");
     stripe.pay(intent.id);
     expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
     await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
@@ -564,10 +607,14 @@ test("a shopper pays less with a discount code, once", async ({ page, request })
     await page.goto(`${STOREFRONT}/p/blue-mug`);
     await page.getByRole("button", { name: "Add to cart" }).click();
     await page.goto(`${STOREFRONT}/cart`);
+    await page.getByRole("link", { name: "Check out" }).click();
+    // Entered from the checkout's summary this time.
+    await page.getByText("Have a promo code?").click();
     await page.getByLabel("Discount code").fill("TEN");
     await page.getByRole("button", { name: "Apply" }).click();
-    await page.getByRole("link", { name: "Check out" }).click();
-    await page.getByRole("button", { name: "Continue to payment" }).click();
+    await expect(page).toHaveURL(`${STOREFRONT}/checkout`);
+    await expect(page.locator("[data-checkout-discount=TEN]")).toHaveText("-1.25 EUR");
+    await page.getByRole("button", { name: "Place order" }).click();
     await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/cart\\?error=discount_already_used`), { timeout: 30_000 });
     await expect(page.getByRole("alert").first()).toContainText("already used this discount code");
 
@@ -624,7 +671,7 @@ test("a buyer's review waits for the merchant, who publishes, trims and takes it
     // One mug, paid for.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
     await page.getByRole("button", { name: "Add to cart" }).click();
-    await continueToPayment(page, true);
+    await placeOrder(page, true);
     const intent = stripe.lastIntent()!;
     stripe.pay(intent.id);
     expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
@@ -696,6 +743,14 @@ test("a buyer's review waits for the merchant, who publishes, trims and takes it
       await page.goto(mugUrl);
       await expect(page.locator("[data-product-rating]")).toContainText("★ 4.0 · 1 published", { timeout: 1000 });
     }).toPass({ timeout: 15_000 });
+    // The next shopper reads it beside the checkout.
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await page.getByRole("button", { name: "Add to cart" }).click();
+    await expect(async () => {
+      await page.goto(`${STOREFRONT}/checkout`);
+      await expect(page.locator("[data-checkout-reviews]")).toContainText("Lovely mug", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await page.goto(mugUrl);
 
     // Taken down for good, with its last photo.
     await page.getByRole("link", { name: "See its reviews" }).click();
@@ -742,7 +797,7 @@ test("a shopper reviews what they bought from the order page, shown once the sho
       await page.goto(`${STOREFRONT}/p/${product}`);
       await page.getByRole("button", { name: "Add to cart" }).click();
     }
-    await continueToPayment(page, true);
+    await placeOrder(page, true);
     const intent = stripe.lastIntent()!;
     stripe.pay(intent.id);
     expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
@@ -814,8 +869,8 @@ test("a shopper reviews what they bought from the order page, shown once the sho
   }
 });
 
-/// From the cart to the card form, shipping to `country`, as a business
-/// when a VAT number is given.
+/// From the cart to Stripe's return page, shipping to `country`, as a
+/// business when a VAT number is given.
 async function checkoutTo(page: Page, country: string, postalCode: string, vatNumber = "") {
   await page.goto(`${STOREFRONT}/cart`);
   await page.getByRole("link", { name: "Check out" }).click();
@@ -825,10 +880,10 @@ async function checkoutTo(page: Page, country: string, postalCode: string, vatNu
   await page.getByLabel("Street address").fill("1 Main Street");
   await page.getByLabel("Postal code").fill(postalCode);
   await page.getByLabel("City").fill("Somewhere");
-  await page.getByLabel("Country code").fill(country);
+  await page.getByLabel("Country").selectOption(country);
   await page.getByLabel("EU company VAT number (optional, for an invoice without VAT)").fill(vatNumber);
-  await page.getByRole("button", { name: "Continue to payment" }).click();
-  await expect(page).toHaveURL(`${STOREFRONT}/checkout/pay`);
+  await page.getByRole("button", { name: "Place order" }).click();
+  await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
 }
 
 test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page, request }) => {
@@ -889,9 +944,9 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
     await page.getByLabel("Street address").fill("1 Main Street");
     await page.getByLabel("Postal code").fill("10115");
     await page.getByLabel("City").fill("Berlin");
-    await page.getByLabel("Country code").fill("DE");
+    await page.getByLabel("Country").selectOption("DE");
     await page.getByLabel("EU company VAT number (optional, for an invoice without VAT)").fill("US123");
-    await page.getByRole("button", { name: "Continue to payment" }).click();
+    await page.getByRole("button", { name: "Place order" }).click();
     await expect(page.getByRole("alert")).toContainText("EU VAT number");
     await checkoutTo(page, "DE", "10115", "DE123456789");
     await pay();

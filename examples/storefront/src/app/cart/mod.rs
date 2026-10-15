@@ -31,6 +31,16 @@ pub fn cart_url(cx: &Cx, error: Option<&str>) -> String {
     href!(index).query(Link { error }).resolve(cx)
 }
 
+/// Where a cart form sends the shopper back: the checkout when it was sent
+/// from there (`back=checkout`), the cart otherwise. Only those two, so a
+/// form cannot send anyone elsewhere.
+pub fn back_url(cx: &Cx, back: &str, error: Option<&str>) -> String {
+    match back {
+        "checkout" => crate::app::checkout::checkout_url(cx, error),
+        _ => cart_url(cx, error),
+    }
+}
+
 /// This browser's cart, unless it has none or it became an order.
 pub async fn current_cart(cx: &Cx) -> Result<Option<CartView>> {
     let Some(id) = cart_id(cx) else {
@@ -155,6 +165,9 @@ pub struct LineForm {
     pub variant_id: String,
     #[serde(default)]
     pub quantity: Option<u32>,
+    /// `checkout` when sent from the checkout's summary.
+    #[serde(default)]
+    pub back: String,
 }
 
 impl LineForm {
