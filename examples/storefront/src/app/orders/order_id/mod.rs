@@ -1,6 +1,6 @@
-//! `/orders/{order_id}`: an order this browser placed, read from the store.
-//! Any other order is a 404: an order id is not a password, and this
-//! example has no shopper accounts.
+//! `/orders/{order_id}`: an order this browser placed, or one the shopper
+//! signed in on it placed with their address, read from the store. Any other
+//! order is a 404: an order id is not a password.
 
 pub mod documents;
 pub mod review;
@@ -18,7 +18,7 @@ use topcoat::{
 };
 
 use crate::app::{document, say};
-use crate::shopper::placed;
+use crate::shopper::holds_order;
 
 module_param!(pub order_id);
 
@@ -66,7 +66,7 @@ struct LineReview {
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let order_id = path_param::<OrderId>(cx);
-    if !placed(cx, order_id) {
+    if !holds_order(cx, order_id).await? {
         return Err(not_found().into());
     }
     let Some(order) = order(cx, order_id).await? else {
