@@ -418,7 +418,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
       key: "pk_test_e2e",
       elements: { mode: "payment", amount: 2500, currency: "eur" },
       // Asked once, in the form: Stripe's card form asks no country again.
-      payment: { fields: { billingDetails: "never" } },
+      payment: { fields: { billingDetails: "never" }, wallets: { link: "never" } },
     });
     await expect(page.locator("[data-checkout-total]")).toHaveText("25.00 EUR");
     await expect(page.locator("[data-checkout-vat]")).toHaveText("(incl. 4.17 EUR VAT FR 20%)");

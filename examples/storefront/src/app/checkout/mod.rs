@@ -79,8 +79,10 @@ if (key && window.Stripe) {
   });
   // The details and the address are asked above: Stripe's form asks
   // nothing again (no second country), and they are handed to it below.
+  // Link's "save my information" box would ask the e-mail, phone and name
+  // a third time: left out too.
   elements
-    .create("payment", { fields: { billingDetails: "never" } })
+    .create("payment", { fields: { billingDetails: "never" }, wallets: { link: "never" } })
     .mount("#payment-element");
   const express = elements.create("expressCheckout", { buttonHeight: 44 });
   express.mount("#express-checkout");
