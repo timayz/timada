@@ -99,6 +99,14 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             &executor,
         )
         .await?,
+        // Nor this one: it copies how each tenant's shoppers pay into the
+        // tenant's store, for the storefronts' payment form.
+        start_read_model(
+            "payment setup",
+            crate::payments::setup_subscription(payments.clone(), tenants.clone()),
+            &executor,
+        )
+        .await?,
     ];
 
     // A restarted node brings its tenant copies up to date in the background

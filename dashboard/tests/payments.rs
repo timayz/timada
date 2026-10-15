@@ -804,6 +804,54 @@ async fn the_stripe_secrets_are_kept_sealed() {
     h.finish().await;
 }
 
+#[tokio::test]
+async fn the_tenant_store_learns_how_its_shoppers_pay() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let follow = async || {
+        payments::setup_subscription(h.payments.clone(), h.tenants.clone())
+            .run_once(&h.platform.0)
+            .await
+            .unwrap();
+    };
+    let orders = timada_orders::Command(h.store(&acme).await);
+    follow().await;
+    assert_eq!(orders.payment_setup().await.unwrap(), None);
+
+    // Connected: the public key reaches the tenant's store, nothing secret.
+    let acme = h.connect_stripe(&acme).await;
+    follow().await;
+    assert_eq!(
+        orders.payment_setup().await.unwrap(),
+        Some(timada_orders::PaymentSetup {
+            provider: "stripe".into(),
+            publishable_key: "pk_test_123".into(),
+        })
+    );
+    // Told again (another node, a replay), nothing new is written.
+    let written = orders.load_payment_method().await.unwrap().unwrap();
+    orders
+        .set_payment_method(
+            "timada-dashboard",
+            Some(timada_orders::PaymentSetup {
+                provider: "stripe".into(),
+                publishable_key: "pk_test_123".into(),
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        orders.load_payment_method().await.unwrap().unwrap(),
+        written
+    );
+
+    // Stopped: the storefronts stop showing the payment form.
+    h.platform.remove_payments("alice", &acme.id).await.unwrap();
+    follow().await;
+    assert_eq!(orders.payment_setup().await.unwrap(), None);
+    h.finish().await;
+}
+
 /// The real client against stripe-mock (`docker compose up -d stripe-mock`),
 /// when `STRIPE_MOCK_URL` says where it is: each call the dashboard makes
 /// is sent and its answer read back as Stripe shapes it. Skipped otherwise.
