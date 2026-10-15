@@ -3,8 +3,8 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 use ulid::Ulid;
 
 use crate::aggregator::{
-    BuyerIdentified, CheckedOut, CheckoutRequested, Claimed, PaymentRefused, PaymentRequested,
-    Placed,
+    BuyerIdentified, CheckedOut, CheckoutRequested, Claimed, DiscountGranted, Discounted,
+    PaymentRefused, PaymentRequested, Placed,
 };
 use crate::error::OrdersError;
 use crate::value_object::{
@@ -12,7 +12,7 @@ use crate::value_object::{
     normalize_email, normalize_note, normalize_shipping, order_id, order_reference_id,
 };
 
-use super::{CartItem, CartLine, CartState, CheckoutRequest, OrderState};
+use super::{CartItem, CartLine, CartState, CheckoutRequest, OrderDiscount, OrderState};
 
 /// How many fresh references are tried before giving up: with 40 bits each,
 /// a second clash in a row means something else is wrong.
@@ -61,6 +61,15 @@ pub struct Quote {
     pub unavailable: Vec<CartLine>,
     /// `None` while no line is priced.
     pub currency: Option<String>,
+    /// What the lines add up to.
+    pub subtotal_cents: u64,
+    /// The cart's discount code, when it takes something off.
+    pub discount: Option<OrderDiscount>,
+    /// Why the cart's discount code takes nothing off (one of
+    /// [`timada_discounts::SHOPPER_CODES`]); the total is then full price.
+    pub discount_refused: Option<&'static str>,
+    /// What a payment asked for now would charge: the subtotal, less the
+    /// discount.
     pub total_cents: u64,
 }
 
@@ -135,10 +144,48 @@ impl<E: Executor> super::Command<E> {
                 unit_amount_cents: price.amount_cents,
                 quantity: line.quantity,
             };
-            quote.total_cents += order_line.amount_cents();
+            quote.subtotal_cents += order_line.amount_cents();
             quote.lines.push(order_line);
         }
+        quote.total_cents = quote.subtotal_cents;
+        if let (Some(code), Some(currency)) = (&cart.discount_code, &quote.currency) {
+            match self
+                .price_discount(code, quote.subtotal_cents, currency)
+                .await
+            {
+                Ok(discount) => {
+                    quote.total_cents -= discount.amount_cents;
+                    quote.discount = Some(discount);
+                }
+                Err(OrdersError::DiscountRefused { code }) => quote.discount_refused = Some(code),
+                Err(err) => return Err(err),
+            }
+        }
         Ok(quote)
+    }
+
+    /// What the discount a code names takes off `subtotal_cents` now.
+    async fn price_discount(
+        &self,
+        code: &str,
+        subtotal_cents: u64,
+        currency: &str,
+    ) -> Result<OrderDiscount, OrdersError> {
+        let discount =
+            self.load_discount_by_code(code)
+                .await?
+                .ok_or(OrdersError::DiscountRefused {
+                    code: timada_discounts::DISCOUNT_UNKNOWN,
+                })?;
+        let amount_cents = discount
+            .amount_off(subtotal_cents, currency, timada_discounts::unix_now())
+            .map_err(OrdersError::from_discount)?;
+        Ok(OrderDiscount {
+            discount_id: discount.id,
+            code: discount.code,
+            subtotal_cents,
+            amount_cents,
+        })
     }
 }
 
@@ -157,7 +204,11 @@ pub struct PendingPayment {
     pub request: CheckoutRequest,
     pub lines: Vec<OrderLine>,
     pub currency: String,
+    /// What to charge: the lines, less the discount.
     pub total_cents: u64,
+    /// The discount to charge it with, whose use the dashboard reserves
+    /// before it opens the payment.
+    pub discount: Option<OrderDiscount>,
 }
 
 impl<E: Executor> super::Command<E> {
@@ -186,6 +237,10 @@ impl<E: Executor> super::Command<E> {
                 product_id: line.product_id.clone(),
             });
         }
+        // A code the shopper counted on is never dropped silently.
+        if let Some(code) = quote.discount_refused {
+            return Err(OrdersError::DiscountRefused { code });
+        }
         if let Some(expected) = request.expected_total_cents
             && expected != quote.total_cents
         {
@@ -199,6 +254,7 @@ impl<E: Executor> super::Command<E> {
             lines: quote.lines,
             currency,
             total_cents: quote.total_cents,
+            discount: quote.discount,
         }))
     }
 
@@ -277,8 +333,8 @@ impl<E: Executor> super::Command<E> {
             if cart.request(&request_id).is_none_or(|r| r.answer.is_some()) {
                 return Ok(());
             }
-            let written = cart
-                .write()?
+            let mut write = cart.write()?;
+            write
                 .routing_key_opt(routing_key.clone())
                 .event(&PaymentRequested {
                     request_id: request_id.clone(),
@@ -290,9 +346,18 @@ impl<E: Executor> super::Command<E> {
                     currency: pending.currency.clone(),
                     total_cents: pending.total_cents,
                     requested_by: actor.to_owned(),
-                })
-                .commit(&self.0)
-                .await;
+                });
+            if let Some(discount) = &pending.discount {
+                write.event(&DiscountGranted {
+                    request_id: request_id.clone(),
+                    discount_id: discount.discount_id.clone(),
+                    code: discount.code.clone(),
+                    subtotal_cents: discount.subtotal_cents,
+                    amount_cents: discount.amount_cents,
+                    granted_by: actor.to_owned(),
+                });
+            }
+            let written = write.commit(&self.0).await;
             match written {
                 Ok(_) => return Ok(()),
                 Err(WriteError::InvalidOriginalVersion) if attempt < CART_WRITE_ATTEMPTS => {}
@@ -369,7 +434,8 @@ impl<E: Executor> super::Command<E> {
         }
 
         let reference = self.claim_reference(&order_id, routing_key.clone()).await?;
-        let placed = evento::append(&order_id)
+        let mut write = evento::append(&order_id);
+        write
             .original_version(0)
             .routing_key_opt(routing_key.clone())
             .event(&Placed {
@@ -386,9 +452,17 @@ impl<E: Executor> super::Command<E> {
                     ..payment.clone()
                 },
                 placed_by: actor.to_owned(),
-            })
-            .commit(&self.0)
-            .await;
+            });
+        if let Some(discount) = &snapshot.discount {
+            write.event(&Discounted {
+                discount_id: discount.discount_id.clone(),
+                code: discount.code.clone(),
+                subtotal_cents: discount.subtotal_cents,
+                amount_cents: discount.amount_cents,
+                discounted_by: actor.to_owned(),
+            });
+        }
+        let placed = write.commit(&self.0).await;
         match placed {
             Ok(_) => {}
             // Told at the same moment on another node: that one stands, and

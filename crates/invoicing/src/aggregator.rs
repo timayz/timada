@@ -54,6 +54,14 @@ pub enum Book {
         /// Whether destination VAT applies for the rest of the year.
         eu_threshold_passed: bool,
     },
+    /// The discount code an invoice's order was paid with, written with its
+    /// `InvoiceIssued`: its lines are at full price, `amount_cents` (VAT
+    /// included) came off them, and its VAT and totals are of what was paid.
+    InvoiceDiscounted {
+        document_id: String,
+        code: String,
+        amount_cents: u64,
+    },
     /// A credit note: money given back against an invoice.
     CreditNoteIssued {
         /// Its index stream ([`credit_note_id`](crate::credit_note_id)).

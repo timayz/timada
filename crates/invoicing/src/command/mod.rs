@@ -23,13 +23,13 @@ use std::ops::Deref;
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
-use crate::aggregator::{CreditNoteIssued, InvoiceIssued, Recorded, Reserved};
+use crate::aggregator::{CreditNoteIssued, InvoiceDiscounted, InvoiceIssued, Recorded, Reserved};
 use crate::error::InvoicingError;
 use crate::tax::{Destination, DistanceSales, Regime, TaxProfile, decide, is_distance_sale};
 use crate::value_object::{
     Address, BOOK_CHUNK, CREDIT_NOTE_PREFIX, INVOICE_PREFIX, InvoiceLine, Seller, TEMPLATE_VERSION,
-    VatSubtotal, book_id, credit_note_id, document_label, invoice_id, lines_breakdown, prorate,
-    series_code, series_of, year_of,
+    VatSubtotal, book_id, credit_note_id, document_label, invoice_id, prorate, series_code,
+    series_of, spread, vat_breakdown, year_of,
 };
 
 /// How often a write lost to another writer is tried again.
@@ -72,6 +72,14 @@ impl DocumentKind {
     }
 }
 
+/// A discount code taken off an invoice's lines.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InvoiceDiscount {
+    pub code: String,
+    /// VAT included, in minor units.
+    pub amount_cents: u64,
+}
+
 /// An issued document as it reads: an invoice or a credit note (the fields
 /// of the other kind are empty).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -100,8 +108,11 @@ pub struct IssuedDocument {
     /// Invoice: where the goods go.
     pub delivery: Option<Address>,
     pub currency: String,
-    /// Invoice: what was sold.
+    /// Invoice: what was sold, at full price.
     pub lines: Vec<InvoiceLine>,
+    /// Invoice: the discount code taken off the lines, if any; `vat` and
+    /// the totals are of what was paid.
+    pub discount: Option<InvoiceDiscount>,
     pub vat: Vec<VatSubtotal>,
     pub total_excl_vat_cents: u64,
     pub total_vat_cents: u64,
@@ -139,6 +150,7 @@ pub fn book_projection<E: Executor>() -> Projection<E, BookState> {
     Projection::new::<crate::aggregator::Book>()
         .handler(on_invoice_issued())
         .handler(on_credit_note_issued())
+        .handler(on_invoice_discounted())
         .strict()
 }
 
@@ -184,6 +196,21 @@ async fn on_invoice_issued(
             ..IssuedDocument::default()
         },
     );
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoice_discounted(
+    event: Event<InvoiceDiscounted>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    // Written right after the `InvoiceIssued` it belongs to.
+    if let Some(document) = book.documents.get_mut(&event.data.document_id) {
+        document.discount = Some(InvoiceDiscount {
+            code: event.data.code.to_owned(),
+            amount_cents: event.data.amount_cents,
+        });
+    }
     Ok(())
 }
 
@@ -310,7 +337,9 @@ pub struct NewInvoice {
     pub delivery: Address,
     pub currency: String,
     pub lines: Vec<NewInvoiceLine>,
-    /// What was paid: the lines must add up to it.
+    /// The discount code the order was paid with, if any.
+    pub discount: Option<InvoiceDiscount>,
+    /// What was paid: the lines, less the discount, must add up to it.
     pub total_cents: u64,
     pub issued_by: String,
     /// The seller as far as VAT goes.
@@ -353,10 +382,28 @@ impl<E: Executor> Command<E> {
         if invoice.lines.is_empty() {
             return Err(InvoicingError::EmptyInvoice);
         }
-        let total: u64 = invoice.lines.iter().map(NewInvoiceLine::total_cents).sum();
+        let gross: Vec<u64> = invoice
+            .lines
+            .iter()
+            .map(NewInvoiceLine::total_cents)
+            .collect();
+        let discount_cents = invoice.discount.as_ref().map_or(0, |d| d.amount_cents);
+        let total = gross
+            .iter()
+            .sum::<u64>()
+            .checked_sub(discount_cents)
+            .ok_or(InvoicingError::TotalMismatch)?;
         if total != invoice.total_cents {
             return Err(InvoicingError::TotalMismatch);
         }
+        // What each line was really sold for: the discount spread over the
+        // lines in proportion, to the cent. The VAT and the distance sales
+        // are of these.
+        let net: Vec<u64> = gross
+            .iter()
+            .zip(spread(&gross, discount_cents))
+            .map(|(line, off)| line - off)
+            .collect();
         let document_id = invoice_id(&invoice.order_id);
         let index = self
             .reserve(
@@ -379,7 +426,8 @@ impl<E: Executor> Command<E> {
         let sold: Vec<(&str, u64)> = invoice
             .lines
             .iter()
-            .map(|line| (line.tax_category.as_str(), line.total_cents()))
+            .zip(&net)
+            .map(|(line, net)| (line.tax_category.as_str(), *net))
             .collect();
         let decide_with = |before: DistanceSales| {
             decide(invoice.tax, &destination, &sold, &invoice.currency, before)
@@ -411,41 +459,53 @@ impl<E: Executor> Command<E> {
                 vat_rate_bps: *rate,
             })
             .collect();
-        let vat = lines_breakdown(&lines);
+        let vat = vat_breakdown(
+            lines
+                .iter()
+                .zip(&net)
+                .filter_map(|(line, net)| line.vat_rate_bps.map(|rate| (rate, *net))),
+        );
         let total_vat_cents: u64 = vat.iter().map(|subtotal| subtotal.vat_cents).sum();
         let reverse_charge = decision.regime == Regime::ReverseCharge;
         self.issue_reserved(&document_id, |book, series, number| {
-            evento::append(book)
-                .event(&InvoiceIssued {
+            let mut write = evento::append(book);
+            write.event(&InvoiceIssued {
+                document_id: document_id.clone(),
+                series: series.to_owned(),
+                number,
+                issued_at: now,
+                order_id: invoice.order_id.clone(),
+                order_reference: invoice.order_reference.clone(),
+                paid_at: invoice.paid_at,
+                payment_method: invoice.payment_method.clone(),
+                seller: invoice.seller.clone(),
+                buyer: invoice.buyer.clone(),
+                buyer_email: invoice.buyer_email.clone(),
+                delivery: invoice.delivery.clone(),
+                currency: invoice.currency.clone(),
+                lines: lines.clone(),
+                vat: vat.clone(),
+                total_excl_vat_cents: total - total_vat_cents,
+                total_vat_cents,
+                total_cents: total,
+                template: TEMPLATE_VERSION,
+                issued_by: invoice.issued_by.clone(),
+                company_id: invoice.company_id.clone(),
+                regime: decision.regime.as_str().to_owned(),
+                tax_country: decision.tax_country.clone(),
+                buyer_vat_number: invoice.buyer_vat_number.clone().filter(|_| reverse_charge),
+                vies_reference: invoice.vies_reference.clone().filter(|_| reverse_charge),
+                eu_distance_sales_cents: decision.distance.sales_cents,
+                eu_threshold_passed: decision.distance.passed,
+            });
+            if let Some(discount) = &invoice.discount {
+                write.event(&InvoiceDiscounted {
                     document_id: document_id.clone(),
-                    series: series.to_owned(),
-                    number,
-                    issued_at: now,
-                    order_id: invoice.order_id.clone(),
-                    order_reference: invoice.order_reference.clone(),
-                    paid_at: invoice.paid_at,
-                    payment_method: invoice.payment_method.clone(),
-                    seller: invoice.seller.clone(),
-                    buyer: invoice.buyer.clone(),
-                    buyer_email: invoice.buyer_email.clone(),
-                    delivery: invoice.delivery.clone(),
-                    currency: invoice.currency.clone(),
-                    lines: lines.clone(),
-                    vat: vat.clone(),
-                    total_excl_vat_cents: total - total_vat_cents,
-                    total_vat_cents,
-                    total_cents: total,
-                    template: TEMPLATE_VERSION,
-                    issued_by: invoice.issued_by.clone(),
-                    company_id: invoice.company_id.clone(),
-                    regime: decision.regime.as_str().to_owned(),
-                    tax_country: decision.tax_country.clone(),
-                    buyer_vat_number: invoice.buyer_vat_number.clone().filter(|_| reverse_charge),
-                    vies_reference: invoice.vies_reference.clone().filter(|_| reverse_charge),
-                    eu_distance_sales_cents: decision.distance.sales_cents,
-                    eu_threshold_passed: decision.distance.passed,
-                })
-                .to_owned()
+                    code: discount.code.clone(),
+                    amount_cents: discount.amount_cents,
+                });
+            }
+            write
         })
         .await
     }

@@ -100,6 +100,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let rows = discounts_of_tenant(pool, &tenant.id, false)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    // How many paid orders used each code, from the orders' read model.
+    let uses = timada_orders::discount_use_counts(pool, &tenant.id).await?;
     let slug = tenant.slug.clone();
     let title = format!("Discounts · {}", tenant.name);
 
@@ -123,12 +125,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <th class="py-2 font-medium">"Off"</th>
                             <th class="py-2 font-medium">"When"</th>
                             <th class="py-2 font-medium">"Limits"</th>
+                            <th class="py-2 font-medium">"Orders"</th>
                             <th class="py-2 font-medium">"Status"</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="5">"No discount yet."</td></tr>
+                            <tr><td class="py-2 text-neutral-500" colspan="6">"No discount yet."</td></tr>
                         }
                         for row in &rows {
                             <tr data-discount=(&row.code)>
@@ -138,6 +141,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <td class="py-2" data-discount-value="">(row.value().to_string())</td>
                                 <td class="py-2">(window_of(row))</td>
                                 <td class="py-2">(limits_of(row))</td>
+                                <td class="py-2" data-discount-orders="">(uses.get(&row.id).copied().unwrap_or(0))</td>
                                 <td class="py-2" data-discount-status=(&row.status)>(&row.status)</td>
                             </tr>
                         }

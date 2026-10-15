@@ -137,6 +137,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         })
         .collect();
     let total = format_money(order.total_cents, &order.currency);
+    // The code it was paid with and what it took off, as `-2.50 EUR`.
+    let discount = order.discount.as_ref().map(|discount| {
+        (
+            discount.code.clone(),
+            format!("-{}", format_money(discount.amount_cents, &order.currency)),
+        )
+    });
     let status = order.status;
     let address = order.shipping.clone();
     let order_id = order.id.clone();
@@ -245,6 +252,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     </tbody>
                     <tfoot>
+                        if let Some((code, amount)) = &discount {
+                            <tr class="border-t border-neutral-200" data-order-discount=(code)>
+                                <td class="py-2" colspan="4">"Discount " <code>(code)</code></td>
+                                <td class="py-2 text-right">(amount)</td>
+                            </tr>
+                        }
                         <tr class="border-t border-neutral-200 font-medium">
                             <td class="py-2" colspan="4">"Total"</td>
                             <td class="py-2 text-right" data-order-total="">(&total)</td>
