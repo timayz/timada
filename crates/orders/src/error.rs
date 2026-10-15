@@ -34,6 +34,8 @@ pub enum OrdersError {
     PriceChanged { total_cents: u64 },
     #[error("enter a valid e-mail address")]
     InvalidEmail,
+    #[error("enter an EU VAT number: its country prefix, then letters and digits")]
+    InvalidVatNumber,
     #[error("enter the name to ship to (at most 120 characters)")]
     InvalidName,
     #[error("enter the street, postal code and city of the address")]
@@ -109,6 +111,7 @@ impl OrdersError {
             Self::AmountMismatch => "amount_mismatch",
             Self::DuplicatePayment { .. } => "duplicate_payment",
             Self::InvalidEmail => "invalid_email",
+            Self::InvalidVatNumber => "invalid_vat_number",
             Self::InvalidName => "invalid_ship_name",
             Self::InvalidAddress => "invalid_address",
             Self::InvalidCountry => "invalid_country",

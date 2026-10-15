@@ -59,6 +59,9 @@ async-stripe-types = { version = "=1.0.0-rc.9" }
 aes-gcm = "0.10"
 hmac = "0.12"
 sha2 = "0.10"
+# VAT rates by country and level, for sales across borders. Pinned: its rates
+# are data, and a new version changes what new invoices say.
+world-tax = "=0.5.2"
 # Draws the invoices as PDF: Typst as a library, with the fonts it ships.
 typst = "=0.15.1"
 typst-as-lib = "=0.17.0"

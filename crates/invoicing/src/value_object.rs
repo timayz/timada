@@ -16,21 +16,6 @@ pub const CREDIT_NOTE_PREFIX: &str = "A";
 pub const TEMPLATE_VERSION: u16 = 1;
 /// How a storefront order was paid.
 pub const PAYMENT_METHOD_CARD: &str = "card";
-/// What a merchant under the VAT exemption for small businesses writes on
-/// its invoices.
-pub const FRANCHISE_MENTION: &str = "TVA non applicable, art. 293 B du CGI";
-
-/// The French VAT rate of a kind of goods (a catalog tax category), in
-/// basis points: books and basic food 5.5 %, medicines sold without
-/// prescription 10 %, press 2.1 %, everything else 20 %.
-pub fn french_rate_bps(category: &str) -> u32 {
-    match category {
-        "books" | "food" => 550,
-        "medicines" => 1000,
-        "press" => 210,
-        _ => 2000,
-    }
-}
 
 /// The index stream of an order's invoice.
 pub fn invoice_id(order_id: &str) -> String {
@@ -254,6 +239,38 @@ pub fn format_date_fr(at: u64) -> String {
     format!("{day:02}/{month:02}/{year}")
 }
 
+/// Unix seconds of midnight UTC on a calendar date (Howard Hinnant's
+/// algorithm, the inverse of [`civil_date`]).
+pub fn unix_of_date(year: i64, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let yoe = year.rem_euclid(400);
+    let mp = i64::from((month + 9) % 12);
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    (era * 146_097 + doe - 719_468) * 86_400
+}
+
+/// The `[from, to)` Unix seconds of a quarter written `2026-Q4`.
+pub fn quarter_bounds(quarter: &str) -> Option<(i64, i64)> {
+    let (year, q) = quarter.split_once("-Q")?;
+    let year: i64 = year.parse().ok()?;
+    let q: u32 = q.parse().ok().filter(|q| (1..=4).contains(q))?;
+    let from = unix_of_date(year, 3 * q - 2, 1);
+    let to = if q == 4 {
+        unix_of_date(year + 1, 1, 1)
+    } else {
+        unix_of_date(year, 3 * q + 1, 1)
+    };
+    Some((from, to))
+}
+
+/// The quarter of Unix seconds, written `2026-Q4`.
+pub fn quarter_of(at: u64) -> String {
+    let (year, month, _) = civil_date(at);
+    format!("{year}-Q{}", month.div_ceil(3))
+}
+
 /// The UTC calendar date of Unix seconds (Howard Hinnant's algorithm).
 pub fn civil_date(at: u64) -> (i64, u32, u32) {
     let days = (at / 86_400) as i64 + 719_468;
@@ -342,5 +359,12 @@ mod tests {
         assert_eq!(series_of(INVOICE_PREFIX, 1_792_011_600), "F2026");
         assert_eq!(civil_date(0), (1970, 1, 1));
         assert_eq!(civil_date(951_782_400), (2000, 2, 29));
+        assert_eq!(unix_of_date(2000, 2, 29), 951_782_400);
+        assert_eq!(unix_of_date(1970, 1, 1), 0);
+        assert_eq!(quarter_of(1_792_011_600), "2026-Q4");
+        let (from, to) = quarter_bounds("2026-Q4").unwrap();
+        assert_eq!(civil_date(from as u64), (2026, 10, 1));
+        assert_eq!(civil_date(to as u64), (2027, 1, 1));
+        assert!(quarter_bounds("2026-Q5").is_none());
     }
 }

@@ -38,6 +38,19 @@ pub enum Book {
         /// [`TEMPLATE_VERSION`](crate::TEMPLATE_VERSION) when issued.
         template: u16,
         issued_by: String,
+        /// How it is taxed ([`Regime`](crate::tax::Regime) as text).
+        regime: String,
+        /// The country whose VAT applies, or where the goods went.
+        tax_country: String,
+        /// The buyer's EU VAT number, when it bought as a business.
+        buyer_vat_number: Option<String>,
+        /// VIES's reference for the check of that number.
+        vies_reference: Option<String>,
+        /// The year's EU distance sales excluding VAT, this one included
+        /// (only the invoices of a series count, in their order).
+        eu_distance_sales_cents: u64,
+        /// Whether destination VAT applies for the rest of the year.
+        eu_threshold_passed: bool,
     },
     /// A credit note: money given back against an invoice.
     CreditNoteIssued {
@@ -64,6 +77,10 @@ pub enum Book {
         total_cents: u64,
         template: u16,
         issued_by: String,
+        /// Copied from the invoice it corrects.
+        regime: String,
+        tax_country: String,
+        buyer_vat_number: Option<String>,
     },
 }
 
