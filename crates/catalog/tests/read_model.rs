@@ -112,6 +112,9 @@ async fn the_category_tree_carries_its_product_counts() {
     let mats = create_child(&cmd, "Mats", &bedding.id).await;
     let toys = create_category(&cmd, "Toys").await;
     cmd.position_category(ALICE, &toys.id, 1).await.unwrap();
+    cmd.set_category_in_menu(ALICE, &toys.id, false)
+        .await
+        .unwrap();
     let mat = create_product(&cmd, "Cooling mat").await;
     let ball = create_product(&cmd, "Ball").await;
     cmd.categorize_product(ALICE, &mat.id, &bedding.id)
@@ -149,6 +152,8 @@ async fn the_category_tree_carries_its_product_counts() {
     assert_eq!(tree[0].item.product_count, 1);
     assert_eq!(tree[0].children[0].item.product_count, 1);
     assert_eq!(tree[1].item.product_count, 1);
+    assert!(tree[0].item.in_menu);
+    assert!(!tree[1].item.in_menu, "hidden from the menu, still listed");
     assert_eq!(
         live_child_count(&pool, TENANT, &bedding.id).await.unwrap(),
         1

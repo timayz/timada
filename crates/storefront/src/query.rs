@@ -636,6 +636,9 @@ pub struct Category {
     pub parent_id: Option<String>,
     /// Where it sorts among its siblings, lowest first.
     pub position: i64,
+    /// Shown in the shop's menu. A hidden category keeps its page; it and
+    /// everything under it are only left out of [`menu_of`].
+    pub in_menu: bool,
 }
 
 impl TreeNode for Category {
@@ -687,6 +690,20 @@ pub fn find_category<'a>(nodes: &'a [CategoryNode], slug: &str) -> Option<&'a Ca
     nodes.iter().find_map(|node| node.find(slug))
 }
 
+/// The trees a menu shows: `nodes` without the categories the merchant hid
+/// from it, each taking its subtree along.
+pub fn menu_of(nodes: &[CategoryNode]) -> Vec<CategoryNode> {
+    nodes
+        .iter()
+        .filter(|node| node.category.in_menu)
+        .map(|node| CategoryNode {
+            category: node.category.clone(),
+            children: menu_of(&node.children),
+            product_count: node.product_count,
+        })
+        .collect()
+}
+
 /// A category row with the count its page lists, as the subscription stored
 /// it.
 #[derive(FromRow)]
@@ -710,7 +727,7 @@ impl TreeNode for CountedCategory {
 /// with how many published products each one's page lists.
 pub async fn published_categories(pool: &SqlitePool) -> sqlx::Result<Vec<CategoryNode>> {
     let categories: Vec<CountedCategory> = sqlx::query_as(
-        "SELECT id, slug, name, description, parent_id, position, subtree_count
+        "SELECT id, slug, name, description, parent_id, position, in_menu, subtree_count
          FROM storefront_categories WHERE archived = 0
          ORDER BY position, name, id",
     )
@@ -734,7 +751,7 @@ pub async fn published_category_by_slug(
     slug: &str,
 ) -> sqlx::Result<Option<Category>> {
     sqlx::query_as(
-        "SELECT id, slug, name, description, parent_id, position
+        "SELECT id, slug, name, description, parent_id, position, in_menu
          FROM storefront_categories WHERE slug = ?1 AND archived = 0",
     )
     .bind(slug)
@@ -758,7 +775,7 @@ pub async fn published_product_categories(
     product_id: &str,
 ) -> sqlx::Result<Vec<Category>> {
     sqlx::query_as(
-        "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position
+        "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position, c.in_menu
          FROM storefront_categories c
          JOIN storefront_product_categories pc ON pc.category_id = c.id
          WHERE pc.product_id = ?1 AND c.archived = 0

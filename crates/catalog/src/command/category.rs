@@ -3,7 +3,9 @@
 use evento::{Executor, ProjectionAggregate};
 use ulid::Ulid;
 
-use crate::aggregator::category::{Archived, Created, Described, Moved, Positioned, Renamed};
+use crate::aggregator::category::{
+    Archived, Created, Described, HiddenFromMenu, Moved, Positioned, Renamed, ShownInMenu,
+};
 use crate::error::CatalogError;
 use crate::value_object::{
     FALLBACK_CATEGORY_SLUG, MAX_CATEGORY_DEPTH, normalize_category_description,
@@ -218,6 +220,34 @@ impl<E: Executor> super::Command<E> {
             })
             .commit(&self.0)
             .await?;
+        Ok(())
+    }
+
+    /// Puts the category in the shop's menu or leaves it out, with its
+    /// subtree; asking for what it already is is a no-op.
+    pub async fn set_category_in_menu(
+        &self,
+        actor: &str,
+        category_id: &str,
+        in_menu: bool,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let category = self.require_live_category(category_id).await?;
+        if category.hidden_from_menu != in_menu {
+            return Ok(());
+        }
+        let mut write = category.write()?;
+        let write = write.routing_key_opt(routing_key);
+        if in_menu {
+            write.event(&ShownInMenu {
+                shown_by: actor.to_owned(),
+            });
+        } else {
+            write.event(&HiddenFromMenu {
+                hidden_by: actor.to_owned(),
+            });
+        }
+        write.commit(&self.0).await?;
         Ok(())
     }
 

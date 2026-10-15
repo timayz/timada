@@ -6,8 +6,9 @@ pub mod documents;
 pub mod review;
 
 use timada_storefront::{
-    DocumentKind, MAX_BODY_LEN, MAX_PHOTOS, MAX_TITLE_LEN, OrderStatus, ReviewStatus, categories,
-    documents as order_documents, format_amount_fr, format_money, order, review_of, stars, store,
+    DocumentKind, MAX_BODY_LEN, MAX_PHOTOS, MAX_TITLE_LEN, OrderStatus, ReviewStatus,
+    documents as order_documents, format_amount_fr, format_money, menu, order, review_of, stars,
+    store,
 };
 use topcoat::{
     Result,
@@ -72,7 +73,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         return Err(not_found().into());
     };
     let query = query_params::<OrderQuery>(cx)?;
-    let nav = categories(cx).await?;
+    let nav = menu(cx).await?;
     let documents = order_documents(cx, order_id).await?;
     // One review per product of the order, whatever variants of it it holds;
     // none for a cancelled order or a shop that takes no reviews.

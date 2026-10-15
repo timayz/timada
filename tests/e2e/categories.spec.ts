@@ -66,6 +66,23 @@ test("an owner builds a category tree and files a product under it", async ({ pa
   await page.getByRole("button", { name: "Set position" }).click();
   await expect(page.getByRole("status")).toContainText("Position set.");
 
+  // Out of the shop's menu, though its page stays.
+  await expect(page.locator("[data-category-menu]")).toHaveAttribute("data-category-menu", "shown");
+  await page.getByLabel("Show in the shop menu").uncheck();
+  await page.getByRole("button", { name: "Save menu visibility" }).click();
+  await expect(page.getByRole("status")).toContainText("Hidden from the menu.");
+  await expect(page.locator("[data-category-menu]")).toHaveAttribute("data-category-menu", "hidden");
+  await expect(page.getByLabel("Show in the shop menu")).not.toBeChecked();
+  await expect(async () => {
+    await page.goto(`/t/${slug}/categories`);
+    await expect(page.locator("[data-category=mats] [data-hidden-from-menu]")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(page.locator("[data-category=bedding] [data-hidden-from-menu]")).toHaveCount(0);
+  await page.goto(matsUrl);
+  await page.getByLabel("Show in the shop menu").check();
+  await page.getByRole("button", { name: "Save menu visibility" }).click();
+  await expect(page.getByRole("status")).toContainText("Shown in the menu.");
+
   // The tree shows both, the child indented, with its own count.
   await expect(async () => {
     await page.goto(`/t/${slug}/categories`);

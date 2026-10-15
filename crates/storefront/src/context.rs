@@ -6,7 +6,7 @@ use topcoat_core::error::{Error, Result};
 use topcoat_router::error::not_found;
 
 use crate::query::{
-    Category, CategoryNode, Product, ProductPage, ProductQuery, category_ancestors,
+    Category, CategoryNode, Product, ProductPage, ProductQuery, category_ancestors, menu_of,
     published_categories, published_category_by_slug, published_product_by_slug,
     published_products,
 };
@@ -75,6 +75,13 @@ pub async fn categories(cx: &Cx) -> Result<Vec<CategoryNode>> {
     published_categories(store(cx).pool())
         .await
         .map_err(|err| Error::from_anyhow(err.into()))
+}
+
+/// The trees a menu shows: [`categories`] without the ones the merchant hid
+/// from the menu. A page that also needs the whole tree (to find its own
+/// category, say) loads [`categories`] once and calls [`menu_of`] on it.
+pub async fn menu(cx: &Cx) -> Result<Vec<CategoryNode>> {
+    Ok(menu_of(&categories(cx).await?))
 }
 
 /// A live category by slug, if any.

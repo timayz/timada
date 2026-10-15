@@ -176,7 +176,7 @@ test("a storefront serves the tenant's published catalog with its key", async ({
   }).toPass({ timeout: 15_000 });
 });
 
-test("a storefront browses the categories its products are filed under", async ({ page, request }) => {
+test("a storefront browses the categories its products are filed under", async ({ page, request, browser }) => {
   await registerWithEmail(page, uniqueEmail("merchant"));
   const { name, slug } = uniqueTenant("Cat Shop");
   await createTenant(page, name);
@@ -210,12 +210,21 @@ test("a storefront browses the categories its products are filed under", async (
   await startStorefront(request, key, 3);
 
   // The menu carries the tree with its counts; Bedding counts its subtree.
+  // Bedding opens a panel led by "All Bedding"; Toys has nothing under it.
+  const menu = page.locator("nav.sections");
   await expect(async () => {
     await page.goto(`${STOREFRONT}/`);
-    await expect(page.locator("nav.sections [data-category=bedding]")).toContainText("Bedding (2)", { timeout: 1000 });
+    await expect(menu.locator("[data-category=bedding]")).toHaveAttribute("data-products", "2", { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
-  await expect(page.locator("nav.sections [data-category=mats]")).toContainText("Mats (2)");
-  await expect(page.locator("nav.sections [data-category=toys]")).toContainText("Toys (1)");
+  await expect(menu.locator("[data-category=mats]")).toHaveAttribute("data-products", "2");
+  await expect(menu.locator("[data-category=toys]")).toHaveAttribute("data-products", "1");
+  await expect(menu.getByRole("link", { name: "All products" })).toBeVisible();
+  await expect(menu.locator("[data-category=bedding]")).toBeHidden();
+  await menu.getByText("Bedding", { exact: true }).hover();
+  await expect(menu.getByRole("link", { name: "All Bedding" })).toBeVisible();
+  await expect(menu.locator("[data-category=mats]")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu.locator("[data-category=mats]")).toBeHidden();
 
   // The shop and the back office agree on every one of those numbers.
   await page.goto(`/t/${slug}/categories`);
@@ -230,6 +239,7 @@ test("a storefront browses the categories its products are filed under", async (
   await page.goto(`${STOREFRONT}/`);
 
   // A top-level category lists what is under it, newest first by default.
+  await menu.getByText("Bedding", { exact: true }).click();
   await page.locator("nav.sections [data-category=bedding]").click();
   await expect(page).toHaveURL(`${STOREFRONT}/c/bedding`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Bedding");
@@ -259,6 +269,35 @@ test("a storefront browses the categories its products are filed under", async (
   await expect(related).toContainText("You may also like");
   await expect(related.locator("[data-product=wool-mat]")).toBeVisible();
   await expect(related.locator("[data-product=cooling-mat]")).toHaveCount(0);
+
+  // On a phone without JS, "Menu" opens the whole tree as a sheet.
+  const phone = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 800 } });
+  const small = await phone.newPage();
+  await small.goto(`${STOREFRONT}/`);
+  await expect(small.locator("nav.sections")).toBeHidden();
+  await small.getByRole("link", { name: "Menu", exact: true }).click();
+  await expect(small).toHaveURL(/#menu$/);
+  await small.locator("nav.sections").getByText("Bedding", { exact: true }).click();
+  await small.locator("nav.sections [data-category=mats]").click();
+  await expect(small).toHaveURL(`${STOREFRONT}/c/mats`);
+  await phone.close();
+
+  // A category the merchant hides leaves the menu, with what is under it;
+  // its page still answers.
+  await page.goto(`/t/${slug}/categories`);
+  await page.locator("[data-category=bedding] a").first().click();
+  await page.getByLabel("Show in the shop menu").uncheck();
+  await page.getByRole("button", { name: "Save menu visibility" }).click();
+  await expect(page.getByRole("status")).toContainText("Hidden from the menu.");
+  await expect(async () => {
+    await page.goto(`${STOREFRONT}/`);
+    await expect(page.locator("nav.sections [data-category=toys]")).toBeVisible({ timeout: 1000 });
+    await expect(page.locator("nav.sections [data-menu=bedding]")).toHaveCount(0, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(page.locator("nav.sections [data-category=mats]")).toHaveCount(0);
+  await page.goto(`${STOREFRONT}/c/mats`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Mats");
+  await expect(page.locator("[data-crumbs]")).toContainText("Bedding");
 });
 
 test("a shopper fills a cart and checks out, refused while the shop takes no payments", async ({ page, request }) => {
