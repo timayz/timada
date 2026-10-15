@@ -113,6 +113,18 @@ pub fn describe_error(code: &str) -> &'static str {
         "category_archived" => "This category is archived and cannot change any more.",
         "category_cycle" => "A category cannot be moved under one of its own sub-categories.",
         "category_too_deep" => "Categories nest at most three levels deep.",
+        "invalid_discount_code" => "A code is 3 to 32 letters, digits, dashes and underscores.",
+        "discount_code_taken" => "Another live discount already uses this code.",
+        "invalid_percent" => "Enter a percentage above 0 and at most 100, like 10 or 12.5.",
+        "invalid_discount_amount" => {
+            "Enter the amount off as a number with at most two decimals, like 5.00."
+        }
+        "invalid_value" => "Give either a percentage or an amount off.",
+        "invalid_window" => "The last day must not come before the first day.",
+        "invalid_date" => "Enter the days as dates, like 2026-12-01.",
+        "invalid_max_uses" => "A limited code serves 1 to 10000 orders.",
+        "discount_not_found" => "This discount does not exist.",
+        "discount_archived" => "This discount is archived.",
         "category_has_children" => "Archive or move its sub-categories first.",
         "too_many_categories" => "A product belongs to at most ten categories.",
         "too_many_images" => "A product carries at most twenty pictures.",
@@ -210,6 +222,10 @@ pub fn describe_permission(permission: &str) -> &'static str {
             "Mark orders fulfilled, and cancel and refund them (includes seeing them)"
         }
         "payments:manage" => "Set up how shoppers pay (the payment provider's keys)",
+        "discounts:read" => "See the discount codes",
+        "discounts:manage" => {
+            "Create, deactivate and archive discount codes (includes seeing them)"
+        }
         _ => "Unknown permission",
     }
 }
@@ -246,6 +262,35 @@ pub fn format_time(secs: u64) -> String {
     )
 }
 
+/// A day as `YYYY-MM-DD` (UTC), the way a date input gives it.
+pub fn format_date(secs: u64) -> String {
+    format_time(secs)[..10].to_owned()
+}
+
+/// Midnight UTC of a `YYYY-MM-DD` day, as unix seconds; `None` for anything
+/// else (or a day before 1970).
+pub fn parse_date(value: &str) -> Option<u64> {
+    let mut parts = value.trim().splitn(3, '-');
+    let y: i64 = parts.next()?.parse().ok()?;
+    let m: i64 = parts.next()?.parse().ok()?;
+    let d: i64 = parts.next()?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // Days-from-civil (Howard Hinnant's algorithm), the inverse of the one
+    // in `format_time`.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = u64::try_from(days).ok()? * 86_400;
+    // A day the month does not have (`2026-02-30`) rolls over: refuse it.
+    (format_date(secs) == value.trim()).then_some(secs)
+}
+
 /// A row of a sessions list: when it started, from where, on what.
 #[component]
 pub async fn session_row(
@@ -270,5 +315,16 @@ mod tests {
     fn formats_unix_time() {
         assert_eq!(super::format_time(0), "1970-01-01 00:00:00 UTC");
         assert_eq!(super::format_time(1_700_000_000), "2023-11-14 22:13:20 UTC");
+    }
+
+    #[test]
+    fn reads_days_back() {
+        assert_eq!(super::parse_date("1970-01-01"), Some(0));
+        assert_eq!(super::parse_date("2023-11-14"), Some(1_699_920_000));
+        assert_eq!(super::parse_date(" 2024-02-29 "), Some(1_709_164_800));
+        for bad in ["", "2026-02-30", "2026-13-01", "nope", "1969-12-31"] {
+            assert_eq!(super::parse_date(bad), None, "{bad}");
+        }
+        assert_eq!(super::format_date(1_709_164_800), "2024-02-29");
     }
 }

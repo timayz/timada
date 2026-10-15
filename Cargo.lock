@@ -5906,6 +5906,7 @@ dependencies = [
  "sqlx",
  "sqlx_migrator",
  "timada-catalog",
+ "timada-discounts",
  "timada-identity",
  "timada-invoicing",
  "timada-orders",
@@ -5920,6 +5921,22 @@ dependencies = [
  "uuid",
  "webauthn-rs",
  "webauthn-rs-proto",
+]
+
+[[package]]
+name = "timada-discounts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror 2.0.21",
+ "timada-catalog",
+ "tokio",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

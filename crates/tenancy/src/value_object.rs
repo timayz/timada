@@ -21,6 +21,8 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `orders:read` — see the orders shoppers placed and the carts they left.
 /// - `orders:manage` — mark orders fulfilled, and cancel (refund) them.
 /// - `payments:manage` — set up how shoppers pay (the provider's keys).
+/// - `discounts:read` — see the discount codes.
+/// - `discounts:manage` — create, deactivate and archive discount codes.
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
@@ -32,6 +34,8 @@ pub const PERMISSIONS: &[&str] = &[
     PERMISSION_ORDERS_READ,
     PERMISSION_ORDERS_MANAGE,
     PERMISSION_PAYMENTS_MANAGE,
+    PERMISSION_DISCOUNTS_READ,
+    PERMISSION_DISCOUNTS_MANAGE,
 ];
 pub const PERMISSION_TENANT_MANAGE: &str = "tenant:manage";
 pub const PERMISSION_MEMBERS_READ: &str = "members:read";
@@ -43,6 +47,8 @@ pub const PERMISSION_PRODUCTS_MANAGE: &str = "products:manage";
 pub const PERMISSION_ORDERS_READ: &str = "orders:read";
 pub const PERMISSION_ORDERS_MANAGE: &str = "orders:manage";
 pub const PERMISSION_PAYMENTS_MANAGE: &str = "payments:manage";
+pub const PERMISSION_DISCOUNTS_READ: &str = "discounts:read";
+pub const PERMISSION_DISCOUNTS_MANAGE: &str = "discounts:manage";
 
 /// Every scope a store API key can hold, as `resource:action`. The list only
 /// grows: a stored key may name any of them. `write` on a resource implies

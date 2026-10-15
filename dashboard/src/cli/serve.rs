@@ -168,6 +168,9 @@ fn tenant_subscriptions(
             timada_orders::read_model_subscription(pool, tenant_id)
         }),
         Arc::new(|pool, tenant_id, _: &Executor| {
+            timada_discounts::read_model_subscription(pool, tenant_id)
+        }),
+        Arc::new(|pool, tenant_id, _: &Executor| {
             timada_invoicing::read_model_subscription(pool, tenant_id)
         }),
         Arc::new(move |_, tenant_id, _: &Executor| {
