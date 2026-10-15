@@ -37,16 +37,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let progress =
         payment_in_progress(cx).ok_or_redirect(checkout_url(cx, Some("payment_expired")))?;
     if query.redirect_status.as_deref() == Some("failed") {
-        #[derive(serde::Serialize)]
-        struct Link {
-            error: &'static str,
-        }
-        let back = href!(super::pay::index)
-            .query(Link {
-                error: "payment_failed",
-            })
-            .resolve(cx);
-        return Err(redirect(back).into());
+        return Err(redirect(checkout_url(cx, Some("payment_failed"))).into());
     }
     if let Some(order) = order_of_cart(cx, &progress.cart_id).await? {
         remember_order(cx, &order.id)?;

@@ -134,6 +134,20 @@ pub async fn published_reviews(
     })
 }
 
+/// The latest published reviews of the whole shop, newest first.
+pub async fn latest_reviews(pool: &SqlitePool, limit: u32) -> sqlx::Result<Vec<Review>> {
+    sqlx::query_as(
+        "SELECT id, product_id, rating, title, body, author_name, variant_label, photos_json,
+            published_at
+         FROM storefront_reviews
+         ORDER BY published_at DESC, id DESC
+         LIMIT ?1",
+    )
+    .bind(i64::from(limit.clamp(1, crate::MAX_PER_PAGE)))
+    .fetch_all(pool)
+    .await
+}
+
 /// What a shopper writes about a product of their order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReviewDraft {
@@ -278,6 +292,15 @@ impl Store {
         }
         Ok(reviews)
     }
+
+    /// See [`recent_reviews`].
+    pub async fn recent_reviews(&self, limit: u32) -> anyhow::Result<Vec<Review>> {
+        let mut reviews = latest_reviews(self.pool(), limit).await?;
+        for review in &mut reviews {
+            review.fill_urls(self.media_url());
+        }
+        Ok(reviews)
+    }
 }
 
 /// Hands in a review of `product_id` from `order_id`; see
@@ -306,6 +329,15 @@ pub async fn review_of(cx: &Cx, order_id: &str, product_id: &str) -> Result<Opti
 pub async fn reviews_of(cx: &Cx, product: &Product, page: u32) -> Result<ReviewPage> {
     store(cx)
         .reviews_of(&product.id, page)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// The latest published reviews of the whole shop, newest first: what a
+/// checkout shows to reassure.
+pub async fn recent_reviews(cx: &Cx, limit: u32) -> Result<Vec<Review>> {
+    store(cx)
+        .recent_reviews(limit)
         .await
         .map_err(Error::from_anyhow)
 }

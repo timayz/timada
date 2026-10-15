@@ -119,6 +119,11 @@ pub fn order_id(cart_id: &str) -> String {
     evento::hash_ids(vec!["order", cart_id])
 }
 
+/// The stream of the tenant's payment method: one per tenant store.
+pub fn payment_method_id() -> String {
+    evento::hash_ids(vec!["payment-method"])
+}
+
 /// The index stream of an order reference.
 pub fn order_reference_id(reference: &str) -> String {
     evento::hash_ids(vec!["order-reference", reference])
