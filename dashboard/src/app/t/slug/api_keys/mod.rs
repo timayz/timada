@@ -2,11 +2,13 @@
 //! `api-keys:manage`. A key's token is shown once, right after its creation
 //! (it travels in a private cookie across the redirect), then only its hint.
 //! A key's scopes are chosen at creation and can be changed while it is
-//! active.
+//! active. The storefront's own address, which the order confirmations
+//! link to, is set here too.
 
 pub mod create;
 pub mod revoke;
 pub mod scopes;
+pub mod storefront;
 
 use std::collections::HashMap;
 
@@ -70,19 +72,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let query = query_params::<ApiKeysQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
-    let TenantAccess { tenant, .. } = access;
     let reveal = take_reveal(cx);
     let store_api = app_context::<Config>(cx).store_api.clone();
-    let keys = api_keys_of_tenant(app_context::<ReadPool>(cx), &tenant.id).await?;
-    let media_url = app_context::<std::sync::Arc<Media>>(cx).tenant_url(&tenant.id);
+    let keys = api_keys_of_tenant(app_context::<ReadPool>(cx), &access.tenant.id).await?;
+    let media_url = app_context::<std::sync::Arc<Media>>(cx).tenant_url(&access.tenant.id);
     let api_url = app_context::<Config>(cx)
         .server
         .url
         .as_str()
         .trim_end_matches('/')
         .to_owned();
+    let storefront_url = super::orders::orders(&access)?
+        .storefront_address()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .unwrap_or_default();
     let ids: Vec<String> = keys.iter().map(|k| k.created_by.clone()).collect();
     let labels = user_labels(cx, &ids).await?;
+    let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let title = format!("API keys · {}", tenant.name);
 
@@ -132,6 +139,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <p class="mt-3 text-sm text-neutral-500">
                     "A storefront loads the product pictures from the picture address, and hands in shoppers' reviews at the dashboard address; set both alongside the key."
                 </p>
+            </section>
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"Storefront address"</h2>
+                <form method="post" action=(href!(storefront::storefront, Slug(slug.clone()))) class="space-y-3">
+                    <label class="block text-sm" for="storefront-url">"Where shoppers find the shop"</label>
+                    <input id="storefront-url" name="url" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
+                        type="url" maxlength="200" value=(&storefront_url) placeholder="https://shop.example">
+                    <p class="text-sm text-neutral-500">
+                        "The confirmation mailed to a shopper after payment links to the order at this address followed by /orders/ and the order's id. Leave it blank to mail confirmations without a link."
+                    </p>
+                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save address"</button>
+                </form>
             </section>
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
