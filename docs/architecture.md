@@ -19,6 +19,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
 | `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own store |
 | `crates/orders` | `timada-orders` | Carts and the orders placed from them, next to the catalog in a tenant's store |
+| `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
 | `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
@@ -27,6 +28,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `events.lock` | | Every persisted shape, frozen (see *Evolving events*) |
 
 Dependencies point one way: context crates depend on evento and sqlx only (plus
+Typst in `timada-invoicing` behind its `pdf` feature,
 `timada-catalog` from the storefront library and from `timada-orders`, which prices
 an order from the products it loads); the dashboard depends on every crate;
 nothing depends on the dashboard.

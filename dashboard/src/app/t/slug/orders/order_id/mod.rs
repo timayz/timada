@@ -6,6 +6,7 @@ pub mod cancel;
 pub mod fulfil;
 
 use timada_catalog::format_money;
+use timada_invoicing::{DocumentKind, format_amount_fr};
 use timada_orders::{MAX_REASON_LEN, MAX_TRACKING_LEN, OrderState, OrderStatus, OrdersError};
 use timada_tenancy::{PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ};
 use topcoat::{
@@ -105,6 +106,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<OrderQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let order = require_order(cx, &access).await?;
+    // Read from their own streams, like the order: issued a moment after
+    // the payment (or the refund), they show as soon as they exist.
+    let invoicing = crate::app::t::slug::invoices::invoicing(&access)?;
+    let mut documents = Vec::new();
+    let invoice = invoicing
+        .load_invoice_of_order(&order.id)
+        .await
+        .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
+    documents.extend(invoice);
+    for refund_id in &order.refund_ids {
+        let note = invoicing
+            .load_credit_note_of_refund(refund_id)
+            .await
+            .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
+        documents.extend(note);
+    }
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let lines: Vec<LineRow> = order
@@ -179,6 +196,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dt class="text-neutral-500">"E-mail"</dt>
                     <dd><a class="underline" href=(format!("mailto:{}", order.email))>(&order.email)</a></dd>
                 </dl>
+            </section>
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-order-documents="">
+                <h2 class="mb-2 text-lg font-medium">"Invoices"</h2>
+                if documents.is_empty() {
+                    <p class="text-sm text-neutral-500">"The invoice is being issued: reload in a moment."</p>
+                }
+                <ul class="space-y-1 text-sm">
+                    for doc in &documents {
+                        <li data-document=(&doc.label)>
+                            <a class="font-mono underline" href=(crate::app::t::slug::invoices::pdf_href(cx, &slug, &doc.document_id))>(&doc.label)</a>
+                            " · "
+                            (if doc.kind == DocumentKind::CreditNote { "credit note" } else { "invoice" })
+                            " · "
+                            (format_amount_fr(doc.total_cents, &doc.currency))
+                        </li>
+                    }
+                </ul>
             </section>
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
