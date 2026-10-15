@@ -138,3 +138,27 @@ async fn shoppers_are_listed_with_their_orders_and_addresses() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn a_forgotten_shopper_leaves_the_list_until_signing_in_again() {
+    let (executor, pool) = executor_with_pool().await;
+    let shoppers = Command(executor.clone());
+    let ada = sign_in(&shoppers, "ada@example.com", NOW).await;
+    shoppers.save_address(&ada, address("Paris")).await.unwrap();
+    sign_in(&shoppers, "bob@example.com", NOW).await;
+    catch_up(&executor, &pool, TENANT).await;
+    assert_eq!(count_shoppers(&pool, TENANT).await.unwrap(), 2);
+
+    shoppers.forget(&ada).await.unwrap();
+    catch_up(&executor, &pool, TENANT).await;
+    let rows = shoppers_of_tenant(&pool, TENANT, 10, 0).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].email, "bob@example.com");
+
+    sign_in(&shoppers, "ada@example.com", NOW + 60).await;
+    catch_up(&executor, &pool, TENANT).await;
+    let rows = shoppers_of_tenant(&pool, TENANT, 10, 0).await.unwrap();
+    let row = rows.iter().find(|row| row.id == ada).unwrap();
+    assert_eq!(row.email, "ada@example.com");
+    assert_eq!(row.address_count, 0, "a fresh account");
+}
