@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use timada_orders::{
-    Command, OrderFilter, OrderStatus, count_orders, open_carts, orders_of_tenant,
+    Command, OrderFilter, OrderStatus, count_orders, open_carts, orders_of_email, orders_of_tenant,
     read_model_subscription,
 };
 
@@ -56,6 +56,22 @@ async fn orders_and_carts_are_listed() {
     assert_eq!(count_orders(&pool, TENANT, &by_reference).await.unwrap(), 1);
     let by_email = OrderFilter::default().search(Some("ADA@example"));
     assert_eq!(count_orders(&pool, TENANT, &by_email).await.unwrap(), 2);
+    let of_email = orders_of_email(&pool, TENANT, &checkout().email.to_lowercase(), 10)
+        .await
+        .unwrap();
+    assert_eq!(of_email.len(), 2);
+    assert!(
+        orders_of_email(&pool, TENANT, "bob@example.com", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        orders_of_email(&pool, "tenant-2", &of_email[0].email, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let carts = open_carts(&pool, TENANT, 0, 10).await.unwrap();
     assert_eq!(

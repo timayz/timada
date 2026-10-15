@@ -24,22 +24,17 @@ use timada_orders::STOREFRONT_ACTOR;
 use timada_reviews::{
     REVIEW_INVALID_PHOTO, REVIEW_INVALID_RATING, ReviewError, ReviewPhoto, SubmitReview,
 };
-use timada_tenancy::{SCOPE_STORE_CHECKOUT, TenancyError};
 use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{
         StatusCode,
         content::{Json, multipart::Multipart},
-        header::AUTHORIZATION,
-        request::headers,
         route,
     },
 };
 
-use crate::app::tenants::tenancy;
 use crate::media::{Media, SniffedImage};
-use crate::tenants::Tenants;
 
 /// The answer to a storefront: the review's id, or why it was refused.
 #[derive(Debug, Serialize)]
@@ -72,23 +67,10 @@ fn status(status: StatusCode) -> (StatusCode, Json<Answer>) {
 
 #[route(POST)]
 pub async fn submit(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Json<Answer>)> {
-    let token = headers(cx)
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim);
-    let Some(token) = token else {
-        return Ok(status(StatusCode::UNAUTHORIZED));
-    };
-    let access = match tenancy(cx).authenticate_api_key(token).await {
+    let access = match super::storefront(cx).await? {
         Ok(access) => access,
-        Err(TenancyError::ApiKeyInvalid) => return Ok(status(StatusCode::UNAUTHORIZED)),
-        Err(TenancyError::Suspended) => return Ok(status(StatusCode::SERVICE_UNAVAILABLE)),
-        Err(err) => return Err(topcoat::Error::from_anyhow(err.into())),
+        Err(code) => return Ok(status(code)),
     };
-    if !access.key.allows(SCOPE_STORE_CHECKOUT) {
-        return Ok(status(StatusCode::FORBIDDEN));
-    }
 
     // The body has to be read to the end whatever happens to it.
     let mut draft = SubmitReview::default();
@@ -135,10 +117,7 @@ pub async fn submit(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
     }
     draft.photos = photos.iter().map(|(photo, _)| photo.clone()).collect();
 
-    let hold = app_context::<Arc<Tenants>>(cx)
-        .hold(&access.tenant)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?;
+    let hold = super::hold(cx, &access).await?;
     let reviews = timada_reviews::Command(hold.executor().clone());
     let tenant_id = access.tenant.id.as_str();
     // Refused before any file is written when it can be.
