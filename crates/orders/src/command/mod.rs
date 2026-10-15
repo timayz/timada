@@ -11,6 +11,7 @@ mod checkout;
 mod confirmation;
 mod lifecycle;
 mod payment_method;
+mod shipping;
 mod storefront;
 
 use std::fmt;
@@ -26,8 +27,9 @@ use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
     BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, ConfirmationMailed,
     Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded,
-    ItemRemoved, PaymentRefused, PaymentRequested, PaymentsDisabled, PaymentsEnabled, Placed,
-    QuantitySet, Refunded, StorefrontAddressCleared, StorefrontAddressSet,
+    ItemRemoved, MethodAdded, MethodChanged, MethodRemoved, PaymentRefused, PaymentRequested,
+    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded, StorefrontAddressCleared,
+    StorefrontAddressSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -675,6 +677,110 @@ async fn on_business_buyers_refused(
 }
 
 // =============================================================================
+// ShippingMethods
+// =============================================================================
+
+/// One way the shop ships, as the merchant last described it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShippingMethod {
+    pub id: String,
+    pub name: String,
+    pub price_cents: u64,
+    pub currency: String,
+    /// Two-letter codes; empty means every country.
+    pub countries: Vec<String>,
+    /// Free once the goods, less any discount, reach this amount.
+    pub free_above_cents: Option<u64>,
+}
+
+impl ShippingMethod {
+    /// Whether the method ships to that country.
+    pub fn covers(&self, country: &str) -> bool {
+        self.countries.is_empty() || self.countries.iter().any(|c| c == country)
+    }
+
+    /// What shipping goods worth `goods_cents` (less any discount) costs.
+    pub fn price_for(&self, goods_cents: u64) -> u64 {
+        match self.free_above_cents {
+            Some(threshold) if goods_cents >= threshold => 0,
+            _ => self.price_cents,
+        }
+    }
+}
+
+#[evento::projection(id = id, name = "timada-orders/ShippingMethodsState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct ShippingMethodsState {
+    pub id: String,
+    /// In the order they were added.
+    pub methods: Vec<ShippingMethod>,
+}
+
+impl ShippingMethodsState {
+    pub fn method(&self, method_id: &str) -> Option<&ShippingMethod> {
+        self.methods.iter().find(|method| method.id == method_id)
+    }
+}
+
+pub fn shipping_methods_projection<E: Executor>() -> Projection<E, ShippingMethodsState> {
+    Projection::new::<crate::aggregator::ShippingMethods>()
+        .handler(on_method_added())
+        .handler(on_method_changed())
+        .handler(on_method_removed())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_method_added(
+    event: Event<MethodAdded>,
+    state: &mut ShippingMethodsState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.methods.push(ShippingMethod {
+        id: event.data.method_id.clone(),
+        name: event.data.name.clone(),
+        price_cents: event.data.price_cents,
+        currency: event.data.currency.clone(),
+        countries: event.data.countries.clone(),
+        free_above_cents: event.data.free_above_cents,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_method_changed(
+    event: Event<MethodChanged>,
+    state: &mut ShippingMethodsState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    if let Some(method) = state
+        .methods
+        .iter_mut()
+        .find(|method| method.id == event.data.method_id)
+    {
+        method.name = event.data.name.clone();
+        method.price_cents = event.data.price_cents;
+        method.currency = event.data.currency.clone();
+        method.countries = event.data.countries.clone();
+        method.free_above_cents = event.data.free_above_cents;
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_method_removed(
+    event: Event<MethodRemoved>,
+    state: &mut ShippingMethodsState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state
+        .methods
+        .retain(|method| method.id != event.data.method_id);
+    Ok(())
+}
+
+// =============================================================================
 // Storefront
 // =============================================================================
 
@@ -786,6 +892,13 @@ impl<E: Executor> Command<E> {
     pub async fn load_business_buyers(&self) -> anyhow::Result<Option<BusinessBuyersState>> {
         business_buyers_projection()
             .load(crate::value_object::business_buyers_id())
+            .execute(&self.0)
+            .await
+    }
+
+    pub async fn load_shipping_methods(&self) -> anyhow::Result<Option<ShippingMethodsState>> {
+        shipping_methods_projection()
+            .load(crate::value_object::shipping_methods_id())
             .execute(&self.0)
             .await
     }
