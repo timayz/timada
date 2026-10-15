@@ -234,6 +234,7 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "reviews:manage" => {
             "Publish and reject reviews, take photos off them (includes seeing them)"
         }
+        "customers:read" => "See the shop's customer accounts",
         _ => "Unknown permission",
     }
 }

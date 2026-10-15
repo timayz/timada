@@ -12,10 +12,11 @@ anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 base64.workspace = true
+sqlx = { workspace = true, features = ["derive"] }
+sqlx_migrator.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
-sqlx.workspace = true
 
 # `#[evento::aggregate]` expands to `bitcode::` paths, so the crate must name the
 # dependency even though no source file mentions it.
