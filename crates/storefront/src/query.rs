@@ -134,9 +134,25 @@ pub struct Product {
     pub attributes: Vec<Attribute>,
     pub min_amount_cents: Option<i64>,
     pub max_amount_cents: Option<i64>,
+    /// How many published reviews it has.
+    pub review_count: i64,
+    /// Their average times a hundred (`435` is 4.35 stars); 0 without any.
+    pub rating_x100: i64,
 }
 
 impl Product {
+    /// The average of its published reviews, to one decimal (`4.4`); `None`
+    /// before the first one.
+    pub fn rating(&self) -> Option<f64> {
+        (self.review_count > 0).then(|| (self.rating_x100 as f64 / 10.0).round() / 10.0)
+    }
+
+    /// Its average as whole stars, rounded (`4` for 4.4): what a row of star
+    /// glyphs shows.
+    pub fn rating_stars(&self) -> Option<u8> {
+        (self.review_count > 0).then(|| ((self.rating_x100 + 50) / 100).clamp(1, 5) as u8)
+    }
+
     /// The price as a listing shows it: `12.50 EUR`, or `12.00–18.00 EUR`
     /// when the variants differ. Empty when it has no price at all.
     pub fn price(&self) -> Option<String> {
@@ -194,6 +210,9 @@ pub enum ProductSort {
     PriceAsc,
     /// Most expensive first; a product with no price comes last.
     PriceDesc,
+    /// Best average first, the most reviewed first among equals; a product
+    /// with no published review comes last.
+    TopRated,
 }
 
 impl ProductSort {
@@ -203,6 +222,7 @@ impl ProductSort {
             Self::Newest => "newest",
             Self::PriceAsc => "price_asc",
             Self::PriceDesc => "price_desc",
+            Self::TopRated => "top_rated",
         }
     }
 
@@ -212,6 +232,7 @@ impl ProductSort {
         match value {
             "price_asc" => Self::PriceAsc,
             "price_desc" => Self::PriceDesc,
+            "top_rated" => Self::TopRated,
             _ => Self::Newest,
         }
     }
@@ -373,7 +394,8 @@ macro_rules! products_page {
         concat!(
             "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
                 p.updated_at, p.images_json, p.options_json, p.variants_json,
-                p.attributes_json, p.min_amount_cents, p.max_amount_cents ",
+                p.attributes_json, p.min_amount_cents, p.max_amount_cents, p.review_count,
+                p.rating_x100 ",
             products_from!($from),
             products_where!(),
             $order,
@@ -403,22 +425,27 @@ macro_rules! products_pages {
                 $from,
                 "ORDER BY p.max_amount_cents IS NULL, p.max_amount_cents DESC, p.id DESC"
             ),
+            products_page!(
+                $from,
+                "ORDER BY p.review_count = 0, p.rating_x100 DESC, p.review_count DESC, p.id DESC"
+            ),
         ]
     };
 }
 
-const PAGES: [&str; 3] = products_pages!(pattern);
+const PAGES: [&str; 4] = products_pages!(pattern);
 const COUNT: &str = products_count!(pattern);
-const SEARCH_PAGES: [&str; 3] = products_pages!(phrase);
+const SEARCH_PAGES: [&str; 4] = products_pages!(phrase);
 const SEARCH_COUNT: &str = products_count!(phrase);
 
 impl ProductSort {
-    /// Its statement among the three of [`products_pages`].
+    /// Its statement among the four of [`products_pages`].
     fn index(self) -> usize {
         match self {
             ProductSort::Newest => 0,
             ProductSort::PriceAsc => 1,
             ProductSort::PriceDesc => 2,
+            ProductSort::TopRated => 3,
         }
     }
 }
@@ -432,7 +459,8 @@ macro_rules! category_page {
         concat!(
             "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
                 p.updated_at, p.images_json, p.options_json, p.variants_json,
-                p.attributes_json, p.min_amount_cents, p.max_amount_cents
+                p.attributes_json, p.min_amount_cents, p.max_amount_cents, p.review_count,
+                p.rating_x100
              FROM storefront_category_products cp
              JOIN storefront_products p ON p.id = cp.product_id
              WHERE cp.category_id = ?1 ",
@@ -448,6 +476,9 @@ const CATEGORY_PRICE_ASC: &str = category_page!(
 );
 const CATEGORY_PRICE_DESC: &str = category_page!(
     "ORDER BY cp.max_amount_cents IS NULL, cp.max_amount_cents DESC, cp.product_id DESC"
+);
+const CATEGORY_TOP_RATED: &str = category_page!(
+    "ORDER BY cp.review_count = 0, cp.rating_x100 DESC, cp.review_count DESC, cp.product_id DESC"
 );
 
 /// The published products a query matches, in the order it asks for.
@@ -486,6 +517,7 @@ pub async fn published_products(
             ProductSort::Newest => CATEGORY_NEWEST,
             ProductSort::PriceAsc => CATEGORY_PRICE_ASC,
             ProductSort::PriceDesc => CATEGORY_PRICE_DESC,
+            ProductSort::TopRated => CATEGORY_TOP_RATED,
         };
         let items = sqlx::query_as(statement)
             .bind(category)
@@ -532,7 +564,7 @@ pub async fn published_product_by_slug(
     sqlx::query_as(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
-            min_amount_cents, max_amount_cents
+            min_amount_cents, max_amount_cents, review_count, rating_x100
          FROM storefront_products WHERE slug = ?1 AND status = 'published'",
     )
     .bind(slug)
@@ -550,7 +582,7 @@ pub async fn published_products_by_ids(
     sqlx::query_as(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
-            min_amount_cents, max_amount_cents
+            min_amount_cents, max_amount_cents, review_count, rating_x100
          FROM storefront_products
          WHERE id IN (SELECT value FROM json_each(?1)) AND status = 'published'",
     )

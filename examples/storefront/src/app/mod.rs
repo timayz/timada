@@ -16,13 +16,19 @@ use topcoat::{
     Result,
     context::Cx,
     cookie::{Key, RouterBuilderCookieExt},
-    router::{Router, RouterBuilderDiscoverExt, href, module_router, page, query_params},
+    router::{
+        BodyLimit, Router, RouterBuilderDiscoverExt, href, module_router, page, query_params,
+    },
     view::{Child, View, attributes, view},
 };
+
+/// A review carries up to three photos of up to 8 MiB each.
+const REVIEW_LIMIT: usize = 26 * 1024 * 1024;
 
 pub fn router(store: Store, cookie_key: Key) -> Router {
     module_router!()
         .discover()
+        .layer(BodyLimit::max(REVIEW_LIMIT).at("/orders"))
         .cookies()
         .app_context(cookie_key)
         .store(store)
@@ -69,6 +75,9 @@ pub async fn document(
                     "ul.gallery li:first-child { grid-column: 1 / -1; }"
                     "ul.gallery li:first-child img { height: 20rem; }"
                     ".price { font-weight: 600; }"
+                    ".rating { color: #b45309; }"
+                    ".reviews li { margin-bottom: 1rem; }"
+                    ".reviews img { width: 6rem; height: 6rem; object-fit: cover; margin-right: .5rem; }"
                     "nav.pages { display: flex; gap: 1rem; margin-top: 1.5rem; }"
                     "p.description { white-space: pre-line; }"
                     "nav.sections { border-bottom: 1px solid #ddd; margin-bottom: 2rem; padding-bottom: 1rem; }"
@@ -154,6 +163,11 @@ pub async fn catalog_grid(products: &[timada_storefront::Product]) -> Result<imp
                         <span>(&product.name)</span>
                     </a>
                     <div>price(product: product, attrs: attributes! { class="price" })</div>
+                    if let (Some(rating), Some(whole)) = (product.rating(), product.rating_stars()) {
+                        <div class="rating" data-rating=(format!("{rating:.1}")) aria-label=(format!("{rating:.1} out of 5, {} reviews", product.review_count))>
+                            (timada_storefront::stars(whole)) " (" (product.review_count) ")"
+                        </div>
+                    }
                 </li>
             }
         </ul>
@@ -235,6 +249,15 @@ pub fn say(code: &str) -> &'static str {
         "discount_currency" => "This discount code is for another currency.",
         "discount_exhausted" => "This discount code has been used as many times as it can be.",
         "discount_already_used" => "You have already used this discount code.",
+        "review_invalid_rating" => "Choose from one to five stars.",
+        "review_invalid_title" => "The title is at most 100 characters.",
+        "review_invalid_body" => "Say a little more: 10 to 2000 characters.",
+        "review_too_many_photos" => "Attach at most three photos.",
+        "review_invalid_photo" => "Attach JPEG, PNG, WebP or GIF photos of at most 8 MiB.",
+        "review_order_not_found" => "This order cannot be reviewed.",
+        "review_not_purchased" => "This product is not part of this order.",
+        "review_order_cancelled" => "A cancelled order cannot be reviewed.",
+        "review_already_reviewed" => "You have already reviewed this product.",
         _ => "Something went wrong. Please try again.",
     }
 }

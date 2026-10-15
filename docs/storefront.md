@@ -34,6 +34,10 @@ store.shutdown().await;
   the cluster nodes' store APIs (`.docker/traefik/dynamic.yaml`).
 - **TLS** is optional in the library and in the dashboard's `[store_api]` section; without
   it the token travels in clear text, so plain TCP is for trusted networks only.
+- The **dashboard address** (`StoreConfig::api_url`, shown on the API keys page) is
+  where a storefront hands in what comes with files: shoppers' reviews and their
+  photos, over HTTPS with the same key. Without it the store shows reviews but takes
+  none (`Store::takes_reviews`).
 - `Store::connect` fails at once when the store is unreachable or refuses the key. It
   applies evento's tables and `storefront_products` to the pool (`timada_storefront::
   migrations()` exists for hosts running their own migrator), then follows the catalog.
@@ -42,8 +46,9 @@ store.shutdown().await;
 
 Events stay on the store. The app's SQLite file holds the subscription cursor (key
 `storefront/catalog`, prefixed by the store's region), the projection snapshots, the
-`storefront_products` rows (the gallery among them) and the category tree
-(`storefront_categories` and `storefront_product_categories`). Picture files are not
+`storefront_products` rows (the gallery among them), the category tree
+(`storefront_categories` and `storefront_product_categories`) and the published reviews
+(`storefront_reviews`). Picture files are not
 copied: they are loaded from the store's own address. One file per replica of the app: replicas never fence each
 other out of the subscription, nothing accumulates on the store, and a restarted replica
 resumes from its own cursor.
@@ -221,6 +226,45 @@ let session = start_payment(cx, &cart_id, Checkout {
   library hands out any order by id. The example keeps the cart id, the payment in
   progress, the browser's orders and its last address in private cookies.
 
+## Reviews
+
+A buyer reviews a product from the page of an order they placed: 1 to 5 stars, an
+optional title, a text of 10 to 2000 characters and up to three photos.
+
+```rust
+use timada_storefront::{PhotoUpload, ReviewDraft, review_of, reviews_of, submit_review};
+
+// The order page: where each product's review stands, or a form.
+let mine = review_of(cx, &order_id, &line.product_id).await?;   // Option<ReviewState>
+let outcome = submit_review(cx, &order_id, &product_id, ReviewDraft {
+    rating: 4,
+    title: Some("Lovely mug".into()),
+    body: "Holds a big tea and keeps it warm.".into(),
+    photos: vec![PhotoUpload { file_name, bytes }],
+}).await?;                                                       // Err(refusal) to show
+
+// The product page: published reviews, newest first, ten a page.
+let reviews = reviews_of(cx, &product, page).await?;
+product.rating();          // Some(4.5) once it has a published review
+product.review_count;
+```
+
+- The library knows nothing of who is who: offer the form only on an order the
+  shopper holds (the example checks its own cookie, as for the order page). The order
+  must be paid and not cancelled and hold the product; one review per product and
+  order. It is signed with the first name and initial the order was shipped to.
+- A review goes to the dashboard (`POST /store/reviews` at the dashboard address)
+  with its photos, which the dashboard checks and keeps like product pictures. A key
+  needs `store:checkout`. Refusals come back as codes to word in the shop's language
+  (`ReviewRefusal::code`: `review_invalid_body`, `review_invalid_photo`,
+  `review_already_reviewed`, …).
+- Nothing shows until the merchant publishes it in the dashboard; a rejected review
+  leaves the shop for good, photos included. `review_of` reads the store, so the
+  shopper sees their review waiting at once, and the reason if it was rejected.
+- Every `Product` carries `review_count` and its average (`rating()`, or
+  `rating_stars()` for whole stars); `ProductSort::TopRated` puts the best rated
+  first and products with no review last. `stars(n)` writes `★★★★☆`.
+
 ## `GET /store/status`
 
 ```json
@@ -234,20 +278,21 @@ counts the published rows of the local copy.
 ## The example
 
 `examples/storefront` is a complete app on the library: a catalog page, a category
-page, a product page with an add-to-cart form, a cart, a checkout, a payment page
-with Stripe's card form, an order confirmation, inline styles, no asset bundle. Against a dashboard whose
+page, a product page with an add-to-cart form and its reviews, a cart, a checkout, a
+payment page with Stripe's card form, an order confirmation where the shopper reviews
+what they bought, inline styles, no asset bundle. Against a dashboard whose
 `[store_api]` listens on `127.0.0.1:4321`:
 
 ```sh
 STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
-    cargo run -p storefront-example
+    STORE_API_URL=https://timada.localhost cargo run -p storefront-example
 open http://127.0.0.1:3456/
 ```
 
-Both values are on the tenant's API keys page. `STORE_ADDR`, `STORE_DB`, `HOST`,
+All three values are on the tenant's API keys page. `STORE_ADDR`, `STORE_DB`, `HOST`,
 `PORT`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by
 default) are the other knobs, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the
 shopper cookies; unset, a random key is made at startup and the cookies do not survive
 a restart. To sell, tick `store:checkout` on the key. The browser suite
 (`tests/e2e/storefront.spec.ts`) boots it with a key minted in the dashboard, checks the
-catalog follows live, then fills a cart and checks out.
+catalog follows live, then fills a cart, checks out and reviews what it bought.

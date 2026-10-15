@@ -5,6 +5,10 @@
 //! category's counts, and the products each one's page lists, are worked out
 //! again in the same transaction, so the menu and a collection page read them
 //! instead of computing them on each request.
+//!
+//! The same subscription follows the reviews: a published one is copied, one
+//! rejected leaves, and its product's count and average are worked out again
+//! with it.
 
 use evento::{
     Executor,
@@ -18,6 +22,8 @@ use timada_catalog::{
     CategoryLink, CategoryState, ProductState, category_counts, category_projection,
     product_projection,
 };
+use timada_reviews::aggregator::Review;
+use timada_reviews::{ReviewState, review_projection};
 
 /// The cursor identity of the catalog subscription, in the local database.
 pub const CATALOG_SUBSCRIPTION: &str = "storefront/catalog";
@@ -29,6 +35,7 @@ pub fn catalog_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilde
         .data(pool)
         .handler(on_product_event())
         .handler(on_category_event())
+        .handler(on_review_event())
         .any_routing_key()
 }
 
@@ -62,6 +69,87 @@ async fn on_category_event<E: Executor>(
         return Ok(());
     };
     upsert_category(&pool, &category).await
+}
+
+#[evento::subscription_all]
+async fn on_review_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<Review>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let Some(review) = review_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_review(&pool, &review).await
+}
+
+/// Copies a published review (and drops one that is not), then counts its
+/// product's reviews again, in one transaction.
+async fn upsert_review(pool: &SqlitePool, review: &ReviewState) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    match review.published_at {
+        Some(published_at) if review.is_published() => {
+            let photos: Vec<crate::ReviewPhoto> = review
+                .photos
+                .iter()
+                .map(|photo| crate::ReviewPhoto {
+                    id: photo.id.clone(),
+                    file: photo.file(),
+                    width: photo.width,
+                    height: photo.height,
+                    // Filled in when a page reads the review.
+                    url: String::new(),
+                })
+                .collect();
+            sqlx::query(
+                "INSERT INTO storefront_reviews (id, product_id, rating, title, body,
+                    author_name, variant_label, photos_json, published_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT (id) DO UPDATE SET photos_json = excluded.photos_json",
+            )
+            .bind(&review.id)
+            .bind(&review.product_id)
+            .bind(i64::from(review.rating))
+            .bind(&review.title)
+            .bind(&review.body)
+            .bind(&review.author_name)
+            .bind(&review.variant_label)
+            .bind(serde_json::to_string(&photos)?)
+            .bind(published_at as i64)
+            .execute(&mut *tx)
+            .await?;
+        }
+        _ => {
+            sqlx::query("DELETE FROM storefront_reviews WHERE id = ?1")
+                .bind(&review.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    // The average rounds half up; no review is 0 (a division by zero is NULL).
+    sqlx::query(
+        "UPDATE storefront_products SET (review_count, rating_x100) =
+            (SELECT COUNT(*), COALESCE((SUM(rating) * 100 + COUNT(*) / 2) / COUNT(*), 0)
+             FROM storefront_reviews WHERE product_id = ?1)
+         WHERE id = ?1",
+    )
+    .bind(&review.product_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE storefront_category_products SET (review_count, rating_x100) =
+            (SELECT review_count, rating_x100 FROM storefront_products WHERE id = ?1)
+         WHERE product_id = ?1",
+    )
+    .bind(&review.product_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// The product row, the categories it is in, the counts they change and what
@@ -309,8 +397,9 @@ async fn refresh_category_counts(conn: &mut sqlx::SqliteConnection) -> sqlx::Res
         for product_id in &counts.subtree_products {
             sqlx::query(
                 "INSERT INTO storefront_category_products (category_id, product_id, updated_at,
-                    min_amount_cents, max_amount_cents)
-                 SELECT ?1, id, updated_at, min_amount_cents, max_amount_cents
+                    min_amount_cents, max_amount_cents, review_count, rating_x100)
+                 SELECT ?1, id, updated_at, min_amount_cents, max_amount_cents, review_count,
+                    rating_x100
                  FROM storefront_products WHERE id = ?2",
             )
             .bind(&id)
