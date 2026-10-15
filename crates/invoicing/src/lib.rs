@@ -24,6 +24,7 @@ mod error;
 #[cfg(feature = "pdf")]
 pub mod pdf;
 mod query;
+pub mod tax;
 mod value_object;
 
 pub use command::*;

@@ -520,6 +520,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
                 },
                 note: None,
                 expected_total_cents: Some(2500),
+                vat_number: None,
             },
         )
         .await

@@ -49,7 +49,14 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.server.region.clone(),
         executor.clone(),
         write_pool.clone(),
-        tenant_subscriptions(media.clone(), payments.clone(), executor.clone()),
+        tenant_subscriptions(
+            media.clone(),
+            payments.clone(),
+            executor.clone(),
+            Arc::new(crate::vies::ViesClient::new(
+                config.invoicing.vies_url.clone(),
+            )),
+        ),
     );
     let connections = StoreConnections::new();
     let store_api = store_api::serve(
@@ -151,6 +158,7 @@ fn tenant_subscriptions(
     media: Arc<crate::media::Media>,
     payments: Arc<crate::payments::Payments>,
     platform: Executor,
+    vies: Arc<dyn crate::vies::Vies>,
 ) -> Vec<TenantSubscription> {
     vec![
         Arc::new(|pool, tenant_id, _: &Executor| {
@@ -169,7 +177,12 @@ fn tenant_subscriptions(
             crate::payments::subscription(payments.clone(), tenant_id, executor.clone())
         }),
         Arc::new(move |_, tenant_id, executor: &Executor| {
-            crate::invoicing::subscription(platform.clone(), tenant_id, executor.clone())
+            crate::invoicing::subscription(
+                platform.clone(),
+                vies.clone(),
+                tenant_id,
+                executor.clone(),
+            )
         }),
     ]
 }

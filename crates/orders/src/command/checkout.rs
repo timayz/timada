@@ -3,12 +3,13 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 use ulid::Ulid;
 
 use crate::aggregator::{
-    CheckedOut, CheckoutRequested, Claimed, PaymentRefused, PaymentRequested, Placed,
+    BuyerIdentified, CheckedOut, CheckoutRequested, Claimed, PaymentRefused, PaymentRequested,
+    Placed,
 };
 use crate::error::OrdersError;
 use crate::value_object::{
-    OrderLine, Payment, ShippingAddress, new_reference, normalize_email, normalize_note,
-    normalize_shipping, order_id, order_reference_id,
+    OrderLine, Payment, ShippingAddress, new_reference, normalize_buyer_vat_number,
+    normalize_email, normalize_note, normalize_shipping, order_id, order_reference_id,
 };
 
 use super::{CartItem, CartLine, CartState, CheckoutRequest, OrderState};
@@ -30,6 +31,9 @@ pub struct Checkout {
     /// for at that total, so a price that moved in between is never charged
     /// unseen.
     pub expected_total_cents: Option<u64>,
+    /// A business buyer's EU VAT number, for an invoice without VAT under
+    /// reverse charge (checked against VIES when invoiced).
+    pub vat_number: Option<String>,
 }
 
 /// The order a payment made.
@@ -229,12 +233,14 @@ impl<E: Executor> super::Command<E> {
         let email = normalize_email(&checkout.email)?;
         let shipping = normalize_shipping(checkout.shipping)?;
         let note = normalize_note(checkout.note.as_deref())?;
+        let vat_number = normalize_buyer_vat_number(checkout.vat_number.as_deref())?;
         let cart = self.require_open_cart(cart_id).await?;
         if cart.lines.is_empty() {
             return Err(OrdersError::EmptyCart);
         }
         let request_id = Ulid::generate().to_string();
-        cart.write()?
+        let mut write = cart.write()?;
+        write
             .routing_key_opt(routing_key)
             .event(&CheckoutRequested {
                 request_id: request_id.clone(),
@@ -243,9 +249,15 @@ impl<E: Executor> super::Command<E> {
                 note,
                 expected_total_cents: checkout.expected_total_cents,
                 requested_by: actor.to_owned(),
-            })
-            .commit(&self.0)
-            .await?;
+            });
+        if let Some(vat_number) = vat_number {
+            write.event(&BuyerIdentified {
+                request_id: request_id.clone(),
+                vat_number,
+                identified_by: actor.to_owned(),
+            });
+        }
+        write.commit(&self.0).await?;
         Ok(request_id)
     }
 

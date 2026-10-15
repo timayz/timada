@@ -46,6 +46,48 @@ VAT is worked out once per rate on the sum of its lines, never per line, so the
 rounding never drifts. A credit note corrects one invoice: it names it, and spreads
 the refunded amount over the invoice's rates in proportion, to the cent.
 
+## Selling abroad
+
+The shopper always pays the catalog price: VAT is included and never added on top.
+What changes with the destination is how that price splits into base and tax. The
+invoice decides it when it is issued, seconds after the payment.
+
+| Where the goods go | Who buys | Regime | VAT on the invoice |
+|---|---|---|---|
+| France (and Monaco) | anyone | `domestic` | French rate of the product's kind |
+| Another EU country | a business whose VAT number VIES confirms | `reverse_charge` | none: "Autoliquidation", art. 262 ter I du CGI, both VAT numbers |
+| Another EU country | a consumer, under the yearly threshold | `distance_origin` | French rate |
+| Another EU country | a consumer, past the threshold or with OSS ticked | `oss` | that country's rate for the product's kind |
+| Outside the EU VAT area (US, CA, AE, GB, French overseas departments, Canary Islands…) | anyone | `export` | none: art. 262 I du CGI (the merchant keeps the VAT share) |
+| anywhere | the merchant has no VAT number | `franchise` | none: art. 293 B du CGI (an export says so instead) |
+
+- **The threshold** is €10,000 a year of sales to consumers in other EU countries,
+  excluding VAT, all countries together (art. 258 A du CGI).
+  - Each invoice carries the year's running total.
+  - The sale that passes the threshold is already taxed at destination, and so is
+    everything after it, until the end of the next year.
+  - The total is counted inside the same append that takes the number, so two
+    invoices issued at once never both count against a stale total.
+  - Only sales in euros count. An EU distance sale in another currency is taxed at
+    destination, which is the safe side.
+- **One-Stop Shop.** The merchant ticks "One-Stop Shop" on the invoicing page to
+  apply destination VAT from the first euro.
+  - The invoicing page shows the year's total.
+  - `/t/<slug>/invoices/oss?quarter=2026-Q4` sums each country's VAT and rate for
+    the quarterly OSS return.
+- **VIES.** A business buyer types its VAT number at checkout. The dashboard
+  checks it with VIES when invoicing, naming the seller's own number, and keeps
+  VIES's reference on the invoice.
+  - An invalid number makes the buyer a consumer.
+  - If VIES is unreachable after three tries, the invoice charges VAT (the safe
+    side) and a warning is logged.
+  - The `[invoicing] vies_url` setting points elsewhere (tests use a stand-in).
+- **Rates.** A product's kind (standard, books, food, medicines, press) maps to a
+  rate level in each EU country through `crates/invoicing/data/tax_categories.json`.
+  The rate of each level comes from the `world-tax` crate, pinned exactly.
+  **Have an accountant review the table**: what counts as a reduced-rate good
+  differs from country to country and changes.
+
 ## Numbering
 
 There is one series per kind and calendar year (UTC): `F2026-000001`, `F2026-000002`
@@ -93,5 +135,8 @@ ten years the law asks.
 
 - Mailing the invoice to the shopper.
 - Factur-X (the PDF/A-3 with embedded XML that French B2B e-invoicing will need).
-- A business buyer's SIREN or VAT number at checkout.
+- A business buyer's SIREN (French B2B e-invoicing).
+- Currency conversion: VAT on a non-euro invoice must also be stated in euros.
+- Northern Ireland (goods follow EU VAT rules there) and other special territories
+  beyond the ones listed above.
 - Shipping costs and discounts, which orders do not have yet.

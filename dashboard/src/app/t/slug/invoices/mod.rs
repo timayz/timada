@@ -4,6 +4,7 @@
 //! downloads as the PDF it was issued as.
 
 pub mod document_id;
+pub mod oss;
 
 use timada_invoicing::{count_documents, documents_of_tenant};
 use timada_tenancy::PERMISSION_ORDERS_READ;
@@ -35,6 +36,19 @@ struct InvoicesLink {
 /// The invoicing gateway over the tenant's own store (403 while suspended).
 pub fn invoicing(access: &TenantAccess) -> Result<timada_invoicing::Command<Executor>> {
     Ok(timada_invoicing::Command(access.executor()?.clone()))
+}
+
+/// How a document is taxed, as a page says it.
+pub fn regime_label(regime: &str, country: &str) -> String {
+    match regime {
+        "domestic" => "France".to_owned(),
+        "distance_origin" => format!("France (sold to {country})"),
+        "oss" => format!("{country}, One-Stop Shop"),
+        "reverse_charge" => format!("Reverse charge ({country})"),
+        "export" => format!("Export ({country})"),
+        "franchise" => "Exempt".to_owned(),
+        other => other.to_owned(),
+    }
 }
 
 /// Where a document's PDF downloads from.
@@ -83,7 +97,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <p class="mb-4 text-sm text-neutral-600">
-                    "Every paid order gets an invoice, every refund a credit note, numbered in one series per year and kind. They never change once issued."
+                    "Every paid order gets an invoice, every refund a credit note, numbered in one series per year and kind. They never change once issued. "
+                    <a class="underline" href=(href!(oss::oss, Slug(slug.clone())))>"One-Stop Shop return"</a>
                 </p>
                 <table class="w-full text-left text-sm">
                     <thead>
@@ -93,12 +108,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <th class="py-2 font-medium">"Issued"</th>
                             <th class="py-2 font-medium">"Order"</th>
                             <th class="py-2 font-medium">"Customer"</th>
+                            <th class="py-2 font-medium">"VAT"</th>
                             <th class="py-2 text-right font-medium">"Total"</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="6">"No invoice yet."</td></tr>
+                            <tr><td class="py-2 text-neutral-500" colspan="7">"No invoice yet."</td></tr>
                         }
                         for row in &rows {
                             <tr data-document=(&row.label)>
@@ -111,6 +127,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <a class="font-mono underline" href=(href!(super::orders::order_id::index, Slug(slug.clone()), super::orders::order_id::OrderId(row.order_id.clone())))>(&row.order_reference)</a>
                                 </td>
                                 <td class="py-2">(&row.buyer_name)</td>
+                                <td class="py-2" data-document-regime=(&row.regime)>(regime_label(&row.regime, &row.tax_country))</td>
                                 <td class="py-2 text-right">
                                     if row.is_credit_note() { "−" }
                                     (row.total_label())

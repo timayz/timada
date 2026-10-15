@@ -6,16 +6,19 @@
 
 pub mod save;
 
+use timada_invoicing::tax::EU_DISTANCE_THRESHOLD_CENTS;
+use timada_invoicing::{civil_date, eu_distance_sales, format_amount_fr};
 use timada_tenancy::{LegalIdentity, PERMISSION_TENANT_MANAGE};
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, app_context},
     router::{href, page, query_params},
     view::{View, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::app::auth::Flash;
+use crate::db::ReadPool;
 use crate::ui::{document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -58,6 +61,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .share_capital_cents
         .map(format_capital)
         .unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let year = civil_date(now).0;
+    let (distance_cents, distance_passed) =
+        eu_distance_sales(app_context::<ReadPool>(cx), &tenant.id, year)
+            .await?
+            .unwrap_or_default();
+    let distance = format_amount_fr(distance_cents.max(0) as u64, "EUR");
+    let threshold = format_amount_fr(EU_DISTANCE_THRESHOLD_CENTS, "EUR");
+    let exempt_past_threshold = distance_passed && set && !legal.is_vat_registered();
     let title = format!("Invoicing · {}", tenant.name);
 
     Ok(view! {
@@ -74,6 +88,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     "Not set up: shoppers cannot pay until the invoices can name you."
                 </p>
             }
+
+            <section class="mb-6 rounded border border-neutral-200 bg-white p-4 text-sm" data-eu-distance=(distance_cents)>
+                <h2 class="mb-1 text-lg font-medium">"Sales to EU consumers abroad, " (year)</h2>
+                <p>
+                    <strong>(&distance)</strong> " excluding VAT, of the " (&threshold) " a year above which their countries' VAT applies."
+                    if distance_passed { " " <strong data-eu-threshold-passed="">"Threshold passed: their VAT applies for the rest of the year and all of next."</strong> }
+                </p>
+                if exempt_past_threshold {
+                    <p role="alert" class="mt-2 rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
+                        "Past the threshold, the exemption no longer covers these sales: register for VAT and the One-Stop Shop, then enter the VAT number below."
+                    </p>
+                }
+            </section>
 
             <form method="post" action=(href!(save::save, Slug(slug.clone()))) class="space-y-6">
                 <fieldset class="space-y-3 rounded border border-neutral-200 bg-white p-4">

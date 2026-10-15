@@ -42,6 +42,8 @@ use crate::auth::user_labels;
 use crate::db::ReadPool;
 use crate::media::Media;
 use crate::ui::{document, format_time, notice};
+use timada_invoicing::format_rate_fr;
+use timada_invoicing::tax::rate_bps;
 
 module_param!(pub product_id);
 
@@ -662,7 +664,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <label class="block text-sm font-medium" for="product-tax">"Kind of goods, for VAT"</label>
                             <select id="product-tax" name="category" class="mt-1 rounded border border-neutral-300 px-3 py-2">
                                 for (key, label) in TAX_CATEGORIES.iter().copied() {
-                                    <option value=(key) selected=(product.tax_category() == key)>(label)</option>
+                                    <option value=(key) selected=(product.tax_category() == key)>
+                                        (label) " (" (format_rate_fr(rate_bps("FR", key))) " in France)"
+                                    </option>
                                 }
                             </select>
                             <p class="mt-1 text-xs text-neutral-500">"Each country taxes a kind at its own rate; most goods are standard."</p>

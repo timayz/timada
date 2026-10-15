@@ -10,9 +10,9 @@ use typst_as_lib::{TypstEngine, TypstTemplateMainFile};
 use typst_pdf::{PdfOptions, PdfStandard, PdfStandards};
 
 use crate::command::{DocumentKind, IssuedDocument};
+use crate::tax::Regime;
 use crate::value_object::{
-    Address, FRANCHISE_MENTION, PAYMENT_METHOD_CARD, civil_date, format_amount_fr, format_date_fr,
-    format_rate_fr,
+    Address, PAYMENT_METHOD_CARD, civil_date, format_amount_fr, format_date_fr, format_rate_fr,
 };
 
 /// Layout version 1 (see [`TEMPLATE_VERSION`](crate::TEMPLATE_VERSION)).
@@ -51,6 +51,40 @@ pub fn render(document: &IssuedDocument) -> anyhow::Result<Vec<u8>> {
         ..PdfOptions::default()
     };
     typst_pdf::pdf(&compiled, &options).map_err(|err| anyhow::anyhow!("no PDF: {err:?}"))
+}
+
+/// The French name of an EU country, or its code.
+fn country_name_fr(code: &str) -> &str {
+    match code {
+        "AT" => "Autriche",
+        "BE" => "Belgique",
+        "BG" => "Bulgarie",
+        "CY" => "Chypre",
+        "CZ" => "Tchéquie",
+        "DE" => "Allemagne",
+        "DK" => "Danemark",
+        "EE" => "Estonie",
+        "ES" => "Espagne",
+        "FI" => "Finlande",
+        "FR" => "France",
+        "GR" => "Grèce",
+        "HR" => "Croatie",
+        "HU" => "Hongrie",
+        "IE" => "Irlande",
+        "IT" => "Italie",
+        "LT" => "Lituanie",
+        "LU" => "Luxembourg",
+        "LV" => "Lettonie",
+        "MT" => "Malte",
+        "NL" => "Pays-Bas",
+        "PL" => "Pologne",
+        "PT" => "Portugal",
+        "RO" => "Roumanie",
+        "SE" => "Suède",
+        "SI" => "Slovénie",
+        "SK" => "Slovaquie",
+        other => other,
+    }
 }
 
 fn text(value: impl Into<String>) -> Value {
@@ -241,13 +275,17 @@ fn inputs(document: &IssuedDocument) -> Dict {
             "Total TTC"
         }),
     );
+    let mention = match document.regime {
+        Regime::Oss => format!(
+            "TVA due en {} au taux de ce pays (guichet unique OSS).",
+            country_name_fr(&document.tax_country)
+        ),
+        regime => regime.mention().unwrap_or_default().to_owned(),
+    };
+    put("vat_mention", text(mention));
     put(
-        "vat_mention",
-        text(if document.is_vat_exempt() {
-            FRANCHISE_MENTION
-        } else {
-            ""
-        }),
+        "buyer_vat",
+        text(document.buyer_vat_number.clone().unwrap_or_default()),
     );
     let settlement = if credit {
         format!(
@@ -345,6 +383,12 @@ mod tests {
             lines,
             vat,
             template: 1,
+            regime: if vat_number.is_some() {
+                Regime::Domestic
+            } else {
+                Regime::Franchise
+            },
+            tax_country: "FR".into(),
             ..Default::default()
         }
     }
@@ -383,9 +427,40 @@ mod tests {
     #[test]
     fn an_exempt_seller_says_so() {
         let d = inputs(&invoice(None));
-        assert_eq!(get(&d, "vat_mention"), FRANCHISE_MENTION);
+        assert_eq!(
+            get(&d, "vat_mention"),
+            "TVA non applicable, art. 293 B du CGI"
+        );
         assert_eq!(get(&d, "seller_vat"), "");
         assert_eq!(get(&d, "total_vat"), "0,00\u{a0}€");
+    }
+
+    #[test]
+    fn each_regime_says_why_its_vat_is_what_it_is() {
+        let oss = IssuedDocument {
+            regime: Regime::Oss,
+            tax_country: "DE".into(),
+            ..invoice(Some("FR85120027016"))
+        };
+        assert_eq!(
+            get(&inputs(&oss), "vat_mention"),
+            "TVA due en Allemagne au taux de ce pays (guichet unique OSS)."
+        );
+        let business = IssuedDocument {
+            regime: Regime::ReverseCharge,
+            tax_country: "DE".into(),
+            buyer_vat_number: Some("DE123456789".into()),
+            ..invoice(Some("FR85120027016"))
+        };
+        let d = inputs(&business);
+        assert!(get(&d, "vat_mention").starts_with("Autoliquidation"));
+        assert_eq!(get(&d, "buyer_vat"), "DE123456789");
+        let export = IssuedDocument {
+            regime: Regime::Export,
+            ..invoice(Some("FR85120027016"))
+        };
+        assert!(get(&inputs(&export), "vat_mention").contains("art. 262 I du CGI"));
+        assert!(render(&business).unwrap().starts_with(b"%PDF-"));
     }
 
     #[test]

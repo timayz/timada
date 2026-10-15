@@ -1,21 +1,27 @@
 //! Issues the invoice of every paid order and the credit note of every
-//! refund, in each tenant's store. What a document says comes from three
-//! places only the dashboard sees together: the order (the tenant's store),
-//! the VAT rate of each product (the catalog, same store) and the merchant's
-//! legal identity (the platform store).
+//! refund, in each tenant's store. What a document says comes from places
+//! only the dashboard sees together: the order and the cart it was paid
+//! from (the tenant's store), the kind of goods of each product (the
+//! catalog, same store), the merchant's legal identity (the platform store)
+//! and, for a business buyer, VIES's word on its VAT number. The invoicing
+//! crate decides the VAT from them.
 
 use evento::{
     Evento, Executor,
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
+use std::sync::Arc;
+
+use timada_invoicing::tax::TaxProfile;
 use timada_invoicing::{
-    Address, InvoiceLine, NewCreditNote, NewInvoice, PAYMENT_METHOD_CARD, Seller, french_rate_bps,
+    Address, NewCreditNote, NewInvoice, NewInvoiceLine, PAYMENT_METHOD_CARD, Seller,
 };
 use timada_orders::aggregator::{Placed, Refunded};
 use timada_tenancy::LegalIdentity;
 
 use crate::cluster::Executor as Store;
+use crate::vies::{Vies, ViesAnswer, check_patiently};
 
 /// The cursor identity of the subscription, in each tenant's store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/invoicing";
@@ -37,11 +43,13 @@ struct TenantStore(Evento);
 /// issuing is safe to repeat and to race (see `timada_invoicing`).
 pub fn subscription<E: Executor>(
     platform: Store,
+    vies: Arc<dyn Vies>,
     tenant_id: &str,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(Platform(platform))
+        .data(vies)
         .data(TenantStore(store))
         .data(Tenant(tenant_id.to_owned()))
         .handler(on_placed())
@@ -102,28 +110,50 @@ async fn on_placed<E: Executor>(
         tracing::warn!(tenant = %tenant.0, order = %event.aggregate_id, "no legal identity: order not invoiced");
         return Ok(());
     };
-    let catalog = timada_catalog::Command(store.0);
+    let vies: Arc<dyn Vies> = context.extract();
+    let catalog = timada_catalog::Command(store.0.clone());
     let mut lines = Vec::with_capacity(event.data.lines.len());
     for line in &event.data.lines {
-        let vat_rate_bps = if legal.is_vat_registered() {
-            let category = catalog
-                .load_product(&line.product_id)
-                .await?
-                .map(|product| product.tax_category().to_owned())
-                .unwrap_or_default();
-            Some(french_rate_bps(&category))
-        } else {
-            None
-        };
-        lines.push(InvoiceLine {
+        let tax_category = catalog
+            .load_product(&line.product_id)
+            .await?
+            .map(|product| product.tax_category().to_owned())
+            .unwrap_or_else(|| timada_catalog::TAX_CATEGORY_STANDARD.to_owned());
+        lines.push(NewInvoiceLine {
             name: line.name.clone(),
             variant_label: line.variant_label.clone(),
             sku: line.sku.clone(),
             quantity: line.quantity,
             unit_amount_cents: line.unit_amount_cents,
-            vat_rate_bps,
+            tax_category,
         });
     }
+    // A business buyer's number, from the request this payment answered,
+    // counts once VIES says it is valid; otherwise the sale is to a consumer
+    // (VAT charged: the safe side).
+    let vat_number = timada_orders::Command(store.0.clone())
+        .load_cart(&event.data.cart_id)
+        .await?
+        .and_then(|cart| {
+            cart.request_paid_by(&event.data.payment.payment_id)
+                .and_then(|request| request.vat_number.clone())
+        });
+    let (buyer_vat_number, vies_reference) = match vat_number {
+        Some(number) if legal.is_vat_registered() => {
+            match check_patiently(vies.as_ref(), &number, legal.vat_number.as_deref()).await {
+                ViesAnswer::Valid { reference } => (Some(number), reference),
+                ViesAnswer::Invalid => {
+                    tracing::info!(tenant = %tenant.0, order = %event.aggregate_id, %number, "VIES: not a valid VAT number");
+                    (None, None)
+                }
+                ViesAnswer::Unavailable(reason) => {
+                    tracing::warn!(tenant = %tenant.0, order = %event.aggregate_id, %number, %reason, "VIES did not answer: invoiced with VAT");
+                    (None, None)
+                }
+            }
+        }
+        _ => (None, None),
+    };
     let shipping = &event.data.shipping;
     let address = Address {
         name: shipping.name.clone(),
@@ -148,6 +178,12 @@ async fn on_placed<E: Executor>(
                 lines,
                 total_cents: event.data.total_cents,
                 issued_by: ISSUER.to_owned(),
+                tax: TaxProfile {
+                    vat_registered: legal.is_vat_registered(),
+                    oss_registered: legal.oss_registered,
+                },
+                buyer_vat_number,
+                vies_reference,
             },
             now(),
         )

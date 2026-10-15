@@ -71,6 +71,14 @@ pub enum Cart {
         total_cents: u64,
         requested_by: String,
     },
+    /// The shopper buys as a business with this VAT number (`DE123456789`),
+    /// written with the `CheckoutRequested` of the same request. Whether it
+    /// is valid is checked when the order is invoiced.
+    BuyerIdentified {
+        request_id: String,
+        vat_number: String,
+        identified_by: String,
+    },
     /// A request to pay that cannot go ahead; `code` says why
     /// ([`OrdersError::code`](crate::OrdersError::code), or `payments_unavailable`).
     PaymentRefused {

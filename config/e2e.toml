@@ -32,6 +32,11 @@ public_addr = "localhost:4321"
 secret_key = "e2e-only-payments-key-never-used-outside-the-test-suite"
 stripe_api_url = "http://127.0.0.1:12112"
 
+# VAT numbers are checked against a stand-in for VIES that the storefront
+# spec starts (tests/e2e/vies.ts).
+[invoicing]
+vies_url = "http://127.0.0.1:12113"
+
 [auth]
 secret_key = "e2e-only-secret-key-never-used-outside-the-test-suite"
 

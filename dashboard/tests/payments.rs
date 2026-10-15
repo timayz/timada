@@ -19,6 +19,8 @@ mod limits;
 mod payments;
 #[path = "../src/tenants.rs"]
 mod tenants;
+#[path = "../src/vies.rs"]
+mod vies;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -126,6 +128,23 @@ impl PaymentGateway for FakeStripe {
     }
 }
 
+/// VIES, as far as these tests need it: numbers starting `DE1` exist.
+struct FakeVies;
+
+#[async_trait::async_trait]
+impl vies::Vies for FakeVies {
+    async fn check(&self, vat_number: &str, requester: Option<&str>) -> vies::ViesAnswer {
+        assert_eq!(requester, Some("FR85120027016"), "the seller asks");
+        if vat_number.starts_with("DE1") {
+            vies::ViesAnswer::Valid {
+                reference: Some(format!("WAPI-{vat_number}")),
+            }
+        } else {
+            vies::ViesAnswer::Invalid
+        }
+    }
+}
+
 struct Harness {
     tenants: Arc<Tenants>,
     platform: Command<cluster::Executor>,
@@ -188,7 +207,12 @@ async fn harness() -> Harness {
                 payments::subscription(subscribed.clone(), tenant_id, executor.clone())
             }),
             Arc::new(move |_, tenant_id: &str, executor: &cluster::Executor| {
-                invoicing::subscription(invoicing_platform.clone(), tenant_id, executor.clone())
+                invoicing::subscription(
+                    invoicing_platform.clone(),
+                    Arc::new(FakeVies),
+                    tenant_id,
+                    executor.clone(),
+                )
             }),
         ],
     );
@@ -215,6 +239,7 @@ fn checkout(expected_total_cents: Option<u64>) -> Checkout {
         },
         note: None,
         expected_total_cents,
+        vat_number: None,
     }
 }
 
@@ -329,9 +354,33 @@ impl Harness {
         cart_id: &str,
         expected: Option<u64>,
     ) -> PaymentAnswer {
+        self.ask_with(tenant, cart_id, checkout(expected)).await
+    }
+
+    /// Pays a cart shipped as `checkout` says, end to end; returns the order.
+    async fn buy(&self, tenant: &TenantState, checkout: Checkout) -> String {
+        let (cart_id, _) = self.cart(tenant).await;
+        let PaymentAnswer::Requested(payment) = self.ask_with(tenant, &cart_id, checkout).await
+        else {
+            panic!("a payment is opened");
+        };
+        self.stripe.pay(&payment.payment_id);
+        let body = succeeded(&payment.payment_id);
+        let Outcome::Placed { order_id } = self.webhook(tenant, &body, signed(&body)).await else {
+            panic!("the order is placed");
+        };
+        order_id
+    }
+
+    async fn ask_with(
+        &self,
+        tenant: &TenantState,
+        cart_id: &str,
+        checkout: Checkout,
+    ) -> PaymentAnswer {
         let orders = timada_orders::Command(self.store(tenant).await);
         let request_id = orders
-            .request_checkout(STOREFRONT_ACTOR, cart_id, checkout(expected))
+            .request_checkout(STOREFRONT_ACTOR, cart_id, checkout)
             .await
             .unwrap();
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -655,4 +704,55 @@ async fn the_stripe_client_speaks_stripe() {
         .await
         .unwrap();
     assert!(refund.starts_with("re_"), "{refund}");
+}
+
+#[tokio::test]
+async fn invoices_follow_where_the_goods_go() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let invoicing = timada_invoicing::Command(h.store(&acme).await);
+    let shipped_to = |country: &str, postal_code: &str, vat_number: Option<&str>| Checkout {
+        shipping: ShippingAddress {
+            country: country.into(),
+            postal_code: postal_code.into(),
+            ..checkout(None).shipping
+        },
+        vat_number: vat_number.map(str::to_owned),
+        ..checkout(None)
+    };
+
+    // A German business VIES knows: no VAT, the reference kept.
+    let business = h
+        .buy(&acme, shipped_to("DE", "10115", Some("DE123456789")))
+        .await;
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&business).await.unwrap()).await;
+    assert_eq!(invoice.regime, timada_invoicing::tax::Regime::ReverseCharge);
+    assert!(invoice.vat.is_empty());
+    assert_eq!(invoice.buyer_vat_number.as_deref(), Some("DE123456789"));
+    assert_eq!(invoice.vies_reference.as_deref(), Some("WAPI-DE123456789"));
+
+    // A number VIES does not know: a consumer, French VAT under the threshold.
+    let unknown = h
+        .buy(&acme, shipped_to("DE", "10115", Some("DE999999999")))
+        .await;
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&unknown).await.unwrap()).await;
+    assert_eq!(
+        invoice.regime,
+        timada_invoicing::tax::Regime::DistanceOrigin
+    );
+    assert_eq!(invoice.vat[0].rate_bps, 2000);
+    assert_eq!(invoice.buyer_vat_number, None);
+    assert_eq!(invoice.eu_distance_sales_cents, 2083);
+
+    // Out of the EU: an export, same price, no VAT.
+    let export = h.buy(&acme, shipped_to("US", "10001", None)).await;
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&export).await.unwrap()).await;
+    assert_eq!(invoice.regime, timada_invoicing::tax::Regime::Export);
+    assert_eq!(invoice.total_cents, 2500);
+    assert_eq!(invoice.total_excl_vat_cents, 2500);
+    h.finish().await;
 }

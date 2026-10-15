@@ -92,6 +92,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <input id="checkout-country" name="country" required="" maxlength="2" autocomplete="country" placeholder="FR" value=(&draft.country)>
                 <label for="checkout-phone">"Phone (optional)"</label>
                 <input id="checkout-phone" name="phone" type="tel" autocomplete="tel" value=(&draft.phone)>
+                <label for="checkout-vat">"EU company VAT number (optional, for an invoice without VAT)"</label>
+                <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
+                <p class="hint" data-import-notice="">"Shipping outside the EU? Import duties and taxes may be due on delivery."</p>
                 <label for="checkout-note">"Note for the shop (optional)"</label>
                 <textarea id="checkout-note" name="note" rows="3">(&draft.note)</textarea>
                 <button class="primary">"Continue to payment"</button>
@@ -124,6 +127,7 @@ pub async fn place(cx: &Cx, Form(form): Form<CheckoutForm>) -> Result<SeeOther> 
         note: Some(draft.note.clone()),
         // Unreadable means not shown: treat it as a price that moved.
         expected_total_cents: Some(form.expected_total_cents.trim().parse().unwrap_or(u64::MAX)),
+        vat_number: Some(draft.vat_number.clone()),
     };
     match start_payment(cx, &cart_id, checkout).await? {
         Ok(session) => {

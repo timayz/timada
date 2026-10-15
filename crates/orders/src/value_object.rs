@@ -95,7 +95,7 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
     use evento::{Aggregate, AggregateEvent};
 
     use crate::aggregator::{
-        Cart, CheckoutRequested, Created, ItemAdded, ItemRemoved, QuantitySet,
+        BuyerIdentified, Cart, CheckoutRequested, Created, ItemAdded, ItemRemoved, QuantitySet,
     };
 
     aggregate_type == Cart::aggregate_type()
@@ -105,6 +105,7 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
             QuantitySet::event_name(),
             ItemRemoved::event_name(),
             CheckoutRequested::event_name(),
+            BuyerIdentified::event_name(),
         ]
         .contains(&name)
 }
@@ -199,6 +200,38 @@ fn optional_text(
         None => Ok(None),
         Some(value) if value.chars().count() <= max => Ok(Some(value.to_owned())),
         Some(_) => Err(err),
+    }
+}
+
+/// The country prefixes of EU VAT numbers (Greece's is `EL`).
+pub const EU_VAT_PREFIXES: &[&str] = &[
+    "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "EL", "ES", "FI", "FR", "HR", "HU", "IE", "IT",
+    "LT", "LU", "LV", "MT", "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+];
+
+/// An EU VAT number without its spaces, dots and dashes, uppercased: a
+/// country prefix of [`EU_VAT_PREFIXES`] and 2 to 12 letters or digits.
+/// Blank is `None`. Whether the number exists is VIES's to say.
+pub fn normalize_buyer_vat_number(vat_number: Option<&str>) -> Result<Option<String>, OrdersError> {
+    let Some(raw) = vat_number else {
+        return Ok(None);
+    };
+    let number: String = raw
+        .chars()
+        .filter(|c| !c.is_whitespace() && !matches!(c, '.' | '-'))
+        .collect::<String>()
+        .to_ascii_uppercase();
+    if number.is_empty() {
+        return Ok(None);
+    }
+    let valid = number.len() >= 4
+        && number.len() <= 14
+        && EU_VAT_PREFIXES.contains(&&number[..2])
+        && number[2..].bytes().all(|b| b.is_ascii_alphanumeric());
+    if valid {
+        Ok(Some(number))
+    } else {
+        Err(OrdersError::InvalidVatNumber)
     }
 }
 

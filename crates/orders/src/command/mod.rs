@@ -18,8 +18,8 @@ pub use checkout::*;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
-    Cancelled, CheckedOut, CheckoutRequested, Claimed, Created, Fulfilled, ItemAdded, ItemRemoved,
-    PaymentRefused, PaymentRequested, Placed, QuantitySet, Refunded,
+    BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, Created, Fulfilled,
+    ItemAdded, ItemRemoved, PaymentRefused, PaymentRequested, Placed, QuantitySet, Refunded,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -82,6 +82,8 @@ pub struct CheckoutRequest {
     pub shipping: ShippingAddress,
     pub note: Option<String>,
     pub expected_total_cents: Option<u64>,
+    /// A business buyer's EU VAT number, as typed (normalized).
+    pub vat_number: Option<String>,
     pub answer: Option<PaymentAnswer>,
 }
 
@@ -164,6 +166,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_item_removed())
         .handler(on_checked_out())
         .handler(on_checkout_requested())
+        .handler(on_buyer_identified())
         .handler(on_payment_requested())
         .handler(on_payment_refused())
         .strict()
@@ -237,9 +240,25 @@ async fn on_checkout_requested(
         shipping: event.data.shipping.to_owned(),
         note: event.data.note.to_owned(),
         expected_total_cents: event.data.expected_total_cents,
+        vat_number: None,
         answer: None,
     });
     cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_buyer_identified(
+    event: Event<BuyerIdentified>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|request| request.request_id == event.data.request_id)
+    {
+        request.vat_number = Some(event.data.vat_number.to_owned());
+    }
     Ok(())
 }
 

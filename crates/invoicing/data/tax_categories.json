@@ -1,0 +1,35 @@
+{
+  "_about": "Which VAT rate level each EU country applies to a kind of goods (a catalog tax category). A level is one of standard, reduced, reduced_alt, super_reduced, zero; its rate per country comes from the world-tax crate's table. A country missing from a category is taxed at its standard rate. Drawn from the European Commission's 'VAT rates applied in the Member States' (2025): food is basic foodstuffs, medicines are sold without prescription, press is newspapers and periodicals. HAVE AN ACCOUNTANT REVIEW IT before relying on it: rates and their scope change.",
+  "books": {
+    "AT": "reduced", "BE": "reduced_alt", "BG": "reduced", "CY": "reduced_alt", "CZ": "zero",
+    "DE": "reduced", "DK": "standard", "EE": "reduced", "ES": "super_reduced", "FI": "reduced",
+    "FR": "reduced_alt", "GR": "reduced_alt", "HR": "reduced_alt", "HU": "reduced_alt", "IE": "zero",
+    "IT": "reduced_alt", "LT": "reduced_alt", "LU": "super_reduced", "LV": "reduced", "MT": "reduced_alt",
+    "NL": "reduced", "PL": "reduced_alt", "PT": "reduced_alt", "RO": "reduced", "SE": "reduced_alt",
+    "SI": "reduced_alt", "SK": "reduced_alt"
+  },
+  "food": {
+    "AT": "reduced", "BE": "reduced_alt", "BG": "standard", "CY": "reduced_alt", "CZ": "reduced",
+    "DE": "reduced", "DK": "standard", "EE": "standard", "ES": "reduced", "FI": "reduced",
+    "FR": "reduced_alt", "GR": "reduced", "HR": "reduced_alt", "HU": "reduced_alt", "IE": "zero",
+    "IT": "reduced", "LT": "standard", "LU": "super_reduced", "LV": "standard", "MT": "zero",
+    "NL": "reduced", "PL": "reduced_alt", "PT": "reduced_alt", "RO": "reduced", "SE": "reduced",
+    "SI": "reduced", "SK": "reduced_alt"
+  },
+  "medicines": {
+    "AT": "reduced", "BE": "reduced_alt", "BG": "standard", "CY": "reduced_alt", "CZ": "reduced",
+    "DE": "standard", "DK": "standard", "EE": "reduced_alt", "ES": "super_reduced", "FI": "reduced_alt",
+    "FR": "reduced", "GR": "reduced_alt", "HR": "reduced_alt", "HU": "reduced_alt", "IE": "zero",
+    "IT": "reduced", "LT": "reduced_alt", "LU": "super_reduced", "LV": "reduced", "MT": "zero",
+    "NL": "reduced", "PL": "reduced", "PT": "reduced_alt", "RO": "reduced", "SE": "standard",
+    "SI": "reduced", "SK": "reduced_alt"
+  },
+  "press": {
+    "AT": "reduced", "BE": "reduced_alt", "BG": "reduced", "CY": "reduced_alt", "CZ": "zero",
+    "DE": "reduced", "DK": "zero", "EE": "reduced_alt", "ES": "super_reduced", "FI": "reduced_alt",
+    "FR": "super_reduced", "GR": "reduced_alt", "HR": "reduced_alt", "HU": "reduced_alt", "IE": "reduced_alt",
+    "IT": "reduced_alt", "LT": "reduced_alt", "LU": "super_reduced", "LV": "reduced", "MT": "reduced_alt",
+    "NL": "reduced", "PL": "reduced", "PT": "reduced_alt", "RO": "reduced", "SE": "reduced_alt",
+    "SI": "reduced_alt", "SK": "reduced_alt"
+  }
+}

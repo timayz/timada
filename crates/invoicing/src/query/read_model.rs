@@ -12,7 +12,7 @@ use sqlx::SqlitePool;
 
 use crate::aggregator::{CreditNoteIssued, InvoiceIssued};
 use crate::command::DocumentKind;
-use crate::value_object::document_label;
+use crate::value_object::{VatSubtotal, document_label};
 
 /// The cursor identity of the read-model subscription, in each tenant's store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-invoicing/read-models";
@@ -57,6 +57,11 @@ async fn on_invoice_issued<E: Executor>(
             total_cents: data.total_cents,
             currency: &data.currency,
             issued_at: data.issued_at,
+            regime: &data.regime,
+            tax_country: &data.tax_country,
+            vat: &data.vat,
+            eu_distance_sales_cents: data.eu_distance_sales_cents,
+            eu_threshold_passed: data.eu_threshold_passed,
         },
     )
     .await
@@ -84,6 +89,11 @@ async fn on_credit_note_issued<E: Executor>(
             total_cents: data.total_cents,
             currency: &data.currency,
             issued_at: data.issued_at,
+            regime: &data.regime,
+            tax_country: &data.tax_country,
+            vat: &data.vat,
+            eu_distance_sales_cents: 0,
+            eu_threshold_passed: false,
         },
     )
     .await
@@ -100,13 +110,42 @@ struct Row<'a> {
     total_cents: u64,
     currency: &'a str,
     issued_at: u64,
+    regime: &'a str,
+    tax_country: &'a str,
+    vat: &'a [VatSubtotal],
+    eu_distance_sales_cents: u64,
+    eu_threshold_passed: bool,
 }
 
+/// Writes the row of a document and one row per VAT rate of it (what the
+/// One-Stop Shop return sums), in one transaction.
 async fn upsert(pool: &SqlitePool, tenant_id: &str, row: Row<'_>) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    for subtotal in row.vat {
+        sqlx::query(
+            "INSERT INTO invoicing_vat_lines (tenant_id, document_id, kind, regime, country,
+                rate_bps, base_cents, vat_cents, currency, issued_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT (tenant_id, document_id, rate_bps) DO NOTHING",
+        )
+        .bind(tenant_id)
+        .bind(row.id)
+        .bind(row.kind.as_str())
+        .bind(row.regime)
+        .bind(row.tax_country)
+        .bind(i64::from(subtotal.rate_bps))
+        .bind(subtotal.base_cents as i64)
+        .bind(subtotal.vat_cents as i64)
+        .bind(row.currency)
+        .bind(row.issued_at as i64)
+        .execute(&mut *tx)
+        .await?;
+    }
     sqlx::query(
         "INSERT INTO invoicing_documents (tenant_id, id, kind, series, number, label, order_id,
-            order_reference, buyer_name, total_cents, currency, issued_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            order_reference, buyer_name, total_cents, currency, issued_at, regime, tax_country,
+            eu_distance_sales_cents, eu_threshold_passed)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT (tenant_id, id) DO NOTHING",
     )
     .bind(tenant_id)
@@ -121,7 +160,12 @@ async fn upsert(pool: &SqlitePool, tenant_id: &str, row: Row<'_>) -> anyhow::Res
     .bind(row.total_cents as i64)
     .bind(row.currency)
     .bind(row.issued_at as i64)
-    .execute(pool)
+    .bind(row.regime)
+    .bind(row.tax_country)
+    .bind(row.eu_distance_sales_cents as i64)
+    .bind(row.eu_threshold_passed)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
