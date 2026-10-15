@@ -22,7 +22,9 @@ use timada_catalog::{
     MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, TAX_CATEGORIES,
     format_money, tax_category_label,
 };
-use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
+use timada_tenancy::{
+    PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ,
+};
 
 use topcoat::{
     Result,
@@ -223,6 +225,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .iter()
         .map(|image| (image.clone(), media.url(&access.tenant.id, &image.file())))
         .collect();
+    // The rating counts published reviews only; the link is for those who
+    // may read the reviews.
+    let can_read_reviews = access.can(cx, PERMISSION_REVIEWS_READ).await?;
+    let rating = timada_reviews::product_rating(pool, &access.tenant.id, &product.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let rating_label = match rating.average() {
+        Some(average) => format!("★ {average:.1} · {} published", rating.review_count),
+        None => "No published review".to_owned(),
+    };
     let editable = can_manage && !product.is_archived();
     let gallery_full = gallery.len() >= MAX_IMAGES_PER_PRODUCT;
     let last = gallery.len().saturating_sub(1);
@@ -320,6 +332,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <dd data-product-price="" data-product-price-range=(&price_label)>(&price_label)</dd>
                     <dt class="text-neutral-500">"VAT"</dt>
                     <dd data-product-vat="">(&tax_label)</dd>
+                    <dt class="text-neutral-500">"Reviews"</dt>
+                    <dd data-product-rating=(rating.review_count)>
+                        (&rating_label)
+                        if can_read_reviews {
+                            " · " <a class="underline" href=(crate::app::t::slug::reviews::product_reviews_url(cx, &slug, &product.id))>"See its reviews"</a>
+                        }
+                    </dd>
                     <dt class="text-neutral-500">"Description"</dt>
                     <dd data-product-description="" class="whitespace-pre-line">(if product.description.is_empty() { "—" } else { product.description.as_str() })</dd>
                     <dt class="text-neutral-500">"Created"</dt>

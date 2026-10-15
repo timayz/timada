@@ -198,6 +198,10 @@ pub fn describe_error(code: &str) -> &'static str {
             "Fill in the legal name, form, address and e-mail, each within its length."
         }
         "invalid_share_capital" => "Enter the share capital in euros, like 1000 or 1000.50.",
+        "invalid_review_reason" => "A reason is at most 300 characters.",
+        "review_not_found" => "This review does not exist.",
+        "review_rejected" => "This review was rejected and cannot change any more.",
+        "review_photo_not_found" => "This photo is no longer on the review.",
         "invoicing_not_configured" => {
             "Shoppers cannot pay until the legal identity on the Invoicing page is filled in."
         }
@@ -225,6 +229,10 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "discounts:read" => "See the discount codes",
         "discounts:manage" => {
             "Create, deactivate and archive discount codes (includes seeing them)"
+        }
+        "reviews:read" => "See the reviews shoppers wrote",
+        "reviews:manage" => {
+            "Publish and reject reviews, take photos off them (includes seeing them)"
         }
         _ => "Unknown permission",
     }

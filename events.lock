@@ -106,6 +106,10 @@ event timada-orders/Order::Fulfilled { tracking: Option<String>, fulfilled_by: S
 event timada-orders/Order::Placed { reference: String, cart_id: String, email: String, shipping: ShippingAddress, note: Option<String>, lines: Vec<OrderLine>, currency: String, total_cents: u64, payment: Payment, placed_by: String }
 event timada-orders/Order::Refunded { payment_id: String, refund_id: String, amount_cents: u64, refunded_by: String }
 event timada-orders/OrderReference::Claimed { order_id: String }
+event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
+event timada-reviews/Review::Published { published_by: String }
+event timada-reviews/Review::Rejected { reason: String, rejected_by: String }
+event timada-reviews/Review::Submitted { order_id: String, product_id: String, variant_label: Option<String>, rating: u8, title: Option<String>, body: String, author_name: String, photos: Vec<ReviewPhoto>, submitted_by: String }
 event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, created_by: String, created_at: u64 }
 event timada-tenancy/ApiKey::Revoked { revoked_by: String, revoked_at: u64 }
 event timada-tenancy/ApiKey::Scoped { scopes: Vec<String>, scoped_by: String, scoped_at: u64 }
@@ -146,3 +150,4 @@ type timada_invoicing::value_object::VatSubtotal { rate_bps: u32, base_cents: u6
 type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32 }
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, country: String, phone: Option<String> }
+type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32> }
