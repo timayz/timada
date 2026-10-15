@@ -137,6 +137,10 @@ pub async fn send_order_confirmation(
     let total = format_money(order.total_cents, currency);
     let ship = &order.shipping;
     let city = format!("{} {}", ship.postal_code, ship.city);
+    let billing = order
+        .billing
+        .as_ref()
+        .map(|bill| (bill, format!("{} {}", bill.postal_code, bill.city)));
     let mail = mail! {
         from: from,
         to: Mailbox::new(&order.email)?,
@@ -174,6 +178,18 @@ pub async fn send_order_confirmation(
                 (&city) <br>
                 (&ship.country)
             </p>
+            if let Some((bill, bill_city)) = &billing {
+                <p>
+                    "Billing to:" <br>
+                    (&bill.name) <br>
+                    (&bill.line1) <br>
+                    if let Some(line2) = &bill.line2 {
+                        (line2) <br>
+                    }
+                    (bill_city) <br>
+                    (&bill.country)
+                </p>
+            }
             if let Some(note) = &order.note {
                 <p>"Your note: " (note)</p>
             }

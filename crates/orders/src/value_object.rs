@@ -95,8 +95,8 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
     use evento::{Aggregate, AggregateEvent};
 
     use crate::aggregator::{
-        BuyerIdentified, Cart, CheckoutRequested, Created, DiscountApplied, DiscountRemoved,
-        ItemAdded, ItemRemoved, QuantitySet,
+        BillingAddressGiven, BuyerIdentified, Cart, CheckoutRequested, Created, DiscountApplied,
+        DiscountRemoved, ItemAdded, ItemRemoved, QuantitySet,
     };
 
     aggregate_type == Cart::aggregate_type()
@@ -107,6 +107,7 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
             ItemRemoved::event_name(),
             CheckoutRequested::event_name(),
             BuyerIdentified::event_name(),
+            BillingAddressGiven::event_name(),
             DiscountApplied::event_name(),
             DiscountRemoved::event_name(),
         ]
@@ -224,6 +225,14 @@ pub fn normalize_shipping(address: ShippingAddress) -> Result<ShippingAddress, O
         city: text(&address.city, MAX_CITY_LEN, || OrdersError::InvalidAddress)?,
         country,
         phone: optional(address.phone, MAX_PHONE_LEN, || OrdersError::InvalidPhone)?,
+    })
+}
+
+/// A billing address: checked like a shipping address, without its phone.
+pub fn normalize_billing(address: ShippingAddress) -> Result<ShippingAddress, OrdersError> {
+    Ok(ShippingAddress {
+        phone: None,
+        ..normalize_shipping(address)?
     })
 }
 
@@ -345,6 +354,14 @@ mod tests {
         assert!(is_shopper_event("timada-orders/Cart", "CheckoutRequested"));
         assert!(is_shopper_event("timada-orders/Cart", "DiscountApplied"));
         assert!(is_shopper_event("timada-orders/Cart", "DiscountRemoved"));
+        assert!(is_shopper_event(
+            "timada-orders/Cart",
+            "BillingAddressGiven"
+        ));
+        assert!(!is_shopper_event(
+            "timada-orders/Order",
+            "BillingAddressSet"
+        ));
         assert!(!is_shopper_event("timada-orders/Cart", "PaymentRequested"));
         // Only the dashboard says what a payment is discounted by.
         assert!(!is_shopper_event("timada-orders/Cart", "DiscountGranted"));
