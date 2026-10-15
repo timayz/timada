@@ -22,6 +22,7 @@ async fn a_paid_order_holds_what_the_payment_was_asked_for() {
         Checkout {
             note: Some("  Leave it at the door ".into()),
             expected_total_cents: Some(3500),
+            vat_number: None,
             ..checkout()
         },
     )
@@ -171,6 +172,7 @@ async fn a_request_is_priced_once_and_refused_when_it_cannot_go_ahead() {
             &cart_id,
             Checkout {
                 expected_total_cents: Some(2500),
+                vat_number: None,
                 ..checkout()
             },
         )
@@ -283,4 +285,58 @@ async fn every_order_has_its_own_reference() {
         references.insert(pay(&orders, &cart_id, checkout()).await.reference);
     }
     assert_eq!(references.len(), 10);
+}
+
+#[tokio::test]
+async fn a_business_buyer_gives_its_vat_number_with_the_request() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let cart = cart_with(&orders, &mug, 1).await;
+
+    let err = orders
+        .request_checkout(
+            SHOPPER,
+            &cart,
+            Checkout {
+                vat_number: Some("US123".into()),
+                ..checkout()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some("invalid_vat_number"));
+
+    let request_id = orders
+        .request_checkout(
+            SHOPPER,
+            &cart,
+            Checkout {
+                vat_number: Some(" de 123.456.789 ".into()),
+                ..checkout()
+            },
+        )
+        .await
+        .unwrap();
+    let state = orders.load_cart(&cart).await.unwrap().unwrap();
+    let request = state.request(&request_id).unwrap();
+    assert_eq!(request.vat_number.as_deref(), Some("DE123456789"));
+
+    // A blank number is no number.
+    let plain = orders
+        .request_checkout(
+            SHOPPER,
+            &cart,
+            Checkout {
+                vat_number: Some("  ".into()),
+                ..checkout()
+            },
+        )
+        .await
+        .unwrap();
+    let state = orders.load_cart(&cart).await.unwrap().unwrap();
+    assert_eq!(state.request(&plain).unwrap().vat_number, None);
+    assert!(timada_orders::is_shopper_event(
+        "timada-orders/Cart",
+        "BuyerIdentified"
+    ));
 }

@@ -13,6 +13,7 @@ mod read_only_store;
 mod store_api;
 mod tenants;
 mod ui;
+mod vies;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

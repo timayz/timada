@@ -2,6 +2,7 @@ use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use super::*;
+use crate::tax::{Regime, TaxProfile};
 use crate::value_object::{PAYMENT_METHOD_CARD, book_id};
 
 async fn command() -> Command<evento::Sqlite> {
@@ -46,26 +47,60 @@ fn invoice(order_id: &str) -> NewInvoice {
             ..Default::default()
         },
         buyer_email: "ada@example.org".into(),
-        delivery: Address::default(),
+        delivery: Address {
+            name: "Ada Lovelace".into(),
+            postal_code: "75002".into(),
+            city: "Paris".into(),
+            country: "FR".into(),
+            ..Default::default()
+        },
         currency: "EUR".into(),
         lines: vec![
-            InvoiceLine {
+            NewInvoiceLine {
                 name: "Mug".into(),
                 quantity: 2,
                 unit_amount_cents: 1250,
-                vat_rate_bps: Some(2000),
+                tax_category: "standard".into(),
                 ..Default::default()
             },
-            InvoiceLine {
+            NewInvoiceLine {
                 name: "Book".into(),
                 quantity: 1,
                 unit_amount_cents: 1999,
-                vat_rate_bps: Some(550),
+                tax_category: "books".into(),
                 ..Default::default()
             },
         ],
         total_cents: 4499,
         issued_by: "test".into(),
+        tax: TaxProfile {
+            vat_registered: true,
+            oss_registered: false,
+        },
+        buyer_vat_number: None,
+        vies_reference: None,
+    }
+}
+
+/// An order of `amount_cents` (VAT included, standard goods) shipped to
+/// Germany.
+fn to_germany(order_id: &str, amount_cents: u64) -> NewInvoice {
+    let base = invoice(order_id);
+    NewInvoice {
+        delivery: Address {
+            country: "DE".into(),
+            postal_code: "10115".into(),
+            ..base.delivery.clone()
+        },
+        lines: vec![NewInvoiceLine {
+            name: "Lamp".into(),
+            quantity: 1,
+            unit_amount_cents: amount_cents,
+            tax_category: "standard".into(),
+            ..Default::default()
+        }],
+        total_cents: amount_cents,
+        ..base
     }
 }
 
@@ -173,13 +208,19 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
             buyer_email: data.buyer_email,
             delivery: data.delivery,
             currency: data.currency,
-            vat: lines_breakdown(&data.lines),
-            lines: data.lines,
+            vat: Vec::new(),
+            lines: Vec::new(),
             total_excl_vat_cents: 0,
             total_vat_cents: 0,
             total_cents: 4499,
             template: TEMPLATE_VERSION,
             issued_by: data.issued_by,
+            regime: "domestic".into(),
+            tax_country: "FR".into(),
+            buyer_vat_number: None,
+            vies_reference: None,
+            eu_distance_sales_cents: 0,
+            eu_threshold_passed: false,
         })
         .commit(&cmd.0)
         .await
@@ -281,4 +322,122 @@ async fn a_refund_is_credited_against_the_invoice() {
         cmd.issue_credit_note(too_much, NOW).await.unwrap_err(),
         InvoicingError::CreditTooLarge
     ));
+}
+
+#[tokio::test]
+async fn eu_distance_sales_pass_the_threshold_in_the_series_order() {
+    let cmd = command().await;
+    // 6,000 € then 4,800 € excluding VAT: French VAT, then the one that
+    // passes 10,000 € is German already, and so is every one after.
+    let first = cmd
+        .issue_invoice(to_germany("o1", 720_000), NOW)
+        .await
+        .unwrap();
+    assert_eq!(first.regime, Regime::DistanceOrigin);
+    assert_eq!(first.vat[0].rate_bps, 2000);
+    assert_eq!(first.eu_distance_sales_cents, 600_000);
+    let domestic = cmd.issue_invoice(invoice("o2"), NOW).await.unwrap();
+    assert_eq!(domestic.regime, Regime::Domestic);
+    assert_eq!(
+        domestic.eu_distance_sales_cents, 600_000,
+        "a French sale does not count"
+    );
+    let second = cmd
+        .issue_invoice(to_germany("o3", 600_000), NOW)
+        .await
+        .unwrap();
+    assert_eq!(second.regime, Regime::Oss);
+    assert_eq!(second.tax_country, "DE");
+    assert_eq!(second.vat[0].rate_bps, 1900);
+    assert!(second.eu_threshold_passed);
+    let small = cmd
+        .issue_invoice(to_germany("o4", 1_000), NOW)
+        .await
+        .unwrap();
+    assert_eq!(small.regime, Regime::Oss);
+
+    // Passed this year: German VAT all next year too, counting from zero.
+    let next_year = NOW + 90 * 86_400;
+    let january = cmd
+        .issue_invoice(to_germany("o5", 1_000), next_year)
+        .await
+        .unwrap();
+    assert!(january.label.starts_with("F2027-"));
+    assert_eq!(january.regime, Regime::Oss);
+    assert_eq!(january.eu_distance_sales_cents, 840);
+}
+
+#[tokio::test]
+async fn racing_writers_count_every_distance_sale_once() {
+    let cmd = command().await;
+    let issues = (0..6).map(|i| {
+        let cmd = Command(cmd.0.clone());
+        async move {
+            cmd.issue_invoice(to_germany(&format!("o{i}"), 240_000), NOW)
+                .await
+                .unwrap()
+        }
+    });
+    let mut documents = futures_join(issues).await;
+    documents.sort_by_key(|document| document.number);
+    // 2,000 € each excluding VAT: the sixth passes 10,000 €.
+    let totals: Vec<u64> = documents
+        .iter()
+        .map(|d| d.eu_distance_sales_cents)
+        .collect();
+    assert_eq!(totals[..4], [200_000, 400_000, 600_000, 800_000]);
+    assert_eq!(totals[4], 1_000_000);
+    let regimes: Vec<Regime> = documents.iter().map(|d| d.regime).collect();
+    assert_eq!(&regimes[..5], &[Regime::DistanceOrigin; 5]);
+    assert_eq!(regimes[5], Regime::Oss);
+}
+
+#[tokio::test]
+async fn a_valid_business_number_reverse_charges_and_its_credit_note_too() {
+    let cmd = command().await;
+    let business = NewInvoice {
+        buyer_vat_number: Some("DE123456789".into()),
+        vies_reference: Some("WAPIAAAAW1".into()),
+        ..to_germany("o1", 12_000)
+    };
+    let invoice = cmd.issue_invoice(business, NOW).await.unwrap();
+    assert_eq!(invoice.regime, Regime::ReverseCharge);
+    assert!(invoice.vat.is_empty());
+    assert_eq!(invoice.total_excl_vat_cents, 12_000);
+    assert_eq!(invoice.buyer_vat_number.as_deref(), Some("DE123456789"));
+    assert_eq!(invoice.vies_reference.as_deref(), Some("WAPIAAAAW1"));
+    assert_eq!(invoice.eu_distance_sales_cents, 0);
+
+    let credit = cmd
+        .issue_credit_note(
+            NewCreditNote {
+                order_id: "o1".into(),
+                refund_id: "re_1".into(),
+                amount_cents: 2_000,
+                issued_by: "test".into(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(credit.regime, Regime::ReverseCharge);
+    assert_eq!(credit.total_excl_vat_cents, 2_000);
+    assert_eq!(credit.buyer_vat_number.as_deref(), Some("DE123456789"));
+
+    // Exported: no VAT either.
+    let export = NewInvoice {
+        delivery: Address {
+            country: "US".into(),
+            postal_code: "10001".into(),
+            ..Address::default()
+        },
+        ..invoice_for_export()
+    };
+    let export = cmd.issue_invoice(export, NOW).await.unwrap();
+    assert_eq!(export.regime, Regime::Export);
+    assert!(export.vat.is_empty());
+}
+
+fn invoice_for_export() -> NewInvoice {
+    invoice("o2")
 }

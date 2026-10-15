@@ -27,6 +27,9 @@ pub struct Config {
     /// Absent: tenants cannot take payments.
     #[serde(default)]
     pub payments: Option<PaymentsConfig>,
+    /// Invoices; every setting has a default.
+    #[serde(default)]
+    pub invoicing: InvoicingConfig,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -140,6 +143,15 @@ impl MediaConfig {
         self.public_url = url.to_owned();
         Ok(())
     }
+}
+
+/// Invoices.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct InvoicingConfig {
+    /// Where the EU's VIES service checks business buyers' VAT numbers; the
+    /// European Commission's own when unset. Tests point it at a stand-in.
+    #[serde(default)]
+    pub vies_url: Option<String>,
 }
 
 /// Card payments: each tenant connects its own Stripe account; this node
