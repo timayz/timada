@@ -22,5 +22,5 @@ pub async fn quantity(cx: &Cx, Form(form): Form<LineForm>) -> Result<SeeOther> {
     let outcome =
         set_cart_quantity(cx, &cart_id, &form.product_id, form.variant_id(), quantity).await?;
     let error = outcome.err().and_then(|err| err.code());
-    Ok(see_other(back_url(cx, &form.back, error)))
+    Ok(see_other(back_url(cx, &form.back, &form.from, error)))
 }

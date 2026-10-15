@@ -275,11 +275,13 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
   // Into the cart, from two product pages.
   await page.goto(`${STOREFRONT}/p/blue-mug`);
   await page.getByLabel("Quantity").fill("2");
-  await page.getByRole("button", { name: "Add to cart" }).click();
-  await expect(page).toHaveURL(`${STOREFRONT}/cart`);
-  await expect(page.locator("[data-cart-total]")).toHaveText("25.00 EUR");
+  await addToCart(page);
+  await expect(page).toHaveURL(`${STOREFRONT}/p/blue-mug`);
+  await expect(page.locator("[data-drawer-total]")).toHaveText("25.00 EUR");
   await page.goto(`${STOREFRONT}/p/red-plate`);
-  await page.getByRole("button", { name: "Add to cart" }).click();
+  await addToCart(page);
+  await expect(page.locator("[data-drawer-total]")).toHaveText("33.00 EUR");
+  await page.goto(`${STOREFRONT}/cart`);
   await expect(page.locator("[data-cart-total]")).toHaveText("33.00 EUR");
 
   // Change a quantity, then take a line out.
@@ -348,6 +350,13 @@ async function fillCheckout(page: Page, fill: boolean) {
 /// From the cart to Stripe's return page: the checkout filled in (or kept
 /// from the last order), the order placed and the payment confirmed (by the
 /// fake Stripe.js, see stripe.ts).
+/// Adds the product page's pick to the cart: the cart drawer opens on it,
+/// without leaving the page.
+async function addToCart(page: Page) {
+  await page.getByRole("button", { name: "Add to cart" }).click();
+  await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toBeVisible();
+}
+
 async function placeOrder(page: Page, fill: boolean) {
   await page.goto(`${STOREFRONT}/cart`);
   await page.getByRole("link", { name: "Check out" }).click();
@@ -409,7 +418,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     // payment is open, and the VAT the total includes where the goods go.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
     await page.getByLabel("Quantity").fill("2");
-    await page.getByRole("button", { name: "Add to cart" }).click();
+    await addToCart(page);
     await page.goto(`${STOREFRONT}/cart`);
     await page.getByRole("link", { name: "Check out" }).click();
     const form = page.locator("[data-checkout-form]");
@@ -498,7 +507,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
 
     // A second order is cancelled: the money goes back through Stripe.
     await page.goto(`${STOREFRONT}/p/red-plate`);
-    await page.getByRole("button", { name: "Add to cart" }).click();
+    await addToCart(page);
     await placeOrder(page, false);
     const second = stripe.lastIntent()!;
     expect(second.id).not.toBe(intent.id);
@@ -541,6 +550,120 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
   }
 });
 
+test("the cart drawer: changed in place, with offers, a code and express pay", async ({ page, browser, request }) => {
+  test.setTimeout(90_000);
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Drawer Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await publishProduct(page, slug, "Red Plate", "8");
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await page.goto(`/t/${slug}/discounts`);
+    await page.getByLabel("Code").fill("TEN");
+    await page.getByLabel("Percentage or amount").fill("10");
+    await page.getByRole("button", { name: "Create discount" }).click();
+    await expect(page.getByRole("status")).toContainText("Discount created.");
+    await startStorefront(request, await mintKey(page, slug, true), 2);
+
+    // Added from the product page: the drawer slides in, the page stays.
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await expect(page.locator("[data-cart-count]")).toBeHidden();
+    await addToCart(page);
+    await expect(page).toHaveURL(`${STOREFRONT}/p/blue-mug`);
+    const drawer = page.locator("[data-cart-drawer]");
+    await expect(drawer.locator("[data-summary-line='Blue Mug']")).toBeVisible();
+    await expect(page.locator("[data-cart-count]")).toHaveText("1");
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("12.50 EUR");
+
+    // The stepper changes it in place.
+    await drawer.getByRole("button", { name: "One more Blue Mug" }).click();
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("25.00 EUR");
+    await expect(page.locator("[data-cart-count]")).toHaveText("2");
+    await expect(page).toHaveURL(`${STOREFRONT}/p/blue-mug`);
+
+    // What goes with it, added in one click.
+    const offers = drawer.locator("[data-upsell]");
+    await expect(offers).toContainText("Frequently bought together");
+    await expect(offers.locator("[data-offer=blue-mug]")).toHaveCount(0);
+    await offers.getByRole("button", { name: "Add Red Plate" }).click();
+    await expect(drawer.locator("[data-summary-line='Red Plate']")).toBeVisible();
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("33.00 EUR");
+    await expect(drawer.locator("[data-upsell]")).toHaveCount(0);
+
+    // A code, from the drawer.
+    await drawer.getByText("Have a promo code?").click();
+    await drawer.getByLabel("Discount code").fill("tem");
+    await drawer.getByRole("button", { name: "Apply" }).click();
+    await expect(drawer.locator("[data-cart-error]")).toContainText("not valid");
+    await drawer.getByLabel("Discount code").fill("ten");
+    await drawer.getByRole("button", { name: "Apply" }).click();
+    await expect(drawer.locator("[data-drawer-discount=TEN]")).toHaveText("-3.30 EUR");
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("29.70 EUR");
+
+    // Closed with Escape, opened again from the header.
+    await page.keyboard.press("Escape");
+    await expect(drawer.locator(".drawer-panel")).toBeHidden();
+    await expect(page.getByRole("button", { name: "Add to cart" })).toBeEnabled();
+    await page.locator("[data-cart-link]").click();
+    await expect(drawer.locator(".drawer-panel")).toBeVisible();
+    await drawer.getByRole("button", { name: "Remove Red Plate" }).click();
+    await expect(drawer.locator("[data-summary-line='Red Plate']")).toHaveCount(0);
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("22.50 EUR");
+
+    // Express pay: Stripe's buttons for the drawer's total, paid with what
+    // the wallet hands over.
+    expect(await page.evaluate(() => (window as any).__stripe)).toMatchObject({
+      key: "pk_test_e2e",
+      elements: { mode: "payment", amount: 2250, currency: "eur" },
+      expressCheckout: { buttonHeight: 44 },
+      mounted: ["#drawer-express-checkout"],
+    });
+    // Not awaited in the page: paying navigates away.
+    await page.evaluate(() => {
+      void (window as any).__stripe.on["expressCheckout:confirm"]({
+        billingDetails: { email: "ada@example.com", name: "Ada Lovelace" },
+        shippingAddress: {
+          name: "Ada Lovelace",
+          address: { line1: "1 rue de la Paix", postal_code: "75002", city: "Paris", country: "FR" },
+        },
+        paymentFailed() {},
+      });
+    });
+    await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
+    expect(stripe.lastIntent()!.amount).toBe(2250);
+
+    // Without JavaScript the forms come back to the page, drawer open.
+    const plain = await browser.newContext({ javaScriptEnabled: false });
+    try {
+      const noScript = await plain.newPage();
+      await noScript.goto(`${STOREFRONT}/p/red-plate`);
+      await noScript.getByRole("button", { name: "Add to cart" }).click();
+      await expect(noScript).toHaveURL(`${STOREFRONT}/p/red-plate#cart`);
+      const panel = noScript.locator("[data-cart-drawer] .drawer-panel");
+      await expect(panel).toBeVisible();
+      await expect(panel.locator("[data-drawer-total]")).toHaveText("8.00 EUR");
+      await panel.getByRole("button", { name: "One more Red Plate" }).click();
+      await expect(noScript).toHaveURL(`${STOREFRONT}/p/red-plate#cart`);
+      await expect(panel.locator("[data-drawer-total]")).toHaveText("16.00 EUR");
+      await panel.getByRole("button", { name: "Remove Red Plate" }).click();
+      await expect(panel.locator("[data-cart-empty]")).toBeVisible();
+    } finally {
+      await plain.close();
+    }
+  } finally {
+    await stripe.stop();
+  }
+});
+
 test("a shopper pays less with a discount code, once", async ({ page, request }) => {
   const stripe = new FakeStripe();
   await stripe.start();
@@ -570,7 +693,7 @@ test("a shopper pays less with a discount code, once", async ({ page, request })
     // A typo is refused at once; the right code takes 2.50 off two mugs.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
     await page.getByLabel("Quantity").fill("2");
-    await page.getByRole("button", { name: "Add to cart" }).click();
+    await addToCart(page);
     await page.goto(`${STOREFRONT}/cart`);
     await page.getByLabel("Discount code").fill("TEM");
     await page.getByRole("button", { name: "Apply" }).click();
@@ -605,7 +728,7 @@ test("a shopper pays less with a discount code, once", async ({ page, request })
 
     // The same shopper cannot use it twice: back to the cart, told why.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
-    await page.getByRole("button", { name: "Add to cart" }).click();
+    await addToCart(page);
     await page.goto(`${STOREFRONT}/cart`);
     await page.getByRole("link", { name: "Check out" }).click();
     // Entered from the checkout's summary this time.
@@ -670,7 +793,7 @@ test("a buyer's review waits for the merchant, who publishes, trims and takes it
 
     // One mug, paid for.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
-    await page.getByRole("button", { name: "Add to cart" }).click();
+    await addToCart(page);
     await placeOrder(page, true);
     const intent = stripe.lastIntent()!;
     stripe.pay(intent.id);
@@ -745,7 +868,7 @@ test("a buyer's review waits for the merchant, who publishes, trims and takes it
     }).toPass({ timeout: 15_000 });
     // The next shopper reads it beside the checkout.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
-    await page.getByRole("button", { name: "Add to cart" }).click();
+    await addToCart(page);
     await expect(async () => {
       await page.goto(`${STOREFRONT}/checkout`);
       await expect(page.locator("[data-checkout-reviews]")).toContainText("Lovely mug", { timeout: 1000 });
@@ -795,7 +918,7 @@ test("a shopper reviews what they bought from the order page, shown once the sho
     // A mug and a plate, paid for.
     for (const product of ["blue-mug", "red-plate"]) {
       await page.goto(`${STOREFRONT}/p/${product}`);
-      await page.getByRole("button", { name: "Add to cart" }).click();
+      await addToCart(page);
     }
     await placeOrder(page, true);
     const intent = stripe.lastIntent()!;
@@ -909,7 +1032,7 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
     // Each order: a mug, paid, then told to the dashboard.
     const addMug = async () => {
       await page.goto(`${STOREFRONT}/p/blue-mug`);
-      await page.getByRole("button", { name: "Add to cart" }).click();
+      await addToCart(page);
     };
     const pay = async () => {
       const intent = stripe.lastIntent()!;

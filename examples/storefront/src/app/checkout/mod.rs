@@ -13,8 +13,7 @@ pub mod pay;
 pub mod start;
 
 use timada_storefront::{
-    Checkout, OrdersError, VatEstimate, categories, format_money, payment_setup, recent_reviews,
-    start_payment,
+    Checkout, OrdersError, VatEstimate, categories, payment_setup, recent_reviews, start_payment,
 };
 use topcoat::{
     Result,
@@ -27,7 +26,7 @@ use topcoat::{
     view::{Unescaped, View, view},
 };
 
-use crate::app::cart::{cart_url, current_cart, discount, quantity, remove};
+use crate::app::cart::{cart_url, current_cart, discount, summary_line};
 use crate::app::{document, say};
 use crate::shopper::{
     CheckoutDraft, PaymentInProgress, cart_id, checkout_draft, save_checkout_draft,
@@ -240,6 +239,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Checkout",
             nav: &nav,
+            no_drawer: true,
             <ol class="steps" aria-label="Checkout steps">
                 <li class="done"><a href=(&back_to_cart)>"Cart"</a></li>
                 <li aria-current="step">"Shipping & payment"</li>
@@ -255,44 +255,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <h2>"Your cart"</h2>
                         <ul class="lines">
                             for line in &cart.lines {
-                                <li data-checkout-line=(&line.name)>
-                                    <span class="pic">
-                                        if let Some(url) = &line.image_url {
-                                            <img src=(url) alt="" width="56" height="56" loading="lazy">
-                                        }
-                                        <span class="badge" aria-label=(format!("Quantity {}", line.quantity))>(line.quantity)</span>
-                                    </span>
-                                    <span class="what">
-                                        (&line.name)
-                                        if let Some(label) = &line.variant_label { " · " (label) }
-                                        <span class="qty">
-                                            <form method="post" action=(href!(quantity::quantity))>
-                                                <input type="hidden" name="product_id" value=(&line.product_id)>
-                                                <input type="hidden" name="variant_id" value=(line.variant_id.as_deref().unwrap_or(""))>
-                                                <input type="hidden" name="quantity" value=(line.quantity.saturating_sub(1))>
-                                                <input type="hidden" name="back" value="checkout">
-                                                <button aria-label=(format!("One less {}", line.name))>"−"</button>
-                                            </form>
-                                            <span data-line-quantity="">(line.quantity)</span>
-                                            <form method="post" action=(href!(quantity::quantity))>
-                                                <input type="hidden" name="product_id" value=(&line.product_id)>
-                                                <input type="hidden" name="variant_id" value=(line.variant_id.as_deref().unwrap_or(""))>
-                                                <input type="hidden" name="quantity" value=(line.quantity + 1)>
-                                                <input type="hidden" name="back" value="checkout">
-                                                <button aria-label=(format!("One more {}", line.name)) disabled=(line.quantity >= 99)>"+"</button>
-                                            </form>
-                                        </span>
-                                    </span>
-                                    <span class="amount">
-                                        (format_money(line.amount_cents.unwrap_or_default(), &currency))
-                                        <form method="post" action=(href!(remove::remove))>
-                                            <input type="hidden" name="product_id" value=(&line.product_id)>
-                                            <input type="hidden" name="variant_id" value=(line.variant_id.as_deref().unwrap_or(""))>
-                                            <input type="hidden" name="back" value="checkout">
-                                            <button class="remove" aria-label=(format!("Remove {}", line.name))>"×"</button>
-                                        </form>
-                                    </span>
-                                </li>
+                                summary_line(line: line, currency: &currency, back: "checkout")
                             }
                         </ul>
                         <details class="promo" open=(cart.discount_code.is_some())>
