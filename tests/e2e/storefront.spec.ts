@@ -1313,7 +1313,7 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       // Signed out, an order this browser did not place asks to sign in
       // first (the confirmation's link, opened elsewhere), then shows.
       await device.goto(`${STOREFRONT}/account`);
-      await device.getByRole("button", { name: "Sign out" }).click();
+      await device.getByRole("button", { name: "Sign out", exact: true }).click();
       await expect(device.locator("[data-account-link]")).toHaveText("Sign in");
       await device.goto(guestOrder);
       await expect(device).toHaveURL(/\/account\/sign-in\?/);
@@ -1338,6 +1338,37 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       await customer.getByRole("link", { name: "2" }).click();
       await expect(page).toHaveURL(new RegExp(`/t/${slug}/orders\\?q=`));
       await expect(page.locator("[data-order]")).toHaveCount(2);
+
+      // Signing out everywhere else, from the first browser: the other device
+      // is signed out, this one stays.
+      await page.goto(`${STOREFRONT}/account`);
+      await page.getByRole("button", { name: "Sign out everywhere else" }).click();
+      await expect(page.getByRole("status")).toContainText("Every other browser is signed out.");
+      await expect(page.locator("[data-account-email]")).toHaveText(shopper);
+      await device.goto(`${STOREFRONT}/account`);
+      await expect(device).toHaveURL(/\/account\/sign-in\?/);
+
+      // Deleting the account: signed out, gone from the customers, while the
+      // shop keeps both orders.
+      await page.goto(`${STOREFRONT}/account`);
+      await page.getByRole("link", { name: "Delete your account" }).click();
+      await expect(page).toHaveURL(`${STOREFRONT}/account/delete`);
+      await page.getByRole("button", { name: "Delete my account" }).click();
+      await expect(page).toHaveURL(`${STOREFRONT}/`);
+      await expect(page.locator("[data-account-link]")).toHaveText("Sign in");
+      await page.goto(`/t/${slug}/customers`);
+      await expect(async () => {
+        await page.reload();
+        await expect(page.locator(`[data-customer="${shopper}"]`)).toHaveCount(0, { timeout: 1000 });
+      }).toPass({ timeout: 15_000 });
+      await page.goto(`/t/${slug}/orders?q=${encodeURIComponent(shopper)}`);
+      await expect(page.locator("[data-order]")).toHaveCount(2);
+
+      // Signing in again starts a new account, with the orders and no address.
+      await signInToShop(device, shopper);
+      await expect(device).toHaveURL(`${STOREFRONT}/account`);
+      await expect(device.locator("[data-account-order]")).toHaveCount(2);
+      await expect(device.locator("[data-saved-address]")).toHaveCount(0);
     } finally {
       await other.close();
     }

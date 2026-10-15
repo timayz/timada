@@ -216,3 +216,84 @@ async fn addresses_are_saved_once_newest_first_and_capped() {
     assert_eq!(state.addresses.len(), MAX_ADDRESSES);
     assert_eq!(state.addresses[0].id, paris);
 }
+
+/// Revocations compare event times in milliseconds: a sign-in in the same
+/// millisecond as one would fall under it.
+async fn next_millisecond() {
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+}
+
+#[tokio::test]
+async fn signing_out_everywhere_else_keeps_only_the_asking_session() {
+    let shoppers = shoppers().await;
+    let here = signed_in(&shoppers, EMAIL, NOW).await;
+    let elsewhere = signed_in(&shoppers, EMAIL, NOW + CODE_RESEND_AFTER_SECS).await;
+    let other_shopper = signed_in(&shoppers, "bob@example.com", NOW).await;
+    shoppers
+        .revoke_other_sessions(&here.shopper_id, &here.token)
+        .await
+        .unwrap();
+
+    let resolves = async |token: &str| {
+        shoppers
+            .resolve_session(token, NOW + 200)
+            .await
+            .unwrap()
+            .is_some()
+    };
+    assert!(resolves(&here.token).await);
+    assert!(!resolves(&elsewhere.token).await);
+    assert!(resolves(&other_shopper.token).await, "only that shopper's");
+
+    next_millisecond().await;
+    let later = signed_in(&shoppers, EMAIL, NOW + 2 * CODE_RESEND_AFTER_SECS).await;
+    assert!(resolves(&later.token).await);
+}
+
+#[tokio::test]
+async fn forgetting_a_shopper_ends_every_session_and_the_next_sign_in_starts_afresh() {
+    let shoppers = shoppers().await;
+    let one = signed_in(&shoppers, EMAIL, NOW).await;
+    let two = signed_in(&shoppers, EMAIL, NOW + CODE_RESEND_AFTER_SECS).await;
+    shoppers
+        .save_address(&one.shopper_id, address("Paris"))
+        .await
+        .unwrap();
+
+    shoppers.forget(&one.shopper_id).await.unwrap();
+    shoppers.forget(&one.shopper_id).await.unwrap();
+    shoppers.forget("unknown").await.unwrap();
+    for token in [&one.token, &two.token] {
+        assert!(
+            shoppers
+                .resolve_session(token, NOW + 200)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert!(
+        shoppers
+            .load_shopper_by_email("ada@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        shoppers
+            .save_address(&one.shopper_id, address("Lyon"))
+            .await,
+        Err(ShopperError::NotFound)
+    ));
+
+    next_millisecond().await;
+    let again = signed_in(&shoppers, EMAIL, NOW + 2 * CODE_RESEND_AFTER_SECS).await;
+    assert_eq!(again.shopper_id, one.shopper_id, "the address's stream");
+    let resolved = shoppers
+        .resolve_session(&again.token, NOW + 200)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.shopper.email, "ada@example.com");
+    assert!(resolved.shopper.addresses.is_empty());
+}

@@ -6,6 +6,7 @@
 
 mod address;
 mod challenge;
+mod forget;
 mod session;
 
 use std::ops::Deref;
@@ -17,8 +18,8 @@ use evento::{Executor, Projection, metadata::Event};
 use timada_orders::ShippingAddress;
 
 use crate::aggregator::{
-    AddressRemoved, AddressSaved, AttemptFailed, CodeConsumed, CodeIssued, Registered,
-    SessionEnded, SessionStarted,
+    AddressRemoved, AddressSaved, AttemptFailed, CodeConsumed, CodeIssued, Forgotten, Registered,
+    SessionEnded, SessionStarted, SessionsRevoked,
 };
 use crate::value_object::{challenge_id, session_id, shopper_id};
 
@@ -42,17 +43,43 @@ pub struct SavedAddress {
     pub saved_at: u64,
 }
 
+/// The latest "sign out everywhere" on a shopper. Sessions started up to it
+/// are void; the one it names (the browser that asked) survives.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionsRevocation {
+    /// Unix milliseconds of the revocation.
+    pub at_ms: u64,
+    /// Session aggregate id spared by the revocation.
+    pub except_session: Option<String>,
+}
+
+impl SessionsRevocation {
+    pub fn covers(&self, session: &SessionState) -> bool {
+        session.started_at_ms <= self.at_ms
+            && self.except_session.as_deref() != Some(session.id.as_str())
+    }
+}
+
+/// Unix milliseconds of an event, for cutoffs where a second is too coarse.
+fn event_millis(event: &evento::Event) -> u64 {
+    event.timestamp * 1000 + u64::from(event.timestamp_subsec)
+}
+
 #[evento::projection(id = id, name = "timada-shoppers/ShopperState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct ShopperState {
     pub id: String,
-    /// Normalized.
+    /// Normalized; empty once forgotten.
     pub email: String,
-    /// Unix seconds of the first sign-in.
+    /// Unix seconds of the first sign-in (since the last deletion).
     pub registered_at: u64,
     /// Most recently saved first.
     pub addresses: Vec<SavedAddress>,
+    pub sessions_revoked: Option<SessionsRevocation>,
+    /// The shopper deleted their account; every command treats it as gone
+    /// until the address signs in again.
+    pub forgotten: bool,
 }
 
 impl ShopperState {
@@ -66,6 +93,8 @@ pub fn shopper_projection<E: Executor>() -> Projection<E, ShopperState> {
         .handler(on_registered())
         .handler(on_address_saved())
         .handler(on_address_removed())
+        .handler(on_sessions_revoked())
+        .handler(on_forgotten())
         .strict()
 }
 
@@ -74,6 +103,8 @@ async fn on_registered(event: Event<Registered>, state: &mut ShopperState) -> an
     state.id = event.aggregate_id.to_owned();
     state.email = event.data.email.to_owned();
     state.registered_at = event.timestamp;
+    state.addresses.clear();
+    state.forgotten = false;
     Ok(())
 }
 
@@ -104,6 +135,30 @@ async fn on_address_removed(
     state
         .addresses
         .retain(|saved| saved.id != event.data.address_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_sessions_revoked(
+    event: Event<SessionsRevoked>,
+    state: &mut ShopperState,
+) -> anyhow::Result<()> {
+    state.sessions_revoked = Some(SessionsRevocation {
+        at_ms: event_millis(&event),
+        except_session: event.data.except_session.to_owned(),
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_forgotten(event: Event<Forgotten>, state: &mut ShopperState) -> anyhow::Result<()> {
+    state.email.clear();
+    state.addresses.clear();
+    state.forgotten = true;
+    state.sessions_revoked = Some(SessionsRevocation {
+        at_ms: event_millis(&event),
+        except_session: None,
+    });
     Ok(())
 }
 
@@ -169,6 +224,8 @@ async fn on_code_consumed(
 pub struct SessionState {
     pub id: String,
     pub shopper_id: String,
+    /// Unix milliseconds, for the revocation cutoff.
+    pub started_at_ms: u64,
     /// Unix seconds.
     pub expires_at: u64,
     pub ended: bool,
@@ -194,6 +251,7 @@ async fn on_session_started(
 ) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
     state.shopper_id = event.data.shopper_id.to_owned();
+    state.started_at_ms = event_millis(&event);
     state.expires_at = event.data.expires_at;
     state.ended = false;
     Ok(())
@@ -214,7 +272,20 @@ impl<E: Executor> Command<E> {
         self.load_shopper(&shopper_id(email)).await
     }
 
+    /// The shopper, or `None` when unknown or forgotten.
     pub async fn load_shopper(&self, shopper_id: &str) -> anyhow::Result<Option<ShopperState>> {
+        Ok(self
+            .load_shopper_any(shopper_id)
+            .await?
+            .filter(|shopper| !shopper.forgotten))
+    }
+
+    /// The shopper including a forgotten one, whose stream a new sign-in
+    /// registers again.
+    pub(crate) async fn load_shopper_any(
+        &self,
+        shopper_id: &str,
+    ) -> anyhow::Result<Option<ShopperState>> {
         shopper_projection().load(shopper_id).execute(&self.0).await
     }
 
