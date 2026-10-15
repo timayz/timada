@@ -200,34 +200,49 @@ pub fn lines_breakdown(lines: &[InvoiceLine]) -> Vec<VatSubtotal> {
     )
 }
 
+/// Spreads `amount` over `parts` in proportion to each, the cents left by
+/// rounding going to the largest remainders: the shares add up to `amount`
+/// exactly, and none is more than its part when `amount` is at most their
+/// sum.
+pub fn spread(parts: &[u64], amount: u64) -> Vec<u64> {
+    let total: u64 = parts.iter().sum();
+    if total == 0 {
+        return vec![0; parts.len()];
+    }
+    let mut shares: Vec<(u64, u128)> = parts
+        .iter()
+        .map(|part| {
+            let exact = u128::from(amount) * u128::from(*part);
+            (
+                (exact / u128::from(total)) as u64,
+                exact % u128::from(total),
+            )
+        })
+        .collect();
+    let mut left = amount - shares.iter().map(|(share, _)| share).sum::<u64>();
+    let mut order: Vec<usize> = (0..shares.len()).collect();
+    order.sort_by(|a, b| shares[*b].1.cmp(&shares[*a].1));
+    for index in order {
+        if left == 0 {
+            break;
+        }
+        shares[index].0 += 1;
+        left -= 1;
+    }
+    shares.into_iter().map(|(share, _)| share).collect()
+}
+
 /// Spreads `amount` (VAT included) over the rates of an invoice in
 /// proportion to what each was for, the cents left by rounding going to the
 /// largest remainders, so the parts add up to `amount` exactly; each part is
 /// then split into base and tax.
 pub fn prorate(invoice: &[VatSubtotal], amount: u64) -> Vec<VatSubtotal> {
-    let total: u64 = invoice.iter().map(VatSubtotal::total_cents).sum();
-    if total == 0 {
+    let totals: Vec<u64> = invoice.iter().map(VatSubtotal::total_cents).collect();
+    if totals.iter().sum::<u64>() == 0 {
         return Vec::new();
     }
-    let mut parts: Vec<(u32, u64, u128)> = invoice
-        .iter()
-        .map(|subtotal| {
-            let exact = u128::from(amount) * u128::from(subtotal.total_cents());
-            let share = (exact / u128::from(total)) as u64;
-            (subtotal.rate_bps, share, exact % u128::from(total))
-        })
-        .collect();
-    let mut left = amount - parts.iter().map(|(_, share, _)| share).sum::<u64>();
-    let mut order: Vec<usize> = (0..parts.len()).collect();
-    order.sort_by(|a, b| parts[*b].2.cmp(&parts[*a].2));
-    for index in order {
-        if left == 0 {
-            break;
-        }
-        parts[index].1 += 1;
-        left -= 1;
-    }
-    vat_breakdown(parts.into_iter().map(|(rate, share, _)| (rate, share)))
+    let shares = spread(&totals, amount);
+    vat_breakdown(invoice.iter().map(|subtotal| subtotal.rate_bps).zip(shares))
 }
 
 /// `1250` as `12,50 €`: what a French reader expects, the thousands
@@ -357,6 +372,14 @@ mod tests {
         );
         assert_eq!(lines[1].unit_excl_vat_cents(), 1042);
         assert!(lines_breakdown(&[line(1000, 1, None)]).is_empty());
+    }
+
+    #[test]
+    fn spread_shares_add_up_and_follow_the_parts() {
+        assert_eq!(spread(&[2500, 1999], 450), vec![250, 200]);
+        assert_eq!(spread(&[1, 1, 1], 2), vec![1, 1, 0]);
+        assert_eq!(spread(&[0, 0], 0), vec![0, 0]);
+        assert_eq!(spread(&[300], 300), vec![300]);
     }
 
     #[test]

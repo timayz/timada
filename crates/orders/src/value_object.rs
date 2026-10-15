@@ -86,8 +86,8 @@ impl OrderLine {
     }
 }
 
-/// Whether an event is one a shopper's storefront writes: filling a cart and
-/// asking to pay for it. Everything else is the dashboard's: answering a
+/// Whether an event is one a shopper's storefront writes: filling a cart,
+/// entering a discount code and asking to pay for it. Everything else is the dashboard's: answering a
 /// request to pay, the orders (they exist once paid, which only the
 /// provider's word to the dashboard proves) and the catalog. A store
 /// connection allowed to sell but not to manage is held to these.
@@ -95,7 +95,8 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
     use evento::{Aggregate, AggregateEvent};
 
     use crate::aggregator::{
-        BuyerIdentified, Cart, CheckoutRequested, Created, ItemAdded, ItemRemoved, QuantitySet,
+        BuyerIdentified, Cart, CheckoutRequested, Created, DiscountApplied, DiscountRemoved,
+        ItemAdded, ItemRemoved, QuantitySet,
     };
 
     aggregate_type == Cart::aggregate_type()
@@ -106,6 +107,8 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
             ItemRemoved::event_name(),
             CheckoutRequested::event_name(),
             BuyerIdentified::event_name(),
+            DiscountApplied::event_name(),
+            DiscountRemoved::event_name(),
         ]
         .contains(&name)
 }
@@ -306,7 +309,12 @@ mod tests {
     fn shoppers_write_carts_and_place_orders_only() {
         assert!(is_shopper_event("timada-orders/Cart", "ItemAdded"));
         assert!(is_shopper_event("timada-orders/Cart", "CheckoutRequested"));
+        assert!(is_shopper_event("timada-orders/Cart", "DiscountApplied"));
+        assert!(is_shopper_event("timada-orders/Cart", "DiscountRemoved"));
         assert!(!is_shopper_event("timada-orders/Cart", "PaymentRequested"));
+        // Only the dashboard says what a payment is discounted by.
+        assert!(!is_shopper_event("timada-orders/Cart", "DiscountGranted"));
+        assert!(!is_shopper_event("timada-orders/Order", "Discounted"));
         assert!(!is_shopper_event("timada-orders/Cart", "CheckedOut"));
         assert!(!is_shopper_event("timada-orders/OrderReference", "Claimed"));
         assert!(!is_shopper_event("timada-orders/Order", "Placed"));

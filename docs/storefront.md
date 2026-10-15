@@ -208,6 +208,15 @@ let session = start_payment(cx, &cart_id, Checkout {
 - The order (`order_of_cart`, `order`) arrives once the provider confirmed the payment
   to the dashboard, usually a second after the browser comes back. Its `reference`
   (`K7Q4-MZP2`) is what a shopper quotes.
+- A cart takes one discount code: `apply_discount(cx, &cart_id, code)` (an unknown
+  code is refused at once, `discount_unknown`) and `remove_discount`. `CartView` then
+  has `subtotal_cents`, `discount` (what the code takes off) and `total_cents`; a code
+  that takes nothing off right now (deactivated, outside its dates, an amount in
+  another currency) stays on the cart with the reason in `discount_refused`.
+  `start_payment` refuses such a cart with that code instead of charging full price,
+  and also refuses `discount_exhausted` (a capped code has no use left) and
+  `discount_already_used` (a code good once per e-mail). The use is held while the
+  shopper pays and spent by the order.
 - Who a shopper is, and which orders a browser may look at, is the host's call: the
   library hands out any order by id. The example keeps the cart id, the payment in
   progress, the browser's orders and its last address in private cookies.
