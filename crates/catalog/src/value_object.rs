@@ -14,6 +14,27 @@ pub const FALLBACK_SLUG: &str = "product";
 pub const MAX_AMOUNT_CENTS: u64 = 100_000_000_000;
 /// The currencies a product can be priced in, as ISO-4217 codes. All of them
 /// have two minor digits.
+/// What kind of goods a product is for VAT, with the label a page shows.
+/// Each country taxes a kind at its own rate (books are 5.5 % in France,
+/// 7 % in Germany); most goods are `standard`. The list only grows.
+pub const TAX_CATEGORIES: &[(&str, &str)] = &[
+    (TAX_CATEGORY_STANDARD, "Standard"),
+    ("books", "Books"),
+    ("food", "Food"),
+    ("medicines", "Medicines"),
+    ("press", "Newspapers and magazines"),
+];
+/// The kind of goods a product is unless told otherwise.
+pub const TAX_CATEGORY_STANDARD: &str = "standard";
+
+/// The label of a tax category, or the key itself if unknown.
+pub fn tax_category_label(category: &str) -> &str {
+    TAX_CATEGORIES
+        .iter()
+        .find(|(key, _)| *key == category)
+        .map_or(category, |(_, label)| label)
+}
+
 pub const CURRENCIES: &[&str] = &["EUR", "USD", "GBP", "CHF"];
 pub const MAX_CATEGORY_NAME_LEN: usize = 80;
 pub const MAX_CATEGORY_DESCRIPTION_LEN: usize = 2000;

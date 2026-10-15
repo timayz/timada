@@ -64,6 +64,36 @@ pub enum Tenant {
     PaymentsRemoved {
         removed_by: String,
     },
+    /// Who the merchant is in law, as its invoices must say: replaced as a
+    /// whole on every change. An invoice copies it when issued, so a change
+    /// never rewrites one already issued.
+    LegalIdentitySet {
+        /// The registered name (raison sociale), or the trader's own name.
+        legal_name: String,
+        /// `SAS`, `SARL`, `EI`…
+        legal_form: String,
+        /// In euro cents; `None` for a form without one (sole trader).
+        share_capital_cents: Option<u64>,
+        /// 14 digits; the first nine are the SIREN.
+        siret: String,
+        /// The city of the trade register (RCS) it is entered in, if any.
+        rcs_city: Option<String>,
+        line1: String,
+        line2: Option<String>,
+        postal_code: String,
+        city: String,
+        /// ISO 3166-1 alpha-2, uppercase.
+        country: String,
+        contact_email: String,
+        /// The intra-community VAT number; `None` under the VAT exemption
+        /// for small businesses (franchise en base, art. 293 B du CGI).
+        vat_number: Option<String>,
+        /// Registered for the EU One-Stop Shop: sales to consumers in other
+        /// EU countries carry their VAT from the first euro, not only past
+        /// the yearly threshold. Needs a `vat_number`.
+        oss_registered: bool,
+        set_by: String,
+    },
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).
