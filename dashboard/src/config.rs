@@ -30,6 +30,9 @@ pub struct Config {
     /// Invoices; every setting has a default.
     #[serde(default)]
     pub invoicing: InvoicingConfig,
+    /// Reviews; every setting has a default.
+    #[serde(default)]
+    pub reviews: ReviewsConfig,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -143,6 +146,27 @@ impl MediaConfig {
         self.public_url = url.to_owned();
         Ok(())
     }
+}
+
+/// Reviews.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ReviewsConfig {
+    /// How often, in seconds, this node looks for fulfilled orders whose
+    /// buyer is due a mail asking for a review.
+    #[serde(default = "default_request_check_secs")]
+    pub request_check_secs: u64,
+}
+
+impl Default for ReviewsConfig {
+    fn default() -> Self {
+        Self {
+            request_check_secs: default_request_check_secs(),
+        }
+    }
+}
+
+fn default_request_check_secs() -> u64 {
+    60 * 60
 }
 
 /// Invoices.

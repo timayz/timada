@@ -2,8 +2,8 @@ mod common;
 
 use common::*;
 use timada_orders::{
-    Command, OrderFilter, OrderStatus, count_orders, open_carts, orders_of_email, orders_of_tenant,
-    read_model_subscription,
+    Command, OrderFilter, OrderStatus, count_orders, fulfilled_between, open_carts,
+    orders_of_email, orders_of_tenant, read_model_subscription,
 };
 
 const TENANT: &str = "tenant-1";
@@ -81,4 +81,44 @@ async fn orders_and_carts_are_listed() {
     );
     assert_eq!(carts[0].id, left);
     assert_eq!(carts[0].item_count, 3);
+}
+
+#[tokio::test]
+async fn fulfilled_orders_are_found_by_when_they_left() {
+    let (executor, pool) = executor_with_pool().await;
+    let orders = Command(executor.clone());
+    let catalog = timada_catalog::Command(executor.clone());
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let paid = pay(&orders, &cart_with(&orders, &mug, 1).await, checkout()).await;
+    let left = pay(&orders, &cart_with(&orders, &mug, 1).await, checkout()).await;
+    orders
+        .fulfil_order(ALICE, &left.order_id, None)
+        .await
+        .unwrap();
+    read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT)
+        .run_once(&executor)
+        .await
+        .unwrap();
+
+    let fulfilled_at = orders
+        .load_order(&left.order_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .fulfilled_at
+        .unwrap() as i64;
+    let found = fulfilled_between(&pool, fulfilled_at, fulfilled_at + 1)
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].id, left.order_id);
+    assert_eq!(found[0].tenant_id, TENANT);
+    assert_eq!(found[0].fulfilled_at, fulfilled_at);
+    assert!(
+        fulfilled_between(&pool, fulfilled_at + 1, fulfilled_at + 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(found.iter().all(|order| order.id != paid.order_id));
 }

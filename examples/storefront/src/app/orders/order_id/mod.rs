@@ -149,7 +149,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             </address>
             <p>"A confirmation goes to " (&order.email) "."</p>
             if !line_reviews.is_empty() {
-                <h2>"Your reviews"</h2>
+                <h2 id="reviews">"Your reviews"</h2>
                 for line in &line_reviews {
                     <section class="review" id=(format!("review-{}", line.product_id)) data-review-of=(&line.product_id)>
                         <h3>(&line.name)</h3>

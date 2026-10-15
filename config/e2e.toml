@@ -37,6 +37,10 @@ stripe_api_url = "http://127.0.0.1:12112"
 [invoicing]
 vies_url = "http://127.0.0.1:12113"
 
+# Review requests go out within seconds of falling due.
+[reviews]
+request_check_secs = 2
+
 [auth]
 secret_key = "e2e-only-secret-key-never-used-outside-the-test-suite"
 
