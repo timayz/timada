@@ -141,8 +141,9 @@ tenant's products while the events stay isolated by construction.
    database, and reconnects are refused.
 4. **Payments** (`payments/`). Each tenant connects its own Stripe account on
    `/t/{slug}/payments`; the secret key and the webhook signing secret are recorded
-   in the tenant's platform events sealed with AES-256-GCM under the operator's
-   `[payments] secret_key` (no section, no payments). A storefront asks to pay
+   in the tenant's platform events sealed with AES-256-GCM (`seal.rs`) under the
+   operator's `[payments] secret_key`, or else `[secrets] key` (no section, no
+   payments). A storefront asks to pay
    (`Cart::CheckoutRequested`); the per-tenant subscription `timada-dashboard/payments`
    prices the cart from the store, opens a PaymentIntent with the tenant's key (the
    request id is the idempotency key, so every node answering opens one payment) and
@@ -152,15 +153,24 @@ tenant's products while the events stay isolated by construction.
    creates the order (`place_paid_order`). A second payment of a cart is refunded;
    cancelling an order refunds it first. Setting it up and testing it locally:
    `docs/payments.md`.
-5. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
+5. **Shop mail** (`shop_mail.rs`). A shop's mails to its shoppers (order
+   confirmations, review requests, sign-in codes) go out through the merchant's own
+   SMTP server once it set one up on `/t/{slug}/mail`, and through the platform's
+   `[mail]` server under the shop's name otherwise. Saving sends a test mail first.
+   The password is recorded in the tenant's platform events (`MailServerConfigured`)
+   sealed under `[secrets] key`; secrets never enter the tenant store, which
+   replicates to storefronts. Hosts on this machine or a private network are refused
+   unless `mail.allow_private_hosts` is set. Account codes and invitations always go
+   through the platform's server. Details: `docs/mail.md`.
+6. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
    roles as roles. Policies are not loaded at startup: every tenant-scoped request loads
    the tenant's strict state, whose version says which events it reflects, and the
    enforcer re-syncs a tenant's rules when a newer state comes along. Owners bypass.
    `manage` on a resource implies `read`.
-6. **Auth glue** (`auth/`). The web side of the identity context: OIDC discovery and
+7. **Auth glue** (`auth/`). The web side of the identity context: OIDC discovery and
    token exchange, WebAuthn ceremonies, mailed one-time codes, the private cookies that
    carry a sign-in attempt between steps, and the session cookie.
-7. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
+8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
    orders, open carts, discounts, reviews, payments), `/stripe/webhooks/{tenant_id}`,

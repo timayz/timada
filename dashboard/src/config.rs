@@ -27,6 +27,10 @@ pub struct Config {
     /// Absent: tenants cannot take payments.
     #[serde(default)]
     pub payments: Option<PaymentsConfig>,
+    /// Absent: no tenant secret can be stored (shop mail servers, and
+    /// payments unless `payments.secret_key` is set).
+    #[serde(default)]
+    pub secrets: Option<SecretsConfig>,
     /// Invoices; every setting has a default.
     #[serde(default)]
     pub invoicing: InvoicingConfig,
@@ -70,7 +74,8 @@ pub struct ProviderConfig {
 }
 
 /// Outgoing e-mail: the codes that prove an address at sign-up, sign-in and
-/// password reset.
+/// password reset, and the shops' mails to their shoppers when a shop has no
+/// mail server of its own.
 #[derive(Debug, Deserialize, Clone)]
 pub struct MailConfig {
     /// Sender shown on those e-mails, e.g. `Timada <no-reply@example.com>`.
@@ -79,6 +84,31 @@ pub struct MailConfig {
     /// local mailbox), `smtp://user:pass@host:587?tls=required` (STARTTLS) or
     /// `smtps://user:pass@host:465` (implicit TLS).
     pub smtp_url: String,
+    /// Lets a shop's mail server be on this machine or a private network.
+    /// Off by default: a merchant could otherwise make the server connect to
+    /// internal services. For development and tests only.
+    #[serde(default)]
+    pub allow_private_hosts: bool,
+}
+
+/// The key that seals the secrets tenants hand over (their mail server
+/// passwords, their payment keys) before they are stored.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SecretsConfig {
+    /// At least 32 characters, the same on every node. Changing it makes the
+    /// stored secrets unreadable, and each merchant has to enter them again.
+    pub key: String,
+}
+
+impl SecretsConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.key.len() < 32 {
+            return Err(ConfigError::Message(
+                "secrets.key must be at least 32 characters (set TIMADA__SECRETS__KEY)".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -179,13 +209,15 @@ pub struct InvoicingConfig {
 }
 
 /// Card payments: each tenant connects its own Stripe account; this node
-/// keeps the account's secrets encrypted under `secret_key`.
+/// keeps the account's secrets encrypted under `secret_key`, or else under
+/// `secrets.key`.
 #[derive(Debug, Deserialize, Clone)]
 pub struct PaymentsConfig {
     /// At least 32 characters, the same on every node. The tenants' Stripe
     /// secrets are encrypted with it: changing it makes them unreadable, and
-    /// each merchant has to enter them again.
-    pub secret_key: String,
+    /// each merchant has to enter them again. Unset: `secrets.key` is used.
+    #[serde(default)]
+    pub secret_key: Option<String>,
     /// Where Stripe's API is reached; Stripe's own address when unset. Tests
     /// point it at a local stand-in.
     #[serde(default)]
@@ -193,14 +225,18 @@ pub struct PaymentsConfig {
 }
 
 impl PaymentsConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.secret_key.len() < 32 {
-            return Err(ConfigError::Message(
+    fn validate(&self, secrets: Option<&SecretsConfig>) -> Result<(), ConfigError> {
+        match &self.secret_key {
+            Some(key) if key.len() < 32 => Err(ConfigError::Message(
                 "payments.secret_key must be at least 32 characters (set TIMADA__PAYMENTS__SECRET_KEY)"
                     .into(),
-            ));
+            )),
+            None if secrets.is_none() => Err(ConfigError::Message(
+                "payments needs payments.secret_key or secrets.key (set TIMADA__SECRETS__KEY)"
+                    .into(),
+            )),
+            _ => Ok(()),
         }
-        Ok(())
     }
 }
 
@@ -322,8 +358,11 @@ impl Config {
         if let Some(store_api) = &config.store_api {
             store_api.validate()?;
         }
+        if let Some(secrets) = &config.secrets {
+            secrets.validate()?;
+        }
         if let Some(payments) = &config.payments {
-            payments.validate()?;
+            payments.validate(config.secrets.as_ref())?;
         }
         config.auth.validate()?;
         config.mail.validate()?;
@@ -489,10 +528,37 @@ mod tests {
     }
 
     #[test]
+    fn payments_seal_with_their_key_or_the_secrets_key() {
+        let secrets = SecretsConfig {
+            key: "a-secrets-key-of-thirty-two-chars!!".into(),
+        };
+        let payments = PaymentsConfig {
+            secret_key: None,
+            stripe_api_url: None,
+        };
+        assert!(payments.validate(Some(&secrets)).is_ok());
+        let err = payments.validate(None).unwrap_err();
+        assert!(err.to_string().contains("secrets.key"), "{err}");
+        let short = PaymentsConfig {
+            secret_key: Some("short".into()),
+            stripe_api_url: None,
+        };
+        assert!(short.validate(Some(&secrets)).is_err());
+        assert!(
+            SecretsConfig {
+                key: "short".into()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
     fn mail_settings_are_checked_with_their_key() {
         let ok = MailConfig {
             from: "Timada <no-reply@example.com>".into(),
             smtp_url: "smtp://localhost:1025".into(),
+            allow_private_hosts: false,
         };
         assert!(ok.validate().is_ok());
         let err = MailConfig {

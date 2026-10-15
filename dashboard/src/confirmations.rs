@@ -36,7 +36,8 @@ struct Platform(Store);
 #[derive(Clone)]
 struct TenantStore(Evento);
 
-/// What sending needs outside a request: the transport and the sender.
+/// What sending needs outside a request: the platform's transport and
+/// sender, and the shops' own servers.
 #[derive(Clone)]
 struct Mail(Arc<AppContext>);
 
@@ -97,7 +98,7 @@ async fn on_placed<E: Executor>(
     // mailed twice is worse off than one left with the provider's receipt.
     let mail: Mail = context.extract();
     let cx = Cx::new(mail.0);
-    match send_order_confirmation(&cx, &shop.name, &order, link.as_deref()).await {
+    match send_order_confirmation(&cx, &shop, &order, link.as_deref()).await {
         Ok(()) => {
             tracing::info!(tenant = %tenant.0, order = %order.id, "order confirmation mailed");
         }

@@ -33,6 +33,6 @@ pub async fn code(cx: &Cx, Form(form): Form<CodeForm>) -> Result<Answer> {
         Ok(issued) => issued,
         Err(err) => return answer_error(err),
     };
-    send_shopper_code(cx, &issued.email, &access.tenant.name, &issued.code).await?;
+    send_shopper_code(cx, &issued.email, &access.tenant, &issued.code).await?;
     status(StatusCode::ACCEPTED)
 }

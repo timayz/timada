@@ -169,6 +169,16 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_webhook_secret" => "A webhook signing secret starts with whsec_.",
         "stripe_refused_key" => "Stripe did not accept this secret key.",
         "payments_disabled" => "Payments are not enabled on this platform.",
+        "mail_servers_disabled" => "Shop mail servers are not enabled on this platform.",
+        "invalid_mail_server" => {
+            "Give the server's name, a port from 1 to 65535 and how the connection is secured."
+        }
+        "mail_server_not_public" => {
+            "This server is not reachable from the internet: give your provider's public server name."
+        }
+        "mail_server_failed" => {
+            "The test mail did not go out: check the server, port, security, user name and password. Nothing was saved."
+        }
         "payments_unavailable" => "This tenant has no payments set up.",
         "refund_failed" => {
             "Stripe could not refund the payment: the order is not cancelled. Try again."
@@ -239,6 +249,7 @@ pub fn describe_permission(permission: &str) -> &'static str {
             "Publish and reject reviews, take photos off them (includes seeing them)"
         }
         "customers:read" => "See the shop's customer accounts",
+        "mail:manage" => "Set up the mail server the shop's mails go out through",
         _ => "Unknown permission",
     }
 }

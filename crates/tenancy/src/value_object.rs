@@ -26,6 +26,7 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `reviews:read` — see the reviews shoppers wrote.
 /// - `reviews:manage` — publish and reject reviews, take photos off them.
 /// - `customers:read` — see the shop's customer accounts.
+/// - `mail:manage` — set up the mail server the shop's mails go out through.
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
@@ -42,6 +43,7 @@ pub const PERMISSIONS: &[&str] = &[
     PERMISSION_REVIEWS_READ,
     PERMISSION_REVIEWS_MANAGE,
     PERMISSION_CUSTOMERS_READ,
+    PERMISSION_MAIL_MANAGE,
 ];
 pub const PERMISSION_TENANT_MANAGE: &str = "tenant:manage";
 pub const PERMISSION_MEMBERS_READ: &str = "members:read";
@@ -58,6 +60,7 @@ pub const PERMISSION_DISCOUNTS_MANAGE: &str = "discounts:manage";
 pub const PERMISSION_REVIEWS_READ: &str = "reviews:read";
 pub const PERMISSION_REVIEWS_MANAGE: &str = "reviews:manage";
 pub const PERMISSION_CUSTOMERS_READ: &str = "customers:read";
+pub const PERMISSION_MAIL_MANAGE: &str = "mail:manage";
 
 /// Every scope a store API key can hold, as `resource:action`. The list only
 /// grows: a stored key may name any of them. `write` on a resource implies
@@ -668,3 +671,16 @@ pub fn normalize_series_code(code: Option<&str>) -> Result<String, crate::Tenanc
         Err(crate::TenancyError::InvalidSeriesCode)
     }
 }
+
+/// How a mail server connection is secured, as [`MailServerConfigured`]
+/// records it: implicit TLS, STARTTLS, or none.
+///
+/// [`MailServerConfigured`]: crate::aggregator::MailServerConfigured
+pub const MAIL_SECURITIES: &[&str] = &[
+    MAIL_SECURITY_TLS,
+    MAIL_SECURITY_STARTTLS,
+    MAIL_SECURITY_NONE,
+];
+pub const MAIL_SECURITY_TLS: &str = "tls";
+pub const MAIL_SECURITY_STARTTLS: &str = "starttls";
+pub const MAIL_SECURITY_NONE: &str = "none";
