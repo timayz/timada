@@ -1,0 +1,22 @@
+[package]
+name = "timada-reviews"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+timada-orders = { path = "../orders" }
+evento.workspace = true
+bitcode.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+sqlx = { workspace = true, features = ["derive"] }
+sqlx_migrator.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+# `#[evento::aggregate]` expands to `bitcode::` paths, so the crate must name the
+# dependency even though no source file mentions it.
+[package.metadata.cargo-machete]
+ignored = ["bitcode"]

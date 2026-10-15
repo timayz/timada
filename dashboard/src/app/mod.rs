@@ -6,6 +6,7 @@ pub mod cluster;
 pub mod companies;
 pub mod invitations;
 mod server_errors;
+pub mod store;
 pub mod stripe;
 pub mod t;
 pub mod tenants;
@@ -85,6 +86,8 @@ pub fn router(services: Services) -> Router {
     // A picture is at most 8 MiB, and a multipart body carries a little more
     // than the file it holds.
     const UPLOAD_LIMIT: usize = 10 * 1024 * 1024;
+    // A review carries up to three of them.
+    const REVIEW_LIMIT: usize = 26 * 1024 * 1024;
 
     module_router!()
         .discover()
@@ -95,6 +98,7 @@ pub fn router(services: Services) -> Router {
         .layer(BodyLimit::max(UPLOAD_LIMIT).at("/t"))
         // A picture another node copies here: the file alone.
         .layer(BodyLimit::max(UPLOAD_LIMIT).at(PEER_ROUTE))
+        .layer(BodyLimit::max(REVIEW_LIMIT).at("/store/reviews"))
         // Absolute URLs (the OIDC redirect URI) follow the public address.
         .base_url(config.server.url.as_str())
         // Validated by `Config::load`; `networks` panics on a bad entry.
