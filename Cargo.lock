@@ -5910,6 +5910,7 @@ dependencies = [
  "timada-identity",
  "timada-invoicing",
  "timada-orders",
+ "timada-reviews",
  "timada-storefront",
  "timada-tenancy",
  "tokio",
@@ -5990,6 +5991,20 @@ dependencies = [
  "timada-discounts",
  "tokio",
  "ulid",
+]
+
+[[package]]
+name = "timada-reviews"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror 2.0.21",
+ "timada-orders",
+ "tokio",
 ]
 
 [[package]]

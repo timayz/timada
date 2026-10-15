@@ -16,6 +16,10 @@
 //! survive. Each node also follows the catalog's stream ([`subscription`])
 //! and fetches from a peer any picture it lacks (a node that was down during
 //! an upload, or a new one), and deletes the ones taken off a product.
+//!
+//! The photos shoppers attach to their reviews are kept the same way, next to
+//! the product pictures: a rejected review, or a photo the merchant takes
+//! off one, takes its files with it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,6 +30,10 @@ use evento::{Executor, metadata::Event};
 use openidconnect::reqwest;
 use timada_catalog::aggregator::{ImageAdded, ImageRemoved};
 use timada_catalog::{MAX_IMAGE_BYTES, product_projection};
+use timada_reviews::aggregator::{
+    PhotoRemoved as ReviewPhotoRemoved, Rejected as ReviewRejected, Submitted as ReviewSubmitted,
+};
+use timada_reviews::review_projection;
 
 use topcoat::context::Cx;
 use topcoat::router::{
@@ -339,7 +347,7 @@ fn is_id(id: &str) -> bool {
 }
 
 /// The cursor identity of the subscription that keeps this node's copies in
-/// step with the catalog, in each tenant's store.
+/// step with the catalog and the reviews, in each tenant's store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/media";
 
 /// Follows one tenant's products: fetches each picture added that this node
@@ -352,6 +360,9 @@ pub fn subscription<E: Executor>(media: Arc<Media>, tenant_id: &str) -> Subscrip
         .data(Tenant(tenant_id.to_owned()))
         .handler(on_image_added())
         .handler(on_image_removed())
+        .handler(on_review_submitted())
+        .handler(on_review_rejected())
+        .handler(on_review_photo_removed())
         .any_routing_key()
         // About four hours of attempts at most a minute apart: a picture is
         // on a majority of nodes before it is recorded, so a fetch only fails
@@ -396,6 +407,62 @@ async fn on_image_added<E: Executor>(
 async fn on_image_removed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<ImageRemoved>,
+) -> anyhow::Result<()> {
+    let media: Arc<Media> = context.extract();
+    let tenant: Tenant = context.extract();
+    media.remove_image(&tenant.0, &event.data.image_id).await;
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_review_submitted<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ReviewSubmitted>,
+) -> anyhow::Result<()> {
+    let media: Arc<Media> = context.extract();
+    let tenant: Tenant = context.extract();
+    // Only the photos still on a review that is not rejected: the others
+    // were deleted since, and nobody keeps them any more.
+    let Some(review) = review_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+        .filter(|review| !review.is_rejected())
+    else {
+        return Ok(());
+    };
+    for photo in &review.photos {
+        media
+            .fetch(&tenant.0, &photo.id, &photo.ext, photo.size)
+            .await?;
+    }
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_review_rejected<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ReviewRejected>,
+) -> anyhow::Result<()> {
+    let media: Arc<Media> = context.extract();
+    let tenant: Tenant = context.extract();
+    let Some(review) = review_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    for photo in &review.photos {
+        media.remove_image(&tenant.0, &photo.id).await;
+    }
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_review_photo_removed<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ReviewPhotoRemoved>,
 ) -> anyhow::Result<()> {
     let media: Arc<Media> = context.extract();
     let tenant: Tenant = context.extract();
