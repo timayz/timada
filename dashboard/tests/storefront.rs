@@ -1396,6 +1396,88 @@ async fn a_store_with_a_checkout_key_sells() {
     h.finish().await;
 }
 
+#[tokio::test]
+async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h
+        .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
+        .await;
+    let catalog = h.catalog(&acme).await;
+    let sell = async |name: &str, cents: u64, tax_category: Option<&str>| {
+        let product = catalog
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: name.into(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap();
+        catalog
+            .price_product("alice", &product.id, cents, "EUR")
+            .await
+            .unwrap();
+        catalog
+            .set_product_tax_category("alice", &product.id, tax_category)
+            .await
+            .unwrap();
+        catalog.publish_product("alice", &product.id).await.unwrap();
+        product.id
+    };
+    let mug = sell("Blue Mug", 1250, None).await;
+    let book = sell("Cat Book", 1000, Some("books")).await;
+
+    let pool = h.local_pool("vat-shop").await;
+    let store = Store::connect(h.config(&token), pool.clone())
+        .await
+        .unwrap();
+
+    // No payments yet; once the dashboard says how, the store knows.
+    assert_eq!(store.payment_setup().await.unwrap(), None);
+    let setup = timada_storefront::PaymentSetup {
+        provider: "stripe".into(),
+        publishable_key: "pk_test_123".into(),
+    };
+    timada_orders::Command(catalog.0.clone())
+        .set_payment_method("timada-dashboard", Some(setup.clone()))
+        .await
+        .unwrap();
+    assert_eq!(store.payment_setup().await.unwrap(), Some(setup));
+
+    // A mug: 20 % French VAT is in its price, and in Germany's too while
+    // the merchant sells little abroad; none on an export.
+    let cart_id = store
+        .add_to_cart(None, &mug, None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    let cart = store.cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(cart.lines[0].tax_category, "standard");
+    let fr = cart.vat_estimate("FR").unwrap();
+    assert_eq!((fr.vat_cents, fr.amount()), (208, "2.08 EUR".to_owned()));
+    assert_eq!(fr.label(), "VAT FR 20%");
+    assert_eq!(cart.vat_estimate("de").unwrap().label(), "VAT FR 20%");
+    assert_eq!(cart.vat_estimate("US"), None);
+
+    // With a book at 5.5 %, each rate on its own sum.
+    store
+        .add_to_cart(Some(&cart_id), &book, None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    let cart = store.cart(&cart_id).await.unwrap().unwrap();
+    let line = cart.lines.iter().find(|line| line.product_id == book);
+    assert_eq!(line.unwrap().tax_category, "books");
+    let fr = cart.vat_estimate("FR").unwrap();
+    assert_eq!((fr.rate_bps, fr.vat_cents), (None, 208 + 52));
+    assert_eq!(fr.label(), "VAT FR");
+
+    store.shutdown().await;
+    h.finish().await;
+}
+
 /// A paid order of one of each product, written as the payments webhook
 /// would: what a review is written from.
 async fn paid_order(executor: &cluster::Executor, order_id: &str, products: &[(&str, &str)]) {

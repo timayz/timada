@@ -13,7 +13,7 @@ use topcoat::{
     },
 };
 
-use super::payments_url;
+use super::{payments_url, publish_setup};
 use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
 use crate::payments::Payments;
@@ -83,12 +83,15 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
         .configure_payments(&access.user_id, &access.tenant.id, cmd)
         .await
     {
-        Ok(()) => Ok(see_other(payments_url(
-            cx,
-            slug,
-            None,
-            Some("Stripe connected."),
-        ))),
+        Ok(()) => {
+            publish_setup(cx, &access).await;
+            Ok(see_other(payments_url(
+                cx,
+                slug,
+                None,
+                Some("Stripe connected."),
+            )))
+        }
         Err(err) if err.is_user_facing() => Ok(see_other(payments_url(
             cx,
             slug,

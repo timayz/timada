@@ -57,6 +57,8 @@ impl From<&OrderState> for PlacedOrder {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Quote {
     pub lines: Vec<OrderLine>,
+    /// What kind of goods each of `lines` is for VAT, in the same order.
+    pub tax_categories: Vec<String>,
     /// The lines whose product is off sale, gone, or whose variant is.
     pub unavailable: Vec<CartLine>,
     /// `None` while no line is priced.
@@ -146,6 +148,7 @@ impl<E: Executor> super::Command<E> {
             };
             quote.subtotal_cents += order_line.amount_cents();
             quote.lines.push(order_line);
+            quote.tax_categories.push(product.tax_category().to_owned());
         }
         quote.total_cents = quote.subtotal_cents;
         if let (Some(code), Some(currency)) = (&cart.discount_code, &quote.currency) {

@@ -8,7 +8,7 @@ use topcoat::{
     },
 };
 
-use super::payments_url;
+use super::{payments_url, publish_setup};
 use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
 
@@ -25,12 +25,15 @@ pub async fn remove(cx: &Cx) -> Result<SeeOther> {
         .remove_payments(&access.user_id, &access.tenant.id)
         .await
     {
-        Ok(()) => Ok(see_other(payments_url(
-            cx,
-            slug,
-            None,
-            Some("Payments stopped."),
-        ))),
+        Ok(()) => {
+            publish_setup(cx, &access).await;
+            Ok(see_other(payments_url(
+                cx,
+                slug,
+                None,
+                Some("Payments stopped."),
+            )))
+        }
         Err(err) if err.is_user_facing() => Ok(see_other(payments_url(
             cx,
             slug,

@@ -8,19 +8,22 @@
 mod cart;
 mod checkout;
 mod lifecycle;
+mod payment_method;
 
 use std::fmt;
 use std::ops::Deref;
 
 pub use cart::*;
 pub use checkout::*;
+pub use payment_method::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
     BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, Created, DiscountApplied,
     DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved,
-    PaymentRefused, PaymentRequested, Placed, QuantitySet, Refunded,
+    PaymentRefused, PaymentRequested, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet,
+    Refunded,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -550,6 +553,49 @@ async fn on_reference_claimed(
 }
 
 // =============================================================================
+// PaymentMethod
+// =============================================================================
+
+#[evento::projection(id = id, name = "timada-orders/PaymentMethodState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct PaymentMethodState {
+    pub id: String,
+    /// `None` while the tenant takes no payments.
+    pub setup: Option<PaymentSetup>,
+}
+
+pub fn payment_method_projection<E: Executor>() -> Projection<E, PaymentMethodState> {
+    Projection::new::<crate::aggregator::PaymentMethod>()
+        .handler(on_payments_enabled())
+        .handler(on_payments_disabled())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_payments_enabled(
+    event: Event<PaymentsEnabled>,
+    state: &mut PaymentMethodState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.setup = Some(PaymentSetup {
+        provider: event.data.provider.to_owned(),
+        publishable_key: event.data.publishable_key.to_owned(),
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payments_disabled(
+    event: Event<PaymentsDisabled>,
+    state: &mut PaymentMethodState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.setup = None;
+    Ok(())
+}
+
+// =============================================================================
 // Loads
 // =============================================================================
 
@@ -560,6 +606,13 @@ impl<E: Executor> Command<E> {
 
     pub async fn load_order(&self, order_id: &str) -> anyhow::Result<Option<OrderState>> {
         order_projection().load(order_id).execute(&self.0).await
+    }
+
+    pub async fn load_payment_method(&self) -> anyhow::Result<Option<PaymentMethodState>> {
+        payment_method_projection()
+            .load(crate::value_object::payment_method_id())
+            .execute(&self.0)
+            .await
     }
 
     /// The order a cart was placed as, if it was.
