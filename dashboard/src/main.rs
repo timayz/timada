@@ -11,6 +11,7 @@ mod limits;
 mod media;
 mod payments;
 mod read_only_store;
+mod review_requests;
 mod store_api;
 mod tenants;
 mod ui;

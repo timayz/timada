@@ -5,7 +5,12 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "orders";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Orders0001, OrderDiscounts0002, OrdersByEmail0003]
+    vec_box![
+        Orders0001,
+        OrderDiscounts0002,
+        OrdersByEmail0003,
+        FulfilledAt0004
+    ]
 }
 
 pub struct Orders0001;
@@ -104,4 +109,25 @@ sqlx_migrator::sqlite_migration!(
         "CREATE INDEX orders_orders_email ON orders_orders (tenant_id, email, placed_at)",
         "DROP INDEX orders_orders_email"
     )]
+);
+
+/// When an order left, so its buyer can be asked for a review some days
+/// later. Orders fulfilled before this column existed keep `NULL`.
+pub struct FulfilledAt0004;
+sqlx_migrator::sqlite_migration!(
+    FulfilledAt0004,
+    "orders",
+    "0004_fulfilled_at",
+    vec_box![("orders", "0003_orders_by_email")],
+    vec_box![
+        (
+            "ALTER TABLE orders_orders ADD COLUMN fulfilled_at INTEGER",
+            "ALTER TABLE orders_orders DROP COLUMN fulfilled_at"
+        ),
+        (
+            "CREATE INDEX orders_orders_fulfilled ON orders_orders (fulfilled_at)
+                WHERE fulfilled_at IS NOT NULL",
+            "DROP INDEX orders_orders_fulfilled"
+        ),
+    ]
 );

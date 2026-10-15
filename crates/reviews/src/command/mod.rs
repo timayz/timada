@@ -4,6 +4,7 @@
 //! it observes, and `write()` sends as `original_version`, never goes stale.
 //! It is not snapshotted: a review is a handful of events.
 
+mod request;
 mod review;
 
 use std::ops::Deref;
@@ -12,9 +13,14 @@ pub use review::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
-use crate::aggregator::{PhotoRemoved, Published, Rejected, Submitted};
+use crate::aggregator::{
+    LinkIssued, PhotoRemoved, Published, Rejected, RequestDelaySet, RequestMailed,
+    RequestsDisabled, Submitted,
+};
 use crate::error::ReviewError;
-use crate::value_object::{ReviewPhoto, ReviewStatus};
+use crate::value_object::{
+    DEFAULT_REQUEST_DELAY_DAYS, ReviewPhoto, ReviewStatus, review_request_id, review_requests_id,
+};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor>(pub E);
@@ -118,7 +124,153 @@ async fn on_photo_removed(
     Ok(())
 }
 
+// =============================================================================
+// Review requests
+// =============================================================================
+
+/// Whether, and when, the shop mails its buyers. The default (no stream) is
+/// on, [`DEFAULT_REQUEST_DELAY_DAYS`] after fulfilment.
+#[evento::projection(id = id, name = "timada-reviews/ReviewRequestsState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReviewRequestsState {
+    pub id: String,
+    /// What the merchant set last, if they did.
+    pub days: Option<u8>,
+    pub disabled: bool,
+}
+
+impl ReviewRequestsState {
+    /// How many days after fulfilment the shop mails, `None` when it never
+    /// does.
+    pub fn delay_days(&self) -> Option<u8> {
+        if self.disabled {
+            return None;
+        }
+        Some(self.days.unwrap_or(DEFAULT_REQUEST_DELAY_DAYS))
+    }
+}
+
+pub fn review_requests_projection<E: Executor>() -> Projection<E, ReviewRequestsState> {
+    Projection::new::<crate::aggregator::ReviewRequests>()
+        .handler(on_request_delay_set())
+        .handler(on_requests_disabled())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_request_delay_set(
+    event: Event<RequestDelaySet>,
+    state: &mut ReviewRequestsState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.days = Some(event.data.days);
+    state.disabled = false;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_requests_disabled(
+    event: Event<RequestsDisabled>,
+    state: &mut ReviewRequestsState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.disabled = true;
+    Ok(())
+}
+
+/// The review request mailed for one order.
+#[evento::projection(id = id, name = "timada-reviews/ReviewRequestState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReviewRequestState {
+    pub id: String,
+    pub order_id: String,
+    pub email: String,
+    /// Unix seconds.
+    pub mailed_at: u64,
+}
+
+pub fn review_request_projection<E: Executor>() -> Projection<E, ReviewRequestState> {
+    Projection::new::<crate::aggregator::ReviewRequest>()
+        .handler(on_request_mailed())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_request_mailed(
+    event: Event<RequestMailed>,
+    state: &mut ReviewRequestState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.order_id = event.data.order_id.clone();
+    state.email = event.data.email.clone();
+    state.mailed_at = event.timestamp;
+    Ok(())
+}
+
+/// A mailed link, by the hash of its token.
+#[evento::projection(id = id, name = "timada-reviews/ReviewLinkState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReviewLinkState {
+    pub id: String,
+    pub order_id: String,
+    /// Unix seconds.
+    pub expires_at: u64,
+}
+
+impl ReviewLinkState {
+    pub fn is_valid_at(&self, now: u64) -> bool {
+        now < self.expires_at
+    }
+}
+
+pub fn review_link_projection<E: Executor>() -> Projection<E, ReviewLinkState> {
+    Projection::new::<crate::aggregator::ReviewLink>()
+        .handler(on_link_issued())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_link_issued(
+    event: Event<LinkIssued>,
+    state: &mut ReviewLinkState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.order_id = event.data.order_id.clone();
+    state.expires_at = event.data.expires_at;
+    Ok(())
+}
+
 impl<E: Executor> Command<E> {
+    pub async fn load_review_requests(&self) -> anyhow::Result<Option<ReviewRequestsState>> {
+        review_requests_projection()
+            .load(review_requests_id())
+            .execute(&self.0)
+            .await
+    }
+
+    /// The review request mailed for an order, if one was.
+    pub async fn load_review_request(
+        &self,
+        order_id: &str,
+    ) -> anyhow::Result<Option<ReviewRequestState>> {
+        review_request_projection()
+            .load(review_request_id(order_id))
+            .execute(&self.0)
+            .await
+    }
+
+    /// A link by its stream id ([`review_link_id`](crate::review_link_id) of
+    /// the token).
+    pub async fn load_review_link(&self, link_id: &str) -> anyhow::Result<Option<ReviewLinkState>> {
+        review_link_projection()
+            .load(link_id)
+            .execute(&self.0)
+            .await
+    }
+
     pub async fn load_review(&self, review_id: &str) -> anyhow::Result<Option<ReviewState>> {
         review_projection().load(review_id).execute(&self.0).await
     }

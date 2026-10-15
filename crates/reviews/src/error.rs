@@ -1,6 +1,8 @@
 use evento::WriteError;
 
-use crate::value_object::{MAX_BODY_LEN, MAX_PHOTOS, MAX_REASON_LEN, MAX_TITLE_LEN, MIN_BODY_LEN};
+use crate::value_object::{
+    MAX_BODY_LEN, MAX_PHOTOS, MAX_REASON_LEN, MAX_REQUEST_DELAY_DAYS, MAX_TITLE_LEN, MIN_BODY_LEN,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReviewError {
@@ -30,6 +32,8 @@ pub enum ReviewError {
     Rejected,
     #[error("this review has no such photo")]
     PhotoNotFound,
+    #[error("a shop asks for reviews at most {MAX_REQUEST_DELAY_DAYS} days after fulfilment")]
+    RequestDelayTooLong,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -59,6 +63,7 @@ impl ReviewError {
             Self::NotFound => "review_not_found",
             Self::Rejected => "review_rejected",
             Self::PhotoNotFound => "review_photo_not_found",
+            Self::RequestDelayTooLong => "review_request_delay_too_long",
             Self::Write(_) | Self::Other(_) => return None,
         })
     }
