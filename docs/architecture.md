@@ -268,7 +268,7 @@ reading the store reveals no token. An account also keeps up to ten addresses.
 A storefront signs its shoppers in over HTTP, not through the store API, under
 `/store/shoppers/*` with its key as a bearer token (it must allow `store:checkout`):
 `code` mails the code from the shop's name, `session` checks it and answers the token,
-`sign_out`, `addresses` and `addresses/remove` act for the shopper whose token is in
+`sign-out`, `addresses` and `addresses/remove` act for the shopper whose token is in
 `X-Shopper-Token`. None of the shopper events are shopper events on the store API, so a
 key cannot sign anyone in by appending them. A storefront resolves a token by loading
 the session over the store API, which the dashboard wrote before it answered.
