@@ -8,6 +8,9 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
+use timada_discounts::{
+    DISCOUNT_ALREADY_USED, DISCOUNT_EXHAUSTED, DISCOUNT_UNKNOWN, DiscountError, RESERVATION_SECS,
+};
 use timada_orders::aggregator::CheckoutRequested;
 use timada_orders::{
     INVOICING_NOT_CONFIGURED, OpenedPayment, OrdersError, PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
@@ -55,7 +58,7 @@ async fn on_checkout_requested<E: Executor>(
     let payments: Arc<Payments> = context.extract();
     let tenant: Tenant = context.extract();
     let store: Store = context.extract();
-    let orders = timada_orders::Command(store.0);
+    let orders = timada_orders::Command(store.0.clone());
     let cart_id = event.aggregate_id.clone();
     let request_id = event.data.request_id.clone();
     let refuse = async |code: &str| {
@@ -95,6 +98,48 @@ async fn on_checkout_requested<E: Executor>(
         refuse(PAYMENTS_UNAVAILABLE).await?;
         return Ok(());
     };
+    // The discount's use is held before the shopper is asked to pay, so a
+    // capped code never serves more orders than it says. Every way out below
+    // that leaves no payment open gives it back.
+    let discounts = timada_discounts::Command(store.0.clone());
+    let email = pending.request.email.clone();
+    let discount_id = pending.discount.as_ref().map(|d| d.discount_id.clone());
+    if let Some(discount_id) = &discount_id {
+        let reserved = discounts
+            .reserve_use(
+                DASHBOARD_ACTOR,
+                discount_id,
+                &cart_id,
+                &email,
+                RESERVATION_SECS,
+            )
+            .await;
+        match reserved {
+            Ok(()) => {}
+            Err(DiscountError::Exhausted) => {
+                refuse(DISCOUNT_EXHAUSTED).await?;
+                return Ok(());
+            }
+            Err(DiscountError::AlreadyUsed) => {
+                refuse(DISCOUNT_ALREADY_USED).await?;
+                return Ok(());
+            }
+            Err(err) if err.is_user_facing() => {
+                refuse(DISCOUNT_UNKNOWN).await?;
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+    let release = async || {
+        if let Some(discount_id) = &discount_id
+            && let Err(err) = discounts
+                .release_use(DASHBOARD_ACTOR, discount_id, &cart_id, &email)
+                .await
+        {
+            tracing::warn!(%cart_id, %err, "cannot give a discount's use back");
+        }
+    };
     let opened = payments
         .gateway
         .open_payment(
@@ -117,6 +162,7 @@ async fn on_checkout_requested<E: Executor>(
         Ok(opened) => opened,
         Err(err) => {
             tracing::warn!(tenant = %tenant.0, %cart_id, %err, "Stripe refused to open a payment");
+            release().await;
             refuse(PAYMENTS_UNAVAILABLE).await?;
             return Ok(());
         }
@@ -136,8 +182,11 @@ async fn on_checkout_requested<E: Executor>(
         .await;
     match recorded {
         Ok(()) => Ok(()),
+        // Retried: the payment opens again under the same idempotency key
+        // and the reservation is held again for the same cart.
         Err(err @ (OrdersError::Write(_) | OrdersError::Other(_))) => Err(err.into()),
         Err(err) => {
+            release().await;
             tracing::warn!(%cart_id, %err, "a payment opened for a cart that cannot record it");
             Ok(())
         }

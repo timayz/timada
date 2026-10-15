@@ -12,7 +12,8 @@ use typst_pdf::{PdfOptions, PdfStandard, PdfStandards};
 use crate::command::{DocumentKind, IssuedDocument};
 use crate::tax::Regime;
 use crate::value_object::{
-    Address, PAYMENT_METHOD_CARD, civil_date, format_amount_fr, format_date_fr, format_rate_fr,
+    Address, InvoiceLine, PAYMENT_METHOD_CARD, civil_date, format_amount_fr, format_date_fr,
+    format_rate_fr, lines_breakdown,
 };
 
 /// Layout version 1 (see [`TEMPLATE_VERSION`](crate::TEMPLATE_VERSION)).
@@ -249,6 +250,44 @@ fn inputs(document: &IssuedDocument) -> Dict {
             })
             .collect()
     };
+    let mut rows = rows;
+    // A discount code reads as one more row, negative, under the lines it
+    // came off: what it took before VAT is the lines' base less what was
+    // paid's.
+    if let Some(discount) = &document.discount {
+        let gross_excl: u64 = lines_breakdown(&document.lines)
+            .iter()
+            .map(|subtotal| subtotal.base_cents)
+            .sum::<u64>()
+            + document
+                .lines
+                .iter()
+                .filter(|line| line.vat_rate_bps.is_none())
+                .map(InvoiceLine::total_cents)
+                .sum::<u64>();
+        let off_excl = gross_excl.saturating_sub(document.total_excl_vat_cents);
+        rows.push(
+            Dict::from_iter([
+                ("name".into(), text(format!("Remise {}", discount.code))),
+                ("detail".into(), text("Code de réduction")),
+                ("quantity".into(), text("1")),
+                ("unit_excl".into(), text(format!("−{}", money(off_excl)))),
+                (
+                    "rate".into(),
+                    text(if document.vat.is_empty() {
+                        "—"
+                    } else {
+                        "selon taux"
+                    }),
+                ),
+                (
+                    "total".into(),
+                    text(format!("−{}", money(discount.amount_cents))),
+                ),
+            ])
+            .into_value(),
+        );
+    }
     put("lines", Value::Array(rows.into_iter().collect()));
     let vat: Vec<Value> = document
         .vat
@@ -461,6 +500,47 @@ mod tests {
         };
         assert!(get(&inputs(&export), "vat_mention").contains("art. 262 I du CGI"));
         assert!(render(&business).unwrap().starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn a_discount_reads_as_a_negative_row_under_the_lines() {
+        let full = invoice(Some("FR85120027016"));
+        let document = IssuedDocument {
+            discount: Some(crate::command::InvoiceDiscount {
+                code: "TEN".into(),
+                amount_cents: 450,
+            }),
+            vat: vec![
+                VatSubtotal {
+                    rate_bps: 2000,
+                    base_cents: 1875,
+                    vat_cents: 375,
+                },
+                VatSubtotal {
+                    rate_bps: 550,
+                    base_cents: 1705,
+                    vat_cents: 94,
+                },
+            ],
+            total_excl_vat_cents: 3580,
+            total_vat_cents: 469,
+            total_cents: 4049,
+            ..full
+        };
+        let d = inputs(&document);
+        let Value::Array(rows) = d.get("lines").unwrap() else {
+            panic!("lines are rows");
+        };
+        assert_eq!(rows.len(), 3);
+        let Value::Dict(row) = rows.as_slice().last().unwrap() else {
+            panic!("a row is a dict");
+        };
+        assert_eq!(get(row, "name"), "Remise TEN");
+        // 20.83 + 18.95 before VAT at full price, 35.80 paid.
+        assert_eq!(get(row, "unit_excl"), "−3,98\u{a0}€");
+        assert_eq!(get(row, "total"), "−4,50\u{a0}€");
+        assert_eq!(get(&d, "total"), "40,49\u{a0}€");
+        assert!(render(&document).unwrap().starts_with(b"%PDF-"));
     }
 
     #[test]

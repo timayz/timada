@@ -6,11 +6,11 @@ authors.workspace = true
 
 [dependencies]
 timada-catalog = { path = "../catalog" }
+timada-discounts = { path = "../discounts" }
 evento.workspace = true
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 ulid.workspace = true
 rand.workspace = true
 sqlx = { workspace = true, features = ["derive"] }

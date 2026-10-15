@@ -18,8 +18,9 @@ pub use checkout::*;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
-    BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, Created, Fulfilled,
-    ItemAdded, ItemRemoved, PaymentRefused, PaymentRequested, Placed, QuantitySet, Refunded,
+    BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, Created, DiscountApplied,
+    DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved,
+    PaymentRefused, PaymentRequested, Placed, QuantitySet, Refunded,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -53,6 +54,17 @@ impl CartLine {
     }
 }
 
+/// A discount code taken off a cart's or an order's items.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OrderDiscount {
+    pub discount_id: String,
+    pub code: String,
+    /// What the lines add up to before it.
+    pub subtotal_cents: u64,
+    /// What it takes off them.
+    pub amount_cents: u64,
+}
+
 /// A payment opened with the provider for a cart: what the order will hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaymentSnapshot {
@@ -62,7 +74,9 @@ pub struct PaymentSnapshot {
     pub publishable_key: String,
     pub lines: Vec<OrderLine>,
     pub currency: String,
+    /// What is charged: the lines, less the discount.
     pub total_cents: u64,
+    pub discount: Option<OrderDiscount>,
 }
 
 /// How a request to pay was answered.
@@ -108,6 +122,8 @@ pub struct CartState {
     pub requests: Vec<CheckoutRequest>,
     /// The order it became, once checked out.
     pub order_id: Option<String>,
+    /// The discount code the shopper entered (normalized), if any.
+    pub discount_code: Option<String>,
     /// Unix seconds of `Created`.
     pub created_at: u64,
     /// Unix seconds of the last event.
@@ -169,6 +185,9 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_buyer_identified())
         .handler(on_payment_requested())
         .handler(on_payment_refused())
+        .handler(on_discount_applied())
+        .handler(on_discount_removed())
+        .handler(on_discount_granted())
         .strict()
 }
 
@@ -280,6 +299,7 @@ async fn on_payment_requested(
             lines: event.data.lines.to_owned(),
             currency: event.data.currency.to_owned(),
             total_cents: event.data.total_cents,
+            discount: None,
         }));
     }
     cart.updated_at = event.timestamp;
@@ -299,6 +319,48 @@ async fn on_payment_refused(
         request.answer = Some(PaymentAnswer::Refused(event.data.code.to_owned()));
     }
     cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_discount_applied(
+    event: Event<DiscountApplied>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    cart.discount_code = Some(event.data.code.to_owned());
+    cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_discount_removed(
+    event: Event<DiscountRemoved>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    cart.discount_code = None;
+    cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_discount_granted(
+    event: Event<DiscountGranted>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    // Written right after the `PaymentRequested` it prices.
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|r| r.request_id == event.data.request_id)
+        && let Some(PaymentAnswer::Requested(payment)) = &mut request.answer
+    {
+        payment.discount = Some(OrderDiscount {
+            discount_id: event.data.discount_id.to_owned(),
+            code: event.data.code.to_owned(),
+            subtotal_cents: event.data.subtotal_cents,
+            amount_cents: event.data.amount_cents,
+        });
+    }
     Ok(())
 }
 
@@ -362,8 +424,11 @@ pub struct OrderState {
     pub note: Option<String>,
     pub lines: Vec<OrderLine>,
     pub currency: String,
+    /// What was paid: the lines, less the discount.
     pub total_cents: u64,
     pub payment: Payment,
+    /// The discount code it was paid with, if any.
+    pub discount: Option<OrderDiscount>,
     /// What went back to the shopper, in minor units, all refunds together.
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
@@ -384,6 +449,11 @@ impl OrderState {
     pub fn item_count(&self) -> u32 {
         self.lines.iter().map(|line| line.quantity).sum()
     }
+
+    /// What the lines add up to, before any discount.
+    pub fn subtotal_cents(&self) -> u64 {
+        self.lines.iter().map(OrderLine::amount_cents).sum()
+    }
 }
 
 pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
@@ -392,6 +462,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_fulfilled())
         .handler(on_cancelled())
         .handler(on_refunded())
+        .handler(on_discounted())
         .strict()
 }
 
@@ -410,6 +481,17 @@ async fn on_placed(event: Event<Placed>, order: &mut OrderState) -> anyhow::Resu
     order.status = OrderStatus::Paid;
     order.placed_at = event.timestamp;
     order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_discounted(event: Event<Discounted>, order: &mut OrderState) -> anyhow::Result<()> {
+    order.discount = Some(OrderDiscount {
+        discount_id: event.data.discount_id.to_owned(),
+        code: event.data.code.to_owned(),
+        subtotal_cents: event.data.subtotal_cents,
+        amount_cents: event.data.amount_cents,
+    });
     Ok(())
 }
 

@@ -31,6 +31,9 @@ pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
         .add_migrations(timada_orders::migrations())
         .unwrap();
     migrator
+        .add_migrations(timada_discounts::migrations())
+        .unwrap();
+    migrator
         .run(&mut *conn, &evento::migrator::Plan::apply_all())
         .await
         .unwrap();

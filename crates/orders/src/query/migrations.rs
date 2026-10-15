@@ -5,7 +5,7 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "orders";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Orders0001]
+    vec_box![Orders0001, OrderDiscounts0002]
 }
 
 pub struct Orders0001;
@@ -62,6 +62,33 @@ sqlx_migrator::sqlite_migration!(
             "CREATE INDEX orders_carts_open ON orders_carts (tenant_id, updated_at)
                 WHERE order_id IS NULL",
             "DROP INDEX orders_carts_open"
+        ),
+    ]
+);
+
+pub struct OrderDiscounts0002;
+sqlx_migrator::sqlite_migration!(
+    OrderDiscounts0002,
+    "orders",
+    "0002_order_discounts",
+    vec_box![("orders", "0001_orders_and_carts")],
+    vec_box![
+        (
+            "ALTER TABLE orders_orders ADD COLUMN discount_id TEXT",
+            "ALTER TABLE orders_orders DROP COLUMN discount_id"
+        ),
+        (
+            "ALTER TABLE orders_orders ADD COLUMN discount_code TEXT",
+            "ALTER TABLE orders_orders DROP COLUMN discount_code"
+        ),
+        (
+            "ALTER TABLE orders_orders ADD COLUMN discount_cents INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE orders_orders DROP COLUMN discount_cents"
+        ),
+        (
+            "CREATE INDEX orders_orders_discount ON orders_orders (tenant_id, discount_id)
+                WHERE discount_id IS NOT NULL",
+            "DROP INDEX orders_orders_discount"
         ),
     ]
 );

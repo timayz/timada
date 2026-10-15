@@ -230,6 +230,11 @@ pub fn say(code: &str) -> &'static str {
         "invalid_phone" => "The phone number is too long.",
         "invalid_note" => "The note is too long.",
         "cart_not_found" | "cart_checked_out" => "This cart was already ordered.",
+        "discount_unknown" => "This discount code is not valid.",
+        "discount_inactive" => "This discount code cannot be used right now.",
+        "discount_currency" => "This discount code is for another currency.",
+        "discount_exhausted" => "This discount code has been used as many times as it can be.",
+        "discount_already_used" => "You have already used this discount code.",
         _ => "Something went wrong. Please try again.",
     }
 }

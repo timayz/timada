@@ -23,6 +23,12 @@
 //! show the shopper ([`OrdersError::code`] names it). The same calls exist
 //! as [`Store`] methods for code that runs outside a request.
 //!
+//! A cart takes one discount code ([`apply_discount`]). The cart page shows
+//! what it takes off, or why it takes nothing ([`CartView::discount_refused`]);
+//! a code that stopped working by the time the shopper pays is refused with
+//! its reason rather than dropped, and so is one a capped code has no use
+//! left for or the shopper's e-mail already used.
+//!
 //! The library keeps no notion of whose cart is whose: the host remembers
 //! the cart id, typically in a cookie.
 
@@ -32,7 +38,7 @@ use topcoat_core::error::{Error, Result};
 pub use timada_catalog::format_money;
 use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
 pub use timada_orders::{
-    Checkout, OrderLine, OrderState, OrderStatus, OrdersError, PAYMENTS_UNAVAILABLE,
+    Checkout, OrderDiscount, OrderLine, OrderState, OrderStatus, OrdersError, PAYMENTS_UNAVAILABLE,
     ShippingAddress,
 };
 
@@ -60,13 +66,25 @@ pub struct PaymentSession {
     /// What the order will hold, priced.
     pub lines: Vec<OrderLine>,
     pub currency: String,
+    /// What is charged: the lines, less the discount.
     pub total_cents: u64,
+    /// The discount code the payment is priced with, if any.
+    pub discount: Option<OrderDiscount>,
 }
 
 impl PaymentSession {
     /// The total as a person reads it (`24.00 EUR`).
     pub fn total(&self) -> String {
         timada_catalog::format_money(self.total_cents, &self.currency)
+    }
+
+    /// What the discount takes off, as a person reads it (`-2.50 EUR`).
+    pub fn discount_amount(&self) -> Option<String> {
+        let discount = self.discount.as_ref()?;
+        Some(format!(
+            "-{}",
+            timada_catalog::format_money(discount.amount_cents, &self.currency)
+        ))
     }
 }
 
@@ -104,6 +122,17 @@ pub struct CartView {
     pub unavailable: Vec<CartLineView>,
     /// `None` while the cart holds nothing that can be sold.
     pub currency: Option<String>,
+    /// What the lines add up to.
+    pub subtotal_cents: u64,
+    /// The discount code the shopper entered, whether or not it takes
+    /// anything off.
+    pub discount_code: Option<String>,
+    /// What the code takes off, when it does.
+    pub discount: Option<OrderDiscount>,
+    /// Why the code takes nothing off (`discount_inactive`,
+    /// `discount_currency`, …), to word on the page.
+    pub discount_refused: Option<&'static str>,
+    /// What paying now charges: the subtotal, less the discount.
     pub total_cents: u64,
     /// Items on the lines that can be sold.
     pub item_count: u32,
@@ -120,6 +149,22 @@ impl CartView {
     pub fn total(&self) -> Option<String> {
         let currency = self.currency.as_deref()?;
         Some(timada_catalog::format_money(self.total_cents, currency))
+    }
+
+    /// The subtotal as a person reads it.
+    pub fn subtotal(&self) -> Option<String> {
+        let currency = self.currency.as_deref()?;
+        Some(timada_catalog::format_money(self.subtotal_cents, currency))
+    }
+
+    /// What the discount takes off, as a person reads it (`-2.50 EUR`).
+    pub fn discount_amount(&self) -> Option<String> {
+        let currency = self.currency.as_deref()?;
+        let discount = self.discount.as_ref()?;
+        Some(format!(
+            "-{}",
+            timada_catalog::format_money(discount.amount_cents, currency)
+        ))
     }
 
     /// Whether [`start_payment`] can go ahead: something to sell, nothing off
@@ -203,9 +248,33 @@ impl Store {
             lines,
             unavailable,
             currency: quote.currency,
+            subtotal_cents: quote.subtotal_cents,
+            discount_code: state.discount_code,
+            discount: quote.discount,
+            discount_refused: quote.discount_refused,
             total_cents: quote.total_cents,
             order_id: state.order_id,
         }))
+    }
+
+    /// See [`apply_discount`].
+    pub async fn apply_discount(&self, cart_id: &str, code: &str) -> anyhow::Result<Refusable<()>> {
+        refusable(
+            self.orders()
+                .apply_discount(STOREFRONT_ACTOR, cart_id, code)
+                .await
+                .map(|_| ()),
+        )
+    }
+
+    /// See [`remove_discount`].
+    pub async fn remove_discount(&self, cart_id: &str) -> anyhow::Result<Refusable<()>> {
+        refusable(
+            self.orders()
+                .remove_discount(STOREFRONT_ACTOR, cart_id)
+                .await
+                .map(|_| ()),
+        )
     }
 
     /// See [`add_to_cart`].
@@ -337,6 +406,7 @@ impl Store {
                 lines: payment.lines.clone(),
                 currency: payment.currency.clone(),
                 total_cents: payment.total_cents,
+                discount: payment.discount.clone(),
             })),
         })
     }
@@ -406,6 +476,24 @@ pub async fn remove_from_cart(
     variant_id: Option<&str>,
 ) -> Result<Refusable<()>> {
     set_cart_quantity(cx, cart_id, product_id, variant_id, 0).await
+}
+
+/// Puts a discount code on the cart, replacing the one it had. A code the
+/// shop has not is refused (`discount_unknown`); one that takes nothing off
+/// right now stays on, and [`CartView::discount_refused`] says why.
+pub async fn apply_discount(cx: &Cx, cart_id: &str, code: &str) -> Result<Refusable<()>> {
+    store(cx)
+        .apply_discount(cart_id, code)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// Takes the discount code off the cart.
+pub async fn remove_discount(cx: &Cx, cart_id: &str) -> Result<Refusable<()>> {
+    store(cx)
+        .remove_discount(cart_id)
+        .await
+        .map_err(Error::from_anyhow)
 }
 
 /// Asks to pay for the cart, shipping where `checkout` says, and waits (up

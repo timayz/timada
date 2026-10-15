@@ -83,6 +83,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                 </tbody>
             </table>
+            if let (Some(discount), Some(amount)) = (&session.discount, session.discount_amount()) {
+                <p data-payment-discount=(&discount.code)>"Discount " <code>(&discount.code)</code> ": " (amount)</p>
+            }
             <p>"Total: " <strong class="price" data-payment-total="">(&total)</strong></p>
             <form data-payment-form="" data-publishable-key=(&session.publishable_key)
                 data-client-secret=(&session.client_secret) data-return-path=(&return_path)>

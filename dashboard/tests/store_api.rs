@@ -504,6 +504,40 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
         )
         .await
         .unwrap();
+    // A shopper enters and takes off a discount code; making one is the
+    // merchant's.
+    timada_discounts::Command(merchant.clone())
+        .create_discount(
+            "alice",
+            timada_discounts::CreateDiscount {
+                code: "TEN".into(),
+                value: timada_discounts::DiscountValue::Percent(1000),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let cart = orders
+        .apply_discount(timada_orders::STOREFRONT_ACTOR, &cart_id, "TEN")
+        .await
+        .unwrap();
+    assert_eq!(cart.discount_code.as_deref(), Some("TEN"));
+    orders
+        .remove_discount(timada_orders::STOREFRONT_ACTOR, &cart_id)
+        .await
+        .unwrap();
+    let forged = timada_discounts::Command(shop.clone())
+        .create_discount(
+            "storefront",
+            timada_discounts::CreateDiscount {
+                code: "FREE".into(),
+                value: timada_discounts::DiscountValue::Percent(10_000),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(format!("{forged}").contains("store:checkout"), "{forged}");
     let request_id = orders
         .request_checkout(
             timada_orders::STOREFRONT_ACTOR,

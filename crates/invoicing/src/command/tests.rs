@@ -95,6 +95,7 @@ fn invoice(order_id: &str) -> NewInvoice {
                 ..Default::default()
             },
         ],
+        discount: None,
         total_cents: 4499,
         issued_by: "test".into(),
         tax: TaxProfile {
@@ -354,6 +355,78 @@ async fn a_refund_is_credited_against_the_invoice() {
         cmd.issue_credit_note(too_much, NOW).await.unwrap_err(),
         InvoicingError::CreditTooLarge
     ));
+}
+
+#[tokio::test]
+async fn a_discount_is_spread_over_the_rates_to_the_cent() {
+    let cmd = command().await;
+    // 10 % off 25.00 at 20 % and 19.99 at 5.5 %.
+    let discounted = NewInvoice {
+        discount: Some(InvoiceDiscount {
+            code: "TEN".into(),
+            amount_cents: 450,
+        }),
+        total_cents: 4049,
+        ..invoice("o1")
+    };
+    let mismatch = NewInvoice {
+        total_cents: 4499,
+        ..discounted.clone()
+    };
+    assert!(matches!(
+        cmd.issue_invoice_here(mismatch, NOW).await.unwrap_err(),
+        InvoicingError::TotalMismatch
+    ));
+
+    let issued = cmd
+        .issue_invoice_here(discounted.clone(), NOW)
+        .await
+        .unwrap();
+    // The lines stay at full price; the discount sits beside them.
+    assert_eq!(issued.lines[0].total_cents(), 2500);
+    assert_eq!(
+        issued.discount,
+        Some(InvoiceDiscount {
+            code: "TEN".into(),
+            amount_cents: 450
+        })
+    );
+    // 250 off the mugs, 200 off the book (the cent left over goes to the
+    // larger remainder): 2250 at 20 %, 1799 at 5.5 %.
+    assert_eq!(
+        issued.vat,
+        vec![
+            VatSubtotal {
+                rate_bps: 2000,
+                base_cents: 1875,
+                vat_cents: 375
+            },
+            VatSubtotal {
+                rate_bps: 550,
+                base_cents: 1705,
+                vat_cents: 94
+            },
+        ]
+    );
+    assert_eq!(issued.total_cents, 4049);
+    assert_eq!(issued.total_excl_vat_cents, 3580);
+    assert_eq!(issued.total_vat_cents, 469);
+    // Read back the same, and a retry finds it.
+    assert_eq!(
+        cmd.issue_invoice_here(discounted, NOW).await.unwrap(),
+        issued
+    );
+
+    // A full refund credits what was paid, at the rates it was paid at.
+    let whole = NewCreditNote {
+        order_id: "o1".into(),
+        refund_id: "re_1".into(),
+        amount_cents: 4049,
+        issued_by: "test".into(),
+    };
+    let credit = cmd.issue_credit_note(whole, NOW).await.unwrap();
+    assert_eq!(credit.vat, issued.vat);
+    assert_eq!(credit.discount, None);
 }
 
 #[tokio::test]

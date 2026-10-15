@@ -53,6 +53,8 @@ cheap ones of the 2026 e-invoicing reform:
   the operation (*livraison de biens*).
 - **The lines.** Quantity, unit price excluding VAT, VAT rate and amount including
   VAT.
+- **The discount.** When the order was paid with a discount code, a negative
+  *Remise CODE* row under the lines, before and including VAT.
 - **VAT and totals.** VAT per rate: base, tax and total. Then the totals excluding
   VAT, of VAT, and including VAT.
 - **Payment.** *Facture acquittée : payée par carte bancaire le …*
@@ -60,6 +62,12 @@ cheap ones of the 2026 e-invoicing reform:
 VAT is worked out once per rate on the sum of its lines, never per line, so the
 rounding never drifts. A credit note corrects one invoice: it names it, and spreads
 the refunded amount over the invoice's rates in proportion, to the cent.
+
+A discount code takes its amount off the whole order. The lines keep their full
+price; the discount is spread over them in proportion to the cent (largest
+remainders), and the VAT, the totals and the EU distance sales are those of what was
+really paid. A credit note against a discounted invoice therefore credits VAT at
+the rates that were paid.
 
 ## Selling abroad
 
@@ -160,4 +168,4 @@ ten years the law asks.
 - Currency conversion: VAT on a non-euro invoice must also be stated in euros.
 - Northern Ireland (goods follow EU VAT rules there) and other special territories
   beyond the ones listed above.
-- Shipping costs and discounts, which orders do not have yet.
+- Shipping costs, which orders do not have yet.

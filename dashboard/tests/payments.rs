@@ -54,6 +54,8 @@ struct FakeStripe {
     /// Payments the shopper paid.
     paid: Mutex<Vec<String>>,
     refunds: Mutex<Vec<(String, u64)>>,
+    /// Stripe is down: opening a payment fails.
+    down: std::sync::atomic::AtomicBool,
 }
 
 impl FakeStripe {
@@ -79,6 +81,10 @@ impl PaymentGateway for FakeStripe {
         payment: NewPayment,
     ) -> anyhow::Result<OpenPayment> {
         anyhow::ensure!(secret_key == "sk_test_good", "invalid API key");
+        anyhow::ensure!(
+            !self.down.load(std::sync::atomic::Ordering::SeqCst),
+            "Stripe is down"
+        );
         let mut opened = self.opened.lock().unwrap();
         let count = opened.len();
         let entry = opened
@@ -205,6 +211,9 @@ async fn harness() -> Harness {
         vec![
             Arc::new(move |_, tenant_id: &str, executor: &cluster::Executor| {
                 payments::subscription(subscribed.clone(), tenant_id, executor.clone())
+            }),
+            Arc::new(|_, _: &str, executor: &cluster::Executor| {
+                timada_orders::discount_usage_subscription(executor.clone())
             }),
             Arc::new(move |_, tenant_id: &str, executor: &cluster::Executor| {
                 invoicing::subscription(
@@ -650,6 +659,117 @@ async fn a_second_payment_of_a_cart_is_given_back() {
     assert_eq!(
         *h.stripe.refunds.lock().unwrap(),
         vec![(second.payment_id.clone(), 2500)]
+    );
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_discount_code_is_charged_held_and_invoiced() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let store = h.store(&acme).await;
+    let orders = timada_orders::Command(store.clone());
+    let discounts = timada_discounts::Command(store.clone());
+    let ten = discounts
+        .create_discount(
+            "alice",
+            timada_discounts::CreateDiscount {
+                code: "TEN".into(),
+                value: timada_discounts::DiscountValue::Percent(1000),
+                max_uses: Some(1),
+                once_per_email: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let with_code = async |email: &str| {
+        let (cart_id, _) = h.cart(&acme).await;
+        orders
+            .apply_discount(STOREFRONT_ACTOR, &cart_id, "ten")
+            .await
+            .unwrap();
+        let checkout = Checkout {
+            email: email.into(),
+            ..checkout(Some(2250))
+        };
+        (cart_id.clone(), h.ask_with(&acme, &cart_id, checkout).await)
+    };
+
+    // Stripe fails: the use is given back.
+    h.stripe
+        .down
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (_, answer) = with_code("ada@example.org").await;
+    assert_eq!(
+        answer,
+        PaymentAnswer::Refused("payments_unavailable".into())
+    );
+    let usage = discounts.load_usage(&ten.id).await.unwrap().unwrap();
+    assert!(usage.reserved.is_empty());
+    h.stripe
+        .down
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    // 10 % off two mugs at 12.50.
+    let (cart_id, answer) = with_code("ada@example.org").await;
+    let PaymentAnswer::Requested(payment) = answer else {
+        panic!("a payment is opened: {answer:?}");
+    };
+    assert_eq!(payment.total_cents, 2250);
+    assert_eq!(payment.discount.as_ref().unwrap().amount_cents, 250);
+    {
+        let opened = h.stripe.opened.lock().unwrap();
+        let (_, new) = opened
+            .values()
+            .find(|(open, _)| open.payment_id == payment.payment_id)
+            .unwrap();
+        assert_eq!(new.amount_cents, 2250);
+    }
+
+    // The one use is held: someone else is refused, and so is Ada again.
+    let (_, other) = with_code("bob@example.org").await;
+    assert_eq!(other, PaymentAnswer::Refused("discount_exhausted".into()));
+    let (_, again) = with_code("ada@example.org").await;
+    assert_eq!(
+        again,
+        PaymentAnswer::Refused("discount_already_used".into())
+    );
+
+    h.stripe.pay(&payment.payment_id);
+    let body = succeeded(&payment.payment_id);
+    let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
+        panic!("the order is placed");
+    };
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.total_cents, 2250);
+    assert_eq!(order.discount.as_ref().unwrap().code, "TEN");
+
+    // The order spends the use for good.
+    let usage = eventually(async || {
+        discounts
+            .load_usage(&ten.id)
+            .await
+            .unwrap()
+            .filter(|usage| usage.consumed.contains_key(&cart_id))
+    })
+    .await;
+    assert!(usage.reserved.is_empty());
+
+    // The invoice keeps the lines at full price and says what came off.
+    let invoicing = timada_invoicing::Command(store);
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(invoice.lines[0].total_cents(), 2500);
+    assert_eq!(invoice.discount.as_ref().unwrap().amount_cents, 250);
+    assert_eq!(invoice.total_cents, 2250);
+    assert_eq!(invoice.vat[0].base_cents, 1875);
+    assert_eq!(invoice.vat[0].vat_cents, 375);
+    assert!(
+        timada_invoicing::pdf::render(&invoice)
+            .unwrap()
+            .starts_with(b"%PDF-")
     );
     h.finish().await;
 }

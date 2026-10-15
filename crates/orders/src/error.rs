@@ -56,6 +56,10 @@ pub enum OrdersError {
     InvalidTracking,
     #[error("say why the order is cancelled (at most 500 characters)")]
     InvalidReason,
+    /// The cart's discount code cannot be used; `code` says why (one of
+    /// [`timada_discounts::SHOPPER_CODES`]).
+    #[error("this discount code cannot be used")]
+    DiscountRefused { code: &'static str },
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -103,6 +107,7 @@ impl OrdersError {
                 return Some(
                     KNOWN_CODES
                         .iter()
+                        .chain(timada_discounts::SHOPPER_CODES)
                         .copied()
                         .find(|known| known == code)
                         .unwrap_or(crate::PAYMENTS_UNAVAILABLE),
@@ -122,7 +127,34 @@ impl OrdersError {
             Self::NotCancellable => "not_cancellable",
             Self::InvalidTracking => "invalid_tracking",
             Self::InvalidReason => "invalid_reason",
+            Self::DiscountRefused { code } => code,
             Self::Write(_) | Self::Other(_) => return None,
         })
+    }
+}
+
+impl OrdersError {
+    /// A discount the cart cannot use, as the refusal a shopper reads.
+    pub(crate) fn from_discount(err: timada_discounts::DiscountError) -> Self {
+        use timada_discounts::DiscountError;
+        match err {
+            DiscountError::Write(err) => Self::Write(err),
+            DiscountError::Other(err) => Self::Other(err),
+            DiscountError::Inactive | DiscountError::Archived => Self::DiscountRefused {
+                code: timada_discounts::DISCOUNT_INACTIVE,
+            },
+            DiscountError::Currency => Self::DiscountRefused {
+                code: timada_discounts::DISCOUNT_CURRENCY,
+            },
+            DiscountError::Exhausted => Self::DiscountRefused {
+                code: timada_discounts::DISCOUNT_EXHAUSTED,
+            },
+            DiscountError::AlreadyUsed => Self::DiscountRefused {
+                code: timada_discounts::DISCOUNT_ALREADY_USED,
+            },
+            _ => Self::DiscountRefused {
+                code: timada_discounts::DISCOUNT_UNKNOWN,
+            },
+        }
     }
 }

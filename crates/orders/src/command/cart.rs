@@ -1,8 +1,14 @@
 use evento::{Executor, ProjectionAggregate};
 use timada_catalog::{ProductState, product_projection};
+use timada_discounts::{
+    DISCOUNT_UNKNOWN, DiscountState, discount_code_id, discount_code_projection,
+    discount_projection, normalize_code,
+};
 use ulid::Ulid;
 
-use crate::aggregator::{Created, ItemAdded, ItemRemoved, QuantitySet};
+use crate::aggregator::{
+    Created, DiscountApplied, DiscountRemoved, ItemAdded, ItemRemoved, QuantitySet,
+};
 use crate::error::OrdersError;
 use crate::value_object::{MAX_CART_LINES, MAX_LINE_QUANTITY};
 
@@ -142,9 +148,84 @@ impl<E: Executor> super::Command<E> {
         )
         .await
     }
+
+    /// Puts a discount code on the cart, replacing the one it had. A code no
+    /// live discount has is refused (`discount_unknown`), so a typo shows at
+    /// once; whether it takes anything off is decided when the cart is
+    /// priced, since that can change before the shopper pays.
+    pub async fn apply_discount(
+        &self,
+        actor: &str,
+        cart_id: &str,
+        code: &str,
+        routing_key: Option<String>,
+    ) -> Result<CartState, OrdersError> {
+        let unknown = || OrdersError::DiscountRefused {
+            code: DISCOUNT_UNKNOWN,
+        };
+        let code = normalize_code(code).map_err(|_| unknown())?;
+        let cart = self.require_open_cart(cart_id).await?;
+        if self.load_discount_by_code(&code).await?.is_none() {
+            return Err(unknown());
+        }
+        if cart.discount_code.as_deref() == Some(code.as_str()) {
+            return Ok(cart);
+        }
+        cart.write()?
+            .routing_key_opt(routing_key)
+            .event(&DiscountApplied {
+                code,
+                applied_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        self.require_cart(cart_id).await
+    }
+
+    /// Takes the discount code off the cart; none is a no-op.
+    pub async fn remove_discount(
+        &self,
+        actor: &str,
+        cart_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<CartState, OrdersError> {
+        let cart = self.require_open_cart(cart_id).await?;
+        if cart.discount_code.is_none() {
+            return Ok(cart);
+        }
+        cart.write()?
+            .routing_key_opt(routing_key)
+            .event(&DiscountRemoved {
+                removed_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        self.require_cart(cart_id).await
+    }
 }
 
 impl<E: Executor> super::Command<E> {
+    /// The live discount a normalized code names, read from the tenant's
+    /// store like the products.
+    pub(crate) async fn load_discount_by_code(
+        &self,
+        code: &str,
+    ) -> anyhow::Result<Option<DiscountState>> {
+        let Some(index) = discount_code_projection()
+            .load(discount_code_id(code))
+            .execute(&self.0)
+            .await?
+            .filter(|index| !index.released)
+        else {
+            return Ok(None);
+        };
+        Ok(discount_projection()
+            .load(&index.discount_id)
+            .execute(&self.0)
+            .await?
+            .filter(|discount| !discount.is_archived()))
+    }
+
     pub(crate) async fn load_product(
         &self,
         product_id: &str,

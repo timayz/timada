@@ -179,6 +179,9 @@ fn tenant_subscriptions(
         Arc::new(move |_, tenant_id, executor: &Executor| {
             crate::payments::subscription(payments.clone(), tenant_id, executor.clone())
         }),
+        Arc::new(|_, _, executor: &Executor| {
+            timada_orders::discount_usage_subscription(executor.clone())
+        }),
         Arc::new(move |_, tenant_id, executor: &Executor| {
             crate::invoicing::subscription(
                 platform.clone(),

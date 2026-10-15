@@ -2,6 +2,7 @@
 //! stands, with the forms that change it.
 
 pub mod add;
+pub mod discount;
 pub mod quantity;
 pub mod remove;
 
@@ -114,6 +115,25 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     </tbody>
                 </table>
+                <p>"Subtotal: " <span data-cart-subtotal="">(cart.subtotal().unwrap_or_default())</span></p>
+                if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
+                    <p data-cart-discount=(&discount.code)>"Discount " <code>(&discount.code)</code> ": " <span data-discount-amount="">(amount)</span></p>
+                }
+                if let Some(refused) = cart.discount_refused {
+                    <p class="notice" role="alert" data-discount-refused=(refused)>(say(refused))</p>
+                }
+                <form class="discount" method="post" action=(href!(discount::discount))>
+                    if let Some(code) = &cart.discount_code {
+                        <span>"Code " <code>(code)</code></span>
+                        <button name="remove" value="1">"Remove the code"</button>
+                    } else {
+                        <label>
+                            "Discount code "
+                            <input type="text" name="code" maxlength="32" autocomplete="off">
+                        </label>
+                        <button>"Apply"</button>
+                    }
+                </form>
                 <p>"Total: " <strong class="price" data-cart-total="">(cart.total().unwrap_or_default())</strong></p>
                 if cart.can_check_out() {
                     <p><a href=(href!(crate::app::checkout::index))>"Check out"</a></p>
