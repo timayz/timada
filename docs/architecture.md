@@ -20,6 +20,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own store |
 | `crates/orders` | `timada-orders` | Carts and the orders placed from them, next to the catalog in a tenant's store |
 | `crates/discounts` | `timada-discounts` | Discount codes and how often each was used, in a tenant's store |
+| `crates/reviews` | `timada-reviews` | What buyers wrote about the products of their orders, and whether the merchant published it |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
@@ -32,7 +33,8 @@ Dependencies point one way: context crates depend on evento and sqlx only (plus
 Typst in `timada-invoicing` behind its `pdf` feature,
 `timada-catalog` from the storefront library, from `timada-orders`, which prices
 an order from the products it loads, and from `timada-discounts`, for its currencies
-and amounts); the dashboard depends on every crate;
+and amounts; `timada-reviews` depends on `timada-orders`, to check that a reviewer
+bought what they review); the dashboard depends on every crate;
 nothing depends on the dashboard.
 
 ## Bounded contexts
@@ -65,11 +67,12 @@ Recurring patterns:
 ```
 data/timada.db            the platform store: identity + tenancy events, every read-model
                           table (including the tenants' catalog_products,
-                          catalog_categories, orders_orders and orders_carts), the
-                          consensus journal
-data/tenants/<id>.db      one per tenant: its catalog, cart and order events and its
-                          consensus journal
-data/media/<id>/          one per tenant: the product pictures, named <image id>.<ext>
+                          catalog_categories, orders_orders, orders_carts and
+                          reviews_reviews), the consensus journal
+data/tenants/<id>.db      one per tenant: its catalog, cart, order and review events and
+                          its consensus journal
+data/media/<id>/          one per tenant: the product pictures and the review photos,
+                          named <image id>.<ext>
 <merchant app>/store.db   a storefront replica: subscription cursor, snapshots, product and
                           category rows
 ```
@@ -158,7 +161,8 @@ tenant's products while the events stay isolated by construction.
 7. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
-   orders, open carts, payments), `/stripe/webhooks/{tenant_id}`, `/invitations/{token}`,
+   orders, open carts, discounts, reviews, payments), `/stripe/webhooks/{tenant_id}`,
+   `/store/reviews` (a storefront handing in a review, see *Reviews*), `/invitations/{token}`,
    `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.
 
 Shutdown stops the HTTP server, then the store API (its leases hold tenants open), the
@@ -225,6 +229,27 @@ it lacks (a node that was down during the upload, or a new one replaying the str
 and deletes the pictures removed. It only runs while the tenant is open on that node,
 so a node that missed a picture catches up the next time the tenant opens there.
 
+## Reviews
+
+Only a buyer reviews: a review is written from a paid order, for a product on it, and
+its id derives from the two (`hash_ids(["review", order, product])`), so there is one
+per product and order. It is signed with the name the order was shipped to (`Ada L.`)
+and waits until the merchant publishes it on `/t/{slug}/reviews`; a rejected one is
+gone for good, and so are its photos. The rating a product shows counts published
+reviews only (`reviews_product_ratings`, recounted by the read-model handler).
+
+A storefront hands a review in over HTTP, not through the store API:
+`POST /store/reviews`, multipart, with its key as a bearer token (it must allow
+`store:checkout`). The photos come with it, and the dashboard treats them like product
+pictures: it checks what the bytes are, stores and replicates them to a majority, and
+only then records the review, deleting the files when that fails. Recording on the
+dashboard's side also means no key can append a review, or describe photos that are
+not there, over the store API; the review events are not shopper events there. The
+storefront vouches that the shopper holds the order: an order id is not guessable, and a
+storefront offers the form only on an order its own shopper placed. The media
+subscription keeps review photos on every node like product pictures, and deletes them
+when a review is rejected or a photo is taken off.
+
 ## The storefront side
 
 `timada-storefront` runs inside the merchant's app. Its executor is a `Sidecar`:
@@ -266,7 +291,8 @@ operators: it names what things do, not the libraries behind them.
   temporary store, and the dashboard's integration tests, which boot the runtime in
   process: `tenants_runtime` (open, evict, reopen, catch-up), `tenants_cluster`
   (three nodes in one process: a node that missed writes catches up), `store_api` (TCP, keys, TLS),
-  `storefront` (the library against a live store), `events_lock`.
+  `storefront` (the library against a live store), `events_lock`. The review endpoint is
+  covered over HTTP by the browser suite.
 - `make e2e`: `scripts/e2e.sh` builds the dashboard and the example storefront, resets
   the database, starts the server on `config/e2e.toml` and runs Playwright through the
   compose stack (`make up`: Traefik for HTTPS, dex as an OIDC provider, MailDev as the

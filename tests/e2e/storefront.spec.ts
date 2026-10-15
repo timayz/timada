@@ -579,6 +579,135 @@ test("a shopper pays less with a discount code, once", async ({ page, request })
   }
 });
 
+/// A review as a storefront hands it in: multipart, with the key.
+function reviewForm(orderId: string, productId: string, body: string, photos: Buffer[]): FormData {
+  const form = new FormData();
+  form.append("order_id", orderId);
+  form.append("product_id", productId);
+  form.append("rating", "4");
+  form.append("title", "Lovely mug");
+  form.append("body", body);
+  for (const [n, photo] of photos.entries()) {
+    form.append("photo", new Blob([photo]), `photo-${n}.png`);
+  }
+  return form;
+}
+
+test("a buyer's review waits for the merchant, who publishes, trims and takes it down", async ({ page, request }) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Reviewed Shop");
+    await createTenant(page, name);
+    const mugUrl = await publishProduct(page, slug, "Blue Mug", "12.50");
+    const productId = mugUrl.split("/").pop() ?? "";
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    const reader = await mintKey(page, slug);
+    const seller = await mintKey(page, slug, true);
+    await startStorefront(request, seller, 1);
+
+    // One mug, paid for.
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await page.getByRole("button", { name: "Add to cart" }).click();
+    await continueToPayment(page, true);
+    const intent = stripe.lastIntent()!;
+    stripe.pay(intent.id);
+    expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+    await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+    await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+    const orderId = page.url().split("/").pop() ?? "";
+
+    // The storefront hands the review in with a key that may sell.
+    const submit = (token: string | null, form: FormData) =>
+      request.post("/store/reviews", {
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+        multipart: form,
+      });
+    const text = "Holds a big tea and keeps it warm.";
+    expect((await submit(null, reviewForm(orderId, productId, text, []))).status()).toBe(401);
+    expect((await submit("tk_unknown", reviewForm(orderId, productId, text, []))).status()).toBe(401);
+    expect((await submit(reader.token, reviewForm(orderId, productId, text, []))).status()).toBe(403);
+    const refusal = async (form: FormData) => {
+      const response = await submit(seller.token, form);
+      expect(response.status()).toBe(422);
+      return ((await response.json()) as { error: string }).error;
+    };
+    expect(await refusal(reviewForm(orderId, productId, "Too short", []))).toBe("review_invalid_body");
+    expect(await refusal(reviewForm(orderId, productId, text, [Buffer.from("not a picture")]))).toBe(
+      "review_invalid_photo",
+    );
+    expect(await refusal(reviewForm(orderId, "not-bought", text, []))).toBe("review_not_purchased");
+    expect(await refusal(reviewForm("0".repeat(64), productId, text, []))).toBe("review_order_not_found");
+    const created = await submit(seller.token, reviewForm(orderId, productId, text, [PNG, PNG]));
+    expect(created.status()).toBe(201);
+    const reviewId = ((await created.json()) as { id: string }).id;
+    expect(await refusal(reviewForm(orderId, productId, text, []))).toBe("review_already_reviewed");
+
+    // The merchant finds it waiting, signed with the name it was shipped to.
+    const row = page.locator(`[data-review="${reviewId}"]`);
+    await expect(async () => {
+      await page.goto(`/t/${slug}/reviews`);
+      await expect(row).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(row).toHaveAttribute("data-review-status", "pending");
+    await expect(row).toContainText("Ada L.");
+    await row.getByRole("link", { name: "Lovely mug" }).click();
+    await expect(page.locator("[data-review-status]")).toHaveAttribute("data-review-status", "pending");
+    await expect(page.locator("[data-review-body]")).toHaveText(text);
+    const photos = page.locator("[data-review-photo]");
+    await expect(photos).toHaveCount(2);
+    const photoUrl = async (n: number) => (await photos.nth(n).locator("img").getAttribute("src")) ?? "";
+    const first = await photoUrl(0);
+    const second = await photoUrl(1);
+    expect((await request.get(first)).status()).toBe(200);
+
+    // One photo off; its file goes with it.
+    await photos.first().getByRole("button", { name: "Remove this photo" }).click();
+    await expect(page.getByRole("status")).toContainText("Photo removed.");
+    await expect(photos).toHaveCount(1);
+    await expect(async () => expect((await request.get(first)).status()).toBe(404)).toPass({ timeout: 15_000 });
+
+    // Published, it counts in the product's rating.
+    await page.goto(mugUrl);
+    await expect(page.locator("[data-product-rating]")).toContainText("No published review");
+    await page.goto(`/t/${slug}/reviews`);
+    await page.getByLabel("Status").selectOption("all");
+    await page.getByRole("button", { name: "Filter" }).click();
+    await row.getByRole("link", { name: "Lovely mug" }).click();
+    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.getByRole("status")).toContainText("Review published.");
+    await expect(page.locator("[data-review-status]")).toHaveAttribute("data-review-status", "published");
+    await expect(async () => {
+      await page.goto(mugUrl);
+      await expect(page.locator("[data-product-rating]")).toContainText("★ 4.0 · 1 published", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+
+    // Taken down for good, with its last photo.
+    await page.getByRole("link", { name: "See its reviews" }).click();
+    await row.getByRole("link", { name: "Lovely mug" }).click();
+    await page.getByLabel("Why it is rejected").fill("Not about the mug");
+    await page.getByRole("button", { name: "Take down" }).click();
+    await expect(page.getByRole("status")).toContainText("Review rejected.");
+    await expect(page.locator("[data-review-reason]")).toHaveText("Not about the mug");
+    await expect(page.getByRole("button", { name: "Publish" })).toHaveCount(0);
+    await expect(async () => expect((await request.get(second)).status()).toBe(404)).toPass({ timeout: 15_000 });
+    await expect(async () => {
+      await page.goto(mugUrl);
+      await expect(page.locator("[data-product-rating]")).toContainText("No published review", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+  } finally {
+    await stripe.stop();
+  }
+});
+
 /// From the cart to the card form, shipping to `country`, as a business
 /// when a VAT number is given.
 async function checkoutTo(page: Page, country: string, postalCode: string, vatNumber = "") {
