@@ -188,3 +188,13 @@ pub enum PaymentMethod {
         disabled_by: String,
     },
 }
+
+/// Whether the tenant sells to businesses: a shopper who gives an EU VAT
+/// number is invoiced without VAT under reverse charge. One stream per
+/// tenant store, with the id [`business_buyers_id`](crate::business_buyers_id);
+/// no stream means the shop does not.
+#[evento::aggregate(name = "timada-orders/BusinessBuyers")]
+pub enum BusinessBuyers {
+    BusinessBuyersAccepted { accepted_by: String },
+    BusinessBuyersRefused { refused_by: String },
+}

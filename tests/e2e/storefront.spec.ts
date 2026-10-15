@@ -1043,7 +1043,9 @@ async function checkoutTo(page: Page, country: string, postalCode: string, vatNu
   await page.getByLabel("Postal code").fill(postalCode);
   await page.getByLabel("City").fill("Somewhere");
   await page.getByLabel("Country").selectOption(country);
-  await page.getByLabel("EU company VAT number (optional, for an invoice without VAT)").fill(vatNumber);
+  // Only a shop that sells to businesses asks for the number.
+  const vat = page.getByLabel("EU company VAT number (optional, for an invoice without VAT)");
+  if (await vat.count()) await vat.fill(vatNumber);
   await page.getByRole("button", { name: "Place order" }).click();
   await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
 }
@@ -1096,9 +1098,20 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
       }).toPass({ timeout: 20_000 });
     };
 
+    // A shop sells to consumers only until its merchant says otherwise: no
+    // VAT number is asked for.
+    await addMug();
+    await page.goto(`${STOREFRONT}/cart`);
+    await page.getByRole("link", { name: "Check out" }).click();
+    await expect(page.locator("#checkout-vat")).toHaveCount(0);
+    await page.goto(`/t/${slug}/invoicing`);
+    await expect(page.locator("[data-business-buyers]")).toHaveAttribute("data-business-buyers", "off");
+    await page.getByRole("button", { name: "Accept business buyers" }).click();
+    await expect(page.getByRole("status")).toContainText("Business buyers accepted.");
+    await expect(page.locator("[data-business-buyers]")).toHaveAttribute("data-business-buyers", "on");
+
     // A German business VIES knows: reverse charge. A bad number is refused
     // at checkout.
-    await addMug();
     await page.goto(`${STOREFRONT}/cart`);
     await page.getByRole("link", { name: "Check out" }).click();
     await page.getByLabel("E-mail").fill("ada@example.org");

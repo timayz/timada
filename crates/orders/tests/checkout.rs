@@ -292,6 +292,7 @@ async fn a_business_buyer_gives_its_vat_number_with_the_request() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let cart = cart_with(&orders, &mug, 1).await;
+    orders.set_business_buyers(ALICE, true).await.unwrap();
 
     let err = orders
         .request_checkout(
@@ -339,4 +340,51 @@ async fn a_business_buyer_gives_its_vat_number_with_the_request() {
         "timada-orders/Cart",
         "BuyerIdentified"
     ));
+}
+
+#[tokio::test]
+async fn a_shop_sells_to_businesses_only_once_its_merchant_says_so() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let cart = cart_with(&orders, &mug, 1).await;
+    let as_business = || Checkout {
+        vat_number: Some("DE123456789".into()),
+        ..checkout()
+    };
+
+    assert!(!orders.accepts_business_buyers().await.unwrap());
+    let err = orders
+        .request_checkout(SHOPPER, &cart, as_business())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, OrdersError::BusinessBuyersRefused));
+    assert_eq!(err.code(), Some("business_buyers_refused"));
+    // A blank number is still a consumer's checkout.
+    orders
+        .request_checkout(
+            SHOPPER,
+            &cart,
+            Checkout {
+                vat_number: Some("  ".into()),
+                ..checkout()
+            },
+        )
+        .await
+        .unwrap();
+
+    orders.set_business_buyers(ALICE, true).await.unwrap();
+    assert!(orders.accepts_business_buyers().await.unwrap());
+    orders
+        .request_checkout(SHOPPER, &cart, as_business())
+        .await
+        .unwrap();
+
+    // Saying it twice is fine; closing it again refuses again.
+    orders.set_business_buyers(ALICE, true).await.unwrap();
+    orders.set_business_buyers(ALICE, false).await.unwrap();
+    let err = orders
+        .request_checkout(SHOPPER, &cart, as_business())
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some("business_buyers_refused"));
 }
