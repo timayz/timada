@@ -39,10 +39,16 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             .and_then(|payments| payments.stripe_api_url.clone()),
     ));
     let payments = Arc::new(crate::payments::Payments::new(
-        config.payments.as_ref(),
+        crate::seal::payments_sealer(&config),
         gateway,
         executor.clone(),
     ));
+    // The shops' own mail servers, shared by the pages and the mails sent
+    // in the background so their connections are too.
+    let shop_mail = crate::shop_mail::ShopMail::new(
+        crate::seal::mail_sealer(&config),
+        config.mail.allow_private_hosts,
+    );
     // The confirmations are mailed from the tenants' subscriptions, outside
     // any request: they get their own transport.
     let order_mail = {
@@ -50,6 +56,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         let mut app = topcoat::context::AppContext::new();
         app.insert(mailer.transport);
         app.insert(mailer.sender);
+        app.insert(shop_mail.clone());
         Arc::new(app)
     };
     let tenants = Tenants::new(
@@ -144,6 +151,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         authorizer,
         media,
         payments,
+        shop_mail,
         store: connections,
         config,
     });

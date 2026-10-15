@@ -56,6 +56,8 @@ pub struct Services {
     pub media: Arc<Media>,
     /// The tenants' Stripe accounts and the provider they are reached through.
     pub payments: Arc<crate::payments::Payments>,
+    /// The shops' own mail servers.
+    pub shop_mail: crate::shop_mail::ShopMail,
     /// The live store connections, so revoking a key ends them.
     pub store: Arc<StoreConnections>,
     pub config: Config,
@@ -73,6 +75,7 @@ pub fn router(services: Services) -> Router {
         authorizer,
         media,
         payments,
+        shop_mail,
         store,
         config,
     } = services;
@@ -124,6 +127,7 @@ pub fn router(services: Services) -> Router {
         // The transport behind `topcoat::mail::send`, and who the codes come from.
         .mail(mailer.transport)
         .app_context(mailer.sender)
+        .app_context(shop_mail)
         .app_context(config)
         .assets(assets)
         .runtime()

@@ -9,6 +9,7 @@ mod company;
 mod create;
 mod invite;
 mod legal;
+mod mail;
 mod member;
 mod payments;
 mod rename;
@@ -24,6 +25,7 @@ pub use company::*;
 pub use create::*;
 pub use invite::*;
 pub use legal::*;
+pub use mail::*;
 pub use payments::*;
 pub use role::*;
 
@@ -33,9 +35,10 @@ use crate::aggregator::api_key::{
     Created as ApiKeyCreated, Revoked as ApiKeyRevoked, Scoped as ApiKeyScoped,
 };
 use crate::aggregator::{
-    Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MemberGranted, MemberRevoked,
-    MemberRoleChanged, PaymentsConfigured, PaymentsRemoved, Released, Renamed, Resumed, Revoked,
-    RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
+    Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailServerConfigured,
+    MailServerRemoved, MemberGranted, MemberRevoked, MemberRoleChanged, PaymentsConfigured,
+    PaymentsRemoved, Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated,
+    Sent, Suspended,
 };
 use crate::value_object::{
     LEGACY_API_KEY_SCOPES, ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id,
@@ -79,6 +82,25 @@ pub struct TenantState {
     pub payments: Option<PaymentSettings>,
     /// The company it sells as, once linked.
     pub company: Option<TenantCompany>,
+    /// The merchant's own mail server, once set up.
+    pub mail_server: Option<MailServerSettings>,
+}
+
+/// The mail server the shop's mails go out through. The password is sealed
+/// bytes only the host can open.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MailServerSettings {
+    pub host: String,
+    pub port: u16,
+    /// One of [`MAIL_SECURITIES`](crate::MAIL_SECURITIES).
+    pub security: String,
+    pub username: Option<String>,
+    pub password_sealed: Option<Vec<u8>>,
+    pub from_address: String,
+    pub from_name: Option<String>,
+    pub configured_by: String,
+    /// Unix seconds.
+    pub configured_at: u64,
 }
 
 /// The company a tenant sells as and the series its invoices are numbered
@@ -168,6 +190,8 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_payments_removed())
         .handler(on_company_linked())
         .handler(on_company_unlinked())
+        .handler(on_mail_server_configured())
+        .handler(on_mail_server_removed())
         .strict()
 }
 
@@ -288,6 +312,35 @@ async fn on_payments_removed(
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     tenant.payments = None;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_server_configured(
+    event: Event<MailServerConfigured>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    tenant.mail_server = Some(MailServerSettings {
+        host: data.host.to_owned(),
+        port: data.port,
+        security: data.security.to_owned(),
+        username: data.username.to_owned(),
+        password_sealed: data.password_sealed.to_owned(),
+        from_address: data.from_address.to_owned(),
+        from_name: data.from_name.to_owned(),
+        configured_by: data.configured_by.to_owned(),
+        configured_at: event.timestamp,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_server_removed(
+    _event: Event<MailServerRemoved>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.mail_server = None;
     Ok(())
 }
 
