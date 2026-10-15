@@ -5,7 +5,7 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "orders";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Orders0001, OrderDiscounts0002]
+    vec_box![Orders0001, OrderDiscounts0002, OrdersByEmail0003]
 }
 
 pub struct Orders0001;
@@ -91,4 +91,17 @@ sqlx_migrator::sqlite_migration!(
             "DROP INDEX orders_orders_discount"
         ),
     ]
+);
+
+/// A shopper's orders are the ones placed with their address.
+pub struct OrdersByEmail0003;
+sqlx_migrator::sqlite_migration!(
+    OrdersByEmail0003,
+    "orders",
+    "0003_orders_by_email",
+    vec_box![("orders", "0002_order_discounts")],
+    vec_box![(
+        "CREATE INDEX orders_orders_email ON orders_orders (tenant_id, email, placed_at)",
+        "DROP INDEX orders_orders_email"
+    )]
 );

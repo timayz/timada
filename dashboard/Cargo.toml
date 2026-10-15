@@ -27,6 +27,7 @@ timada-catalog = { path = "../crates/catalog" }
 timada-orders = { path = "../crates/orders" }
 timada-discounts = { path = "../crates/discounts" }
 timada-reviews = { path = "../crates/reviews" }
+timada-shoppers = { path = "../crates/shoppers" }
 timada-invoicing = { path = "../crates/invoicing", features = ["pdf"] }
 openidconnect.workspace = true
 webauthn-rs.workspace = true

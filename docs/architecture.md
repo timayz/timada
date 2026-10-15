@@ -21,6 +21,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/orders` | `timada-orders` | Carts and the orders placed from them, next to the catalog in a tenant's store |
 | `crates/discounts` | `timada-discounts` | Discount codes and how often each was used, in a tenant's store |
 | `crates/reviews` | `timada-reviews` | What buyers wrote about the products of their orders, and whether the merchant published it |
+| `crates/shoppers` | `timada-shoppers` | A shop's customers who sign in: mailed codes, sessions, saved addresses, in a tenant's store |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
@@ -34,7 +35,8 @@ Typst in `timada-invoicing` behind its `pdf` feature,
 `timada-catalog` from the storefront library, from `timada-orders`, which prices
 an order from the products it loads, and from `timada-discounts`, for its currencies
 and amounts; `timada-reviews` depends on `timada-orders`, to check that a reviewer
-bought what they review); the dashboard depends on every crate;
+bought what they review, and `timada-shoppers` on it, for the shape of an address and
+the rule an e-mail is kept under); the dashboard depends on every crate;
 nothing depends on the dashboard.
 
 ## Bounded contexts
@@ -162,7 +164,8 @@ tenant's products while the events stay isolated by construction.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
    orders, open carts, discounts, reviews, payments), `/stripe/webhooks/{tenant_id}`,
-   `/store/reviews` (a storefront handing in a review, see *Reviews*), `/invitations/{token}`,
+   `/store/reviews` (a storefront handing in a review, see *Reviews*), `/store/shoppers/*`
+   (a storefront signing its shoppers in, see *Shopper accounts*), `/invitations/{token}`,
    `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.
 
 Shutdown stops the HTTP server, then the store API (its leases hold tenants open), the
@@ -249,6 +252,31 @@ storefront vouches that the shopper holds the order: an order id is not guessabl
 storefront offers the form only on an order its own shopper placed. The media
 subscription keeps review photos on every node like product pictures, and deletes them
 when a review is rejected or a photo is taken off.
+
+## Shopper accounts
+
+A shopper account belongs to one shop: it lives in the tenant's store
+(`timada-shoppers`), so the same address at two shops is two accounts, and the platform
+users (`timada-identity`) are only the merchants' staff. There is no sign-up: a shopper
+asks for a six-digit code, and the first code they hand back creates the account. The
+`Shopper` stream's id derives from the normalized address, so it is its own uniqueness
+index; `ShopperChallenge` keeps only the code's hash and counts the wrong guesses (five
+kill it, it lives ten minutes, another may be mailed a minute later); a
+`ShopperSession`'s id derives from a random token the shopper's browser keeps, so
+reading the store reveals no token. An account also keeps up to ten addresses.
+
+A storefront signs its shoppers in over HTTP, not through the store API, under
+`/store/shoppers/*` with its key as a bearer token (it must allow `store:checkout`):
+`code` mails the code from the shop's name, `session` checks it and answers the token,
+`sign_out`, `addresses` and `addresses/remove` act for the shopper whose token is in
+`X-Shopper-Token`. None of the shopper events are shopper events on the store API, so a
+key cannot sign anyone in by appending them. A storefront resolves a token by loading
+the session over the store API, which the dashboard wrote before it answered.
+
+A shopper's orders are the shop's orders placed with their address, guest ones
+included: owning the mailbox is what entitles them to it. `GET /store/shoppers/orders`
+lists them from `orders_orders` (indexed on the tenant and the e-mail), so an order paid
+a moment ago may show a second later.
 
 ## The storefront side
 
