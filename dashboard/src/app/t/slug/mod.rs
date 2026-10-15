@@ -9,6 +9,7 @@ pub mod customers;
 pub mod discounts;
 pub mod invoices;
 pub mod invoicing;
+pub mod mail;
 pub mod members;
 pub mod orders;
 pub mod payments;
@@ -21,9 +22,9 @@ use std::sync::Arc;
 
 use timada_tenancy::{
     PERMISSION_API_KEYS_MANAGE, PERMISSION_CUSTOMERS_READ, PERMISSION_DISCOUNTS_READ,
-    PERMISSION_MEMBERS_READ, PERMISSION_ORDERS_READ, PERMISSION_PAYMENTS_MANAGE,
-    PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ, PERMISSION_ROLES_MANAGE,
-    PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
+    PERMISSION_MAIL_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ORDERS_READ,
+    PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ,
+    PERMISSION_ROLES_MANAGE, PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
 };
 use topcoat::{
     Result,
@@ -156,6 +157,7 @@ pub struct TenantNav {
     pub reviews: bool,
     pub invoices: bool,
     pub payments: bool,
+    pub mail: bool,
     pub invoicing: bool,
     pub members: bool,
     pub roles: bool,
@@ -181,6 +183,7 @@ impl TenantNav {
             // Invoices are what the orders were billed as.
             invoices: orders,
             payments: access.can(cx, PERMISSION_PAYMENTS_MANAGE).await?,
+            mail: access.can(cx, PERMISSION_MAIL_MANAGE).await?,
             invoicing: access.can(cx, PERMISSION_TENANT_MANAGE).await?,
             members: access.can(cx, PERMISSION_MEMBERS_READ).await?,
             roles: access.can(cx, PERMISSION_ROLES_MANAGE).await?,
@@ -192,7 +195,7 @@ impl TenantNav {
 /// The header links of a tenant page: the tenant's home, each section the
 /// member may see, the dashboard and the account. `current` names the
 /// section being shown (`"home"`, `"products"`, `"categories"`, `"orders"`,
-/// `"carts"`, `"customers"`, `"discounts"`, `"reviews"`, `"invoices"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
+/// `"carts"`, `"customers"`, `"discounts"`, `"reviews"`, `"invoices"`, `"payments"`, `"mail"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
 /// section), which gets
 /// no link.
 #[component]
@@ -229,6 +232,9 @@ pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) ->
             }
             if nav.payments && current != "payments" {
                 <a class="underline" href=(href!(payments::index, Slug(slug.clone())))>"Payments"</a>
+            }
+            if nav.mail && current != "mail" {
+                <a class="underline" href=(href!(mail::index, Slug(slug.clone())))>"Mail"</a>
             }
             if nav.invoicing && current != "invoicing" {
                 <a class="underline" href=(href!(invoicing::index, Slug(slug.clone())))>"Invoicing"</a>

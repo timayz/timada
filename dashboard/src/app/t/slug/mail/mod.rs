@@ -1,0 +1,175 @@
+//! `/t/{slug}/mail`: the mail server the shop's mails to its shoppers go
+//! out through, for members with `mail:manage`. Without one they go out
+//! through the platform's server, under the shop's name. Saving sends a test
+//! mail through the new settings first: what cannot deliver is not kept.
+
+pub mod configure;
+pub mod remove;
+
+use timada_tenancy::{
+    MAIL_SECURITY_NONE, MAIL_SECURITY_STARTTLS, MAIL_SECURITY_TLS, PERMISSION_MAIL_MANAGE,
+};
+use topcoat::{
+    Result,
+    context::{Cx, app_context},
+    router::{href, page, query_params},
+    view::{View, view},
+};
+
+use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use crate::app::auth::Flash;
+use crate::auth::require_user;
+use crate::shop_mail::ShopMail;
+use crate::ui::{document, format_time, notice};
+
+#[topcoat::router::query_params(error = bad_request)]
+struct MailQuery {
+    error: Option<String>,
+    message: Option<String>,
+}
+
+pub fn mail_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
+    href!(index, Slug(slug.to_owned()))
+        .query(Flash { error, message })
+        .resolve(cx)
+}
+
+/// How a connection is secured, as the form names it.
+fn security_label(security: &str) -> &'static str {
+    match security {
+        MAIL_SECURITY_TLS => "TLS",
+        MAIL_SECURITY_STARTTLS => "STARTTLS",
+        MAIL_SECURITY_NONE => "None",
+        _ => "Unknown",
+    }
+}
+
+#[page]
+pub async fn index(cx: &Cx) -> Result<impl View> {
+    let access = require_tenant(cx).await?;
+    access
+        .require_permission(cx, PERMISSION_MAIL_MANAGE)
+        .await?;
+    let query = query_params::<MailQuery>(cx)?;
+    let nav = TenantNav::of(cx, &access).await?;
+    let user = require_user(cx).await?;
+    // Where the test mail goes unless the member says otherwise.
+    let test_to = user
+        .password
+        .as_ref()
+        .map(|password| password.email.clone())
+        .or_else(|| {
+            user.oauth2_accounts
+                .iter()
+                .find_map(|account| account.email.clone())
+        })
+        .unwrap_or_default();
+    let TenantAccess { tenant, .. } = access;
+    let enabled = app_context::<ShopMail>(cx).enabled();
+    let slug = tenant.slug.clone();
+    let settings = tenant.mail_server.clone();
+    let title = format!("Mail · {}", tenant.name);
+    let current = settings.clone().unwrap_or_default();
+    let port = settings
+        .as_ref()
+        .map_or_else(|| "587".to_owned(), |settings| settings.port.to_string());
+    let security = if settings.is_some() {
+        current.security.clone()
+    } else {
+        MAIL_SECURITY_STARTTLS.to_owned()
+    };
+    let has_password = current.password_sealed.is_some();
+
+    Ok(view! {
+        document(
+            title: &title,
+            <header class="mb-8 flex items-center justify-between">
+                <h1 class="text-2xl font-semibold">"Mail"</h1>
+                tenant_nav(tenant: &tenant, nav: &nav, current: "mail")
+            </header>
+            notice(error: query.error.as_deref(), message: query.message.as_deref())
+
+            if !enabled {
+                <p role="alert" class="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                    "Shop mail servers are not enabled on this platform: the operator has to set them up first."
+                </p>
+            }
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+                <h2 class="mb-2 text-lg font-medium">"Mail server"</h2>
+                if let Some(settings) = &settings {
+                    <dl class="mb-4 grid grid-cols-[12rem_1fr] gap-y-1 text-sm" data-mail-server="own">
+                        <dt class="text-neutral-500">"Server"</dt>
+                        <dd><code data-mail-host="">(&settings.host) ":" (settings.port)</code></dd>
+                        <dt class="text-neutral-500">"Security"</dt><dd>(security_label(&settings.security))</dd>
+                        <dt class="text-neutral-500">"User name"</dt>
+                        <dd>(settings.username.as_deref().unwrap_or("None"))</dd>
+                        <dt class="text-neutral-500">"Password"</dt>
+                        <dd>(if settings.password_sealed.is_some() { "Saved, never shown again" } else { "None" })</dd>
+                        <dt class="text-neutral-500">"Sent from"</dt>
+                        <dd data-mail-from="">
+                            (settings.from_name.as_deref().unwrap_or(&tenant.name))
+                            " <" (&settings.from_address) ">"
+                        </dd>
+                        <dt class="text-neutral-500">"Since"</dt>
+                        <dd><time datetime=(settings.configured_at)>(format_time(settings.configured_at))</time></dd>
+                    </dl>
+                    <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
+                        <button class="rounded border border-red-300 px-3 py-1 text-sm text-red-800 hover:bg-red-50">"Use the platform's server"</button>
+                    </form>
+                } else {
+                    <p class="mb-2 text-sm" data-mail-server="platform">
+                        "Not set up: your order confirmations, review requests and sign-in codes go out through the platform's server, under the name "
+                        <strong>(&tenant.name)</strong> "."
+                    </p>
+                }
+            </section>
+
+            if enabled {
+                <section class="rounded border border-neutral-200 bg-white p-4">
+                    <h2 class="mb-2 text-lg font-medium">
+                        if settings.is_some() { "Change the server" } else { "Send from your own server" }
+                    </h2>
+                    <p class="mb-4 text-sm text-neutral-600">
+                        "Your mail provider gives these settings for sending (SMTP). Saving sends a test mail through them first: they are kept only if it goes out."
+                    </p>
+                    <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="space-y-3">
+                        <label class="block text-sm" for="mail-host">"Server"</label>
+                        <input id="mail-host" name="host" required="" maxlength="253" placeholder="smtp.example.com" value=(&current.host)
+                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
+                        <label class="block text-sm" for="mail-port">"Port"</label>
+                        <input id="mail-port" name="port" type="number" min="1" max="65535" required="" value=(&port)
+                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
+                        <label class="block text-sm" for="mail-security">"Security"</label>
+                        <select id="mail-security" name="security" class="w-full rounded border border-neutral-300 px-3 py-2">
+                            for (value, label) in [
+                                (MAIL_SECURITY_STARTTLS, "STARTTLS (usually port 587)"),
+                                (MAIL_SECURITY_TLS, "TLS (usually port 465)"),
+                                (MAIL_SECURITY_NONE, "None (not encrypted)"),
+                            ] {
+                                <option value=(value) selected=(security == value)>(label)</option>
+                            }
+                        </select>
+                        <label class="block text-sm" for="mail-username">"User name"</label>
+                        <input id="mail-username" name="username" maxlength="254" autocomplete="off" value=(current.username.as_deref().unwrap_or_default())
+                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
+                        <label class="block text-sm" for="mail-password">"Password"</label>
+                        <input id="mail-password" name="password" type="password" autocomplete="off"
+                            placeholder=(if has_password { "Leave blank to keep the saved one" } else { "" })
+                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
+                        <label class="block text-sm" for="mail-from-address">"Send from address"</label>
+                        <input id="mail-from-address" name="from_address" type="email" required="" maxlength="254" placeholder="orders@example.com" value=(&current.from_address)
+                            class="w-full rounded border border-neutral-300 px-3 py-2">
+                        <label class="block text-sm" for="mail-from-name">"Send from name"</label>
+                        <input id="mail-from-name" name="from_name" maxlength="80" placeholder=(&tenant.name) value=(current.from_name.as_deref().unwrap_or_default())
+                            class="w-full rounded border border-neutral-300 px-3 py-2">
+                        <label class="block text-sm" for="mail-test-to">"Send the test mail to"</label>
+                        <input id="mail-test-to" name="test_to" type="email" required="" maxlength="254" value=(&test_to)
+                            class="w-full rounded border border-neutral-300 px-3 py-2">
+                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Test and save"</button>
+                    </form>
+                </section>
+            }
+        )
+    })
+}

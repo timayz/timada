@@ -52,10 +52,15 @@ client_id = "timada"
 client_secret = "timada-e2e-client-secret"
 
 # The development mailbox from compose.yml; the tests read the codes back
-# through its API on port 1080.
+# through its API on port 1080. A shop's own server is that same mailbox, on
+# this machine.
 [mail]
 from = "Timada <no-reply@timada.localhost>"
 smtp_url = "smtp://localhost:1025"
+allow_private_hosts = true
+
+[secrets]
+key = "e2e-only-secrets-key-never-used-outside-the-test-suite"
 
 [monitoring]
 log_level = "info,timada_dashboard=debug"

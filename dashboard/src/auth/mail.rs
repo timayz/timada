@@ -11,9 +11,11 @@ use topcoat::{
 
 use timada_catalog::format_money;
 use timada_orders::OrderState;
+use timada_tenancy::TenantState;
 
 use crate::auth::cookies::EmailFlowKind;
 use crate::config;
+use crate::shop_mail::shop_sender;
 
 /// Who the codes come from (`mail.from`).
 #[derive(Debug, Clone)]
@@ -74,10 +76,12 @@ pub async fn send_invitation(
 }
 
 /// Mails a shop's sign-in code to one of its shoppers. The mail speaks for
-/// the shop, not for the platform: the shop's name is the sender's.
-pub async fn send_shopper_code(cx: &Cx, to: &str, shop_name: &str, code: &str) -> Result<()> {
-    let sender = &app_context::<MailSender>(cx).0;
-    let from = Mailbox::named(shop_name, sender.address())?;
+/// the shop, not for the platform: it comes from the shop's own server and
+/// address when it has one, under the shop's name in any case.
+pub async fn send_shopper_code(cx: &Cx, to: &str, shop: &TenantState, code: &str) -> Result<()> {
+    let sender = shop_sender(cx, shop).await?;
+    let shop_name = shop.name.as_str();
+    let from = sender.from.clone();
     let subject = format!("Your sign-in code for {shop_name}");
     let mail = mail! {
         from: from,
@@ -91,21 +95,22 @@ pub async fn send_shopper_code(cx: &Cx, to: &str, shop_name: &str, code: &str) -
             <p>"If you did not ask for it, you can ignore this message."</p>
         },
     }?;
-    send(cx, mail).await?;
+    sender.send(cx, mail).await?;
     Ok(())
 }
 
-/// Mails a shop's confirmation of a paid order to its shopper, under the
-/// shop's name. `link` is the order's page on the shop's storefront, when
-/// the merchant said where it lives.
+/// Mails a shop's confirmation of a paid order to its shopper, from the
+/// shop (see [`send_shopper_code`]). `link` is the order's page on the
+/// shop's storefront, when the merchant said where it lives.
 pub async fn send_order_confirmation(
     cx: &Cx,
-    shop_name: &str,
+    shop: &TenantState,
     order: &OrderState,
     link: Option<&str>,
 ) -> Result<()> {
-    let sender = &app_context::<MailSender>(cx).0;
-    let from = Mailbox::named(shop_name, sender.address())?;
+    let sender = shop_sender(cx, shop).await?;
+    let shop_name = shop.name.as_str();
+    let from = sender.from.clone();
     let subject = format!("Your {shop_name} order {}", order.reference);
     let currency = &order.currency;
     let lines: Vec<(String, u32, String)> = order
@@ -177,22 +182,24 @@ pub async fn send_order_confirmation(
             }
         },
     }?;
-    send(cx, mail).await?;
+    sender.send(cx, mail).await?;
     Ok(())
 }
 
-/// Asks the buyer of a fulfilled order, under the shop's name, what they
-/// think of `products` (the names of the ones not reviewed yet). `link` opens
-/// the order's review forms on the storefront without signing in.
+/// Asks the buyer of a fulfilled order, from the shop (see
+/// [`send_shopper_code`]), what they think of `products` (the names of the
+/// ones not reviewed yet). `link` opens the order's review forms on the
+/// storefront without signing in.
 pub async fn send_review_request(
     cx: &Cx,
-    shop_name: &str,
+    shop: &TenantState,
     order: &OrderState,
     products: &[String],
     link: &str,
 ) -> Result<()> {
-    let sender = &app_context::<MailSender>(cx).0;
-    let from = Mailbox::named(shop_name, sender.address())?;
+    let sender = shop_sender(cx, shop).await?;
+    let shop_name = shop.name.as_str();
+    let from = sender.from.clone();
     let subject = format!("How was your {shop_name} order {}?", order.reference);
     let mail = mail! {
         from: from,
@@ -212,7 +219,7 @@ pub async fn send_review_request(
             <p>"The link opens your order on the shop for 60 days."</p>
         },
     }?;
-    send(cx, mail).await?;
+    sender.send(cx, mail).await?;
     Ok(())
 }
 
@@ -254,6 +261,15 @@ mod tests {
     use topcoat::mail::MemoryTransport;
 
     use super::*;
+    use crate::shop_mail::ShopMail;
+
+    fn acme() -> TenantState {
+        TenantState {
+            id: "t1".into(),
+            name: "Acme Tea".into(),
+            ..Default::default()
+        }
+    }
 
     #[tokio::test]
     async fn the_code_reaches_the_address() {
@@ -261,6 +277,7 @@ mod tests {
         let cx = CxTestBuilder::new()
             .app_context(MailConfig::builder().transport(transport.clone()).build())
             .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
             .build();
 
         send_code(&cx, "alice@example.com", EmailFlowKind::SignIn, "123456")
@@ -282,9 +299,10 @@ mod tests {
         let cx = CxTestBuilder::new()
             .app_context(MailConfig::builder().transport(transport.clone()).build())
             .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
             .build();
 
-        send_shopper_code(&cx, "ada@example.com", "Acme Tea", "654321")
+        send_shopper_code(&cx, "ada@example.com", &acme(), "654321")
             .await
             .unwrap();
 
@@ -338,18 +356,14 @@ mod tests {
         let cx = CxTestBuilder::new()
             .app_context(MailConfig::builder().transport(transport.clone()).build())
             .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
             .build();
 
         let order = paid_order();
-        send_order_confirmation(
-            &cx,
-            "Acme Tea",
-            &order,
-            Some("https://shop.example/orders/o1"),
-        )
-        .await
-        .unwrap();
-        send_order_confirmation(&cx, "Acme Tea", &order, None)
+        send_order_confirmation(&cx, &acme(), &order, Some("https://shop.example/orders/o1"))
+            .await
+            .unwrap();
+        send_order_confirmation(&cx, &acme(), &order, None)
             .await
             .unwrap();
 
@@ -381,11 +395,12 @@ mod tests {
         let cx = CxTestBuilder::new()
             .app_context(MailConfig::builder().transport(transport.clone()).build())
             .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
             .build();
 
         send_review_request(
             &cx,
-            "Acme Tea",
+            &acme(),
             &paid_order(),
             &["Mug".to_owned(), "Teapot".to_owned()],
             "https://shop.example/reviews/t0k3n",
@@ -411,6 +426,7 @@ mod tests {
         let cx = CxTestBuilder::new()
             .app_context(MailConfig::builder().transport(transport.clone()).build())
             .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
             .build();
 
         send_invitation(

@@ -17,6 +17,8 @@ mod invoicing;
 mod limits;
 #[path = "../src/payments/mod.rs"]
 mod payments;
+#[path = "../src/seal.rs"]
+mod seal;
 #[path = "../src/tenants.rs"]
 mod tenants;
 #[path = "../src/vies.rs"]
@@ -38,7 +40,7 @@ use timada_tenancy::{
 };
 
 use cluster::Cluster;
-use config::{PaymentsConfig, TenantsConfig};
+use config::TenantsConfig;
 use payments::webhook::{Outcome, receive};
 use payments::{NewPayment, OpenPayment, PaymentGateway, PaymentStatus, Payments, signature};
 use tenants::Tenants;
@@ -190,10 +192,7 @@ async fn harness() -> Harness {
         .unwrap();
     let stripe = Arc::new(FakeStripe::default());
     let payments = Arc::new(Payments::new(
-        Some(&PaymentsConfig {
-            secret_key: SEAL_KEY.into(),
-            stripe_api_url: None,
-        }),
+        Some(seal::Sealer::new("payments", SEAL_KEY)),
         stripe.clone(),
         platform.clone(),
     ));
@@ -791,10 +790,10 @@ async fn the_stripe_secrets_are_kept_sealed() {
     assert_eq!(account.webhook_secret, WEBHOOK_SECRET);
 
     let other_node = Payments::new(
-        Some(&PaymentsConfig {
-            secret_key: "another-secret-of-thirty-two-chars!".into(),
-            stripe_api_url: None,
-        }),
+        Some(seal::Sealer::new(
+            "payments",
+            "another-secret-of-thirty-two-chars!",
+        )),
         h.stripe.clone(),
         h.platform.0.clone(),
     );

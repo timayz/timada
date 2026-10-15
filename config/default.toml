@@ -59,6 +59,21 @@ from = "Timada <no-reply@timada.localhost>"
 # is the development mailbox from compose.yml, whose inbox is readable at
 # http://localhost:1080. Set TIMADA__MAIL__SMTP_URL in production.
 smtp_url = "smtp://localhost:1025"
+# A shop can send its mails to shoppers (order confirmations, review requests,
+# sign-in codes) through a mail server of its own, set on /t/<slug>/mail;
+# shops without one use the server above, under their own name. A shop's
+# server may not be on this machine or a private network unless this is true:
+# leave it off outside development, or merchants could reach internal services.
+# allow_private_hosts = false
+
+# The key that seals the secrets merchants hand over (their mail server
+# passwords, and their payment keys unless payments.secret_key is set) before
+# they are stored. At least 32 characters, the same on every node; changing it
+# makes the stored secrets unreadable, and merchants then enter them again.
+# Without it, shops cannot set up a mail server of their own.
+# Set TIMADA__SECRETS__KEY in production.
+# [secrets]
+# key = "at least 32 characters, the same on every node"
 
 [tenants]
 # Directory holding one database per tenant (its events and its consensus
@@ -83,8 +98,8 @@ public_url = "https://timada.localhost/media"
 # Card payments. Each tenant connects its own Stripe account on
 # /t/<slug>/payments; the account's secrets are kept encrypted with
 # secret_key, which every node shares (changing it makes the stored secrets
-# unreadable: merchants then enter them again). Without this section, tenants
-# cannot take payments.
+# unreadable: merchants then enter them again). Unset, secrets.key is used.
+# Without this section, tenants cannot take payments.
 # [payments]
 # secret_key = "at least 32 characters, the same on every node"
 # # Where Stripe's API is reached; Stripe's own address when unset.

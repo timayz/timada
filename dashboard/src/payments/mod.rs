@@ -7,12 +7,11 @@
 //! payment went through, and only then does the order exist. Cancelling an
 //! order gives the money back through Stripe first.
 //!
-//! The tenant's Stripe secrets are recorded sealed ([`seal`]) under the
-//! operator's `payments.secret_key`; without that setting no tenant takes
-//! payments.
+//! The tenant's Stripe secrets are recorded sealed ([`Sealer`]) under the
+//! operator's `payments.secret_key` (or else `secrets.key`); without a
+//! `[payments]` section no tenant takes payments.
 
 mod gateway;
-pub mod seal;
 mod setup;
 pub mod signature;
 mod subscription;
@@ -27,8 +26,7 @@ pub use subscription::*;
 use timada_tenancy::{CompanyState, TenantState};
 
 use crate::cluster::Executor;
-use crate::config::PaymentsConfig;
-use seal::Sealer;
+use crate::seal::Sealer;
 
 /// Who the dashboard's own payment events say did them.
 pub const DASHBOARD_ACTOR: &str = "timada-dashboard";
@@ -57,14 +55,15 @@ pub struct Payments {
 }
 
 impl Payments {
-    /// `config`: `None` turns payments off for every tenant.
+    /// `sealer`: `None` turns payments off for every tenant (see
+    /// [`payments_sealer`](crate::seal::payments_sealer)).
     pub fn new(
-        config: Option<&PaymentsConfig>,
+        sealer: Option<Sealer>,
         gateway: Arc<dyn PaymentGateway>,
         platform: Executor,
     ) -> Self {
         Self {
-            sealer: config.map(|config| Sealer::new(&config.secret_key)),
+            sealer,
             gateway,
             platform,
         }

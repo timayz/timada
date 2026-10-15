@@ -76,6 +76,25 @@ pub enum Tenant {
     CompanyUnlinked {
         unlinked_by: String,
     },
+    /// The merchant's own mail server, which the shop's mails to its
+    /// shoppers go out through, from `from_address`. The password is sealed
+    /// by the host, as the payment secrets are.
+    MailServerConfigured {
+        host: String,
+        port: u16,
+        /// `tls` (implicit TLS), `starttls` or `none`.
+        security: String,
+        username: Option<String>,
+        password_sealed: Option<Vec<u8>>,
+        from_address: String,
+        /// The display name; `None` is the tenant's name.
+        from_name: Option<String>,
+        configured_by: String,
+    },
+    /// The shop's mails go out through the platform's server again.
+    MailServerRemoved {
+        removed_by: String,
+    },
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).
