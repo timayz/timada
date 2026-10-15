@@ -43,6 +43,17 @@ struct OrdersLink<'a> {
     page: Option<i64>,
 }
 
+/// The list of the orders matching an e-mail address.
+pub fn orders_of_email_url(cx: &Cx, slug: &str, email: &str) -> String {
+    href!(index, Slug(slug.to_owned()))
+        .query(OrdersLink {
+            status: None,
+            q: Some(email),
+            page: None,
+        })
+        .resolve(cx)
+}
+
 /// The orders gateway over the tenant's own store (403 while suspended).
 pub fn orders(access: &TenantAccess) -> Result<Command<Executor>> {
     Ok(Command(access.executor()?.clone()))

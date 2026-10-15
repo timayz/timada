@@ -159,7 +159,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
 /// What follows each tenant's own stream while it is open: the read models
 /// fed into the shared database (the catalog's product list, the orders and
-/// carts, the invoices, the reviews), this node's copies of the product
+/// carts, the customers, the invoices, the reviews), this node's copies of the product
 /// pictures and review photos, and the answers the dashboard writes back
 /// (payments, invoices). Every
 /// tenant-scoped bounded context registers its subscription here.
@@ -175,6 +175,9 @@ fn tenant_subscriptions(
         }),
         Arc::new(|pool, tenant_id, _: &Executor| {
             timada_orders::read_model_subscription(pool, tenant_id)
+        }),
+        Arc::new(|pool, tenant_id, _: &Executor| {
+            timada_shoppers::read_model_subscription(pool, tenant_id)
         }),
         Arc::new(|pool, tenant_id, _: &Executor| {
             timada_discounts::read_model_subscription(pool, tenant_id)
