@@ -3,6 +3,7 @@
 
 pub mod archive;
 pub mod describe;
+pub mod menu;
 pub mod move_to;
 pub mod position;
 pub mod rename;
@@ -222,6 +223,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </dd>
                     <dt class="text-neutral-500">"Sub-categories"</dt><dd data-category-children=(children)>(children)</dd>
                     <dt class="text-neutral-500">"Position"</dt><dd>(category.position)</dd>
+                    <dt class="text-neutral-500">"Shop menu"</dt>
+                    <dd data-category-menu=(if category.hidden_from_menu { "hidden" } else { "shown" })>
+                        if category.hidden_from_menu {
+                            "Hidden, with its sub-categories; its page stays open"
+                        } else {
+                            "Shown"
+                        }
+                    </dd>
                     <dt class="text-neutral-500">"Created"</dt>
                     <dd>(&created_by) ", " <time datetime=(category.created_at)>(format_time(category.created_at))</time></dd>
                     <dt class="text-neutral-500">"Changed"</dt>
@@ -267,6 +276,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">(&category.description)</textarea>
                         <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Save description"</button>
                     </form>
+                    <form method="post" action=(href!(menu::menu, Slug(slug.clone()), CategoryId(category.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
+                        <label class="flex items-center gap-2 text-sm font-medium">
+                            <input name="in_menu" type="checkbox" value="on" checked=(!category.hidden_from_menu)>
+                            "Show in the shop menu"
+                        </label>
+                        <p class="mt-1 text-sm text-neutral-500">"A hidden category takes its sub-categories out of the menu too. Its page and products stay reachable."</p>
+                        <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Save menu visibility"</button>
+                    </form>
                 </section>
 
                 <section class="flex flex-wrap items-center gap-3">
@@ -309,4 +326,11 @@ pub struct MoveForm {
 #[derive(serde::Deserialize)]
 pub struct PositionForm {
     pub position: u32,
+}
+
+#[derive(serde::Deserialize)]
+pub struct MenuForm {
+    /// An unticked checkbox is not sent at all.
+    #[serde(default)]
+    pub in_menu: Option<String>,
 }

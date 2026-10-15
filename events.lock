@@ -5,9 +5,11 @@
 event timada-catalog/Category::Archived { archived_by: String }
 event timada-catalog/Category::Created { slug: String, name: String, parent_id: Option<String>, created_by: String }
 event timada-catalog/Category::Described { description: String, described_by: String }
+event timada-catalog/Category::HiddenFromMenu { hidden_by: String }
 event timada-catalog/Category::Moved { parent_id: Option<String>, moved_by: String }
 event timada-catalog/Category::Positioned { position: u32, positioned_by: String }
 event timada-catalog/Category::Renamed { name: String, renamed_by: String }
+event timada-catalog/Category::ShownInMenu { shown_by: String }
 event timada-catalog/CategorySlug::Claimed { category_id: String }
 event timada-catalog/CategorySlug::Released unit
 event timada-catalog/Product::Archived { archived_by: String }

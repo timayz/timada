@@ -1,6 +1,6 @@
 use timada_storefront::{
-    categories, price, product_categories, product_image, related_products, require_product,
-    reviews_of, stars,
+    menu, price, product_categories, product_image, related_products, require_product, reviews_of,
+    stars,
 };
 use topcoat::{
     Result,
@@ -44,7 +44,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 .resolve(cx)
         )
     };
-    let nav = categories(cx).await?;
+    let nav = menu(cx).await?;
     let related = related_products(cx, &product, RELATED).await?;
     // The first category it is filed under carries the breadcrumb.
     let crumb = product_categories(cx, &product).await?.into_iter().next();

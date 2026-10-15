@@ -215,6 +215,15 @@ pub mod category {
         Archived {
             archived_by: String,
         },
+        /// Left out of the shop's menu, with everything under it. Its page,
+        /// products and place in the tree are untouched.
+        HiddenFromMenu {
+            hidden_by: String,
+        },
+        /// Back in the shop's menu.
+        ShownInMenu {
+            shown_by: String,
+        },
     }
 
     /// The index `slug → category`: one stream per slug, with the

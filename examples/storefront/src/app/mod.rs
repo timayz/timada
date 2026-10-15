@@ -5,11 +5,12 @@
 pub mod c;
 pub mod cart;
 pub mod checkout;
+pub mod menu;
 pub mod orders;
 pub mod p;
 
 use timada_storefront::{
-    CategoryNode, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, categories, price,
+    CategoryNode, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, menu, price,
     product_image, products,
 };
 use topcoat::{
@@ -23,6 +24,7 @@ use topcoat::{
 };
 
 use cart::drawer::{CART_SCRIPT, DRAWER_CSS, cart_drawer};
+use menu::{MENU_CSS, MENU_SCRIPT, site_menu};
 
 /// A review carries up to three photos of up to 8 MiB each.
 const REVIEW_LIMIT: usize = 26 * 1024 * 1024;
@@ -91,10 +93,6 @@ pub async fn document(
                     ".reviews img { width: 6rem; height: 6rem; object-fit: cover; margin-right: .5rem; }"
                     "nav.pages { display: flex; gap: 1rem; margin-top: 1.5rem; }"
                     "p.description { white-space: pre-line; }"
-                    "nav.sections { border-bottom: 1px solid #ddd; margin-bottom: 2rem; padding-bottom: 1rem; }"
-                    "nav.sections > ul { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 1.5rem; }"
-                    "nav.sections ul ul { display: block; margin: .25rem 0 0; }"
-                    "nav.sections summary { cursor: pointer; }"
                     "nav.crumbs { color: #666; font-size: .875rem; margin-bottom: 1rem; }"
                     "nav.sort { margin-bottom: 1rem; }"
                     "section.related { margin-top: 2.5rem; }"
@@ -171,9 +169,13 @@ pub async fn document(
                     "[hidden] { display: none !important; }"
                 </style>
                 <style>(Unescaped::new_unchecked(DRAWER_CSS))</style>
+                <style>(Unescaped::new_unchecked(MENU_CSS))</style>
             </head>
             <body>
                 <header>
+                    if !nav.is_empty() {
+                        <a class="menu-toggle" href="#menu" aria-controls="menu">"Menu"</a>
+                    }
                     <a href=(href!(index))><strong>"The Cat Shop"</strong></a>
                     <form method="get" action=(href!(index))>
                         <input name="q" type="search" placeholder="Search" aria-label="Search">
@@ -184,26 +186,8 @@ pub async fn document(
                     </a>
                 </header>
                 if !nav.is_empty() {
-                    <nav class="sections" aria-label="Categories">
-                        <ul>
-                            for node in nav {
-                                <li>
-                                    if node.children.is_empty() {
-                                        menu_link(node: node)
-                                    } else {
-                                        <details>
-                                            <summary>menu_link(node: node)</summary>
-                                            <ul>
-                                                for child in &node.children {
-                                                    <li>menu_link(node: child)</li>
-                                                }
-                                            </ul>
-                                        </details>
-                                    }
-                                </li>
-                            }
-                        </ul>
-                    </nav>
+                    site_menu(nav: nav)
+                    <script>(Unescaped::new_unchecked(MENU_SCRIPT))</script>
                 }
                 <main>(child)</main>
                 if !no_drawer {
@@ -212,17 +196,6 @@ pub async fn document(
                 }
             </body>
         </html>
-    })
-}
-
-/// One entry of the menu: the category and how many products are in it.
-#[topcoat::view::component]
-pub async fn menu_link(node: &CategoryNode) -> Result<impl View> {
-    Ok(view! {
-        <a data-category=(&node.category.slug)
-            href=(href!(c::slug::index, c::slug::Slug(node.category.slug.clone())))>
-            (&node.category.name) " (" (node.product_count) ")"
-        </a>
     })
 }
 
@@ -261,7 +234,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         wanted = wanted.search(q.as_str());
     }
     let page = products(cx, &wanted).await?;
-    let nav = categories(cx).await?;
+    let nav = menu(cx).await?;
     let link = move |number: u32| {
         href!(index)
             .query(CatalogLink {

@@ -10,7 +10,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         Categories0002,
         ProductImages0003,
         ProductVariants0004,
-        ProductSearch0005
+        ProductSearch0005,
+        CategoryMenu0006
     ]
 }
 
@@ -169,4 +170,16 @@ sqlx_migrator::sqlite_migration!(
             "DELETE FROM catalog_products_fts"
         ),
     ]
+);
+
+pub struct CategoryMenu0006;
+sqlx_migrator::sqlite_migration!(
+    CategoryMenu0006,
+    "catalog",
+    "0006_category_menu",
+    vec_box![("catalog", "0005_product_search")],
+    vec_box![(
+        "ALTER TABLE catalog_categories ADD COLUMN in_menu INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE catalog_categories DROP COLUMN in_menu"
+    )]
 );
