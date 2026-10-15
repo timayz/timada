@@ -62,6 +62,15 @@ function showVat() {
 country.addEventListener("change", showVat);
 vatNumber?.addEventListener("input", showVat);
 
+// The billing fields count only while the box is ticked: a disabled
+// fieldset is neither checked nor sent.
+const billing = form.querySelector("[data-billing]");
+const billingDifferent = form.elements.billing_different;
+billingDifferent.addEventListener("change", () => {
+  billing.hidden = !billingDifferent.checked;
+  billing.disabled = !billingDifferent.checked;
+});
+
 function fail(message) {
   error.textContent = message;
   error.hidden = false;
@@ -116,19 +125,21 @@ if (key && window.Stripe) {
 
 // What Stripe's form was told not to ask, from the form's own fields: every
 // one of them, as "never" requires.
+// The address is the billing one when the shopper gave one.
 function billingDetails() {
   const value = (name) => form.elements[name].value.trim();
+  const at = billingDifferent.checked ? "billing_" : "";
   return {
-    name: value("name"),
+    name: value(`${at}name`),
     email: value("email"),
     phone: value("phone"),
     address: {
-      line1: value("line1"),
-      line2: value("line2"),
-      city: value("city"),
-      postal_code: value("postal_code"),
+      line1: value(`${at}line1`),
+      line2: value(`${at}line2`),
+      city: value(`${at}city`),
+      postal_code: value(`${at}postal_code`),
       state: "",
-      country: country.value,
+      country: value(`${at}country`),
     },
   };
 }
@@ -262,6 +273,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         draft.country.to_ascii_uppercase()
     };
+    let billing_country = if draft.billing_country.is_empty() {
+        country.clone()
+    } else {
+        draft.billing_country.to_ascii_uppercase()
+    };
+    let bills_elsewhere = draft.bills_elsewhere();
     // What the VAT line says for each country, for the select to switch.
     let countries: Vec<(&str, &str, Option<String>)> = COUNTRIES
         .iter()
@@ -436,6 +453,37 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <label for="checkout-vat">"EU company VAT number (optional, for an invoice without VAT)"</label>
                                 <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
                             }
+                            <label class="check">
+                                <input type="checkbox" name="billing_different" value="1" checked=(bills_elsewhere)>
+                                " Use a different billing address (optional)"
+                            </label>
+                            <fieldset class="billing" data-billing="" hidden=(!bills_elsewhere) disabled=(!bills_elsewhere)>
+                                <legend class="vh">"Billing address"</legend>
+                                <label for="billing-name">"Billing name or company"</label>
+                                <input id="billing-name" name="billing_name" required="" autocomplete="billing name" value=(&draft.billing_name)>
+                                <label for="billing-line1">"Billing street address"</label>
+                                <input id="billing-line1" name="billing_line1" required="" autocomplete="billing address-line1" value=(&draft.billing_line1)>
+                                <label for="billing-line2">"Billing apartment, suite (optional)"</label>
+                                <input id="billing-line2" name="billing_line2" autocomplete="billing address-line2" value=(&draft.billing_line2)>
+                                <div class="row">
+                                    <span>
+                                        <label for="billing-city">"Billing city"</label>
+                                        <input id="billing-city" name="billing_city" required="" autocomplete="billing address-level2" value=(&draft.billing_city)>
+                                    </span>
+                                    <span>
+                                        <label for="billing-postal-code">"Billing postal code"</label>
+                                        <input id="billing-postal-code" name="billing_postal_code" required="" autocomplete="billing postal-code" value=(&draft.billing_postal_code)>
+                                    </span>
+                                    <span>
+                                        <label for="billing-country">"Billing country"</label>
+                                        <select id="billing-country" name="billing_country" required="" autocomplete="billing country">
+                                            for (code, name) in COUNTRIES {
+                                                <option value=(*code) selected=(*code == billing_country)>(*name)</option>
+                                            }
+                                        </select>
+                                    </span>
+                                </div>
+                            </fieldset>
                             <p class="hint" data-import-notice="">"Shipping outside the EU? Import duties and taxes may be due on delivery."</p>
                             if shopper.is_some() {
                                 <label class="check">
@@ -534,6 +582,7 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         // A number kept from before the shop stopped selling to businesses
         // is not sent: the field is not shown any more.
         vat_number: business.then(|| draft.vat_number.clone()),
+        billing: draft.billing(),
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {
         Ok(session) => {

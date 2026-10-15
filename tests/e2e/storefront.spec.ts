@@ -346,10 +346,10 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
   await expect(page.locator("[data-payments-off]")).toBeVisible();
   await page.getByLabel("E-mail").fill("ada@example.org");
   await page.getByLabel("Full name").fill("Ada Lovelace");
-  await page.getByLabel("Street address").fill("1 rue de la Paix");
-  await page.getByLabel("Postal code").fill("75002");
-  await page.getByLabel("City").fill("Paris");
-  await page.getByLabel("Country").selectOption("FR");
+  await page.getByLabel("Street address", { exact: true }).fill("1 rue de la Paix");
+  await page.getByLabel("Postal code", { exact: true }).fill("75002");
+  await page.getByLabel("City", { exact: true }).fill("Paris");
+  await page.getByLabel("Country", { exact: true }).selectOption("FR");
 
   // The request to pay is refused, the form still filled in: the shop has
   // not said who it is yet, so it could not issue the invoice.
@@ -377,10 +377,10 @@ async function fillCheckout(page: Page, fill: boolean) {
   if (fill) {
     await page.getByLabel("E-mail").fill("ada@example.org");
     await page.getByLabel("Full name").fill("Ada Lovelace");
-    await page.getByLabel("Street address").fill("1 rue de la Paix");
-    await page.getByLabel("Postal code").fill("75002");
-    await page.getByLabel("City").fill("Paris");
-    await page.getByLabel("Country").selectOption("FR");
+    await page.getByLabel("Street address", { exact: true }).fill("1 rue de la Paix");
+    await page.getByLabel("Postal code", { exact: true }).fill("75002");
+    await page.getByLabel("City", { exact: true }).fill("Paris");
+    await page.getByLabel("Country", { exact: true }).selectOption("FR");
   } else {
     await expect(page.getByLabel("Full name")).toHaveValue("Ada Lovelace");
   }
@@ -470,9 +470,9 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     });
     await expect(page.locator("[data-checkout-total]")).toHaveText("25.00 EUR");
     await expect(page.locator("[data-checkout-vat]")).toHaveText("(incl. 4.17 EUR VAT FR 20%)");
-    await page.getByLabel("Country").selectOption("US");
+    await page.getByLabel("Country", { exact: true }).selectOption("US");
     await expect(page.locator("[data-checkout-vat]")).toBeHidden();
-    await page.getByLabel("Country").selectOption("FR");
+    await page.getByLabel("Country", { exact: true }).selectOption("FR");
     await expect(page.locator("[data-checkout-vat]")).toBeVisible();
 
     // The cart changes from the checkout and stays there.
@@ -1039,10 +1039,10 @@ async function checkoutTo(page: Page, country: string, postalCode: string, vatNu
   await expect(page.locator("[data-import-notice]")).toBeVisible();
   await page.getByLabel("E-mail").fill("ada@example.org");
   await page.getByLabel("Full name").fill("Ada Lovelace");
-  await page.getByLabel("Street address").fill("1 Main Street");
-  await page.getByLabel("Postal code").fill(postalCode);
-  await page.getByLabel("City").fill("Somewhere");
-  await page.getByLabel("Country").selectOption(country);
+  await page.getByLabel("Street address", { exact: true }).fill("1 Main Street");
+  await page.getByLabel("Postal code", { exact: true }).fill(postalCode);
+  await page.getByLabel("City", { exact: true }).fill("Somewhere");
+  await page.getByLabel("Country", { exact: true }).selectOption(country);
   // Only a shop that sells to businesses asks for the number.
   const vat = page.getByLabel("EU company VAT number (optional, for an invoice without VAT)");
   if (await vat.count()) await vat.fill(vatNumber);
@@ -1116,10 +1116,10 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
     await page.getByRole("link", { name: "Check out" }).click();
     await page.getByLabel("E-mail").fill("ada@example.org");
     await page.getByLabel("Full name").fill("Ada Lovelace");
-    await page.getByLabel("Street address").fill("1 Main Street");
-    await page.getByLabel("Postal code").fill("10115");
-    await page.getByLabel("City").fill("Berlin");
-    await page.getByLabel("Country").selectOption("DE");
+    await page.getByLabel("Street address", { exact: true }).fill("1 Main Street");
+    await page.getByLabel("Postal code", { exact: true }).fill("10115");
+    await page.getByLabel("City", { exact: true }).fill("Berlin");
+    await page.getByLabel("Country", { exact: true }).selectOption("DE");
     await page.getByLabel("EU company VAT number (optional, for an invoice without VAT)").fill("US123");
     await page.getByRole("button", { name: "Place order" }).click();
     await expect(page.getByRole("alert")).toContainText("EU VAT number");
@@ -1150,6 +1150,43 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
     }).toPass({ timeout: 15_000 });
     await page.goto(company.companyUrl);
     await expect(page.locator("[data-eu-distance]")).toContainText("20,92");
+
+    // Shipped to New York, billed to a company in Berlin: the billing
+    // fields show once asked for, Stripe and the invoice get the billing
+    // address, and VAT still follows the goods.
+    await addMug();
+    await page.goto(`${STOREFRONT}/checkout`);
+    const billing = page.locator("[data-billing]");
+    await expect(billing).toBeHidden();
+    await page.getByLabel("E-mail").fill("ada@example.org");
+    await page.getByLabel("Full name").fill("Ada Lovelace");
+    await page.getByLabel("Street address", { exact: true }).fill("350 Fifth Avenue");
+    await page.getByLabel("Postal code", { exact: true }).fill("10118");
+    await page.getByLabel("City", { exact: true }).fill("New York");
+    await page.getByLabel("Country", { exact: true }).selectOption("US");
+    await page.getByLabel("Use a different billing address (optional)").check();
+    await expect(billing).toBeVisible();
+    await page.getByLabel("Billing name or company").fill("Analytical Engines GmbH");
+    await page.getByLabel("Billing street address").fill("Unter den Linden 1");
+    await page.getByLabel("Billing city").fill("Berlin");
+    await page.getByLabel("Billing postal code").fill("10117");
+    await page.getByLabel("Billing country").selectOption("DE");
+    await page.getByRole("button", { name: "Place order" }).click();
+    await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
+    expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem("confirmed")))!).billing_details).toMatchObject({
+      name: "Analytical Engines GmbH",
+      email: "ada@example.org",
+      address: { line1: "Unter den Linden 1", city: "Berlin", postal_code: "10117", country: "DE" },
+    });
+    await pay();
+    await expect(page.locator("[data-order-billing]")).toContainText("Analytical Engines GmbH");
+    await expect(page.locator("[data-order-address]")).toContainText("350 Fifth Avenue");
+    await expectRegime(5, "export");
+    const billed = page.locator(`[data-document="F${year}-000005"]`);
+    await expect(billed).toContainText("Analytical Engines GmbH");
+    await billed.locator("a").nth(1).click();
+    await expect(page.locator("[data-order-billing]")).toContainText("Unter den Linden 1");
+    await expect(page.locator("[data-order-address]")).toContainText("New York");
   } finally {
     await vies.stop();
     await stripe.stop();
@@ -1219,10 +1256,10 @@ test("a returning shopper signs in with a mailed code and finds their orders and
     await page.goto(`${STOREFRONT}/checkout`);
     await page.getByLabel("E-mail").fill(shopper);
     await page.getByLabel("Full name").fill("Ada Lovelace");
-    await page.getByLabel("Street address").fill("1 rue de la Paix");
-    await page.getByLabel("Postal code").fill("75002");
-    await page.getByLabel("City").fill("Paris");
-    await page.getByLabel("Country").selectOption("FR");
+    await page.getByLabel("Street address", { exact: true }).fill("1 rue de la Paix");
+    await page.getByLabel("Postal code", { exact: true }).fill("75002");
+    await page.getByLabel("City", { exact: true }).fill("Paris");
+    await page.getByLabel("Country", { exact: true }).selectOption("FR");
     await page.getByRole("button", { name: "Place order" }).click();
     const guestOrder = await pay(page);
 
@@ -1259,7 +1296,7 @@ test("a returning shopper signs in with a mailed code and finds their orders and
     await expect(page.locator("[data-returning]")).toHaveCount(0);
     await expect(page.getByLabel("E-mail")).toHaveValue(shopper);
     await expect(page.getByLabel("E-mail")).toHaveAttribute("readonly", "");
-    await expect(page.getByLabel("City")).toHaveValue("Paris");
+    await expect(page.getByLabel("City", { exact: true })).toHaveValue("Paris");
     await expect(page.getByLabel("Save this address to my account")).toBeChecked();
     await page.getByRole("button", { name: "Place order" }).click();
     await pay(page);
@@ -1306,8 +1343,8 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       await device.goto(`${STOREFRONT}/checkout`);
       await expect(device.getByLabel("E-mail")).toHaveValue(shopper);
       await expect(device.getByLabel("Full name")).toHaveValue("Ada Lovelace");
-      await expect(device.getByLabel("Street address")).toHaveValue("1 rue de la Paix");
-      await expect(device.getByLabel("City")).toHaveValue("Paris");
+      await expect(device.getByLabel("Street address", { exact: true })).toHaveValue("1 rue de la Paix");
+      await expect(device.getByLabel("City", { exact: true })).toHaveValue("Paris");
       await expect(device.locator("[data-saved-address=Paris]")).toHaveAttribute("data-current", "");
 
       // Signed out, an order this browser did not place asks to sign in
@@ -1422,10 +1459,10 @@ test("a buyer is mailed a link to review a fulfilled order, which opens it on an
     await page.goto(`${STOREFRONT}/checkout`);
     await page.getByLabel("E-mail").fill(shopper);
     await page.getByLabel("Full name").fill("Ada Lovelace");
-    await page.getByLabel("Street address").fill("1 rue de la Paix");
-    await page.getByLabel("Postal code").fill("75002");
-    await page.getByLabel("City").fill("Paris");
-    await page.getByLabel("Country").selectOption("FR");
+    await page.getByLabel("Street address", { exact: true }).fill("1 rue de la Paix");
+    await page.getByLabel("Postal code", { exact: true }).fill("75002");
+    await page.getByLabel("City", { exact: true }).fill("Paris");
+    await page.getByLabel("Country", { exact: true }).selectOption("FR");
     await page.getByRole("button", { name: "Place order" }).click();
     await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
     const intent = stripe.lastIntent()!;

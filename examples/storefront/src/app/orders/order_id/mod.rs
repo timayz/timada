@@ -147,6 +147,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 (&order.shipping.postal_code) " " (&order.shipping.city) <br>
                 (&order.shipping.country)
             </address>
+            if let Some(billing) = &order.billing {
+                <h2>"Billing to"</h2>
+                <address data-order-billing="">
+                    (&billing.name) <br>
+                    (&billing.line1) <br>
+                    if let Some(line2) = &billing.line2 { (line2) <br> }
+                    (&billing.postal_code) " " (&billing.city) <br>
+                    (&billing.country)
+                </address>
+            }
             <p>"A confirmation goes to " (&order.email) "."</p>
             if !line_reviews.is_empty() {
                 <h2 id="reviews">"Your reviews"</h2>

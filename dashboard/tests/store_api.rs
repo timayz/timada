@@ -555,6 +555,15 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
                 note: None,
                 expected_total_cents: Some(2500),
                 vat_number: None,
+                // Billed elsewhere: a shopper's event too.
+                billing: Some(timada_orders::ShippingAddress {
+                    name: "Ada Corp".into(),
+                    line1: "1 Main Street".into(),
+                    postal_code: "10001".into(),
+                    city: "New York".into(),
+                    country: "US".into(),
+                    ..Default::default()
+                }),
             },
         )
         .await

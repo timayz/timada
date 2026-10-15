@@ -3,13 +3,14 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 use ulid::Ulid;
 
 use crate::aggregator::{
-    BuyerIdentified, CheckedOut, CheckoutRequested, Claimed, DiscountGranted, Discounted,
-    PaymentRefused, PaymentRequested, Placed,
+    BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
+    Claimed, DiscountGranted, Discounted, PaymentRefused, PaymentRequested, Placed,
 };
 use crate::error::OrdersError;
 use crate::value_object::{
-    OrderLine, Payment, ShippingAddress, new_reference, normalize_buyer_vat_number,
-    normalize_email, normalize_note, normalize_shipping, order_id, order_reference_id,
+    OrderLine, Payment, ShippingAddress, new_reference, normalize_billing,
+    normalize_buyer_vat_number, normalize_email, normalize_note, normalize_shipping, order_id,
+    order_reference_id,
 };
 
 use super::{CartItem, CartLine, CartState, CheckoutRequest, OrderDiscount, OrderState};
@@ -34,6 +35,9 @@ pub struct Checkout {
     /// A business buyer's EU VAT number, for an invoice without VAT under
     /// reverse charge (checked against VIES when invoiced).
     pub vat_number: Option<String>,
+    /// Where to bill, when not at `shipping`: what the invoice is addressed
+    /// to.
+    pub billing: Option<ShippingAddress>,
 }
 
 /// The order a payment made.
@@ -291,6 +295,7 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<String, OrdersError> {
         let email = normalize_email(&checkout.email)?;
         let shipping = normalize_shipping(checkout.shipping)?;
+        let billing = checkout.billing.map(normalize_billing).transpose()?;
         let note = normalize_note(checkout.note.as_deref())?;
         let vat_number = normalize_buyer_vat_number(checkout.vat_number.as_deref())?;
         if vat_number.is_some() && !self.accepts_business_buyers().await? {
@@ -317,6 +322,13 @@ impl<E: Executor> super::Command<E> {
                 request_id: request_id.clone(),
                 vat_number,
                 identified_by: actor.to_owned(),
+            });
+        }
+        if let Some(billing) = billing {
+            write.event(&BillingAddressGiven {
+                request_id: request_id.clone(),
+                billing,
+                given_by: actor.to_owned(),
             });
         }
         write.commit(&self.0).await?;
@@ -466,6 +478,12 @@ impl<E: Executor> super::Command<E> {
                 subtotal_cents: discount.subtotal_cents,
                 amount_cents: discount.amount_cents,
                 discounted_by: actor.to_owned(),
+            });
+        }
+        if let Some(billing) = &request.billing {
+            write.event(&BillingAddressSet {
+                billing: billing.clone(),
+                set_by: actor.to_owned(),
             });
         }
         let placed = write.commit(&self.0).await;

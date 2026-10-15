@@ -180,6 +180,7 @@ pub async fn document(
                     "ul.saved form { display: inline; }"
                     "form.checkout label.check { display: flex; gap: .5rem; align-items: center; }"
                     "form.checkout label.check input { width: auto; }"
+                    "form.checkout fieldset.billing { border: 0; padding: 0; margin: .5rem 0 0; }"
                     "form.sign-in label { display: block; margin-top: .75rem; }"
                     "form.sign-in input { padding: .5rem; width: 100%; max-width: 20rem; }"
                     "table.history { border-collapse: collapse; width: 100%; }"
