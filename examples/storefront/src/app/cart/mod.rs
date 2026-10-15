@@ -7,7 +7,7 @@ pub mod drawer;
 pub mod quantity;
 pub mod remove;
 
-use timada_storefront::{CartLineView, CartView, cart, categories, format_money};
+use timada_storefront::{CartLineView, CartView, cart, format_money, menu};
 use topcoat::{
     Result,
     context::Cx,
@@ -84,7 +84,7 @@ pub async fn current_cart(cx: &Cx) -> Result<Option<CartView>> {
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<CartQuery>(cx)?;
-    let nav = categories(cx).await?;
+    let nav = menu(cx).await?;
     let cart = current_cart(cx).await?.filter(|cart| !cart.is_empty());
     let currency = cart
         .as_ref()

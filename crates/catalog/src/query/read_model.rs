@@ -203,12 +203,13 @@ pub async fn upsert_category(
     .await?;
     sqlx::query(
         "INSERT INTO catalog_categories (tenant_id, id, slug, name, description, parent_id,
-            position, archived, created_by, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            position, archived, in_menu, created_by, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             slug = excluded.slug, name = excluded.name, description = excluded.description,
             parent_id = excluded.parent_id, position = excluded.position,
-            archived = excluded.archived, updated_at = excluded.updated_at",
+            archived = excluded.archived, in_menu = excluded.in_menu,
+            updated_at = excluded.updated_at",
     )
     .bind(tenant_id)
     .bind(&category.id)
@@ -218,6 +219,7 @@ pub async fn upsert_category(
     .bind(category.parent_id.as_deref())
     .bind(category.position as i64)
     .bind(category.archived)
+    .bind(!category.hidden_from_menu)
     .bind(&category.created_by)
     .bind(category.created_at as i64)
     .bind(category.updated_at as i64)

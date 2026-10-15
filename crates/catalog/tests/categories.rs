@@ -251,6 +251,7 @@ async fn an_archived_category_leaves_its_slug_and_takes_no_edits() {
         cmd.describe_category(ALICE, &first.id, "Nope").await,
         cmd.move_category(ALICE, &first.id, None).await,
         cmd.position_category(ALICE, &first.id, 1).await,
+        cmd.set_category_in_menu(ALICE, &first.id, false).await,
     ] {
         assert!(
             matches!(err, Err(CatalogError::CategoryArchived)),
@@ -264,4 +265,38 @@ async fn an_archived_category_leaves_its_slug_and_takes_no_edits() {
             .is_some_and(|c| c.id == second.id),
         "the new category owns the slug"
     );
+}
+
+#[tokio::test]
+async fn a_category_leaves_the_menu_and_comes_back() {
+    let cmd = command().await;
+    let category = create_category(&cmd, "Bedding").await;
+    assert!(!category.hidden_from_menu, "a new category is in the menu");
+
+    let version = category.aggregate_version;
+    cmd.set_category_in_menu(ALICE, &category.id, true)
+        .await
+        .unwrap();
+    let same = cmd.load_category(&category.id).await.unwrap().unwrap();
+    assert_eq!(same.aggregate_version, version, "already shown: no event");
+
+    cmd.set_category_in_menu(ALICE, &category.id, false)
+        .await
+        .unwrap();
+    let hidden = cmd.load_category(&category.id).await.unwrap().unwrap();
+    assert!(hidden.hidden_from_menu);
+    cmd.set_category_in_menu(ALICE, &category.id, false)
+        .await
+        .unwrap();
+    let again = cmd.load_category(&category.id).await.unwrap().unwrap();
+    assert_eq!(
+        again.aggregate_version, hidden.aggregate_version,
+        "hiding twice is a no-op"
+    );
+
+    cmd.set_category_in_menu(ALICE, &category.id, true)
+        .await
+        .unwrap();
+    let shown = cmd.load_category(&category.id).await.unwrap().unwrap();
+    assert!(!shown.hidden_from_menu);
 }

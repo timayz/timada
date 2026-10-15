@@ -1,7 +1,7 @@
 //! A category and the products in it, sub-categories included.
 
 use timada_storefront::{
-    ProductQuery, ProductSort, categories, category_path, products, require_category_in,
+    ProductQuery, ProductSort, categories, category_path, menu_of, products, require_category_in,
 };
 use topcoat::{
     Result,
@@ -31,12 +31,14 @@ struct CategoryLink<'a> {
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    // The menu holds every live category, so the page's own comes out of it.
-    let nav = categories(cx).await?;
-    let node = require_category_in(&nav, path_param::<Slug>(cx))?;
+    // The tree holds every live category, so the page's own comes out of it
+    // even when the merchant left it out of the menu.
+    let tree = categories(cx).await?;
+    let nav = menu_of(&tree);
+    let node = require_category_in(&tree, path_param::<Slug>(cx))?;
     let category = node.category.clone();
     let children = node.children.clone();
-    let crumbs = category_path(&nav, &category);
+    let crumbs = category_path(&tree, &category);
     let query = query_params::<CategoryQuery>(cx)?;
     let sort = query
         .sort
