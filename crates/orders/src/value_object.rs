@@ -124,6 +124,11 @@ pub fn payment_method_id() -> String {
     evento::hash_ids(vec!["payment-method"])
 }
 
+/// The stream of whether the tenant sells to businesses: one per tenant store.
+pub fn business_buyers_id() -> String {
+    evento::hash_ids(vec!["business-buyers"])
+}
+
 /// The index stream of an order reference.
 pub fn order_reference_id(reference: &str) -> String {
     evento::hash_ids(vec!["order-reference", reference])

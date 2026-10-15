@@ -902,6 +902,10 @@ async fn invoices_follow_where_the_goods_go() {
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
     let invoicing = timada_invoicing::Command(h.store(&acme).await);
+    timada_orders::Command(h.store(&acme).await)
+        .set_business_buyers("alice", true)
+        .await
+        .unwrap();
     let shipped_to = |country: &str, postal_code: &str, vat_number: Option<&str>| Checkout {
         shipping: ShippingAddress {
             country: country.into(),

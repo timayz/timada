@@ -13,7 +13,8 @@ pub mod pay;
 pub mod start;
 
 use timada_storefront::{
-    Checkout, OrdersError, VatEstimate, menu, payment_setup, recent_reviews, start_payment,
+    Checkout, OrdersError, VatEstimate, accepts_business_buyers, menu, payment_setup,
+    recent_reviews, start_payment,
 };
 use topcoat::{
     Result,
@@ -47,17 +48,18 @@ const button = form.querySelector("button.place");
 const error = document.querySelector("[data-payment-error]");
 const vat = document.querySelector("[data-checkout-vat]");
 const country = form.elements.country;
+// Absent when the shop does not sell to businesses.
 const vatNumber = form.elements.vat_number;
 
 function showVat() {
   if (!vat) return;
   const text = country.selectedOptions[0]?.dataset.vat;
-  const reverseCharge = vatNumber.value.trim() !== "" && country.value !== "FR";
+  const reverseCharge = !!vatNumber && vatNumber.value.trim() !== "" && country.value !== "FR";
   vat.hidden = !text || reverseCharge;
   vat.textContent = text ? `(${text})` : "";
 }
 country.addEventListener("change", showVat);
-vatNumber.addEventListener("input", showVat);
+vatNumber?.addEventListener("input", showVat);
 
 function fail(message) {
   error.textContent = message;
@@ -211,7 +213,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = menu(cx).await?;
     let setup = payment_setup(cx).await?;
     let reviews = recent_reviews(cx, REVIEWS_SHOWN).await?;
-    let draft = checkout_draft(cx);
+    let business = accepts_business_buyers(cx).await?;
+    let mut draft = checkout_draft(cx);
+    if !business {
+        draft.vat_number.clear();
+    }
     let currency = cart.currency.clone().unwrap_or_default();
     let country = if draft.country.is_empty() {
         DEFAULT_COUNTRY.to_owned()
@@ -370,8 +376,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     </select>
                                 </span>
                             </div>
-                            <label for="checkout-vat">"EU company VAT number (optional, for an invoice without VAT)"</label>
-                            <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
+                            if business {
+                                <label for="checkout-vat">"EU company VAT number (optional, for an invoice without VAT)"</label>
+                                <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
+                            }
                             <p class="hint" data-import-notice="">"Shipping outside the EU? Import duties and taxes may be due on delivery."</p>
                             <label for="checkout-note">"Note for the shop (optional)"</label>
                             <textarea id="checkout-note" name="note" rows="2">(&draft.note)</textarea>
@@ -443,13 +451,16 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
     };
     let draft = form.draft;
     save_checkout_draft(cx, draft.clone())?;
+    let business = accepts_business_buyers(cx).await?;
     let checkout = Checkout {
         email: draft.email.clone(),
         shipping: draft.shipping(),
         note: Some(draft.note.clone()),
         // Unreadable means not shown: treat it as a price that moved.
         expected_total_cents: Some(form.expected_total_cents.trim().parse().unwrap_or(u64::MAX)),
-        vat_number: Some(draft.vat_number.clone()),
+        // A number kept from before the shop stopped selling to businesses
+        // is not sent: the field is not shown any more.
+        vat_number: business.then(|| draft.vat_number.clone()),
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {
         Ok(session) => {

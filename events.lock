@@ -90,6 +90,8 @@ event timada-invoicing/Book::InvoiceIssued { document_id: String, series: String
 event timada-invoicing/DistanceLedger::Counted { document_id: String, tenant_id: String, regime: String, tax_country: String, rates: Vec<Option<u32>>, sales_cents: u64, passed: bool }
 event timada-invoicing/Document::Recorded { book_id: String, label: String }
 event timada-invoicing/Document::Reserved { series: String, year: u16 }
+event timada-orders/BusinessBuyers::BusinessBuyersAccepted { accepted_by: String }
+event timada-orders/BusinessBuyers::BusinessBuyersRefused { refused_by: String }
 event timada-orders/Cart::BuyerIdentified { request_id: String, vat_number: String, identified_by: String }
 event timada-orders/Cart::CheckedOut { order_id: String, checked_out_by: String }
 event timada-orders/Cart::CheckoutRequested { request_id: String, email: String, shipping: ShippingAddress, note: Option<String>, expected_total_cents: Option<u64>, requested_by: String }

@@ -293,6 +293,9 @@ impl<E: Executor> super::Command<E> {
         let shipping = normalize_shipping(checkout.shipping)?;
         let note = normalize_note(checkout.note.as_deref())?;
         let vat_number = normalize_buyer_vat_number(checkout.vat_number.as_deref())?;
+        if vat_number.is_some() && !self.accepts_business_buyers().await? {
+            return Err(OrdersError::BusinessBuyersRefused);
+        }
         let cart = self.require_open_cart(cart_id).await?;
         if cart.lines.is_empty() {
             return Err(OrdersError::EmptyCart);

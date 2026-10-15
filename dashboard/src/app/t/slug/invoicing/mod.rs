@@ -1,8 +1,10 @@
 //! `/t/{slug}/invoicing`: the company the tenant sells as, for members with
 //! `tenant:manage`. Its invoices name that company and count with its other
 //! tenants' towards its VAT obligations, numbered in a series of the
-//! tenant's own (its code). Shoppers cannot pay until it is linked.
+//! tenant's own (its code). Shoppers cannot pay until it is linked. The
+//! page also says whether the shop sells to businesses (reverse charge).
 
+pub mod business_buyers;
 pub mod link;
 pub mod unlink;
 
@@ -42,6 +44,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<InvoicingQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let user_id = access.user_id.clone();
+    let business = timada_orders::Command(access.executor()?.clone())
+        .accepts_business_buyers()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let company = match &tenant.company {
@@ -126,6 +132,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </form>
                 }
                 <a class="underline" href=(&create)>"Register a new company"</a>
+            </section>
+
+            <section class="mt-6 rounded border border-neutral-200 bg-white p-4 text-sm" data-business-buyers=(if business { "on" } else { "off" })>
+                <h2 class="mb-2 text-lg font-medium">"Business buyers"</h2>
+                if business {
+                    <p class="mb-3 text-neutral-600">"Shoppers may give an EU company VAT number at checkout: a sale to a business in another EU country is invoiced without VAT (reverse charge), once VIES confirms the number."</p>
+                } else {
+                    <p class="mb-3 text-neutral-600">"The shop sells to consumers only: checkout asks for no VAT number and every invoice carries VAT."</p>
+                }
+                <form method="post" action=(href!(business_buyers::business_buyers, Slug(slug.clone())))>
+                    if business {
+                        <input type="hidden" name="accept" value="off">
+                        <button class="rounded border border-neutral-300 px-3 py-1 hover:bg-neutral-50">"Stop accepting business buyers"</button>
+                    } else {
+                        <input type="hidden" name="accept" value="on">
+                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Accept business buyers"</button>
+                    }
+                </form>
             </section>
         )
     })

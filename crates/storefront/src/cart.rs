@@ -465,6 +465,11 @@ impl Store {
         self.orders().payment_setup().await
     }
 
+    /// See [`accepts_business_buyers`].
+    pub async fn accepts_business_buyers(&self) -> anyhow::Result<bool> {
+        self.orders().accepts_business_buyers().await
+    }
+
     /// See [`payment_session`].
     pub async fn payment_session(
         &self,
@@ -648,4 +653,14 @@ pub async fn order(cx: &Cx, order_id: &str) -> Result<Option<OrderState>> {
 /// the shop takes no payments.
 pub async fn payment_setup(cx: &Cx) -> Result<Option<PaymentSetup>> {
     store(cx).payment_setup().await.map_err(Error::from_anyhow)
+}
+
+/// Whether the shop sells to businesses: a shopper may then give an EU VAT
+/// number, for an invoice without VAT. A checkout form asks for one only
+/// then; the store refuses one otherwise (`business_buyers_refused`).
+pub async fn accepts_business_buyers(cx: &Cx) -> Result<bool> {
+    store(cx)
+        .accepts_business_buyers()
+        .await
+        .map_err(Error::from_anyhow)
 }
