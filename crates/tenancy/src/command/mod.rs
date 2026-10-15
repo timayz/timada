@@ -5,6 +5,7 @@
 //! stale. None of them is snapshotted: a tenant stream is a handful of events.
 
 mod api_key;
+mod company;
 mod create;
 mod invite;
 mod legal;
@@ -19,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 
 pub use api_key::*;
+pub use company::*;
 pub use create::*;
 pub use invite::*;
 pub use legal::*;
@@ -31,9 +33,9 @@ use crate::aggregator::api_key::{
     Created as ApiKeyCreated, Revoked as ApiKeyRevoked, Scoped as ApiKeyScoped,
 };
 use crate::aggregator::{
-    Accepted, Claimed, Created, LegalIdentitySet, MemberGranted, MemberRevoked, MemberRoleChanged,
-    PaymentsConfigured, PaymentsRemoved, Released, Renamed, Resumed, Revoked, RoleDefined,
-    RoleRemoved, RoleUpdated, Sent, Suspended,
+    Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MemberGranted, MemberRevoked,
+    MemberRoleChanged, PaymentsConfigured, PaymentsRemoved, Released, Renamed, Resumed, Revoked,
+    RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
 };
 use crate::value_object::{
     LEGACY_API_KEY_SCOPES, ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id,
@@ -75,8 +77,17 @@ pub struct TenantState {
     pub roles: BTreeMap<String, RoleDef>,
     /// How shoppers pay, once set up.
     pub payments: Option<PaymentSettings>,
-    /// Who the merchant is in law, once set: what its invoices say.
-    pub legal: Option<LegalIdentity>,
+    /// The company it sells as, once linked.
+    pub company: Option<TenantCompany>,
+}
+
+/// The company a tenant sells as and the series its invoices are numbered
+/// in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TenantCompany {
+    pub company_id: String,
+    /// `""` for the plain series.
+    pub series_code: String,
 }
 
 /// The merchant's account with the payment provider. The secrets are sealed
@@ -155,7 +166,8 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_role_removed())
         .handler(on_payments_configured())
         .handler(on_payments_removed())
-        .handler(on_legal_identity_set())
+        .handler(on_company_linked())
+        .handler(on_company_unlinked())
         .strict()
 }
 
@@ -280,26 +292,23 @@ async fn on_payments_removed(
 }
 
 #[evento::handler]
-async fn on_legal_identity_set(
-    event: Event<LegalIdentitySet>,
+async fn on_company_linked(
+    event: Event<CompanyLinked>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
-    let data = &event.data;
-    tenant.legal = Some(LegalIdentity {
-        legal_name: data.legal_name.to_owned(),
-        legal_form: data.legal_form.to_owned(),
-        share_capital_cents: data.share_capital_cents,
-        siret: data.siret.to_owned(),
-        rcs_city: data.rcs_city.to_owned(),
-        line1: data.line1.to_owned(),
-        line2: data.line2.to_owned(),
-        postal_code: data.postal_code.to_owned(),
-        city: data.city.to_owned(),
-        country: data.country.to_owned(),
-        contact_email: data.contact_email.to_owned(),
-        vat_number: data.vat_number.to_owned(),
-        oss_registered: data.oss_registered,
+    tenant.company = Some(TenantCompany {
+        company_id: event.data.company_id.to_owned(),
+        series_code: event.data.series_code.to_owned(),
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_company_unlinked(
+    _event: Event<CompanyUnlinked>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.company = None;
     Ok(())
 }
 

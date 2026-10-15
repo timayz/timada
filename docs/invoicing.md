@@ -6,24 +6,39 @@ dashboard issues them a moment after the payment or the refund.
 
 ## Before the first sale
 
-On `/t/<slug>/invoicing` (permission `tenant:manage`) the merchant records who it
-is in law:
+Invoices name a **company**, the legal entity that sells. One company can sell
+through several tenants (shops); its tenants' invoices then count together towards
+its VAT obligations.
 
-- legal name and form, and the share capital if the form has one;
-- SIRET, which must pass its Luhn check;
-- the RCS city, if the company is registered;
-- the registered address and a contact e-mail;
-- VAT, one of two ways:
-  - a VAT number, which must embed the SIREN under its key, and whether the merchant
-    is registered for the EU One-Stop Shop;
-  - nothing, for the exemption for small businesses. The invoices then carry
-    *TVA non applicable, art. 293 B du CGI*.
-
-Until this is set, checkout refuses to take a payment (`invoicing_not_configured`):
-no sale goes through without an invoice that can name the seller. A VAT-registered
-merchant says on the product page what kind of goods each product is: standard,
-books, food, medicines or press. In France that is 20, 5.5, 5.5, 10 and 2.1 %. Catalog
-prices always include VAT.
+- **Registering.** A signed-in user registers a company on `/companies/new`, or
+  through "Register a new company" on a tenant's `/t/<slug>/invoicing` page. The
+  user becomes its first owner. A company holds:
+  - its legal name and form, and its share capital;
+  - its SIRET, which must pass its Luhn check;
+  - its RCS city, registered address and contact e-mail;
+  - its VAT, one of two ways:
+    - a VAT number, which must embed the SIREN under its key, and whether the
+      company is registered for the EU One-Stop Shop;
+    - nothing, for the exemption for small businesses. The invoices then carry
+      *TVA non applicable, art. 293 B du CGI*.
+- **A SIREN is unique on the platform.** A second registration of the same SIREN is
+  refused (`siren_taken`). A platform administrator releases a SIREN someone
+  registered without owning it, on `/admin/companies`.
+- **Owners.** A company's owners, and nobody else, see and edit its page
+  `/companies/<id>`: its identity, its owners (added by the e-mail of a registered
+  user), its tenants, its EU sales of the year and its One-Stop Shop return.
+- **Linking a tenant.** On the tenant's `/t/<slug>/invoicing`, which needs
+  `tenant:manage`, the member links the tenant to one of the companies they own.
+  - The tenant takes a **series code**:
+    - the company's first tenant usually keeps the plain series (`F2026-000001`);
+    - every other one needs a code (`PRO` numbers `PRO-F2026-000001`).
+  - A code stays its tenant's for good, even after unlinking, so no two tenants of
+    a company ever number the same way.
+- **No company, no sale.** Until the tenant is linked to a company with an
+  identity, checkout refuses to take a payment (`invoicing_not_configured`).
+- **Kind of goods.** A VAT-registered company's tenants say on each product page
+  what kind of goods it is: standard, books, food, medicines or press. In France
+  that is 20, 5.5, 5.5, 10 and 2.1 %. Catalog prices always include VAT.
 
 ## What a document says
 
@@ -62,19 +77,23 @@ invoice decides it when it is issued, seconds after the payment.
 | anywhere | the merchant has no VAT number | `franchise` | none: art. 293 B du CGI (an export says so instead) |
 
 - **The threshold** is €10,000 a year of sales to consumers in other EU countries,
-  excluding VAT, all countries together (art. 258 A du CGI).
-  - Each invoice carries the year's running total.
+  excluding VAT, all countries together, and **every tenant of the company
+  together** (art. 258 A du CGI).
+  - It is counted in the company's ledger, in the platform store; each such
+    invoice carries the running total.
   - The sale that passes the threshold is already taxed at destination, and so is
     everything after it, until the end of the next year.
-  - The total is counted inside the same append that takes the number, so two
-    invoices issued at once never both count against a stale total.
+  - The sale is counted, with the decision it got, before it takes its number.
+    That count is an append at the version the ledger was read at, so two tenants
+    selling at once never both count against a stale total. A retry finds its
+    sale counted and gets the same decision back.
   - Only sales in euros count. An EU distance sale in another currency is taxed at
     destination, which is the safe side.
 - **One-Stop Shop.** The merchant ticks "One-Stop Shop" on the invoicing page to
   apply destination VAT from the first euro.
-  - The invoicing page shows the year's total.
-  - `/t/<slug>/invoices/oss?quarter=2026-Q4` sums each country's VAT and rate for
-    the quarterly OSS return.
+  - The company's page shows the year's total.
+  - `/companies/<id>/oss?quarter=2026-Q4` sums each country's VAT and rate across
+    every tenant of the company, for the quarterly OSS return.
 - **VIES.** A business buyer types its VAT number at checkout. The dashboard
   checks it with VIES when invoicing, naming the seller's own number, and keeps
   VIES's reference on the invoice.
@@ -90,8 +109,10 @@ invoice decides it when it is issued, seconds after the payment.
 
 ## Numbering
 
-There is one series per kind and calendar year (UTC): `F2026-000001`, `F2026-000002`
-and so on for invoices, `A2026-000001` for credit notes. Within a series the numbers
+There is one series per tenant, kind and calendar year (UTC): `F2026-000001`,
+`F2026-000002` and so on for invoices, `A2026-000001` for credit notes. A tenant
+with a series code gets `PRO-F2026-…` and `PRO-A2026-…`, so the numbers of a
+company's tenants never collide. A credit note follows its invoice's code. Within a series the numbers
 follow each other with no gap, in the order the documents were issued.
 
 How it holds under retries and several nodes (details in

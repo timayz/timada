@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod auth;
 pub mod cluster;
+pub mod companies;
 pub mod invitations;
 mod server_errors;
 pub mod stripe;
@@ -148,7 +149,9 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
                     if user.is_admin {
                         <a class="underline" href=(href!(admin::tenants::tenants))>"Tenants"</a>
                         <a class="underline" href=(href!(admin::users::users))>"Users"</a>
+                        <a class="underline" href=(href!(admin::companies::index))>"All companies"</a>
                     }
+                    <a class="underline" href=(href!(companies::index))>"Companies"</a>
                     <a class="underline" href=(href!(auth::account::account))>"Account"</a>
                     <form method="post" action=(href!(auth::logout::logout))>
                         <button class="underline">"Sign out"</button>
