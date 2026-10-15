@@ -103,7 +103,7 @@ impl ReviewRequests {
         }
         let lease = self.tenants.lease(&tenant).await?;
         let cx = Cx::new(self.mail.clone());
-        ask_buyers(lease.executor(), &cx, &tenant.name, orders, now).await?;
+        ask_buyers(lease.executor(), &cx, &tenant, orders, now).await?;
         Ok(())
     }
 }
@@ -113,7 +113,7 @@ impl ReviewRequests {
 pub async fn ask_buyers<E: evento::Executor + Clone>(
     store: &E,
     cx: &Cx,
-    shop_name: &str,
+    tenant: &timada_tenancy::TenantState,
     orders: &[FulfilledOrder],
     now: u64,
 ) -> anyhow::Result<usize> {
@@ -159,7 +159,7 @@ pub async fn ask_buyers<E: evento::Executor + Clone>(
         // asked twice is worse off than one never asked.
         let token = reviews.issue_review_link(&order.id, MAILER, now).await?;
         let link = format!("{address}/reviews/{token}");
-        match send_review_request(cx, shop_name, &order, &products, &link).await {
+        match send_review_request(cx, tenant, &order, &products, &link).await {
             Ok(()) => {
                 mailed += 1;
                 tracing::info!(order = %order.id, "review request mailed");
@@ -230,11 +230,20 @@ mod tests {
         pool.into()
     }
 
+    fn shop(name: &str) -> timada_tenancy::TenantState {
+        timada_tenancy::TenantState {
+            id: "t1".into(),
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+
     fn mail() -> (Cx, MemoryTransport) {
         let transport = MemoryTransport::new();
         let cx = CxTestBuilder::new()
             .app_context(MailConfig::builder().transport(transport.clone()).build())
             .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(crate::shop_mail::ShopMail::new(None, false))
             .build();
         (cx, transport)
     }
@@ -313,21 +322,21 @@ mod tests {
         // Too early.
         let early = left + 6 * DAY_SECS;
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme Tea", &orders, early)
+            ask_buyers(&store, &cx, &shop("Acme Tea"), &orders, early)
                 .await
                 .unwrap(),
             0
         );
         let week = left + 7 * DAY_SECS;
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme Tea", &orders, week)
+            ask_buyers(&store, &cx, &shop("Acme Tea"), &orders, week)
                 .await
                 .unwrap(),
             1
         );
         // Another sweep, or another node: already asked.
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme Tea", &orders, week)
+            ask_buyers(&store, &cx, &shop("Acme Tea"), &orders, week)
                 .await
                 .unwrap(),
             0
@@ -369,7 +378,7 @@ mod tests {
         let late = order.fulfilled_at as u64 + 7 * DAY_SECS + WINDOW_SECS;
         let (cx, transport) = mail();
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme", &[order], late)
+            ask_buyers(&store, &cx, &shop("Acme"), &[order], late)
                 .await
                 .unwrap(),
             0
@@ -385,7 +394,7 @@ mod tests {
         let orders = [order];
         let (cx, _) = mail();
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme", &orders, week)
+            ask_buyers(&store, &cx, &shop("Acme"), &orders, week)
                 .await
                 .unwrap(),
             0
@@ -401,7 +410,7 @@ mod tests {
 
         with_storefront(&store).await;
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme", &orders, week + 1)
+            ask_buyers(&store, &cx, &shop("Acme"), &orders, week + 1)
                 .await
                 .unwrap(),
             1
@@ -423,7 +432,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme", &orders, left + 7 * DAY_SECS)
+            ask_buyers(&store, &cx, &shop("Acme"), &orders, left + 7 * DAY_SECS)
                 .await
                 .unwrap(),
             0
@@ -433,7 +442,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme", &orders, left)
+            ask_buyers(&store, &cx, &shop("Acme"), &orders, left)
                 .await
                 .unwrap(),
             1
@@ -462,7 +471,7 @@ mod tests {
         let (cx, transport) = mail();
         let orders = [order];
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme", &orders, week)
+            ask_buyers(&store, &cx, &shop("Acme"), &orders, week)
                 .await
                 .unwrap(),
             1
@@ -486,7 +495,7 @@ mod tests {
             .unwrap();
         let week = order.fulfilled_at as u64 + 7 * DAY_SECS;
         assert_eq!(
-            ask_buyers(&store, &cx, "Acme", &[order], week)
+            ask_buyers(&store, &cx, &shop("Acme"), &[order], week)
                 .await
                 .unwrap(),
             0
