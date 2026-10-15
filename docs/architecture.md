@@ -253,6 +253,21 @@ storefront offers the form only on an order its own shopper placed. The media
 subscription keeps review photos on every node like product pictures, and deletes them
 when a review is rejected or a photo is taken off.
 
+Some days after an order is fulfilled (7 unless the merchant picks 0 to 60, or turns
+it off, on the Reviews page: the `ReviewRequests` stream), its buyer is mailed under
+the shop's name with a link to `{storefront}/reviews/{token}`. Nothing in the event
+store fires later, so every node runs a timer (`[reviews] request_check_secs`) that
+looks in the shared read model for orders fulfilled in the last 63 days
+(`orders_orders.fulfilled_at`) and mails those due within the last 3 days: a node
+that was down catches up, and a shop that turns the mails on does not mail its
+history. The first node to write an order's `ReviewRequest` stream
+(`original_version(0)`) sends. Nothing is claimed while the shop has no storefront
+address, or once every product of the order is reviewed. The token is 32 random bytes
+whose hash names a `ReviewLink` stream (valid 60 days), so a storefront key reading
+the store learns nothing it can use. The storefront resolves the token from the
+store, remembers the order as if its own browser had placed it, and sends the shopper
+to the order's review forms.
+
 ## Shopper accounts
 
 A shopper account belongs to one shop: it lives in the tenant's store

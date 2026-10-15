@@ -119,6 +119,10 @@ event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String
 event timada-reviews/Review::Published { published_by: String }
 event timada-reviews/Review::Rejected { reason: String, rejected_by: String }
 event timada-reviews/Review::Submitted { order_id: String, product_id: String, variant_label: Option<String>, rating: u8, title: Option<String>, body: String, author_name: String, photos: Vec<ReviewPhoto>, submitted_by: String }
+event timada-reviews/ReviewLink::LinkIssued { order_id: String, expires_at: u64, issued_by: String }
+event timada-reviews/ReviewRequest::RequestMailed { order_id: String, email: String, mailed_by: String }
+event timada-reviews/ReviewRequests::RequestDelaySet { days: u8, set_by: String }
+event timada-reviews/ReviewRequests::RequestsDisabled { disabled_by: String }
 event timada-shoppers/Shopper::AddressRemoved { address_id: String }
 event timada-shoppers/Shopper::AddressSaved { address_id: String, address: ShippingAddress }
 event timada-shoppers/Shopper::Forgotten unit

@@ -2,13 +2,17 @@
 //! for members with `reviews:read`; those with `reviews:manage` publish and
 //! reject them. The list comes from the shared read model (a moment behind)
 //! and opens on the reviews waiting; a review's own page reads its stream.
+//! Above it, whether and when the buyers of fulfilled orders are mailed a
+//! link to review what they bought.
 
+pub mod requests;
 pub mod review_id;
 
 use timada_reviews::{
-    Command, ReviewFilter, ReviewStatus, count_reviews, reviews_of_tenant, stars,
+    Command, DEFAULT_REQUEST_DELAY_DAYS, MAX_REQUEST_DELAY_DAYS, ReviewFilter, ReviewStatus,
+    count_reviews, reviews_of_tenant, stars,
 };
-use timada_tenancy::PERMISSION_REVIEWS_READ;
+use timada_tenancy::{PERMISSION_REVIEWS_MANAGE, PERMISSION_REVIEWS_READ};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -111,6 +115,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .filter(|value| !value.is_empty());
     let page_number = query.page.unwrap_or(1).max(1);
     let nav = TenantNav::of(cx, &access).await?;
+    let can_manage = access.can(cx, PERMISSION_REVIEWS_MANAGE).await?;
+    let ask_after = reviews(&access)?
+        .review_requests()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .delay_days();
+    let has_storefront = crate::app::t::slug::orders::orders(&access)?
+        .storefront_address()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .is_some();
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<ReadPool>(cx);
     let filter = ReviewFilter {
@@ -163,9 +178,47 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-review-requests=(ask_after.map_or("off".to_owned(), |days| days.to_string()))>
+                <h2 class="mb-2 text-lg font-medium">"Review requests"</h2>
+                <p class="mb-4 text-sm text-neutral-500">
+                    "Some days after an order is marked fulfilled, its buyer gets a mail from the shop with a link to review what they bought. The link opens their order on the storefront for 60 days."
+                </p>
+                if !has_storefront {
+                    <p class="mb-4 text-sm" data-review-requests-no-storefront="">
+                        "No mail goes out until the storefront address is set on the "
+                        <a class="underline" href=(href!(crate::app::t::slug::api_keys::index, Slug(slug.clone())))>"API keys page"</a> "."
+                    </p>
+                }
+                if can_manage {
+                    <form method="post" action=(href!(requests::requests, Slug(slug.clone()))) class="flex flex-wrap items-end gap-2">
+                        <label class="text-sm">
+                            <span class="mb-1 block text-neutral-500">"Ask buyers"</span>
+                            <select name="ask" class="rounded border border-neutral-300 px-3 py-2">
+                                <option value="on" selected=(ask_after.is_some())>"Yes"</option>
+                                <option value="off" selected=(ask_after.is_none())>"Never"</option>
+                            </select>
+                        </label>
+                        <label class="text-sm">
+                            <span class="mb-1 block text-neutral-500">"Days after fulfilment"</span>
+                            <input type="number" name="days" min="0" max=(MAX_REQUEST_DELAY_DAYS)
+                                value=(ask_after.unwrap_or(DEFAULT_REQUEST_DELAY_DAYS))
+                                class="w-24 rounded border border-neutral-300 px-3 py-2">
+                        </label>
+                        <button class="rounded bg-neutral-900 px-3 py-2 text-white">"Save"</button>
+                    </form>
+                } else {
+                    <p class="text-sm">
+                        match ask_after {
+                            Some(days) => { "Buyers are asked " (days) " day(s) after fulfilment." }
+                            None => { "Buyers are not asked." }
+                        }
+                    </p>
+                }
+            </section>
+
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <p class="mb-4 text-sm text-neutral-500">
-                    "A shopper reviews a product from the page of the order they bought it with. Nothing shows on the shop until it is published here; a rejected review never comes back."
+                    "A shopper reviews a product from the page of the order they bought it with, or from the link the review request mailed them. Nothing shows on the shop until it is published here; a rejected review never comes back."
                 </p>
                 <form method="get" class="mb-4 flex flex-wrap gap-2">
                     if let Some(product) = product {

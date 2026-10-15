@@ -1376,3 +1376,102 @@ test("a returning shopper signs in with a mailed code and finds their orders and
     await stripe.stop();
   }
 });
+
+test("a buyer is mailed a link to review a fulfilled order, which opens it on another device", async ({
+  page,
+  request,
+  browser,
+}) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Asking Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await startStorefront(request, await mintKey(page, slug, true), 1);
+
+    // No storefront address yet: the Reviews page says no mail goes out.
+    await page.goto(`/t/${slug}/reviews`);
+    await expect(page.locator("[data-review-requests]")).toHaveAttribute("data-review-requests", "7");
+    await expect(page.locator("[data-review-requests-no-storefront]")).toBeVisible();
+    await page.goto(`/t/${slug}/api-keys`);
+    await page.getByLabel("Where shoppers find the shop").fill(STOREFRONT);
+    await page.getByRole("button", { name: "Save address" }).click();
+    await expect(page.getByRole("status")).toContainText("Storefront address saved.");
+    // Ask at once, so the test does not wait a week.
+    await page.goto(`/t/${slug}/reviews`);
+    await expect(page.locator("[data-review-requests-no-storefront]")).toHaveCount(0);
+    await page.getByLabel("Days after fulfilment").fill("0");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Review requests saved.");
+    await expect(page.locator("[data-review-requests]")).toHaveAttribute("data-review-requests", "0");
+
+    // A guest order.
+    const shopper = uniqueEmail("buyer");
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await addToCart(page);
+    await page.goto(`${STOREFRONT}/checkout`);
+    await page.getByLabel("E-mail").fill(shopper);
+    await page.getByLabel("Full name").fill("Ada Lovelace");
+    await page.getByLabel("Street address").fill("1 rue de la Paix");
+    await page.getByLabel("Postal code").fill("75002");
+    await page.getByLabel("City").fill("Paris");
+    await page.getByLabel("Country").selectOption("FR");
+    await page.getByRole("button", { name: "Place order" }).click();
+    await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
+    const intent = stripe.lastIntent()!;
+    stripe.pay(intent.id);
+    expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+    await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+    await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+    const orderId = new URL(page.url()).pathname.split("/").at(-1)!;
+
+    // Not asked while it is only paid; asked once it is fulfilled.
+    await page.goto(`/t/${slug}/orders/${orderId}`);
+    await expect(page.locator("[data-order-review-request]")).toHaveAttribute("data-order-review-request", "none");
+    await page.getByRole("button", { name: "Mark as fulfilled" }).click();
+    await expect(page.getByRole("status")).toContainText("Order marked as fulfilled.");
+    let link = "";
+    await expect(async () => {
+      const all = (await (await request.get(`${MAILDEV}/email`)).json()) as {
+        to: { address: string }[];
+        subject: string;
+        from: { name: string }[];
+        html?: string;
+      }[];
+      const asked = all.find((m) => m.to.some((to) => to.address === shopper) && m.subject.startsWith("How was your"));
+      expect(asked).toBeDefined();
+      expect(asked!.from[0]?.name).toBe(name);
+      expect(asked!.html).toContain("Blue Mug");
+      link = asked!.html!.match(new RegExp(`${STOREFRONT}/reviews/[A-Za-z0-9_-]{43}`))![0];
+    }).toPass({ timeout: 30_000 });
+    await page.goto(`/t/${slug}/orders/${orderId}`);
+    await expect(page.locator("[data-order-review-request]")).toHaveAttribute("data-order-review-request", "mailed");
+
+    // Another device, never signed in: the link opens the order's review form.
+    const other = await (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
+    await other.goto(link);
+    await expect(other).toHaveURL(`${STOREFRONT}/orders/${orderId}#reviews`);
+    const mug = other.locator("[data-review-of]", { hasText: "Blue Mug" });
+    await mug.getByRole("radio", { name: "5 stars" }).check();
+    await mug.getByLabel("Your review").fill("Arrived quickly and holds a big tea.");
+    await mug.getByRole("button", { name: "Send my review" }).click();
+    await expect(mug.getByRole("status")).toContainText("Your review is with the shop.");
+
+    // A token that opens nothing says so.
+    await other.goto(`${STOREFRONT}/reviews/not-a-token`);
+    await expect(other.locator("[data-review-link-expired]")).toBeVisible();
+    await other.context().close();
+  } finally {
+    await stripe.stop();
+  }
+});
