@@ -1,12 +1,12 @@
-//! What this browser holds: its cart, the orders it placed (only those may
-//! be looked at again) and the address it last checked out with. Each lives
-//! in a private (encrypted, authenticated) cookie; the library itself keeps
-//! no notion of who a shopper is.
+//! What this browser holds: its cart, the orders it placed (only those, and
+//! the signed-in shopper's, may be looked at again), the address it last
+//! checked out with, and the token of the shopper signed in on it. Each lives
+//! in a private (encrypted, authenticated) cookie.
 
 use serde::{Deserialize, Serialize};
-use timada_storefront::ShippingAddress;
+use timada_storefront::{SavedAddress, ShippingAddress, ShopperState, order, shopper, store};
 use topcoat::{
-    context::Cx,
+    context::{Cx, memoize},
     cookie::{Cookies, SameSite, UnparsedCookieStore, cookie_store, private_cookies, time},
 };
 
@@ -61,6 +61,22 @@ pub fn placed(cx: &Cx, order_id: &str) -> bool {
     recent_orders(cx).iter().any(|id| id == order_id)
 }
 
+/// Whether this browser may look at that order: it placed it, or the
+/// shopper signed in on it did (with the same e-mail address, guest orders
+/// included).
+pub async fn holds_order(cx: &Cx, order_id: &str) -> topcoat::Result<bool> {
+    if placed(cx, order_id) {
+        return Ok(true);
+    }
+    let Some(shopper) = signed_in(cx).await else {
+        return Ok(false);
+    };
+    let email = shopper.email.clone();
+    Ok(order(cx, order_id)
+        .await?
+        .is_some_and(|order| order.email == email))
+}
+
 fn recent_orders(cx: &Cx) -> Vec<String> {
     orders_store(cx)
         .parse()
@@ -99,6 +115,19 @@ pub struct CheckoutDraft {
 }
 
 impl CheckoutDraft {
+    /// The draft with a saved address in place of the one typed last.
+    pub fn with_address(mut self, saved: &SavedAddress) -> Self {
+        let address = &saved.address;
+        self.name = address.name.clone();
+        self.line1 = address.line1.clone();
+        self.line2 = address.line2.clone().unwrap_or_default();
+        self.postal_code = address.postal_code.clone();
+        self.city = address.city.clone();
+        self.country = address.country.clone();
+        self.phone = address.phone.clone().unwrap_or_default();
+        self
+    }
+
     pub fn shipping(&self) -> ShippingAddress {
         let optional = |value: &str| (!value.trim().is_empty()).then(|| value.to_owned());
         ShippingAddress {
@@ -154,4 +183,92 @@ pub fn set_payment_in_progress(cx: &Cx, payment: PaymentInProgress) -> topcoat::
 
 pub fn forget_payment(cx: &Cx) {
     payment_store(cx).remove();
+}
+
+fn shopper_store(cx: &Cx) -> UnparsedCookieStore<String, impl Cookies + '_> {
+    cookie_store(jar(cx), "shopper")
+}
+
+/// The token of the shopper signed in on this browser, if any.
+pub fn shopper_token(cx: &Cx) -> Option<String> {
+    shopper_store(cx)
+        .parse()
+        .ok()
+        .flatten()
+        .map(|store| store.get())
+}
+
+pub fn set_shopper_token(cx: &Cx, token: &str) -> topcoat::Result<()> {
+    shopper_store(cx).set(token.to_owned()).commit()?;
+    Ok(())
+}
+
+pub fn forget_shopper(cx: &Cx) {
+    shopper_store(cx).remove();
+}
+
+/// The shopper signed in on this browser, read from the store once per
+/// request. A token that no longer signs anyone in reads as signed out.
+#[memoize(as_ref)]
+pub async fn signed_in(cx: &Cx) -> Option<ShopperState> {
+    let token = shopper_token(cx)?;
+    match shopper(cx, &token).await {
+        Ok(shopper) => shopper,
+        Err(err) => {
+            tracing::error!(%err, "cannot read who is signed in");
+            None
+        }
+    }
+}
+
+/// Whether this shop can sign shoppers in: it knows the dashboard's address.
+pub fn accounts_enabled(cx: &Cx) -> bool {
+    store(cx).signs_shoppers_in()
+}
+
+/// A sign-in on its way: the address the code went to, and where to go once
+/// it is entered.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SignInFlow {
+    pub email: String,
+    pub next: String,
+}
+
+fn sign_in_store(cx: &Cx) -> UnparsedCookieStore<SignInFlow, impl Cookies + '_> {
+    cookie_store(
+        private_cookies(cx)
+            .default_same_site(SameSite::Lax)
+            .default_path("/")
+            .default_http_only(true)
+            // A code lives ten minutes; a little more to type it.
+            .default_max_age(time::Duration::minutes(15)),
+        "sign_in",
+    )
+}
+
+pub fn sign_in_flow(cx: &Cx) -> Option<SignInFlow> {
+    sign_in_store(cx)
+        .parse()
+        .ok()
+        .flatten()
+        .map(|store| store.get())
+}
+
+pub fn set_sign_in_flow(cx: &Cx, flow: SignInFlow) -> topcoat::Result<()> {
+    sign_in_store(cx).set(flow).commit()?;
+    Ok(())
+}
+
+pub fn forget_sign_in_flow(cx: &Cx) {
+    sign_in_store(cx).remove();
+}
+
+/// Where to go after signing in: a path on this site, else the account.
+pub fn safe_next(next: Option<&str>, fallback: String) -> String {
+    match next {
+        Some(next) if next.starts_with('/') && !next.starts_with("//") && !next.contains('\\') => {
+            next.to_owned()
+        }
+        _ => fallback,
+    }
 }

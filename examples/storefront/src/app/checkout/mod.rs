@@ -14,7 +14,7 @@ pub mod start;
 
 use timada_storefront::{
     Checkout, OrdersError, VatEstimate, accepts_business_buyers, menu, payment_setup,
-    recent_reviews, start_payment,
+    recent_reviews, save_address, start_payment,
 };
 use topcoat::{
     Result,
@@ -27,11 +27,12 @@ use topcoat::{
     view::{Unescaped, View, view},
 };
 
+use crate::app::account::sign_in::sign_in_url;
 use crate::app::cart::{cart_url, current_cart, discount, summary_line};
 use crate::app::{document, say};
 use crate::shopper::{
-    CheckoutDraft, PaymentInProgress, cart_id, checkout_draft, save_checkout_draft,
-    set_payment_in_progress,
+    CheckoutDraft, PaymentInProgress, accounts_enabled, cart_id, checkout_draft,
+    save_checkout_draft, set_payment_in_progress, shopper_token, signed_in,
 };
 use countries::{COUNTRIES, DEFAULT_COUNTRY};
 
@@ -178,6 +179,8 @@ form.addEventListener("submit", (event) => {
 #[topcoat::router::query_params(error = bad_request)]
 struct CheckoutQuery {
     error: Option<String>,
+    /// A saved address of the signed-in shopper to ship to.
+    address: Option<String>,
 }
 
 pub fn checkout_url(cx: &Cx, error: Option<&str>) -> String {
@@ -186,6 +189,19 @@ pub fn checkout_url(cx: &Cx, error: Option<&str>) -> String {
         error: Option<&'a str>,
     }
     href!(index).query(Link { error }).resolve(cx)
+}
+
+/// The checkout, shipping to a saved address.
+fn ship_to_url(cx: &Cx, address_id: &str) -> String {
+    #[derive(serde::Serialize)]
+    struct Link<'a> {
+        address: &'a str,
+    }
+    href!(index)
+        .query(Link {
+            address: address_id,
+        })
+        .resolve(cx)
 }
 
 /// `incl. 9.97 EUR VAT FR 20%`.
@@ -218,6 +234,28 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     if !business {
         draft.vat_number.clear();
     }
+    let accounts = accounts_enabled(cx);
+    let shopper = if accounts {
+        signed_in(cx).await.cloned()
+    } else {
+        None
+    };
+    // Signed in: the account's address, and the saved address chosen (or the
+    // latest one, when nothing was typed yet).
+    let mut shipping_to = None;
+    if let Some(shopper) = &shopper {
+        draft.email = shopper.email.clone();
+        let pick = match query.address.as_deref() {
+            Some(id) => shopper.address(id),
+            None if draft.line1.trim().is_empty() => shopper.addresses.first(),
+            None => None,
+        };
+        if let Some(saved) = pick {
+            shipping_to = Some(saved.id.clone());
+            draft = draft.with_address(saved);
+        }
+    }
+    let sign_in = sign_in_url(cx, Some(&href!(index).resolve(cx)), None);
     let currency = cart.currency.clone().unwrap_or_default();
     let country = if draft.country.is_empty() {
         DEFAULT_COUNTRY.to_owned()
@@ -328,6 +366,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 </aside>
 
                 <div class="checkout-main">
+                    if let Some(shopper) = &shopper {
+                        <p class="returning" data-signed-in="">"Signed in as " <strong>(&shopper.email)</strong></p>
+                    } else if accounts {
+                        <p class="returning" data-returning="">
+                            "Already a customer? " <a href=(&sign_in)>"Click here to log in"</a>
+                        </p>
+                    }
                     if setup.is_some() {
                         <section class="express" data-express="" hidden="" aria-label="Express checkout">
                             <h2>"Express checkout"</h2>
@@ -343,7 +388,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <section class="card">
                             <h2>"Your details"</h2>
                             <label for="checkout-email">"E-mail"</label>
-                            <input id="checkout-email" name="email" type="email" required="" autocomplete="email" value=(&draft.email)>
+                            <input id="checkout-email" name="email" type="email" required="" autocomplete="email" value=(&draft.email) readonly=(shopper.is_some())>
                             <label for="checkout-name">"Full name"</label>
                             <input id="checkout-name" name="name" required="" autocomplete="name" value=(&draft.name)>
                             <label for="checkout-phone">"Phone (optional)"</label>
@@ -351,6 +396,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </section>
                         <section class="card">
                             <h2>"Delivery address"</h2>
+                            if let Some(shopper) = shopper.as_ref().filter(|shopper| !shopper.addresses.is_empty()) {
+                                <ul class="saved" data-saved-addresses="">
+                                    for saved in &shopper.addresses {
+                                        <li data-saved-address=(&saved.address.city) data-current=(shipping_to.as_deref() == Some(saved.id.as_str()))>
+                                            (&saved.address.name) ", " (&saved.address.line1) ", "
+                                            (&saved.address.postal_code) " " (&saved.address.city) " "
+                                            <a href=(ship_to_url(cx, &saved.id))>"Ship here"</a>
+                                        </li>
+                                    }
+                                </ul>
+                            }
                             <label for="checkout-line1">"Street address"</label>
                             <input id="checkout-line1" name="line1" required="" autocomplete="address-line1" value=(&draft.line1)>
                             <details class="more" open=(!draft.line2.is_empty())>
@@ -381,6 +437,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
                             }
                             <p class="hint" data-import-notice="">"Shipping outside the EU? Import duties and taxes may be due on delivery."</p>
+                            if shopper.is_some() {
+                                <label class="check">
+                                    <input type="checkbox" name="save_address" value="1" checked="">
+                                    " Save this address to my account"
+                                </label>
+                            }
                             <label for="checkout-note">"Note for the shop (optional)"</label>
                             <textarea id="checkout-note" name="note" rows="2">(&draft.note)</textarea>
                         </section>
@@ -410,6 +472,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 pub struct CheckoutForm {
     // A string: `flatten` hands every field to serde as text.
     expected_total_cents: String,
+    /// Signed in: keep the address on the account.
+    #[serde(default)]
+    save_address: String,
     #[serde(flatten)]
     draft: CheckoutDraft,
 }
@@ -449,7 +514,15 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
             to_cart: true,
         });
     };
-    let draft = form.draft;
+    let mut draft = form.draft;
+    // A signed-in shopper orders under their account's address, whatever
+    // the form said.
+    let token = shopper_token(cx).filter(|_| accounts_enabled(cx));
+    if token.is_some()
+        && let Some(shopper) = signed_in(cx).await
+    {
+        draft.email = shopper.email.clone();
+    }
     save_checkout_draft(cx, draft.clone())?;
     let business = accepts_business_buyers(cx).await?;
     let checkout = Checkout {
@@ -464,6 +537,11 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {
         Ok(session) => {
+            // The address checked out: kept on the account for the next
+            // order. A refusal (ten kept already) does not stop the payment.
+            if let Some(token) = token.filter(|_| !form.save_address.is_empty()) {
+                let _ = save_address(cx, &token, &draft.shipping()).await?;
+            }
             set_payment_in_progress(
                 cx,
                 PaymentInProgress {

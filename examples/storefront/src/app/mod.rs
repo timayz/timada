@@ -1,7 +1,9 @@
 //! The pages: the catalog at `/`, a category at `/c/{slug}`, a product at
 //! `/p/{slug}`, the cart at `/cart`, the checkout at `/checkout`, a placed
-//! order at `/orders/{order_id}`, and the library's `/store/status`.
+//! order at `/orders/{order_id}`, the shopper's account at `/account`, and
+//! the library's `/store/status`.
 
+pub mod account;
 pub mod c;
 pub mod cart;
 pub mod checkout;
@@ -23,6 +25,7 @@ use topcoat::{
     view::{Child, Unescaped, View, attributes, view},
 };
 
+use crate::shopper::accounts_enabled;
 use cart::drawer::{CART_SCRIPT, DRAWER_CSS, cart_drawer};
 use menu::{MENU_CSS, MENU_SCRIPT, site_menu};
 
@@ -69,6 +72,8 @@ pub async fn document(
         .as_ref()
         .map(|cart| cart.item_count)
         .unwrap_or_default();
+    let accounts = accounts_enabled(cx);
+    let signed_in = accounts && crate::shopper::signed_in(cx).await.is_some();
     Ok(view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -166,6 +171,18 @@ pub async fn document(
                     "figure.review .avatar { width: 2rem; height: 2rem; border-radius: 50%; background: #fde7cf; display: inline-grid; place-items: center; font-size: .75rem; }"
                     "figure.review .rating { color: #00b67a; margin: .4rem 0; }"
                     "figure.review blockquote { margin: .25rem 0 0; }"
+                    "p.returning { margin: 0 0 1.25rem; padding: .75rem 1rem; border: 1px solid #eee; border-radius: .5rem; background: #fafafa; }"
+                    "p.returning a { color: #e8606a; font-weight: 600; }"
+                    "ul.saved { list-style: none; padding: 0; display: grid; gap: .5rem; }"
+                    "ul.saved li { border: 1px solid #ddd; border-radius: .4rem; padding: .6rem .8rem; }"
+                    "ul.saved li[aria-current] { border-color: #e8606a; }"
+                    "ul.saved form { display: inline; }"
+                    "form.checkout label.check { display: flex; gap: .5rem; align-items: center; }"
+                    "form.checkout label.check input { width: auto; }"
+                    "form.sign-in label { display: block; margin-top: .75rem; }"
+                    "form.sign-in input { padding: .5rem; width: 100%; max-width: 20rem; }"
+                    "table.history { border-collapse: collapse; width: 100%; }"
+                    "table.history th, table.history td { border-bottom: 1px solid #ddd; padding: .5rem; text-align: left; }"
                     "[hidden] { display: none !important; }"
                 </style>
                 <style>(Unescaped::new_unchecked(DRAWER_CSS))</style>
@@ -180,6 +197,11 @@ pub async fn document(
                     <form method="get" action=(href!(index))>
                         <input name="q" type="search" placeholder="Search" aria-label="Search">
                     </form>
+                    if accounts {
+                        <a class="account-link" href=(href!(account::index)) data-account-link="">
+                            if signed_in { "Account" } else { "Sign in" }
+                        </a>
+                    }
                     <a class="cart-link" href=(href!(cart::index)) data-cart-link="" aria-controls="cart">
                         "Cart"
                         <span class="count" data-cart-count="" hidden=(count == 0)>(count)</span>
@@ -311,6 +333,12 @@ pub fn say(code: &str) -> &'static str {
         "review_not_purchased" => "This product is not part of this order.",
         "review_order_cancelled" => "A cancelled order cannot be reviewed.",
         "review_already_reviewed" => "You have already reviewed this product.",
+        "wrong_code" => "This is not the code we sent. Check the e-mail and try again.",
+        "code_expired" => "This code has expired: ask for a new one.",
+        "too_many_attempts" => "Too many wrong codes: ask for a new one.",
+        "code_recently_sent" => "A code was sent less than a minute ago: check your inbox.",
+        "too_many_addresses" => "Your account keeps ten addresses: remove one first.",
+        "signed_out" => "You were signed out. Please sign in again.",
         _ => "Something went wrong. Please try again.",
     }
 }

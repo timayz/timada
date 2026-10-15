@@ -184,9 +184,9 @@ pub type ReviewRefusable<T> = std::result::Result<T, ReviewRefusal>;
 
 /// The dashboard's HTTP side: its address and the key.
 pub(crate) struct Api {
-    client: reqwest::Client,
-    url: String,
-    token: String,
+    pub(crate) client: reqwest::Client,
+    pub(crate) url: String,
+    pub(crate) token: String,
 }
 
 impl Api {

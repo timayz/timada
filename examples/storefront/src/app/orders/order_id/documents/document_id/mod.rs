@@ -15,14 +15,14 @@ use topcoat::{
 };
 
 use crate::app::orders::order_id::OrderId;
-use crate::shopper::placed;
+use crate::shopper::holds_order;
 
 module_param!(pub document_id);
 
 #[route(GET)]
 pub async fn pdf(cx: &Cx) -> Result<impl IntoResponse> {
     let order_id = path_param::<OrderId>(cx);
-    if !placed(cx, order_id) {
+    if !holds_order(cx, order_id).await? {
         return Err(not_found().into());
     }
     let document_id = path_param::<DocumentId>(cx);

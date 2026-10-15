@@ -29,6 +29,7 @@ mod query;
 mod read_model;
 mod reviews;
 mod router;
+mod shoppers;
 mod store;
 
 pub use cart::*;
@@ -41,4 +42,5 @@ pub use query::*;
 pub use read_model::*;
 pub use reviews::*;
 pub use router::*;
+pub use shoppers::*;
 pub use store::*;

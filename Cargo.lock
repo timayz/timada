@@ -6102,6 +6102,7 @@ dependencies = [
  "timada-invoicing",
  "timada-orders",
  "timada-reviews",
+ "timada-shoppers",
  "tokio",
  "tokio-rustls",
  "topcoat-core",
