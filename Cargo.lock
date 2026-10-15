@@ -6082,6 +6082,7 @@ dependencies = [
  "evento",
  "rand 0.9.5",
  "sqlx",
+ "sqlx_migrator",
  "thiserror 2.0.21",
  "timada-orders",
  "tokio",
