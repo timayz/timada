@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import http from "node:http";
+import type { Page } from "@playwright/test";
 
 // A stand-in for Stripe's API for the browser suite: every call goes on to
 // stripe-mock (compose.yml), so the dashboard reads answers shaped exactly as
@@ -124,4 +125,35 @@ export function stripeSignature(body: string, secret: string): string {
   const t = Math.floor(Date.now() / 1000);
   const v1 = crypto.createHmac("sha256", secret).update(`${t}.${body}`).digest("hex");
   return `t=${t},v1=${v1}`;
+}
+
+/// Stripe.js as the checkout page loads it, faked: the elements mount
+/// nothing (and offer no wallet), and confirming a payment goes straight to
+/// the return page as Stripe does once the shopper paid, with the payment's
+/// client secret in the address. What the page created the elements with is
+/// kept on `window.__stripe`.
+const STRIPE_JS = `
+window.Stripe = (key) => {
+  window.__stripe = { key };
+  const element = { mount() {}, on() {} };
+  return {
+    elements(options) {
+      window.__stripe.elements = options;
+      return { create: () => element, submit: async () => ({}) };
+    },
+    async confirmPayment({ clientSecret, confirmParams }) {
+      const url = new URL(confirmParams.return_url);
+      url.searchParams.set("payment_intent_client_secret", clientSecret);
+      url.searchParams.set("redirect_status", "succeeded");
+      location.assign(url.href);
+      return new Promise(() => {});
+    },
+  };
+};
+`;
+
+export async function fakeStripeJs(page: Page) {
+  await page.route(/^https:\/\/js\.stripe\.com\/v3/, (route) =>
+    route.fulfill({ contentType: "text/javascript", body: STRIPE_JS }),
+  );
 }
