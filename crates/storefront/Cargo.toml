@@ -21,3 +21,4 @@ anyhow.workspace = true
 tracing.workspace = true
 timada-catalog = { path = "../catalog" }
 timada-orders = { path = "../orders" }
+timada-invoicing = { path = "../invoicing", features = ["pdf"] }

@@ -2,11 +2,16 @@
 //! Any other order is a 404: an order id is not a password, and this
 //! example has no shopper accounts.
 
-use timada_storefront::{OrderStatus, categories, format_money, order};
+pub mod documents;
+
+use timada_storefront::{
+    DocumentKind, OrderStatus, categories, documents as order_documents, format_amount_fr,
+    format_money, order,
+};
 use topcoat::{
     Result,
     context::Cx,
-    router::{error::not_found, module_param, page, path_param},
+    router::{error::not_found, href, module_param, page, path_param},
     view::{View, view},
 };
 
@@ -25,6 +30,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         return Err(not_found().into());
     };
     let nav = categories(cx).await?;
+    let documents = order_documents(cx, order_id).await?;
+    let order_key = order_id.to_owned();
     let status = match order.status {
         OrderStatus::Paid => "Paid: the shop is preparing it.",
         OrderStatus::Fulfilled => "On its way.",
@@ -67,6 +74,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 (&order.shipping.country)
             </address>
             <p>"A confirmation goes to " (&order.email) "."</p>
+            <h2>"Invoice"</h2>
+            if documents.is_empty() {
+                <p data-invoice-pending="">"Your invoice is being prepared: reload this page in a moment."</p>
+            }
+            <ul data-documents="">
+                for doc in &documents {
+                    <li>
+                        <a data-document=(&doc.label) href=(href!(documents::document_id::pdf, OrderId(order_key.clone()), documents::document_id::DocumentId(doc.document_id.clone())))>
+                            (if doc.kind == DocumentKind::CreditNote { "Credit note " } else { "Invoice " })
+                            (&doc.label)
+                        </a>
+                        " · " (format_amount_fr(doc.total_cents, &doc.currency)) " (PDF)"
+                    </li>
+                }
+            </ul>
         )
     })
 }

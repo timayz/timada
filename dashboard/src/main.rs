@@ -5,6 +5,7 @@ mod cli;
 mod cluster;
 mod config;
 mod db;
+mod invoicing;
 mod limits;
 mod media;
 mod payments;

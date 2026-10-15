@@ -70,6 +70,10 @@ event timada-identity/User::SessionsRevoked { except_session: Option<String> }
 event timada-identity/User::SignedIn { method: SignInMethod, provider: Option<String>, credential_id: Option<String>, user_agent: Option<String>, ip: Option<String> }
 event timada-identity/User::SignedInWithPassword { user_agent: Option<String>, ip: Option<String> }
 event timada-identity/User::SignedOut unit
+event timada-invoicing/Book::CreditNoteIssued { document_id: String, series: String, number: u64, issued_at: u64, invoice_document_id: String, invoice_label: String, order_id: String, order_reference: String, refund_id: String, seller: Seller, buyer: Address, buyer_email: String, currency: String, vat: Vec<VatSubtotal>, total_excl_vat_cents: u64, total_vat_cents: u64, total_cents: u64, template: u16, issued_by: String }
+event timada-invoicing/Book::InvoiceIssued { document_id: String, series: String, number: u64, issued_at: u64, order_id: String, order_reference: String, paid_at: u64, payment_method: String, seller: Seller, buyer: Address, buyer_email: String, delivery: Address, currency: String, lines: Vec<InvoiceLine>, vat: Vec<VatSubtotal>, total_excl_vat_cents: u64, total_vat_cents: u64, total_cents: u64, template: u16, issued_by: String }
+event timada-invoicing/Document::Recorded { book_id: String, label: String }
+event timada-invoicing/Document::Reserved { series: String }
 event timada-orders/Cart::CheckedOut { order_id: String, checked_out_by: String }
 event timada-orders/Cart::CheckoutRequested { request_id: String, email: String, shipping: ShippingAddress, note: Option<String>, expected_total_cents: Option<u64>, requested_by: String }
 event timada-orders/Cart::Created { created_by: String }
@@ -108,6 +112,10 @@ event timada-tenancy/TenantSlug::Released unit
 type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
 type timada_identity::value_object::ChallengePurpose enum { Register, SignIn, ResetPassword }
 type timada_identity::value_object::SignInMethod enum { OAuth2, Passkey }
+type timada_invoicing::value_object::Address { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, country: String }
+type timada_invoicing::value_object::InvoiceLine { name: String, variant_label: Option<String>, sku: Option<String>, quantity: u32, unit_amount_cents: u64, vat_rate_bps: Option<u32> }
+type timada_invoicing::value_object::Seller { address: Address, legal_form: String, share_capital_cents: Option<u64>, siret: String, rcs_city: Option<String>, contact_email: String, vat_number: Option<String> }
+type timada_invoicing::value_object::VatSubtotal { rate_bps: u32, base_cents: u64, vat_cents: u64 }
 type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32 }
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, country: String, phone: Option<String> }
