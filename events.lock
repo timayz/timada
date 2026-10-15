@@ -39,6 +39,18 @@ event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: Strin
 event timada-catalog/ProductSku::Released unit
 event timada-catalog/ProductSlug::Claimed { product_id: String }
 event timada-catalog/ProductSlug::Released unit
+event timada-discounts/Discount::Archived { archived_by: String }
+event timada-discounts/Discount::Created { code: String, percent_bps: Option<u32>, amount_cents: Option<u64>, currency: Option<String>, starts_at: Option<u64>, ends_at: Option<u64>, max_uses: Option<u32>, once_per_email: bool, created_by: String }
+event timada-discounts/Discount::Deactivated { deactivated_by: String }
+event timada-discounts/Discount::Reactivated { reactivated_by: String }
+event timada-discounts/DiscountBuyer::Consumed { cart_id: String, order_id: String, consumed_by: String }
+event timada-discounts/DiscountBuyer::Released { cart_id: String, released_by: String }
+event timada-discounts/DiscountBuyer::Reserved { cart_id: String, expires_at: u64, reserved_by: String }
+event timada-discounts/DiscountCode::Claimed { discount_id: String }
+event timada-discounts/DiscountCode::Released unit
+event timada-discounts/DiscountUsage::Consumed { cart_id: String, order_id: String, consumed_by: String }
+event timada-discounts/DiscountUsage::Released { cart_id: String, released_by: String }
+event timada-discounts/DiscountUsage::Reserved { cart_id: String, email: String, expires_at: u64, reserved_by: String }
 event timada-identity/EmailAccount::Claimed { user_id: String, email: String }
 event timada-identity/EmailAccount::Released unit
 event timada-identity/EmailChallenge::AttemptFailed unit
