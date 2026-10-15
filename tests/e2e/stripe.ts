@@ -135,16 +135,20 @@ export function stripeSignature(body: string, secret: string): string {
 /// `sessionStorage.confirmed`.
 const STRIPE_JS = `
 window.Stripe = (key) => {
-  window.__stripe = { key };
-  const element = { mount() {}, on() {} };
+  // The handlers an element was given, by "type:event", for a test to call.
+  window.__stripe = { key, on: {} };
   return {
     elements(options) {
       window.__stripe.elements = options;
       return {
         create(type, options) {
           window.__stripe[type] = options ?? {};
-          return element;
+          return {
+            mount(target) { window.__stripe.mounted = [...(window.__stripe.mounted ?? []), target]; },
+            on(event, handler) { window.__stripe.on[type + ":" + event] = handler; },
+          };
         },
+        update(options) { Object.assign(window.__stripe.elements, options); },
         submit: async () => ({}),
       };
     },

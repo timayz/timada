@@ -240,7 +240,7 @@ impl ProductSort {
 
 /// A page of the catalog: 1-based `page`, `per_page` capped at
 /// [`MAX_PER_PAGE`], an optional search over name and slug, a category whose
-/// page it is, the categories a product must be in (any of them), one product
+/// page it is, the categories a product must be in (any of them), the products
 /// to leave out and the order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProductQuery {
@@ -253,8 +253,8 @@ pub struct ProductQuery {
     /// Products filed directly under any of these; empty means every
     /// category.
     pub categories: Vec<String>,
-    /// A product to leave out, by id: what "related products" needs.
-    pub exclude: Option<String>,
+    /// Products to leave out, by id: what "related products" needs.
+    pub exclude: Vec<String>,
     pub sort: ProductSort,
 }
 
@@ -266,7 +266,7 @@ impl Default for ProductQuery {
             q: None,
             category: None,
             categories: Vec::new(),
-            exclude: None,
+            exclude: Vec::new(),
             sort: ProductSort::default(),
         }
     }
@@ -303,7 +303,13 @@ impl ProductQuery {
     }
 
     pub fn exclude(mut self, id: impl Into<String>) -> Self {
-        self.exclude = Some(id.into());
+        self.exclude.push(id.into());
+        self
+    }
+
+    /// Leaves out every one of these products too.
+    pub fn exclude_all(mut self, ids: impl IntoIterator<Item = String>) -> Self {
+        self.exclude.extend(ids);
         self
     }
 
@@ -372,7 +378,7 @@ macro_rules! products_from {
 
 /// What a page of products is filtered by besides the search, shared by the
 /// count and the list so the two never disagree. `?2` is the JSON array of
-/// category ids (`[]` for every category), `?3` a product to leave out, `?4`
+/// category ids (`[]` for every category), `?3` the JSON ids to leave out, `?4`
 /// a category whose page it is (read from what the subscription stored for
 /// it, so a sub-category costs nothing more).
 macro_rules! products_where {
@@ -380,7 +386,7 @@ macro_rules! products_where {
         "AND p.status = 'published'
            AND (?2 = '[]' OR p.id IN (SELECT product_id FROM storefront_product_categories
                 WHERE category_id IN (SELECT value FROM json_each(?2))))
-           AND (?3 IS NULL OR p.id <> ?3)
+           AND (?3 = '[]' OR p.id NOT IN (SELECT value FROM json_each(?3)))
            AND (?4 IS NULL OR p.id IN (SELECT product_id FROM storefront_category_products
                 WHERE category_id = ?4)) "
     };
@@ -499,13 +505,14 @@ pub async fn published_products(
     let search = phrase.or_else(|| query.q.as_deref().map(contains));
     // A JSON array, read back by `json_each`: one bind for any number of ids.
     let categories = serde_json::to_string(&query.categories).unwrap_or_else(|_| "[]".to_owned());
+    let exclude = serde_json::to_string(&query.exclude).unwrap_or_else(|_| "[]".to_owned());
     let offset = i64::from(page - 1) * per_page;
     // A category's page as it is, with nothing else to match: the count and
     // the order the subscription stored.
     if let Some(category) = query.category.as_deref()
         && search.is_none()
         && query.categories.is_empty()
-        && query.exclude.is_none()
+        && query.exclude.is_empty()
     {
         let total: i64 =
             sqlx::query_scalar("SELECT subtree_count FROM storefront_categories WHERE id = ?1")
@@ -535,14 +542,14 @@ pub async fn published_products(
     let total: i64 = sqlx::query_scalar(count)
         .bind(&search)
         .bind(&categories)
-        .bind(query.exclude.as_deref())
+        .bind(&exclude)
         .bind(query.category.as_deref())
         .fetch_one(pool)
         .await?;
     let items = sqlx::query_as(pages[query.sort.index()])
         .bind(&search)
         .bind(&categories)
-        .bind(query.exclude.as_deref())
+        .bind(&exclude)
         .bind(query.category.as_deref())
         .bind(per_page)
         .bind(offset)
@@ -554,6 +561,29 @@ pub async fn published_products(
         per_page: per_page as u32,
         total,
     })
+}
+
+/// What goes well with a cart holding `product_ids`: the published products
+/// sharing a category with any of them, newest first, none of them already
+/// in it. With no category to go by, the newest products.
+pub async fn published_cart_recommendations(
+    pool: &SqlitePool,
+    product_ids: &[String],
+    limit: u32,
+) -> sqlx::Result<Vec<Product>> {
+    let ids = serde_json::to_string(product_ids).unwrap_or_else(|_| "[]".to_owned());
+    let categories: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT category_id FROM storefront_product_categories
+         WHERE product_id IN (SELECT value FROM json_each(?1))",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+    let query = ProductQuery::default()
+        .per_page(limit)
+        .in_categories(categories)
+        .exclude_all(product_ids.iter().cloned());
+    Ok(published_products(pool, &query).await?.items)
 }
 
 /// One published product, by slug.

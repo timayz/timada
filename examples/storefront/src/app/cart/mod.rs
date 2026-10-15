@@ -3,10 +3,11 @@
 
 pub mod add;
 pub mod discount;
+pub mod drawer;
 pub mod quantity;
 pub mod remove;
 
-use timada_storefront::{CartView, cart, categories, format_money};
+use timada_storefront::{CartLineView, CartView, cart, categories, format_money};
 use topcoat::{
     Result,
     context::Cx,
@@ -32,12 +33,43 @@ pub fn cart_url(cx: &Cx, error: Option<&str>) -> String {
 }
 
 /// Where a cart form sends the shopper back: the checkout when it was sent
-/// from there (`back=checkout`), the cart otherwise. Only those two, so a
-/// form cannot send anyone elsewhere.
-pub fn back_url(cx: &Cx, back: &str, error: Option<&str>) -> String {
+/// from there (`back=checkout`), the page the drawer sat on (`back=drawer`,
+/// `from`), the cart otherwise. `from` is a path on this site, so a form
+/// cannot send anyone elsewhere.
+pub fn back_url(cx: &Cx, back: &str, from: &str, error: Option<&str>) -> String {
     match back {
         "checkout" => crate::app::checkout::checkout_url(cx, error),
+        "drawer" => drawer_url(from, error),
         _ => cart_url(cx, error),
+    }
+}
+
+/// `from` with the drawer open: `#cart`, and the refusal to show in it as
+/// `cart_error`. Anything but a path on this site (`//host`, `/\host`, a
+/// full URL) is the home page; refusals it already carried are dropped.
+pub fn drawer_url(from: &str, error: Option<&str>) -> String {
+    let from = from.split('#').next().unwrap_or_default();
+    let from = if from.starts_with('/') && !from.starts_with("//") && !from.starts_with("/\\") {
+        from
+    } else {
+        "/"
+    };
+    let (path, query) = from.split_once('?').unwrap_or((from, ""));
+    let mut pairs: Vec<String> = query
+        .split('&')
+        .filter(|pair| {
+            !pair.is_empty() && !pair.starts_with("cart_error=") && !pair.starts_with("error=")
+        })
+        .map(str::to_owned)
+        .collect();
+    if let Some(code) = error {
+        // A code is snake_case: nothing to escape.
+        pairs.push(format!("cart_error={code}"));
+    }
+    if pairs.is_empty() {
+        format!("{path}#cart")
+    } else {
+        format!("{path}?{}#cart", pairs.join("&"))
     }
 }
 
@@ -63,6 +95,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Your cart",
             nav: &nav,
+            no_drawer: true,
             <h1>"Your cart"</h1>
             if let Some(code) = query.error.as_deref() {
                 <p class="notice" role="alert">(say(code))</p>
@@ -165,13 +198,89 @@ pub struct LineForm {
     pub variant_id: String,
     #[serde(default)]
     pub quantity: Option<u32>,
-    /// `checkout` when sent from the checkout's summary.
+    /// `checkout` when sent from the checkout's summary, `drawer` from the
+    /// cart drawer.
     #[serde(default)]
     pub back: String,
+    /// The page the drawer sat on.
+    #[serde(default)]
+    pub from: String,
 }
 
 impl LineForm {
     pub fn variant_id(&self) -> Option<&str> {
         Some(self.variant_id.as_str()).filter(|id| !id.is_empty())
     }
+}
+
+/// One line of a cart beside the checkout or in the drawer: the picture,
+/// the name, a −/+ stepper and the amount with a remove button. Each button
+/// is its own small form, so it works without the page's script; `back` and
+/// `from` say where it comes back to.
+#[topcoat::view::component]
+pub async fn summary_line(
+    line: &CartLineView,
+    currency: &str,
+    back: &str,
+    #[default] from: &str,
+) -> Result<impl View> {
+    let variant_id = line.variant_id.clone().unwrap_or_default();
+    let name = if line.name.is_empty() {
+        "A product no longer sold".to_owned()
+    } else {
+        line.name.clone()
+    };
+    Ok(view! {
+        <li data-summary-line=(&line.name) data-available=(if line.amount_cents.is_some() { "true" } else { "false" })>
+            <span class="pic">
+                if let Some(url) = &line.image_url {
+                    <img src=(url) alt="" width="56" height="56" loading="lazy">
+                }
+                <span class="badge" aria-hidden="true">(line.quantity)</span>
+            </span>
+            <span class="what">
+                if let Some(slug) = &line.slug {
+                    <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::Slug(slug.clone())))>(&name)</a>
+                } else {
+                    (&name)
+                }
+                if let Some(label) = &line.variant_label { <small class="variant">(label)</small> }
+                if line.amount_cents.is_some() {
+                    <span class="qty">
+                        <form method="post" action=(href!(quantity::quantity))>
+                            <input type="hidden" name="product_id" value=(&line.product_id)>
+                            <input type="hidden" name="variant_id" value=(&variant_id)>
+                            <input type="hidden" name="quantity" value=(line.quantity.saturating_sub(1))>
+                            <input type="hidden" name="back" value=(back)>
+                            <input type="hidden" name="from" value=(from)>
+                            <button aria-label=(format!("One less {}", line.name))>"−"</button>
+                        </form>
+                        <span data-line-quantity="">(line.quantity)</span>
+                        <form method="post" action=(href!(quantity::quantity))>
+                            <input type="hidden" name="product_id" value=(&line.product_id)>
+                            <input type="hidden" name="variant_id" value=(&variant_id)>
+                            <input type="hidden" name="quantity" value=(line.quantity + 1)>
+                            <input type="hidden" name="back" value=(back)>
+                            <input type="hidden" name="from" value=(from)>
+                            <button aria-label=(format!("One more {}", line.name)) disabled=(line.quantity >= 99)>"+"</button>
+                        </form>
+                    </span>
+                } else {
+                    <small class="off-sale">"No longer on sale: remove it to order the rest."</small>
+                }
+            </span>
+            <span class="amount">
+                if let Some(amount) = line.amount_cents {
+                    (format_money(amount, currency))
+                }
+                <form method="post" action=(href!(remove::remove))>
+                    <input type="hidden" name="product_id" value=(&line.product_id)>
+                    <input type="hidden" name="variant_id" value=(&variant_id)>
+                    <input type="hidden" name="back" value=(back)>
+                    <input type="hidden" name="from" value=(from)>
+                    <button class="remove" aria-label=(format!("Remove {}", line.name))>"×"</button>
+                </form>
+            </span>
+        </li>
+    })
 }

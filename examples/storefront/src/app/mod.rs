@@ -19,8 +19,10 @@ use topcoat::{
     router::{
         BodyLimit, Router, RouterBuilderDiscoverExt, href, module_router, page, query_params,
     },
-    view::{Child, View, attributes, view},
+    view::{Child, Unescaped, View, attributes, view},
 };
+
+use cart::drawer::{CART_SCRIPT, DRAWER_CSS, cart_drawer};
 
 /// A review carries up to three photos of up to 8 MiB each.
 const REVIEW_LIMIT: usize = 26 * 1024 * 1024;
@@ -49,13 +51,22 @@ struct CatalogLink<'a> {
 }
 
 /// The HTML shell every page shares. The look is a few inline rules: the
-/// library ships no markup and no classes, the merchant decides.
+/// library ships no markup and no classes, the merchant decides. Every page
+/// but the cart's and the checkout's (`no_drawer`, they show the cart
+/// already) carries the cart drawer.
 #[topcoat::view::component]
 pub async fn document(
+    cx: &Cx,
     title: &str,
     #[default] nav: &[CategoryNode],
+    #[default] no_drawer: bool,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
+    let cart = cart::current_cart(cx).await?;
+    let count = cart
+        .as_ref()
+        .map(|cart| cart.item_count)
+        .unwrap_or_default();
     Ok(view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -159,6 +170,7 @@ pub async fn document(
                     "figure.review blockquote { margin: .25rem 0 0; }"
                     "[hidden] { display: none !important; }"
                 </style>
+                <style>(Unescaped::new_unchecked(DRAWER_CSS))</style>
             </head>
             <body>
                 <header>
@@ -166,7 +178,10 @@ pub async fn document(
                     <form method="get" action=(href!(index))>
                         <input name="q" type="search" placeholder="Search" aria-label="Search">
                     </form>
-                    <a href=(href!(cart::index)) data-cart-link="">"Cart"</a>
+                    <a class="cart-link" href=(href!(cart::index)) data-cart-link="" aria-controls="cart">
+                        "Cart"
+                        <span class="count" data-cart-count="" hidden=(count == 0)>(count)</span>
+                    </a>
                 </header>
                 if !nav.is_empty() {
                     <nav class="sections" aria-label="Categories">
@@ -191,6 +206,10 @@ pub async fn document(
                     </nav>
                 }
                 <main>(child)</main>
+                if !no_drawer {
+                    cart_drawer(cart: cart.as_ref())
+                    <script>(Unescaped::new_unchecked(CART_SCRIPT))</script>
+                }
             </body>
         </html>
     })
