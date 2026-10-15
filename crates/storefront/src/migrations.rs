@@ -16,7 +16,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         Categories0002,
         ProductImages0003,
         ProductVariants0004,
-        ProductSearch0005
+        ProductSearch0005,
+        Reviews0006
     ]
 }
 
@@ -220,6 +221,64 @@ sqlx_migrator::sqlite_migration!(
             "INSERT INTO storefront_products_fts (rowid, slug, name)
                 SELECT rowid, slug, name FROM storefront_products",
             "DELETE FROM storefront_products_fts"
+        ),
+    ]
+);
+
+pub struct Reviews0006;
+sqlx_migrator::sqlite_migration!(
+    Reviews0006,
+    "storefront",
+    "0006_reviews",
+    vec_box![("storefront", "0005_product_search")],
+    vec_box![
+        (
+            // Published reviews only: one that is rejected leaves.
+            "CREATE TABLE storefront_reviews (
+                id TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL,
+                rating INTEGER NOT NULL,
+                title TEXT,
+                body TEXT NOT NULL,
+                author_name TEXT NOT NULL,
+                variant_label TEXT,
+                photos_json TEXT NOT NULL,
+                published_at INTEGER NOT NULL
+            )",
+            "DROP TABLE storefront_reviews"
+        ),
+        (
+            "CREATE INDEX storefront_reviews_product ON storefront_reviews
+                (product_id, published_at DESC, id DESC)",
+            "DROP INDEX storefront_reviews_product"
+        ),
+        // A product's published reviews, counted, and their average times a
+        // hundred (`435` is 4.35 stars), so a listing sorts by them.
+        (
+            "ALTER TABLE storefront_products
+                ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE storefront_products DROP COLUMN review_count"
+        ),
+        (
+            "ALTER TABLE storefront_products
+                ADD COLUMN rating_x100 INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE storefront_products DROP COLUMN rating_x100"
+        ),
+        (
+            "ALTER TABLE storefront_category_products
+                ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE storefront_category_products DROP COLUMN review_count"
+        ),
+        (
+            "ALTER TABLE storefront_category_products
+                ADD COLUMN rating_x100 INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE storefront_category_products DROP COLUMN rating_x100"
+        ),
+        (
+            "CREATE INDEX storefront_category_products_top_rated ON storefront_category_products
+                (category_id, review_count = 0, rating_x100 DESC, review_count DESC,
+                 product_id DESC)",
+            "DROP INDEX storefront_category_products_top_rated"
         ),
     ]
 );

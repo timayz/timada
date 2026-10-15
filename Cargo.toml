@@ -68,6 +68,9 @@ typst-as-lib = "=0.17.0"
 typst-pdf = "=0.15.1"
 typst-assets = { version = "=0.15.1", features = ["fonts"] }
 serde = { version = "1.0", features = ["derive"] }
+# The storefront library's one HTTP call (handing in a review with its
+# photos). The crypto provider is the process-wide one rustls already uses.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider", "multipart", "json"] }
 anyhow = "1.0"
 thiserror = "2.0"
 tracing = "0.1"

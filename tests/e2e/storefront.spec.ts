@@ -39,9 +39,13 @@ const PNG = Buffer.from(
 );
 
 /// Mints a key on the tenant's page and reads it, with the address the
-/// tenant's pictures are served from. `sell` adds store:checkout to the
-/// default read scope.
-async function mintKey(page: Page, slug: string, sell = false): Promise<{ token: string; mediaUrl: string }> {
+/// tenant's pictures are served from and the dashboard's own. `sell` adds
+/// store:checkout to the default read scope.
+async function mintKey(
+  page: Page,
+  slug: string,
+  sell = false,
+): Promise<{ token: string; mediaUrl: string; apiUrl: string }> {
   await page.goto(`/t/${slug}/api-keys`);
   await page.getByLabel("Label").fill("Example storefront");
   if (sell) {
@@ -52,14 +56,16 @@ async function mintKey(page: Page, slug: string, sell = false): Promise<{ token:
   expect(token).toMatch(/^tk_/);
   const mediaUrl = (await page.locator("[data-media-url]").textContent())?.trim() ?? "";
   expect(mediaUrl).toContain("/media/");
-  return { token, mediaUrl };
+  const apiUrl = (await page.locator("[data-api-url]").textContent())?.trim() ?? "";
+  expect(apiUrl).toMatch(/^https?:\/\//);
+  return { token, mediaUrl, apiUrl };
 }
 
 /// Boots the example storefront with `token` and waits for it to have synced
 /// at least `products` products.
 async function startStorefront(
   request: APIRequestContext,
-  { token, mediaUrl }: { token: string; mediaUrl: string },
+  { token, mediaUrl, apiUrl }: { token: string; mediaUrl: string; apiUrl?: string },
   products: number,
 ) {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "timada-storefront-"));
@@ -69,6 +75,7 @@ async function startStorefront(
       STORE_ADDR,
       STORE_TOKEN: token,
       STORE_MEDIA_URL: mediaUrl,
+      ...(apiUrl ? { STORE_API_URL: apiUrl } : {}),
       STORE_DB: path.join(dir, "storefront.db"),
       HOST: "127.0.0.1",
       PORT: String(STOREFRONT_PORT),
@@ -703,6 +710,105 @@ test("a buyer's review waits for the merchant, who publishes, trims and takes it
       await page.goto(mugUrl);
       await expect(page.locator("[data-product-rating]")).toContainText("No published review", { timeout: 1000 });
     }).toPass({ timeout: 15_000 });
+  } finally {
+    await stripe.stop();
+  }
+});
+
+test("a shopper reviews what they bought from the order page, shown once the shop publishes it", async ({
+  page,
+  request,
+}) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Rated Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await publishProduct(page, slug, "Red Plate", "8");
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await startStorefront(request, await mintKey(page, slug, true), 2);
+
+    // A mug and a plate, paid for.
+    for (const product of ["blue-mug", "red-plate"]) {
+      await page.goto(`${STOREFRONT}/p/${product}`);
+      await page.getByRole("button", { name: "Add to cart" }).click();
+    }
+    await continueToPayment(page, true);
+    const intent = stripe.lastIntent()!;
+    stripe.pay(intent.id);
+    expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+    await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+    await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+    const orderUrl = page.url();
+
+    // Nothing reviewed yet: a form under each product of the order.
+    const reviews = page.locator("[data-review-of]");
+    await expect(reviews).toHaveCount(2);
+    const mug = reviews.filter({ hasText: "Blue Mug" });
+    const plate = reviews.filter({ hasText: "Red Plate" });
+
+    // Too short is refused, with what was wrong.
+    await plate.getByRole("radio", { name: "2 stars" }).check();
+    await plate.getByLabel("Your review").fill("Meh.");
+    await plate.getByRole("button", { name: "Send my review" }).click();
+    await expect(plate.getByRole("alert")).toContainText("Say a little more");
+
+    // The mug: four stars, a title, a text and a photo.
+    await mug.getByRole("radio", { name: "4 stars" }).check();
+    await mug.getByLabel("Title (optional)").fill("Lovely mug");
+    await mug.getByLabel("Your review").fill("Holds a big tea and keeps it warm.");
+    await mug.getByLabel(/^Photos/).setInputFiles({ name: "mug.png", mimeType: "image/png", buffer: PNG });
+    await mug.getByRole("button", { name: "Send my review" }).click();
+    await expect(mug.getByRole("status")).toContainText("Your review is with the shop.");
+    await expect(mug.locator("[data-review-status]")).toHaveAttribute("data-review-status", "pending");
+    await expect(mug.getByRole("button", { name: "Send my review" })).toHaveCount(0);
+
+    // Waiting for the merchant, nothing shows on the shop.
+    await page.goto(`${STOREFRONT}/p/blue-mug`);
+    await expect(page.locator("[data-reviews]")).toHaveAttribute("data-reviews", "0");
+    await expect(page.locator("[data-product-rating]")).toHaveCount(0);
+
+    // The merchant publishes it.
+    const row = page.locator("[data-review-status=pending]", { hasText: "Lovely mug" });
+    await expect(async () => {
+      await page.goto(`/t/${slug}/reviews`);
+      await expect(row).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await row.getByRole("link", { name: "Lovely mug" }).click();
+    await expect(page.locator("[data-review-photo]")).toHaveCount(1);
+    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.getByRole("status")).toContainText("Review published.");
+
+    // On the product page with its photo, and stars on the card.
+    await expect(async () => {
+      await page.goto(`${STOREFRONT}/p/blue-mug`);
+      await expect(page.locator("[data-product-rating]")).toHaveAttribute("data-product-rating", "4.0", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
+    const review = page.locator("[data-review]");
+    await expect(review).toHaveCount(1);
+    await expect(review).toContainText("Lovely mug");
+    await expect(review).toContainText("Holds a big tea and keeps it warm.");
+    await expect(review).toContainText("Ada L. · Verified purchase");
+    const photo = (await review.locator("[data-review-photo]").getAttribute("src")) ?? "";
+    expect((await request.get(photo)).status()).toBe(200);
+    await page.goto(STOREFRONT);
+    await expect(page.locator("[data-product=blue-mug] [data-rating]")).toHaveAttribute("data-rating", "4.0");
+    await expect(page.locator("[data-product=red-plate] [data-rating]")).toHaveCount(0);
+
+    // The shopper's order page says it is out.
+    await page.goto(orderUrl);
+    await expect(mug.locator("[data-review-status]")).toHaveAttribute("data-review-status", "published");
   } finally {
     await stripe.stop();
   }

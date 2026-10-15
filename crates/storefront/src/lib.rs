@@ -27,6 +27,7 @@ mod invoice;
 mod migrations;
 mod query;
 mod read_model;
+mod reviews;
 mod router;
 mod store;
 
@@ -38,5 +39,6 @@ pub use invoice::*;
 pub use migrations::*;
 pub use query::*;
 pub use read_model::*;
+pub use reviews::*;
 pub use router::*;
 pub use store::*;

@@ -1395,3 +1395,174 @@ async fn a_store_with_a_checkout_key_sells() {
     store.shutdown().await;
     h.finish().await;
 }
+
+/// A paid order of one of each product, written as the payments webhook
+/// would: what a review is written from.
+async fn paid_order(executor: &cluster::Executor, order_id: &str, products: &[(&str, &str)]) {
+    let lines = products
+        .iter()
+        .map(|(id, name)| timada_orders::OrderLine {
+            product_id: (*id).to_owned(),
+            name: (*name).to_owned(),
+            unit_amount_cents: 1000,
+            quantity: 1,
+            ..Default::default()
+        })
+        .collect();
+    evento::append(order_id)
+        .original_version(0)
+        .event(&timada_orders::aggregator::Placed {
+            reference: "ABCD-EFGH".into(),
+            cart_id: format!("cart-{order_id}"),
+            email: "ada@example.org".into(),
+            shipping: timada_orders::ShippingAddress {
+                name: "Ada Lovelace".into(),
+                country: "FR".into(),
+                ..Default::default()
+            },
+            note: None,
+            lines,
+            currency: "EUR".into(),
+            total_cents: 1000 * products.len() as u64,
+            payment: timada_orders::Payment {
+                provider: "stripe".into(),
+                payment_id: format!("pi-{order_id}"),
+                amount_cents: 1000 * products.len() as u64,
+                currency: "EUR".into(),
+            },
+            placed_by: "storefront".into(),
+        })
+        .commit(executor)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme).await;
+    let kitchen = catalog
+        .create_category(
+            "alice",
+            CreateCategory {
+                name: "Kitchen".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mug = stock(&catalog, "Mug", 1000, &[&kitchen.id]).await;
+    let plate = stock(&catalog, "Plate", 1000, &[&kitchen.id]).await;
+    let bowl = stock(&catalog, "Bowl", 1000, &[&kitchen.id]).await;
+    let executor = catalog.0.clone();
+    let reviews = timada_reviews::Command(executor.clone());
+    let write = |order: &str, product: &str, rating: u8| timada_reviews::SubmitReview {
+        order_id: order.to_owned(),
+        product_id: product.to_owned(),
+        rating,
+        title: None,
+        body: format!("{rating} stars, honestly."),
+        photos: vec![timada_reviews::ReviewPhoto {
+            id: format!("photo-{order}-{rating}"),
+            ext: "png".into(),
+            mime: "image/png".into(),
+            size: 68,
+            width: Some(1),
+            height: Some(1),
+        }],
+    };
+    paid_order(&executor, "order-1", &[(&mug, "Mug"), (&plate, "Plate")]).await;
+    paid_order(&executor, "order-2", &[(&mug, "Mug"), (&bowl, "Bowl")]).await;
+    let mug_5 = reviews
+        .submit_review("storefront", write("order-1", &mug, 5))
+        .await
+        .unwrap();
+    let plate_3 = reviews
+        .submit_review("storefront", write("order-1", &plate, 3))
+        .await
+        .unwrap();
+    let mug_4 = reviews
+        .submit_review("storefront", write("order-2", &mug, 4))
+        .await
+        .unwrap();
+    // Waiting for the merchant: not on the shop.
+    reviews
+        .submit_review("storefront", write("order-2", &bowl, 5))
+        .await
+        .unwrap();
+    for review in [&mug_5, &plate_3, &mug_4] {
+        reviews.publish_review("alice", &review.id).await.unwrap();
+    }
+
+    let pool = h.local_pool("acme-shop").await;
+    let store = Store::connect(
+        h.config(&token).media_url("https://media.example/acme"),
+        pool.clone(),
+    )
+    .await
+    .unwrap();
+    let rated = async |query: ProductQuery| -> Vec<(String, i64, Option<f64>)> {
+        published_products(&pool, &query.sort(ProductSort::TopRated))
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|p| (p.name.clone(), p.review_count, p.rating()))
+            .collect()
+    };
+    let expected = vec![
+        ("Mug".to_owned(), 2, Some(4.5)),
+        ("Plate".to_owned(), 1, Some(3.0)),
+        ("Bowl".to_owned(), 0, None),
+    ];
+    eventually("the published reviews are counted", async || {
+        rated(ProductQuery::default()).await == expected
+    })
+    .await;
+    // A category's page sorts the same way, from its own copy.
+    assert_eq!(
+        rated(ProductQuery::default().in_category(&kitchen.id)).await,
+        expected
+    );
+    let page = store.reviews_of(&mug, 1).await.unwrap();
+    assert_eq!(page.total, 2);
+    assert_eq!(page.items[0].author_name, "Ada L.");
+    assert_eq!(
+        page.items[0].photos[0].url,
+        format!(
+            "https://media.example/acme/{}",
+            page.items[0].photos[0].file
+        )
+    );
+    assert!(store.reviews_of(&bowl, 1).await.unwrap().items.is_empty());
+    // The shopper's own review is read from the store, waiting or not.
+    let own = store.review_of("order-2", &bowl).await.unwrap().unwrap();
+    assert_eq!(own.status, timada_storefront::ReviewStatus::Pending);
+    assert!(store.review_of("order-1", &bowl).await.unwrap().is_none());
+
+    // Taken down, the mug's best review leaves and its average falls.
+    reviews.reject_review("alice", &mug_5.id, "").await.unwrap();
+    eventually("the rejected review leaves", async || {
+        rated(ProductQuery::default()).await
+            == vec![
+                ("Mug".to_owned(), 1, Some(4.0)),
+                ("Plate".to_owned(), 1, Some(3.0)),
+                ("Bowl".to_owned(), 0, None),
+            ]
+    })
+    .await;
+    assert_eq!(store.reviews_of(&mug, 1).await.unwrap().total, 1);
+    // Without the dashboard's address no review can be handed in.
+    assert!(!store.takes_reviews());
+    assert!(
+        store
+            .submit_review("order-1", &mug, Default::default())
+            .await
+            .is_err()
+    );
+
+    store.shutdown().await;
+    h.finish().await;
+}

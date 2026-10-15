@@ -30,6 +30,8 @@ struct Inner {
     pool: SqlitePool,
     prefix: String,
     media_url: Option<String>,
+    /// The dashboard's HTTP side, when the host gave its address.
+    api: Option<crate::reviews::Api>,
     request_timeout: Duration,
     subscription: Mutex<SubscriptionState>,
     stop: watch::Sender<bool>,
@@ -84,6 +86,14 @@ impl Store {
         let executor = Evento::new(Sidecar::from((client, local)));
 
         crate::migrate(&pool).await?;
+        let api = match &config.api_url {
+            Some(url) => Some(crate::reviews::Api::new(
+                url,
+                &config.token,
+                config.request_timeout,
+            )?),
+            None => None,
+        };
 
         let subscription = catalog_subscription(pool.clone())
             .start(&executor)
@@ -95,6 +105,7 @@ impl Store {
             pool,
             prefix: config.prefix.into_owned(),
             media_url: config.media_url,
+            api,
             request_timeout: config.request_timeout,
             subscription: Mutex::new(SubscriptionState::Running),
             stop,
@@ -125,6 +136,17 @@ impl Store {
     /// Where this store's pictures are loaded from, when the host said so.
     pub fn media_url(&self) -> Option<&str> {
         self.inner.media_url.as_deref()
+    }
+
+    /// Whether reviews can be handed in: the host gave the dashboard's
+    /// address ([`StoreConfig::api_url`](crate::StoreConfig::api_url)).
+    pub fn takes_reviews(&self) -> bool {
+        self.inner.api.is_some()
+    }
+
+    /// The dashboard's HTTP side, when the host gave its address.
+    pub(crate) fn api(&self) -> Option<&crate::reviews::Api> {
+        self.inner.api.as_ref()
     }
 
     /// Asks the store one cheap question and counts the local copy.

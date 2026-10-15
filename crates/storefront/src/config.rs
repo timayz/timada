@@ -74,6 +74,11 @@ pub struct StoreConfig {
     /// trailing slash: the picture address shown on its API keys page.
     /// Without it, a picture is only its file name and the host serves it.
     pub media_url: Option<String>,
+    /// The dashboard's address, with no trailing slash: the "dashboard
+    /// address" shown on the tenant's API keys page. What a storefront hands
+    /// in with files (a review and its photos) goes there over HTTPS, with
+    /// the same key; without it a review cannot be handed in.
+    pub api_url: Option<String>,
     /// The URL prefix of the library's own endpoints (`/store`).
     pub prefix: Cow<'static, str>,
 }
@@ -87,6 +92,7 @@ impl StoreConfig {
             request_timeout: Duration::from_secs(10),
             prefix: Cow::Borrowed(DEFAULT_PREFIX),
             media_url: None,
+            api_url: None,
         }
     }
 
@@ -106,6 +112,15 @@ impl StoreConfig {
         let base = base.into();
         let base = base.trim_end_matches('/');
         self.media_url = (!base.is_empty()).then(|| base.to_owned());
+        self
+    }
+
+    /// The dashboard's address; a trailing slash is dropped. The tenant's
+    /// API keys page shows it.
+    pub fn api_url(mut self, base: impl Into<String>) -> Self {
+        let base = base.into();
+        let base = base.trim_end_matches('/');
+        self.api_url = (!base.is_empty()).then(|| base.to_owned());
         self
     }
 
@@ -132,6 +147,8 @@ impl fmt::Debug for StoreConfig {
             .field("token", &"tk_…")
             .field("tls", &self.tls)
             .field("request_timeout", &self.request_timeout)
+            .field("media_url", &self.media_url)
+            .field("api_url", &self.api_url)
             .field("prefix", &self.prefix)
             .finish()
     }

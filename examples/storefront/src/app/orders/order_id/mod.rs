@@ -3,22 +3,64 @@
 //! example has no shopper accounts.
 
 pub mod documents;
+pub mod review;
 
 use timada_storefront::{
-    DocumentKind, OrderStatus, categories, documents as order_documents, format_amount_fr,
-    format_money, order,
+    DocumentKind, MAX_BODY_LEN, MAX_PHOTOS, MAX_TITLE_LEN, OrderStatus, ReviewStatus, categories,
+    documents as order_documents, format_amount_fr, format_money, order, review_of, stars, store,
 };
 use topcoat::{
     Result,
     context::Cx,
-    router::{error::not_found, href, module_param, page, path_param},
+    router::{error::not_found, href, module_param, page, path_param, query_params},
     view::{View, view},
 };
 
-use crate::app::document;
+use crate::app::{document, say};
 use crate::shopper::placed;
 
 module_param!(pub order_id);
+
+#[topcoat::router::query_params(error = bad_request)]
+pub(crate) struct OrderQuery {
+    pub error: Option<String>,
+    /// The product a refusal or a confirmation is about.
+    pub product: Option<String>,
+    pub reviewed: Option<String>,
+}
+
+/// The order's page, with a refusal or a confirmation about the review of
+/// one of its products.
+pub fn order_url(cx: &Cx, order_id: &str, product: &str, error: Option<&str>) -> String {
+    #[derive(serde::Serialize)]
+    struct Link<'a> {
+        product: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reviewed: Option<&'a str>,
+    }
+    let link = Link {
+        product,
+        error,
+        reviewed: error.is_none().then_some("1"),
+    };
+    format!(
+        "{}#review-{product}",
+        href!(index, OrderId(order_id.to_owned()))
+            .query(link)
+            .resolve(cx)
+    )
+}
+
+/// What the page shows under a product of the order: the shopper's review
+/// as it stands, or the form to write one.
+struct LineReview {
+    product_id: String,
+    name: String,
+    /// Where it stands, its stars and why it was refused, once written.
+    review: Option<(ReviewStatus, u8, Option<String>)>,
+}
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
@@ -29,8 +71,30 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let Some(order) = order(cx, order_id).await? else {
         return Err(not_found().into());
     };
+    let query = query_params::<OrderQuery>(cx)?;
     let nav = categories(cx).await?;
     let documents = order_documents(cx, order_id).await?;
+    // One review per product of the order, whatever variants of it it holds;
+    // none for a cancelled order or a shop that takes no reviews.
+    let mut line_reviews: Vec<LineReview> = Vec::new();
+    if order.status != OrderStatus::Cancelled && store(cx).takes_reviews() {
+        for line in &order.lines {
+            if line_reviews
+                .iter()
+                .any(|seen| seen.product_id == line.product_id)
+            {
+                continue;
+            }
+            let review = review_of(cx, order_id, &line.product_id)
+                .await?
+                .map(|review| (review.status, review.rating, review.rejection_reason));
+            line_reviews.push(LineReview {
+                product_id: line.product_id.clone(),
+                name: line.name.clone(),
+                review,
+            });
+        }
+    }
     let order_key = order_id.to_owned();
     let status = match order.status {
         OrderStatus::Paid => "Paid: the shop is preparing it.",
@@ -77,6 +141,61 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 (&order.shipping.country)
             </address>
             <p>"A confirmation goes to " (&order.email) "."</p>
+            if !line_reviews.is_empty() {
+                <h2>"Your reviews"</h2>
+                for line in &line_reviews {
+                    <section class="review" id=(format!("review-{}", line.product_id)) data-review-of=(&line.product_id)>
+                        <h3>(&line.name)</h3>
+                        if query.product.as_deref() == Some(line.product_id.as_str()) {
+                            if let Some(code) = query.error.as_deref() {
+                                <p class="notice" role="alert">(say(code))</p>
+                            }
+                            if query.reviewed.is_some() && query.error.is_none() {
+                                <p role="status">"Thank you! Your review is with the shop."</p>
+                            }
+                        }
+                        if let Some((status, rating, reason)) = &line.review {
+                            <p data-review-status=(status.as_str())>
+                                <span class="rating" aria-label=(format!("{rating} out of 5"))>(stars(*rating))</span> " "
+                                (match status {
+                                    ReviewStatus::Pending => "Your review is waiting for the shop to publish it.",
+                                    ReviewStatus::Published => "Your review is published. Thank you!",
+                                    ReviewStatus::Rejected => "The shop did not publish your review.",
+                                })
+                                if let Some(reason) = reason.as_deref().filter(|reason| !reason.is_empty()) {
+                                    " " (reason)
+                                }
+                            </p>
+                        } else {
+                            <form method="post" enctype="multipart/form-data" action=(href!(review::review, OrderId(order_key.clone())))>
+                                <input type="hidden" name="product_id" value=(&line.product_id)>
+                                <fieldset>
+                                    <legend>"Your rating"</legend>
+                                    for value in (1u8..=5).rev() {
+                                        <label>
+                                            <input type="radio" name="rating" value=(value) required="">
+                                            " " (value) (if value == 1 { " star" } else { " stars" })
+                                        </label> " "
+                                    }
+                                </fieldset>
+                                <p>
+                                    <label for=(format!("title-{}", line.product_id))>"Title (optional)"</label>
+                                    <input id=(format!("title-{}", line.product_id)) name="title" type="text" maxlength=(MAX_TITLE_LEN)>
+                                </p>
+                                <p>
+                                    <label for=(format!("body-{}", line.product_id))>"Your review"</label>
+                                    <textarea id=(format!("body-{}", line.product_id)) name="body" rows="4" maxlength=(MAX_BODY_LEN) required=""></textarea>
+                                </p>
+                                <p>
+                                    <label for=(format!("photos-{}", line.product_id))>(format!("Photos (optional, up to {MAX_PHOTOS})"))</label>
+                                    <input id=(format!("photos-{}", line.product_id)) name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple="">
+                                </p>
+                                <button class="primary">"Send my review"</button>
+                            </form>
+                        }
+                    </section>
+                }
+            }
             <h2>"Invoice"</h2>
             if documents.is_empty() {
                 <p data-invoice-pending="">"Your invoice is being prepared: reload this page in a moment."</p>

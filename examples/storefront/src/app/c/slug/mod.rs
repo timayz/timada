@@ -100,6 +100,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <option value="newest" selected=(sort == ProductSort::Newest)>"Newest"</option>
                     <option value="price_asc" selected=(sort == ProductSort::PriceAsc)>"Price, low to high"</option>
                     <option value="price_desc" selected=(sort == ProductSort::PriceDesc)>"Price, high to low"</option>
+                    <option value="top_rated" selected=(sort == ProductSort::TopRated)>"Top rated"</option>
                 </select>
                 <button>"Sort"</button>
             </form>
