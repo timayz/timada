@@ -109,9 +109,12 @@ event timada-orders/Order::Discounted { discount_id: String, code: String, subto
 event timada-orders/Order::Fulfilled { tracking: Option<String>, fulfilled_by: String }
 event timada-orders/Order::Placed { reference: String, cart_id: String, email: String, shipping: ShippingAddress, note: Option<String>, lines: Vec<OrderLine>, currency: String, total_cents: u64, payment: Payment, placed_by: String }
 event timada-orders/Order::Refunded { payment_id: String, refund_id: String, amount_cents: u64, refunded_by: String }
+event timada-orders/OrderConfirmation::ConfirmationMailed { order_id: String, email: String, mailed_by: String }
 event timada-orders/OrderReference::Claimed { order_id: String }
 event timada-orders/PaymentMethod::PaymentsDisabled { disabled_by: String }
 event timada-orders/PaymentMethod::PaymentsEnabled { provider: String, publishable_key: String, enabled_by: String }
+event timada-orders/Storefront::StorefrontAddressCleared { cleared_by: String }
+event timada-orders/Storefront::StorefrontAddressSet { url: String, set_by: String }
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
 event timada-reviews/Review::Rejected { reason: String, rejected_by: String }

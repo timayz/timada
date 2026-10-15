@@ -58,6 +58,8 @@ pub enum OrdersError {
     InvalidTracking,
     #[error("say why the order is cancelled (at most 500 characters)")]
     InvalidReason,
+    #[error("the storefront address starts with https:// (at most 200 characters)")]
+    InvalidStorefrontUrl,
     /// The cart's discount code cannot be used; `code` says why (one of
     /// [`timada_discounts::SHOPPER_CODES`]).
     #[error("this discount code cannot be used")]
@@ -130,6 +132,7 @@ impl OrdersError {
             Self::NotCancellable => "not_cancellable",
             Self::InvalidTracking => "invalid_tracking",
             Self::InvalidReason => "invalid_reason",
+            Self::InvalidStorefrontUrl => "invalid_storefront_url",
             Self::DiscountRefused { code } => code,
             Self::Write(_) | Self::Other(_) => return None,
         })
