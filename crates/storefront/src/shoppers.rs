@@ -6,7 +6,8 @@
 //! shopper's browser (a private cookie, typically) and hands it back:
 //! [`shopper`] reads who it signs in from the store, [`shopper_orders`] lists
 //! every order placed with their address (guest ones included), and the
-//! account keeps the addresses [`save_address`] gives it. Codes and sessions
+//! account keeps the addresses [`save_address`] gives it. A shopper may
+//! [`sign_out_everywhere_else`] and [`delete_account`]. Codes and sessions
 //! go through the dashboard over HTTP, as
 //! [`StoreConfig::api_url`](crate::StoreConfig::api_url) says, so no key can
 //! sign anyone in by writing to the store.
@@ -170,6 +171,30 @@ impl Store {
         Ok(())
     }
 
+    /// Ends every other session of the account `token` signs in; this one
+    /// stays signed in.
+    pub async fn sign_out_everywhere_else(
+        &self,
+        token: &str,
+    ) -> anyhow::Result<ShopperRefusable<()>> {
+        let response = self
+            .shopper_call(reqwest::Method::POST, "sign-out-everywhere", Some(token))?
+            .send()
+            .await;
+        answer(response, reqwest::StatusCode::NO_CONTENT, |_| Ok(())).await
+    }
+
+    /// Deletes the account `token` signs in: its addresses are forgotten and
+    /// every session ends, this one included. The orders placed with its
+    /// address stay with the shop; signing in again starts a new account.
+    pub async fn delete_account(&self, token: &str) -> anyhow::Result<ShopperRefusable<()>> {
+        let response = self
+            .shopper_call(reqwest::Method::POST, "delete", Some(token))?
+            .send()
+            .await;
+        answer(response, reqwest::StatusCode::NO_CONTENT, |_| Ok(())).await
+    }
+
     /// Keeps an address on the account `token` signs in: its id. One already
     /// kept moves first.
     pub async fn save_address(
@@ -305,6 +330,22 @@ pub async fn shopper(cx: &Cx, token: &str) -> Result<Option<ShopperState>> {
 /// Ends the session `token` opened.
 pub async fn sign_out(cx: &Cx, token: &str) -> Result<()> {
     store(cx).sign_out(token).await.map_err(Error::from_anyhow)
+}
+
+/// Ends every other session; see [`Store::sign_out_everywhere_else`].
+pub async fn sign_out_everywhere_else(cx: &Cx, token: &str) -> Result<ShopperRefusable<()>> {
+    store(cx)
+        .sign_out_everywhere_else(token)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// Deletes the account; see [`Store::delete_account`].
+pub async fn delete_account(cx: &Cx, token: &str) -> Result<ShopperRefusable<()>> {
+    store(cx)
+        .delete_account(token)
+        .await
+        .map_err(Error::from_anyhow)
 }
 
 /// Keeps an address on the account; see [`Store::save_address`].

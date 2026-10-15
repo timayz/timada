@@ -288,7 +288,8 @@ keep in its shopper's browser; it never keeps one itself.
 
 ```rust
 use timada_storefront::{
-    request_sign_in_code, save_address, shopper, shopper_orders, sign_in, sign_out,
+    delete_account, request_sign_in_code, save_address, shopper, shopper_orders, sign_in,
+    sign_out, sign_out_everywhere_else,
 };
 
 request_sign_in_code(cx, &email).await?;           // Ok(()) or a ShopperRefusal
@@ -298,6 +299,8 @@ let me = shopper(cx, &token).await?;               // Option<ShopperState>: emai
 let orders = shopper_orders(cx, &token).await?;    // Ok(Vec<ShopperOrder>), newest first
 save_address(cx, &token, &shipping).await?;        // Ok(address id)
 sign_out(cx, &token).await?;
+sign_out_everywhere_else(cx, &token).await?;       // every other browser; this one stays
+delete_account(cx, &token).await?;                 // addresses and sessions go, orders stay
 ```
 
 - The codes, the sessions and the addresses go through the dashboard
@@ -314,6 +317,10 @@ sign_out(cx, &token).await?;
   host may show an order to the shopper signed in with its e-mail address
   (`order.email == shopper.email`).
 - A session lasts 30 days. Saving an address it already keeps moves it first.
+- Deleting an account forgets its addresses and ends every session, the caller's
+  too: forget the token, and anything else the browser keeps about the shopper. The
+  orders placed with the address stay with the shop (and in the shopper's next
+  account, if they sign in again with it).
 
 ## `GET /store/status`
 

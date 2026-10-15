@@ -1,6 +1,6 @@
 use evento::{Executor, ProjectionAggregate, WriteError};
 
-use crate::aggregator::{Registered, SessionEnded, SessionStarted};
+use crate::aggregator::{Registered, SessionEnded, SessionStarted, SessionsRevoked};
 use crate::error::ShopperError;
 use crate::value_object::{SESSION_TTL_SECS, generate_token, session_id, shopper_id};
 
@@ -50,20 +50,31 @@ impl<E: Executor> super::Command<E> {
             .await?;
 
         let shopper_id = shopper_id(&email);
-        if self.load_shopper(&shopper_id).await?.is_none() {
-            let registered = evento::append(&shopper_id)
+        let registered = Registered {
+            email: email.clone(),
+        };
+        let registered = match self.load_shopper_any(&shopper_id).await? {
+            Some(shopper) if !shopper.forgotten => Ok(()),
+            // The address deleted its account: it registers again, afresh.
+            Some(forgotten) => forgotten
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&registered)
+                .commit(&self.0)
+                .await
+                .map(|_| ()),
+            None => evento::append(&shopper_id)
                 .original_version(0)
                 .routing_key_opt(routing_key.clone())
-                .event(&Registered {
-                    email: email.clone(),
-                })
+                .event(&registered)
                 .commit(&self.0)
-                .await;
-            match registered {
-                // A second browser registered the same address at once.
-                Ok(_) | Err(WriteError::InvalidOriginalVersion) => {}
-                Err(err) => return Err(err.into()),
-            }
+                .await
+                .map(|_| ()),
+        };
+        match registered {
+            // A second browser registered the same address at once.
+            Ok(()) | Err(WriteError::InvalidOriginalVersion) => {}
+            Err(err) => return Err(err.into()),
         }
 
         let token = generate_token();
@@ -114,11 +125,36 @@ impl<E: Executor> super::Command<E> {
             Err(err) => Err(err.into()),
         }
     }
+
+    /// Voids every session of the shopper started up to now, except the one
+    /// `token` opened (the browser asking to sign out everywhere else).
+    /// Sessions started afterwards are unaffected.
+    pub async fn revoke_other_sessions(
+        &self,
+        shopper_id: &str,
+        token: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), ShopperError> {
+        let shopper = self
+            .load_shopper(shopper_id)
+            .await?
+            .ok_or(ShopperError::NotFound)?;
+        shopper
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&SessionsRevoked {
+                except_session: Some(session_id(token)),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
 }
 
 impl<E: Executor> super::Command<E> {
     /// The session and shopper behind a presented token, or `None` when the
-    /// session is unknown, ended or expired at `now` (unix seconds). This
+    /// session is unknown, ended, revoked or expired at `now` (unix seconds),
+    /// or its shopper deleted their account. This
     /// runs on every signed-in request.
     pub async fn resolve_session(
         &self,
@@ -134,6 +170,13 @@ impl<E: Executor> super::Command<E> {
         let Some(shopper) = self.load_shopper(&session.shopper_id).await? else {
             return Ok(None);
         };
+        if shopper
+            .sessions_revoked
+            .as_ref()
+            .is_some_and(|revocation| revocation.covers(&session))
+        {
+            return Ok(None);
+        }
         Ok(Some(ResolvedShopper { session, shopper }))
     }
 }

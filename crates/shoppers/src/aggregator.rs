@@ -21,6 +21,15 @@ pub enum Shopper {
     AddressRemoved {
         address_id: String,
     },
+    /// Every session started up to this event's time is void, except the one
+    /// named (the browser that asked to sign out everywhere else).
+    SessionsRevoked {
+        except_session: Option<String>,
+    },
+    /// The shopper deleted their account: the addresses are forgotten and
+    /// every session is void. Their orders stay with the shop. A later
+    /// sign-in with the same address registers it afresh on this stream.
+    Forgotten,
 }
 
 /// The one-time codes mailed to one address. Its id is
