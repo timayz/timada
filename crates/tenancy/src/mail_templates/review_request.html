@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<body>
+<p>Thank you again for your order <strong>{{ order.reference }}</strong> at <strong>{{ shop.name }}</strong>.</p>
+<p>Now that it has reached you, how do you like it? A few words help other shoppers choose:</p>
+<ul>
+{% for product in products %}
+  <li>{{ product }}</li>
+{% endfor %}
+</ul>
+<p><a href="{{ link }}">Review your purchase</a></p>
+<p>The link opens your order on the shop for {{ valid_days }} days.</p>
+</body>
+</html>

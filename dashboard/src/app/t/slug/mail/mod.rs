@@ -5,9 +5,12 @@
 
 pub mod configure;
 pub mod remove;
+pub mod templates;
 
+use timada_identity::UserState;
 use timada_tenancy::{
     MAIL_SECURITY_NONE, MAIL_SECURITY_STARTTLS, MAIL_SECURITY_TLS, PERMISSION_MAIL_MANAGE,
+    ShopMailKind,
 };
 use topcoat::{
     Result,
@@ -18,7 +21,7 @@ use topcoat::{
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::app::auth::Flash;
-use crate::auth::require_user;
+use crate::auth::{require_user, user_labels};
 use crate::shop_mail::ShopMail;
 use crate::ui::{document, format_time, notice};
 
@@ -32,6 +35,20 @@ pub fn mail_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>)
     href!(index, Slug(slug.to_owned()))
         .query(Flash { error, message })
         .resolve(cx)
+}
+
+/// Where a member's test mails go unless they say otherwise: their own
+/// address.
+pub fn own_address(user: &UserState) -> String {
+    user.password
+        .as_ref()
+        .map(|password| password.email.clone())
+        .or_else(|| {
+            user.oauth2_accounts
+                .iter()
+                .find_map(|account| account.email.clone())
+        })
+        .unwrap_or_default()
 }
 
 /// How a connection is secured, as the form names it.
@@ -53,17 +70,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<MailQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let user = require_user(cx).await?;
-    // Where the test mail goes unless the member says otherwise.
-    let test_to = user
-        .password
-        .as_ref()
-        .map(|password| password.email.clone())
-        .or_else(|| {
-            user.oauth2_accounts
-                .iter()
-                .find_map(|account| account.email.clone())
-        })
-        .unwrap_or_default();
+    let test_to = own_address(user);
     let TenantAccess { tenant, .. } = access;
     let enabled = app_context::<ShopMail>(cx).enabled();
     let slug = tenant.slug.clone();
@@ -79,6 +86,25 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         MAIL_SECURITY_STARTTLS.to_owned()
     };
     let has_password = current.password_sealed.is_some();
+    let editors: Vec<String> = ShopMailKind::ALL
+        .iter()
+        .filter_map(|kind| tenant.mail_template(*kind))
+        .map(|template| template.saved_by.clone())
+        .collect();
+    let labels = user_labels(cx, &editors).await?;
+    let mails: Vec<(ShopMailKind, Option<(String, u64)>)> = ShopMailKind::ALL
+        .into_iter()
+        .map(|kind| {
+            let edited = tenant.mail_template(kind).map(|template| {
+                let by = labels
+                    .get(&template.saved_by)
+                    .cloned()
+                    .unwrap_or_else(|| template.saved_by.clone());
+                (by, template.saved_at)
+            });
+            (kind, edited)
+        })
+        .collect();
 
     Ok(view! {
         document(
@@ -123,6 +149,33 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <strong>(&tenant.name)</strong> "."
                     </p>
                 }
+            </section>
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-mail-templates="">
+                <h2 class="mb-2 text-lg font-medium">"Mails to shoppers"</h2>
+                <p class="mb-4 text-sm text-neutral-600">
+                    "Word the mails your shop sends in your own way. A mail you have not changed goes out as below."
+                </p>
+                <ul class="divide-y divide-neutral-200">
+                    for (kind, edited) in &mails {
+                        <li class="flex items-center justify-between py-2" data-mail-template=(kind.key())>
+                            <div>
+                                <a class="font-medium underline"
+                                    href=(href!(templates::kind::index, Slug(slug.clone()), templates::kind::Kind(kind.key().to_owned())))>
+                                    (kind.label())
+                                </a>
+                                <p class="text-sm text-neutral-500">(kind.description())</p>
+                            </div>
+                            <span class="text-sm text-neutral-600">
+                                if let Some((by, at)) = edited {
+                                    "Edited by " (by) " on " <time datetime=(at)>(format_time(*at))</time>
+                                } else {
+                                    "Built-in wording"
+                                }
+                            </span>
+                        </li>
+                    }
+                </ul>
             </section>
 
             if enabled {

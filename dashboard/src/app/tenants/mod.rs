@@ -40,6 +40,8 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::ApiKeyInvalid => "api_key_invalid",
         TenancyError::InvalidPublishableKey => "invalid_publishable_key",
         TenancyError::InvalidMailServer => "invalid_mail_server",
+        TenancyError::UnknownMail => "unknown_mail",
+        TenancyError::InvalidMailTemplate(_) => "invalid_mail_template",
         TenancyError::InvalidSiret => "invalid_siret",
         TenancyError::InvalidVatNumber => "invalid_vat_number",
         TenancyError::OssWithoutVatNumber => "oss_without_vat_number",

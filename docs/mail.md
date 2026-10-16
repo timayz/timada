@@ -29,6 +29,61 @@ The send fails and is logged, so a broken setup shows instead of being hidden. O
 confirmations and review requests are claimed before they are sent, so one that fails
 is not retried.
 
+## A shop's own wording
+
+Members with `mail:manage` can also reword the three shop mails, from "Mails to
+shoppers" on `/t/{slug}/mail`. Each mail has an editor with:
+
+- the subject and the whole HTML document;
+- a preview with made-up data;
+- "Send me a test", which mails the draft to the member through the shop's server;
+- a history of who saved or reset the mail, and when.
+
+A mail the merchant has not changed, or has reset, goes out in the built-in wording.
+The built-in wording is the template the editor starts from.
+
+Templates use a small template language:
+
+- `{{ order.reference }}` prints a variable;
+- `{% for line in order.lines %} … {% endfor %}` goes through a list;
+- `{% if order.discount %} … {% endif %}` covers a part that may be missing.
+
+Each mail has its own variables, all listed in the editor:
+
+| Mail | Variables |
+| --- | --- |
+| Sign-in code | `shop.name`, `code`, `valid_minutes` |
+| Order confirmation | `shop.name`, `order.reference`, `order.email`, `order.lines` (`name`, `variant`, `quantity`, `amount`), `order.subtotal`, `order.discount` (`code`, `amount`), `order.shipping_method` (`name`, `amount`, `free`), `order.total`, `order.shipping_address` and `order.billing_address` (`name`, `line1`, `line2`, `postal_code`, `city`, `country`), `order.note`, `link` |
+| Review request | `shop.name`, `order.reference`, `products`, `link`, `valid_days` |
+
+Amounts are already worded with their currency, for example `12.50 EUR`.
+
+On save, a template is refused with the reason, and nothing is recorded, when:
+
+- it does not parse, for example a `{% for %}` with no `{% endfor %}` (the line is given);
+- it names a variable the mail does not have;
+- its HTML holds `<script>`, `<iframe>`, `<object>`, `<embed>`, `<form>`, `<base>`,
+  `<link>` or `<meta http-equiv>`, or an `on…` event handler;
+- a link or picture address does not start with `https://`, `http://`, `mailto:`,
+  `tel:` or `#`, and is not one of the mail's link variables (such as `{{ link }}`).
+  Raster `data:image/…` pictures are allowed;
+- it fails to render with sample data, both with every optional part filled in and
+  with every optional part empty. This catches a `{{ order.discount.code }}` that is
+  not inside an `{% if order.discount %}`.
+
+Safety rules:
+
+- Every variable is HTML-escaped and the `safe` filter is unavailable, so what a
+  shopper typed (a note, an address) shows as text.
+- The subject is plain text on one line.
+- The plain-text part of each mail is derived from its HTML.
+- The dashboard shows the preview in a sandboxed frame, so the merchant's HTML never
+  runs on the dashboard's origin.
+
+If a saved template still fails at send time, for example by running out of its
+rendering budget, the failure is logged and the built-in wording is sent instead. The
+shopper always gets the mail.
+
 ## Operator settings
 
 ```toml

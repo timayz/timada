@@ -69,6 +69,10 @@ typst-as-lib = "=0.17.0"
 typst-pdf = "=0.15.1"
 typst-assets = { version = "=0.15.1", features = ["fonts"] }
 serde = { version = "1.0", features = ["derive"] }
+# The shop mails merchants write: a sandboxed template language whose
+# variables are HTML-escaped, and an HTML scanner that refuses scripts in them.
+minijinja = { version = "3.0", default-features = false, features = ["builtins", "fuel", "serde"] }
+lol_html = "3.0"
 # The storefront library's one HTTP call (handing in a review with its
 # photos). The crypto provider is the process-wide one rustls already uses.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider", "multipart", "json"] }

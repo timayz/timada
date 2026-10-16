@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use timada_tenancy::{ConfigureMailServer, DefineRole, TenancyError};
+use timada_tenancy::{ConfigureMailServer, DefineRole, ShopMailKind, TenancyError};
 
 fn role(name: &str, permission: &str) -> DefineRole {
     DefineRole {
@@ -106,4 +106,98 @@ async fn a_member_needs_mail_manage() {
     cmd.configure_mail_server(&bob, &tenant.id, server("smtp.acme.test", "tls"))
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn an_owner_words_a_mail_and_resets_it() {
+    let cmd = command().await;
+    let alice = new_id();
+    let tenant = create_tenant(&cmd, "Acme", &alice).await;
+    let kind = ShopMailKind::ShopperCode;
+
+    cmd.save_mail_template(
+        &alice,
+        &tenant.id,
+        kind.key(),
+        "  Code for {{ shop.name }} ",
+        "<p>{{ code }}</p>",
+    )
+    .await
+    .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    let saved = state.mail_template(kind).unwrap();
+    assert_eq!(saved.subject, "Code for {{ shop.name }}");
+    assert_eq!(saved.html, "<p>{{ code }}</p>");
+    assert_eq!(saved.saved_by, alice);
+
+    // Saving the same wording again records nothing.
+    cmd.save_mail_template(
+        &alice,
+        &tenant.id,
+        kind.key(),
+        "Code for {{ shop.name }}",
+        "<p>{{ code }}</p>",
+    )
+    .await
+    .unwrap();
+
+    let err = cmd
+        .save_mail_template(&alice, &tenant.id, kind.key(), "Code", "<p>{{ nope }}</p>")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::InvalidMailTemplate(_)), "{err}");
+    assert_eq!(
+        err.to_string(),
+        "Body: this mail has no variable {{ nope }}."
+    );
+    let err = cmd
+        .save_mail_template(&alice, &tenant.id, "welcome", "Hi", "<p>Hi</p>")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::UnknownMail), "{err}");
+    let err = cmd
+        .reset_mail_template(&new_id(), &tenant.id, kind.key())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::Forbidden), "{err}");
+
+    cmd.reset_mail_template(&alice, &tenant.id, kind.key())
+        .await
+        .unwrap();
+    cmd.reset_mail_template(&alice, &tenant.id, kind.key())
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert!(state.mail_template(kind).is_none());
+    let changes: Vec<_> = state
+        .mail_template_changes(kind)
+        .map(|change| (change.by.as_str(), change.reset))
+        .collect();
+    assert_eq!(changes, [(alice.as_str(), true), (alice.as_str(), false)]);
+}
+
+#[tokio::test]
+async fn wording_a_mail_needs_mail_manage() {
+    let cmd = command().await;
+    let alice = new_id();
+    let bob = new_id();
+    let tenant = create_tenant(&cmd, "Acme", &alice).await;
+    cmd.define_role(&alice, &tenant.id, role("clerk", "orders:manage"))
+        .await
+        .unwrap();
+    cmd.grant_member(&alice, &tenant.id, &bob, "clerk")
+        .await
+        .unwrap();
+    let kind = ShopMailKind::ReviewRequest;
+    let err = cmd
+        .save_mail_template(
+            &bob,
+            &tenant.id,
+            kind.key(),
+            kind.default_subject(),
+            kind.default_html(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::Forbidden), "{err}");
 }

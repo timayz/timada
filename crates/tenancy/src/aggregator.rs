@@ -95,6 +95,20 @@ pub enum Tenant {
     MailServerRemoved {
         removed_by: String,
     },
+    /// The merchant's own wording of one of the shop's mails to its
+    /// shoppers. `mail` is a [`ShopMailKind`](crate::ShopMailKind) key;
+    /// `subject` and `html` are templates over that mail's variables.
+    MailTemplateSaved {
+        mail: String,
+        subject: String,
+        html: String,
+        saved_by: String,
+    },
+    /// The mail goes back to the built-in wording.
+    MailTemplateReset {
+        mail: String,
+        reset_by: String,
+    },
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).
