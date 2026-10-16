@@ -7,11 +7,18 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     mail::{Mail, MailConfig, Mailbox, SmtpTransport, mail, send},
+    view::Unescaped,
 };
 
 use timada_catalog::format_money;
 use timada_orders::OrderState;
-use timada_tenancy::TenantState;
+use timada_reviews::REVIEW_LINK_TTL_SECS;
+use timada_shoppers::CODE_TTL_SECS;
+use timada_tenancy::{
+    AddressVars, DiscountVars, LineVars, MailVars, OrderConfirmationVars, OrderVars, RenderedMail,
+    ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind, ShopVars,
+    ShopperCodeVars, TenantState, render,
+};
 
 use crate::auth::cookies::EmailFlowKind;
 use crate::config;
@@ -75,152 +82,179 @@ pub async fn send_invitation(
     Ok(())
 }
 
-/// Mails a shop's sign-in code to one of its shoppers. The mail speaks for
-/// the shop, not for the platform: it comes from the shop's own server and
-/// address when it has one, under the shop's name in any case.
-pub async fn send_shopper_code(cx: &Cx, to: &str, shop: &TenantState, code: &str) -> Result<()> {
+/// Sends one of a shop's mails to `to`, in the merchant's wording when the
+/// shop has one ([`TenantState::mail_template`]) and in the built-in one
+/// otherwise. The mail speaks for the shop, not for the platform: it comes
+/// from the shop's own server and address when it has one, under the shop's
+/// name in any case.
+///
+/// A merchant's template that fails to render (it was checked when saved,
+/// but an order may hold what the sample did not) is logged and the
+/// built-in wording sent instead, so the shopper still gets the mail.
+async fn send_shop_mail(
+    cx: &Cx,
+    shop: &TenantState,
+    kind: ShopMailKind,
+    to: &str,
+    vars: &MailVars,
+) -> Result<()> {
+    let rendered = match shop.mail_template(kind) {
+        Some(template) => render(&template.subject, &template.html, vars).or_else(|err| {
+            tracing::warn!(
+                tenant = %shop.id,
+                mail = kind.key(),
+                error = %err,
+                "the shop's mail template failed, sending the built-in one"
+            );
+            render(kind.default_subject(), kind.default_html(), vars)
+        }),
+        None => render(kind.default_subject(), kind.default_html(), vars),
+    }
+    .map_err(|err| topcoat::Error::from_anyhow(anyhow::anyhow!("{}: {err}", kind.key())))?;
+    send_rendered(cx, shop, to, rendered).await
+}
+
+/// Sends a rendered shop mail from the shop (see [`send_shop_mail`]).
+pub async fn send_rendered(
+    cx: &Cx,
+    shop: &TenantState,
+    to: &str,
+    rendered: RenderedMail,
+) -> Result<()> {
     let sender = shop_sender(cx, shop).await?;
-    let shop_name = shop.name.as_str();
     let from = sender.from.clone();
-    let subject = format!("Your sign-in code for {shop_name}");
+    // The template's markup was checked when it was saved (no scripts,
+    // frames, forms or handlers) and every variable in it is escaped, so the
+    // rendered HTML is safe to send as is.
+    let html = Unescaped::new_unchecked(rendered.html);
     let mail = mail! {
         from: from,
         to: Mailbox::new(to)?,
-        subject: &subject,
+        subject: &rendered.subject,
         html: {
             cx =>
-            <p>"Enter this code to sign in to " <strong>(shop_name)</strong> ":"</p>
-            <p style="font-size: 1.5rem; letter-spacing: 0.25rem;"><strong>(code)</strong></p>
-            <p>"It is valid for 10 minutes."</p>
-            <p>"If you did not ask for it, you can ignore this message."</p>
+            (html)
         },
     }?;
     sender.send(cx, mail).await?;
     Ok(())
 }
 
-/// Mails a shop's confirmation of a paid order to its shopper, from the
-/// shop (see [`send_shopper_code`]). `link` is the order's page on the
-/// shop's storefront, when the merchant said where it lives.
+fn shop_vars(shop: &TenantState) -> ShopVars {
+    ShopVars {
+        name: shop.name.clone(),
+    }
+}
+
+/// Mails a shop's sign-in code to one of its shoppers.
+pub async fn send_shopper_code(cx: &Cx, to: &str, shop: &TenantState, code: &str) -> Result<()> {
+    let vars = MailVars::ShopperCode(ShopperCodeVars {
+        shop: shop_vars(shop),
+        code: code.to_owned(),
+        valid_minutes: CODE_TTL_SECS / 60,
+    });
+    send_shop_mail(cx, shop, ShopMailKind::ShopperCode, to, &vars).await
+}
+
+fn address_vars(
+    name: &str,
+    line1: &str,
+    line2: Option<&String>,
+    postal_code: &str,
+    city: &str,
+    country: &str,
+) -> AddressVars {
+    AddressVars {
+        name: name.to_owned(),
+        line1: line1.to_owned(),
+        line2: line2.cloned(),
+        postal_code: postal_code.to_owned(),
+        city: city.to_owned(),
+        country: country.to_owned(),
+    }
+}
+
+/// An order as the order confirmation's template sees it, its amounts
+/// worded with the currency.
+fn order_vars(order: &OrderState) -> OrderVars {
+    let currency = &order.currency;
+    let ship = &order.shipping;
+    OrderVars {
+        reference: order.reference.clone(),
+        email: order.email.clone(),
+        lines: order
+            .lines
+            .iter()
+            .map(|line| LineVars {
+                name: line.name.clone(),
+                variant: line.variant_label.clone(),
+                quantity: line.quantity,
+                amount: format_money(line.amount_cents(), currency),
+            })
+            .collect(),
+        subtotal: format_money(order.subtotal_cents(), currency),
+        discount: order.discount.as_ref().map(|discount| DiscountVars {
+            code: discount.code.clone(),
+            amount: format_money(discount.amount_cents, currency),
+        }),
+        shipping_method: order
+            .shipping_charge
+            .as_ref()
+            .map(|shipping| ShippingMethodVars {
+                name: shipping.name.clone(),
+                amount: format_money(shipping.amount_cents, currency),
+                free: shipping.amount_cents == 0,
+            }),
+        total: format_money(order.total_cents, currency),
+        shipping_address: address_vars(
+            &ship.name,
+            &ship.line1,
+            ship.line2.as_ref(),
+            &ship.postal_code,
+            &ship.city,
+            &ship.country,
+        ),
+        billing_address: order.billing.as_ref().map(|bill| {
+            address_vars(
+                &bill.name,
+                &bill.line1,
+                bill.line2.as_ref(),
+                &bill.postal_code,
+                &bill.city,
+                &bill.country,
+            )
+        }),
+        note: order.note.clone(),
+    }
+}
+
+/// Mails a shop's confirmation of a paid order to its shopper. `link` is
+/// the order's page on the shop's storefront, when the merchant said where
+/// it lives.
 pub async fn send_order_confirmation(
     cx: &Cx,
     shop: &TenantState,
     order: &OrderState,
     link: Option<&str>,
 ) -> Result<()> {
-    let sender = shop_sender(cx, shop).await?;
-    let shop_name = shop.name.as_str();
-    let from = sender.from.clone();
-    let subject = format!("Your {shop_name} order {}", order.reference);
-    let currency = &order.currency;
-    let lines: Vec<(String, u32, String)> = order
-        .lines
-        .iter()
-        .map(|line| {
-            let name = match &line.variant_label {
-                Some(variant) => format!("{} · {variant}", line.name),
-                None => line.name.clone(),
-            };
-            (
-                name,
-                line.quantity,
-                format_money(line.amount_cents(), currency),
-            )
-        })
-        .collect();
-    let discount = order.discount.as_ref().map(|discount| {
-        (
-            discount.code.clone(),
-            format!("-{}", format_money(discount.amount_cents, currency)),
-        )
-    });
-    let shipping = order.shipping_charge.as_ref().map(|shipping| {
-        (
-            shipping.name.clone(),
-            match shipping.amount_cents {
-                0 => "Free".to_owned(),
-                cents => format_money(cents, currency),
-            },
-        )
-    });
-    let total = format_money(order.total_cents, currency);
-    let ship = &order.shipping;
-    let city = format!("{} {}", ship.postal_code, ship.city);
-    let billing = order
-        .billing
-        .as_ref()
-        .map(|bill| (bill, format!("{} {}", bill.postal_code, bill.city)));
-    let mail = mail! {
-        from: from,
-        to: Mailbox::new(&order.email)?,
-        subject: &subject,
-        html: {
-            cx =>
-            <p>"Thank you for your order at " <strong>(shop_name)</strong> "."</p>
-            <p>"Order " <strong>(&order.reference)</strong></p>
-            <table cellpadding="4" style="border-collapse: collapse;">
-                for (name, quantity, amount) in &lines {
-                    <tr>
-                        <td>(name)</td>
-                        <td>"× " (quantity)</td>
-                        <td style="text-align: right;">(amount)</td>
-                    </tr>
-                }
-                if let Some((code, amount)) = &discount {
-                    <tr>
-                        <td colspan="2">"Discount " (code)</td>
-                        <td style="text-align: right;">(amount)</td>
-                    </tr>
-                }
-                if let Some((name, amount)) = &shipping {
-                    <tr>
-                        <td colspan="2">"Shipping: " (name)</td>
-                        <td style="text-align: right;">(amount)</td>
-                    </tr>
-                }
-                <tr>
-                    <td colspan="2"><strong>"Total"</strong></td>
-                    <td style="text-align: right;"><strong>(&total)</strong></td>
-                </tr>
-            </table>
-            <p>
-                "Shipping to:" <br>
-                (&ship.name) <br>
-                (&ship.line1) <br>
-                if let Some(line2) = &ship.line2 {
-                    (line2) <br>
-                }
-                (&city) <br>
-                (&ship.country)
-            </p>
-            if let Some((bill, bill_city)) = &billing {
-                <p>
-                    "Billing to:" <br>
-                    (&bill.name) <br>
-                    (&bill.line1) <br>
-                    if let Some(line2) = &bill.line2 {
-                        (line2) <br>
-                    }
-                    (bill_city) <br>
-                    (&bill.country)
-                </p>
-            }
-            if let Some(note) = &order.note {
-                <p>"Your note: " (note)</p>
-            }
-            if let Some(link) = link {
-                <p><a href=(link)>"View your order"</a></p>
-            }
-        },
-    }?;
-    sender.send(cx, mail).await?;
-    Ok(())
+    let vars = MailVars::OrderConfirmation(Box::new(OrderConfirmationVars {
+        shop: shop_vars(shop),
+        order: order_vars(order),
+        link: link.map(str::to_owned),
+    }));
+    send_shop_mail(
+        cx,
+        shop,
+        ShopMailKind::OrderConfirmation,
+        &order.email,
+        &vars,
+    )
+    .await
 }
 
-/// Asks the buyer of a fulfilled order, from the shop (see
-/// [`send_shopper_code`]), what they think of `products` (the names of the
-/// ones not reviewed yet). `link` opens the order's review forms on the
-/// storefront without signing in.
+/// Asks the buyer of a fulfilled order, from the shop, what they think of
+/// `products` (the names of the ones not reviewed yet). `link` opens the
+/// order's review forms on the storefront without signing in.
 pub async fn send_review_request(
     cx: &Cx,
     shop: &TenantState,
@@ -228,30 +262,16 @@ pub async fn send_review_request(
     products: &[String],
     link: &str,
 ) -> Result<()> {
-    let sender = shop_sender(cx, shop).await?;
-    let shop_name = shop.name.as_str();
-    let from = sender.from.clone();
-    let subject = format!("How was your {shop_name} order {}?", order.reference);
-    let mail = mail! {
-        from: from,
-        to: Mailbox::new(&order.email)?,
-        subject: &subject,
-        html: {
-            cx =>
-            <p>"Thank you again for your order " <strong>(&order.reference)</strong>
-                " at " <strong>(shop_name)</strong> "."</p>
-            <p>"Now that it has reached you, how do you like it? A few words help other shoppers choose:"</p>
-            <ul>
-                for name in products {
-                    <li>(name)</li>
-                }
-            </ul>
-            <p><a href=(link)>"Review your purchase"</a></p>
-            <p>"The link opens your order on the shop for 60 days."</p>
+    let vars = MailVars::ReviewRequest(ReviewRequestVars {
+        shop: shop_vars(shop),
+        order: ReviewOrderVars {
+            reference: order.reference.clone(),
         },
-    }?;
-    sender.send(cx, mail).await?;
-    Ok(())
+        products: products.to_vec(),
+        link: link.to_owned(),
+        valid_days: REVIEW_LINK_TTL_SECS / (24 * 60 * 60),
+    });
+    send_shop_mail(cx, shop, ShopMailKind::ReviewRequest, &order.email, &vars).await
 }
 
 fn subject(kind: EmailFlowKind) -> &'static str {
@@ -449,6 +469,72 @@ mod tests {
             assert!(wire.contains(part), "{part}: {wire}");
         }
         assert!(!wire.contains("Timada"), "{wire}");
+    }
+
+    fn worded(subject: &str, html: &str) -> timada_tenancy::MailTemplate {
+        timada_tenancy::MailTemplate {
+            subject: subject.into(),
+            html: html.into(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_shop_words_its_mails_its_own_way() {
+        let transport = MemoryTransport::new();
+        let cx = CxTestBuilder::new()
+            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
+            .build();
+        let mut shop = acme();
+        shop.mail_templates.insert(
+            ShopMailKind::OrderConfirmation.key().into(),
+            worded(
+                "Merci ! Commande {{ order.reference }}",
+                "<p>Bonjour, voici votre commande chez {{ shop.name }} :</p>\
+                 {% for line in order.lines %}<p>{{ line.name }} ({{ line.quantity }})</p>{% endfor %}\
+                 <p>Note : {{ order.note }}</p>",
+            ),
+        );
+        let mut order = paid_order();
+        order.note = Some("<script>alert(1)</script>".into());
+
+        send_order_confirmation(&cx, &shop, &order, None)
+            .await
+            .unwrap();
+
+        let sent = transport.sent();
+        assert_eq!(sent[0].subject(), "Merci ! Commande K7Q4-MZP2");
+        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        assert!(wire.contains("Bonjour"), "{wire}");
+        assert!(wire.contains("Mug (2)"), "{wire}");
+        let html = &wire[wire.find("text/html").unwrap()..];
+        assert!(!html.contains("<script>"), "{wire}");
+        assert!(html.contains("&lt;script&gt;"), "{wire}");
+    }
+
+    #[tokio::test]
+    async fn a_template_that_fails_sends_the_built_in_mail() {
+        let transport = MemoryTransport::new();
+        let cx = CxTestBuilder::new()
+            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
+            .build();
+        let mut shop = acme();
+        shop.mail_templates.insert(
+            ShopMailKind::OrderConfirmation.key().into(),
+            worded("Order", "<p>{{ order.billing_address.city }}</p>"),
+        );
+
+        send_order_confirmation(&cx, &shop, &paid_order(), None)
+            .await
+            .unwrap();
+
+        let sent = transport.sent();
+        assert_eq!(sent.len(), 1, "the mail is not lost");
+        assert_eq!(sent[0].subject(), "Your Acme Tea order K7Q4-MZP2");
     }
 
     #[tokio::test]
