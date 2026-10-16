@@ -16,6 +16,11 @@
 //! A cart may carry one discount code (`timada-discounts`). It is priced with
 //! the cart each time, so the order holds the lines at full price and the
 //! amount taken off them beside, in a `Discounted` written with `Placed`.
+//!
+//! The merchant's checkout offers (`timada-discounts` too) are priced the
+//! same way, but into the lines: while the rest of the cart meets an offer's
+//! conditions, one unit of its item is a line of its own at the offer's
+//! price, so the order and its invoice show what that unit cost.
 
 pub mod aggregator;
 mod command;

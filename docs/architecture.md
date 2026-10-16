@@ -19,7 +19,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
 | `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own store |
 | `crates/orders` | `timada-orders` | Carts and the orders placed from them, next to the catalog in a tenant's store |
-| `crates/discounts` | `timada-discounts` | Discount codes and how often each was used, in a tenant's store |
+| `crates/discounts` | `timada-discounts` | Discount codes and how often each was used, and the checkout offers, in a tenant's store |
 | `crates/reviews` | `timada-reviews` | What buyers wrote about the products of their orders, and whether the merchant published it |
 | `crates/shoppers` | `timada-shoppers` | A shop's customers who sign in: mailed codes, sessions, saved addresses, in a tenant's store |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
@@ -63,6 +63,15 @@ Recurring patterns:
 - **Read models** are SQL tables in the shared database, fed by one
   `read_model_subscription` per crate. They are eventually consistent; pages that must
   show a write immediately read the aggregate.
+- **One stream per tenant for a short list.** The settings a checkout reads whole each
+  time (shipping methods, checkout offers) live in one stream with a deterministic id
+  (`hash_ids(["offers"])`), capped in size, and are read straight from it: no read
+  model, and a change shows at once.
+- **A price that changes goes into the lines.** A checkout offer prices one unit of a
+  line: the quote splits that line in two (the unit at the offer's price, the rest at
+  full price), so `PaymentRequested`, `Placed`, the invoice and the mail carry it
+  without a new field. A discount code, by contrast, stays beside the lines at full
+  price (`Discounted`).
 
 ## Where data lives
 
@@ -173,7 +182,7 @@ tenant's products while the events stay isolated by construction.
 8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
-   orders, open carts, discounts, reviews, payments), `/stripe/webhooks/{tenant_id}`,
+   orders, open carts, discounts, checkout offers, reviews, payments), `/stripe/webhooks/{tenant_id}`,
    `/store/reviews` (a storefront handing in a review, see *Reviews*), `/store/shoppers/*`
    (a storefront signing its shoppers in, see *Shopper accounts*), `/invitations/{token}`,
    `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.

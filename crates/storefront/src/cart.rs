@@ -35,6 +35,15 @@
 //! that ships to their country ([`Checkout::shipping_method`]); a shop
 //! without methods ships for free and none is picked.
 //!
+//! A merchant may make checkout offers: one unit of a product at a lower
+//! price while the cart meets the offer's conditions (holds another product,
+//! is worth a minimum). [`CartView::offers`] lists the ones the shopper may
+//! add; once the item is in the cart, [`CartLineView::offer`] says which
+//! unit the offer prices, and the order bills it at that price. An offer
+//! that ends, or whose conditions stop holding, prices nothing any more:
+//! the payment is then refused as `price_changed` rather than charged
+//! unseen.
+//!
 //! The library keeps no notion of whose cart is whose: the host remembers
 //! the cart id, typically in a cookie.
 
@@ -117,17 +126,86 @@ pub struct CartLineView {
     pub quantity: u32,
     /// What kind of goods it is for VAT (`standard`, `books`, …).
     pub tax_category: String,
-    /// `None` on a line that cannot be sold any more.
+    /// The price of one without any offer; `None` on a line that cannot be
+    /// sold any more.
     pub unit_amount_cents: Option<u64>,
+    /// What the whole line costs, the unit an offer prices included.
     pub amount_cents: Option<u64>,
+    /// The offer one unit of the line is priced at, if any.
+    pub offer: Option<LineOfferView>,
+}
+
+/// The offer one unit of a cart line is priced at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineOfferView {
+    pub offer_id: String,
+    /// What that one unit costs.
+    pub unit_amount_cents: u64,
+}
+
+/// An offer the merchant makes on the cart: one unit of a product at a
+/// price below its own, while the cart meets the offer's conditions. Adding
+/// the item is all it takes ([`add_to_cart`]); the cart then prices that
+/// unit at the offer ([`CartLineView::offer`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfferView {
+    pub offer_id: String,
+    pub product_id: String,
+    /// The variant to add, when the product sells variants.
+    pub variant_id: Option<String>,
+    /// The product's name.
+    pub name: String,
+    /// The variant's values (`Beige / Large`).
+    pub variant_label: Option<String>,
+    /// What the merchant titled it, if anything.
+    pub title: Option<String>,
+    /// The product's handle, when it is on sale here.
+    pub slug: Option<String>,
+    /// The variant's picture, else the product's first one.
+    pub image_url: Option<String>,
+    /// What one costs without the offer.
+    pub unit_amount_cents: u64,
+    /// What the one unit costs with it.
+    pub offer_amount_cents: u64,
+    pub currency: String,
+}
+
+impl OfferView {
+    /// What the checkout says above it: the merchant's title, else the
+    /// product's name.
+    pub fn heading(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.name)
+    }
+
+    /// The full price as a person reads it (`30.00 EUR`).
+    pub fn price(&self) -> String {
+        timada_catalog::format_money(self.unit_amount_cents, &self.currency)
+    }
+
+    /// The offer's price as a person reads it (`12.00 EUR`).
+    pub fn offer_price(&self) -> String {
+        timada_catalog::format_money(self.offer_amount_cents, &self.currency)
+    }
+
+    /// How much is off, in whole percent, rounded down (`60`).
+    pub fn percent_off(&self) -> u64 {
+        match self.unit_amount_cents {
+            0 => 0,
+            full => (full - self.offer_amount_cents.min(full)) * 100 / full,
+        }
+    }
 }
 
 /// A cart priced from the store as it stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CartView {
     pub id: String,
-    /// The lines an order would hold.
+    /// The cart's lines that can be sold, priced. A line one unit of which
+    /// an offer prices stays one line here ([`CartLineView::offer`]); the
+    /// order holds that unit as a line of its own.
     pub lines: Vec<CartLineView>,
+    /// The offers the shopper may add, from the merchant's checkout offers.
+    pub offers: Vec<OfferView>,
     /// The lines whose product or variant is off sale: the shopper removes
     /// them before checking out.
     pub unavailable: Vec<CartLineView>,
@@ -374,31 +452,81 @@ impl Store {
                 })
             })
             .collect();
-        let ids: Vec<&str> = state.lines.iter().map(|l| l.product_id.as_str()).collect();
+        let ids: Vec<&str> = state
+            .lines
+            .iter()
+            .map(|l| l.product_id.as_str())
+            .chain(quote.offers.iter().map(|offer| offer.product_id.as_str()))
+            .collect();
         let mut products = published_products_by_ids(self.pool(), &ids).await?;
         for product in &mut products {
             product.fill_urls(self.media_url());
         }
         let product = |id: &str| products.iter().find(|p| p.id == id);
 
-        let lines = quote
+        // The quote splits a line an offer prices in two (its one unit, then
+        // the others): joined back here, the page shows the cart's line.
+        let mut lines: Vec<CartLineView> = Vec::new();
+        let mut join_next = false;
+        for ((line, tax_category), line_offer) in quote
             .lines
             .iter()
             .zip(&quote.tax_categories)
-            .map(|(line, tax_category)| {
-                let local = product(&line.product_id);
-                CartLineView {
-                    product_id: line.product_id.clone(),
-                    variant_id: line.variant_id.clone(),
-                    name: line.name.clone(),
-                    variant_label: line.variant_label.clone(),
-                    sku: line.sku.clone(),
+            .zip(&quote.line_offers)
+        {
+            if let Some(last) = lines.last_mut().filter(|last| {
+                join_next
+                    && line_offer.is_none()
+                    && last.product_id == line.product_id
+                    && last.variant_id == line.variant_id
+            }) {
+                last.quantity += line.quantity;
+                last.amount_cents = last.amount_cents.map(|cents| cents + line.amount_cents());
+                join_next = false;
+                continue;
+            }
+            join_next = line_offer.is_some();
+            let local = product(&line.product_id);
+            lines.push(CartLineView {
+                product_id: line.product_id.clone(),
+                variant_id: line.variant_id.clone(),
+                name: line.name.clone(),
+                variant_label: line.variant_label.clone(),
+                sku: line.sku.clone(),
+                slug: local.map(|p| p.slug.clone()),
+                image_url: local.and_then(|p| picture(p, line.variant_id.as_deref())),
+                quantity: line.quantity,
+                tax_category: tax_category.clone(),
+                unit_amount_cents: Some(
+                    line_offer
+                        .as_ref()
+                        .map_or(line.unit_amount_cents, |offer| offer.full_unit_amount_cents),
+                ),
+                amount_cents: Some(line.amount_cents()),
+                offer: line_offer.as_ref().map(|offer| LineOfferView {
+                    offer_id: offer.offer_id.clone(),
+                    unit_amount_cents: line.unit_amount_cents,
+                }),
+            });
+        }
+        let currency = quote.currency.clone().unwrap_or_default();
+        let offers = quote
+            .offers
+            .iter()
+            .map(|offer| {
+                let local = product(&offer.product_id);
+                OfferView {
+                    offer_id: offer.offer_id.clone(),
+                    product_id: offer.product_id.clone(),
+                    variant_id: offer.variant_id.clone(),
+                    name: offer.name.clone(),
+                    variant_label: offer.variant_label.clone(),
+                    title: offer.title.clone(),
                     slug: local.map(|p| p.slug.clone()),
-                    image_url: local.and_then(|p| picture(p, line.variant_id.as_deref())),
-                    quantity: line.quantity,
-                    tax_category: tax_category.clone(),
-                    unit_amount_cents: Some(line.unit_amount_cents),
-                    amount_cents: Some(line.amount_cents()),
+                    image_url: local.and_then(|p| picture(p, offer.variant_id.as_deref())),
+                    unit_amount_cents: offer.unit_amount_cents,
+                    offer_amount_cents: offer.offer_amount_cents,
+                    currency: currency.clone(),
                 }
             })
             .collect();
@@ -419,6 +547,7 @@ impl Store {
                     tax_category: timada_catalog::TAX_CATEGORY_STANDARD.to_owned(),
                     unit_amount_cents: None,
                     amount_cents: None,
+                    offer: None,
                 }
             })
             .collect();
@@ -426,6 +555,7 @@ impl Store {
             id: state.id.clone(),
             item_count: quote.item_count(),
             lines,
+            offers,
             unavailable,
             currency: quote.currency,
             subtotal_cents: quote.subtotal_cents,

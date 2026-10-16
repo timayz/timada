@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use timada_storefront::{add_to_cart, require_product};
+use timada_storefront::{add_to_cart, cart, require_product};
 use topcoat::{
     Result,
     context::Cx,
@@ -11,24 +11,29 @@ use topcoat::{
     },
 };
 
-use super::drawer_url;
+use super::{back_url, drawer_url};
 use crate::shopper::{cart_id, set_cart_id};
 
 /// The form field of an option's menu: `option:<option id>`.
 pub const OPTION_FIELD_PREFIX: &str = "option:";
 
+/// What the checkout says when an offer added at its card no longer prices
+/// the item: it ended, or the cart stopped meeting it, meanwhile.
+pub const OFFER_ENDED: &str = "offer_ended";
+
 /// Adds what the product page's form names: `slug`, `quantity`, and one
-/// `option:<id>` per menu, which pick the variant. The shopper comes back to
-/// `from` (the product page when absent) with the cart drawer open; a
-/// refusal goes back to the product page.
+/// `option:<id>` per menu, which pick the variant (or `variant_id`, from a
+/// form that knows it already). The shopper comes back to `from` (the
+/// product page when absent) with the cart drawer open; a refusal goes back
+/// to the product page. A form sent from elsewhere says so in `back`
+/// (`checkout` for an offer's card), and the shopper comes back there; with
+/// `offer`, an offer that no longer prices the item is told.
 #[route(POST)]
 pub async fn add(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<SeeOther> {
-    let slug = form.get("slug").cloned().unwrap_or_default();
+    let field = |name: &str| form.get(name).map(String::as_str).unwrap_or_default();
+    let slug = field("slug").to_owned();
     let product = require_product(cx, &slug).await?;
-    let quantity = form
-        .get("quantity")
-        .and_then(|q| q.trim().parse::<u32>().ok())
-        .unwrap_or(0);
+    let quantity = field("quantity").trim().parse::<u32>().unwrap_or(0);
     let picked: Vec<(String, String)> = form
         .iter()
         .filter_map(|(field, value)| {
@@ -41,6 +46,8 @@ pub async fn add(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<S
     // one variant, or none the shop sells (refused by the store).
     let variant_id = if product.options.is_empty() {
         None
+    } else if !field("variant_id").is_empty() {
+        Some(field("variant_id").to_owned())
     } else {
         Some(
             product
@@ -58,18 +65,34 @@ pub async fn add(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<S
         quantity,
     )
     .await?;
+    let back = field("back");
     match outcome {
         Ok(cart_id) => {
             if current.as_deref() != Some(cart_id.as_str()) {
                 set_cart_id(cx, &cart_id)?;
             }
+            if !back.is_empty() {
+                let offer = field("offer");
+                let ended = !offer.is_empty()
+                    && !cart(cx, &cart_id).await?.is_some_and(|cart| {
+                        cart.lines.iter().any(|line| {
+                            line.offer
+                                .as_ref()
+                                .is_some_and(|applied| applied.offer_id == offer)
+                        })
+                    });
+                let error = ended.then_some(OFFER_ENDED);
+                return Ok(see_other(back_url(cx, back, field("from"), error)));
+            }
             let product_page =
                 href!(crate::app::p::slug::index, crate::app::p::slug::Slug(slug)).resolve(cx);
-            let from = form
-                .get("from")
+            let from = Some(field("from"))
                 .filter(|from| !from.is_empty())
                 .unwrap_or(&product_page);
             Ok(see_other(drawer_url(from, None)))
+        }
+        Err(err) if !back.is_empty() => {
+            Ok(see_other(back_url(cx, back, field("from"), err.code())))
         }
         Err(err) => {
             #[derive(serde::Serialize)]

@@ -776,6 +776,66 @@ async fn a_discount_code_is_charged_held_and_invoiced() {
 }
 
 #[tokio::test]
+async fn a_checkout_offer_is_charged_and_invoiced() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let store = h.store(&acme).await;
+    let (cart_id, mug) = h.cart(&acme).await;
+    // The second mug at 5.00 instead of 12.50.
+    timada_discounts::Command(store.clone())
+        .create_offer(
+            "alice",
+            timada_discounts::CreateOffer {
+                product_id: mug,
+                price_cents: 500,
+                currency: "EUR".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let PaymentAnswer::Requested(payment) = h.ask(&acme, &cart_id, Some(1750)).await else {
+        panic!("a payment is opened");
+    };
+    assert_eq!(payment.total_cents, 1750);
+    let lines: Vec<(u64, u32)> = payment
+        .lines
+        .iter()
+        .map(|line| (line.unit_amount_cents, line.quantity))
+        .collect();
+    assert_eq!(lines, vec![(500, 1), (1250, 1)]);
+    h.stripe.pay(&payment.payment_id);
+    let body = succeeded(&payment.payment_id);
+    let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
+        panic!("the order is placed");
+    };
+
+    // The invoice bills the unit at the offer's price: its total is the
+    // charge.
+    let invoicing = timada_invoicing::Command(store);
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    let billed: Vec<(u64, u32)> = invoice
+        .lines
+        .iter()
+        .map(|line| (line.unit_amount_cents, line.quantity))
+        .collect();
+    assert_eq!(billed, vec![(500, 1), (1250, 1)]);
+    assert_eq!(invoice.total_cents, 1750);
+    assert_eq!(
+        invoice
+            .vat
+            .iter()
+            .map(|vat| vat.base_cents + vat.vat_cents)
+            .sum::<u64>(),
+        1750
+    );
+    h.finish().await;
+}
+
+#[tokio::test]
 async fn the_stripe_secrets_are_kept_sealed() {
     let h = harness().await;
     let acme = h.create("acme").await;

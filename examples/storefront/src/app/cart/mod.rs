@@ -122,6 +122,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     if let Some(label) = &line.variant_label {
                                         <div><small>(label)</small></div>
                                     }
+                                    if let Some(offer) = &line.offer {
+                                        <div><small class="offer-note" data-line-offer=(&offer.offer_id)>"Offer: 1 at " (format_money(offer.unit_amount_cents, &currency))</small></div>
+                                    }
                                     if line.unit_amount_cents.is_none() {
                                         <div><small>"No longer on sale: remove it to order the rest."</small></div>
                                     }
@@ -245,6 +248,9 @@ pub async fn summary_line(
                     (&name)
                 }
                 if let Some(label) = &line.variant_label { <small class="variant">(label)</small> }
+                if let Some(offer) = &line.offer {
+                    <small class="offer-note" data-line-offer=(&offer.offer_id)>"Offer: 1 at " (format_money(offer.unit_amount_cents, currency))</small>
+                }
                 if line.amount_cents.is_some() {
                     <span class="qty">
                         <form method="post" action=(href!(quantity::quantity))>
