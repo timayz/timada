@@ -926,7 +926,11 @@ async fn a_checkout_goes_through_stripe_test_mode() {
     use stripe_core::payment_intent::ConfirmPaymentIntent;
     use stripe_core::refund::RetrieveRefund;
 
-    let Ok(secret_key) = std::env::var("STRIPE_TEST_SECRET_KEY") else {
+    // Empty counts as unset, as a CI secret that is not configured comes out.
+    let Some(secret_key) = std::env::var("STRIPE_TEST_SECRET_KEY")
+        .ok()
+        .filter(|key| !key.trim().is_empty())
+    else {
         return;
     };
     // Never a live key: this test charges a card.

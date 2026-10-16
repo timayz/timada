@@ -142,7 +142,7 @@ STRIPE_TEST_SECRET_KEY=sk_test_… cargo test -p timada-dashboard --test payment
 ```
 
 - It is ignored by default, since it needs the network and a Stripe account. Run with
-  `--ignored` but without the variable, it does nothing.
+  `--ignored` but without the variable (or with it empty), it does nothing.
 - It refuses any key that is not a test-mode key (`sk_test_…` or `rk_test_…`).
 - What it does:
   1. checks the key, as the payments page does;
