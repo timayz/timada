@@ -20,6 +20,12 @@ const STORE_ADDR = process.env.E2E_STORE_ADDR ?? "127.0.0.1:4321";
 const STOREFRONT_PORT = Number(process.env.E2E_STOREFRONT_PORT ?? 3456);
 const STOREFRONT = `http://127.0.0.1:${STOREFRONT_PORT}`;
 
+/// A shop mail's HTML escapes "/" in its links as "&#x2f;"; undo it so a
+/// link can be matched as the shopper's mail client reads it.
+function unescapeSlashes(html: string | undefined): string {
+  return (html ?? "").replaceAll("&#x2f;", "/");
+}
+
 let child: ChildProcess | undefined;
 let dir: string | undefined;
 
@@ -1489,7 +1495,8 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       );
       expect(confirmation).toBeDefined();
       expect(confirmation!.from[0]?.name).toBe(name);
-      expect(confirmation!.html).toContain(`${STOREFRONT}/orders/${guestOrderId}`);
+      // The mail's HTML escapes every "/" in an attribute as "&#x2f;".
+      expect(unescapeSlashes(confirmation!.html)).toContain(`${STOREFRONT}/orders/${guestOrderId}`);
       expect(confirmation!.html).toContain("Blue Mug");
     }).toPass({ timeout: 15_000 });
     await page.goto(`/t/${slug}/orders/${guestOrderId}`);
@@ -1747,7 +1754,7 @@ test("a buyer is mailed a link to review a fulfilled order, which opens it on an
       expect(asked).toBeDefined();
       expect(asked!.from[0]?.name).toBe(name);
       expect(asked!.html).toContain("Blue Mug");
-      link = asked!.html!.match(new RegExp(`${STOREFRONT}/reviews/[A-Za-z0-9_-]{43}`))![0];
+      link = unescapeSlashes(asked!.html).match(new RegExp(`${STOREFRONT}/reviews/[A-Za-z0-9_-]{43}`))![0];
     }).toPass({ timeout: 30_000 });
     await page.goto(`/t/${slug}/orders/${orderId}`);
     await expect(page.locator("[data-order-review-request]")).toHaveAttribute("data-order-review-request", "mailed");
