@@ -2,17 +2,35 @@
 //! address, from the shop. Any address gets one: the first sign-in creates
 //! the account. 202 `{}` once mailed; 429 `{"error": "code_recently_sent"}`
 //! within a minute of the last one.
+//!
+//! Each key, and each shopper at a shop, may have only so many codes mailed
+//! within `[store]`'s window: past it, 429 `{"error": "too_many_requests"}`
+//! and nothing is mailed. The shopper is the address the storefront reports
+//! in `X-Shopper-IP`, else the caller's.
+
+use std::sync::Arc;
 
 use serde::Deserialize;
+use timada_shoppers::SHOPPER_TOO_MANY_REQUESTS;
 use topcoat::{
     Result,
-    context::Cx,
-    router::{StatusCode, content::Form, route},
+    context::{Cx, app_context},
+    router::{
+        StatusCode,
+        content::Form,
+        request::{client_ip, headers},
+        route,
+    },
 };
 
-use super::{Answer, answer_error, status};
+use super::{Answer, answer_error, refused, status};
 use crate::auth::mail::send_shopper_code;
 use crate::auth::now;
+use crate::config::Config;
+use crate::rate_limit::{RateLimiter, allow_shopper_code};
+
+/// The header a storefront reports its shopper's address in.
+pub const SHOPPER_IP: &str = "x-shopper-ip";
 
 #[derive(Deserialize)]
 pub struct CodeForm {
@@ -25,6 +43,24 @@ pub async fn code(cx: &Cx, Form(form): Form<CodeForm>) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
+    let allowed = allow_shopper_code(
+        app_context::<Arc<RateLimiter>>(cx),
+        &app_context::<Config>(cx).store,
+        &access.key.id,
+        &access.tenant.id,
+        headers(cx)
+            .get(SHOPPER_IP)
+            .and_then(|value| value.to_str().ok()),
+        client_ip(cx),
+    );
+    if !allowed {
+        tracing::info!(
+            tenant = %access.tenant.slug,
+            key = %access.key.id,
+            "sign-in code refused: too many asked for"
+        );
+        return refused(StatusCode::TOO_MANY_REQUESTS, SHOPPER_TOO_MANY_REQUESTS);
+    }
     let hold = super::super::hold(cx, &access).await?;
     let issued = match timada_shoppers::Command(hold.executor().clone())
         .issue_code(&form.email, now())

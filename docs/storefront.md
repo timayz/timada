@@ -321,13 +321,20 @@ delete_account(cx, &token).await?;                 // addresses and sessions go,
   next request.
 - A refusal is a `ShopperRefusal` to word for the shopper: `wrong_code`,
   `code_expired`, `too_many_attempts` (five wrong codes), `code_recently_sent` (one a
-  minute), `invalid_email`, an address refusal (`invalid_country`, …),
+  minute), `too_many_requests` (see below), `invalid_email`, an address refusal (`invalid_country`, …),
   `too_many_addresses` (ten are kept), or `signed_out` (`is_signed_out()`) for a token
   that no longer signs anyone in: forget it.
 - A shopper's orders are every order placed with their address, guest ones too, read
   from the dashboard's order list, so one paid a second ago may still be missing. A
   host may show an order to the shopper signed in with its e-mail address
   (`order.email == shopper.email`).
+- The dashboard holds each API key, and each shopper's address at a shop, to a number
+  of codes within a window (`[store]` in its configuration; 100 and 10 per 10 minutes
+  by default, counted on each node): past it, `too_many_requests`, and no mail goes
+  out. `request_sign_in_code(cx, …)` reports the request's client address
+  (`X-Shopper-IP`), so behind a reverse proxy the host must trust it
+  (`.trusted_proxies(…)` on its router), or all its shoppers share one address.
+  `Store::request_sign_in_code` takes the address itself.
 - A session lasts 30 days. Saving an address it already keeps moves it first.
 - Deleting an account forgets its addresses and ends every session, the caller's
   too: forget the token, and anything else the browser keeps about the shopper. The
@@ -364,7 +371,9 @@ open http://127.0.0.1:3456/
 
 All three values are on the tenant's API keys page. `STORE_ADDR`, `STORE_DB`, `HOST`,
 `PORT`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by
-default) are the other knobs, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the
+default) are the other knobs, `TRUSTED_PROXIES` (comma-separated addresses or CIDR
+networks) names the reverse proxies whose `X-Forwarded-For` gives the shopper's
+address, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the
 shopper cookies; unset, a random key is made at startup and the cookies do not survive
 a restart. To sell, tick `store:checkout` on the key. The browser suite
 (`tests/e2e/storefront.spec.ts`) boots it with a key minted in the dashboard, checks the

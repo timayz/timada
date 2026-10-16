@@ -41,6 +41,12 @@ vies_url = "http://127.0.0.1:12113"
 [reviews]
 request_check_secs = 2
 
+# Every spec signs shoppers in from this one machine, so the limits on
+# sign-in codes are far above what the suite asks for.
+[store]
+shopper_codes_per_ip = 1000
+shopper_codes_per_key = 10000
+
 [auth]
 secret_key = "e2e-only-secret-key-never-used-outside-the-test-suite"
 
