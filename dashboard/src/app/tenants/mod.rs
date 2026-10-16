@@ -41,6 +41,7 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::InvalidPublishableKey => "invalid_publishable_key",
         TenancyError::InvalidMailServer => "invalid_mail_server",
         TenancyError::UnknownMail => "unknown_mail",
+        TenancyError::InvalidMailBranding => "invalid_mail_branding",
         TenancyError::InvalidMailTemplate(_) => "invalid_mail_template",
         TenancyError::InvalidSiret => "invalid_siret",
         TenancyError::InvalidVatNumber => "invalid_vat_number",

@@ -44,10 +44,25 @@ pub struct MailVariable {
     pub description: &'static str,
 }
 
-const SHOP_VARIABLES: [MailVariable; 1] = [MailVariable {
-    name: "shop.name",
-    description: "The shop's name.",
-}];
+const SHOP_VARIABLES: [MailVariable; 4] = [
+    MailVariable {
+        name: "shop.name",
+        description: "The shop's name.",
+    },
+    MailVariable {
+        name: "shop.logo_url",
+        description: "The address of the shop's logo, when it has one: \
+                      <img src=\"{{ shop.logo_url }}\">. Check it with {% if shop.logo_url %}.",
+    },
+    MailVariable {
+        name: "shop.accent",
+        description: "The shop's accent colour (#rrggbb), when it has one.",
+    },
+    MailVariable {
+        name: "shop.footer",
+        description: "The footer text all the shop's mails share, when it has one.",
+    },
+];
 
 const SHOPPER_CODE_VARIABLES: [MailVariable; 2] = [
     MailVariable {
@@ -184,8 +199,8 @@ impl ShopMailKind {
     /// The variables a link may point at whole (`href="{{ link }}"`).
     fn url_variables(self) -> &'static [&'static str] {
         match self {
-            Self::ShopperCode => &[],
-            Self::OrderConfirmation | Self::ReviewRequest => &["link"],
+            Self::ShopperCode => &["shop.logo_url"],
+            Self::OrderConfirmation | Self::ReviewRequest => &["link", "shop.logo_url"],
         }
     }
 
@@ -228,16 +243,25 @@ impl ShopMailKind {
         }
     }
 
-    /// Made-up variables for the preview and the test mail, every optional
-    /// part filled in.
-    pub fn sample(self, shop_name: &str) -> MailVars {
-        self.sample_with(shop_name, true)
+    /// Made-up variables for `shop`'s preview and test mail, every optional
+    /// part of the order filled in.
+    pub fn sample(self, shop: ShopVars) -> MailVars {
+        self.sample_with(shop, true)
     }
 
-    fn sample_with(self, shop_name: &str, full: bool) -> MailVars {
+    /// Made-up variables for checking a template: with every optional part
+    /// filled in (`full`), or with none.
+    fn check_sample(self, full: bool) -> MailVars {
         let shop = ShopVars {
-            name: shop_name.to_owned(),
+            name: "Sample shop".to_owned(),
+            logo_url: full.then(|| "https://shop.example.com/logo.png".to_owned()),
+            accent: full.then(|| "#1a73e8".to_owned()),
+            footer: full.then(|| "Sample shop · 12 rue des Lilas, Paris".to_owned()),
         };
+        self.sample_with(shop, full)
+    }
+
+    fn sample_with(self, shop: ShopVars, full: bool) -> MailVars {
         match self {
             Self::ShopperCode => MailVars::ShopperCode(ShopperCodeVars {
                 shop,
@@ -319,6 +343,22 @@ pub enum MailVars {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ShopVars {
     pub name: String,
+    pub logo_url: Option<String>,
+    /// `#rrggbb`.
+    pub accent: Option<String>,
+    pub footer: Option<String>,
+}
+
+impl ShopVars {
+    /// A shop with no branding.
+    pub fn named(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            logo_url: None,
+            accent: None,
+            footer: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -612,8 +652,8 @@ pub fn validate(kind: ShopMailKind, subject: &str, html: &str) -> Result<(), Mai
     check_variables(kind, &env, "Subject", "subject.txt", subject)?;
     check_variables(kind, &env, "Body", "body.html", html)?;
     check_markup(kind, html)?;
-    render(subject, html, &kind.sample_with("Sample shop", true))?;
-    render(subject, html, &kind.sample_with("Sample shop", false)).map_err(|err| {
+    render(subject, html, &kind.check_sample(true))?;
+    render(subject, html, &kind.check_sample(false)).map_err(|err| {
         MailTemplateError(format!(
             "{err} (with the optional parts empty: check them with {{% if … %}})"
         ))
@@ -640,7 +680,7 @@ mod tests {
         let mail = render(
             kind.default_subject(),
             kind.default_html(),
-            &kind.sample("Chez Léa"),
+            &kind.sample(ShopVars::named("Chez Léa")),
         )
         .unwrap();
         assert_eq!(mail.subject, "Your Chez Léa order A1B2C3");
@@ -672,7 +712,7 @@ mod tests {
         let mail = render(
             kind.default_subject(),
             kind.default_html(),
-            &kind.sample_with("Shop", false),
+            &kind.sample_with(ShopVars::named("Shop"), false),
         )
         .unwrap();
         for text in [
@@ -687,12 +727,51 @@ mod tests {
     }
 
     #[test]
+    fn the_defaults_carry_the_shop_branding() {
+        let shop = ShopVars {
+            name: "Chez Léa".to_owned(),
+            logo_url: Some("https://media.example.com/t1/LOGO.png".to_owned()),
+            accent: Some("#c0ffee".to_owned()),
+            footer: Some("Chez Léa <SARL>\n12 rue des Lilas".to_owned()),
+        };
+        for kind in ShopMailKind::ALL {
+            let mail = render(
+                kind.default_subject(),
+                kind.default_html(),
+                &kind.sample(shop.clone()),
+            )
+            .unwrap();
+            for text in [
+                "<img src=\"https:&#x2f;&#x2f;media.example.com&#x2f;t1&#x2f;LOGO.png\" alt=\"Chez Léa\"",
+                "color: #c0ffee;",
+                "Chez Léa &lt;SARL&gt;\n12 rue des Lilas",
+            ] {
+                assert!(
+                    mail.html.contains(text),
+                    "{kind:?}: missing {text:?} in {}",
+                    mail.html
+                );
+            }
+        }
+        let plain = ShopMailKind::ReviewRequest;
+        let mail = render(
+            plain.default_subject(),
+            plain.default_html(),
+            &plain.sample(ShopVars::named("Shop")),
+        )
+        .unwrap();
+        for text in ["<img", "color:", "<hr"] {
+            assert!(!mail.html.contains(text), "unexpected {text:?}");
+        }
+    }
+
+    #[test]
     fn variables_are_escaped() {
         let kind = ShopMailKind::ShopperCode;
         let mail = render(
             "Code for {{ shop.name }}",
             "<p>{{ shop.name }}</p>",
-            &kind.sample("<b>Bold</b> & co"),
+            &kind.sample(ShopVars::named("<b>Bold</b> & co")),
         )
         .unwrap();
         assert_eq!(mail.html, "<p>&lt;b&gt;Bold&lt;&#x2f;b&gt; &amp; co</p>");
@@ -797,7 +876,7 @@ mod tests {
         let err = render(
             "x",
             "{% for i in range(100000) %}{% for j in range(100000) %}.{% endfor %}{% endfor %}",
-            &ShopMailKind::ShopperCode.sample("Shop"),
+            &ShopMailKind::ShopperCode.sample(ShopVars::named("Shop")),
         )
         .unwrap_err();
         assert!(err.0.starts_with("Body"), "{err}");

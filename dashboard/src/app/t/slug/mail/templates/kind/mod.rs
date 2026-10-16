@@ -30,7 +30,7 @@ use super::super::own_address;
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::app::tenants::{error_code, tenancy};
-use crate::auth::mail::send_rendered;
+use crate::auth::mail::{send_rendered, shop_vars};
 use crate::auth::{require_user, user_labels};
 use crate::ui::{document, format_time, notice};
 
@@ -105,13 +105,14 @@ async fn load(cx: &Cx) -> Result<Page> {
 
 /// The draft rendered with made-up data, or why it can't be.
 fn preview(
+    cx: &Cx,
     kind: ShopMailKind,
     tenant: &TenantState,
     subject: &str,
     html: &str,
 ) -> std::result::Result<(String, String), MailTemplateError> {
     validate(kind, subject, html)?;
-    let rendered = render(subject, html, &kind.sample(&tenant.name))?;
+    let rendered = render(subject, html, &kind.sample(shop_vars(cx, tenant)))?;
     Ok((rendered.subject, rendered.html))
 }
 
@@ -126,7 +127,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             page.kind.default_html().to_owned(),
         ),
     };
-    let checked = preview(page.kind, &page.access.tenant, &subject, &html);
+    let checked = preview(cx, page.kind, &page.access.tenant, &subject, &html);
     let Page {
         access,
         nav,
@@ -166,7 +167,7 @@ pub async fn submit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> 
     // Browsers send textarea line breaks as CRLF.
     let html = form.html.replace("\r\n", "\n");
     let subject = form.subject.trim().to_owned();
-    let checked = preview(page.kind, tenant, &subject, &html);
+    let checked = preview(cx, page.kind, tenant, &subject, &html);
     let mut error = None;
     let mut message = None;
     match form.action.as_str() {

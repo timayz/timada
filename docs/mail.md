@@ -52,9 +52,19 @@ Each mail has its own variables, all listed in the editor:
 
 | Mail | Variables |
 | --- | --- |
-| Sign-in code | `shop.name`, `code`, `valid_minutes` |
-| Order confirmation | `shop.name`, `order.reference`, `order.email`, `order.lines` (`name`, `variant`, `quantity`, `amount`), `order.subtotal`, `order.discount` (`code`, `amount`), `order.shipping_method` (`name`, `amount`, `free`), `order.total`, `order.shipping_address` and `order.billing_address` (`name`, `line1`, `line2`, `postal_code`, `city`, `country`), `order.note`, `link` |
-| Review request | `shop.name`, `order.reference`, `products`, `link`, `valid_days` |
+| Sign-in code | `shop.*`, `code`, `valid_minutes` |
+| Order confirmation | `shop.*`, `order.reference`, `order.email`, `order.lines` (`name`, `variant`, `quantity`, `amount`), `order.subtotal`, `order.discount` (`code`, `amount`), `order.shipping_method` (`name`, `amount`, `free`), `order.total`, `order.shipping_address` and `order.billing_address` (`name`, `line1`, `line2`, `postal_code`, `city`, `country`), `order.note`, `link` |
+| Review request | `shop.*`, `order.reference`, `products`, `link`, `valid_days` |
+
+Every mail also has `shop.logo_url`, `shop.accent` and `shop.footer`. Set them under
+"Look of your mails" on the same page. Each is empty until set, so check it with
+`{% if %}`. The built-in wording shows the logo, the accent colour and the footer once
+they are set. A shop with none of them set sends exactly what it sent before.
+
+The logo is an uploaded JPEG, PNG, WebP or GIF of at most 8 MiB. It is kept like a
+product picture: copied to a majority of nodes before it is recorded. The other nodes
+fetch it as they follow the platform's stream. The accent colour is `#rrggbb`. The
+footer is plain text of at most 500 characters, and its line breaks are kept.
 
 Amounts are already worded with their currency, for example `12.50 EUR`.
 

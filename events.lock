@@ -161,6 +161,8 @@ event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: 
 event timada-tenancy/Tenant::CompanyLinked { company_id: String, series_code: String, linked_by: String }
 event timada-tenancy/Tenant::CompanyUnlinked { unlinked_by: String }
 event timada-tenancy/Tenant::Created { slug: String, name: String, created_by: String }
+event timada-tenancy/Tenant::MailBrandingCleared { cleared_by: String }
+event timada-tenancy/Tenant::MailBrandingSet { logo_file: Option<String>, logo_size: u64, accent: Option<String>, footer: Option<String>, set_by: String }
 event timada-tenancy/Tenant::MailServerConfigured { host: String, port: u16, security: String, username: Option<String>, password_sealed: Option<Vec<u8>>, from_address: String, from_name: Option<String>, configured_by: String }
 event timada-tenancy/Tenant::MailServerRemoved { removed_by: String }
 event timada-tenancy/Tenant::MailTemplateReset { mail: String, reset_by: String }

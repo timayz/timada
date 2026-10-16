@@ -2,6 +2,8 @@
 //! invitation to join a tenant, and, speaking for a shop, its shoppers'
 //! sign-in codes, order confirmations and requests for a review.
 
+use std::sync::Arc;
+
 use anyhow::Context as _;
 use topcoat::{
     Result,
@@ -22,6 +24,7 @@ use timada_tenancy::{
 
 use crate::auth::cookies::EmailFlowKind;
 use crate::config;
+use crate::media::Media;
 use crate::shop_mail::shop_sender;
 
 /// Who the codes come from (`mail.from`).
@@ -140,16 +143,24 @@ pub async fn send_rendered(
     Ok(())
 }
 
-fn shop_vars(shop: &TenantState) -> ShopVars {
+/// The shop as its mails' templates see it: its name and branding, the
+/// logo as an address a mail client can load.
+pub fn shop_vars(cx: &Cx, shop: &TenantState) -> ShopVars {
+    let branding = shop.mail_branding.as_ref();
     ShopVars {
         name: shop.name.clone(),
+        logo_url: branding
+            .and_then(|branding| branding.logo_file.as_deref())
+            .map(|file| app_context::<Arc<Media>>(cx).url(&shop.id, file)),
+        accent: branding.and_then(|branding| branding.accent.clone()),
+        footer: branding.and_then(|branding| branding.footer.clone()),
     }
 }
 
 /// Mails a shop's sign-in code to one of its shoppers.
 pub async fn send_shopper_code(cx: &Cx, to: &str, shop: &TenantState, code: &str) -> Result<()> {
     let vars = MailVars::ShopperCode(ShopperCodeVars {
-        shop: shop_vars(shop),
+        shop: shop_vars(cx, shop),
         code: code.to_owned(),
         valid_minutes: CODE_TTL_SECS / 60,
     });
@@ -238,7 +249,7 @@ pub async fn send_order_confirmation(
     link: Option<&str>,
 ) -> Result<()> {
     let vars = MailVars::OrderConfirmation(Box::new(OrderConfirmationVars {
-        shop: shop_vars(shop),
+        shop: shop_vars(cx, shop),
         order: order_vars(order),
         link: link.map(str::to_owned),
     }));
@@ -263,7 +274,7 @@ pub async fn send_review_request(
     link: &str,
 ) -> Result<()> {
     let vars = MailVars::ReviewRequest(ReviewRequestVars {
-        shop: shop_vars(shop),
+        shop: shop_vars(cx, shop),
         order: ReviewOrderVars {
             reference: order.reference.clone(),
         },
