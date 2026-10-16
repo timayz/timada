@@ -1,8 +1,8 @@
 use serde::Deserialize;
-use timada_tenancy::InviteMember;
+use timada_tenancy::{InviteMember, invitations_sent_since};
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, app_context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
@@ -15,6 +15,8 @@ use crate::app::invitations::token::{Token, index as invitation_page};
 use crate::app::t::slug::{require_tenant, role_label};
 use crate::app::tenants::{error_code, tenancy};
 use crate::auth::{mail::send_invitation, now, require_user};
+use crate::config::Config;
+use crate::db::ReadPool;
 
 #[derive(Deserialize)]
 struct InviteForm {
@@ -24,11 +26,37 @@ struct InviteForm {
 
 /// Records an invitation and mails its link. When the mail cannot go out the
 /// invitation is withdrawn again (best effort), so a retry sends a fresh one.
+/// Refused once the tenant, or the sender, has sent its share within the
+/// configured window.
 #[route(POST)]
 pub async fn invite(cx: &Cx, Form(form): Form<InviteForm>) -> Result<SeeOther> {
     let user = require_user(cx).await?;
     let access = require_tenant(cx).await?;
     let slug = access.tenant.slug.as_str();
+    let limits = &app_context::<Config>(cx).invitations;
+    let sent_recently = invitations_sent_since(
+        app_context::<ReadPool>(cx),
+        &access.tenant.id,
+        &access.user_id,
+        now().saturating_sub(limits.window_secs),
+    )
+    .await?;
+    if !limits.allows(&sent_recently) {
+        tracing::info!(
+            tenant = %access.tenant.id,
+            user = %access.user_id,
+            tenant_sent = sent_recently.tenant,
+            account_sent = sent_recently.account,
+            "invitation limit reached"
+        );
+        return Ok(see_other(members_url(
+            cx,
+            slug,
+            Some("too_many_invitations"),
+            None,
+        )));
+    }
+
     let tenancy = tenancy(cx);
     let sent = match tenancy
         .invite_member(
