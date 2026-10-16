@@ -14,8 +14,8 @@ pub use review::*;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
-    LinkIssued, PhotoRemoved, Published, Rejected, RequestDelaySet, RequestMailed,
-    RequestsDisabled, Revised, Submitted,
+    LinkIssued, PhotoRemoved, Published, Rejected, Replied, ReplyRemoved, RequestDelaySet,
+    RequestMailed, RequestsDisabled, Revised, Submitted,
 };
 use crate::error::ReviewError;
 use crate::value_object::{
@@ -56,6 +56,10 @@ pub struct ReviewState {
     pub published_at: Option<u64>,
     /// Unix seconds of the last event.
     pub updated_at: u64,
+    /// The merchant's public answer, while there is one.
+    pub reply: Option<String>,
+    /// Unix seconds of the answer as it reads now.
+    pub replied_at: Option<u64>,
 }
 
 impl ReviewState {
@@ -75,6 +79,8 @@ pub fn review_projection<E: Executor>() -> Projection<E, ReviewState> {
         .handler(on_rejected())
         .handler(on_photo_removed())
         .handler(on_revised())
+        .handler(on_replied())
+        .handler(on_reply_removed())
         .strict()
 }
 
@@ -135,6 +141,25 @@ async fn on_revised(event: Event<Revised>, review: &mut ReviewState) -> anyhow::
         .photos
         .retain(|photo| !data.removed.contains(&photo.id));
     review.photos.extend(data.added.iter().cloned());
+    review.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_replied(event: Event<Replied>, review: &mut ReviewState) -> anyhow::Result<()> {
+    review.reply = Some(event.data.body.to_owned());
+    review.replied_at = Some(event.timestamp);
+    review.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_reply_removed(
+    event: Event<ReplyRemoved>,
+    review: &mut ReviewState,
+) -> anyhow::Result<()> {
+    review.reply = None;
+    review.replied_at = None;
     review.updated_at = event.timestamp;
     Ok(())
 }

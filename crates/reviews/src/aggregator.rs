@@ -47,6 +47,11 @@ pub enum Review {
         removed: Vec<String>,
         revised_by: String,
     },
+    /// The merchant's public answer, shown under the review; a later one
+    /// replaces it.
+    Replied { body: String, replied_by: String },
+    /// The merchant's answer taken off.
+    ReplyRemoved { removed_by: String },
 }
 
 /// Whether the shop mails its buyers a link to review what they bought, and

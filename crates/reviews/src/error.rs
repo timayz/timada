@@ -1,7 +1,8 @@
 use evento::WriteError;
 
 use crate::value_object::{
-    MAX_BODY_LEN, MAX_PHOTOS, MAX_REASON_LEN, MAX_REQUEST_DELAY_DAYS, MAX_TITLE_LEN, MIN_BODY_LEN,
+    MAX_BODY_LEN, MAX_PHOTOS, MAX_REASON_LEN, MAX_REPLY_LEN, MAX_REQUEST_DELAY_DAYS, MAX_TITLE_LEN,
+    MIN_BODY_LEN,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -16,6 +17,8 @@ pub enum ReviewError {
     TooManyPhotos,
     #[error("a reason is at most {MAX_REASON_LEN} characters")]
     InvalidReason,
+    #[error("a reply says something in at most {MAX_REPLY_LEN} characters")]
+    InvalidReply,
     /// No paid order has this id.
     #[error("order not found")]
     OrderNotFound,
@@ -60,6 +63,7 @@ impl ReviewError {
             Self::InvalidBody => REVIEW_INVALID_BODY,
             Self::TooManyPhotos => REVIEW_TOO_MANY_PHOTOS,
             Self::InvalidReason => "invalid_review_reason",
+            Self::InvalidReply => "invalid_review_reply",
             Self::OrderNotFound => REVIEW_ORDER_NOT_FOUND,
             Self::NotPurchased => REVIEW_NOT_PURCHASED,
             Self::OrderCancelled => REVIEW_ORDER_CANCELLED,
