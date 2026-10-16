@@ -20,6 +20,11 @@ pub const MAX_PHONE_LEN: usize = 30;
 pub const MAX_NOTE_LEN: usize = 1000;
 pub const MAX_TRACKING_LEN: usize = 200;
 pub const MAX_REASON_LEN: usize = 500;
+pub const MAX_SHIPPING_NAME_LEN: usize = 80;
+/// The most countries one shipping method lists.
+pub const MAX_SHIPPING_COUNTRIES: usize = 250;
+/// The most shipping methods a shop offers.
+pub const MAX_SHIPPING_METHODS: usize = 20;
 /// The characters of a reference: Crockford's base 32, which leaves out the
 /// letters a reader mistakes for digits (I, L, O) and U.
 pub const REFERENCE_ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -130,6 +135,11 @@ pub fn business_buyers_id() -> String {
     evento::hash_ids(vec!["business-buyers"])
 }
 
+/// The stream of how the tenant ships: one per tenant store.
+pub fn shipping_methods_id() -> String {
+    evento::hash_ids(vec!["shipping-methods"])
+}
+
 /// The stream of where the tenant's storefront lives: one per tenant store.
 pub fn storefront_id() -> String {
     evento::hash_ids(vec!["storefront"])
@@ -226,6 +236,66 @@ pub fn normalize_shipping(address: ShippingAddress) -> Result<ShippingAddress, O
         country,
         phone: optional(address.phone, MAX_PHONE_LEN, || OrdersError::InvalidPhone)?,
     })
+}
+
+/// A shipping method as the merchant describes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewShippingMethod {
+    pub name: String,
+    pub price_cents: u64,
+    pub currency: String,
+    /// Two-letter codes; empty means every country.
+    pub countries: Vec<String>,
+    pub free_above_cents: Option<u64>,
+}
+
+/// Trims the name, uppercases the currency and the countries (sorted, each
+/// once) and checks the amounts.
+pub fn normalize_shipping_method(
+    method: NewShippingMethod,
+) -> Result<NewShippingMethod, OrdersError> {
+    let name = method.name.trim();
+    if name.is_empty()
+        || name.chars().count() > MAX_SHIPPING_NAME_LEN
+        || name.chars().any(char::is_control)
+    {
+        return Err(OrdersError::InvalidShippingName);
+    }
+    let currency = timada_catalog::normalize_currency(&method.currency)
+        .map_err(|_| OrdersError::InvalidShippingCurrency)?;
+    let max = timada_catalog::MAX_AMOUNT_CENTS;
+    if method.price_cents > max || method.free_above_cents.is_some_and(|cents| cents > max) {
+        return Err(OrdersError::InvalidShippingPrice);
+    }
+    let mut countries = Vec::with_capacity(method.countries.len());
+    for country in &method.countries {
+        let country = country.trim().to_ascii_uppercase();
+        if country.len() != 2 || !country.bytes().all(|b| b.is_ascii_uppercase()) {
+            return Err(OrdersError::InvalidShippingCountries);
+        }
+        countries.push(country);
+    }
+    countries.sort();
+    countries.dedup();
+    if countries.len() > MAX_SHIPPING_COUNTRIES {
+        return Err(OrdersError::InvalidShippingCountries);
+    }
+    Ok(NewShippingMethod {
+        name: name.to_owned(),
+        price_cents: method.price_cents,
+        currency,
+        countries,
+        free_above_cents: method.free_above_cents,
+    })
+}
+
+/// The countries a merchant typed, split on commas and spaces: `"fr, BE"`
+/// is `["fr", "BE"]`. [`normalize_shipping_method`] checks them.
+pub fn split_countries(text: &str) -> Vec<String> {
+    text.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|code| !code.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A billing address: checked like a shipping address, without its phone.
