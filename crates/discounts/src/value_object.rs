@@ -17,6 +17,11 @@ pub const MAX_PERCENT_BPS: u32 = 10_000;
 pub const MIN_CHARGE_CENTS: u64 = 50;
 /// How long a checkout holds a use while the shopper pays.
 pub const RESERVATION_SECS: u64 = 30 * 60;
+/// The most live offers a shop has: a checkout reads them all each time it
+/// prices a cart.
+pub const MAX_OFFERS: usize = 20;
+/// The longest title an offer shows above its item.
+pub const MAX_OFFER_TITLE_LEN: usize = 80;
 
 /// What a discount takes off.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +132,11 @@ pub fn discount_usage_id(discount_id: &str) -> String {
 /// e-mail is the normalized one the checkout carries.
 pub fn discount_buyer_id(discount_id: &str, email: &str) -> String {
     evento::hash_ids(vec!["discount-buyer", discount_id, email])
+}
+
+/// The stream of the tenant's checkout offers: one per tenant store.
+pub fn offers_id() -> String {
+    evento::hash_ids(vec!["offers"])
 }
 
 /// Unix seconds now.

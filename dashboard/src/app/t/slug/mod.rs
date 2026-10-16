@@ -11,6 +11,7 @@ pub mod invoices;
 pub mod invoicing;
 pub mod mail;
 pub mod members;
+pub mod offers;
 pub mod orders;
 pub mod payments;
 pub mod products;
@@ -156,6 +157,7 @@ pub struct TenantNav {
     pub carts: bool,
     pub customers: bool,
     pub discounts: bool,
+    pub offers: bool,
     pub reviews: bool,
     pub invoices: bool,
     pub payments: bool,
@@ -171,6 +173,7 @@ impl TenantNav {
     pub async fn of(cx: &Cx, access: &TenantAccess) -> Result<Self> {
         let products = access.can(cx, PERMISSION_PRODUCTS_READ).await?;
         let orders = access.can(cx, PERMISSION_ORDERS_READ).await?;
+        let discounts = access.can(cx, PERMISSION_DISCOUNTS_READ).await?;
         Ok(Self {
             products,
             // The catalog is one section of the back office: whoever sees the
@@ -181,7 +184,9 @@ impl TenantNav {
             orders,
             carts: orders,
             customers: access.can(cx, PERMISSION_CUSTOMERS_READ).await?,
-            discounts: access.can(cx, PERMISSION_DISCOUNTS_READ).await?,
+            discounts,
+            // Checkout offers are discounts of another shape.
+            offers: discounts,
             reviews: access.can(cx, PERMISSION_REVIEWS_READ).await?,
             // Invoices are what the orders were billed as.
             invoices: orders,
@@ -199,7 +204,7 @@ impl TenantNav {
 /// The header links of a tenant page: the tenant's home, each section the
 /// member may see, the dashboard and the account. `current` names the
 /// section being shown (`"home"`, `"products"`, `"categories"`, `"orders"`,
-/// `"carts"`, `"customers"`, `"discounts"`, `"reviews"`, `"invoices"`, `"payments"`, `"shipping"`, `"mail"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
+/// `"carts"`, `"customers"`, `"discounts"`, `"offers"`, `"reviews"`, `"invoices"`, `"payments"`, `"shipping"`, `"mail"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
 /// section), which gets
 /// no link.
 #[component]
@@ -227,6 +232,9 @@ pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) ->
             }
             if nav.discounts && current != "discounts" {
                 <a class="underline" href=(href!(discounts::index, Slug(slug.clone())))>"Discounts"</a>
+            }
+            if nav.offers && current != "offers" {
+                <a class="underline" href=(href!(offers::index, Slug(slug.clone())))>"Offers"</a>
             }
             if nav.reviews && current != "reviews" {
                 <a class="underline" href=(href!(reviews::index, Slug(slug.clone())))>"Reviews"</a>

@@ -3,10 +3,12 @@
 //! Every write model folds *all* events of its aggregate (`strict()`), so the
 //! version it observes, and `write()` sends as `original_version`, never goes
 //! stale. None of them is snapshotted: a discount is a handful of events, a
-//! usage stream at most a few per use of a capped code.
+//! usage stream at most a few per use of a capped code, the offers stream a
+//! few per offer.
 
 mod code_index;
 mod discount;
+mod offer;
 mod usage;
 
 use std::collections::BTreeMap;
@@ -14,6 +16,7 @@ use std::fmt;
 use std::ops::Deref;
 
 pub use discount::*;
+pub use offer::*;
 
 use evento::{Executor, Projection, metadata::Event};
 

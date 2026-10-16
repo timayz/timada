@@ -1514,6 +1514,102 @@ async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
     h.finish().await;
 }
 
+#[tokio::test]
+async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h
+        .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
+        .await;
+    let catalog = h.catalog(&acme).await;
+    let sell = async |name: &str, cents: u64| {
+        let product = catalog
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: name.into(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap();
+        catalog
+            .price_product("alice", &product.id, cents, "EUR")
+            .await
+            .unwrap();
+        catalog.publish_product("alice", &product.id).await.unwrap();
+        product.id
+    };
+    let mug = sell("Blue Mug", 1250).await;
+    let tracker = sell("GPS Tracker", 3000).await;
+    let offer_id = timada_discounts::Command(catalog.0.clone())
+        .create_offer(
+            "alice",
+            timada_discounts::CreateOffer {
+                product_id: tracker.clone(),
+                price_cents: 1200,
+                currency: "EUR".into(),
+                title: Some("A tracker at 60% off".into()),
+                requires_product_id: Some(mug.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let pool = h.local_pool("offer-shop").await;
+    let store = Store::connect(h.config(&token), pool.clone())
+        .await
+        .unwrap();
+    eventually("both products are in the local copy", async || {
+        published(&pool).await.len() == 2
+    })
+    .await;
+
+    // A mug in the cart: the tracker is offered, illustrated from the copy.
+    let cart_id = store
+        .add_to_cart(None, &mug, None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    let cart = store.cart(&cart_id).await.unwrap().unwrap();
+    let [offer] = cart.offers.as_slice() else {
+        panic!("one offer: {:?}", cart.offers);
+    };
+    assert_eq!(offer.offer_id, offer_id);
+    assert_eq!(offer.slug.as_deref(), Some("gps-tracker"));
+    assert_eq!(offer.heading(), "A tracker at 60% off");
+    assert_eq!(
+        (offer.price(), offer.offer_price(), offer.percent_off()),
+        ("30.00 EUR".to_owned(), "12.00 EUR".to_owned(), 60)
+    );
+
+    // Two trackers added: one line, one unit of it at the offer.
+    store
+        .add_to_cart(Some(&cart_id), &tracker, None, 2)
+        .await
+        .unwrap()
+        .unwrap();
+    let cart = store.cart(&cart_id).await.unwrap().unwrap();
+    assert!(cart.offers.is_empty());
+    assert_eq!(cart.lines.len(), 2);
+    let line = &cart.lines[1];
+    assert_eq!(line.quantity, 2);
+    assert_eq!(line.unit_amount_cents, Some(3000));
+    assert_eq!(line.amount_cents, Some(4200));
+    let applied = line.offer.as_ref().unwrap();
+    assert_eq!(
+        (applied.offer_id.as_str(), applied.unit_amount_cents),
+        (offer_id.as_str(), 1200)
+    );
+    assert_eq!(cart.item_count, 3);
+    assert_eq!(cart.total().as_deref(), Some("54.50 EUR"));
+    assert_eq!(cart.vat_estimate("FR").unwrap().vat_cents, 908);
+
+    store.shutdown().await;
+    h.finish().await;
+}
+
 /// A paid order of one of each product, written as the payments webhook
 /// would: what a review is written from.
 async fn paid_order(executor: &cluster::Executor, order_id: &str, products: &[(&str, &str)]) {

@@ -5,7 +5,9 @@
 //! (`/checkout/start`), which opens the payment for the cart as it stands, then
 //! confirms it in the browser, which comes back to `/checkout/complete`. The
 //! total the page showed travels with the request, so a price the shopper
-//! did not see is never charged.
+//! did not see is never charged. The merchant's checkout offers show as
+//! cards above the payment, each with an Add button that puts its item in
+//! the cart and comes back here.
 
 pub mod complete;
 pub mod countries;
@@ -13,8 +15,8 @@ pub mod pay;
 pub mod start;
 
 use timada_storefront::{
-    CartView, Checkout, OrdersError, VatEstimate, accepts_business_buyers, format_money, menu,
-    payment_setup, recent_reviews, save_address, start_payment,
+    CartView, Checkout, OfferView, OrdersError, VatEstimate, accepts_business_buyers, format_money,
+    menu, payment_setup, recent_reviews, save_address, start_payment,
 };
 use topcoat::{
     Result,
@@ -428,6 +430,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let total_cents = cart.total_with(shipping.as_ref());
     let total = format_money(total_cents, &currency);
     let rates = express_rates(&cart);
+    // The offers the shopper may add, among the products this site sells.
+    let offers: Vec<OfferView> = cart
+        .offers
+        .iter()
+        .filter(|offer| offer.slug.is_some())
+        .cloned()
+        .collect();
     let back_to_cart = href!(crate::app::cart::index).resolve(cx);
     let publishable_key = setup
         .as_ref()
@@ -658,6 +667,35 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <label for="checkout-note">"Note for the shop (optional)"</label>
                             <textarea id="checkout-note" name="note" rows="2">(&draft.note)</textarea>
                         </section>
+                        if !offers.is_empty() {
+                            <section class="card offers" aria-labelledby="checkout-offers-title" data-checkout-offers="">
+                                <h2 id="checkout-offers-title">"Exclusive offer"</h2>
+                                <ul>
+                                    for offer in &offers {
+                                        <li data-checkout-offer=(&offer.name)>
+                                            if let Some(url) = &offer.image_url {
+                                                <img src=(url) alt="" width="56" height="56" loading="lazy">
+                                            } else {
+                                                <span></span>
+                                            }
+                                            <span class="what">
+                                                <strong>(offer.heading())</strong>
+                                                if offer.title.is_some() { <small>(&offer.name)</small> }
+                                                if let Some(label) = &offer.variant_label { <small class="variant">(label)</small> }
+                                                <span>
+                                                    <s aria-label=(format!("instead of {}", offer.price()))>(offer.price())</s> " "
+                                                    <strong class="price" data-offer-price="">(offer.offer_price())</strong> " "
+                                                    <span class="off">"−" (offer.percent_off()) "%"</span>
+                                                </span>
+                                            </span>
+                                            // The offer's own form sits after this one: forms do not nest.
+                                            <button type="submit" form=(format!("offer-{}", offer.offer_id))
+                                                aria-label=(format!("Add {} at {}", offer.name, offer.offer_price()))>"Add"</button>
+                                        </li>
+                                    }
+                                </ul>
+                            </section>
+                        }
                         <section class="card">
                             <h2>"Payment"</h2>
                             <p class="hint">"Every transaction is secured and encrypted. Card details are never stored on our servers."</p>
@@ -670,6 +708,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <button class="primary place">"Place order · " <span data-place-total="">(&total)</span></button>
                         </section>
                     </form>
+                    for offer in &offers {
+                        <form id=(format!("offer-{}", offer.offer_id)) method="post" action=(href!(crate::app::cart::add::add))>
+                            <input type="hidden" name="slug" value=(offer.slug.as_deref().unwrap_or_default())>
+                            <input type="hidden" name="variant_id" value=(offer.variant_id.as_deref().unwrap_or_default())>
+                            <input type="hidden" name="quantity" value="1">
+                            <input type="hidden" name="offer" value=(&offer.offer_id)>
+                            <input type="hidden" name="back" value="checkout">
+                        </form>
+                    }
                 </div>
             </div>
             if setup.is_some() {

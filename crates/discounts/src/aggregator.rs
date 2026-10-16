@@ -94,3 +94,46 @@ pub mod buyer {
         },
     }
 }
+
+/// The checkout offers of the tenant: one stream per tenant store, with the
+/// deterministic id [`offers_id`](crate::offers_id). An offer prices one
+/// unit of a product (one variant of it, when it sells variants) below its
+/// price while its conditions hold.
+#[evento::aggregate(name = "timada-discounts/Offers")]
+pub enum Offers {
+    OfferCreated {
+        offer_id: String,
+        product_id: String,
+        /// Set exactly when the product sells variants.
+        variant_id: Option<String>,
+        /// What the one unit costs, in minor units of `currency`: below the
+        /// product's price.
+        price_cents: u64,
+        currency: String,
+        /// What the checkout says above it; `None` is the product's name.
+        title: Option<String>,
+        /// Only while the cart holds this product too.
+        requires_product_id: Option<String>,
+        /// Only while the rest of the cart is worth this much at least.
+        min_subtotal_cents: Option<u64>,
+        /// Unix seconds; `None` is from the start.
+        starts_at: Option<u64>,
+        /// Unix seconds, excluded; `None` is no end.
+        ends_at: Option<u64>,
+        created_by: String,
+    },
+    /// Shoppers are not offered it until it is reactivated.
+    OfferDeactivated {
+        offer_id: String,
+        deactivated_by: String,
+    },
+    OfferReactivated {
+        offer_id: String,
+        reactivated_by: String,
+    },
+    /// Final: the offer is gone.
+    OfferArchived {
+        offer_id: String,
+        archived_by: String,
+    },
+}
