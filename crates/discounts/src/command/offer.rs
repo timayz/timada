@@ -117,9 +117,28 @@ impl OffersState {
     /// `now`, if any: one for that item, in `currency`, cheaper than its
     /// full price, whose conditions the cart meets without that unit. The
     /// cheapest wins when several do.
+    ///
+    /// The rest of the cart counts the units other offers price at what
+    /// they are charged: two offers never hold each other's minimum up with
+    /// a full price nobody pays. Each line is checked against the others'
+    /// offers of a first pass, which only ever grants more of them than the
+    /// final say, so every offer granted holds with the prices charged.
     pub fn applied(
         &self,
         items: &[OfferItem<'_>],
+        currency: &str,
+        now: u64,
+    ) -> Vec<Option<&Offer>> {
+        let first = self.applied_with(items, &vec![None; items.len()], currency, now);
+        self.applied_with(items, &first, currency, now)
+    }
+
+    /// [`applied`](Self::applied), the units of the other lines `others`
+    /// prices counted at the offer's price.
+    fn applied_with(
+        &self,
+        items: &[OfferItem<'_>],
+        others: &[Option<&Offer>],
         currency: &str,
         now: u64,
     ) -> Vec<Option<&Offer>> {
@@ -127,8 +146,17 @@ impl OffersState {
             .iter()
             .enumerate()
             .map(|(index, item)| {
-                let mut rest = items.to_vec();
-                rest[index].quantity = rest[index].quantity.saturating_sub(1);
+                let mut rest = Vec::with_capacity(items.len() + 1);
+                for (other_index, (other, offer)) in items.iter().zip(others).enumerate() {
+                    if other_index == index {
+                        rest.push(OfferItem {
+                            quantity: other.quantity.saturating_sub(1),
+                            ..*other
+                        });
+                    } else {
+                        push_charged(&mut rest, other, *offer);
+                    }
+                }
                 self.offers
                     .iter()
                     .filter(|offer| {
@@ -144,15 +172,22 @@ impl OffersState {
     }
 
     /// The offers a cart of `items` in `currency` could take at `now`: those
-    /// whose item is not in it yet and whose conditions it meets, the
-    /// cheapest one for each item.
+    /// whose item is not in it yet and whose conditions it meets (the units
+    /// offers already price counted at their price), the cheapest one for
+    /// each item.
     pub fn applicable(&self, items: &[OfferItem<'_>], currency: &str, now: u64) -> Vec<&Offer> {
+        let mut charged = Vec::with_capacity(items.len());
+        for (item, offer) in items.iter().zip(self.applied(items, currency, now)) {
+            push_charged(&mut charged, item, offer);
+        }
         let mut found: Vec<&Offer> = Vec::new();
         for offer in &self.offers {
             let in_cart = items
                 .iter()
                 .any(|item| item.quantity > 0 && offer.is_for(item.product_id, item.variant_id));
-            if in_cart || !offer.currency.eq_ignore_ascii_case(currency) || !offer.holds(items, now)
+            if in_cart
+                || !offer.currency.eq_ignore_ascii_case(currency)
+                || !offer.holds(&charged, now)
             {
                 continue;
             }
@@ -166,6 +201,25 @@ impl OffersState {
             }
         }
         found
+    }
+}
+
+/// Pushes `item` as it is charged: its one unit `offer` prices at the
+/// offer's price, the others at full price.
+fn push_charged<'a>(rest: &mut Vec<OfferItem<'a>>, item: &OfferItem<'a>, offer: Option<&Offer>) {
+    match offer {
+        Some(offer) if item.quantity > 0 => {
+            rest.push(OfferItem {
+                quantity: 1,
+                unit_amount_cents: offer.price_cents,
+                ..*item
+            });
+            rest.push(OfferItem {
+                quantity: item.quantity - 1,
+                ..*item
+            });
+        }
+        _ => rest.push(*item),
     }
 }
 
@@ -511,6 +565,50 @@ mod tests {
         // A second tracker counts towards the minimum of the first.
         let two = [item("bowl", 1, 2000), item("tracker", 2, 3000)];
         assert!(offers.applied(&two, "EUR", 0)[1].is_some());
+    }
+
+    #[test]
+    fn another_offered_unit_counts_at_its_offer_price_towards_a_minimum() {
+        let offers = state(vec![
+            Offer {
+                min_subtotal_cents: Some(5000),
+                ..offer("o1", "tracker", 1200)
+            },
+            Offer {
+                min_subtotal_cents: Some(5000),
+                ..offer("o2", "collar", 500)
+            },
+        ]);
+        // At full price each is 30.00 + 25.00 besides the other; charged,
+        // the collar is 5.00 and the tracker 12.00: neither minimum holds.
+        let cart = [
+            item("bowl", 1, 3000),
+            item("tracker", 1, 3000),
+            item("collar", 1, 2500),
+        ];
+        assert_eq!(offers.applied(&cart, "EUR", 0), vec![None, None, None]);
+        // With 50.00 of bowls, both do.
+        let more = [
+            item("bowl", 2, 2500),
+            item("tracker", 1, 3000),
+            item("collar", 1, 2500),
+        ];
+        let ids: Vec<Option<&str>> = offers
+            .applied(&more, "EUR", 0)
+            .iter()
+            .map(|offer| offer.map(|offer| offer.id.as_str()))
+            .collect();
+        assert_eq!(ids, vec![None, Some("o1"), Some("o2")]);
+        // A suggestion counts the tracker at its offer price too.
+        let suggest = state(vec![
+            offer("o1", "tracker", 1200),
+            Offer {
+                min_subtotal_cents: Some(4000),
+                ..offer("o2", "collar", 500)
+            },
+        ]);
+        let cart = [item("bowl", 1, 2000), item("tracker", 1, 3000)];
+        assert!(suggest.applicable(&cart, "EUR", 0).is_empty());
     }
 
     #[test]
