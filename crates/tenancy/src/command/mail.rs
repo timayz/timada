@@ -1,7 +1,10 @@
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{MailServerConfigured, MailServerRemoved};
+use crate::aggregator::{
+    MailServerConfigured, MailServerRemoved, MailTemplateReset, MailTemplateSaved,
+};
 use crate::error::TenancyError;
+use crate::mail_template::{ShopMailKind, validate};
 use crate::value_object::{MAIL_SECURITIES, PERMISSION_MAIL_MANAGE};
 
 /// The merchant's own mail server, its password sealed by the host.
@@ -88,6 +91,74 @@ impl<E: Executor> super::Command<E> {
             .routing_key_opt(routing_key)
             .event(&MailServerRemoved {
                 removed_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Words one of the shop's mails the merchant's way. The template is
+    /// checked first ([`validate`]): a refused one says why. Needs
+    /// `mail:manage`.
+    pub async fn save_mail_template(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        mail: &str,
+        subject: &str,
+        html: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let kind = ShopMailKind::from_key(mail).ok_or(TenancyError::UnknownMail)?;
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        let subject = subject.trim();
+        validate(kind, subject, html)?;
+        if tenant
+            .mail_template(kind)
+            .is_some_and(|saved| saved.subject == subject && saved.html == html)
+        {
+            return Ok(());
+        }
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&MailTemplateSaved {
+                mail: kind.key().to_owned(),
+                subject: subject.to_owned(),
+                html: html.to_owned(),
+                saved_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Sends one of the shop's mails in the built-in wording again; a mail
+    /// already in it is a no-op. Needs `mail:manage`.
+    pub async fn reset_mail_template(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        mail: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let kind = ShopMailKind::from_key(mail).ok_or(TenancyError::UnknownMail)?;
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        if tenant.mail_template(kind).is_none() {
+            return Ok(());
+        }
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&MailTemplateReset {
+                mail: kind.key().to_owned(),
+                reset_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)
             .await?;
