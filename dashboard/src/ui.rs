@@ -262,6 +262,7 @@ pub fn describe_permission(permission: &str) -> &'static str {
             "Publish and reject reviews, take photos off them (includes seeing them)"
         }
         "customers:read" => "See the shop's customer accounts",
+        "customers:manage" => "Delete shopper accounts (includes seeing them)",
         "mail:manage" => "Set up the mail server the shop's mails go out through",
         "shipping:manage" => "Set up the ways the shop ships and what they cost",
         _ => "Unknown permission",

@@ -2,8 +2,9 @@ mod common;
 
 use common::*;
 use timada_tenancy::{
-    DefineRole, PERMISSION_MEMBERS_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ROLES_MANAGE,
-    PERMISSION_TENANT_MANAGE, PERMISSIONS, TenancyError,
+    DefineRole, PERMISSION_CUSTOMERS_MANAGE, PERMISSION_CUSTOMERS_READ, PERMISSION_MEMBERS_MANAGE,
+    PERMISSION_MEMBERS_READ, PERMISSION_ROLES_MANAGE, PERMISSION_TENANT_MANAGE, PERMISSIONS,
+    TenancyError, implies,
 };
 
 fn role(name: &str, perms: &[&str]) -> DefineRole {
@@ -184,6 +185,17 @@ async fn permissions_follow_roles_and_owners_hold_everything() {
     assert!(state.can(&manager, PERMISSION_MEMBERS_READ));
     assert!(state.can(&manager, PERMISSION_MEMBERS_MANAGE));
     assert!(!state.can(&manager, PERMISSION_ROLES_MANAGE));
+    // Deleting a shopper account includes seeing the customers, not the other
+    // way round.
+    assert!(PERMISSIONS.contains(&PERMISSION_CUSTOMERS_MANAGE));
+    assert!(implies(
+        PERMISSION_CUSTOMERS_MANAGE,
+        PERMISSION_CUSTOMERS_READ
+    ));
+    assert!(!implies(
+        PERMISSION_CUSTOMERS_READ,
+        PERMISSION_CUSTOMERS_MANAGE
+    ));
     assert!(!state.can(&bob, PERMISSION_TENANT_MANAGE));
     assert!(!state.can(&new_id(), PERMISSION_MEMBERS_READ));
 
