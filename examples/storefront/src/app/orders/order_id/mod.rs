@@ -220,6 +220,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     " " (reason)
                                 }
                             </p>
+                            if let Some(reply) = review.reply.as_deref().filter(|_| review.is_published()) {
+                                <blockquote class="review-reply" data-review-reply="">
+                                    <p><strong>"Reply from the shop"</strong></p>
+                                    <p>(reply)</p>
+                                </blockquote>
+                            }
                             if review.status == ReviewStatus::Pending {
                                 <details class="review-edit" data-review-edit=(&line.product_id) open=(query.product.as_deref() == Some(line.product_id.as_str()) && query.error.is_some())>
                                     <summary>"Edit my review"</summary>

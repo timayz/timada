@@ -107,9 +107,10 @@ async fn upsert_review(pool: &SqlitePool, review: &ReviewState) -> anyhow::Resul
                 .collect();
             sqlx::query(
                 "INSERT INTO storefront_reviews (id, product_id, rating, title, body,
-                    author_name, variant_label, photos_json, published_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT (id) DO UPDATE SET photos_json = excluded.photos_json",
+                    author_name, variant_label, photos_json, published_at, reply, replied_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT (id) DO UPDATE SET photos_json = excluded.photos_json,
+                    reply = excluded.reply, replied_at = excluded.replied_at",
             )
             .bind(&review.id)
             .bind(&review.product_id)
@@ -120,6 +121,8 @@ async fn upsert_review(pool: &SqlitePool, review: &ReviewState) -> anyhow::Resul
             .bind(&review.variant_label)
             .bind(serde_json::to_string(&photos)?)
             .bind(published_at as i64)
+            .bind(&review.reply)
+            .bind(review.replied_at.map(|at| at as i64))
             .execute(&mut *tx)
             .await?;
         }
