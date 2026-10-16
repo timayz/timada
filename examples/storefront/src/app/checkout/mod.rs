@@ -113,10 +113,20 @@ const ratesTo = (code) => rates
 // fieldset is neither checked nor sent.
 const billing = form.querySelector("[data-billing]");
 const billingDifferent = form.elements.billing_different;
-billingDifferent.addEventListener("change", () => {
+function showBilling() {
   billing.hidden = !billingDifferent.checked;
   billing.disabled = !billingDifferent.checked;
-});
+}
+billingDifferent.addEventListener("change", showBilling);
+
+// The wallet's billing address, when it is not the delivery one.
+function walletBilling(billing, shipping) {
+  const at = billing.address, to = shipping.address || {};
+  if (!at?.line1) return null;
+  const same = (a, b) => (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
+  return ["line1", "line2", "postal_code", "city", "country"]
+    .every((key) => same(at[key], to[key])) ? null : at;
+}
 
 function fail(message) {
   error.textContent = message;
@@ -150,6 +160,8 @@ if (key && window.Stripe) {
   express.on("click", (event) => event.resolve({
     emailRequired: true,
     shippingAddressRequired: true,
+    // A whole address, else wallets hand only its country and postal code.
+    billingAddressRequired: true,
     allowedShippingCountries: [...country.options].map((option) => option.value),
     // Before the wallet's address is known: those that ship to the form's
     // country, else all of them.
@@ -182,6 +194,16 @@ if (key && window.Stripe) {
     fill("postal_code", address.postal_code);
     fill("city", address.city);
     fill("country", address.country);
+    // Billed elsewhere when the wallet says so; else at the delivery address.
+    const other = walletBilling(billing, shipping);
+    billingDifferent.checked = !!other;
+    showBilling();
+    if (other) {
+      fill("billing_name", billing.name || shipping.name);
+      for (const key of ["line1", "line2", "postal_code", "city", "country"]) {
+        form.elements[`billing_${key}`].value = other[key] || "";
+      }
+    }
     const rate = methods.find((method) => method.value === event.shippingRate?.id);
     if (rate) rate.checked = true;
     showShipping();
@@ -258,6 +280,8 @@ struct CheckoutQuery {
     error: Option<String>,
     /// A saved address of the signed-in shopper to ship to.
     address: Option<String>,
+    /// A saved address of the signed-in shopper to bill to.
+    billing: Option<String>,
 }
 
 pub fn checkout_url(cx: &Cx, error: Option<&str>) -> String {
@@ -268,17 +292,16 @@ pub fn checkout_url(cx: &Cx, error: Option<&str>) -> String {
     href!(index).query(Link { error }).resolve(cx)
 }
 
-/// The checkout, shipping to a saved address.
-fn ship_to_url(cx: &Cx, address_id: &str) -> String {
+/// The checkout, shipping and billing to saved addresses.
+fn saved_url(cx: &Cx, address: Option<&str>, billing: Option<&str>) -> String {
     #[derive(serde::Serialize)]
     struct Link<'a> {
-        address: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        address: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        billing: Option<&'a str>,
     }
-    href!(index)
-        .query(Link {
-            address: address_id,
-        })
-        .resolve(cx)
+    href!(index).query(Link { address, billing }).resolve(cx)
 }
 
 /// `incl. 9.97 EUR VAT FR 20%`.
@@ -336,8 +359,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         None
     };
     // Signed in: the account's address, and the saved address chosen (or the
-    // latest one, when nothing was typed yet).
+    // latest one, when nothing was typed yet); the one chosen to bill to.
     let mut shipping_to = None;
+    let mut billing_to = None;
     if let Some(shopper) = &shopper {
         draft.email = shopper.email.clone();
         let pick = match query.address.as_deref() {
@@ -348,6 +372,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         if let Some(saved) = pick {
             shipping_to = Some(saved.id.clone());
             draft = draft.with_address(saved);
+        }
+        if let Some(saved) = query.billing.as_deref().and_then(|id| shopper.address(id)) {
+            billing_to = Some(saved.id.clone());
+            draft = draft.with_billing_address(saved);
         }
     }
     let sign_in = sign_in_url(cx, Some(&href!(index).resolve(cx)), None);
@@ -527,10 +555,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             if let Some(shopper) = shopper.as_ref().filter(|shopper| !shopper.addresses.is_empty()) {
                                 <ul class="saved" data-saved-addresses="">
                                     for saved in &shopper.addresses {
-                                        <li data-saved-address=(&saved.address.city) data-current=(shipping_to.as_deref() == Some(saved.id.as_str()))>
+                                        <li data-saved-address=(&saved.address.city) data-current=(shipping_to.as_deref() == Some(saved.id.as_str()))
+                                            data-billing-current=(billing_to.as_deref() == Some(saved.id.as_str()))>
                                             (&saved.address.name) ", " (&saved.address.line1) ", "
                                             (&saved.address.postal_code) " " (&saved.address.city) " "
-                                            <a href=(ship_to_url(cx, &saved.id))>"Ship here"</a>
+                                            <a href=(saved_url(cx, Some(&saved.id), billing_to.as_deref()))>"Ship here"</a> " "
+                                            <a href=(saved_url(cx, shipping_to.as_deref(), Some(&saved.id))) data-bill-here="">"Bill here"</a>
                                         </li>
                                     }
                                 </ul>
@@ -611,6 +641,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         </select>
                                     </span>
                                 </div>
+                                if shopper.is_some() {
+                                    <label class="check">
+                                        <input type="checkbox" name="save_billing_address" value="1">
+                                        " Save this billing address to my account"
+                                    </label>
+                                }
                             </fieldset>
                             <p class="hint" data-import-notice="">"Shipping outside the EU? Import duties and taxes may be due on delivery."</p>
                             if shopper.is_some() {
@@ -651,6 +687,9 @@ pub struct CheckoutForm {
     /// Signed in: keep the address on the account.
     #[serde(default)]
     save_address: String,
+    /// Signed in: keep the billing address on the account too.
+    #[serde(default)]
+    save_billing_address: String,
     #[serde(flatten)]
     draft: CheckoutDraft,
 }
@@ -715,10 +754,19 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {
         Ok(session) => {
-            // The address checked out: kept on the account for the next
+            // The addresses checked out: kept on the account for the next
             // order. A refusal (ten kept already) does not stop the payment.
-            if let Some(token) = token.filter(|_| !form.save_address.is_empty()) {
-                let _ = save_address(cx, &token, &draft.shipping()).await?;
+            // The billing one first: the latest saved is the next delivery.
+            if let Some(token) = &token {
+                if let Some(billing) = draft
+                    .billing()
+                    .filter(|_| !form.save_billing_address.is_empty())
+                {
+                    let _ = save_address(cx, token, &billing).await?;
+                }
+                if !form.save_address.is_empty() {
+                    let _ = save_address(cx, token, &draft.shipping()).await?;
+                }
             }
             set_payment_in_progress(
                 cx,

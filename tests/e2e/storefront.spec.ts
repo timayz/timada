@@ -666,16 +666,37 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
       expressCheckout: { buttonHeight: 44 },
       mounted: ["#drawer-express-checkout"],
     });
+    // The wallet is asked for a whole billing address.
+    const asked = await page.evaluate(
+      () =>
+        new Promise((resolve) => (window as any).__stripe.on["expressCheckout:click"]({ resolve })),
+    );
+    expect(asked).toMatchObject({ emailRequired: true, shippingAddressRequired: true, billingAddressRequired: true });
+    // Billed elsewhere than delivered: the order is asked for with both.
     // Not awaited in the page: paying navigates away.
+    const started = page.waitForRequest((req) => req.method() === "POST" && req.url().includes("/checkout/start"));
     await page.evaluate(() => {
       void (window as any).__stripe.on["expressCheckout:confirm"]({
-        billingDetails: { email: "ada@example.com", name: "Ada Lovelace" },
+        billingDetails: {
+          email: "ada@example.com",
+          name: "Analytical Engines GmbH",
+          address: { line1: "Unter den Linden 1", postal_code: "10117", city: "Berlin", country: "DE" },
+        },
         shippingAddress: {
           name: "Ada Lovelace",
           address: { line1: "1 rue de la Paix", postal_code: "75002", city: "Paris", country: "FR" },
         },
         paymentFailed() {},
       });
+    });
+    const sent = new URLSearchParams((await started).postData() ?? "");
+    expect(Object.fromEntries(sent)).toMatchObject({
+      city: "Paris",
+      billing_different: "1",
+      billing_name: "Analytical Engines GmbH",
+      billing_line1: "Unter den Linden 1",
+      billing_city: "Berlin",
+      billing_country: "DE",
     });
     await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
     expect(stripe.lastIntent()!.amount).toBe(2250);
@@ -1284,6 +1305,32 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
     await billed.locator("a").nth(1).click();
     await expect(page.locator("[data-order-billing]")).toContainText("Unter den Linden 1");
     await expect(page.locator("[data-order-address]")).toContainText("New York");
+
+    // Express Checkout: the wallet's billing address, when it is not the
+    // delivery one, fills the billing fields and goes to Stripe.
+    await addMug();
+    await page.goto(`${STOREFRONT}/checkout`);
+    await page.getByLabel("Use a different billing address (optional)").uncheck();
+    await page.evaluate(() => {
+      void (window as any).__stripe.on["expressCheckout:confirm"]({
+        billingDetails: {
+          email: "ada@example.org",
+          name: "Analytical Engines GmbH",
+          address: { line1: "Unter den Linden 1", postal_code: "10117", city: "Berlin", country: "DE" },
+        },
+        shippingAddress: {
+          name: "Ada Lovelace",
+          address: { line1: "350 Fifth Avenue", postal_code: "10118", city: "New York", country: "US" },
+        },
+        paymentFailed() {},
+      });
+    });
+    await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
+    expect(JSON.parse((await page.evaluate(() => sessionStorage.getItem("confirmed")))!).billing_details).toMatchObject({
+      name: "Analytical Engines GmbH",
+      email: "ada@example.org",
+      address: { line1: "Unter den Linden 1", city: "Berlin", postal_code: "10117", country: "DE" },
+    });
   } finally {
     await vies.stop();
     await stripe.stop();
@@ -1395,6 +1442,15 @@ test("a returning shopper signs in with a mailed code and finds their orders and
     await expect(page.getByLabel("E-mail")).toHaveAttribute("readonly", "");
     await expect(page.getByLabel("City", { exact: true })).toHaveValue("Paris");
     await expect(page.getByLabel("Save this address to my account")).toBeChecked();
+    // Billed to a company this time, kept on the account too.
+    await page.getByLabel("Use a different billing address (optional)").check();
+    await page.getByLabel("Billing name or company").fill("Analytical Engines GmbH");
+    await page.getByLabel("Billing street address").fill("Unter den Linden 1");
+    await page.getByLabel("Billing city").fill("Berlin");
+    await page.getByLabel("Billing postal code").fill("10117");
+    await page.getByLabel("Billing country").selectOption("DE");
+    await expect(page.getByLabel("Save this billing address to my account")).not.toBeChecked();
+    await page.getByLabel("Save this billing address to my account").check();
     await page.getByRole("button", { name: "Place order" }).click();
     await pay(page);
 
@@ -1425,8 +1481,9 @@ test("a returning shopper signs in with a mailed code and finds their orders and
         await device.reload();
         await expect(device.locator("[data-account-order]")).toHaveCount(2, { timeout: 1000 });
       }).toPass({ timeout: 15_000 });
-      await expect(device.locator("[data-saved-address]")).toHaveCount(1);
+      await expect(device.locator("[data-saved-address]")).toHaveCount(2);
       await expect(device.locator("[data-saved-address=Paris]")).toContainText("1 rue de la Paix");
+      await expect(device.locator("[data-saved-address=Berlin]")).toContainText("Unter den Linden 1");
 
       // The guest order opens here: it was placed with this address.
       const guestPath = new URL(guestOrder).pathname;
@@ -1444,6 +1501,22 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       await expect(device.getByLabel("City", { exact: true })).toHaveValue("Paris");
       await expect(device.locator("[data-saved-address=Paris]")).toHaveAttribute("data-current", "");
 
+      // Billed to another saved address in one click; still shipped to Paris.
+      await expect(device.locator("[data-billing]")).toBeHidden();
+      await device.locator("[data-saved-address=Berlin]").getByRole("link", { name: "Bill here" }).click();
+      await expect(device).toHaveURL(/[?&]billing=/);
+      await expect(device.locator("[data-saved-address=Berlin]")).toHaveAttribute("data-billing-current", "");
+      await expect(device.locator("[data-saved-address=Paris]")).toHaveAttribute("data-current", "");
+      await expect(device.getByLabel("Use a different billing address (optional)")).toBeChecked();
+      await expect(device.getByLabel("Billing name or company")).toHaveValue("Analytical Engines GmbH");
+      await expect(device.getByLabel("Billing city")).toHaveValue("Berlin");
+      await expect(device.getByLabel("Billing country")).toHaveValue("DE");
+      await expect(device.getByLabel("City", { exact: true })).toHaveValue("Paris");
+      // Shipping elsewhere keeps the billing choice.
+      await device.locator("[data-saved-address=Berlin]").getByRole("link", { name: "Ship here" }).click();
+      await expect(device.getByLabel("City", { exact: true })).toHaveValue("Berlin");
+      await expect(device.getByLabel("Billing city")).toHaveValue("Berlin");
+
       // Signed out, an order this browser did not place asks to sign in
       // first (the confirmation's link, opened elsewhere), then shows.
       await device.goto(`${STOREFRONT}/account`);
@@ -1455,9 +1528,10 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       await expect(device).toHaveURL(guestOrder);
       await expect(device.getByRole("heading", { level: 1 })).toBeVisible();
 
-      // Removing an address, back on the first browser.
+      // Removing the addresses, back on the first browser.
       await page.goto(`${STOREFRONT}/account`);
       await page.locator("[data-saved-address=Paris]").getByRole("button", { name: "Remove" }).click();
+      await page.locator("[data-saved-address=Berlin]").getByRole("button", { name: "Remove" }).click();
       await expect(page.locator("[data-saved-address]")).toHaveCount(0);
 
       // The merchant finds the shopper among the shop's customers, with both
