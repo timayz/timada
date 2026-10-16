@@ -153,16 +153,25 @@ impl vies::Vies for FakeVies {
     }
 }
 
-struct Harness {
+/// One node with its platform store and tenants, paying through `G`: the
+/// fake Stripe unless said otherwise.
+struct Harness<G = FakeStripe> {
     tenants: Arc<Tenants>,
     platform: Command<cluster::Executor>,
     payments: Arc<Payments>,
-    stripe: Arc<FakeStripe>,
+    stripe: Arc<G>,
+    /// What [`Harness::connect_stripe`] saves as the tenant's secret key.
+    secret_key: String,
     pool: SqlitePool,
     dir: PathBuf,
 }
 
 async fn harness() -> Harness {
+    harness_with(Arc::new(FakeStripe::default()), "sk_test_good").await
+}
+
+/// A harness whose tenants pay through `stripe` with `secret_key`.
+async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &str) -> Harness<G> {
     let dir = std::env::temp_dir().join(format!("timada-payments-{}", ulid::Ulid::generate()));
     std::fs::create_dir_all(&dir).unwrap();
     let options = SqliteConnectOptions::new()
@@ -190,7 +199,6 @@ async fn harness() -> Harness {
         .open_platform(None, pool.clone(), pool.clone())
         .await
         .unwrap();
-    let stripe = Arc::new(FakeStripe::default());
     let payments = Arc::new(Payments::new(
         Some(seal::Sealer::new("payments", SEAL_KEY)),
         stripe.clone(),
@@ -229,6 +237,7 @@ async fn harness() -> Harness {
         platform: Command(platform),
         payments,
         stripe,
+        secret_key: secret_key.to_owned(),
         pool,
         dir,
     }
@@ -253,7 +262,7 @@ fn checkout(expected_total_cents: Option<u64>) -> Checkout {
     }
 }
 
-impl Harness {
+impl<G: PaymentGateway + 'static> Harness<G> {
     async fn create(&self, slug: &str) -> TenantState {
         let tenant = self
             .platform
@@ -326,7 +335,7 @@ impl Harness {
                 ConfigurePayments {
                     provider: "stripe".into(),
                     publishable_key: "pk_test_123".into(),
-                    secret_key_sealed: self.payments.seal("sk_test_good").unwrap(),
+                    secret_key_sealed: self.payments.seal(&self.secret_key).unwrap(),
                     webhook_secret_sealed: self.payments.seal(WEBHOOK_SECRET).unwrap(),
                 },
             )
@@ -389,21 +398,6 @@ impl Harness {
         self.ask_with(tenant, cart_id, checkout(expected)).await
     }
 
-    /// Pays a cart shipped as `checkout` says, end to end; returns the order.
-    async fn buy(&self, tenant: &TenantState, checkout: Checkout) -> String {
-        let (cart_id, _) = self.cart(tenant).await;
-        let PaymentAnswer::Requested(payment) = self.ask_with(tenant, &cart_id, checkout).await
-        else {
-            panic!("a payment is opened");
-        };
-        self.stripe.pay(&payment.payment_id);
-        let body = succeeded(&payment.payment_id);
-        let Outcome::Placed { order_id } = self.webhook(tenant, &body, signed(&body)).await else {
-            panic!("the order is placed");
-        };
-        order_id
-    }
-
     async fn ask_with(
         &self,
         tenant: &TenantState,
@@ -452,6 +446,23 @@ impl Harness {
     async fn finish(self) {
         self.tenants.shutdown().await;
         let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+impl Harness {
+    /// Pays a cart shipped as `checkout` says, end to end; returns the order.
+    async fn buy(&self, tenant: &TenantState, checkout: Checkout) -> String {
+        let (cart_id, _) = self.cart(tenant).await;
+        let PaymentAnswer::Requested(payment) = self.ask_with(tenant, &cart_id, checkout).await
+        else {
+            panic!("a payment is opened");
+        };
+        self.stripe.pay(&payment.payment_id);
+        let body = succeeded(&payment.payment_id);
+        let Outcome::Placed { order_id } = self.webhook(tenant, &body, signed(&body)).await else {
+            panic!("the order is placed");
+        };
+        order_id
     }
 }
 
@@ -895,6 +906,109 @@ async fn the_stripe_client_speaks_stripe() {
         .await
         .unwrap();
     assert!(refund.starts_with("re_"), "{refund}");
+}
+
+/// One checkout through Stripe itself, in test mode, with the operator's own
+/// key (`STRIPE_TEST_SECRET_KEY`, `sk_test_…`): the payments subscription
+/// opens a real PaymentIntent, the test pays it with Stripe's test Visa card
+/// (`pm_card_visa`) as the Payment Element would, then hands the webhook a
+/// signed `payment_intent.succeeded`, and the dashboard reads the payment
+/// back from Stripe before placing the order. Cancelling refunds it, and
+/// Stripe is asked whether the refund went through.
+///
+/// Ignored: it needs the network and a Stripe account. Run it with
+/// `STRIPE_TEST_SECRET_KEY=sk_test_… cargo test -p timada-dashboard --test
+/// payments -- --ignored`; without the variable it does nothing.
+#[tokio::test]
+#[ignore = "talks to Stripe's test mode: set STRIPE_TEST_SECRET_KEY"]
+async fn a_checkout_goes_through_stripe_test_mode() {
+    use stripe_core::PaymentIntentStatus;
+    use stripe_core::payment_intent::ConfirmPaymentIntent;
+    use stripe_core::refund::RetrieveRefund;
+
+    let Ok(secret_key) = std::env::var("STRIPE_TEST_SECRET_KEY") else {
+        return;
+    };
+    // Never a live key: this test charges a card.
+    assert!(
+        secret_key.starts_with("sk_test_") || secret_key.starts_with("rk_test_"),
+        "STRIPE_TEST_SECRET_KEY must be a test-mode key"
+    );
+    let gateway = Arc::new(payments::StripeGateway::new(None));
+    gateway.check_key(&secret_key).await.unwrap();
+
+    let h = harness_with(gateway, &secret_key).await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, _) = h.cart(&acme).await;
+    let PaymentAnswer::Requested(payment) = h.ask(&acme, &cart_id, Some(2500)).await else {
+        panic!("Stripe opens a payment");
+    };
+    assert!(payment.payment_id.starts_with("pi_"), "{payment:?}");
+    assert_eq!(payment.total_cents, 2500);
+
+    // Not paid yet: Stripe says so, and nothing is placed.
+    let body = succeeded(&payment.payment_id);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Ignored
+    );
+
+    // What the shopper's browser does through the Payment Element.
+    let client = stripe::ClientBuilder::new(secret_key.as_str())
+        .build()
+        .unwrap();
+    let confirmed = ConfirmPaymentIntent::new(payment.payment_id.as_str())
+        .payment_method("pm_card_visa")
+        .return_url("https://example.org/checkout/complete")
+        .send(&client)
+        .await
+        .unwrap();
+    assert_eq!(confirmed.status, PaymentIntentStatus::Succeeded);
+
+    let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
+        panic!("the order is placed");
+    };
+    let orders = timada_orders::Command(h.store(&acme).await);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, timada_orders::OrderStatus::Paid);
+    assert_eq!(order.cart_id, cart_id);
+    assert_eq!(order.total_cents, 2500);
+    assert_eq!(order.payment.payment_id, payment.payment_id);
+    assert_eq!(order.payment.amount_cents, 2500);
+    assert_eq!(order.payment.currency, "EUR");
+
+    // Cancelled as the order page does it: refunded through Stripe first.
+    let refund_id = h
+        .payments
+        .gateway
+        .refund(
+            &secret_key,
+            &order.payment.payment_id,
+            order.total_cents,
+            &format!("timada-cancel-{order_id}"),
+        )
+        .await
+        .unwrap();
+    orders
+        .record_refund("alice", &order_id, &refund_id, order.total_cents)
+        .await
+        .unwrap();
+    orders
+        .cancel_order("alice", &order_id, "Live test".into())
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, timada_orders::OrderStatus::Cancelled);
+    assert_eq!(order.refunded_cents, 2500);
+
+    let refund = RetrieveRefund::new(refund_id.as_str())
+        .send(&client)
+        .await
+        .unwrap();
+    assert_eq!(refund.amount, 2500);
+    assert_eq!(refund.status.as_deref(), Some("succeeded"), "{refund:?}");
+    h.finish().await;
 }
 
 #[tokio::test]
