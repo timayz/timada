@@ -1,14 +1,16 @@
 //! `/t/{slug}/reviews/{review_id}`: one review, read from its own stream (so
 //! a moderation shows at once), with its photos and the forms that publish,
-//! reject or trim it.
+//! reject or trim it, and answer it in public.
 
 pub mod publish;
 pub mod reject;
 pub mod remove_photo;
+pub mod remove_reply;
+pub mod reply;
 
 use std::sync::Arc;
 
-use timada_reviews::{ReviewError, ReviewState, ReviewStatus, stars};
+use timada_reviews::{MAX_REPLY_LEN, ReviewError, ReviewState, ReviewStatus, stars};
 use timada_tenancy::{PERMISSION_REVIEWS_MANAGE, PERMISSION_REVIEWS_READ};
 use topcoat::{
     Result,
@@ -39,6 +41,12 @@ struct ReviewQuery {
 pub struct RejectForm {
     #[serde(default)]
     pub reason: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ReplyForm {
+    #[serde(default)]
+    pub body: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -213,6 +221,34 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </ul>
                 }
             </section>
+
+            if review.reply.is_some() || open {
+                <section class="mb-8 space-y-4 rounded border border-neutral-200 bg-white p-4" data-review-reply-section="">
+                    <h2 class="text-lg font-medium">"Your public reply"</h2>
+                    if let Some(reply) = &review.reply {
+                        <p class="whitespace-pre-line text-sm" data-review-reply="">(reply)</p>
+                        if let Some(at) = review.replied_at {
+                            <p class="text-sm text-neutral-500">"Written " (format_time(at))</p>
+                        }
+                    } else {
+                        <p class="text-sm text-neutral-500">"Shown under the review on the shop once it is published."</p>
+                    }
+                    if open {
+                        <form method="post" action=(href!(reply::reply, Slug(slug.clone()), ReviewId(id.clone()))) class="space-y-2">
+                            <label class="block text-sm" for="review-reply">"Reply"</label>
+                            <textarea id="review-reply" name="body" rows="4" maxlength=(MAX_REPLY_LEN) required="" class="w-full rounded border border-neutral-300 px-3 py-2">(review.reply.as_deref().unwrap_or_default())</textarea>
+                            <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">
+                                if review.reply.is_some() { "Update the reply" } else { "Post the reply" }
+                            </button>
+                        </form>
+                    }
+                    if can_manage && review.reply.is_some() {
+                        <form method="post" action=(href!(remove_reply::remove_reply, Slug(slug.clone()), ReviewId(id.clone())))>
+                            <button class="text-sm text-red-700 underline">"Delete the reply"</button>
+                        </form>
+                    }
+                </section>
+            }
 
             if open {
                 <section class="space-y-4 rounded border border-neutral-200 bg-white p-4">

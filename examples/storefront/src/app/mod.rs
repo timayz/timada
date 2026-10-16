@@ -97,6 +97,8 @@ pub async fn document(
                     ".rating { color: #b45309; }"
                     ".reviews li { margin-bottom: 1rem; }"
                     ".reviews img { width: 6rem; height: 6rem; object-fit: cover; margin-right: .5rem; }"
+                    "blockquote.review-reply { margin: .5rem 0 0 1rem; padding: .5rem 1rem; border-left: 2px solid #d2d2d7; color: #444; }"
+                    "blockquote.review-reply p { margin: .25rem 0; white-space: pre-line; }"
                     "nav.pages { display: flex; gap: 1rem; margin-top: 1.5rem; }"
                     "p.description { white-space: pre-line; }"
                     "nav.crumbs { color: #666; font-size: .875rem; margin-bottom: 1rem; }"

@@ -1,11 +1,13 @@
 use evento::{Executor, ProjectionAggregate, WriteError};
 use timada_orders::{OrderLine, OrderState, OrderStatus, order_projection};
 
-use crate::aggregator::{PhotoRemoved, Published, Rejected, Revised, Submitted};
+use crate::aggregator::{
+    PhotoRemoved, Published, Rejected, Replied, ReplyRemoved, Revised, Submitted,
+};
 use crate::error::ReviewError;
 use crate::value_object::{
-    MAX_BODY_LEN, MAX_PHOTOS, MAX_RATING, MAX_REASON_LEN, MAX_TITLE_LEN, MIN_BODY_LEN, MIN_RATING,
-    ReviewPhoto, ReviewStatus, author_name, non_blank, review_id,
+    MAX_BODY_LEN, MAX_PHOTOS, MAX_RATING, MAX_REASON_LEN, MAX_REPLY_LEN, MAX_TITLE_LEN,
+    MIN_BODY_LEN, MIN_RATING, ReviewPhoto, ReviewStatus, author_name, non_blank, review_id,
 };
 
 use super::ReviewState;
@@ -266,6 +268,61 @@ impl<E: Executor> super::Command<E> {
             .event(&Rejected {
                 reason: reason.to_owned(),
                 rejected_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Answers the review in public, waiting or published (shown once it
+    /// is); a new answer replaces the old one, the same one again is a
+    /// no-op. `Rejected` once it is.
+    pub async fn reply_to_review(
+        &self,
+        actor: &str,
+        review_id: &str,
+        body: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), ReviewError> {
+        let body = body.trim();
+        if body.is_empty() || body.chars().count() > MAX_REPLY_LEN {
+            return Err(ReviewError::InvalidReply);
+        }
+        let review = self.require_open(review_id).await?;
+        if review.reply.as_deref() == Some(body) {
+            return Ok(());
+        }
+        review
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&Replied {
+                body: body.to_owned(),
+                replied_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Takes the answer off; none is a no-op.
+    pub async fn remove_review_reply(
+        &self,
+        actor: &str,
+        review_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), ReviewError> {
+        let review = self
+            .load_review(review_id)
+            .await?
+            .ok_or(ReviewError::NotFound)?;
+        if review.reply.is_none() {
+            return Ok(());
+        }
+        review
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&ReplyRemoved {
+                removed_by: actor.to_owned(),
             })
             .commit(&self.0)
             .await?;

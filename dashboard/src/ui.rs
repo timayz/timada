@@ -218,6 +218,7 @@ pub fn describe_error(code: &str) -> &'static str {
         }
         "invalid_share_capital" => "Enter the share capital in euros, like 1000 or 1000.50.",
         "invalid_review_reason" => "A reason is at most 300 characters.",
+        "invalid_review_reply" => "Write a reply of at most 1000 characters.",
         "review_not_found" => "This review does not exist.",
         "review_rejected" => "This review was rejected and cannot change any more.",
         "review_photo_not_found" => "This photo is no longer on the review.",

@@ -48,6 +48,10 @@ pub struct Review {
     pub photos: Vec<ReviewPhoto>,
     /// Unix seconds.
     pub published_at: i64,
+    /// The merchant's public answer, if there is one.
+    pub reply: Option<String>,
+    /// Unix seconds of the answer.
+    pub replied_at: Option<i64>,
 }
 
 impl Review {
@@ -116,7 +120,7 @@ pub async fn published_reviews(
             .await?;
     let items = sqlx::query_as(
         "SELECT id, product_id, rating, title, body, author_name, variant_label, photos_json,
-            published_at
+            published_at, reply, replied_at
          FROM storefront_reviews WHERE product_id = ?1
          ORDER BY published_at DESC, id DESC
          LIMIT ?2 OFFSET ?3",
@@ -138,7 +142,7 @@ pub async fn published_reviews(
 pub async fn latest_reviews(pool: &SqlitePool, limit: u32) -> sqlx::Result<Vec<Review>> {
     sqlx::query_as(
         "SELECT id, product_id, rating, title, body, author_name, variant_label, photos_json,
-            published_at
+            published_at, reply, replied_at
          FROM storefront_reviews
          ORDER BY published_at DESC, id DESC
          LIMIT ?1",

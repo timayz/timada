@@ -127,6 +127,8 @@ event timada-orders/Storefront::StorefrontAddressSet { url: String, set_by: Stri
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
 event timada-reviews/Review::Rejected { reason: String, rejected_by: String }
+event timada-reviews/Review::Replied { body: String, replied_by: String }
+event timada-reviews/Review::ReplyRemoved { removed_by: String }
 event timada-reviews/Review::Revised { rating: u8, title: Option<String>, body: String, added: Vec<ReviewPhoto>, removed: Vec<String>, revised_by: String }
 event timada-reviews/Review::Submitted { order_id: String, product_id: String, variant_label: Option<String>, rating: u8, title: Option<String>, body: String, author_name: String, photos: Vec<ReviewPhoto>, submitted_by: String }
 event timada-reviews/ReviewLink::LinkIssued { order_id: String, expires_at: u64, issued_by: String }

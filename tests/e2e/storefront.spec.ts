@@ -1161,6 +1161,16 @@ test("a shopper reviews what they bought from the order page, shown once the sho
     await expect(page.locator("[data-review-body]")).toHaveText("Holds a big tea and keeps it hot.");
     await page.getByRole("button", { name: "Publish" }).click();
     await expect(page.getByRole("status")).toContainText("Review published.");
+    const reviewPage = page.url();
+
+    // The merchant answers in public, then rewrites the answer.
+    await page.getByLabel("Reply", { exact: true }).fill("Thank you!");
+    await page.getByRole("button", { name: "Post the reply" }).click();
+    await expect(page.getByRole("status")).toContainText("Reply saved.");
+    await expect(page.locator("[data-review-reply]")).toHaveText("Thank you!");
+    await page.getByLabel("Reply", { exact: true }).fill("Thank you, Ada! Enjoy your tea.");
+    await page.getByRole("button", { name: "Update the reply" }).click();
+    await expect(page.locator("[data-review-reply]")).toHaveText("Thank you, Ada! Enjoy your tea.");
 
     // On the product page with its photo, and stars on the card.
     await expect(async () => {
@@ -1174,6 +1184,12 @@ test("a shopper reviews what they bought from the order page, shown once the sho
     await expect(review).toContainText("Lovely mug");
     await expect(review).toContainText("Holds a big tea and keeps it hot.");
     await expect(review).toContainText("Ada L. · Verified purchase");
+    await expect(async () => {
+      await page.goto(`${STOREFRONT}/p/blue-mug`);
+      await expect(review.locator("[data-review-reply]")).toContainText("Thank you, Ada! Enjoy your tea.", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
     const photo = (await review.locator("[data-review-photo]").getAttribute("src")) ?? "";
     expect((await request.get(photo)).status()).toBe(200);
     await page.goto(STOREFRONT);
@@ -1184,6 +1200,18 @@ test("a shopper reviews what they bought from the order page, shown once the sho
     await page.goto(orderUrl);
     await expect(mug.locator("[data-review-status]")).toHaveAttribute("data-review-status", "published");
     await expect(mug.locator("[data-review-edit]")).toHaveCount(0);
+    await expect(mug.locator("[data-review-reply]")).toContainText("Thank you, Ada! Enjoy your tea.");
+
+    // The answer taken off leaves the shop too.
+    await page.goto(reviewPage);
+    await page.getByRole("button", { name: "Delete the reply" }).click();
+    await expect(page.getByRole("status")).toContainText("Reply deleted.");
+    await expect(page.locator("[data-review-reply]")).toHaveCount(0);
+    await expect(async () => {
+      await page.goto(`${STOREFRONT}/p/blue-mug`);
+      await expect(page.locator("[data-review]")).toHaveCount(1, { timeout: 1000 });
+      await expect(page.locator("[data-review-reply]")).toHaveCount(0, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
   } finally {
     await stripe.stop();
   }

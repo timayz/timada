@@ -224,3 +224,65 @@ async fn a_revision_is_checked_and_ends_with_the_merchant() {
         ReviewError::NotPending
     ));
 }
+
+#[tokio::test]
+async fn the_merchant_answers_in_public() {
+    let reviews = command().await;
+    paid_order(&reviews, "order-1").await;
+    let review = submit(&reviews, "order-1", MUG, 4).await;
+
+    reviews
+        .reply_to_review(ALICE, &review.id, "  Thank you!  ")
+        .await
+        .unwrap();
+    let replied = reviews.load_review(&review.id).await.unwrap().unwrap();
+    assert_eq!(replied.reply.as_deref(), Some("Thank you!"));
+    assert!(replied.replied_at.is_some());
+
+    // The same answer again writes nothing; another one replaces it.
+    let version = replied.aggregate_version().unwrap();
+    reviews
+        .reply_to_review(ALICE, &review.id, "Thank you!")
+        .await
+        .unwrap();
+    let same = reviews.load_review(&review.id).await.unwrap().unwrap();
+    assert_eq!(same.aggregate_version().unwrap(), version);
+    reviews
+        .reply_to_review(ALICE, &review.id, "Thank you, Ada!")
+        .await
+        .unwrap();
+    let rewritten = reviews.load_review(&review.id).await.unwrap().unwrap();
+    assert_eq!(rewritten.reply.as_deref(), Some("Thank you, Ada!"));
+
+    for body in ["   ", &"a".repeat(timada_reviews::MAX_REPLY_LEN + 1)] {
+        assert!(matches!(
+            reviews.reply_to_review(ALICE, &review.id, body).await,
+            Err(ReviewError::InvalidReply)
+        ));
+    }
+
+    // Taken off; taking it off again is a no-op.
+    reviews
+        .remove_review_reply(ALICE, &review.id)
+        .await
+        .unwrap();
+    let removed = reviews.load_review(&review.id).await.unwrap().unwrap();
+    assert_eq!(removed.reply, None);
+    assert_eq!(removed.replied_at, None);
+    reviews
+        .remove_review_reply(ALICE, &review.id)
+        .await
+        .unwrap();
+    let again = reviews.load_review(&review.id).await.unwrap().unwrap();
+    assert_eq!(
+        again.aggregate_version().unwrap(),
+        removed.aggregate_version().unwrap()
+    );
+
+    // A rejected review is not answered.
+    reviews.reject_review(ALICE, &review.id, "").await.unwrap();
+    assert!(matches!(
+        reviews.reply_to_review(ALICE, &review.id, "Too late").await,
+        Err(ReviewError::Rejected)
+    ));
+}

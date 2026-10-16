@@ -169,6 +169,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     if let Some(label) = &review.variant_label { " · " (label) }
                                 </small>
                             </p>
+                            if let Some(reply) = &review.reply {
+                                <blockquote class="review-reply" data-review-reply="">
+                                    <p><strong>"Reply from the shop"</strong></p>
+                                    <p>(reply)</p>
+                                </blockquote>
+                            }
                         </li>
                     }
                 </ul>

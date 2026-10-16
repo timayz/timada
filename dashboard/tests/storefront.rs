@@ -1653,6 +1653,38 @@ async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
         )
     );
     assert!(store.reviews_of(&bowl, 1).await.unwrap().items.is_empty());
+    assert_eq!(page.items[0].reply, None);
+    // The merchant's answer follows the review, rewritten or taken off.
+    let reply_of = async |id: &str| -> Option<String> {
+        store
+            .reviews_of(&mug, 1)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|review| review.id == id)
+            .and_then(|review| review.reply)
+    };
+    reviews
+        .reply_to_review("alice", &mug_4.id, "Thank you!")
+        .await
+        .unwrap();
+    reviews
+        .reply_to_review("alice", &mug_4.id, "Thank you, Ada!")
+        .await
+        .unwrap();
+    eventually("the reply is copied", async || {
+        reply_of(&mug_4.id).await.as_deref() == Some("Thank you, Ada!")
+    })
+    .await;
+    reviews
+        .remove_review_reply("alice", &mug_4.id)
+        .await
+        .unwrap();
+    eventually("the reply leaves", async || {
+        reply_of(&mug_4.id).await.is_none()
+    })
+    .await;
     // The shopper's own review is read from the store, waiting or not.
     let own = store.review_of("order-2", &bowl).await.unwrap().unwrap();
     assert_eq!(own.status, timada_storefront::ReviewStatus::Pending);
