@@ -88,3 +88,38 @@ async fn reviews_are_listed_and_products_rated_from_published_ones() {
         0
     );
 }
+
+#[tokio::test]
+async fn a_revised_review_is_listed_as_it_now_reads() {
+    let (executor, pool) = executor_with_pool().await;
+    let reviews = timada_reviews::Command(executor.clone());
+    paid_order(&executor, "order-1").await;
+    let id = submit(&reviews, "order-1", MUG, 5).await.id;
+    catch_up(&executor, &pool).await;
+
+    reviews
+        .revise_review(
+            SHOPPER,
+            timada_reviews::ReviseReview {
+                order_id: "order-1".to_owned(),
+                product_id: MUG.to_owned(),
+                rating: 2,
+                title: Some("Chipped".to_owned()),
+                body: "Chipped after a week.".to_owned(),
+                keep: vec!["photo-1".to_owned()],
+                photos: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+
+    let rows = reviews_of_tenant(&pool, TENANT, &ReviewFilter::default(), 10, 0)
+        .await
+        .unwrap();
+    let row = rows.iter().find(|row| row.id == id).unwrap();
+    assert_eq!(row.rating, 2);
+    assert_eq!(row.title.as_deref(), Some("Chipped"));
+    assert_eq!(row.body, "Chipped after a week.");
+    assert_eq!(row.photo_count, 1);
+}
