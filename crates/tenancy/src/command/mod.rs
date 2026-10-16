@@ -36,9 +36,9 @@ use crate::aggregator::api_key::{
 };
 use crate::aggregator::{
     Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailServerConfigured,
-    MailServerRemoved, MemberGranted, MemberRevoked, MemberRoleChanged, PaymentsConfigured,
-    PaymentsRemoved, Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated,
-    Sent, Suspended,
+    MailServerRemoved, MailTemplateReset, MailTemplateSaved, MemberGranted, MemberRevoked,
+    MemberRoleChanged, PaymentsConfigured, PaymentsRemoved, Released, Renamed, Resumed, Revoked,
+    RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
 };
 use crate::value_object::{
     LEGACY_API_KEY_SCOPES, ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id,
@@ -84,6 +84,37 @@ pub struct TenantState {
     pub company: Option<TenantCompany>,
     /// The merchant's own mail server, once set up.
     pub mail_server: Option<MailServerSettings>,
+    /// The merchant's wording of the shop's mails, by
+    /// [`ShopMailKind`](crate::ShopMailKind) key. A mail not here is sent
+    /// in the built-in wording.
+    pub mail_templates: BTreeMap<String, MailTemplate>,
+    /// Who changed the mails' wording and when, newest last; the last
+    /// [`MAIL_TEMPLATE_HISTORY`] changes of each mail.
+    pub mail_template_history: Vec<MailTemplateChange>,
+}
+
+/// How many changes of one mail's wording the tenant remembers.
+pub const MAIL_TEMPLATE_HISTORY: usize = 20;
+
+/// The merchant's wording of one mail.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MailTemplate {
+    pub subject: String,
+    pub html: String,
+    pub saved_by: String,
+    /// Unix seconds.
+    pub saved_at: u64,
+}
+
+/// One change to a mail's wording.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MailTemplateChange {
+    pub mail: String,
+    pub by: String,
+    /// Unix seconds.
+    pub at: u64,
+    /// Back to the built-in wording, rather than saved.
+    pub reset: bool,
 }
 
 /// The mail server the shop's mails go out through. The password is sealed
@@ -192,6 +223,8 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_company_unlinked())
         .handler(on_mail_server_configured())
         .handler(on_mail_server_removed())
+        .handler(on_mail_template_saved())
+        .handler(on_mail_template_reset())
         .strict()
 }
 
@@ -341,6 +374,81 @@ async fn on_mail_server_removed(
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     tenant.mail_server = None;
+    Ok(())
+}
+
+impl TenantState {
+    /// The merchant's wording of `kind`, when not the built-in one.
+    pub fn mail_template(&self, kind: crate::ShopMailKind) -> Option<&MailTemplate> {
+        self.mail_templates.get(kind.key())
+    }
+
+    /// Who changed `kind`'s wording and when, newest first.
+    pub fn mail_template_changes(
+        &self,
+        kind: crate::ShopMailKind,
+    ) -> impl Iterator<Item = &MailTemplateChange> {
+        self.mail_template_history
+            .iter()
+            .rev()
+            .filter(move |change| change.mail == kind.key())
+    }
+
+    fn record_mail_template_change(&mut self, change: MailTemplateChange) {
+        let mail = change.mail.clone();
+        self.mail_template_history.push(change);
+        let kept = self
+            .mail_template_history
+            .iter()
+            .filter(|change| change.mail == mail)
+            .count();
+        if kept > MAIL_TEMPLATE_HISTORY
+            && let Some(oldest) = self
+                .mail_template_history
+                .iter()
+                .position(|change| change.mail == mail)
+        {
+            self.mail_template_history.remove(oldest);
+        }
+    }
+}
+
+#[evento::handler]
+async fn on_mail_template_saved(
+    event: Event<MailTemplateSaved>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    tenant.mail_templates.insert(
+        data.mail.to_owned(),
+        MailTemplate {
+            subject: data.subject.to_owned(),
+            html: data.html.to_owned(),
+            saved_by: data.saved_by.to_owned(),
+            saved_at: event.timestamp,
+        },
+    );
+    tenant.record_mail_template_change(MailTemplateChange {
+        mail: data.mail.to_owned(),
+        by: data.saved_by.to_owned(),
+        at: event.timestamp,
+        reset: false,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_template_reset(
+    event: Event<MailTemplateReset>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.mail_templates.remove(event.data.mail.as_str());
+    tenant.record_mail_template_change(MailTemplateChange {
+        mail: event.data.mail.to_owned(),
+        by: event.data.reset_by.to_owned(),
+        at: event.timestamp,
+        reset: true,
+    });
     Ok(())
 }
 

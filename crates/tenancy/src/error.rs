@@ -16,6 +16,10 @@ pub enum TenancyError {
     InvalidPublishableKey,
     #[error("give the mail server's host, port and security, and the address mails come from")]
     InvalidMailServer,
+    #[error("unknown mail")]
+    UnknownMail,
+    #[error(transparent)]
+    InvalidMailTemplate(#[from] crate::MailTemplateError),
     #[error("a SIRET is 14 digits that pass the check")]
     InvalidSiret,
     #[error("the VAT number must be FR, its two-digit key and the SIREN")]
