@@ -41,6 +41,9 @@ pub struct Config {
     /// default.
     #[serde(default)]
     pub store: StoreConfig,
+    /// How many invitations members may send; every setting has a default.
+    #[serde(default)]
+    pub invitations: InvitationsConfig,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -269,6 +272,66 @@ impl StoreConfig {
     }
 }
 
+/// How many invitations may be mailed. Counted from what every node has
+/// recorded, so the limits hold across a cluster and across restarts.
+#[derive(Debug, Deserialize, Clone)]
+pub struct InvitationsConfig {
+    /// Invitations one tenant may send within the window, whoever sends them.
+    #[serde(default = "default_invitations_per_tenant")]
+    pub per_tenant: u32,
+    /// Invitations one account may send within the window, across every
+    /// tenant it belongs to.
+    #[serde(default = "default_invitations_per_account")]
+    pub per_account: u32,
+    /// The window both limits count over, in seconds.
+    #[serde(default = "default_invitations_window_secs")]
+    pub window_secs: u64,
+}
+
+impl Default for InvitationsConfig {
+    fn default() -> Self {
+        Self {
+            per_tenant: default_invitations_per_tenant(),
+            per_account: default_invitations_per_account(),
+            window_secs: default_invitations_window_secs(),
+        }
+    }
+}
+
+fn default_invitations_per_tenant() -> u32 {
+    50
+}
+
+fn default_invitations_per_account() -> u32 {
+    20
+}
+
+fn default_invitations_window_secs() -> u64 {
+    24 * 3600
+}
+
+impl InvitationsConfig {
+    /// Whether one more invitation fits, given those sent within the window.
+    pub fn allows(&self, sent: &timada_tenancy::SentCounts) -> bool {
+        sent.tenant < i64::from(self.per_tenant) && sent.account < i64::from(self.per_account)
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (name, value) in [
+            ("invitations.per_tenant", u64::from(self.per_tenant)),
+            ("invitations.per_account", u64::from(self.per_account)),
+            ("invitations.window_secs", self.window_secs),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::Message(format!(
+                    "{name} must be greater than 0"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Invoices.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct InvoicingConfig {
@@ -426,6 +489,7 @@ impl Config {
         config.tenants.validate()?;
         config.media.validate()?;
         config.store.validate()?;
+        config.invitations.validate()?;
         if let Some(store_api) = &config.store_api {
             store_api.validate()?;
         }
@@ -697,6 +761,46 @@ mod tests {
             let err = zero.validate().unwrap_err();
             assert!(err.to_string().starts_with("store.shopper_codes_"), "{err}");
         }
+    }
+
+    #[test]
+    fn invitation_limits_default_and_refuse_zero() {
+        let limits = InvitationsConfig::default();
+        assert_eq!(limits.per_tenant, 50);
+        assert_eq!(limits.per_account, 20);
+        assert_eq!(limits.window_secs, 86_400);
+        assert!(limits.validate().is_ok());
+        for zero in [
+            InvitationsConfig {
+                per_tenant: 0,
+                ..limits.clone()
+            },
+            InvitationsConfig {
+                per_account: 0,
+                ..limits.clone()
+            },
+            InvitationsConfig {
+                window_secs: 0,
+                ..limits.clone()
+            },
+        ] {
+            let err = zero.validate().unwrap_err();
+            assert!(err.to_string().starts_with("invitations."), "{err}");
+        }
+    }
+
+    #[test]
+    fn invitation_limits_refuse_at_either_cap() {
+        let limits = InvitationsConfig {
+            per_tenant: 3,
+            per_account: 2,
+            window_secs: 60,
+        };
+        let sent = |tenant, account| timada_tenancy::SentCounts { tenant, account };
+        assert!(limits.allows(&sent(0, 0)));
+        assert!(limits.allows(&sent(2, 1)));
+        assert!(!limits.allows(&sent(3, 0)), "the tenant's share is used");
+        assert!(!limits.allows(&sent(0, 2)), "the account's share is used");
     }
 
     #[test]
