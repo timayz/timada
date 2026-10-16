@@ -130,6 +130,17 @@ public_url = "https://timada.localhost/media"
 # # The window both limits count over, in seconds.
 # shopper_codes_window_secs = 600
 
+# How many invitations members may mail. Past either limit, the members page
+# refuses to send another one until older ones leave the window. Withdrawn
+# and accepted invitations still count. The limits hold across every node.
+# [invitations]
+# # Invitations one tenant may send within the window, whoever sends them.
+# per_tenant = 50
+# # Invitations one account may send within the window, across its tenants.
+# per_account = 20
+# # The window both limits count over, in seconds.
+# window_secs = 86400
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events. A connected storefront keeps its tenant's database open.

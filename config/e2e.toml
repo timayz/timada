@@ -47,6 +47,12 @@ request_check_secs = 2
 shopper_codes_per_ip = 1000
 shopper_codes_per_key = 10000
 
+# Every spec invites from a handful of accounts, so the limits on invitations
+# are far above what the suite sends.
+[invitations]
+per_tenant = 10000
+per_account = 10000
+
 [auth]
 secret_key = "e2e-only-secret-key-never-used-outside-the-test-suite"
 

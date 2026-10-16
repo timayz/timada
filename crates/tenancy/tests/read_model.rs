@@ -2,9 +2,9 @@ mod common;
 
 use common::*;
 use timada_tenancy::{
-    AcceptInvitation, Command, InviteMember, count_open_invitations_of_tenant, count_tenants,
-    group_of, invitation_by_id, list_tenants, open_invitations_of_tenant, read_model_subscription,
-    tenant_by_group, tenants_of_user,
+    AcceptInvitation, Command, InviteMember, SentCounts, count_open_invitations_of_tenant,
+    count_tenants, group_of, invitation_by_id, invitations_sent_since, list_tenants,
+    open_invitations_of_tenant, read_model_subscription, tenant_by_group, tenants_of_user,
 };
 
 async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
@@ -172,4 +172,74 @@ async fn invitations_are_listed_while_open() {
     assert_eq!(accepted.accepted_at, Some(now as i64 + 40));
     assert_eq!(tenants_of_user(&pool, &bob).await.unwrap().len(), 1);
     assert!(invitation_by_id(&pool, "nope").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn invitations_sent_are_counted_by_tenant_and_by_account() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let alice = new_id();
+    let bob = new_id();
+    let now = 1_800_000_000;
+    let acme = create_tenant(&cmd, "Acme", &alice).await;
+    let beta = create_tenant(&cmd, "Beta", &alice).await;
+    let zeta = create_tenant(&cmd, "Zeta", &bob).await;
+    async fn invite(
+        cmd: &Command<evento::Sqlite>,
+        by: &str,
+        tenant_id: &str,
+        email: &str,
+        at: u64,
+    ) -> timada_tenancy::SentInvitation {
+        cmd.invite_member(
+            by,
+            InviteMember {
+                tenant_id: tenant_id.to_owned(),
+                email: email.to_owned(),
+                role: "owner".to_owned(),
+            },
+            at,
+        )
+        .await
+        .unwrap()
+    }
+    invite(&cmd, &alice, &acme.id, "old@example.com", now - 1).await;
+    invite(&cmd, &alice, &acme.id, "a@example.com", now).await;
+    let revoked = invite(&cmd, &alice, &acme.id, "b@example.com", now + 10).await;
+    cmd.revoke_invitation(&alice, &revoked.invitation.id, now + 20)
+        .await
+        .unwrap();
+    invite(&cmd, &alice, &beta.id, "c@example.com", now + 30).await;
+    invite(&cmd, &bob, &zeta.id, "d@example.com", now + 40).await;
+
+    catch_up(&executor, &pool).await;
+
+    assert_eq!(
+        invitations_sent_since(&pool, &acme.id, &alice, now)
+            .await
+            .unwrap(),
+        SentCounts {
+            tenant: 2,
+            account: 3
+        },
+        "the window starts at `since`; revoked ones were still mailed; the account spans tenants"
+    );
+    assert_eq!(
+        invitations_sent_since(&pool, &zeta.id, &bob, 0)
+            .await
+            .unwrap(),
+        SentCounts {
+            tenant: 1,
+            account: 1
+        }
+    );
+    assert_eq!(
+        invitations_sent_since(&pool, &acme.id, &alice, now + 31)
+            .await
+            .unwrap(),
+        SentCounts {
+            tenant: 0,
+            account: 0
+        }
+    );
 }

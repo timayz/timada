@@ -12,7 +12,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         TenantSearch0004,
         TenantList0005,
         ApiKeyScopes0006,
-        Companies0007
+        Companies0007,
+        InvitationsSent0008
     ]
 }
 
@@ -229,6 +230,26 @@ sqlx_migrator::sqlite_migration!(
         (
             "CREATE INDEX tenancy_tenants_company ON tenancy_tenants (company_id)",
             "DROP INDEX tenancy_tenants_company"
+        ),
+    ]
+);
+
+/// What the invitation limit counts by: the invitations a tenant, or an
+/// account, sent since a moment.
+pub struct InvitationsSent0008;
+sqlx_migrator::sqlite_migration!(
+    InvitationsSent0008,
+    "tenancy",
+    "0008_invitations_sent",
+    vec_box![("tenancy", "0007_companies")],
+    vec_box![
+        (
+            "CREATE INDEX tenancy_invitations_tenant_sent ON tenancy_invitations (tenant_id, sent_at)",
+            "DROP INDEX tenancy_invitations_tenant_sent"
+        ),
+        (
+            "CREATE INDEX tenancy_invitations_invited_by_sent ON tenancy_invitations (invited_by, sent_at)",
+            "DROP INDEX tenancy_invitations_invited_by_sent"
         ),
     ]
 );
