@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use topcoat::{
     Result,
     context::{Cx, app_context},
-    mail::{Mail, MailConfig, Mailbox, SmtpTransport, mail, send},
+    mail::{Mail, MailConfig, Mailbox, SmtpTransport, TextBody, mail, send},
     view::Unescaped,
 };
 
@@ -19,7 +19,7 @@ use timada_shoppers::CODE_TTL_SECS;
 use timada_tenancy::{
     AddressVars, DiscountVars, LineVars, MailVars, OrderConfirmationVars, OrderVars, RenderedMail,
     ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind, ShopVars,
-    ShopperCodeVars, TenantState, render,
+    ShopperCodeVars, TenantState, render, render_text,
 };
 
 use crate::auth::cookies::EmailFlowKind;
@@ -93,7 +93,10 @@ pub async fn send_invitation(
 ///
 /// A merchant's template that fails to render (it was checked when saved,
 /// but an order may hold what the sample did not) is logged and the
-/// built-in wording sent instead, so the shopper still gets the mail.
+/// built-in wording sent instead, so the shopper still gets the mail. A
+/// plain-text part that fails alone is logged too, and the text derived
+/// from the HTML sent instead. The merchant's plain text never goes out
+/// with the built-in HTML.
 async fn send_shop_mail(
     cx: &Cx,
     shop: &TenantState,
@@ -102,16 +105,33 @@ async fn send_shop_mail(
     vars: &MailVars,
 ) -> Result<()> {
     let rendered = match shop.mail_template(kind) {
-        Some(template) => render(&template.subject, &template.html, vars).or_else(|err| {
-            tracing::warn!(
-                tenant = %shop.id,
-                mail = kind.key(),
-                error = %err,
-                "the shop's mail template failed, sending the built-in one"
-            );
-            render(kind.default_subject(), kind.default_html(), vars)
-        }),
-        None => render(kind.default_subject(), kind.default_html(), vars),
+        Some(template) => match render(&template.subject, &template.html, None, vars) {
+            Ok(mut rendered) => {
+                // The merchant's plain text goes only with the merchant's HTML.
+                if let Some(text) = template.text.as_deref() {
+                    match render_text(text, vars) {
+                        Ok(text) => rendered.text = Some(text),
+                        Err(err) => tracing::warn!(
+                            tenant = %shop.id,
+                            mail = kind.key(),
+                            error = %err,
+                            "the shop's plain-text part failed, sending the text derived from the HTML"
+                        ),
+                    }
+                }
+                Ok(rendered)
+            }
+            Err(err) => {
+                tracing::warn!(
+                    tenant = %shop.id,
+                    mail = kind.key(),
+                    error = %err,
+                    "the shop's mail template failed, sending the built-in one"
+                );
+                render(kind.default_subject(), kind.default_html(), None, vars)
+            }
+        },
+        None => render(kind.default_subject(), kind.default_html(), None, vars),
     }
     .map_err(|err| topcoat::Error::from_anyhow(anyhow::anyhow!("{}: {err}", kind.key())))?;
     send_rendered(cx, shop, to, rendered).await
@@ -130,6 +150,8 @@ pub async fn send_rendered(
     // frames, forms or handlers) and every variable in it is escaped, so the
     // rendered HTML is safe to send as is.
     let html = Unescaped::new_unchecked(rendered.html);
+    // The merchant's own plain text, or the one derived from the HTML.
+    let text = rendered.text.map_or(TextBody::FromHtml, TextBody::Text);
     let mail = mail! {
         from: from,
         to: Mailbox::new(to)?,
@@ -138,6 +160,7 @@ pub async fn send_rendered(
             cx =>
             (html)
         },
+        text: text,
     }?;
     sender.send(cx, mail).await?;
     Ok(())
@@ -482,6 +505,51 @@ mod tests {
         assert!(!wire.contains("Timada"), "{wire}");
     }
 
+    #[tokio::test]
+    async fn a_shop_writes_its_own_plain_text() {
+        let transport = MemoryTransport::new();
+        let cx = CxTestBuilder::new()
+            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
+            .build();
+        let mut shop = acme();
+        let mut template = worded("Order {{ order.reference }}", "<p>Thanks!</p>");
+        template.text = Some("Plain thanks for {{ order.reference }} & {{ order.note }}".into());
+        shop.mail_templates
+            .insert(ShopMailKind::OrderConfirmation.key().into(), template);
+        let mut broken = worded("Code", "<p>Your code: {{ code }}</p>");
+        broken.text = Some(
+            "{{ code }} {% for i in range(100000) %}{% for j in range(100000) %}.{% endfor %}{% endfor %}"
+                .into(),
+        );
+        shop.mail_templates
+            .insert(ShopMailKind::ShopperCode.key().into(), broken);
+        let mut order = paid_order();
+        order.note = Some("<b>fragile</b>".into());
+
+        send_order_confirmation(&cx, &shop, &order, None)
+            .await
+            .unwrap();
+        send_shopper_code(&cx, "ada@example.com", &shop, "654321")
+            .await
+            .unwrap();
+
+        let sent = transport.sent();
+        assert_eq!(
+            sent[0].text(),
+            &TextBody::Text("Plain thanks for K7Q4-MZP2 & <b>fragile</b>".into())
+        );
+        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let text = &wire[wire.find("text/plain").unwrap()..wire.find("text/html").unwrap()];
+        assert!(text.contains("Plain thanks for K7Q4-MZP2"), "{wire}");
+        // A plain-text part that fails sends the text derived from the HTML.
+        assert_eq!(sent[1].text(), &TextBody::FromHtml);
+        let wire = String::from_utf8(sent[1].clone().formatted(&cx).unwrap()).unwrap();
+        let text = &wire[wire.find("text/plain").unwrap()..wire.find("text/html").unwrap()];
+        assert!(text.contains("Your code: 654321"), "{wire}");
+    }
+
     fn worded(subject: &str, html: &str) -> timada_tenancy::MailTemplate {
         timada_tenancy::MailTemplate {
             subject: subject.into(),
@@ -534,10 +602,10 @@ mod tests {
             .app_context(ShopMail::new(None, false))
             .build();
         let mut shop = acme();
-        shop.mail_templates.insert(
-            ShopMailKind::OrderConfirmation.key().into(),
-            worded("Order", "<p>{{ order.billing_address.city }}</p>"),
-        );
+        let mut template = worded("Order", "<p>{{ order.billing_address.city }}</p>");
+        template.text = Some("Plain order {{ order.reference }}".into());
+        shop.mail_templates
+            .insert(ShopMailKind::OrderConfirmation.key().into(), template);
 
         send_order_confirmation(&cx, &shop, &paid_order(), None)
             .await
@@ -546,6 +614,8 @@ mod tests {
         let sent = transport.sent();
         assert_eq!(sent.len(), 1, "the mail is not lost");
         assert_eq!(sent[0].subject(), "Your Acme Tea order K7Q4-MZP2");
+        // The merchant's plain text does not go with the built-in HTML.
+        assert_eq!(sent[0].text(), &TextBody::FromHtml);
     }
 
     #[tokio::test]

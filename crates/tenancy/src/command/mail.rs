@@ -2,10 +2,10 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
     MailBrandingCleared, MailBrandingSet, MailServerConfigured, MailServerRemoved,
-    MailTemplateReset, MailTemplateSaved,
+    MailTemplateReset, MailTemplateSaved, MailTemplateTextSaved,
 };
 use crate::error::TenancyError;
-use crate::mail_template::{ShopMailKind, validate};
+use crate::mail_template::{ShopMailKind, validate, validate_text};
 use crate::value_object::{MAIL_SECURITIES, PERMISSION_MAIL_MANAGE};
 
 /// The merchant's own mail server, its password sealed by the host.
@@ -28,6 +28,15 @@ pub struct SetMailBranding {
     pub logo_size: u64,
     pub accent: Option<String>,
     pub footer: Option<String>,
+}
+
+/// The merchant's wording of one of the shop's mails.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SaveMailTemplate {
+    pub subject: String,
+    pub html: String,
+    /// The plain-text part; `None` or blank derives it from the HTML.
+    pub text: Option<String>,
 }
 
 /// The longest footer a shop's mails may carry, in characters.
@@ -130,15 +139,15 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Words one of the shop's mails the merchant's way. The template is
-    /// checked first ([`validate`]): a refused one says why. Needs
-    /// `mail:manage`.
+    /// checked first ([`validate`], and [`validate_text`] for a plain-text
+    /// part): a refused one says why. A blank or missing `text` sends the
+    /// text derived from the HTML. Needs `mail:manage`.
     pub async fn save_mail_template(
         &self,
         actor_user_id: &str,
         tenant_id: &str,
         mail: &str,
-        subject: &str,
-        html: &str,
+        cmd: SaveMailTemplate,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
         let kind = ShopMailKind::from_key(mail).ok_or(TenancyError::UnknownMail)?;
@@ -146,25 +155,34 @@ impl<E: Executor> super::Command<E> {
         if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
             return Err(TenancyError::Forbidden);
         }
-        let subject = subject.trim();
+        let subject = cmd.subject.trim();
+        let html = cmd.html.as_str();
         validate(kind, subject, html)?;
-        if tenant
-            .mail_template(kind)
-            .is_some_and(|saved| saved.subject == subject && saved.html == html)
-        {
+        let text = cmd.text.as_deref().filter(|text| !text.trim().is_empty());
+        if let Some(text) = text {
+            validate_text(kind, text)?;
+        }
+        if tenant.mail_template(kind).is_some_and(|saved| {
+            saved.subject == subject && saved.html == html && saved.text.as_deref() == text
+        }) {
             return Ok(());
         }
-        tenant
-            .write()?
+        let mut write = tenant.write()?;
+        let write = write
             .routing_key_opt(routing_key)
             .event(&MailTemplateSaved {
                 mail: kind.key().to_owned(),
                 subject: subject.to_owned(),
                 html: html.to_owned(),
                 saved_by: actor_user_id.to_owned(),
-            })
-            .commit(&self.0)
-            .await?;
+            });
+        if let Some(text) = text {
+            write.event(&MailTemplateTextSaved {
+                mail: kind.key().to_owned(),
+                text: text.to_owned(),
+            });
+        }
+        write.commit(&self.0).await?;
         Ok(())
     }
 
