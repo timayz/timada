@@ -39,6 +39,23 @@ pub async fn open_invitations_of_tenant(
     .await
 }
 
+/// How many invitations of a tenant are still waiting at `now`: the rows
+/// [`open_invitations_of_tenant`] would return.
+pub async fn count_open_invitations_of_tenant(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    now: u64,
+) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM tenancy_invitations
+         WHERE tenant_id = ?1 AND accepted_by IS NULL AND revoked = 0 AND expires_at > ?2",
+    )
+    .bind(tenant_id)
+    .bind(now as i64)
+    .fetch_one(pool)
+    .await
+}
+
 pub async fn invitation_by_id(pool: &SqlitePool, id: &str) -> sqlx::Result<Option<InvitationRow>> {
     sqlx::query_as(
         "SELECT id, tenant_id, email, role, invited_by, sent_at, expires_at, accepted_by,

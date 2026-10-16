@@ -2,9 +2,9 @@ mod common;
 
 use common::*;
 use timada_tenancy::{
-    AcceptInvitation, Command, InviteMember, count_tenants, group_of, invitation_by_id,
-    list_tenants, open_invitations_of_tenant, read_model_subscription, tenant_by_group,
-    tenants_of_user,
+    AcceptInvitation, Command, InviteMember, count_open_invitations_of_tenant, count_tenants,
+    group_of, invitation_by_id, list_tenants, open_invitations_of_tenant, read_model_subscription,
+    tenant_by_group, tenants_of_user,
 };
 
 async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
@@ -114,6 +114,12 @@ async fn invitations_are_listed_while_open() {
         .await
         .unwrap();
     assert_eq!(open.len(), 2);
+    assert_eq!(
+        count_open_invitations_of_tenant(&pool, &tenant.id, now + 30)
+            .await
+            .unwrap(),
+        2
+    );
     assert_eq!(open[0].email, "second@example.com", "newest first");
     assert_eq!(open[1].id, first.invitation.id);
     assert_eq!(open[1].invited_by, alice);
@@ -124,6 +130,12 @@ async fn invitations_are_listed_while_open() {
             .unwrap()
             .is_empty(),
         "expired ones drop out"
+    );
+    assert_eq!(
+        count_open_invitations_of_tenant(&pool, &tenant.id, second.invitation.expires_at)
+            .await
+            .unwrap(),
+        0
     );
     let revoked = invitation_by_id(&pool, &third.invitation.id)
         .await
@@ -146,6 +158,12 @@ async fn invitations_are_listed_while_open() {
         .await
         .unwrap();
     assert_eq!(open.len(), 1);
+    assert_eq!(
+        count_open_invitations_of_tenant(&pool, &tenant.id, now + 50)
+            .await
+            .unwrap(),
+        1
+    );
     let accepted = invitation_by_id(&pool, &second.invitation.id)
         .await
         .unwrap()
