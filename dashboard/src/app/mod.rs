@@ -38,6 +38,7 @@ use crate::cluster::Executor;
 use crate::config::Config;
 use crate::db::{ReadPool, WritePool};
 use crate::media::{MEDIA_ROUTE, Media, MediaCache, PEER_ROUTE};
+use crate::rate_limit::RateLimiter;
 use crate::store_api::StoreConnections;
 use crate::tenants::Tenants;
 use crate::ui::{document, notice};
@@ -124,6 +125,9 @@ pub fn router(services: Services) -> Router {
         .app_context(media)
         .app_context(payments)
         .app_context(store)
+        // How often each storefront and shopper has had a sign-in code mailed
+        // from this node.
+        .app_context(Arc::new(RateLimiter::new()))
         // The transport behind `topcoat::mail::send`, and who the codes come from.
         .mail(mailer.transport)
         .app_context(mailer.sender)

@@ -59,6 +59,9 @@ pub const SHOPPER_WRONG_CODE: &str = "wrong_code";
 pub const SHOPPER_CODE_EXPIRED: &str = "code_expired";
 pub const SHOPPER_TOO_MANY_ATTEMPTS: &str = "too_many_attempts";
 pub const SHOPPER_TOO_MANY_ADDRESSES: &str = "too_many_addresses";
+/// The dashboard mails no more sign-in codes for this storefront or this
+/// shopper for a while; not a refusal of the shoppers context itself.
+pub const SHOPPER_TOO_MANY_REQUESTS: &str = "too_many_requests";
 
 /// Every code a shopper may meet, address refusals included, so one read back
 /// from an answer maps to a `&'static str` again.
@@ -69,6 +72,7 @@ pub const SHOPPER_CODES: &[&str] = &[
     SHOPPER_CODE_EXPIRED,
     SHOPPER_TOO_MANY_ATTEMPTS,
     SHOPPER_TOO_MANY_ADDRESSES,
+    SHOPPER_TOO_MANY_REQUESTS,
     "invalid_ship_name",
     "invalid_address",
     "invalid_country",

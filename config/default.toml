@@ -117,6 +117,19 @@ public_url = "https://timada.localhost/media"
 # # How often, in seconds, this node looks for buyers due that mail.
 # request_check_secs = 3600
 
+# What storefronts may ask for their shoppers. A storefront has the shop mail
+# sign-in codes; past these limits it is refused for a while and nothing is
+# mailed. A shopper is the address the storefront reports for them, and is
+# counted per shop. Each node counts on its own, so behind a balancer over N
+# nodes a client may get up to N times these.
+# [store]
+# # Codes one shopper's address may have mailed within the window.
+# shopper_codes_per_ip = 10
+# # Codes one API key may have mailed within the window, whoever the shoppers.
+# shopper_codes_per_key = 100
+# # The window both limits count over, in seconds.
+# shopper_codes_window_secs = 600
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events. A connected storefront keeps its tenant's database open.
