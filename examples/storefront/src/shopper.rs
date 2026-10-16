@@ -148,6 +148,19 @@ impl CheckoutDraft {
         self
     }
 
+    /// The draft billed at a saved address.
+    pub fn with_billing_address(mut self, saved: &SavedAddress) -> Self {
+        let address = &saved.address;
+        self.billing_different = "1".to_owned();
+        self.billing_name = address.name.clone();
+        self.billing_line1 = address.line1.clone();
+        self.billing_line2 = address.line2.clone().unwrap_or_default();
+        self.billing_postal_code = address.postal_code.clone();
+        self.billing_city = address.city.clone();
+        self.billing_country = address.country.clone();
+        self
+    }
+
     pub fn shipping(&self) -> ShippingAddress {
         let optional = |value: &str| (!value.trim().is_empty()).then(|| value.to_owned());
         ShippingAddress {

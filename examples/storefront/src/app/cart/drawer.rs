@@ -395,6 +395,8 @@ async function express() {
   button.on("click", (event) => event.resolve({
     emailRequired: true,
     shippingAddressRequired: true,
+    // A whole address, else wallets hand only its country and postal code.
+    billingAddressRequired: true,
     allowedShippingCountries: drawer.dataset.countries.split(","),
     shippingRates: rates().length
       ? ratesTo(null)
@@ -415,6 +417,15 @@ async function express() {
   button.on("confirm", async (event) => {
     if (!(await pay(event))) event.paymentFailed({ reason: "fail" });
   });
+}
+
+// The wallet's billing address, when it is not the delivery one.
+function walletBilling(billing, shipping) {
+  const at = billing.address, to = shipping.address || {};
+  if (!at?.line1) return null;
+  const same = (a, b) => (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
+  return ["line1", "line2", "postal_code", "city", "country"]
+    .every((key) => same(at[key], to[key])) ? null : at;
 }
 
 // The wallet's details stand in for the checkout's form. Resolves false when
@@ -439,6 +450,15 @@ async function pay(event) {
     note: "",
     vat_number: "",
   });
+  // Billed elsewhere when the wallet says so.
+  const other = walletBilling(billing, shipping);
+  if (other) {
+    body.set("billing_different", "1");
+    body.set("billing_name", billing.name || shipping.name || "");
+    for (const key of ["line1", "line2", "postal_code", "city", "country"]) {
+      body.set(`billing_${key}`, other[key] || "");
+    }
+  }
   try {
     const { error: invalid } = await stripeElements.submit();
     if (invalid) { payError(invalid.message); return false; }
