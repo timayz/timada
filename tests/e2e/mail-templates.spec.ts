@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { MAILDEV, registerWithEmail, uniqueEmail } from "./email";
 import { createTenant, uniqueTenant } from "./tenants";
 
@@ -15,6 +15,29 @@ async function mailTo(request: APIRequestContext, email: string, subject: string
     expect(found, `no "${subject}" mail to ${email}`).toBeDefined();
   }).toPass({ timeout: 15_000 });
   return found!;
+}
+
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+// A storefront key for the shop, and a way to ask it for a shopper's
+// sign-in code.
+async function codeAsker(page: Page, slug: string): Promise<(email: string) => Promise<void>> {
+  await page.goto(`/t/${slug}/api-keys`);
+  await page.getByLabel("Label").fill("Mail storefront");
+  await page.getByRole("checkbox", { name: "store:checkout" }).first().check();
+  await page.getByRole("button", { name: "Create key" }).click();
+  const token = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
+  expect(token).toMatch(/^tk_/);
+  return async (email: string) => {
+    const response = await page.request.post("/store/shoppers/code", {
+      headers: { Authorization: `Bearer ${token}` },
+      form: { email },
+    });
+    expect(response.status()).toBe(202);
+  };
 }
 
 test("a shop words its sign-in code mail its own way, and back", async ({ page }) => {
@@ -60,20 +83,7 @@ test("a shop words its sign-in code mail its own way, and back", async ({ page }
   await expect(page.getByRole("status")).toContainText("Saved");
   await expect(page.locator("[data-template-history]")).toContainText("Saved by");
 
-  // A storefront's key, to ask for shopper sign-in codes.
-  await page.goto(`/t/${slug}/api-keys`);
-  await page.getByLabel("Label").fill("Worded storefront");
-  await page.getByRole("checkbox", { name: "store:checkout" }).first().check();
-  await page.getByRole("button", { name: "Create key" }).click();
-  const token = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
-  expect(token).toMatch(/^tk_/);
-  const askCode = async (email: string) => {
-    const response = await page.request.post("/store/shoppers/code", {
-      headers: { Authorization: `Bearer ${token}` },
-      form: { email },
-    });
-    expect(response.status()).toBe(202);
-  };
+  const askCode = await codeAsker(page, slug);
 
   const first = uniqueEmail("shopper");
   await askCode(first);
@@ -91,4 +101,47 @@ test("a shop words its sign-in code mail its own way, and back", async ({ page }
   const second = uniqueEmail("shopper");
   await askCode(second);
   await mailTo(page.request, second, `Your sign-in code for ${name}`);
+});
+
+test("a shop gives all its mails a logo, an accent colour and a footer", async ({ page }) => {
+  const merchant = uniqueEmail("merchant");
+  await registerWithEmail(page, merchant);
+  const { name, slug } = uniqueTenant("Branded Shop");
+  await createTenant(page, name);
+  const askCode = await codeAsker(page, slug);
+
+  await page.goto(`/t/${slug}/mail`);
+  const look = page.locator("[data-mail-branding]");
+  await look.getByLabel("Logo").setInputFiles({ name: "logo.png", mimeType: "image/png", buffer: PNG });
+  await look.getByLabel("Accent colour").fill("#C0FFEE");
+  await look.getByLabel("Footer").fill(`${name} SARL\n12 rue des Lilas, Paris`);
+  await look.getByRole("button", { name: "Save the look" }).click();
+  await expect(page.getByRole("status")).toContainText("all your mails carry this look");
+  const logo = page.locator("[data-mail-logo]");
+  await expect(logo).toBeVisible();
+  const src = (await logo.getAttribute("src")) ?? "";
+  expect((await page.request.get(src)).status()).toBe(200);
+  await expect(look.getByLabel("Accent colour")).toHaveValue("#c0ffee");
+
+  // The editor's preview carries the look too.
+  await page.locator('[data-mail-template="shopper_code"]').getByRole("link").click();
+  await expect(page.frameLocator("iframe").getByText(`${name} SARL`)).toBeVisible();
+
+  const first = uniqueEmail("shopper");
+  await askCode(first);
+  const branded = await mailTo(page.request, first, `Your sign-in code for ${name}`);
+  expect(branded.html).toContain("color: #c0ffee;");
+  expect(branded.html).toContain(`${name} SARL`);
+  expect(branded.html).toMatch(/<img src="[^"]+\.png"/);
+
+  await page.goto(`/t/${slug}/mail`);
+  await page.getByRole("button", { name: "Back to the plain look" }).click();
+  await expect(page.getByRole("status")).toContainText("plain look");
+  await expect(page.locator("[data-mail-logo]")).toHaveCount(0);
+
+  const second = uniqueEmail("shopper");
+  await askCode(second);
+  const plain = await mailTo(page.request, second, `Your sign-in code for ${name}`);
+  expect(plain.html).not.toContain("<img");
+  expect(plain.html).not.toContain(`${name} SARL`);
 });

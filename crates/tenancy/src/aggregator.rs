@@ -109,6 +109,20 @@ pub enum Tenant {
         mail: String,
         reset_by: String,
     },
+    /// The look all the shop's mails share. `logo_file` is a picture in the
+    /// tenant's media (`<id>.<ext>`, `logo_size` bytes); `accent` is a
+    /// `#rrggbb` colour; `footer` is plain text. Each is `None` when unset.
+    MailBrandingSet {
+        logo_file: Option<String>,
+        logo_size: u64,
+        accent: Option<String>,
+        footer: Option<String>,
+        set_by: String,
+    },
+    /// The mails go back to the plain look.
+    MailBrandingCleared {
+        cleared_by: String,
+    },
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).
