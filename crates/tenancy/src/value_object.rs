@@ -26,6 +26,7 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `reviews:read` — see the reviews shoppers wrote.
 /// - `reviews:manage` — publish and reject reviews, take photos off them.
 /// - `customers:read` — see the shop's customer accounts.
+/// - `customers:manage` — delete a shopper's account (an erasure request).
 /// - `mail:manage` — set up the mail server the shop's mails go out through.
 /// - `shipping:manage` — set up the ways the shop ships and what they cost.
 pub const PERMISSIONS: &[&str] = &[
@@ -44,6 +45,7 @@ pub const PERMISSIONS: &[&str] = &[
     PERMISSION_REVIEWS_READ,
     PERMISSION_REVIEWS_MANAGE,
     PERMISSION_CUSTOMERS_READ,
+    PERMISSION_CUSTOMERS_MANAGE,
     PERMISSION_MAIL_MANAGE,
     PERMISSION_SHIPPING_MANAGE,
 ];
@@ -62,6 +64,7 @@ pub const PERMISSION_DISCOUNTS_MANAGE: &str = "discounts:manage";
 pub const PERMISSION_REVIEWS_READ: &str = "reviews:read";
 pub const PERMISSION_REVIEWS_MANAGE: &str = "reviews:manage";
 pub const PERMISSION_CUSTOMERS_READ: &str = "customers:read";
+pub const PERMISSION_CUSTOMERS_MANAGE: &str = "customers:manage";
 pub const PERMISSION_MAIL_MANAGE: &str = "mail:manage";
 pub const PERMISSION_SHIPPING_MANAGE: &str = "shipping:manage";
 
