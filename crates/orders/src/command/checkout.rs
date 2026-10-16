@@ -1,5 +1,6 @@
 use evento::{Executor, ProjectionAggregate, WriteError};
 
+use timada_discounts::{Offer, OfferItem, OffersState, offers_id, offers_projection};
 use ulid::Ulid;
 
 use crate::aggregator::{
@@ -69,6 +70,13 @@ pub struct Quote {
     pub lines: Vec<OrderLine>,
     /// What kind of goods each of `lines` is for VAT, in the same order.
     pub tax_categories: Vec<String>,
+    /// The offer each of `lines` is priced at, in the same order: `Some` on
+    /// the line of the one unit an offer prices, which comes right before
+    /// the line of the cart's other units at full price (if any).
+    pub line_offers: Vec<Option<LineOffer>>,
+    /// The offers the shopper may add: the ones whose conditions the cart
+    /// meets and whose item it does not hold yet.
+    pub offers: Vec<QuotedOffer>,
     /// The lines whose product is off sale, gone, or whose variant is.
     pub unavailable: Vec<CartLine>,
     /// `None` while no line is priced.
@@ -98,6 +106,42 @@ impl Quote {
     }
 }
 
+/// The offer one unit of a line is priced at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineOffer {
+    pub offer_id: String,
+    /// What one costs without the offer.
+    pub full_unit_amount_cents: u64,
+}
+
+/// An offer a cart may take, priced from the catalog as it stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotedOffer {
+    pub offer_id: String,
+    pub product_id: String,
+    pub variant_id: Option<String>,
+    /// The product's name.
+    pub name: String,
+    /// The variant's values (`Beige / Large`).
+    pub variant_label: Option<String>,
+    /// What the merchant titled it, if anything.
+    pub title: Option<String>,
+    /// What one costs without the offer.
+    pub unit_amount_cents: u64,
+    /// What the one unit costs with it.
+    pub offer_amount_cents: u64,
+}
+
+/// `Beige / Large`: the values a variant takes.
+fn variant_label(variant: &timada_catalog::ProductVariant) -> String {
+    variant
+        .selections
+        .iter()
+        .map(|selection| selection.value.as_str())
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
 impl<E: Executor> super::Command<E> {
     /// Prices a cart from the catalog as it stands now, reading every product
     /// from the store (never from a replica), so what it says is what a
@@ -107,8 +151,14 @@ impl<E: Executor> super::Command<E> {
         self.quote(&cart).await
     }
 
+    /// Prices the cart's lines at full price, then lets each live offer
+    /// price one unit of its item, when the rest of the cart meets its
+    /// conditions: that unit becomes a line of its own, so the order, its
+    /// invoice and its mail say what it cost. The discount code comes off
+    /// what that adds up to.
     pub(crate) async fn quote(&self, cart: &CartState) -> Result<Quote, OrdersError> {
         let mut quote = Quote::default();
+        let mut priced: Vec<(OrderLine, String)> = Vec::new();
         for line in &cart.lines {
             let item = CartItem {
                 product_id: line.product_id.clone(),
@@ -146,27 +196,18 @@ impl<E: Executor> super::Command<E> {
                 Some(_) => {}
                 None => quote.currency = Some(price.currency.clone()),
             }
-            let label = variant.map(|variant| {
-                variant
-                    .selections
-                    .iter()
-                    .map(|selection| selection.value.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            });
             let order_line = OrderLine {
                 product_id: product.id.clone(),
                 variant_id: line.variant_id.clone(),
                 name: product.name.clone(),
-                variant_label: label,
+                variant_label: variant.map(variant_label),
                 sku: variant.and_then(|variant| variant.sku.clone()),
                 unit_amount_cents: price.amount_cents,
                 quantity: line.quantity,
             };
-            quote.subtotal_cents += order_line.amount_cents();
-            quote.lines.push(order_line);
-            quote.tax_categories.push(product.tax_category().to_owned());
+            priced.push((order_line, product.tax_category().to_owned()));
         }
+        self.price_offers(&mut quote, priced).await?;
         quote.total_cents = quote.subtotal_cents;
         if let (Some(code), Some(currency)) = (&cart.discount_code, &quote.currency) {
             match self
@@ -206,6 +247,121 @@ impl<E: Executor> super::Command<E> {
             subtotal_cents,
             amount_cents,
         })
+    }
+
+    /// Puts the lines priced at full price on the quote, each one an offer
+    /// prices split in two (its one unit at the offer's price, the others at
+    /// full price), adds them up, and lists the offers the cart may take.
+    async fn price_offers(
+        &self,
+        quote: &mut Quote,
+        priced: Vec<(OrderLine, String)>,
+    ) -> Result<(), OrdersError> {
+        let offers = match &quote.currency {
+            Some(_) => offers_projection()
+                .load(offers_id())
+                .execute(&self.0)
+                .await?
+                .unwrap_or_default(),
+            None => OffersState::default(),
+        };
+        let currency = quote.currency.clone().unwrap_or_default();
+        let now = timada_discounts::unix_now();
+        let items: Vec<OfferItem<'_>> = priced
+            .iter()
+            .map(|(line, _)| OfferItem {
+                product_id: &line.product_id,
+                variant_id: line.variant_id.as_deref(),
+                quantity: line.quantity,
+                unit_amount_cents: line.unit_amount_cents,
+            })
+            .collect();
+        let applied: Vec<Option<LineOffer>> = offers
+            .applied(&items, &currency, now)
+            .into_iter()
+            .zip(&priced)
+            .map(|(offer, (line, _))| {
+                offer.map(|offer| LineOffer {
+                    offer_id: offer.id.clone(),
+                    full_unit_amount_cents: line.unit_amount_cents,
+                })
+            })
+            .collect();
+        let applicable: Vec<Offer> = offers
+            .applicable(&items, &currency, now)
+            .into_iter()
+            .cloned()
+            .collect();
+        drop(items);
+
+        for ((line, tax_category), line_offer) in priced.into_iter().zip(applied) {
+            let Some(line_offer) = line_offer else {
+                quote.lines.push(line);
+                quote.tax_categories.push(tax_category);
+                quote.line_offers.push(None);
+                continue;
+            };
+            let offer_price = offers
+                .offer(&line_offer.offer_id)
+                .map_or(line.unit_amount_cents, |offer| offer.price_cents);
+            quote.lines.push(OrderLine {
+                unit_amount_cents: offer_price,
+                quantity: 1,
+                ..line.clone()
+            });
+            quote.tax_categories.push(tax_category.clone());
+            quote.line_offers.push(Some(line_offer));
+            if line.quantity > 1 {
+                quote.lines.push(OrderLine {
+                    quantity: line.quantity - 1,
+                    ..line
+                });
+                quote.tax_categories.push(tax_category);
+                quote.line_offers.push(None);
+            }
+        }
+        quote.subtotal_cents = quote.lines.iter().map(OrderLine::amount_cents).sum();
+
+        for offer in applicable {
+            let item = CartItem {
+                product_id: offer.product_id.clone(),
+                variant_id: offer.variant_id.clone(),
+                quantity: 1,
+            };
+            let product = match self.require_sellable(&item).await {
+                Ok(product) => product,
+                Err(
+                    OrdersError::Unavailable { .. }
+                    | OrdersError::VariantRequired
+                    | OrdersError::VariantNotFound,
+                ) => continue,
+                Err(err) => return Err(err),
+            };
+            let variant = offer
+                .variant_id
+                .as_deref()
+                .and_then(|id| product.variant(id));
+            let Some(price) = variant
+                .map(|variant| &variant.price)
+                .or(product.price.as_ref())
+            else {
+                continue;
+            };
+            if price.currency != currency || offer.price_cents >= price.amount_cents {
+                continue;
+            }
+            quote.offers.push(QuotedOffer {
+                offer_id: offer.id,
+                product_id: product.id.clone(),
+                variant_id: offer.variant_id,
+                name: product.name.clone(),
+                variant_label: variant.map(variant_label),
+                title: offer.title,
+                unit_amount_cents: price.amount_cents,
+                offer_amount_cents: offer.price_cents,
+            });
+        }
+        Ok(())
     }
 }
 

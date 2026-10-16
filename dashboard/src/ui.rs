@@ -125,6 +125,18 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_max_uses" => "A limited code serves 1 to 10000 orders.",
         "discount_not_found" => "This discount does not exist.",
         "discount_archived" => "This discount is archived.",
+        "offer_not_found" => "This offer does not exist any more.",
+        "offer_product_not_found" => "This product does not exist any more.",
+        "offer_variant" => "Choose one of the product's variants for the offer.",
+        "invalid_offer_price" => {
+            "Enter the offer price as a number above 0 and below the product's price, like 12.00."
+        }
+        "offer_currency" => "The offer is priced in the product's currency.",
+        "invalid_offer_title" => "An offer's title is at most 80 characters.",
+        "invalid_min_subtotal" => {
+            "Enter the minimum as a positive amount with at most two decimals, like 50.00."
+        }
+        "too_many_offers" => "A shop has at most 20 offers: archive one first.",
         "invalid_shipping_name" => "A shipping method's name is 1 to 80 characters.",
         "invalid_shipping_countries" => {
             "List the countries as two-letter codes separated by commas, like FR, BE."

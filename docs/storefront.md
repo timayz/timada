@@ -246,6 +246,18 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   and also refuses `discount_exhausted` (a capped code has no use left) and
   `discount_already_used` (a code good once per e-mail). The use is held while the
   shopper pays and spent by the order.
+- Checkout offers: the merchant may offer one unit of a product (or of one variant) at
+  a lower price while the cart meets the offer's conditions (`/t/{slug}/offers`: it
+  holds another product, the rest of it is worth a minimum, between two days).
+  `CartView::offers` lists the ones the shopper may add (`OfferView`: the product and
+  variant, `heading()`, `price()` and `offer_price()`, the slug and picture); adding the
+  item with `add_to_cart` is all it takes. The cart then prices one unit of that line at
+  the offer (`CartLineView::offer`), the other units at full price, and the order holds
+  that unit as a line of its own, so the invoice bills what it cost. A discount code
+  comes off the total with the offer. An offer that ends, or whose conditions stop
+  holding, prices nothing any more: a payment for the total shown before is refused
+  with `price_changed`. The example shows them as "Exclusive offer" cards above the
+  checkout's payment, whose Add buttons post to `/cart/add` with `back=checkout`.
 - Who a shopper is, and which orders a browser may look at, is the host's call: the
   library hands out any order by id. The example keeps the cart id, the payment in
   progress, the browser's orders and its last address in private cookies.
