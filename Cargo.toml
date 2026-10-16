@@ -62,6 +62,7 @@ sha2 = "0.10"
 # VAT rates by country and level, for sales across borders. Pinned: its rates
 # are data, and a new version changes what new invoices say.
 world-tax = "=0.5.2"
+rust_iso3166 = "=0.2.0"
 # Draws the invoices as PDF: Typst as a library, with the fonts it ships.
 typst = "=0.15.1"
 typst-as-lib = "=0.17.0"
