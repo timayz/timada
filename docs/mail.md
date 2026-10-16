@@ -99,9 +99,9 @@ Safety rules:
   runs on the dashboard's origin.
 
 If a saved template still fails at send time, for example by running out of its
-rendering budget, the failure is logged and the built-in wording is sent instead. A
-plain-text version that fails alone is logged too, and the text derived from the HTML
-is sent with the merchant's HTML. The shopper always gets the mail.
+rendering budget, the failure is logged and the built-in wording, plain text included,
+is sent instead. A plain-text version that fails alone is logged too, and the text
+derived from the HTML is sent with the merchant's HTML. The shopper always gets the mail.
 
 ## Operator settings
 

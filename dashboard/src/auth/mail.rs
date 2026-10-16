@@ -95,7 +95,8 @@ pub async fn send_invitation(
 /// but an order may hold what the sample did not) is logged and the
 /// built-in wording sent instead, so the shopper still gets the mail. A
 /// plain-text part that fails alone is logged too, and the text derived
-/// from the HTML sent instead.
+/// from the HTML sent instead. The merchant's plain text never goes out
+/// with the built-in HTML.
 async fn send_shop_mail(
     cx: &Cx,
     shop: &TenantState,
@@ -103,31 +104,36 @@ async fn send_shop_mail(
     to: &str,
     vars: &MailVars,
 ) -> Result<()> {
-    let template = shop.mail_template(kind);
-    let mut rendered = match template {
-        Some(template) => render(&template.subject, &template.html, None, vars).or_else(|err| {
-            tracing::warn!(
-                tenant = %shop.id,
-                mail = kind.key(),
-                error = %err,
-                "the shop's mail template failed, sending the built-in one"
-            );
-            render(kind.default_subject(), kind.default_html(), None, vars)
-        }),
+    let rendered = match shop.mail_template(kind) {
+        Some(template) => match render(&template.subject, &template.html, None, vars) {
+            Ok(mut rendered) => {
+                // The merchant's plain text goes only with the merchant's HTML.
+                if let Some(text) = template.text.as_deref() {
+                    match render_text(text, vars) {
+                        Ok(text) => rendered.text = Some(text),
+                        Err(err) => tracing::warn!(
+                            tenant = %shop.id,
+                            mail = kind.key(),
+                            error = %err,
+                            "the shop's plain-text part failed, sending the text derived from the HTML"
+                        ),
+                    }
+                }
+                Ok(rendered)
+            }
+            Err(err) => {
+                tracing::warn!(
+                    tenant = %shop.id,
+                    mail = kind.key(),
+                    error = %err,
+                    "the shop's mail template failed, sending the built-in one"
+                );
+                render(kind.default_subject(), kind.default_html(), None, vars)
+            }
+        },
         None => render(kind.default_subject(), kind.default_html(), None, vars),
     }
     .map_err(|err| topcoat::Error::from_anyhow(anyhow::anyhow!("{}: {err}", kind.key())))?;
-    if let Some(text) = template.and_then(|template| template.text.as_deref()) {
-        match render_text(text, vars) {
-            Ok(text) => rendered.text = Some(text),
-            Err(err) => tracing::warn!(
-                tenant = %shop.id,
-                mail = kind.key(),
-                error = %err,
-                "the shop's plain-text part failed, sending the text derived from the HTML"
-            ),
-        }
-    }
     send_rendered(cx, shop, to, rendered).await
 }
 
@@ -596,10 +602,10 @@ mod tests {
             .app_context(ShopMail::new(None, false))
             .build();
         let mut shop = acme();
-        shop.mail_templates.insert(
-            ShopMailKind::OrderConfirmation.key().into(),
-            worded("Order", "<p>{{ order.billing_address.city }}</p>"),
-        );
+        let mut template = worded("Order", "<p>{{ order.billing_address.city }}</p>");
+        template.text = Some("Plain order {{ order.reference }}".into());
+        shop.mail_templates
+            .insert(ShopMailKind::OrderConfirmation.key().into(), template);
 
         send_order_confirmation(&cx, &shop, &paid_order(), None)
             .await
@@ -608,6 +614,8 @@ mod tests {
         let sent = transport.sent();
         assert_eq!(sent.len(), 1, "the mail is not lost");
         assert_eq!(sent[0].subject(), "Your Acme Tea order K7Q4-MZP2");
+        // The merchant's plain text does not go with the built-in HTML.
+        assert_eq!(sent[0].text(), &TextBody::FromHtml);
     }
 
     #[tokio::test]
