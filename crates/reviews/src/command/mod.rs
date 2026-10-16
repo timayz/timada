@@ -15,7 +15,7 @@ use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
     LinkIssued, PhotoRemoved, Published, Rejected, RequestDelaySet, RequestMailed,
-    RequestsDisabled, Submitted,
+    RequestsDisabled, Revised, Submitted,
 };
 use crate::error::ReviewError;
 use crate::value_object::{
@@ -74,6 +74,7 @@ pub fn review_projection<E: Executor>() -> Projection<E, ReviewState> {
         .handler(on_published())
         .handler(on_rejected())
         .handler(on_photo_removed())
+        .handler(on_revised())
         .strict()
 }
 
@@ -120,6 +121,20 @@ async fn on_photo_removed(
     review
         .photos
         .retain(|photo| photo.id != event.data.image_id);
+    review.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_revised(event: Event<Revised>, review: &mut ReviewState) -> anyhow::Result<()> {
+    let data = &event.data;
+    review.rating = data.rating;
+    review.title = data.title.to_owned();
+    review.body = data.body.to_owned();
+    review
+        .photos
+        .retain(|photo| !data.removed.contains(&photo.id));
+    review.photos.extend(data.added.iter().cloned());
     review.updated_at = event.timestamp;
     Ok(())
 }

@@ -5,11 +5,12 @@
 
 pub mod documents;
 pub mod review;
+pub mod revise;
 
 use timada_storefront::{
-    DocumentKind, MAX_BODY_LEN, MAX_PHOTOS, MAX_TITLE_LEN, OrderStatus, ReviewStatus,
-    documents as order_documents, format_amount_fr, format_money, menu, order, review_of, stars,
-    store,
+    DocumentKind, MAX_BODY_LEN, MAX_PHOTOS, MAX_TITLE_LEN, OrderStatus, ReviewState, ReviewStatus,
+    documents as order_documents, format_amount_fr, format_money, menu, order, picture_url,
+    review_of, stars, store,
 };
 use topcoat::{
     Result,
@@ -33,11 +34,28 @@ pub(crate) struct OrderQuery {
     /// The product a refusal or a confirmation is about.
     pub product: Option<String>,
     pub reviewed: Option<String>,
+    pub revised: Option<String>,
 }
 
 /// The order's page, with a refusal or a confirmation about the review of
 /// one of its products.
 pub fn order_url(cx: &Cx, order_id: &str, product: &str, error: Option<&str>) -> String {
+    review_url(cx, order_id, product, error, false)
+}
+
+/// The order's page after a change to a waiting review: a refusal, or a
+/// confirmation of the change.
+pub fn revised_url(cx: &Cx, order_id: &str, product: &str, error: Option<&str>) -> String {
+    review_url(cx, order_id, product, error, true)
+}
+
+fn review_url(
+    cx: &Cx,
+    order_id: &str,
+    product: &str,
+    error: Option<&str>,
+    revised: bool,
+) -> String {
     #[derive(serde::Serialize)]
     struct Link<'a> {
         product: &'a str,
@@ -45,11 +63,15 @@ pub fn order_url(cx: &Cx, order_id: &str, product: &str, error: Option<&str>) ->
         error: Option<&'a str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reviewed: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        revised: Option<&'a str>,
     }
+    let done = error.is_none().then_some("1");
     let link = Link {
         product,
         error,
-        reviewed: error.is_none().then_some("1"),
+        reviewed: done.filter(|_| !revised),
+        revised: done.filter(|_| revised),
     };
     format!(
         "{}#review-{product}",
@@ -64,8 +86,11 @@ pub fn order_url(cx: &Cx, order_id: &str, product: &str, error: Option<&str>) ->
 struct LineReview {
     product_id: String,
     name: String,
-    /// Where it stands, its stars and why it was refused, once written.
-    review: Option<(ReviewStatus, u8, Option<String>)>,
+    /// The review as it stands, once written.
+    review: Option<ReviewState>,
+    /// The id and address of each of its photos, for its author to keep or
+    /// drop while it waits.
+    photos: Vec<(String, String)>,
 }
 
 #[page]
@@ -92,13 +117,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             {
                 continue;
             }
-            let review = review_of(cx, order_id, &line.product_id)
-                .await?
-                .map(|review| (review.status, review.rating, review.rejection_reason));
+            let review = review_of(cx, order_id, &line.product_id).await?;
+            let photos = review
+                .iter()
+                .flat_map(|review| &review.photos)
+                .map(|photo| (photo.id.clone(), picture_url(cx, &photo.file())))
+                .collect();
             line_reviews.push(LineReview {
                 product_id: line.product_id.clone(),
                 name: line.name.clone(),
                 review,
+                photos,
             });
         }
     }
@@ -175,19 +204,64 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             if query.reviewed.is_some() && query.error.is_none() {
                                 <p role="status">"Thank you! Your review is with the shop."</p>
                             }
+                            if query.revised.is_some() && query.error.is_none() {
+                                <p role="status">"Your changes are with the shop."</p>
+                            }
                         }
-                        if let Some((status, rating, reason)) = &line.review {
-                            <p data-review-status=(status.as_str())>
-                                <span class="rating" aria-label=(format!("{rating} out of 5"))>(stars(*rating))</span> " "
-                                (match status {
+                        if let Some(review) = &line.review {
+                            <p data-review-status=(review.status.as_str())>
+                                <span class="rating" aria-label=(format!("{} out of 5", review.rating))>(stars(review.rating))</span> " "
+                                (match review.status {
                                     ReviewStatus::Pending => "Your review is waiting for the shop to publish it.",
                                     ReviewStatus::Published => "Your review is published. Thank you!",
                                     ReviewStatus::Rejected => "The shop did not publish your review.",
                                 })
-                                if let Some(reason) = reason.as_deref().filter(|reason| !reason.is_empty()) {
+                                if let Some(reason) = review.rejection_reason.as_deref().filter(|reason| !reason.is_empty()) {
                                     " " (reason)
                                 }
                             </p>
+                            if review.status == ReviewStatus::Pending {
+                                <details class="review-edit" data-review-edit=(&line.product_id) open=(query.product.as_deref() == Some(line.product_id.as_str()) && query.error.is_some())>
+                                    <summary>"Edit my review"</summary>
+                                    <form method="post" enctype="multipart/form-data" action=(href!(revise::revise, OrderId(order_key.clone())))>
+                                        <input type="hidden" name="product_id" value=(&line.product_id)>
+                                        <fieldset>
+                                            <legend>"Your rating"</legend>
+                                            for value in (1u8..=5).rev() {
+                                                <label>
+                                                    <input type="radio" name="rating" value=(value) required="" checked=(value == review.rating)>
+                                                    " " (value) (if value == 1 { " star" } else { " stars" })
+                                                </label> " "
+                                            }
+                                        </fieldset>
+                                        <p>
+                                            <label for=(format!("edit-title-{}", line.product_id))>"Title (optional)"</label>
+                                            <input id=(format!("edit-title-{}", line.product_id)) name="title" type="text" maxlength=(MAX_TITLE_LEN) value=(review.title.as_deref().unwrap_or_default())>
+                                        </p>
+                                        <p>
+                                            <label for=(format!("edit-body-{}", line.product_id))>"Your review"</label>
+                                            <textarea id=(format!("edit-body-{}", line.product_id)) name="body" rows="4" maxlength=(MAX_BODY_LEN) required="">(&review.body)</textarea>
+                                        </p>
+                                        if !line.photos.is_empty() {
+                                            <fieldset>
+                                                <legend>"Your photos"</legend>
+                                                for (id, url) in &line.photos {
+                                                    <label data-review-photo-keep=(id)>
+                                                        <input type="checkbox" name="keep_photo" value=(id) checked="">
+                                                        <img src=(url) alt="A photo you attached" width="64" height="64">
+                                                        " Keep this photo"
+                                                    </label> " "
+                                                }
+                                            </fieldset>
+                                        }
+                                        <p>
+                                            <label for=(format!("edit-photos-{}", line.product_id))>(format!("Add photos (up to {MAX_PHOTOS} in all)"))</label>
+                                            <input id=(format!("edit-photos-{}", line.product_id)) name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple="">
+                                        </p>
+                                        <button class="primary">"Save my changes"</button>
+                                    </form>
+                                </details>
+                            }
                         } else {
                             <form method="post" enctype="multipart/form-data" action=(href!(review::review, OrderId(order_key.clone())))>
                                 <input type="hidden" name="product_id" value=(&line.product_id)>

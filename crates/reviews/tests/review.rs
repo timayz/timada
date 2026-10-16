@@ -1,7 +1,8 @@
 mod common;
 
 use common::*;
-use timada_reviews::{ReviewError, ReviewStatus, SubmitReview, review_id};
+use evento::ProjectionAggregate as _;
+use timada_reviews::{ReviewError, ReviewStatus, ReviseReview, SubmitReview, review_id};
 
 #[tokio::test]
 async fn a_buyer_reviews_a_product_of_their_order() {
@@ -138,5 +139,88 @@ async fn the_merchant_publishes_takes_down_and_trims_photos() {
     assert!(matches!(
         reviews.reject_review(ALICE, &id, &"x".repeat(301)).await,
         Err(ReviewError::InvalidReason)
+    ));
+}
+
+fn revision(order_id: &str, product_id: &str, keep: &[&str]) -> ReviseReview {
+    ReviseReview {
+        order_id: order_id.to_owned(),
+        product_id: product_id.to_owned(),
+        rating: 2,
+        title: Some("  ".to_owned()),
+        body: "  Chipped after a week.  ".to_owned(),
+        keep: keep.iter().map(|id| (*id).to_owned()).collect(),
+        photos: vec![photo("photo-3")],
+    }
+}
+
+#[tokio::test]
+async fn a_waiting_review_is_revised() {
+    let reviews = command().await;
+    paid_order(&reviews, "order-1").await;
+    submit(&reviews, "order-1", MUG, 4).await;
+
+    let revised = reviews
+        .revise_review(SHOPPER, revision("order-1", MUG, &["photo-2"]))
+        .await
+        .unwrap();
+    assert_eq!(revised.status, ReviewStatus::Pending);
+    assert_eq!(revised.rating, 2);
+    assert_eq!(revised.title, None);
+    assert_eq!(revised.body, "Chipped after a week.");
+    let photos: Vec<&str> = revised
+        .photos
+        .iter()
+        .map(|photo| photo.id.as_str())
+        .collect();
+    assert_eq!(photos, ["photo-2", "photo-3"]);
+    // What the order gave stays.
+    assert_eq!(revised.author_name, "Ada L.");
+    assert_eq!(revised.variant_label.as_deref(), Some("Beige"));
+
+    // The same words again write nothing.
+    let version = revised.aggregate_version().unwrap();
+    let mut same = revision("order-1", MUG, &["photo-2", "photo-3"]);
+    same.photos.clear();
+    let unchanged = reviews.revise_review(SHOPPER, same).await.unwrap();
+    assert_eq!(unchanged.aggregate_version().unwrap(), version);
+}
+
+#[tokio::test]
+async fn a_revision_is_checked_and_ends_with_the_merchant() {
+    let reviews = command().await;
+    paid_order(&reviews, "order-1").await;
+    let review = submit(&reviews, "order-1", MUG, 4).await;
+
+    let refused = |cmd: ReviseReview| {
+        let reviews = &reviews;
+        async move { reviews.revise_review(SHOPPER, cmd).await.unwrap_err() }
+    };
+    assert!(matches!(
+        refused(revision("order-1", TEA, &[])).await,
+        ReviewError::NotFound
+    ));
+    assert!(matches!(
+        refused(revision("order-1", MUG, &["photo-9"])).await,
+        ReviewError::PhotoNotFound
+    ));
+    let mut crowded = revision("order-1", MUG, &["photo-1", "photo-2"]);
+    crowded.photos.push(photo("photo-4"));
+    assert!(matches!(refused(crowded).await, ReviewError::TooManyPhotos));
+    let mut short = revision("order-1", MUG, &[]);
+    short.body = "Meh".to_owned();
+    assert!(matches!(refused(short).await, ReviewError::InvalidBody));
+
+    reviews.publish_review(ALICE, &review.id).await.unwrap();
+    assert!(matches!(
+        refused(revision("order-1", MUG, &[])).await,
+        ReviewError::NotPending
+    ));
+
+    let tea = submit(&reviews, "order-1", TEA, 5).await;
+    reviews.reject_review(ALICE, &tea.id, "").await.unwrap();
+    assert!(matches!(
+        refused(revision("order-1", TEA, &[])).await,
+        ReviewError::NotPending
     ));
 }

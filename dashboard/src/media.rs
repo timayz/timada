@@ -31,7 +31,8 @@ use openidconnect::reqwest;
 use timada_catalog::aggregator::{ImageAdded, ImageRemoved};
 use timada_catalog::{MAX_IMAGE_BYTES, product_projection};
 use timada_reviews::aggregator::{
-    PhotoRemoved as ReviewPhotoRemoved, Rejected as ReviewRejected, Submitted as ReviewSubmitted,
+    PhotoRemoved as ReviewPhotoRemoved, Rejected as ReviewRejected, Revised as ReviewRevised,
+    Submitted as ReviewSubmitted,
 };
 use timada_reviews::review_projection;
 
@@ -363,6 +364,7 @@ pub fn subscription<E: Executor>(media: Arc<Media>, tenant_id: &str) -> Subscrip
         .handler(on_review_submitted())
         .handler(on_review_rejected())
         .handler(on_review_photo_removed())
+        .handler(on_review_revised())
         .any_routing_key()
         // About four hours of attempts at most a minute apart: a picture is
         // on a majority of nodes before it is recorded, so a fetch only fails
@@ -467,6 +469,36 @@ async fn on_review_photo_removed<E: Executor>(
     let media: Arc<Media> = context.extract();
     let tenant: Tenant = context.extract();
     media.remove_image(&tenant.0, &event.data.image_id).await;
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_review_revised<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ReviewRevised>,
+) -> anyhow::Result<()> {
+    let media: Arc<Media> = context.extract();
+    let tenant: Tenant = context.extract();
+    for image_id in &event.data.removed {
+        media.remove_image(&tenant.0, image_id).await;
+    }
+    // As on a submission: only the added photos still on a review that is
+    // not rejected.
+    let Some(review) = review_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+        .filter(|review| !review.is_rejected())
+    else {
+        return Ok(());
+    };
+    for photo in &review.photos {
+        if event.data.added.iter().any(|added| added.id == photo.id) {
+            media
+                .fetch(&tenant.0, &photo.id, &photo.ext, photo.size)
+                .await?;
+        }
+    }
     Ok(())
 }
 

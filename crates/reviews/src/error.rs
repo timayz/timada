@@ -32,6 +32,10 @@ pub enum ReviewError {
     Rejected,
     #[error("this review has no such photo")]
     PhotoNotFound,
+    /// Its author may change it only until the merchant publishes or
+    /// rejects it.
+    #[error("this review no longer waits for the shop")]
+    NotPending,
     #[error("a shop asks for reviews at most {MAX_REQUEST_DELAY_DAYS} days after fulfilment")]
     RequestDelayTooLong,
     #[error(transparent)]
@@ -60,9 +64,10 @@ impl ReviewError {
             Self::NotPurchased => REVIEW_NOT_PURCHASED,
             Self::OrderCancelled => REVIEW_ORDER_CANCELLED,
             Self::AlreadyReviewed => REVIEW_ALREADY_REVIEWED,
-            Self::NotFound => "review_not_found",
+            Self::NotFound => REVIEW_NOT_FOUND,
             Self::Rejected => "review_rejected",
-            Self::PhotoNotFound => "review_photo_not_found",
+            Self::PhotoNotFound => REVIEW_PHOTO_NOT_FOUND,
+            Self::NotPending => REVIEW_NOT_PENDING,
             Self::RequestDelayTooLong => "review_request_delay_too_long",
             Self::Write(_) | Self::Other(_) => return None,
         })
@@ -78,6 +83,9 @@ pub const REVIEW_ORDER_NOT_FOUND: &str = "review_order_not_found";
 pub const REVIEW_NOT_PURCHASED: &str = "review_not_purchased";
 pub const REVIEW_ORDER_CANCELLED: &str = "review_order_cancelled";
 pub const REVIEW_ALREADY_REVIEWED: &str = "review_already_reviewed";
+pub const REVIEW_NOT_FOUND: &str = "review_not_found";
+pub const REVIEW_PHOTO_NOT_FOUND: &str = "review_photo_not_found";
+pub const REVIEW_NOT_PENDING: &str = "review_not_pending";
 /// Not a domain refusal: what the upload endpoint answers for a file that is
 /// not a picture it takes, or one too large.
 pub const REVIEW_INVALID_PHOTO: &str = "review_invalid_photo";
@@ -93,5 +101,8 @@ pub const SHOPPER_CODES: &[&str] = &[
     REVIEW_NOT_PURCHASED,
     REVIEW_ORDER_CANCELLED,
     REVIEW_ALREADY_REVIEWED,
+    REVIEW_NOT_FOUND,
+    REVIEW_PHOTO_NOT_FOUND,
+    REVIEW_NOT_PENDING,
     REVIEW_INVALID_PHOTO,
 ];

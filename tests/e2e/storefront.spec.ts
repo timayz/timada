@@ -985,6 +985,20 @@ test("a buyer's review waits for the merchant, who publishes, trims and takes it
     const reviewId = ((await created.json()) as { id: string }).id;
     expect(await refusal(reviewForm(orderId, productId, text, []))).toBe("review_already_reviewed");
 
+    // While it waits, the storefront may hand in a change, with the same key.
+    const revise = (token: string | null, form: FormData) =>
+      request.post("/store/reviews/revise", {
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+        multipart: form,
+      });
+    expect((await revise(null, reviewForm(orderId, productId, text, []))).status()).toBe(401);
+    expect((await revise(reader.token, reviewForm(orderId, productId, text, []))).status()).toBe(403);
+    const unknownPhoto = reviewForm(orderId, productId, text, []);
+    unknownPhoto.append("keep_photo", "not-a-photo");
+    const unknownRefused = await revise(seller.token, unknownPhoto);
+    expect(unknownRefused.status()).toBe(422);
+    expect(((await unknownRefused.json()) as { error: string }).error).toBe("review_photo_not_found");
+
     // The merchant finds it waiting, signed with the name it was shipped to.
     const row = page.locator(`[data-review="${reviewId}"]`);
     await expect(async () => {
@@ -1019,6 +1033,10 @@ test("a buyer's review waits for the merchant, who publishes, trims and takes it
     await page.getByRole("button", { name: "Publish" }).click();
     await expect(page.getByRole("status")).toContainText("Review published.");
     await expect(page.locator("[data-review-status]")).toHaveAttribute("data-review-status", "published");
+    // Published, it can no longer be changed.
+    const late = await revise(seller.token, reviewForm(orderId, productId, "Changed my mind about it.", []));
+    expect(late.status()).toBe(422);
+    expect(((await late.json()) as { error: string }).error).toBe("review_not_pending");
     await expect(async () => {
       await page.goto(mugUrl);
       await expect(page.locator("[data-product-rating]")).toContainText("★ 4.0 · 1 published", { timeout: 1000 });
@@ -1107,6 +1125,26 @@ test("a shopper reviews what they bought from the order page, shown once the sho
     await expect(mug.locator("[data-review-status]")).toHaveAttribute("data-review-status", "pending");
     await expect(mug.getByRole("button", { name: "Send my review" })).toHaveCount(0);
 
+    // Still waiting, the shopper changes it: other words, and another photo.
+    const kept = mug.locator("[data-review-photo-keep]");
+    await expect(kept).toHaveCount(1);
+    const firstPhoto = (await kept.locator("img").getAttribute("src")) ?? "";
+    expect((await request.get(firstPhoto)).status()).toBe(200);
+    await mug.getByText("Edit my review").click();
+    await mug.getByRole("radio", { name: "5 stars" }).check();
+    await mug.locator("[data-review-edit]").getByLabel("Your review").fill("Holds a big tea and keeps it hot.");
+    await kept.getByRole("checkbox", { name: "Keep this photo" }).uncheck();
+    await mug.getByLabel(/^Add photos/).setInputFiles({ name: "mug-2.png", mimeType: "image/png", buffer: PNG });
+    await mug.getByRole("button", { name: "Save my changes" }).click();
+    await expect(mug.getByRole("status")).toContainText("Your changes are with the shop.");
+    await expect(mug.locator("[data-review-status]")).toHaveAttribute("data-review-status", "pending");
+    await expect(mug.locator("[data-review-status] .rating")).toHaveAttribute("aria-label", "5 out of 5");
+    await expect(kept).toHaveCount(1);
+    const secondPhoto = (await kept.locator("img").getAttribute("src")) ?? "";
+    expect(secondPhoto).not.toBe(firstPhoto);
+    await expect(async () => expect((await request.get(firstPhoto)).status()).toBe(404)).toPass({ timeout: 15_000 });
+    expect((await request.get(secondPhoto)).status()).toBe(200);
+
     // Waiting for the merchant, nothing shows on the shop.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
     await expect(page.locator("[data-reviews]")).toHaveAttribute("data-reviews", "0");
@@ -1120,30 +1158,32 @@ test("a shopper reviews what they bought from the order page, shown once the sho
     }).toPass({ timeout: 15_000 });
     await row.getByRole("link", { name: "Lovely mug" }).click();
     await expect(page.locator("[data-review-photo]")).toHaveCount(1);
+    await expect(page.locator("[data-review-body]")).toHaveText("Holds a big tea and keeps it hot.");
     await page.getByRole("button", { name: "Publish" }).click();
     await expect(page.getByRole("status")).toContainText("Review published.");
 
     // On the product page with its photo, and stars on the card.
     await expect(async () => {
       await page.goto(`${STOREFRONT}/p/blue-mug`);
-      await expect(page.locator("[data-product-rating]")).toHaveAttribute("data-product-rating", "4.0", {
+      await expect(page.locator("[data-product-rating]")).toHaveAttribute("data-product-rating", "5.0", {
         timeout: 1000,
       });
     }).toPass({ timeout: 15_000 });
     const review = page.locator("[data-review]");
     await expect(review).toHaveCount(1);
     await expect(review).toContainText("Lovely mug");
-    await expect(review).toContainText("Holds a big tea and keeps it warm.");
+    await expect(review).toContainText("Holds a big tea and keeps it hot.");
     await expect(review).toContainText("Ada L. · Verified purchase");
     const photo = (await review.locator("[data-review-photo]").getAttribute("src")) ?? "";
     expect((await request.get(photo)).status()).toBe(200);
     await page.goto(STOREFRONT);
-    await expect(page.locator("[data-product=blue-mug] [data-rating]")).toHaveAttribute("data-rating", "4.0");
+    await expect(page.locator("[data-product=blue-mug] [data-rating]")).toHaveAttribute("data-rating", "5.0");
     await expect(page.locator("[data-product=red-plate] [data-rating]")).toHaveCount(0);
 
-    // The shopper's order page says it is out.
+    // The shopper's order page says it is out, and it can no longer be changed.
     await page.goto(orderUrl);
     await expect(mug.locator("[data-review-status]")).toHaveAttribute("data-review-status", "published");
+    await expect(mug.locator("[data-review-edit]")).toHaveCount(0);
   } finally {
     await stripe.stop();
   }

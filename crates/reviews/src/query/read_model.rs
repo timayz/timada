@@ -89,6 +89,7 @@ pub async fn upsert_review(
             submitted_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
+            rating = excluded.rating, title = excluded.title, body = excluded.body,
             photo_count = excluded.photo_count, status = excluded.status,
             updated_at = excluded.updated_at",
     )
