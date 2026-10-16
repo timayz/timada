@@ -57,6 +57,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         app.insert(mailer.transport);
         app.insert(mailer.sender);
         app.insert(shop_mail.clone());
+        // Where the shops' logos are loaded from.
+        app.insert(media.clone());
         Arc::new(app)
     };
     let tenants = Tenants::new(
@@ -121,6 +123,13 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         start_read_model(
             "payment setup",
             crate::payments::setup_subscription(payments.clone(), tenants.clone()),
+            &executor,
+        )
+        .await?,
+        // Nor this: it fetches the shops' mail logos this node lacks.
+        start_read_model(
+            "mail logos",
+            crate::media::logo_subscription(media.clone()),
             &executor,
         )
         .await?,

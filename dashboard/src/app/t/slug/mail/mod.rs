@@ -3,14 +3,17 @@
 //! through the platform's server, under the shop's name. Saving sends a test
 //! mail through the new settings first: what cannot deliver is not kept.
 
+pub mod branding;
 pub mod configure;
 pub mod remove;
 pub mod templates;
 
+use std::sync::Arc;
+
 use timada_identity::UserState;
 use timada_tenancy::{
-    MAIL_SECURITY_NONE, MAIL_SECURITY_STARTTLS, MAIL_SECURITY_TLS, PERMISSION_MAIL_MANAGE,
-    ShopMailKind,
+    MAIL_SECURITY_NONE, MAIL_SECURITY_STARTTLS, MAIL_SECURITY_TLS, MAX_MAIL_FOOTER_LEN,
+    PERMISSION_MAIL_MANAGE, ShopMailKind,
 };
 use topcoat::{
     Result,
@@ -22,6 +25,7 @@ use topcoat::{
 use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::app::auth::Flash;
 use crate::auth::{require_user, user_labels};
+use crate::media::Media;
 use crate::shop_mail::ShopMail;
 use crate::ui::{document, format_time, notice};
 
@@ -92,6 +96,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(|template| template.saved_by.clone())
         .collect();
     let labels = user_labels(cx, &editors).await?;
+    let branding = tenant.mail_branding.clone().unwrap_or_default();
+    let logo_url = branding
+        .logo_file
+        .as_deref()
+        .map(|file| app_context::<Arc<Media>>(cx).url(&tenant.id, file));
+    let max_footer = MAX_MAIL_FOOTER_LEN.to_string();
     let mails: Vec<(ShopMailKind, Option<(String, u64)>)> = ShopMailKind::ALL
         .into_iter()
         .map(|kind| {
@@ -176,6 +186,41 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </li>
                     }
                 </ul>
+            </section>
+
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-mail-branding="">
+                <h2 class="mb-2 text-lg font-medium">"Look of your mails"</h2>
+                <p class="mb-4 text-sm text-neutral-600">
+                    "A logo, an accent colour and a footer, shared by all the mails above. In your own wording, use "
+                    <code>"{{ shop.logo_url }}"</code> ", " <code>"{{ shop.accent }}"</code> " and " <code>"{{ shop.footer }}"</code> "."
+                </p>
+                <form method="post" enctype="multipart/form-data" action=(href!(branding::save, Slug(slug.clone()))) class="space-y-3">
+                    if let Some(logo_url) = &logo_url {
+                        <img src=(logo_url) alt="Your logo" data-mail-logo="" class="max-h-16 rounded border border-neutral-200 p-1">
+                        <label class="flex items-center gap-2 text-sm">
+                            <input type="checkbox" name="remove_logo" value="1">
+                            "Remove the logo"
+                        </label>
+                    }
+                    <label class="block text-sm" for="mail-logo">
+                        if logo_url.is_some() { "Replace the logo" } else { "Logo" }
+                    </label>
+                    <input id="mail-logo" name="logo" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="block text-sm">
+                    <label class="block text-sm" for="mail-accent">"Accent colour"</label>
+                    <input id="mail-accent" name="accent" maxlength="7" placeholder="#1a73e8" pattern="#[0-9a-fA-F]{6}"
+                        value=(branding.accent.as_deref().unwrap_or_default())
+                        class="w-40 rounded border border-neutral-300 px-3 py-2 font-mono">
+                    <label class="block text-sm" for="mail-footer">"Footer"</label>
+                    <textarea id="mail-footer" name="footer" rows="3" maxlength=(&max_footer)
+                        placeholder="Your shop's address, a line about returns…"
+                        class="w-full rounded border border-neutral-300 px-3 py-2">(branding.footer.as_deref().unwrap_or_default())</textarea>
+                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save the look"</button>
+                </form>
+                if tenant.mail_branding.is_some() {
+                    <form method="post" class="mt-3" action=(href!(branding::clear::clear, Slug(slug.clone())))>
+                        <button class="rounded border border-red-300 px-3 py-1 text-sm text-red-800 hover:bg-red-50">"Back to the plain look"</button>
+                    </form>
+                }
             </section>
 
             if enabled {

@@ -1,6 +1,9 @@
 <!doctype html>
 <html>
 <body>
+{% if shop.logo_url %}
+<p><img src="{{ shop.logo_url }}" alt="{{ shop.name }}" style="max-height: 64px; max-width: 240px;"></p>
+{% endif %}
 <p>Thank you for your order at <strong>{{ shop.name }}</strong>.</p>
 <p>Order <strong>{{ order.reference }}</strong></p>
 <table cellpadding="4" style="border-collapse: collapse;">
@@ -50,7 +53,11 @@
 <p>Your note: {{ order.note }}</p>
 {% endif %}
 {% if link %}
-<p><a href="{{ link }}">View your order</a></p>
+<p><a href="{{ link }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>View your order</a></p>
+{% endif %}
+{% if shop.footer %}
+<hr style="border: none; border-top: 1px solid #e5e7eb;">
+<p style="color: #6b7280; font-size: 12px; white-space: pre-line;">{{ shop.footer }}</p>
 {% endif %}
 </body>
 </html>
