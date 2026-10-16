@@ -814,15 +814,16 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
 
     // Tracked to France and Belgium, free from 50.00; VIP to France only.
     await page.goto(`/t/${slug}/shipping`);
-    await page.getByLabel("Name").fill("Tracked delivery");
+    await page.getByLabel("Name", { exact: true }).fill("Tracked delivery");
     await page.getByLabel("Price").fill("4.90");
     await page.getByLabel("Free from (optional)").fill("50");
-    await page.getByLabel("Countries (optional)").fill("FR, BE");
+    await page.getByRole("checkbox", { name: "France FR" }).check();
+    await page.getByRole("checkbox", { name: "Belgium BE" }).check();
     await page.getByRole("button", { name: "Add shipping method" }).click();
     await expect(page.getByRole("status")).toContainText("Shipping method added.");
-    await page.getByLabel("Name").fill("VIP");
+    await page.getByLabel("Name", { exact: true }).fill("VIP");
     await page.getByLabel("Price").fill("6.90");
-    await page.getByLabel("Countries (optional)").fill("FR");
+    await page.getByRole("checkbox", { name: "France FR" }).check();
     await page.getByRole("button", { name: "Add shipping method" }).click();
     await expect(page.getByRole("status")).toContainText("Shipping method added.");
     await startStorefront(request, await mintKey(page, slug, true), 1);
