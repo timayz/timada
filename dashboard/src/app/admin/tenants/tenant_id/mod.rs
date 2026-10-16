@@ -5,6 +5,7 @@ pub mod suspend;
 
 use std::sync::Arc;
 
+use timada_tenancy::count_open_invitations_of_tenant;
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -17,7 +18,8 @@ use crate::app::admin::require_admin;
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, index as tenant_page};
 use crate::app::tenants::tenancy;
-use crate::auth::{unix_seconds, user_labels};
+use crate::auth::{now, unix_seconds, user_labels};
+use crate::db::ReadPool;
 use crate::tenants::{TenantStatus, Tenants};
 use crate::ui::{document, format_time, notice};
 
@@ -54,6 +56,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let runtime = app_context::<Arc<Tenants>>(cx);
     let status = runtime.status(&tenant.id);
+    let pending =
+        count_open_invitations_of_tenant(app_context::<ReadPool>(cx), &tenant.id, now()).await?;
     let mut ids: Vec<String> = tenant.members.keys().cloned().collect();
     ids.push(tenant.created_by.clone());
     let labels = user_labels(cx, &ids).await?;
@@ -98,6 +102,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <h2 class="mb-2 text-lg font-medium">"Members"</h2>
+                <p class="mb-2 text-sm text-neutral-500" data-pending-invitations="">
+                    (pending) if pending == 1 { " pending invitation" } else { " pending invitations" }
+                </p>
                 <ul class="divide-y divide-neutral-100 text-sm">
                     for (user_id, role) in &tenant.members {
                         <li class="flex justify-between py-2">
