@@ -343,6 +343,11 @@ pub fn say(code: &str) -> &'static str {
         "review_not_purchased" => "This product is not part of this order.",
         "review_order_cancelled" => "A cancelled order cannot be reviewed.",
         "review_already_reviewed" => "You have already reviewed this product.",
+        "review_not_pending" => {
+            "The shop has already looked at your review: it can no longer be changed."
+        }
+        "review_not_found" => "This review cannot be found.",
+        "review_photo_not_found" => "One of your photos was taken off meanwhile: try again.",
         "wrong_code" => "This is not the code we sent. Check the e-mail and try again.",
         "code_expired" => "This code has expired: ask for a new one.",
         "too_many_attempts" => "Too many wrong codes: ask for a new one.",

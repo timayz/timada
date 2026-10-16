@@ -160,6 +160,21 @@ pub struct ReviewDraft {
     pub photos: Vec<PhotoUpload>,
 }
 
+/// What the author of a review still waiting for the shop changes: the
+/// rating, title and text replace the old ones; of the photos already on it,
+/// those in `keep_photos` (their ids) stay, and `photos` come after them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewEdit {
+    /// 1 to 5.
+    pub rating: u8,
+    /// Blank is none.
+    pub title: Option<String>,
+    pub body: String,
+    pub keep_photos: Vec<String>,
+    /// With the kept ones, at most [`MAX_PHOTOS`].
+    pub photos: Vec<PhotoUpload>,
+}
+
 /// A file the shopper chose.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PhotoUpload {
@@ -206,6 +221,32 @@ impl Api {
     }
 }
 
+/// The fields a review and its revision share.
+fn review_form(
+    order_id: &str,
+    product_id: &str,
+    rating: u8,
+    title: Option<String>,
+    body: String,
+    photos: Vec<PhotoUpload>,
+) -> reqwest::multipart::Form {
+    let mut form = reqwest::multipart::Form::new()
+        .text("order_id", order_id.to_owned())
+        .text("product_id", product_id.to_owned())
+        .text("rating", rating.to_string())
+        .text("body", body);
+    if let Some(title) = title {
+        form = form.text("title", title);
+    }
+    for photo in photos {
+        form = form.part(
+            "photo",
+            reqwest::multipart::Part::bytes(photo.bytes).file_name(photo.file_name),
+        );
+    }
+    form
+}
+
 /// What the dashboard answers.
 #[derive(Debug, Deserialize)]
 struct Answer {
@@ -224,33 +265,59 @@ impl Store {
         product_id: &str,
         draft: ReviewDraft,
     ) -> anyhow::Result<ReviewRefusable<String>> {
+        let form = review_form(
+            order_id,
+            product_id,
+            draft.rating,
+            draft.title,
+            draft.body,
+            draft.photos,
+        );
+        self.send_review("/store/reviews", form).await
+    }
+
+    /// Changes the review of `product_id` from `order_id` while it waits for
+    /// the shop: its id, or why it was refused (`review_not_pending` once
+    /// the shop published or rejected it). Fails as
+    /// [`submit_review`](Self::submit_review) does.
+    pub async fn revise_review(
+        &self,
+        order_id: &str,
+        product_id: &str,
+        edit: ReviewEdit,
+    ) -> anyhow::Result<ReviewRefusable<String>> {
+        let mut form = review_form(
+            order_id,
+            product_id,
+            edit.rating,
+            edit.title,
+            edit.body,
+            edit.photos,
+        );
+        for id in edit.keep_photos {
+            form = form.text("keep_photo", id);
+        }
+        self.send_review("/store/reviews/revise", form).await
+    }
+
+    async fn send_review(
+        &self,
+        path: &str,
+        form: reqwest::multipart::Form,
+    ) -> anyhow::Result<ReviewRefusable<String>> {
         let api = self
             .api()
             .context("no dashboard address: set StoreConfig::api_url to take reviews")?;
-        let mut form = reqwest::multipart::Form::new()
-            .text("order_id", order_id.to_owned())
-            .text("product_id", product_id.to_owned())
-            .text("rating", draft.rating.to_string())
-            .text("body", draft.body);
-        if let Some(title) = draft.title {
-            form = form.text("title", title);
-        }
-        for photo in draft.photos {
-            form = form.part(
-                "photo",
-                reqwest::multipart::Part::bytes(photo.bytes).file_name(photo.file_name),
-            );
-        }
         let response = api
             .client
-            .post(format!("{}/store/reviews", api.url))
+            .post(format!("{}{path}", api.url))
             .bearer_auth(&api.token)
             .multipart(form)
             .send()
             .await
             .context("cannot reach the dashboard")?;
         let status = response.status();
-        if status == reqwest::StatusCode::CREATED || status.as_u16() == 422 {
+        if status.is_success() || status.as_u16() == 422 {
             let answer: Answer = response
                 .json()
                 .await
@@ -268,6 +335,15 @@ impl Store {
             };
         }
         anyhow::bail!("the dashboard did not take the review: {status}")
+    }
+
+    /// Where a browser loads a stored picture from, `file` being
+    /// `<id>.<ext>`: what a page shows a waiting review's photos with.
+    pub fn picture_url(&self, file: &str) -> String {
+        match self.media_url() {
+            Some(base) => format!("{base}/{file}"),
+            None => file.to_owned(),
+        }
     }
 
     /// The review of `product_id` from `order_id`, if one was handed in,
@@ -327,6 +403,25 @@ pub async fn submit_review(
         .submit_review(order_id, product_id, draft)
         .await
         .map_err(Error::from_anyhow)
+}
+
+/// Changes a review still waiting for the shop; see
+/// [`Store::revise_review`].
+pub async fn revise_review(
+    cx: &Cx,
+    order_id: &str,
+    product_id: &str,
+    edit: ReviewEdit,
+) -> Result<ReviewRefusable<String>> {
+    store(cx)
+        .revise_review(order_id, product_id, edit)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// Where a browser loads a stored picture from; see [`Store::picture_url`].
+pub fn picture_url(cx: &Cx, file: &str) -> String {
+    store(cx).picture_url(file)
 }
 
 /// Where the review of `product_id` from `order_id` stands, if there is one.
