@@ -104,6 +104,14 @@ pub enum Tenant {
         html: String,
         saved_by: String,
     },
+    /// The merchant's own plain-text part of a mail, committed right after
+    /// the [`MailTemplateSaved`] it goes with. A save without it sends the
+    /// text derived from the HTML. `text` is a template over the same
+    /// variables, printed unescaped.
+    MailTemplateTextSaved {
+        mail: String,
+        text: String,
+    },
     /// The mail goes back to the built-in wording.
     MailTemplateReset {
         mail: String,

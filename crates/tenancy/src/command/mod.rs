@@ -37,8 +37,9 @@ use crate::aggregator::api_key::{
 use crate::aggregator::{
     Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailBrandingCleared,
     MailBrandingSet, MailServerConfigured, MailServerRemoved, MailTemplateReset, MailTemplateSaved,
-    MemberGranted, MemberRevoked, MemberRoleChanged, PaymentsConfigured, PaymentsRemoved, Released,
-    Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
+    MailTemplateTextSaved, MemberGranted, MemberRevoked, MemberRoleChanged, PaymentsConfigured,
+    PaymentsRemoved, Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated,
+    Sent, Suspended,
 };
 use crate::value_object::{
     LEGACY_API_KEY_SCOPES, ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id,
@@ -117,6 +118,9 @@ pub const MAIL_TEMPLATE_HISTORY: usize = 20;
 pub struct MailTemplate {
     pub subject: String,
     pub html: String,
+    /// The merchant's plain-text part; `None` sends the text derived from
+    /// the HTML.
+    pub text: Option<String>,
     pub saved_by: String,
     /// Unix seconds.
     pub saved_at: u64,
@@ -240,6 +244,7 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_mail_server_configured())
         .handler(on_mail_server_removed())
         .handler(on_mail_template_saved())
+        .handler(on_mail_template_text_saved())
         .handler(on_mail_template_reset())
         .handler(on_mail_branding_set())
         .handler(on_mail_branding_cleared())
@@ -442,6 +447,7 @@ async fn on_mail_template_saved(
         MailTemplate {
             subject: data.subject.to_owned(),
             html: data.html.to_owned(),
+            text: None,
             saved_by: data.saved_by.to_owned(),
             saved_at: event.timestamp,
         },
@@ -452,6 +458,17 @@ async fn on_mail_template_saved(
         at: event.timestamp,
         reset: false,
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_template_text_saved(
+    event: Event<MailTemplateTextSaved>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    if let Some(template) = tenant.mail_templates.get_mut(event.data.mail.as_str()) {
+        template.text = Some(event.data.text.to_owned());
+    }
     Ok(())
 }
 

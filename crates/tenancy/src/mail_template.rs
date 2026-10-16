@@ -7,6 +7,10 @@
 //! typed (a note, an address) can never add markup, and the template itself
 //! may not carry scripts, frames, forms or event handlers.
 //!
+//! The merchant may also write the mail's plain-text part, a template over
+//! the same variables printed as they are. Without it, the text is derived
+//! from the HTML.
+//!
 //! A shop without its own template sends the built-in one, which words the
 //! mails as they always were.
 
@@ -22,6 +26,8 @@ use serde::Serialize;
 pub const MAX_MAIL_SUBJECT_LEN: usize = 200;
 /// The largest HTML a template may have, in bytes.
 pub const MAX_MAIL_HTML_LEN: usize = 100 * 1024;
+/// The largest plain-text part a template may have, in bytes.
+pub const MAX_MAIL_TEXT_LEN: usize = 100 * 1024;
 /// How much work one render may do before it is stopped, so a runaway
 /// `{% for %}` can't hold a mail up.
 const RENDER_FUEL: u64 = 200_000;
@@ -451,6 +457,8 @@ pub struct MailTemplateError(pub String);
 pub struct RenderedMail {
     pub subject: String,
     pub html: String,
+    /// The plain-text part; `None` derives it from the HTML.
+    pub text: Option<String>,
 }
 
 /// The sandbox templates render in: no other templates to include, no
@@ -487,11 +495,13 @@ fn describe(part: &str, err: &minijinja::Error) -> MailTemplateError {
     })
 }
 
-/// Renders `subject` and `html` with `vars`. The subject is plain text on
-/// one line; the HTML has every variable escaped.
+/// Renders `subject`, `html` and, when given, the plain `text` with
+/// `vars`. The subject is plain text on one line; the HTML has every
+/// variable escaped; the text prints them as they are.
 pub fn render(
     subject: &str,
     html: &str,
+    text: Option<&str>,
     vars: &MailVars,
 ) -> Result<RenderedMail, MailTemplateError> {
     let env = environment();
@@ -504,10 +514,21 @@ pub fn render(
         .template_from_named_str("body.html", html)
         .and_then(|template| template.render(&ctx))
         .map_err(|err| describe("Body", &err))?;
+    let text = text.map(|text| render_text(text, vars)).transpose()?;
     Ok(RenderedMail {
         subject: subject.split_whitespace().collect::<Vec<_>>().join(" "),
         html,
+        text,
     })
+}
+
+/// Renders a plain-text part with `vars`, its variables unescaped: a mail
+/// client shows it as text, never as markup.
+pub fn render_text(text: &str, vars: &MailVars) -> Result<String, MailTemplateError> {
+    environment()
+        .template_from_named_str("body.txt", text)
+        .and_then(|template| template.render(Value::from(Serde(vars))))
+        .map_err(|err| describe("Plain text", &err))
 }
 
 /// Whether a link or picture address is one a mail may carry: a web or
@@ -652,12 +673,38 @@ pub fn validate(kind: ShopMailKind, subject: &str, html: &str) -> Result<(), Mai
     check_variables(kind, &env, "Subject", "subject.txt", subject)?;
     check_variables(kind, &env, "Body", "body.html", html)?;
     check_markup(kind, html)?;
-    render(subject, html, &kind.check_sample(true))?;
-    render(subject, html, &kind.check_sample(false)).map_err(|err| {
-        MailTemplateError(format!(
-            "{err} (with the optional parts empty: check them with {{% if … %}})"
-        ))
-    })?;
+    render(subject, html, None, &kind.check_sample(true))?;
+    render(subject, html, None, &kind.check_sample(false)).map_err(optional_parts)?;
+    Ok(())
+}
+
+/// A render that failed on the sample with every optional part empty.
+fn optional_parts(err: MailTemplateError) -> MailTemplateError {
+    MailTemplateError(format!(
+        "{err} (with the optional parts empty: check them with {{% if … %}})"
+    ))
+}
+
+/// Checks a plain-text part before it is saved, as [`validate`] checks the
+/// HTML: it is within size, it reads, it uses only the mail's variables,
+/// and it renders with every optional part present and with none. Being
+/// text, it has no markup to check. A blank one is no plain text at all
+/// (the text is derived from the HTML), so it is not passed here.
+pub fn validate_text(kind: ShopMailKind, text: &str) -> Result<(), MailTemplateError> {
+    if text.trim().is_empty() {
+        return Err(MailTemplateError(
+            "Plain text: leave it empty to derive it from the HTML.".to_owned(),
+        ));
+    }
+    if text.len() > MAX_MAIL_TEXT_LEN {
+        return Err(MailTemplateError(format!(
+            "Plain text: at most {} KB.",
+            MAX_MAIL_TEXT_LEN / 1024
+        )));
+    }
+    check_variables(kind, &environment(), "Plain text", "body.txt", text)?;
+    render_text(text, &kind.check_sample(true))?;
+    render_text(text, &kind.check_sample(false)).map_err(optional_parts)?;
     Ok(())
 }
 
@@ -680,6 +727,7 @@ mod tests {
         let mail = render(
             kind.default_subject(),
             kind.default_html(),
+            None,
             &kind.sample(ShopVars::named("Chez Léa")),
         )
         .unwrap();
@@ -712,6 +760,7 @@ mod tests {
         let mail = render(
             kind.default_subject(),
             kind.default_html(),
+            None,
             &kind.sample_with(ShopVars::named("Shop"), false),
         )
         .unwrap();
@@ -738,6 +787,7 @@ mod tests {
             let mail = render(
                 kind.default_subject(),
                 kind.default_html(),
+                None,
                 &kind.sample(shop.clone()),
             )
             .unwrap();
@@ -757,6 +807,7 @@ mod tests {
         let mail = render(
             plain.default_subject(),
             plain.default_html(),
+            None,
             &plain.sample(ShopVars::named("Shop")),
         )
         .unwrap();
@@ -771,6 +822,7 @@ mod tests {
         let mail = render(
             "Code for {{ shop.name }}",
             "<p>{{ shop.name }}</p>",
+            None,
             &kind.sample(ShopVars::named("<b>Bold</b> & co")),
         )
         .unwrap();
@@ -876,9 +928,53 @@ mod tests {
         let err = render(
             "x",
             "{% for i in range(100000) %}{% for j in range(100000) %}.{% endfor %}{% endfor %}",
+            None,
             &ShopMailKind::ShopperCode.sample(ShopVars::named("Shop")),
         )
         .unwrap_err();
         assert!(err.0.starts_with("Body"), "{err}");
+    }
+
+    #[test]
+    fn the_plain_text_prints_variables_as_they_are() {
+        let kind = ShopMailKind::ShopperCode;
+        let mail = render(
+            "Code",
+            "<p>{{ code }}</p>",
+            Some("Hello from {{ shop.name }}: {{ code }}"),
+            &kind.sample(ShopVars::named("Martin & <Fils>")),
+        )
+        .unwrap();
+        assert_eq!(
+            mail.text.as_deref(),
+            Some("Hello from Martin & <Fils>: 428913")
+        );
+        let derived = render(
+            "Code",
+            "<p>{{ code }}</p>",
+            None,
+            &kind.sample(ShopVars::named("Shop")),
+        )
+        .unwrap();
+        assert_eq!(derived.text, None);
+    }
+
+    #[test]
+    fn a_plain_text_part_is_checked_like_the_html() {
+        let kind = ShopMailKind::OrderConfirmation;
+        validate_text(
+            kind,
+            "Order {{ order.reference }}\n{% for line in order.lines %}- {{ line.name }}\n{% endfor %}\
+             {% if order.discount %}{{ order.discount.code }}{% endif %}\n<not markup>",
+        )
+        .unwrap();
+        let err = validate_text(kind, "{{ code }}").unwrap_err();
+        assert_eq!(err.0, "Plain text: this mail has no variable {{ code }}.");
+        let err = validate_text(kind, "{% for line in order.lines %}").unwrap_err();
+        assert!(err.0.starts_with("Plain text"), "{err}");
+        let err = validate_text(kind, "{{ order.discount.code }}").unwrap_err();
+        assert!(err.0.contains("optional parts empty"), "{err}");
+        assert!(validate_text(kind, " \n ").is_err());
+        assert!(validate_text(kind, &"x".repeat(MAX_MAIL_TEXT_LEN + 1)).is_err());
     }
 }

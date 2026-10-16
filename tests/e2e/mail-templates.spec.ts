@@ -5,7 +5,7 @@ import { createTenant, uniqueTenant } from "./tenants";
 // A shop words its own mails: the sign-in code here, sent through the
 // platform's server and read back from the development mailbox.
 
-type Sent = { to: { address: string }[]; subject: string; html: string };
+type Sent = { to: { address: string }[]; subject: string; html: string; text: string };
 
 async function mailTo(request: APIRequestContext, email: string, subject: string): Promise<Sent> {
   let found: Sent | undefined;
@@ -73,11 +73,21 @@ test("a shop words its sign-in code mail its own way, and back", async ({ page }
   await page.getByRole("button", { name: "Preview" }).click();
   await expect(page.locator("[data-preview-subject]")).toHaveText(`Your ${name} code`);
   await expect(page.frameLocator("iframe").getByText(`Hello from ${name}`)).toBeVisible();
+  await expect(page.locator("[data-preview-text]")).toHaveText("Derived from the HTML.");
+
+  // A plain-text version is checked like the HTML.
+  await page.getByLabel("Plain-text version").fill("Code {{ order.reference }}");
+  await page.getByRole("button", { name: "Preview" }).click();
+  await expect(page.locator("[data-template-error]")).toContainText("Plain text: this mail has no variable");
+  await page.getByLabel("Plain-text version").fill("Plain hello from {{ shop.name }}: {{ code }}");
+  await page.getByRole("button", { name: "Preview" }).click();
+  await expect(page.locator("[data-preview-text]")).toContainText(`Plain hello from ${name}: `);
 
   await page.getByRole("button", { name: "Send me a test" }).click();
   await expect(page.getByRole("status")).toContainText(`Test mail sent to ${merchant}`);
   const test_mail = await mailTo(page.request, merchant, `[Test] Your ${name} code`);
   expect(test_mail.html).toContain("Hello from");
+  expect(test_mail.text).toContain(`Plain hello from ${name}`);
 
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("status")).toContainText("Saved");
@@ -90,6 +100,7 @@ test("a shop words its sign-in code mail its own way, and back", async ({ page }
   const worded = await mailTo(page.request, first, `Your ${name} code`);
   expect(worded.html).toContain(`Hello from ${name}`);
   expect(worded.html).toMatch(/<b>\d{6}<\/b>/);
+  expect(worded.text).toMatch(new RegExp(`Plain hello from ${name}: \\d{6}`));
 
   await page.goto(`/t/${slug}/mail`);
   await expect(row).toContainText("Edited by");
