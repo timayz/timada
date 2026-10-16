@@ -12,8 +12,8 @@ use typst_pdf::{PdfOptions, PdfStandard, PdfStandards};
 use crate::command::{DocumentKind, IssuedDocument};
 use crate::tax::Regime;
 use crate::value_object::{
-    Address, InvoiceLine, PAYMENT_METHOD_CARD, civil_date, format_amount_fr, format_date_fr,
-    format_rate_fr, lines_breakdown,
+    Address, InvoiceLine, PAYMENT_METHOD_CARD, civil_date, excl_vat, format_amount_fr,
+    format_date_fr, format_rate_fr, lines_breakdown, spread,
 };
 
 /// Layout version 1 (see [`TEMPLATE_VERSION`](crate::TEMPLATE_VERSION)).
@@ -251,9 +251,39 @@ fn inputs(document: &IssuedDocument) -> Dict {
             .collect()
     };
     let mut rows = rows;
+    // Shipping reads as one more row, taxed at the rates of the goods it
+    // carries: its share on each line, before that line's VAT.
+    let shipping_excl = document.shipping.as_ref().map(|shipping| {
+        let gross: Vec<u64> = document
+            .lines
+            .iter()
+            .map(InvoiceLine::total_cents)
+            .collect();
+        let off = spread(
+            &gross,
+            document.discount.as_ref().map_or(0, |d| d.amount_cents),
+        );
+        let goods: Vec<u64> = gross
+            .iter()
+            .zip(off)
+            .map(|(line, off)| line - off)
+            .collect();
+        document
+            .lines
+            .iter()
+            .zip(crate::command::shipping_shares(
+                &goods,
+                shipping.amount_cents,
+            ))
+            .map(|(line, share)| {
+                line.vat_rate_bps
+                    .map_or(share, |rate| excl_vat(share, rate))
+            })
+            .sum::<u64>()
+    });
     // A discount code reads as one more row, negative, under the lines it
-    // came off: what it took before VAT is the lines' base less what was
-    // paid's.
+    // came off: what it took before VAT is the lines' base (and shipping's)
+    // less what was paid's.
     if let Some(discount) = &document.discount {
         let gross_excl: u64 = lines_breakdown(&document.lines)
             .iter()
@@ -265,7 +295,8 @@ fn inputs(document: &IssuedDocument) -> Dict {
                 .filter(|line| line.vat_rate_bps.is_none())
                 .map(InvoiceLine::total_cents)
                 .sum::<u64>();
-        let off_excl = gross_excl.saturating_sub(document.total_excl_vat_cents);
+        let off_excl =
+            (gross_excl + shipping_excl.unwrap_or(0)).saturating_sub(document.total_excl_vat_cents);
         rows.push(
             Dict::from_iter([
                 ("name".into(), text(format!("Remise {}", discount.code))),
@@ -284,6 +315,29 @@ fn inputs(document: &IssuedDocument) -> Dict {
                     "total".into(),
                     text(format!("−{}", money(discount.amount_cents))),
                 ),
+            ])
+            .into_value(),
+        );
+    }
+    if let (Some(shipping), Some(excl)) = (&document.shipping, shipping_excl) {
+        rows.push(
+            Dict::from_iter([
+                (
+                    "name".into(),
+                    text(format!("Livraison — {}", shipping.name)),
+                ),
+                ("detail".into(), text("Frais de port")),
+                ("quantity".into(), text("1")),
+                ("unit_excl".into(), text(money(excl))),
+                (
+                    "rate".into(),
+                    text(if document.vat.is_empty() {
+                        "—"
+                    } else {
+                        "selon taux"
+                    }),
+                ),
+                ("total".into(), text(money(shipping.amount_cents))),
             ])
             .into_value(),
         );
@@ -500,6 +554,55 @@ mod tests {
         };
         assert!(get(&inputs(&export), "vat_mention").contains("art. 262 I du CGI"));
         assert!(render(&business).unwrap().starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn shipping_reads_as_a_row_after_the_discount() {
+        let full = invoice(Some("FR85120027016"));
+        // 10 % off and 6.90 shipping: 2250 + 383 at 20 %, 1799 + 307 at 5.5 %.
+        let document = IssuedDocument {
+            discount: Some(crate::command::InvoiceDiscount {
+                code: "TEN".into(),
+                amount_cents: 450,
+            }),
+            shipping: Some(crate::command::InvoiceShipping {
+                name: "VIP".into(),
+                amount_cents: 690,
+            }),
+            vat: vec![
+                VatSubtotal {
+                    rate_bps: 2000,
+                    base_cents: 2194,
+                    vat_cents: 439,
+                },
+                VatSubtotal {
+                    rate_bps: 550,
+                    base_cents: 1996,
+                    vat_cents: 110,
+                },
+            ],
+            total_excl_vat_cents: 4190,
+            total_vat_cents: 549,
+            total_cents: 4739,
+            ..full
+        };
+        let d = inputs(&document);
+        let Value::Array(rows) = d.get("lines").unwrap() else {
+            panic!("lines are rows");
+        };
+        assert_eq!(rows.len(), 4);
+        let row = |index: usize| match &rows.as_slice()[index] {
+            Value::Dict(row) => row.clone(),
+            _ => panic!("a row is a dict"),
+        };
+        assert_eq!(get(&row(2), "name"), "Remise TEN");
+        assert_eq!(get(&row(3), "name"), "Livraison — VIP");
+        assert_eq!(get(&row(3), "total"), "6,90\u{a0}€");
+        // Each line's share before its VAT: 3.19 + 2.91.
+        assert_eq!(get(&row(3), "unit_excl"), "6,10\u{a0}€");
+        // 39.78 + 6.10 before VAT, 41.90 paid.
+        assert_eq!(get(&row(2), "unit_excl"), "−3,98\u{a0}€");
+        assert!(render(&document).unwrap().starts_with(b"%PDF-"));
     }
 
     #[test]

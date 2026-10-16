@@ -152,6 +152,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             format!("-{}", format_money(discount.amount_cents, &order.currency)),
         )
     });
+    let shipping = order.shipping_charge.as_ref().map(|shipping| {
+        (
+            shipping.name.clone(),
+            match shipping.amount_cents {
+                0 => "Free".to_owned(),
+                cents => format_money(cents, &order.currency),
+            },
+        )
+    });
     let status = order.status;
     let address = order.shipping.clone();
     let billing = order.billing.clone();
@@ -280,6 +289,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         if let Some((code, amount)) = &discount {
                             <tr class="border-t border-neutral-200" data-order-discount=(code)>
                                 <td class="py-2" colspan="4">"Discount " <code>(code)</code></td>
+                                <td class="py-2 text-right">(amount)</td>
+                            </tr>
+                        }
+                        if let Some((name, amount)) = &shipping {
+                            <tr class="border-t border-neutral-200" data-order-shipping=(name)>
+                                <td class="py-2" colspan="4">"Shipping: " (name)</td>
                                 <td class="py-2 text-right">(amount)</td>
                             </tr>
                         }

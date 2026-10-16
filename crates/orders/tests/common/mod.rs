@@ -138,6 +138,7 @@ pub fn checkout() -> Checkout {
         expected_total_cents: None,
         vat_number: None,
         billing: None,
+        shipping_method: None,
     }
 }
 

@@ -96,6 +96,7 @@ fn invoice(order_id: &str) -> NewInvoice {
             },
         ],
         discount: None,
+        shipping: None,
         total_cents: 4499,
         issued_by: "test".into(),
         tax: TaxProfile {
@@ -662,4 +663,65 @@ async fn a_crash_after_counting_reuses_the_decision() {
         platform.total("company-1", 2026).await.unwrap().sales_cents,
         1_100_000
     );
+}
+
+#[tokio::test]
+async fn shipping_is_taxed_at_the_rates_of_the_goods_it_carries() {
+    let cmd = command().await;
+    // 6.90 shipping on 25.00 at 20 % and 19.99 at 5.5 %.
+    let shipped = NewInvoice {
+        shipping: Some(InvoiceShipping {
+            name: "VIP".into(),
+            amount_cents: 690,
+        }),
+        total_cents: 4499 + 690,
+        ..invoice("o1")
+    };
+    let mismatch = NewInvoice {
+        total_cents: 4499,
+        ..shipped.clone()
+    };
+    assert!(matches!(
+        cmd.issue_invoice_here(mismatch, NOW).await.unwrap_err(),
+        InvoicingError::TotalMismatch
+    ));
+
+    let issued = cmd.issue_invoice_here(shipped.clone(), NOW).await.unwrap();
+    // The lines stay what the goods cost; shipping sits beside them.
+    assert_eq!(issued.lines[0].total_cents(), 2500);
+    assert_eq!(
+        issued.shipping,
+        Some(InvoiceShipping {
+            name: "VIP".into(),
+            amount_cents: 690
+        })
+    );
+    // 383 rides with the mugs, 307 with the book (the cent left over goes
+    // to the larger remainder): 2883 at 20 %, 2306 at 5.5 %.
+    assert_eq!(
+        issued.vat,
+        vec![
+            VatSubtotal {
+                rate_bps: 2000,
+                base_cents: 2403,
+                vat_cents: 480
+            },
+            VatSubtotal {
+                rate_bps: 550,
+                base_cents: 2186,
+                vat_cents: 120
+            },
+        ]
+    );
+    assert_eq!(issued.total_cents, 5189);
+    assert_eq!(issued.total_excl_vat_cents, 4589);
+    assert_eq!(issued.total_vat_cents, 600);
+    assert_eq!(cmd.issue_invoice_here(shipped, NOW).await.unwrap(), issued);
+}
+
+#[test]
+fn shipping_on_free_goods_is_shared_evenly() {
+    assert_eq!(shipping_shares(&[0, 0], 491), vec![246, 245]);
+    assert_eq!(shipping_shares(&[300, 100], 400), vec![300, 100]);
+    assert_eq!(shipping_shares(&[300, 100], 0), vec![0, 0]);
 }
