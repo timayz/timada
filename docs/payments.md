@@ -111,10 +111,55 @@ CLI and an internet connection.
   for a restricted key), a publishable key with `pk_`, and a signing secret with
   `whsec_`.
 
+### Round-trip checklist
+
+Run this once with real test keys whenever the payment flow changes, and before
+turning payments on for a merchant. Follow the steps above, then tick each line.
+
+- [ ] **Payment Element.** The card form shows on `/checkout/pay`, and `4242 4242 4242
+      4242` goes through. A declined card (`4000 0000 0000 9995`) shows its error under
+      the form, and 3-D Secure (`4000 0025 0000 3155`) opens its popup.
+- [ ] **Webhook.** `stripe listen` logs a `204` for `payment_intent.succeeded`, and the
+      page moves on from "Confirming your payment…".
+- [ ] **Order.** `/t/<slug>/orders` lists it as Paid at the amount Stripe's test
+      dashboard shows for the payment, and its invoice is issued.
+- [ ] **Refund on cancel.** *Cancel and refund* marks the order Cancelled. Stripe's test
+      dashboard shows the payment refunded in full, and a credit note is issued.
+
+Last run:
+
+| Date | Who | Result | Notes |
+|---|---|---|---|
+| | | | |
+
+## Live test
+
+`a_checkout_goes_through_stripe_test_mode` in `dashboard/tests/payments.rs` runs the
+dashboard's side of the round trip against Stripe itself, without a browser:
+
+```sh
+STRIPE_TEST_SECRET_KEY=sk_test_… cargo test -p timada-dashboard --test payments -- --ignored
+```
+
+- It is ignored by default, since it needs the network and a Stripe account. Run with
+  `--ignored` but without the variable (or with it empty), it does nothing.
+- It refuses any key that is not a test-mode key (`sk_test_…` or `rk_test_…`).
+- What it does:
+  1. checks the key, as the payments page does;
+  2. checks out a cart, so the payments subscription opens a real PaymentIntent;
+  3. pays it with Stripe's test card `pm_card_visa`, as the Payment Element would;
+  4. sends the webhook a signed `payment_intent.succeeded`. The dashboard reads the
+     payment back from Stripe, so the order is placed only if Stripe confirms it;
+  5. checks the order is Paid at 25.00 EUR;
+  6. cancels it with a refund, and asks Stripe whether the refund succeeded.
+- The webhook is signed by the test itself, so it does not cover Stripe delivering
+  one. The checklist's `stripe listen` step does.
+- It leaves one refunded 25.00 EUR payment in Stripe's test dashboard per run.
+
 ## Automated tests
 
-These run without a Stripe account and cover everything except typing a card into
-Stripe's form.
+These run without a Stripe account (the live test above aside) and cover everything
+except typing a card into Stripe's form.
 
 - `cargo test -p timada-dashboard --test payments` drives the dashboard's side against a
   fake Stripe:
