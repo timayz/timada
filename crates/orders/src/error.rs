@@ -64,6 +64,18 @@ pub enum OrdersError {
     /// [`timada_discounts::SHOPPER_CODES`]).
     #[error("this discount code cannot be used")]
     DiscountRefused { code: &'static str },
+    #[error("name the shipping method (at most 80 characters)")]
+    InvalidShippingName,
+    #[error("a shipping method is priced in one of the shop's currencies")]
+    InvalidShippingCurrency,
+    #[error("enter a shipping price, such as 4.90")]
+    InvalidShippingPrice,
+    #[error("list the countries as two-letter codes such as FR, BE")]
+    InvalidShippingCountries,
+    #[error("a shop offers at most twenty shipping methods")]
+    TooManyShippingMethods,
+    #[error("shipping method not found")]
+    ShippingMethodNotFound,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -134,6 +146,12 @@ impl OrdersError {
             Self::InvalidReason => "invalid_reason",
             Self::InvalidStorefrontUrl => "invalid_storefront_url",
             Self::DiscountRefused { code } => code,
+            Self::InvalidShippingName => "invalid_shipping_name",
+            Self::InvalidShippingCurrency => "invalid_currency",
+            Self::InvalidShippingPrice => "invalid_amount",
+            Self::InvalidShippingCountries => "invalid_shipping_countries",
+            Self::TooManyShippingMethods => "too_many_shipping_methods",
+            Self::ShippingMethodNotFound => "shipping_method_not_found",
             Self::Write(_) | Self::Other(_) => return None,
         })
     }

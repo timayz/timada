@@ -240,3 +240,36 @@ pub enum OrderConfirmation {
         mailed_by: String,
     },
 }
+
+/// How the tenant ships: the methods a shopper picks one of at checkout.
+/// One stream per tenant store, with the id
+/// [`shipping_methods_id`](crate::shipping_methods_id), so a quote reads them
+/// all in one load; no stream (or none left) means shipping is included.
+/// `countries` empty means every country.
+#[evento::aggregate(name = "timada-orders/ShippingMethods")]
+pub enum ShippingMethods {
+    MethodAdded {
+        method_id: String,
+        name: String,
+        price_cents: u64,
+        currency: String,
+        countries: Vec<String>,
+        /// Free once the goods, less any discount, reach this amount.
+        free_above_cents: Option<u64>,
+        added_by: String,
+    },
+    /// Replaces everything the method was.
+    MethodChanged {
+        method_id: String,
+        name: String,
+        price_cents: u64,
+        currency: String,
+        countries: Vec<String>,
+        free_above_cents: Option<u64>,
+        changed_by: String,
+    },
+    MethodRemoved {
+        method_id: String,
+        removed_by: String,
+    },
+}

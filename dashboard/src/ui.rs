@@ -125,6 +125,12 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_max_uses" => "A limited code serves 1 to 10000 orders.",
         "discount_not_found" => "This discount does not exist.",
         "discount_archived" => "This discount is archived.",
+        "invalid_shipping_name" => "A shipping method's name is 1 to 80 characters.",
+        "invalid_shipping_countries" => {
+            "List the countries as two-letter codes separated by commas, like FR, BE."
+        }
+        "too_many_shipping_methods" => "A shop offers at most twenty shipping methods.",
+        "shipping_method_not_found" => "This shipping method does not exist.",
         "category_has_children" => "Archive or move its sub-categories first.",
         "too_many_categories" => "A product belongs to at most ten categories.",
         "too_many_images" => "A product carries at most twenty pictures.",
@@ -250,6 +256,7 @@ pub fn describe_permission(permission: &str) -> &'static str {
         }
         "customers:read" => "See the shop's customer accounts",
         "mail:manage" => "Set up the mail server the shop's mails go out through",
+        "shipping:manage" => "Set up the ways the shop ships and what they cost",
         _ => "Unknown permission",
     }
 }

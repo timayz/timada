@@ -115,6 +115,9 @@ event timada-orders/OrderConfirmation::ConfirmationMailed { order_id: String, em
 event timada-orders/OrderReference::Claimed { order_id: String }
 event timada-orders/PaymentMethod::PaymentsDisabled { disabled_by: String }
 event timada-orders/PaymentMethod::PaymentsEnabled { provider: String, publishable_key: String, enabled_by: String }
+event timada-orders/ShippingMethods::MethodAdded { method_id: String, name: String, price_cents: u64, currency: String, countries: Vec<String>, free_above_cents: Option<u64>, added_by: String }
+event timada-orders/ShippingMethods::MethodChanged { method_id: String, name: String, price_cents: u64, currency: String, countries: Vec<String>, free_above_cents: Option<u64>, changed_by: String }
+event timada-orders/ShippingMethods::MethodRemoved { method_id: String, removed_by: String }
 event timada-orders/Storefront::StorefrontAddressCleared { cleared_by: String }
 event timada-orders/Storefront::StorefrontAddressSet { url: String, set_by: String }
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
