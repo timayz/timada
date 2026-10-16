@@ -12,12 +12,14 @@
 //! [`StoreConfig::api_url`](crate::StoreConfig::api_url) says, so no key can
 //! sign anyone in by writing to the store.
 
+use std::net::IpAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context as _;
 use serde::Deserialize;
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
+use topcoat_router::request::client_ip;
 
 use timada_catalog::format_money;
 use timada_orders::OrderStatus;
@@ -32,9 +34,12 @@ use crate::store::Store;
 /// the host forgets it.
 pub const SHOPPER_SIGNED_OUT: &str = "signed_out";
 
+/// The header the shopper's address travels in to the dashboard.
+const SHOPPER_IP: &str = "x-shopper-ip";
+
 /// Why a shopper's request was refused, to show them: `wrong_code`,
 /// `code_expired`, `too_many_attempts`, `code_recently_sent`,
-/// `invalid_email`, an address refusal (`invalid_country`, …),
+/// `too_many_requests`, `invalid_email`, an address refusal (`invalid_country`, …),
 /// `too_many_addresses`, or [`SHOPPER_SIGNED_OUT`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShopperRefusal(pub &'static str);
@@ -123,12 +128,21 @@ impl Store {
     }
 
     /// Has the dashboard mail a sign-in code to `email`, from the shop.
-    pub async fn request_sign_in_code(&self, email: &str) -> anyhow::Result<ShopperRefusable<()>> {
-        let response = self
+    /// `ip` is the shopper's address, which the dashboard holds to its own
+    /// limit of codes (`too_many_requests` past it); without it, this host's
+    /// address counts for every shopper.
+    pub async fn request_sign_in_code(
+        &self,
+        email: &str,
+        ip: Option<IpAddr>,
+    ) -> anyhow::Result<ShopperRefusable<()>> {
+        let mut request = self
             .shopper_call(reqwest::Method::POST, "code", None)?
-            .form(&[("email", email)])
-            .send()
-            .await;
+            .form(&[("email", email)]);
+        if let Some(ip) = ip {
+            request = request.header(SHOPPER_IP, ip.to_string());
+        }
+        let response = request.send().await;
         answer(response, reqwest::StatusCode::ACCEPTED, |_| Ok(())).await
     }
 
@@ -307,9 +321,11 @@ async fn answer<T>(
 }
 
 /// Has the dashboard mail a sign-in code; see [`Store::request_sign_in_code`].
+/// The shopper's address is the request's client, as the host's trusted
+/// proxies report it.
 pub async fn request_sign_in_code(cx: &Cx, email: &str) -> Result<ShopperRefusable<()>> {
     store(cx)
-        .request_sign_in_code(email)
+        .request_sign_in_code(email, client_ip(cx))
         .await
         .map_err(Error::from_anyhow)
 }

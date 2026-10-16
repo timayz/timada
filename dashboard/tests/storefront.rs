@@ -15,6 +15,8 @@ mod cluster;
 mod config;
 #[path = "../src/limits.rs"]
 mod limits;
+#[path = "../src/rate_limit.rs"]
+mod rate_limit;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
 #[path = "../src/store_api.rs"]
@@ -1710,6 +1712,122 @@ async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
             .await
             .is_err()
     );
+
+    store.shutdown().await;
+    h.finish().await;
+}
+
+/// The dashboard's `POST /store/shoppers/code` as far as its limits go: the
+/// key is checked against the platform, then the request is held to the
+/// same limits with the same inputs, and answered 202 or 429 as the
+/// dashboard does. No mail goes out. Returns the address to give the store.
+async fn code_endpoint(platform: cluster::Executor, limits: config::StoreConfig) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let limiter = Arc::new(rate_limit::RateLimiter::new());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, peer)) = listener.accept().await else {
+                return;
+            };
+            let (platform, limits, limiter) = (platform.clone(), limits.clone(), limiter.clone());
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buf = [0u8; 4096];
+                let head_end = loop {
+                    let n = socket.read(&mut buf).await.unwrap();
+                    assert!(n > 0, "the request ended before its headers did");
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break at + 4;
+                    }
+                };
+                let head = String::from_utf8_lossy(&request[..head_end]).into_owned();
+                let header = |name: &str| {
+                    head.lines().find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case(name)
+                            .then(|| value.trim().to_owned())
+                    })
+                };
+                let length: usize = header("content-length")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                while request.len() < head_end + length {
+                    let n = socket.read(&mut buf).await.unwrap();
+                    request.extend_from_slice(&buf[..n]);
+                }
+                assert!(head.starts_with("POST /store/shoppers/code "), "{head}");
+                let token = header("authorization").unwrap();
+                let access = Command(platform)
+                    .authenticate_api_key(token.strip_prefix("Bearer ").unwrap())
+                    .await
+                    .unwrap();
+                let allowed = rate_limit::allow_shopper_code(
+                    &limiter,
+                    &limits,
+                    &access.key.id,
+                    &access.tenant.id,
+                    header("x-shopper-ip").as_deref(),
+                    Some(peer.ip()),
+                );
+                let (status, body) = if allowed {
+                    ("202 Accepted", "{}")
+                } else {
+                    ("429 Too Many Requests", r#"{"error":"too_many_requests"}"#)
+                };
+                let answer = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(answer.as_bytes()).await.unwrap();
+                socket.shutdown().await.ok();
+            });
+        }
+    });
+    url
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sign_in_codes_are_held_to_a_limit_per_shopper_and_per_key() {
+    let h = harness(None).await;
+    let tenant = h.create("acme").await;
+    let (token, _) = h
+        .key_with(&tenant, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
+        .await;
+    let api = code_endpoint(
+        h.platform.0.clone(),
+        config::StoreConfig {
+            shopper_codes_per_ip: 2,
+            shopper_codes_per_key: 4,
+            shopper_codes_window_secs: 600,
+        },
+    )
+    .await;
+    let store = Store::connect(h.config(&token).api_url(api), h.local_pool("codes").await)
+        .await
+        .unwrap();
+    let ask = async |ip: Option<&str>| {
+        store
+            .request_sign_in_code("ada@example.com", ip.map(|ip| ip.parse().unwrap()))
+            .await
+            .unwrap()
+            .map_err(|refusal| refusal.code())
+    };
+
+    // One shopper gets their two codes, the third is refused, and the
+    // shopper next to them still gets theirs.
+    assert_eq!(ask(Some("203.0.113.7")).await, Ok(()));
+    assert_eq!(ask(Some("203.0.113.7")).await, Ok(()));
+    assert_eq!(ask(Some("203.0.113.7")).await, Err("too_many_requests"));
+    assert_eq!(ask(Some("2001:db8::7")).await, Ok(()));
+    // Without the shopper's address, the storefront's own counts.
+    assert_eq!(ask(None).await, Ok(()));
+    // The key has had four codes mailed (the refusal cost it none): no
+    // more, whoever the shopper.
+    assert_eq!(ask(Some("198.51.100.9")).await, Err("too_many_requests"));
 
     store.shutdown().await;
     h.finish().await;
