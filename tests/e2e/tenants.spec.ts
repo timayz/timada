@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { ADMIN_STATE } from "./fixtures";
+import { invite } from "./invitations";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // Tenants: self-service creation, the tenant's own page, and the platform
@@ -76,6 +77,8 @@ test("the administrator sees a tenant running, suspends and resumes it", async (
   const { name, slug } = uniqueTenant("Quiet Shop");
   await createTenant(owner, name);
   await expect(owner).toHaveURL(new RegExp(`/t/${slug}`));
+  await owner.goto(`/t/${slug}/members`);
+  await invite(owner, uniqueEmail("invitee"), "owner");
 
   const adminContext = await browser.newContext({ storageState: ADMIN_STATE });
   const admin = await adminContext.newPage();
@@ -98,6 +101,11 @@ test("the administrator sees a tenant running, suspends and resumes it", async (
   // Suspend: offline for the owner, closed on the node.
   await row.getByRole("link", { name }).click();
   await expect(admin.getByRole("heading", { name })).toBeVisible();
+  // The invitation the owner sent is still waiting (read model, so it may lag).
+  await expect(async () => {
+    await admin.reload();
+    await expect(admin.locator("[data-pending-invitations]")).toHaveText("1 pending invitation", { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
   await admin.getByLabel("Reason").fill("unpaid invoices");
   await admin.getByRole("button", { name: "Suspend tenant" }).click();
   await expect(admin.getByRole("status")).toContainText("Tenant suspended.");
