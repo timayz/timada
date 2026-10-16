@@ -56,6 +56,36 @@ pub async fn count_open_invitations_of_tenant(
     .await
 }
 
+/// How many invitations were sent since a moment, by a tenant and by an
+/// account (across every tenant). Accepted, revoked and expired ones count
+/// too: each was a mail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SentCounts {
+    pub tenant: i64,
+    pub account: i64,
+}
+
+/// The invitations `tenant_id` sent, and those `user_id` sent, at or after
+/// `since` (unix seconds).
+pub async fn invitations_sent_since(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    user_id: &str,
+    since: u64,
+) -> sqlx::Result<SentCounts> {
+    let (tenant, account): (i64, i64) = sqlx::query_as(
+        "SELECT
+            (SELECT COUNT(*) FROM tenancy_invitations WHERE tenant_id = ?1 AND sent_at >= ?3),
+            (SELECT COUNT(*) FROM tenancy_invitations WHERE invited_by = ?2 AND sent_at >= ?3)",
+    )
+    .bind(tenant_id)
+    .bind(user_id)
+    .bind(since as i64)
+    .fetch_one(pool)
+    .await?;
+    Ok(SentCounts { tenant, account })
+}
+
 pub async fn invitation_by_id(pool: &SqlitePool, id: &str) -> sqlx::Result<Option<InvitationRow>> {
     sqlx::query_as(
         "SELECT id, tenant_id, email, role, invited_by, sent_at, expires_at, accepted_by,
