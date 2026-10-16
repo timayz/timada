@@ -62,6 +62,15 @@ pub enum Book {
         code: String,
         amount_cents: u64,
     },
+    /// The shipping an invoice's order was charged, written with its
+    /// `InvoiceIssued`: `amount_cents` (VAT included) came on top of the
+    /// goods, taxed at their rates in proportion; its VAT and totals
+    /// include it.
+    InvoiceShippingCharged {
+        document_id: String,
+        name: String,
+        amount_cents: u64,
+    },
     /// A credit note: money given back against an invoice.
     CreditNoteIssued {
         /// Its index stream ([`credit_note_id`](crate::credit_note_id)).

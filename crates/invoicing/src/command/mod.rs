@@ -23,7 +23,9 @@ use std::ops::Deref;
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
-use crate::aggregator::{CreditNoteIssued, InvoiceDiscounted, InvoiceIssued, Recorded, Reserved};
+use crate::aggregator::{
+    CreditNoteIssued, InvoiceDiscounted, InvoiceIssued, InvoiceShippingCharged, Recorded, Reserved,
+};
 use crate::error::InvoicingError;
 use crate::tax::{Destination, DistanceSales, Regime, TaxProfile, decide, is_distance_sale};
 use crate::value_object::{
@@ -80,6 +82,15 @@ pub struct InvoiceDiscount {
     pub amount_cents: u64,
 }
 
+/// What shipping an invoice's order was charged.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InvoiceShipping {
+    /// The shipping method, as the shop names it.
+    pub name: String,
+    /// VAT included, in minor units.
+    pub amount_cents: u64,
+}
+
 /// An issued document as it reads: an invoice or a credit note (the fields
 /// of the other kind are empty).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -113,6 +124,9 @@ pub struct IssuedDocument {
     /// Invoice: the discount code taken off the lines, if any; `vat` and
     /// the totals are of what was paid.
     pub discount: Option<InvoiceDiscount>,
+    /// Invoice: the shipping charged on top of the goods, if any; taxed at
+    /// the rates of the goods it carries, in proportion.
+    pub shipping: Option<InvoiceShipping>,
     pub vat: Vec<VatSubtotal>,
     pub total_excl_vat_cents: u64,
     pub total_vat_cents: u64,
@@ -151,6 +165,7 @@ pub fn book_projection<E: Executor>() -> Projection<E, BookState> {
         .handler(on_invoice_issued())
         .handler(on_credit_note_issued())
         .handler(on_invoice_discounted())
+        .handler(on_invoice_shipping_charged())
         .strict()
 }
 
@@ -208,6 +223,21 @@ async fn on_invoice_discounted(
     if let Some(document) = book.documents.get_mut(&event.data.document_id) {
         document.discount = Some(InvoiceDiscount {
             code: event.data.code.to_owned(),
+            amount_cents: event.data.amount_cents,
+        });
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoice_shipping_charged(
+    event: Event<InvoiceShippingCharged>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    // Written right after the `InvoiceIssued` it belongs to.
+    if let Some(document) = book.documents.get_mut(&event.data.document_id) {
+        document.shipping = Some(InvoiceShipping {
+            name: event.data.name.to_owned(),
             amount_cents: event.data.amount_cents,
         });
     }
@@ -339,7 +369,10 @@ pub struct NewInvoice {
     pub lines: Vec<NewInvoiceLine>,
     /// The discount code the order was paid with, if any.
     pub discount: Option<InvoiceDiscount>,
-    /// What was paid: the lines, less the discount, must add up to it.
+    /// The shipping the order was charged, if any.
+    pub shipping: Option<InvoiceShipping>,
+    /// What was paid: the lines, less the discount, plus shipping, must add
+    /// up to it.
     pub total_cents: u64,
     pub issued_by: String,
     /// The seller as far as VAT goes.
@@ -358,6 +391,16 @@ pub struct NewCreditNote {
     pub refund_id: String,
     pub amount_cents: u64,
     pub issued_by: String,
+}
+
+/// The share of shipping each line carries: in proportion to what the line
+/// was sold for, or evenly when the goods were all free.
+pub fn shipping_shares(goods: &[u64], shipping_cents: u64) -> Vec<u64> {
+    if goods.iter().any(|line| *line > 0) {
+        spread(goods, shipping_cents)
+    } else {
+        spread(&vec![1; goods.len()], shipping_cents)
+    }
 }
 
 /// The book a document goes in, as read for one attempt.
@@ -388,21 +431,29 @@ impl<E: Executor> Command<E> {
             .map(NewInvoiceLine::total_cents)
             .collect();
         let discount_cents = invoice.discount.as_ref().map_or(0, |d| d.amount_cents);
+        let shipping_cents = invoice.shipping.as_ref().map_or(0, |s| s.amount_cents);
         let total = gross
             .iter()
             .sum::<u64>()
             .checked_sub(discount_cents)
+            .and_then(|goods| goods.checked_add(shipping_cents))
             .ok_or(InvoicingError::TotalMismatch)?;
         if total != invoice.total_cents {
             return Err(InvoicingError::TotalMismatch);
         }
         // What each line was really sold for: the discount spread over the
-        // lines in proportion, to the cent. The VAT and the distance sales
-        // are of these.
-        let net: Vec<u64> = gross
+        // lines in proportion, to the cent. Shipping is an accessory of the
+        // goods it carries: it is spread over them the same way and taxed
+        // with them. The VAT and the distance sales are of these.
+        let goods: Vec<u64> = gross
             .iter()
             .zip(spread(&gross, discount_cents))
             .map(|(line, off)| line - off)
+            .collect();
+        let net: Vec<u64> = goods
+            .iter()
+            .zip(shipping_shares(&goods, shipping_cents))
+            .map(|(line, shipping)| line + shipping)
             .collect();
         let document_id = invoice_id(&invoice.order_id);
         let index = self
@@ -503,6 +554,13 @@ impl<E: Executor> Command<E> {
                     document_id: document_id.clone(),
                     code: discount.code.clone(),
                     amount_cents: discount.amount_cents,
+                });
+            }
+            if let Some(shipping) = &invoice.shipping {
+                write.event(&InvoiceShippingCharged {
+                    document_id: document_id.clone(),
+                    name: shipping.name.clone(),
+                    amount_cents: shipping.amount_cents,
                 });
             }
             write

@@ -564,6 +564,8 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
                     country: "US".into(),
                     ..Default::default()
                 }),
+                // The shipping method picked: a shopper's event too.
+                shipping_method: Some("tracked".into()),
             },
         )
         .await

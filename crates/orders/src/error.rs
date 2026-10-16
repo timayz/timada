@@ -76,6 +76,8 @@ pub enum OrdersError {
     TooManyShippingMethods,
     #[error("shipping method not found")]
     ShippingMethodNotFound,
+    #[error("pick a shipping method that ships to this country")]
+    ShippingUnavailable,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -93,6 +95,7 @@ const KNOWN_CODES: &[&str] = &[
     "mixed_currencies",
     "empty_cart",
     "price_changed",
+    "shipping_unavailable",
     crate::PAYMENTS_UNAVAILABLE,
     crate::INVOICING_NOT_CONFIGURED,
 ];
@@ -152,6 +155,7 @@ impl OrdersError {
             Self::InvalidShippingCountries => "invalid_shipping_countries",
             Self::TooManyShippingMethods => "too_many_shipping_methods",
             Self::ShippingMethodNotFound => "shipping_method_not_found",
+            Self::ShippingUnavailable => "shipping_unavailable",
             Self::Write(_) | Self::Other(_) => return None,
         })
     }

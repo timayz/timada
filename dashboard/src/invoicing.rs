@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use timada_invoicing::tax::TaxProfile;
 use timada_invoicing::{
-    Address, InvoiceDiscount, NewCreditNote, NewInvoice, NewInvoiceLine, PAYMENT_METHOD_CARD,
-    Seller,
+    Address, InvoiceDiscount, InvoiceShipping, NewCreditNote, NewInvoice, NewInvoiceLine,
+    PAYMENT_METHOD_CARD, Seller,
 };
 use timada_orders::aggregator::{Placed, Refunded};
 use timada_tenancy::LegalIdentity;
@@ -165,7 +165,7 @@ async fn on_placed<E: Executor>(
         }
         _ => (None, None),
     };
-    // A discount code and a billing address are written with `Placed`, in
+    // A discount code, shipping and a billing address are written with `Placed`, in
     // the same commit.
     let order = timada_orders::Command(store.0.clone())
         .load_order(&event.aggregate_id)
@@ -176,6 +176,13 @@ async fn on_placed<E: Executor>(
         .map(|discount| InvoiceDiscount {
             code: discount.code,
             amount_cents: discount.amount_cents,
+        });
+    let shipping = order
+        .as_ref()
+        .and_then(|order| order.shipping_charge.clone())
+        .map(|shipping| InvoiceShipping {
+            name: shipping.name,
+            amount_cents: shipping.amount_cents,
         });
     let address = |address: &timada_orders::ShippingAddress| Address {
         name: address.name.clone(),
@@ -207,6 +214,7 @@ async fn on_placed<E: Executor>(
                 currency: event.data.currency.clone(),
                 lines,
                 discount,
+                shipping,
                 total_cents: event.data.total_cents,
                 issued_by: ISSUER.to_owned(),
                 tax: TaxProfile {

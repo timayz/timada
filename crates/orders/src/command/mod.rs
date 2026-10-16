@@ -28,8 +28,8 @@ use crate::aggregator::{
     BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, ConfirmationMailed,
     Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded,
     ItemRemoved, MethodAdded, MethodChanged, MethodRemoved, PaymentRefused, PaymentRequested,
-    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded, StorefrontAddressCleared,
-    StorefrontAddressSet,
+    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded, ShippingCharged,
+    ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -74,6 +74,15 @@ pub struct OrderDiscount {
     pub amount_cents: u64,
 }
 
+/// The shipping a payment or an order is charged: the method as it was
+/// then, and its price for those goods (0 once they reach its threshold).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OrderShipping {
+    pub method_id: String,
+    pub name: String,
+    pub amount_cents: u64,
+}
+
 /// A payment opened with the provider for a cart: what the order will hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaymentSnapshot {
@@ -83,16 +92,17 @@ pub struct PaymentSnapshot {
     pub publishable_key: String,
     pub lines: Vec<OrderLine>,
     pub currency: String,
-    /// What is charged: the lines, less the discount.
+    /// What is charged: the lines, less the discount, plus shipping.
     pub total_cents: u64,
     pub discount: Option<OrderDiscount>,
+    pub shipping: Option<OrderShipping>,
 }
 
 /// How a request to pay was answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaymentAnswer {
     /// A payment is open: the shopper's browser confirms it.
-    Requested(PaymentSnapshot),
+    Requested(Box<PaymentSnapshot>),
     /// It cannot go ahead; the code says why.
     Refused(String),
 }
@@ -109,6 +119,8 @@ pub struct CheckoutRequest {
     pub vat_number: Option<String>,
     /// Where to bill, when not at `shipping`.
     pub billing: Option<ShippingAddress>,
+    /// The shipping method picked, in a shop that has some.
+    pub shipping_method: Option<String>,
     pub answer: Option<PaymentAnswer>,
 }
 
@@ -116,7 +128,7 @@ impl CheckoutRequest {
     /// The open payment, when the request got one.
     pub fn payment(&self) -> Option<&PaymentSnapshot> {
         match &self.answer {
-            Some(PaymentAnswer::Requested(payment)) => Some(payment),
+            Some(PaymentAnswer::Requested(payment)) => Some(payment.as_ref()),
             _ => None,
         }
     }
@@ -200,6 +212,8 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_discount_applied())
         .handler(on_discount_removed())
         .handler(on_discount_granted())
+        .handler(on_shipping_method_chosen())
+        .handler(on_shipping_granted())
         .strict()
 }
 
@@ -273,6 +287,7 @@ async fn on_checkout_requested(
         expected_total_cents: event.data.expected_total_cents,
         vat_number: None,
         billing: None,
+        shipping_method: None,
         answer: None,
     });
     cart.updated_at = event.timestamp;
@@ -319,7 +334,7 @@ async fn on_payment_requested(
         .iter_mut()
         .find(|r| r.request_id == event.data.request_id)
     {
-        request.answer = Some(PaymentAnswer::Requested(PaymentSnapshot {
+        request.answer = Some(PaymentAnswer::Requested(Box::new(PaymentSnapshot {
             provider: event.data.provider.to_owned(),
             payment_id: event.data.payment_id.to_owned(),
             client_secret: event.data.client_secret.to_owned(),
@@ -328,7 +343,8 @@ async fn on_payment_requested(
             currency: event.data.currency.to_owned(),
             total_cents: event.data.total_cents,
             discount: None,
-        }));
+            shipping: None,
+        })));
     }
     cart.updated_at = event.timestamp;
     Ok(())
@@ -386,6 +402,42 @@ async fn on_discount_granted(
             discount_id: event.data.discount_id.to_owned(),
             code: event.data.code.to_owned(),
             subtotal_cents: event.data.subtotal_cents,
+            amount_cents: event.data.amount_cents,
+        });
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_shipping_method_chosen(
+    event: Event<ShippingMethodChosen>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|request| request.request_id == event.data.request_id)
+    {
+        request.shipping_method = Some(event.data.method_id.to_owned());
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_shipping_granted(
+    event: Event<ShippingGranted>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    // Written right after the `PaymentRequested` it prices.
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|r| r.request_id == event.data.request_id)
+        && let Some(PaymentAnswer::Requested(payment)) = &mut request.answer
+    {
+        payment.shipping = Some(OrderShipping {
+            method_id: event.data.method_id.to_owned(),
+            name: event.data.name.to_owned(),
             amount_cents: event.data.amount_cents,
         });
     }
@@ -454,11 +506,13 @@ pub struct OrderState {
     pub note: Option<String>,
     pub lines: Vec<OrderLine>,
     pub currency: String,
-    /// What was paid: the lines, less the discount.
+    /// What was paid: the lines, less the discount, plus shipping.
     pub total_cents: u64,
     pub payment: Payment,
     /// The discount code it was paid with, if any.
     pub discount: Option<OrderDiscount>,
+    /// The shipping it was paid with; `None` when shipping was included.
+    pub shipping_charge: Option<OrderShipping>,
     /// What went back to the shopper, in minor units, all refunds together.
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
@@ -499,6 +553,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_refunded())
         .handler(on_discounted())
         .handler(on_billing_address_set())
+        .handler(on_shipping_charged())
         .strict()
 }
 
@@ -537,6 +592,19 @@ async fn on_billing_address_set(
     order: &mut OrderState,
 ) -> anyhow::Result<()> {
     order.billing = Some(event.data.billing.to_owned());
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_shipping_charged(
+    event: Event<ShippingCharged>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.shipping_charge = Some(OrderShipping {
+        method_id: event.data.method_id.to_owned(),
+        name: event.data.name.to_owned(),
+        amount_cents: event.data.amount_cents,
+    });
     Ok(())
 }
 

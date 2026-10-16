@@ -188,9 +188,12 @@ let cart_id = match add_to_cart(cx, current_id.as_deref(), &product.id, variant_
     Err(refusal) => return show(refusal.code()),   // e.g. "variant_required"
 };
 let view = cart(cx, &cart_id).await?;              // lines, total, unavailable lines
+let method = view.shipping_options_to(&shipping.country).next();   // None: free shipping
 let session = start_payment(cx, &cart_id, Checkout {
     email, shipping, note,
-    expected_total_cents: Some(view.total_cents),   // the total the shopper saw
+    shipping_method: method.map(|m| m.id.clone()),
+    expected_total_cents: Some(view.total_with(method)),   // the total the shopper saw
+    ..Default::default()
 }).await?;
 // Ok(session): confirm with Stripe using session.client_secret; confirmPayment
 // returns the browser to your page, which waits for order_of_cart(cx, &cart_id).
@@ -225,6 +228,15 @@ into the tenant's store whenever the merchant changes the Stripe settings.
 - The order (`order_of_cart`, `order`) arrives once the provider confirmed the payment
   to the dashboard, usually a second after the browser comes back. Its `reference`
   (`K7Q4-MZP2`) is what a shopper quotes.
+- Shipping: when the merchant set up shipping methods (`/t/{slug}/shipping`),
+  `CartView::shipping_options` lists them, priced for the cart (`amount_cents` is 0
+  once the goods, less any discount, reach a method's free-above threshold), and
+  `shipping_required` is true. The shopper picks one that ships to their country
+  (`ShippingOption::ships_to`, `CartView::shipping_options_to`) and the checkout names
+  it in `Checkout::shipping_method`; the total is `CartView::total_with(option)` and
+  `vat_estimate_with(country, option)` adds shipping's VAT, at the rates of the goods.
+  A missing method, one that does not ship there or one removed since is refused with
+  `shipping_unavailable`. A shop without methods ships for free and takes none.
 - A cart takes one discount code: `apply_discount(cx, &cart_id, code)` (an unknown
   code is refused at once, `discount_unknown`) and `remove_discount`. `CartView` then
   has `subtotal_cents`, `discount` (what the code takes off) and `total_cents`; a code

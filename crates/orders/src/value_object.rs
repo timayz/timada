@@ -101,7 +101,7 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
 
     use crate::aggregator::{
         BillingAddressGiven, BuyerIdentified, Cart, CheckoutRequested, Created, DiscountApplied,
-        DiscountRemoved, ItemAdded, ItemRemoved, QuantitySet,
+        DiscountRemoved, ItemAdded, ItemRemoved, QuantitySet, ShippingMethodChosen,
     };
 
     aggregate_type == Cart::aggregate_type()
@@ -115,6 +115,7 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
             BillingAddressGiven::event_name(),
             DiscountApplied::event_name(),
             DiscountRemoved::event_name(),
+            ShippingMethodChosen::event_name(),
         ]
         .contains(&name)
 }
@@ -436,6 +437,17 @@ mod tests {
         // Only the dashboard says what a payment is discounted by.
         assert!(!is_shopper_event("timada-orders/Cart", "DiscountGranted"));
         assert!(!is_shopper_event("timada-orders/Order", "Discounted"));
+        // The shopper picks a shipping method; only the dashboard prices it.
+        assert!(is_shopper_event(
+            "timada-orders/Cart",
+            "ShippingMethodChosen"
+        ));
+        assert!(!is_shopper_event("timada-orders/Cart", "ShippingGranted"));
+        assert!(!is_shopper_event("timada-orders/Order", "ShippingCharged"));
+        assert!(!is_shopper_event(
+            "timada-orders/ShippingMethods",
+            "MethodAdded"
+        ));
         assert!(!is_shopper_event("timada-orders/Cart", "CheckedOut"));
         assert!(!is_shopper_event("timada-orders/OrderReference", "Claimed"));
         assert!(!is_shopper_event("timada-orders/Order", "Placed"));

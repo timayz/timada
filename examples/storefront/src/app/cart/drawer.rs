@@ -72,6 +72,10 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
         .map(|(code, _)| *code)
         .collect::<Vec<_>>()
         .join(",");
+    let rates = cart
+        .as_ref()
+        .map(crate::app::checkout::express_rates)
+        .unwrap_or_else(|| "[]".to_owned());
     let error = query.cart_error.clone();
     // A refused code leaves the promo box open, to type it again.
     let promo_refused = error
@@ -81,7 +85,7 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
     Ok(view! {
         <div id="cart" class="drawer" data-cart-drawer="" data-count=(count)
             data-publishable-key=(&publishable_key) data-amount=(total_cents)
-            data-currency=(currency.to_lowercase()) data-countries=(&countries)
+            data-currency=(currency.to_lowercase()) data-countries=(&countries) data-shipping=(&rates)
             data-start-path=(href!(crate::app::checkout::start::start))
             data-return-path=(href!(crate::app::checkout::complete::index))>
             <a class="drawer-backdrop" href="#" tabindex="-1" aria-hidden="true" data-drawer-close=""></a>
@@ -382,12 +386,32 @@ async function express() {
   button.on("ready", ({ availablePaymentMethods }) => {
     if (availablePaymentMethods) drawer.querySelector("[data-drawer-express]").hidden = false;
   });
+  // The shop's shipping methods; none when shipping is included.
+  const rates = () => JSON.parse(drawer.dataset.shipping || "[]");
+  const ratesTo = (code) => rates()
+    .filter((rate) => !code || !rate.countries.length || rate.countries.includes(code))
+    .map(({ id, displayName, amount }) => ({ id, displayName, amount }));
+  const goods = () => Number(drawer.dataset.amount);
   button.on("click", (event) => event.resolve({
     emailRequired: true,
     shippingAddressRequired: true,
     allowedShippingCountries: drawer.dataset.countries.split(","),
-    shippingRates: [{ id: "standard", displayName: "Standard delivery", amount: 0 }],
+    shippingRates: rates().length
+      ? ratesTo(null)
+      : [{ id: "standard", displayName: "Standard delivery", amount: 0 }],
   }));
+  // Only the methods that ship to the wallet's address, priced in.
+  button.on("shippingaddresschange", (event) => {
+    if (!rates().length) { event.resolve(); return; }
+    const here = ratesTo(event.address.country);
+    if (!here.length) { event.reject(); return; }
+    stripeElements.update({ amount: goods() + here[0].amount });
+    event.resolve({ shippingRates: here });
+  });
+  button.on("shippingratechange", (event) => {
+    if (rates().length) stripeElements.update({ amount: goods() + event.shippingRate.amount });
+    event.resolve();
+  });
   button.on("confirm", async (event) => {
     if (!(await pay(event))) event.paymentFailed({ reason: "fail" });
   });
@@ -399,8 +423,11 @@ async function pay(event) {
   const billing = event.billingDetails || {};
   const shipping = event.shippingAddress || {};
   const address = shipping.address || {};
+  const rate = event.shippingRate || {};
+  const shipped = JSON.parse(drawer.dataset.shipping || "[]").length > 0;
   const body = new URLSearchParams({
-    expected_total_cents: drawer.dataset.amount,
+    expected_total_cents: String(Number(drawer.dataset.amount) + (shipped ? rate.amount || 0 : 0)),
+    shipping_method: shipped ? rate.id || "" : "",
     email: billing.email || "",
     name: shipping.name || billing.name || "",
     phone: billing.phone || "",

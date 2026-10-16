@@ -128,6 +128,10 @@ pub struct CheckoutDraft {
     pub billing_city: String,
     #[serde(default)]
     pub billing_country: String,
+    /// The shipping method picked; absent from older drafts and in a shop
+    /// that ships for free.
+    #[serde(default)]
+    pub shipping_method: String,
 }
 
 impl CheckoutDraft {

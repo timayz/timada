@@ -5,6 +5,7 @@ use ulid::Ulid;
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
     Claimed, DiscountGranted, Discounted, PaymentRefused, PaymentRequested, Placed,
+    ShippingCharged, ShippingGranted, ShippingMethodChosen,
 };
 use crate::error::OrdersError;
 use crate::value_object::{
@@ -13,7 +14,9 @@ use crate::value_object::{
     order_reference_id,
 };
 
-use super::{CartItem, CartLine, CartState, CheckoutRequest, OrderDiscount, OrderState};
+use super::{
+    CartItem, CartLine, CartState, CheckoutRequest, OrderDiscount, OrderShipping, OrderState,
+};
 
 /// How many fresh references are tried before giving up: with 40 bits each,
 /// a second clash in a row means something else is wrong.
@@ -38,6 +41,9 @@ pub struct Checkout {
     /// Where to bill, when not at `shipping`: what the invoice is addressed
     /// to.
     pub billing: Option<ShippingAddress>,
+    /// The id of the shipping method picked, in a shop that has some: one
+    /// that ships to `shipping`'s country, in the cart's currency.
+    pub shipping_method: Option<String>,
 }
 
 /// The order a payment made.
@@ -74,14 +80,21 @@ pub struct Quote {
     /// Why the cart's discount code takes nothing off (one of
     /// [`timada_discounts::SHOPPER_CODES`]); the total is then full price.
     pub discount_refused: Option<&'static str>,
-    /// What a payment asked for now would charge: the subtotal, less the
-    /// discount.
+    /// What the goods cost: the subtotal, less the discount. Shipping, when
+    /// the shop charges for it, comes on top (see [`Quote::shipping_for`]).
     pub total_cents: u64,
 }
 
 impl Quote {
     pub fn item_count(&self) -> u32 {
         self.lines.iter().map(|line| line.quantity).sum()
+    }
+
+    /// What shipping these goods with `method` costs, or `None` when the
+    /// method is priced in another currency than the goods.
+    pub fn shipping_for(&self, method: &super::ShippingMethod) -> Option<u64> {
+        (self.currency.as_deref() == Some(method.currency.as_str()))
+            .then(|| method.price_for(self.total_cents))
     }
 }
 
@@ -211,11 +224,13 @@ pub struct PendingPayment {
     pub request: CheckoutRequest,
     pub lines: Vec<OrderLine>,
     pub currency: String,
-    /// What to charge: the lines, less the discount.
+    /// What to charge: the lines, less the discount, plus shipping.
     pub total_cents: u64,
     /// The discount to charge it with, whose use the dashboard reserves
     /// before it opens the payment.
     pub discount: Option<OrderDiscount>,
+    /// The shipping to charge it with; `None` in a shop without methods.
+    pub shipping: Option<OrderShipping>,
 }
 
 impl<E: Executor> super::Command<E> {
@@ -248,20 +263,53 @@ impl<E: Executor> super::Command<E> {
         if let Some(code) = quote.discount_refused {
             return Err(OrdersError::DiscountRefused { code });
         }
+        let shipping = self.price_shipping(&quote, request).await?;
+        let total_cents = quote.total_cents
+            + shipping
+                .as_ref()
+                .map_or(0, |shipping| shipping.amount_cents);
         if let Some(expected) = request.expected_total_cents
-            && expected != quote.total_cents
+            && expected != total_cents
         {
-            return Err(OrdersError::PriceChanged {
-                total_cents: quote.total_cents,
-            });
+            return Err(OrdersError::PriceChanged { total_cents });
         }
         let currency = quote.currency.ok_or(OrdersError::EmptyCart)?;
         Ok(Some(PendingPayment {
             request: request.clone(),
             lines: quote.lines,
             currency,
-            total_cents: quote.total_cents,
+            total_cents,
             discount: quote.discount,
+            shipping,
+        }))
+    }
+
+    /// The shipping a request is charged: `None` in a shop without methods;
+    /// `ShippingUnavailable` when the method picked is gone, priced in
+    /// another currency or does not ship to the request's country (or none
+    /// was picked).
+    async fn price_shipping(
+        &self,
+        quote: &Quote,
+        request: &CheckoutRequest,
+    ) -> Result<Option<OrderShipping>, OrdersError> {
+        let methods = self.shipping_methods().await?;
+        if methods.is_empty() {
+            return Ok(None);
+        }
+        let method = request
+            .shipping_method
+            .as_deref()
+            .and_then(|id| methods.iter().find(|method| method.id == id))
+            .filter(|method| method.covers(&request.shipping.country))
+            .ok_or(OrdersError::ShippingUnavailable)?;
+        let amount_cents = quote
+            .shipping_for(method)
+            .ok_or(OrdersError::ShippingUnavailable)?;
+        Ok(Some(OrderShipping {
+            method_id: method.id.clone(),
+            name: method.name.clone(),
+            amount_cents,
         }))
     }
 
@@ -298,6 +346,10 @@ impl<E: Executor> super::Command<E> {
         let billing = checkout.billing.map(normalize_billing).transpose()?;
         let note = normalize_note(checkout.note.as_deref())?;
         let vat_number = normalize_buyer_vat_number(checkout.vat_number.as_deref())?;
+        let shipping_method = checkout
+            .shipping_method
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty());
         if vat_number.is_some() && !self.accepts_business_buyers().await? {
             return Err(OrdersError::BusinessBuyersRefused);
         }
@@ -329,6 +381,13 @@ impl<E: Executor> super::Command<E> {
                 request_id: request_id.clone(),
                 billing,
                 given_by: actor.to_owned(),
+            });
+        }
+        if let Some(method_id) = shipping_method {
+            write.event(&ShippingMethodChosen {
+                request_id: request_id.clone(),
+                method_id,
+                chosen_by: actor.to_owned(),
             });
         }
         write.commit(&self.0).await?;
@@ -372,6 +431,15 @@ impl<E: Executor> super::Command<E> {
                     code: discount.code.clone(),
                     subtotal_cents: discount.subtotal_cents,
                     amount_cents: discount.amount_cents,
+                    granted_by: actor.to_owned(),
+                });
+            }
+            if let Some(shipping) = &pending.shipping {
+                write.event(&ShippingGranted {
+                    request_id: request_id.clone(),
+                    method_id: shipping.method_id.clone(),
+                    name: shipping.name.clone(),
+                    amount_cents: shipping.amount_cents,
                     granted_by: actor.to_owned(),
                 });
             }
@@ -484,6 +552,14 @@ impl<E: Executor> super::Command<E> {
             write.event(&BillingAddressSet {
                 billing: billing.clone(),
                 set_by: actor.to_owned(),
+            });
+        }
+        if let Some(shipping) = &snapshot.shipping {
+            write.event(&ShippingCharged {
+                method_id: shipping.method_id.clone(),
+                name: shipping.name.clone(),
+                amount_cents: shipping.amount_cents,
+                charged_by: actor.to_owned(),
             });
         }
         let placed = write.commit(&self.0).await;

@@ -134,6 +134,15 @@ pub async fn send_order_confirmation(
             format!("-{}", format_money(discount.amount_cents, currency)),
         )
     });
+    let shipping = order.shipping_charge.as_ref().map(|shipping| {
+        (
+            shipping.name.clone(),
+            match shipping.amount_cents {
+                0 => "Free".to_owned(),
+                cents => format_money(cents, currency),
+            },
+        )
+    });
     let total = format_money(order.total_cents, currency);
     let ship = &order.shipping;
     let city = format!("{} {}", ship.postal_code, ship.city);
@@ -160,6 +169,12 @@ pub async fn send_order_confirmation(
                 if let Some((code, amount)) = &discount {
                     <tr>
                         <td colspan="2">"Discount " (code)</td>
+                        <td style="text-align: right;">(amount)</td>
+                    </tr>
+                }
+                if let Some((name, amount)) = &shipping {
+                    <tr>
+                        <td colspan="2">"Shipping: " (name)</td>
                         <td style="text-align: right;">(amount)</td>
                     </tr>
                 }

@@ -138,6 +138,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if let Some(discount) = &order.discount {
                 <p data-order-discount=(&discount.code)>"Discount " <code>(&discount.code)</code> ": -" (format_money(discount.amount_cents, &currency))</p>
             }
+            if let Some(shipping) = &order.shipping_charge {
+                <p data-order-shipping=(&shipping.name)>"Shipping (" (&shipping.name) "): "
+                    if shipping.amount_cents == 0 { "Free" } else { (format_money(shipping.amount_cents, &currency)) }
+                </p>
+            }
             <p>"Total: " <strong class="price" data-order-total="">(format_money(order.total_cents, &currency))</strong></p>
             <h2>"Shipping to"</h2>
             <address data-order-address="">
