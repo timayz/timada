@@ -195,6 +195,16 @@ pub async fn document(
                     "form.checkout label.method input { width: auto; margin: 0; }"
                     "form.checkout label.method .name { flex: 1; }"
                     "form.checkout label.method .price { font-weight: 600; }"
+                    "section.offers { border-color: #f28b8f; background: #fff6f6; }"
+                    "section.offers ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .75rem; }"
+                    "section.offers li { display: grid; grid-template-columns: 3.5rem 1fr auto; gap: .75rem; align-items: center; }"
+                    "section.offers img { width: 3.5rem; height: 3.5rem; object-fit: cover; border-radius: .25rem; background: #fff; }"
+                    "section.offers .what { display: grid; gap: .15rem; color: #3d3b5c; }"
+                    "section.offers s { color: #888; }"
+                    "section.offers .off { color: #e8606a; font-weight: 600; }"
+                    "section.offers button { border: 1px solid #e8606a; background: #fff; color: #e8606a; border-radius: 2rem; padding: .45rem 1.2rem; font-weight: 600; cursor: pointer; }"
+                    "section.offers button:hover { background: #e8606a; color: #fff; }"
+                    ".offer-note { display: block; color: #e8606a; font-size: .8rem; }"
                     "form.sign-in label { display: block; margin-top: .75rem; }"
                     "form.sign-in input { padding: .5rem; width: 100%; max-width: 20rem; }"
                     "table.history { border-collapse: collapse; width: 100%; }"
@@ -341,6 +351,7 @@ pub fn say(code: &str) -> &'static str {
         "discount_currency" => "This discount code is for another currency.",
         "discount_exhausted" => "This discount code has been used as many times as it can be.",
         "discount_already_used" => "You have already used this discount code.",
+        "offer_ended" => "This offer is no longer available: the item was added at its full price.",
         "review_invalid_rating" => "Choose from one to five stars.",
         "review_invalid_title" => "The title is at most 100 characters.",
         "review_invalid_body" => "Say a little more: 10 to 2000 characters.",

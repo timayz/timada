@@ -35,6 +35,24 @@ pub enum DiscountError {
     Exhausted,
     #[error("this code has already been used with this e-mail")]
     AlreadyUsed,
+    #[error("offer not found")]
+    OfferNotFound,
+    #[error("this product does not exist")]
+    OfferProductNotFound,
+    /// The product sells variants and none was named, or one it does not
+    /// sell, or one was named for a product without variants.
+    #[error("choose one of the product's variants")]
+    OfferVariant,
+    #[error("the offer price must be more than 0 and below the product's price")]
+    InvalidOfferPrice,
+    #[error("the offer must be priced in the product's currency")]
+    OfferCurrency,
+    #[error("an offer title is at most 80 characters")]
+    InvalidOfferTitle,
+    #[error("the minimum must be a positive amount")]
+    InvalidMinSubtotal,
+    #[error("a shop has at most 20 offers")]
+    TooManyOffers,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -67,6 +85,14 @@ impl DiscountError {
             Self::Currency => DISCOUNT_CURRENCY,
             Self::Exhausted => DISCOUNT_EXHAUSTED,
             Self::AlreadyUsed => DISCOUNT_ALREADY_USED,
+            Self::OfferNotFound => "offer_not_found",
+            Self::OfferProductNotFound => "offer_product_not_found",
+            Self::OfferVariant => "offer_variant",
+            Self::InvalidOfferPrice => "invalid_offer_price",
+            Self::OfferCurrency => "offer_currency",
+            Self::InvalidOfferTitle => "invalid_offer_title",
+            Self::InvalidMinSubtotal => "invalid_min_subtotal",
+            Self::TooManyOffers => "too_many_offers",
             Self::Write(_) | Self::Other(_) => return None,
         })
     }
