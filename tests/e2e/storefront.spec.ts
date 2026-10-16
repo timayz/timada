@@ -1652,6 +1652,25 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       await expect(device).toHaveURL(`${STOREFRONT}/account`);
       await expect(device.locator("[data-account-order]")).toHaveCount(2);
       await expect(device.locator("[data-saved-address]")).toHaveCount(0);
+
+      // An erasure request: the merchant deletes the new account from the
+      // customers. Gone from the list, signed out of the shop, orders kept.
+      await page.goto(`/t/${slug}/customers`);
+      const again = page.locator(`[data-customer="${shopper}"]`);
+      await expect(async () => {
+        await page.reload();
+        await expect(again).toHaveCount(1, { timeout: 1000 });
+      }).toPass({ timeout: 15_000 });
+      await again.getByRole("button", { name: "Delete" }).click();
+      await expect(page.getByRole("status")).toContainText("Customer deleted");
+      await expect(async () => {
+        await page.reload();
+        await expect(page.locator(`[data-customer="${shopper}"]`)).toHaveCount(0, { timeout: 1000 });
+      }).toPass({ timeout: 15_000 });
+      await device.goto(`${STOREFRONT}/account`);
+      await expect(device).toHaveURL(/\/account\/sign-in\?/);
+      await page.goto(`/t/${slug}/orders?q=${encodeURIComponent(shopper)}`);
+      await expect(page.locator("[data-order]")).toHaveCount(2);
     } finally {
       await other.close();
     }

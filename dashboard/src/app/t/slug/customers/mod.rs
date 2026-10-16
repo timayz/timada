@@ -1,10 +1,13 @@
 //! `/t/{slug}/customers`: the shoppers who signed in to the shop, for members
 //! with `customers:read`. The list comes from the shared read model (a moment
 //! behind); a customer's order count is every order placed with their
-//! address, guest ones included.
+//! address, guest ones included. Members with `customers:manage` delete a
+//! shopper's account.
 
-use timada_shoppers::{count_shoppers, shoppers_of_tenant};
-use timada_tenancy::PERMISSION_CUSTOMERS_READ;
+pub mod delete;
+
+use timada_shoppers::{ShopperError, count_shoppers, shoppers_of_tenant};
+use timada_tenancy::{PERMISSION_CUSTOMERS_MANAGE, PERMISSION_CUSTOMERS_READ};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -14,6 +17,7 @@ use topcoat::{
 
 use super::orders::orders_of_email_url;
 use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use crate::app::auth::Flash;
 use crate::db::ReadPool;
 use crate::ui::{document, format_time, notice};
 
@@ -32,6 +36,18 @@ struct CustomersLink {
     page: u32,
 }
 
+/// The customers page, with a flash error code or message.
+pub fn customers_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
+    href!(index, Slug(slug.to_owned()))
+        .query(Flash { error, message })
+        .resolve(cx)
+}
+
+/// The query-string code of a user-facing shopper error.
+pub fn error_code(err: &ShopperError) -> &'static str {
+    err.code().unwrap_or("unexpected")
+}
+
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
@@ -40,6 +56,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let query = query_params::<CustomersQuery>(cx)?;
     let page_number = query.page.unwrap_or(1).max(1);
+    let can_manage = access.can(cx, PERMISSION_CUSTOMERS_MANAGE).await?;
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<ReadPool>(cx);
@@ -74,6 +91,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <p class="mb-4 text-sm text-neutral-500">
                     "A shopper gets an account the first time they sign in to the shop with a mailed code. Their orders are every order placed with their address, those placed before they signed in included."
                 </p>
+                if can_manage {
+                    <p class="mb-4 text-sm text-neutral-500">
+                        "Deleting a customer forgets their saved addresses and signs them out everywhere; the orders they placed stay with the shop."
+                    </p>
+                }
                 <p class="mb-4 text-sm" data-customer-count=(total)>(total) " customer(s)"</p>
                 <table class="w-full text-left text-sm">
                     <thead>
@@ -82,11 +104,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <th class="py-2 font-medium">"Customer since"</th>
                             <th class="py-2 font-medium">"Orders"</th>
                             <th class="py-2 font-medium">"Saved addresses"</th>
+                            if can_manage {
+                                <th class="py-2 text-right font-medium">"Actions"</th>
+                            }
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-neutral-100">
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="4">"No customer here."</td></tr>
+                            <tr><td class="py-2 text-neutral-500" colspan=(if can_manage { 5 } else { 4 })>"No customer here."</td></tr>
                         }
                         for row in &rows {
                             <tr data-customer=(&row.email)>
@@ -100,6 +125,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     }
                                 </td>
                                 <td class="py-2" data-customer-addresses=(row.address_count)>(row.address_count)</td>
+                                if can_manage {
+                                    <td class="py-2 text-right">
+                                        <form method="post" action=(href!(delete::delete, Slug(slug.clone())))>
+                                            <input type="hidden" name="shopper_id" value=(&row.id)>
+                                            <button class="rounded border border-red-700 px-2 py-1 text-xs text-red-700 hover:bg-red-50">"Delete"</button>
+                                        </form>
+                                    </td>
+                                }
                             </tr>
                         }
                     </tbody>
