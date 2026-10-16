@@ -21,14 +21,15 @@ pub struct Config {
     pub cluster: Option<ClusterConfig>,
     pub tenants: TenantsConfig,
     pub media: MediaConfig,
+    pub shopper_keys: ShopperKeysConfig,
     /// Absent: this node does not expose the store API.
     #[serde(default)]
     pub store_api: Option<StoreApiConfig>,
     /// Absent: tenants cannot take payments.
     #[serde(default)]
     pub payments: Option<PaymentsConfig>,
-    /// Absent: no tenant secret can be stored (shop mail servers, and
-    /// payments unless `payments.secret_key` is set).
+    /// Absent: no tenant secret can be stored (shop mail servers, shopper
+    /// accounts, and payments unless `payments.secret_key` is set).
     #[serde(default)]
     pub secrets: Option<SecretsConfig>,
     /// Invoices; every setting has a default.
@@ -157,6 +158,16 @@ pub struct TenantsConfig {
     /// sqlx-sqlite runs one OS thread per connection. Unset: worked out from
     /// the machine at startup ([`crate::limits::auto_max_open`]).
     pub max_open: Option<usize>,
+}
+
+/// The keys that open each shopper account's personal data: one file per
+/// account, copied to every node and sealed with `secrets.key`. Deleting an
+/// account deletes its key, which leaves what the account recorded
+/// unreadable for good.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ShopperKeysConfig {
+    /// Directory holding one sub-directory per tenant. Created on demand.
+    pub dir: PathBuf,
 }
 
 /// The pictures merchants upload for their products: where the files are
@@ -463,6 +474,7 @@ impl Config {
             .set_default("tenants.dir", "data/tenants")?
             .set_default("media.dir", "data/media")?
             .set_default("media.public_url", "https://timada.localhost/media")?
+            .set_default("shopper_keys.dir", "data/shopper-keys")?
             .set_default("auth.session_lifetime_secs", 14 * 24 * 60 * 60)?
             .set_default("auth.rp_name", "Timada")?
             .set_default("mail.from", "Timada <no-reply@timada.localhost>")?

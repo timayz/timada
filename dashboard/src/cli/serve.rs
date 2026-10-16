@@ -28,10 +28,17 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             write_pool.clone(),
         )
         .await?;
-    let media = Arc::new(crate::media::Media::new(
-        &config.media,
-        config.cluster.as_ref(),
-    )?);
+    let peers = crate::peers::Peers::from_cluster(config.cluster.as_ref())?.map(Arc::new);
+    let media = Arc::new(crate::media::Media::new(&config.media, peers.clone()));
+    let shoppers_sealer = crate::seal::shoppers_sealer(&config);
+    if shoppers_sealer.is_none() {
+        tracing::warn!("secrets.key is not set: no shopper can create an account");
+    }
+    let shopper_keys = Arc::new(crate::shopper_keys::ShopperKeyVault::new(
+        &config.shopper_keys,
+        shoppers_sealer,
+        peers,
+    ));
     let gateway = Arc::new(crate::payments::StripeGateway::new(
         config
             .payments
@@ -69,6 +76,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         write_pool.clone(),
         tenant_subscriptions(
             media.clone(),
+            shopper_keys.clone(),
             payments.clone(),
             executor.clone(),
             Arc::new(crate::vies::ViesClient::new(
@@ -159,6 +167,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         tenants: tenants.clone(),
         authorizer,
         media,
+        shopper_keys,
         payments,
         shop_mail,
         store: connections,
@@ -198,11 +207,12 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 /// What follows each tenant's own stream while it is open: the read models
 /// fed into the shared database (the catalog's product list, the orders and
 /// carts, the customers, the invoices, the reviews), this node's copies of the product
-/// pictures and review photos, the answers the dashboard writes back
+/// pictures, review photos and shopper keys, the answers the dashboard writes back
 /// (payments, invoices) and the order confirmations it mails. Every
 /// tenant-scoped bounded context registers its subscription here.
 fn tenant_subscriptions(
     media: Arc<crate::media::Media>,
+    shopper_keys: Arc<crate::shopper_keys::ShopperKeyVault>,
     payments: Arc<crate::payments::Payments>,
     platform: Executor,
     vies: Arc<dyn crate::vies::Vies>,
@@ -215,8 +225,15 @@ fn tenant_subscriptions(
         Arc::new(|pool, tenant_id, _: &Executor| {
             timada_orders::read_model_subscription(pool, tenant_id)
         }),
-        Arc::new(|pool, tenant_id, _: &Executor| {
-            timada_shoppers::read_model_subscription(pool, tenant_id)
+        Arc::new({
+            let shopper_keys = shopper_keys.clone();
+            move |pool, tenant_id, _: &Executor| {
+                timada_shoppers::read_model_subscription(
+                    pool,
+                    tenant_id,
+                    shopper_keys.for_tenant(tenant_id),
+                )
+            }
         }),
         Arc::new(|pool, tenant_id, _: &Executor| {
             timada_discounts::read_model_subscription(pool, tenant_id)
@@ -229,6 +246,9 @@ fn tenant_subscriptions(
         }),
         Arc::new(move |_, tenant_id, _: &Executor| {
             crate::media::subscription(media.clone(), tenant_id)
+        }),
+        Arc::new(move |_, tenant_id, _: &Executor| {
+            crate::shopper_keys::subscription(shopper_keys.clone(), tenant_id)
         }),
         Arc::new(move |_, tenant_id, executor: &Executor| {
             crate::payments::subscription(payments.clone(), tenant_id, executor.clone())

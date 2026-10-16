@@ -32,7 +32,10 @@ pub async fn delete(cx: &Cx, Form(form): Form<DeleteForm>) -> Result<SeeOther> {
         .await?;
     let slug = access.tenant.slug.as_str();
     match timada_shoppers::Command(access.executor()?.clone())
-        .forget(&form.shopper_id)
+        .forget(
+            &*crate::app::store::shoppers::keys(cx, &access.tenant.id),
+            &form.shopper_id,
+        )
         .await
     {
         Ok(()) => Ok(see_other(customers_url(

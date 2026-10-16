@@ -319,18 +319,20 @@ use timada_storefront::{
 request_sign_in_code(cx, &email).await?;           // Ok(()) or a ShopperRefusal
 let signed_in = sign_in(cx, &email, &code).await?; // Ok(ShopperSignIn { token, expires_at })
 // keep signed_in.token in a private cookie, then on each request:
-let me = shopper(cx, &token).await?;               // Option<ShopperState>: email, addresses
+let me = shopper(cx, &token).await?;               // Option<Shopper>: email, addresses
 let orders = shopper_orders(cx, &token).await?;    // Ok(Vec<ShopperOrder>), newest first
 save_address(cx, &token, &shipping).await?;        // Ok(address id)
 sign_out(cx, &token).await?;
 sign_out_everywhere_else(cx, &token).await?;       // every other browser; this one stays
-delete_account(cx, &token).await?;                 // addresses and sessions go, orders stay
+delete_account(cx, &token).await?;                 // its key is destroyed, sessions go, orders stay
 ```
 
 - The codes, the sessions and the addresses go through the dashboard
   (`/store/shoppers/*` at the dashboard address), with a key that allows
-  `store:checkout`. `shopper` reads the session from the store, so it works on the
-  next request.
+  `store:checkout`. `shopper` asks the dashboard too (`GET /store/shoppers/me`), one
+  call per request: the store holds a shopper's e-mail and addresses only sealed
+  under a key of theirs that the dashboard keeps, and destroys when the account is
+  deleted. Without a dashboard address, nobody is signed in.
 - A refusal is a `ShopperRefusal` to word for the shopper: `wrong_code`,
   `code_expired`, `too_many_attempts` (five wrong codes), `code_recently_sent` (one a
   minute), `too_many_requests` (see below), `invalid_email`, an address refusal

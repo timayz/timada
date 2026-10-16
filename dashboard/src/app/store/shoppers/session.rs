@@ -28,7 +28,12 @@ pub async fn session(cx: &Cx, Form(form): Form<SessionForm>) -> Result<Answer> {
     };
     let hold = super::super::hold(cx, &access).await?;
     match timada_shoppers::Command(hold.executor().clone())
-        .sign_in(&form.email, &form.code, now())
+        .sign_in(
+            &*super::keys(cx, &access.tenant.id),
+            &form.email,
+            &form.code,
+            now(),
+        )
         .await
     {
         Ok(signed_in) => answer(

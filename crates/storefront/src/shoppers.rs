@@ -4,16 +4,17 @@
 //! six-digit code from the shop, and [`sign_in`] trades it for a token, the
 //! first time creating the account. The host keeps the token in its
 //! shopper's browser (a private cookie, typically) and hands it back:
-//! [`shopper`] reads who it signs in from the store, [`shopper_orders`] lists
+//! [`shopper`] asks the dashboard who it signs in, [`shopper_orders`] lists
 //! every order placed with their address (guest ones included), and the
 //! account keeps the addresses [`save_address`] gives it. A shopper may
-//! [`sign_out_everywhere_else`] and [`delete_account`]. Codes and sessions
-//! go through the dashboard over HTTP, as
-//! [`StoreConfig::api_url`](crate::StoreConfig::api_url) says, so no key can
-//! sign anyone in by writing to the store.
+//! [`sign_out_everywhere_else`] and [`delete_account`]. Everything goes
+//! through the dashboard over HTTP, as
+//! [`StoreConfig::api_url`](crate::StoreConfig::api_url) says: no key can
+//! sign anyone in by writing to the store, and the store holds a shopper's
+//! personal data only sealed under a key of theirs that the dashboard keeps
+//! (and destroys with the account).
 
 use std::net::IpAddr;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context as _;
 use serde::Deserialize;
@@ -25,7 +26,7 @@ use timada_catalog::format_money;
 use timada_orders::OrderStatus;
 pub use timada_orders::ShippingAddress;
 use timada_shoppers::SHOPPER_CODES;
-pub use timada_shoppers::{MAX_ADDRESSES, SavedAddress, ShopperState};
+pub use timada_shoppers::{MAX_ADDRESSES, SavedAddress, Shopper};
 
 use crate::context::store;
 use crate::store::Store;
@@ -113,11 +114,58 @@ struct History {
     orders: Vec<ShopperOrder>,
 }
 
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default()
+/// A shopper as the dashboard answers one.
+#[derive(Deserialize)]
+struct WireShopper {
+    id: String,
+    email: String,
+    registered_at: u64,
+    addresses: Vec<WireSavedAddress>,
+}
+
+#[derive(Deserialize)]
+struct WireSavedAddress {
+    id: String,
+    saved_at: u64,
+    address: WireAddress,
+}
+
+#[derive(Deserialize)]
+struct WireAddress {
+    name: String,
+    line1: String,
+    line2: Option<String>,
+    postal_code: String,
+    city: String,
+    country: String,
+    phone: Option<String>,
+}
+
+impl From<WireShopper> for Shopper {
+    fn from(wire: WireShopper) -> Self {
+        Self {
+            id: wire.id,
+            email: wire.email,
+            registered_at: wire.registered_at,
+            addresses: wire
+                .addresses
+                .into_iter()
+                .map(|saved| SavedAddress {
+                    id: saved.id,
+                    saved_at: saved.saved_at,
+                    address: ShippingAddress {
+                        name: saved.address.name,
+                        line1: saved.address.line1,
+                        line2: saved.address.line2,
+                        postal_code: saved.address.postal_code,
+                        city: saved.address.city,
+                        country: saved.address.country,
+                        phone: saved.address.phone,
+                    },
+                })
+                .collect(),
+        }
+    }
 }
 
 impl Store {
@@ -164,13 +212,28 @@ impl Store {
         .await
     }
 
-    /// Who `token` signs in, read from the store: `None` once it was signed
-    /// out or expired.
-    pub async fn shopper(&self, token: &str) -> anyhow::Result<Option<ShopperState>> {
-        let resolved = timada_shoppers::Command(self.executor().clone())
-            .resolve_session(token, now())
-            .await?;
-        Ok(resolved.map(|resolved| resolved.shopper))
+    /// Who `token` signs in, as the dashboard answers: `None` once it was
+    /// signed out, expired, or the account deleted, and when no dashboard
+    /// address is set.
+    pub async fn shopper(&self, token: &str) -> anyhow::Result<Option<Shopper>> {
+        if !self.signs_shoppers_in() {
+            return Ok(None);
+        }
+        let response = self
+            .shopper_call(reqwest::Method::GET, "me", Some(token))?
+            .send()
+            .await;
+        let answered = answer(response, reqwest::StatusCode::OK, |body| {
+            let shopper: WireShopper =
+                serde_json::from_slice(body).context("the dashboard's answer is not one")?;
+            Ok(Shopper::from(shopper))
+        })
+        .await?;
+        match answered {
+            Ok(shopper) => Ok(Some(shopper)),
+            Err(refusal) if refusal.is_signed_out() => Ok(None),
+            Err(refusal) => anyhow::bail!("the dashboard refused a shopper: {}", refusal.code()),
+        }
     }
 
     /// Ends the session `token` opened.
@@ -339,7 +402,7 @@ pub async fn sign_in(cx: &Cx, email: &str, code: &str) -> Result<ShopperRefusabl
 }
 
 /// Who `token` signs in, if anyone still.
-pub async fn shopper(cx: &Cx, token: &str) -> Result<Option<ShopperState>> {
+pub async fn shopper(cx: &Cx, token: &str) -> Result<Option<Shopper>> {
     store(cx).shopper(token).await.map_err(Error::from_anyhow)
 }
 
