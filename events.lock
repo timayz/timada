@@ -167,6 +167,7 @@ event timada-tenancy/Tenant::MailServerConfigured { host: String, port: u16, sec
 event timada-tenancy/Tenant::MailServerRemoved { removed_by: String }
 event timada-tenancy/Tenant::MailTemplateReset { mail: String, reset_by: String }
 event timada-tenancy/Tenant::MailTemplateSaved { mail: String, subject: String, html: String, saved_by: String }
+event timada-tenancy/Tenant::MailTemplateTextSaved { mail: String, text: String }
 event timada-tenancy/Tenant::MemberGranted { user_id: String, role: String }
 event timada-tenancy/Tenant::MemberRevoked { user_id: String }
 event timada-tenancy/Tenant::MemberRoleChanged { user_id: String, role: String }
