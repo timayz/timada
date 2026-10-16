@@ -6,17 +6,19 @@
 pub mod add;
 pub mod method_id;
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use timada_catalog::{CURRENCIES, format_money, parse_amount};
 use timada_orders::{
-    Command, MAX_SHIPPING_NAME_LEN, NewShippingMethod, OrdersError, ShippingMethod, split_countries,
+    Command, MAX_SHIPPING_NAME_LEN, NewShippingMethod, OrdersError, ShippingMethod,
 };
 use timada_tenancy::PERMISSION_SHIPPING_MANAGE;
 use topcoat::{
     Result,
     context::Cx,
     router::{href, page, query_params},
-    view::{View, view},
+    view::{Unescaped, View, component, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
@@ -53,9 +55,10 @@ pub struct MethodForm {
     price: String,
     currency: String,
     #[serde(default)]
-    countries: String,
-    #[serde(default)]
     free_above: String,
+    /// The ticked country checkboxes, among anything else posted.
+    #[serde(flatten)]
+    fields: HashMap<String, String>,
 }
 
 impl MethodForm {
@@ -71,10 +74,76 @@ impl MethodForm {
             name: self.name,
             price_cents: amount(&self.price)?,
             currency: self.currency,
-            countries: split_countries(&self.countries),
+            countries: checked_countries(&self.fields),
             free_above_cents,
         })
     }
+}
+
+/// The form field of a country checkbox: `country:<code>`.
+const COUNTRY_FIELD_PREFIX: &str = "country:";
+
+/// The countries ticked in a posted method form.
+fn checked_countries(fields: &HashMap<String, String>) -> Vec<String> {
+    fields
+        .keys()
+        .filter_map(|key| key.strip_prefix(COUNTRY_FIELD_PREFIX))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Narrows the country list to what the merchant types, by name or code.
+const COUNTRY_FILTER_SCRIPT: &str = r#"
+for (const filter of document.querySelectorAll("[data-country-filter]")) {
+  const list = document.getElementById(filter.dataset.countryFilter);
+  filter.hidden = false;
+  filter.addEventListener("input", () => {
+    const text = filter.value.trim().toLowerCase();
+    for (const row of list.querySelectorAll("[data-country]")) {
+      const shown = text === "" || row.textContent.toLowerCase().includes(text);
+      row.style.display = shown ? "" : "none";
+    }
+  });
+}
+"#;
+
+/// The countries a method ships to, as checkboxes: those `selected` first,
+/// then every ISO 3166 country by name. None ticked ships everywhere.
+#[component]
+pub async fn countries_field(id: &str, selected: &[String]) -> Result<impl View> {
+    let mut rows: Vec<(String, String, bool)> = selected
+        .iter()
+        .map(|code| {
+            let name =
+                rust_iso3166::from_alpha2(code).map_or(code.as_str(), |country| country.name);
+            (code.clone(), name.to_owned(), true)
+        })
+        .collect();
+    rows.extend(
+        rust_iso3166::ALL
+            .iter()
+            .filter(|country| !selected.iter().any(|code| code == country.alpha2))
+            .map(|country| (country.alpha2.to_owned(), country.name.to_owned(), false)),
+    );
+    let list = format!("{id}-list");
+
+    Ok(view! {
+        <fieldset id=(id)>
+            <legend class="block text-sm">"Countries (optional)"</legend>
+            <input type="search" aria-label="Filter countries" placeholder="Filter countries" hidden=""
+                class="mt-1 w-full rounded border border-neutral-300 px-3 py-2" data-country-filter=(&list)>
+            <div id=(&list) class="mt-2 max-h-64 overflow-y-auto rounded border border-neutral-300 p-2">
+                for (code, name, checked) in &rows {
+                    <label class="flex items-center gap-2 py-0.5" data-country=(code)>
+                        <input type="checkbox" name=(format!("{COUNTRY_FIELD_PREFIX}{code}")) value="on" checked=(*checked)>
+                        <span>(name) " " <code class="text-neutral-500">(code)</code></span>
+                    </label>
+                }
+            </div>
+            <p class="mt-1 text-sm text-neutral-500">"Tick the countries it ships to. Leave them all unticked to ship everywhere."</p>
+            <script>(Unescaped::new_unchecked(COUNTRY_FILTER_SCRIPT))</script>
+        </fieldset>
+    })
 }
 
 /// Where a method ships, in words.
@@ -175,10 +244,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <input id="new-shipping-free" name="free_above" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
                         type="text" inputmode="decimal" placeholder="50.00">
                     <p class="text-sm text-neutral-500">"Shipping costs nothing once the items, less any discount, reach this amount."</p>
-                    <label class="block text-sm" for="new-shipping-countries">"Countries (optional)"</label>
-                    <input id="new-shipping-countries" name="countries" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2 uppercase"
-                        type="text" placeholder="FR, BE, LU">
-                    <p class="text-sm text-neutral-500">"Two-letter codes separated by commas. Leave blank to ship everywhere."</p>
+                    countries_field(id: "new-shipping-countries", selected: &[])
                     <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Add shipping method"</button>
                 </form>
             </section>

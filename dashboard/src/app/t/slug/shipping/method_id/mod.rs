@@ -17,7 +17,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{amount_field, error_code, orders, shipping_url};
+use super::{amount_field, countries_field, error_code, orders, shipping_url};
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
 use crate::ui::{document, notice};
@@ -109,7 +109,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .free_above_cents
         .map(amount_field)
         .unwrap_or_default();
-    let countries = method.countries.join(", ");
 
     Ok(view! {
         document(
@@ -139,10 +138,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <label class="block text-sm" for="shipping-free">"Free from (optional)"</label>
                     <input id="shipping-free" name="free_above" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
                         type="text" inputmode="decimal" value=(&free_above)>
-                    <label class="block text-sm" for="shipping-countries">"Countries (optional)"</label>
-                    <input id="shipping-countries" name="countries" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2 uppercase"
-                        type="text" value=(&countries)>
-                    <p class="text-sm text-neutral-500">"Two-letter codes separated by commas. Leave blank to ship everywhere."</p>
+                    countries_field(id: "shipping-countries", selected: &method.countries)
                     <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save shipping method"</button>
                 </form>
             </section>

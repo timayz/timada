@@ -17,10 +17,16 @@ test("an owner adds, changes and removes shipping methods", async ({ page }) => 
   await expect(page).toHaveURL(new RegExp(`/t/${slug}/shipping$`));
   await expect(page.getByText("No shipping method: shipping is included.")).toBeVisible();
 
-  await page.getByLabel("Name").fill("Tracked delivery");
+  await page.getByLabel("Name", { exact: true }).fill("Tracked delivery");
   await page.getByLabel("Price").fill("4,9");
   await page.getByLabel("Free from (optional)").fill("50");
-  await page.getByLabel("Countries (optional)").fill("fr, be");
+  // The filter narrows the country list; ticking survives it.
+  const countries = page.getByRole("group", { name: "Countries (optional)" });
+  await countries.getByLabel("Filter countries").fill("fran");
+  await expect(countries.locator('[data-country="BE"]')).toBeHidden();
+  await countries.getByRole("checkbox", { name: "France FR" }).check();
+  await countries.getByLabel("Filter countries").fill("BE");
+  await countries.getByRole("checkbox", { name: "Belgium BE" }).check();
   await page.getByRole("button", { name: "Add shipping method" }).click();
   await expect(page.getByRole("status")).toContainText("Shipping method added.");
   const tracked = page.locator('[data-shipping-method="Tracked delivery"]');
@@ -28,15 +34,8 @@ test("an owner adds, changes and removes shipping methods", async ({ page }) => 
   await expect(tracked.locator("[data-shipping-free]")).toHaveText("From 50.00 EUR");
   await expect(tracked.locator("[data-shipping-countries]")).toHaveText("BE, FR");
 
-  // A country that is not a code is refused.
-  await page.getByLabel("Name").fill("VIP");
-  await page.getByLabel("Price").fill("6.90");
-  await page.getByLabel("Countries (optional)").fill("France");
-  await page.getByRole("button", { name: "Add shipping method" }).click();
-  await expect(page.getByRole("alert").first()).toContainText("two-letter codes");
-
-  // Blank countries ship everywhere.
-  await page.getByLabel("Name").fill("VIP");
+  // No country ticked ships everywhere.
+  await page.getByLabel("Name", { exact: true }).fill("VIP");
   await page.getByLabel("Price").fill("6.90");
   await page.getByRole("button", { name: "Add shipping method" }).click();
   await expect(page.getByRole("status")).toContainText("Shipping method added.");
@@ -47,14 +46,21 @@ test("an owner adds, changes and removes shipping methods", async ({ page }) => 
   await vip.getByRole("link", { name: "VIP" }).click();
   await expect(page.locator("[data-shipping-name]")).toHaveText("VIP");
   await expect(page.getByLabel("Price")).toHaveValue("6.90");
-  await page.getByLabel("Name").fill("VIP: insured");
+  await page.getByLabel("Name", { exact: true }).fill("VIP: insured");
   await page.getByLabel("Price").fill("7.90");
-  await page.getByLabel("Countries (optional)").fill("FR");
+  await page.getByRole("checkbox", { name: "France FR" }).check();
   await page.getByRole("button", { name: "Save shipping method" }).click();
   await expect(page.getByRole("status")).toContainText("Shipping method saved.");
   const insured = page.locator('[data-shipping-method="VIP: insured"]');
   await expect(insured.locator("[data-shipping-price]")).toHaveText("7.90 EUR");
   await expect(insured.locator("[data-shipping-countries]")).toHaveText("FR");
+
+  // What a method ships to comes back ticked, at the top of the list.
+  await insured.getByRole("link", { name: "VIP: insured" }).click();
+  const ticked = page.locator('[data-country]:has(input:checked)');
+  await expect(ticked).toHaveCount(1);
+  await expect(page.locator("[data-country]").first()).toHaveAttribute("data-country", "FR");
+  await page.getByRole("link", { name: "All shipping methods" }).click();
 
   await tracked.getByRole("link", { name: "Tracked delivery" }).click();
   await page.getByRole("button", { name: "Remove" }).click();
