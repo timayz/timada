@@ -30,7 +30,7 @@ use crate::config::Config;
 use crate::rate_limit::{RateLimiter, allow_shopper_code};
 
 /// The header a storefront reports its shopper's address in.
-pub const SHOPPER_IP: &str = "x-shopper-ip";
+const SHOPPER_IP: &str = "x-shopper-ip";
 
 #[derive(Deserialize)]
 pub struct CodeForm {

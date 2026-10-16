@@ -321,9 +321,9 @@ delete_account(cx, &token).await?;                 // addresses and sessions go,
   next request.
 - A refusal is a `ShopperRefusal` to word for the shopper: `wrong_code`,
   `code_expired`, `too_many_attempts` (five wrong codes), `code_recently_sent` (one a
-  minute), `too_many_requests` (see below), `invalid_email`, an address refusal (`invalid_country`, …),
-  `too_many_addresses` (ten are kept), or `signed_out` (`is_signed_out()`) for a token
-  that no longer signs anyone in: forget it.
+  minute), `too_many_requests` (see below), `invalid_email`, an address refusal
+  (`invalid_country`, …), `too_many_addresses` (ten are kept), or `signed_out`
+  (`is_signed_out()`) for a token that no longer signs anyone in: forget it.
 - A shopper's orders are every order placed with their address, guest ones too, read
   from the dashboard's order list, so one paid a second ago may still be missing. A
   host may show an order to the shopper signed in with its e-mail address

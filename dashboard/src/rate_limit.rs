@@ -45,10 +45,22 @@ impl RateLimiter {
     /// within the last `window`. A refusal is not counted, so a client that
     /// keeps knocking is let through again once its oldest pass ages out.
     pub fn check(&self, key: &str, limit: u32, window: Duration) -> bool {
-        self.check_at(key, limit, window, Instant::now())
+        self.check_all(&[(key, limit)], window)
     }
 
+    /// Whether every key may go once more, each under its own limit; only
+    /// then is the pass counted, against all of them. A refusal by one key
+    /// costs the others nothing.
+    pub fn check_all(&self, keys: &[(&str, u32)], window: Duration) -> bool {
+        self.check_all_at(keys, window, Instant::now())
+    }
+
+    #[cfg(test)]
     fn check_at(&self, key: &str, limit: u32, window: Duration, now: Instant) -> bool {
+        self.check_all_at(&[(key, limit)], window, now)
+    }
+
+    fn check_all_at(&self, wanted: &[(&str, u32)], window: Duration, now: Instant) -> bool {
         let mut state = self
             .state
             .lock()
@@ -62,31 +74,45 @@ impl RateLimiter {
             });
             *sweep_above = keys.len() * 2;
         }
-        let hits = keys.entry(key.to_owned()).or_insert_with(|| Hits {
-            window,
-            at: VecDeque::new(),
-        });
-        hits.window = window;
-        while hits
-            .at
-            .front()
-            .is_some_and(|first| now.duration_since(*first) >= window)
-        {
-            hits.at.pop_front();
+        let mut full = false;
+        for &(key, limit) in wanted {
+            let Some(hits) = keys.get_mut(key) else {
+                full |= limit == 0;
+                continue;
+            };
+            hits.window = window;
+            while hits
+                .at
+                .front()
+                .is_some_and(|first| now.duration_since(*first) >= window)
+            {
+                hits.at.pop_front();
+            }
+            full |= hits.at.len() >= limit as usize;
         }
-        if hits.at.len() >= limit as usize {
+        if full {
             return false;
         }
-        hits.at.push_back(now);
+        for &(key, _) in wanted {
+            keys.entry(key.to_owned())
+                .or_insert_with(|| Hits {
+                    window,
+                    at: VecDeque::new(),
+                })
+                .at
+                .push_back(now);
+        }
         true
     }
 }
 
-/// Whether a storefront may have one more sign-in code mailed: first under
-/// its key's limit, then under its shopper's. The shopper's address is the
-/// one the storefront reports (`shopper_ip`, the `X-Shopper-IP` header),
-/// else the caller's (`peer`); a report that is not an address is ignored.
-/// Without either, only the key's limit applies.
+/// Whether a storefront may have one more sign-in code mailed: under both
+/// its key's limit and its shopper's, and counted against both only when
+/// let through, so one shopper refused again and again does not use up the
+/// key's codes for everyone else. The shopper's address is the one the
+/// storefront reports (`shopper_ip`, the `X-Shopper-IP` header), else the
+/// caller's (`peer`); a report that is not an address is ignored. Without
+/// either, only the key's limit applies.
 pub fn allow_shopper_code(
     limiter: &RateLimiter,
     limits: &StoreConfig,
@@ -96,24 +122,21 @@ pub fn allow_shopper_code(
     peer: Option<IpAddr>,
 ) -> bool {
     let window = Duration::from_secs(limits.shopper_codes_window_secs);
-    if !limiter.check(
-        &format!("shopper-code:key:{key_id}"),
-        limits.shopper_codes_per_key,
-        window,
-    ) {
-        return false;
-    }
+    let key = format!("shopper-code:key:{key_id}");
     let ip = shopper_ip
         .and_then(|value| value.trim().parse::<IpAddr>().ok())
-        .or(peer);
-    let Some(ip) = ip else {
-        return true;
-    };
-    limiter.check(
-        &format!("shopper-code:ip:{tenant_id}:{ip}"),
-        limits.shopper_codes_per_ip,
-        window,
-    )
+        .or(peer)
+        .map(|ip| format!("shopper-code:ip:{tenant_id}:{ip}"));
+    match ip {
+        Some(ip) => limiter.check_all(
+            &[
+                (key.as_str(), limits.shopper_codes_per_key),
+                (ip.as_str(), limits.shopper_codes_per_ip),
+            ],
+            window,
+        ),
+        None => limiter.check(&key, limits.shopper_codes_per_key, window),
+    }
 }
 
 #[cfg(test)]
@@ -246,5 +269,18 @@ mod tests {
             Some("203.0.113.3"),
             None
         ));
+    }
+
+    #[test]
+    fn a_refused_shopper_does_not_use_up_the_key() {
+        let limiter = RateLimiter::new();
+        let limits = limits(1, 2);
+        let ask = |ip: &str| allow_shopper_code(&limiter, &limits, "k1", "t1", Some(ip), None);
+        assert!(ask("203.0.113.1"));
+        for _ in 0..5 {
+            assert!(!ask("203.0.113.1"));
+        }
+        assert!(ask("203.0.113.2"));
+        assert!(!ask("203.0.113.3"));
     }
 }

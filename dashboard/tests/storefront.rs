@@ -1801,7 +1801,7 @@ async fn sign_in_codes_are_held_to_a_limit_per_shopper_and_per_key() {
         h.platform.0.clone(),
         config::StoreConfig {
             shopper_codes_per_ip: 2,
-            shopper_codes_per_key: 5,
+            shopper_codes_per_key: 4,
             shopper_codes_window_secs: 600,
         },
     )
@@ -1825,7 +1825,8 @@ async fn sign_in_codes_are_held_to_a_limit_per_shopper_and_per_key() {
     assert_eq!(ask(Some("2001:db8::7")).await, Ok(()));
     // Without the shopper's address, the storefront's own counts.
     assert_eq!(ask(None).await, Ok(()));
-    // The key has had five: no more, whoever the shopper.
+    // The key has had four codes mailed (the refusal cost it none): no
+    // more, whoever the shopper.
     assert_eq!(ask(Some("198.51.100.9")).await, Err("too_many_requests"));
 
     store.shutdown().await;
