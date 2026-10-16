@@ -36,6 +36,17 @@ pub enum Review {
         image_id: String,
         removed_by: String,
     },
+    /// Its author changed it while it waited: the rating, title and text
+    /// are replaced, the photos in `removed` taken off and those in `added`
+    /// put after the ones kept.
+    Revised {
+        rating: u8,
+        title: Option<String>,
+        body: String,
+        added: Vec<ReviewPhoto>,
+        removed: Vec<String>,
+        revised_by: String,
+    },
 }
 
 /// Whether the shop mails its buyers a link to review what they bought, and
