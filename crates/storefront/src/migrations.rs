@@ -18,7 +18,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         ProductVariants0004,
         ProductSearch0005,
         Reviews0006,
-        CategoryMenu0007
+        CategoryMenu0007,
+        ReviewReplies0008
     ]
 }
 
@@ -294,4 +295,23 @@ sqlx_migrator::sqlite_migration!(
         "ALTER TABLE storefront_categories ADD COLUMN in_menu INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE storefront_categories DROP COLUMN in_menu"
     )]
+);
+
+pub struct ReviewReplies0008;
+sqlx_migrator::sqlite_migration!(
+    ReviewReplies0008,
+    "storefront",
+    "0008_review_replies",
+    vec_box![("storefront", "0007_category_menu")],
+    vec_box![
+        // The merchant's public answer, while there is one.
+        (
+            "ALTER TABLE storefront_reviews ADD COLUMN reply TEXT",
+            "ALTER TABLE storefront_reviews DROP COLUMN reply"
+        ),
+        (
+            "ALTER TABLE storefront_reviews ADD COLUMN replied_at INTEGER",
+            "ALTER TABLE storefront_reviews DROP COLUMN replied_at"
+        ),
+    ]
 );

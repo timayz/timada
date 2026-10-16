@@ -7,6 +7,7 @@ pub const MIN_BODY_LEN: usize = 10;
 pub const MAX_BODY_LEN: usize = 2000;
 pub const MAX_PHOTOS: usize = 3;
 pub const MAX_REASON_LEN: usize = 300;
+pub const MAX_REPLY_LEN: usize = 1000;
 
 /// How many days after fulfilment a shop mails its buyers, until the
 /// merchant says otherwise.
