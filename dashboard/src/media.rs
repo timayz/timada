@@ -17,6 +17,10 @@
 //! and fetches from a peer any picture it lacks (a node that was down during
 //! an upload, or a new one), and deletes the ones taken off a product.
 //!
+//! A shop's mail logo is kept the same way too. Its uploads are recorded in the
+//! platform's stream rather than a tenant's, so [`logo_subscription`] follows
+//! that one.
+//!
 //! The photos shoppers attach to their reviews are kept the same way, next to
 //! the product pictures: a rejected review, or a photo the merchant takes
 //! off one, takes its files with it.
@@ -35,6 +39,8 @@ use timada_reviews::aggregator::{
     Submitted as ReviewSubmitted,
 };
 use timada_reviews::review_projection;
+use timada_tenancy::aggregator::MailBrandingSet;
+use timada_tenancy::tenant_projection;
 
 use topcoat::context::Cx;
 use topcoat::router::{
@@ -374,6 +380,43 @@ pub fn subscription<E: Executor>(media: Arc<Media>, tenant_id: &str) -> Subscrip
 
 #[derive(Clone)]
 struct Tenant(String);
+
+/// The cursor identity of [`logo_subscription`], in the platform store.
+pub const LOGO_SUBSCRIPTION: &str = "timada-dashboard/mail-logos";
+
+/// Follows the tenants in the platform store and fetches each mail logo
+/// this node lacks. A logo replaced since is skipped, as a removed product
+/// picture is. A replaced logo's file stays on disk, unreferenced.
+pub fn logo_subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<E> {
+    SubscriptionBuilder::new(LOGO_SUBSCRIPTION)
+        .data(media)
+        .handler(on_mail_branding_set())
+        .any_routing_key()
+        .retry(u8::MAX)
+}
+
+#[evento::subscription]
+async fn on_mail_branding_set<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<MailBrandingSet>,
+) -> anyhow::Result<()> {
+    let media: Arc<Media> = context.extract();
+    let Some(file) = event.data.logo_file.as_deref() else {
+        return Ok(());
+    };
+    let still_there = tenant_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+        .and_then(|tenant| tenant.mail_branding)
+        .is_some_and(|branding| branding.logo_file.as_deref() == Some(file));
+    let Some((id, ext)) = file.split_once('.').filter(|_| still_there) else {
+        return Ok(());
+    };
+    media
+        .fetch(&event.aggregate_id, id, ext, event.data.logo_size)
+        .await
+}
 
 #[evento::subscription]
 async fn on_image_added<E: Executor>(

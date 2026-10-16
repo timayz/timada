@@ -18,6 +18,8 @@ pub enum TenancyError {
     InvalidMailServer,
     #[error("unknown mail")]
     UnknownMail,
+    #[error("an accent colour is #rrggbb, and a footer at most 500 characters")]
+    InvalidMailBranding,
     #[error(transparent)]
     InvalidMailTemplate(#[from] crate::MailTemplateError),
     #[error("a SIRET is 14 digits that pass the check")]

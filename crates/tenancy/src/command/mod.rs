@@ -35,10 +35,10 @@ use crate::aggregator::api_key::{
     Created as ApiKeyCreated, Revoked as ApiKeyRevoked, Scoped as ApiKeyScoped,
 };
 use crate::aggregator::{
-    Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailServerConfigured,
-    MailServerRemoved, MailTemplateReset, MailTemplateSaved, MemberGranted, MemberRevoked,
-    MemberRoleChanged, PaymentsConfigured, PaymentsRemoved, Released, Renamed, Resumed, Revoked,
-    RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
+    Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailBrandingCleared,
+    MailBrandingSet, MailServerConfigured, MailServerRemoved, MailTemplateReset, MailTemplateSaved,
+    MemberGranted, MemberRevoked, MemberRoleChanged, PaymentsConfigured, PaymentsRemoved, Released,
+    Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
 };
 use crate::value_object::{
     LEGACY_API_KEY_SCOPES, ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id,
@@ -91,6 +91,22 @@ pub struct TenantState {
     /// Who changed the mails' wording and when, newest last; the last
     /// [`MAIL_TEMPLATE_HISTORY`] changes of each mail.
     pub mail_template_history: Vec<MailTemplateChange>,
+    /// The look all the shop's mails share, once set.
+    pub mail_branding: Option<MailBranding>,
+}
+
+/// The look all of a shop's mails share.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MailBranding {
+    /// A picture in the tenant's media, `<id>.<ext>`.
+    pub logo_file: Option<String>,
+    pub logo_size: u64,
+    /// `#rrggbb`.
+    pub accent: Option<String>,
+    pub footer: Option<String>,
+    pub set_by: String,
+    /// Unix seconds.
+    pub set_at: u64,
 }
 
 /// How many changes of one mail's wording the tenant remembers.
@@ -225,6 +241,8 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_mail_server_removed())
         .handler(on_mail_template_saved())
         .handler(on_mail_template_reset())
+        .handler(on_mail_branding_set())
+        .handler(on_mail_branding_cleared())
         .strict()
 }
 
@@ -449,6 +467,32 @@ async fn on_mail_template_reset(
         at: event.timestamp,
         reset: true,
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_branding_set(
+    event: Event<MailBrandingSet>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    tenant.mail_branding = Some(MailBranding {
+        logo_file: data.logo_file.to_owned(),
+        logo_size: data.logo_size,
+        accent: data.accent.to_owned(),
+        footer: data.footer.to_owned(),
+        set_by: data.set_by.to_owned(),
+        set_at: event.timestamp,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_branding_cleared(
+    _event: Event<MailBrandingCleared>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.mail_branding = None;
     Ok(())
 }
 

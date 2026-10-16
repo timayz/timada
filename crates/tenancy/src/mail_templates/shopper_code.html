@@ -1,9 +1,16 @@
 <!doctype html>
 <html>
 <body>
+{% if shop.logo_url %}
+<p><img src="{{ shop.logo_url }}" alt="{{ shop.name }}" style="max-height: 64px; max-width: 240px;"></p>
+{% endif %}
 <p>Enter this code to sign in to <strong>{{ shop.name }}</strong>:</p>
-<p style="font-size: 1.5rem; letter-spacing: 0.25rem;"><strong>{{ code }}</strong></p>
+<p style="font-size: 1.5rem; letter-spacing: 0.25rem;{% if shop.accent %} color: {{ shop.accent }};{% endif %}"><strong>{{ code }}</strong></p>
 <p>It is valid for {{ valid_minutes }} minutes.</p>
 <p>If you did not ask for it, you can ignore this message.</p>
+{% if shop.footer %}
+<hr style="border: none; border-top: 1px solid #e5e7eb;">
+<p style="color: #6b7280; font-size: 12px; white-space: pre-line;">{{ shop.footer }}</p>
+{% endif %}
 </body>
 </html>

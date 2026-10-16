@@ -1,7 +1,8 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
-    MailServerConfigured, MailServerRemoved, MailTemplateReset, MailTemplateSaved,
+    MailBrandingCleared, MailBrandingSet, MailServerConfigured, MailServerRemoved,
+    MailTemplateReset, MailTemplateSaved,
 };
 use crate::error::TenancyError;
 use crate::mail_template::{ShopMailKind, validate};
@@ -17,6 +18,37 @@ pub struct ConfigureMailServer {
     pub password_sealed: Option<Vec<u8>>,
     pub from_address: String,
     pub from_name: Option<String>,
+}
+
+/// The look all of a shop's mails share. Blank parts are unset.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SetMailBranding {
+    /// A picture already in the tenant's media, `<id>.<ext>`.
+    pub logo_file: Option<String>,
+    pub logo_size: u64,
+    pub accent: Option<String>,
+    pub footer: Option<String>,
+}
+
+/// The longest footer a shop's mails may carry, in characters.
+pub const MAX_MAIL_FOOTER_LEN: usize = 500;
+
+/// `#rrggbb`, lowercased; `None` when it is not one.
+pub fn parse_accent(accent: &str) -> Option<String> {
+    let hex = accent.trim().strip_prefix('#')?;
+    (hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| format!("#{}", hex.to_ascii_lowercase()))
+}
+
+/// `<id>.<ext>`: letters and digits on each side, so it names one file in
+/// the tenant's media and nothing above it.
+fn is_media_file(file: &str) -> bool {
+    file.split_once('.').is_some_and(|(id, ext)| {
+        (1..=64).contains(&id.len())
+            && (1..=5).contains(&ext.len())
+            && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            && ext.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
 }
 
 /// Trimmed, `None` when blank.
@@ -159,6 +191,80 @@ impl<E: Executor> super::Command<E> {
             .event(&MailTemplateReset {
                 mail: kind.key().to_owned(),
                 reset_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Sets the look all the shop's mails share: a logo, an accent colour
+    /// and a footer, each optional. Needs `mail:manage`.
+    pub async fn set_mail_branding(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        cmd: SetMailBranding,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let accent = match filled(cmd.accent) {
+            Some(accent) => Some(parse_accent(&accent).ok_or(TenancyError::InvalidMailBranding)?),
+            None => None,
+        };
+        let footer = filled(cmd.footer).map(|footer| footer.replace("\r\n", "\n"));
+        if footer
+            .as_ref()
+            .is_some_and(|footer| footer.chars().count() > MAX_MAIL_FOOTER_LEN)
+            || cmd
+                .logo_file
+                .as_deref()
+                .is_some_and(|file| !is_media_file(file))
+        {
+            return Err(TenancyError::InvalidMailBranding);
+        }
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        let logo_size = if cmd.logo_file.is_some() {
+            cmd.logo_size
+        } else {
+            0
+        };
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&MailBrandingSet {
+                logo_file: cmd.logo_file,
+                logo_size,
+                accent,
+                footer,
+                set_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// The shop's mails go back to the plain look; none set is a no-op.
+    /// Needs `mail:manage`.
+    pub async fn clear_mail_branding(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        if tenant.mail_branding.is_none() {
+            return Ok(());
+        }
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&MailBrandingCleared {
+                cleared_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)
             .await?;
