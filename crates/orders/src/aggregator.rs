@@ -115,6 +115,24 @@ pub enum Cart {
         billing: ShippingAddress,
         given_by: String,
     },
+    /// The shipping method the shopper picked, written with the
+    /// `CheckoutRequested` of the same request. A shop without methods
+    /// ships for free, and none is picked.
+    ShippingMethodChosen {
+        request_id: String,
+        method_id: String,
+        chosen_by: String,
+    },
+    /// What shipping the payment of a request is priced with, written with
+    /// its `PaymentRequested`: the payment's total is the lines, less any
+    /// discount, plus `amount_cents`.
+    ShippingGranted {
+        request_id: String,
+        method_id: String,
+        name: String,
+        amount_cents: u64,
+        granted_by: String,
+    },
 }
 
 /// A paid order. Its id derives from the cart it was placed from
@@ -173,6 +191,14 @@ pub enum Order {
     BillingAddressSet {
         billing: ShippingAddress,
         set_by: String,
+    },
+    /// What shipping the order was paid with, written with `Placed`: its
+    /// total is the lines, less any discount, plus `amount_cents`.
+    ShippingCharged {
+        method_id: String,
+        name: String,
+        amount_cents: u64,
+        charged_by: String,
     },
 }
 

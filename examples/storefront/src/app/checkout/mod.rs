@@ -13,8 +13,8 @@ pub mod pay;
 pub mod start;
 
 use timada_storefront::{
-    Checkout, OrdersError, VatEstimate, accepts_business_buyers, menu, payment_setup,
-    recent_reviews, save_address, start_payment,
+    CartView, Checkout, OrdersError, VatEstimate, accepts_business_buyers, format_money, menu,
+    payment_setup, recent_reviews, save_address, start_payment,
 };
 use topcoat::{
     Result,
@@ -52,15 +52,62 @@ const country = form.elements.country;
 // Absent when the shop does not sell to businesses.
 const vatNumber = form.elements.vat_number;
 
+// The shipping method picked, among those that ship to the country.
+const methods = [...form.querySelectorAll("input[name=shipping_method]")];
+const noShipping = form.querySelector("[data-no-shipping]");
+const shippingLine = document.querySelector("[data-checkout-shipping]");
+const totalLine = document.querySelector("[data-checkout-total]");
+const placeTotal = form.querySelector("[data-place-total]");
+const goods = Number(form.dataset.goods);
+const money = (cents) => `${(cents / 100).toFixed(2)} ${form.dataset.currency.toUpperCase()}`;
+const picked = () => methods.find((method) => method.checked && !method.disabled);
+
 function showVat() {
   if (!vat) return;
-  const text = country.selectedOptions[0]?.dataset.vat;
+  const texts = JSON.parse(country.selectedOptions[0]?.dataset.vat || "{}");
+  const text = texts[picked()?.value || ""];
   const reverseCharge = !!vatNumber && vatNumber.value.trim() !== "" && country.value !== "FR";
   vat.hidden = !text || reverseCharge;
   vat.textContent = text ? `(${text})` : "";
 }
-country.addEventListener("change", showVat);
+
+// Shows the methods that ship to the country (keeping the one picked when
+// it still does) and prices the order with the one picked.
+function showShipping() {
+  if (methods.length) {
+    for (const method of methods) {
+      const countries = method.dataset.countries;
+      const ships = !countries || countries.split(" ").includes(country.value);
+      method.disabled = !ships;
+      method.closest("label").hidden = !ships;
+    }
+    if (!picked()) {
+      const first = methods.find((method) => !method.disabled);
+      if (first) first.checked = true;
+    }
+  }
+  const method = picked();
+  if (noShipping) noShipping.hidden = !methods.length || !!method;
+  const total = goods + (method ? Number(method.dataset.amount) : 0);
+  if (shippingLine && methods.length) shippingLine.textContent = method ? method.dataset.price : "—";
+  totalLine.textContent = money(total);
+  if (placeTotal) placeTotal.textContent = money(total);
+  form.elements.expected_total_cents.value = total;
+  form.dataset.amount = total;
+  if (elements && total > 0) elements.update({ amount: total });
+  showVat();
+}
+country.addEventListener("change", showShipping);
+methods.forEach((method) => method.addEventListener("change", showShipping));
 vatNumber?.addEventListener("input", showVat);
+
+// The shop's shipping methods as Express Checkout offers them; none when
+// shipping is included.
+const rates = JSON.parse(form.dataset.shipping || "[]");
+const allRates = rates.map(({ id, displayName, amount }) => ({ id, displayName, amount }));
+const ratesTo = (code) => rates
+  .filter((rate) => !rate.countries.length || rate.countries.includes(code))
+  .map(({ id, displayName, amount }) => ({ id, displayName, amount }));
 
 // The billing fields count only while the box is ticked: a disabled
 // fieldset is neither checked nor sent.
@@ -104,8 +151,24 @@ if (key && window.Stripe) {
     emailRequired: true,
     shippingAddressRequired: true,
     allowedShippingCountries: [...country.options].map((option) => option.value),
-    shippingRates: [{ id: "standard", displayName: "Standard delivery", amount: 0 }],
+    // Before the wallet's address is known: those that ship to the form's
+    // country, else all of them.
+    shippingRates: rates.length
+      ? (ratesTo(country.value).length ? ratesTo(country.value) : allRates)
+      : [{ id: "standard", displayName: "Standard delivery", amount: 0 }],
   }));
+  // Only the methods that ship to the wallet's address, priced in.
+  express.on("shippingaddresschange", (event) => {
+    if (!rates.length) { event.resolve(); return; }
+    const here = ratesTo(event.address.country);
+    if (!here.length) { event.reject(); return; }
+    elements.update({ amount: goods + here[0].amount });
+    event.resolve({ shippingRates: here });
+  });
+  express.on("shippingratechange", (event) => {
+    if (rates.length) elements.update({ amount: goods + event.shippingRate.amount });
+    event.resolve();
+  });
   express.on("confirm", async (event) => {
     const billing = event.billingDetails || {};
     const shipping = event.shippingAddress || {};
@@ -119,6 +182,9 @@ if (key && window.Stripe) {
     fill("postal_code", address.postal_code);
     fill("city", address.city);
     fill("country", address.country);
+    const rate = methods.find((method) => method.value === event.shippingRate?.id);
+    if (rate) rate.checked = true;
+    showShipping();
     if (!(await pay())) event.paymentFailed({ reason: "fail" });
   });
 }
@@ -220,6 +286,24 @@ fn vat_text(estimate: &VatEstimate) -> String {
     format!("incl. {} {}", estimate.amount(), estimate.label())
 }
 
+/// The shop's shipping options, as Express Checkout's rates (with the
+/// countries each ships to): `[]` when shipping is included.
+pub(crate) fn express_rates(cart: &CartView) -> String {
+    let rates: Vec<_> = cart
+        .shipping_options
+        .iter()
+        .map(|option| {
+            serde_json::json!({
+                "id": option.id,
+                "displayName": option.name,
+                "amount": option.amount_cents,
+                "countries": option.countries,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(rates).to_string()
+}
+
 /// `Ada L.` as `AL`.
 fn initials(name: &str) -> String {
     name.split_whitespace()
@@ -279,17 +363,43 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         draft.billing_country.to_ascii_uppercase()
     };
     let bills_elsewhere = draft.bills_elsewhere();
-    // What the VAT line says for each country, for the select to switch.
-    let countries: Vec<(&str, &str, Option<String>)> = COUNTRIES
+    // The shipping method: the one picked last when it ships here, else the
+    // first that does.
+    let shipping = cart
+        .shipping_options_to(&country)
+        .find(|option| option.id == draft.shipping_method)
+        .or_else(|| cart.shipping_options_to(&country).next())
+        .cloned();
+    let shipping_text = match &shipping {
+        Some(option) => option.price(),
+        None if cart.shipping_required => "—".to_owned(),
+        None => "Included".to_owned(),
+    };
+    // What the VAT line says for each country and shipping method (`""`
+    // for none), for the page's script to switch.
+    let countries: Vec<(&str, &str, String)> = COUNTRIES
         .iter()
-        .map(|(code, name)| (*code, *name, cart.vat_estimate(code).as_ref().map(vat_text)))
+        .map(|(code, name)| {
+            let mut texts = serde_json::Map::new();
+            for option in std::iter::once(None).chain(cart.shipping_options_to(code).map(Some)) {
+                if let Some(estimate) = cart.vat_estimate_with(code, option) {
+                    texts.insert(
+                        option.map(|option| option.id.clone()).unwrap_or_default(),
+                        vat_text(&estimate).into(),
+                    );
+                }
+            }
+            (*code, *name, serde_json::Value::Object(texts).to_string())
+        })
         .collect();
-    let vat = countries
-        .iter()
-        .find(|(code, ..)| *code == country)
-        .and_then(|(.., text)| text.clone())
+    let vat = cart
+        .vat_estimate_with(&country, shipping.as_ref())
+        .as_ref()
+        .map(vat_text)
         .filter(|_| draft.vat_number.trim().is_empty() || country == "FR");
-    let total = cart.total().unwrap_or_default();
+    let total_cents = cart.total_with(shipping.as_ref());
+    let total = format_money(total_cents, &currency);
+    let rates = express_rates(&cart);
     let back_to_cart = href!(crate::app::cart::index).resolve(cx);
     let publishable_key = setup
         .as_ref()
@@ -346,7 +456,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <dd data-checkout-discount=(&discount.code)>(amount)</dd>
                             }
                             <dt>"Shipping"</dt>
-                            <dd>"Included"</dd>
+                            <dd data-checkout-shipping="">(&shipping_text)</dd>
                             <dt class="total">"Total"</dt>
                             <dd class="total">
                                 <strong class="price" data-checkout-total="">(&total)</strong>
@@ -399,9 +509,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                     <form class="checkout" method="post" action=(href!(place)) data-checkout-form=""
                         data-start-path=(href!(start::start)) data-return-path=(href!(complete::index))
-                        data-publishable-key=(&publishable_key) data-amount=(cart.total_cents)
+                        data-publishable-key=(&publishable_key) data-amount=(total_cents)
+                        data-goods=(cart.total_cents) data-shipping=(&rates)
                         data-currency=(currency.to_lowercase())>
-                        <input type="hidden" name="expected_total_cents" value=(cart.total_cents)>
+                        <input type="hidden" name="expected_total_cents" value=(total_cents)>
                         <section class="card">
                             <h2>"Your details"</h2>
                             <label for="checkout-email">"E-mail"</label>
@@ -444,11 +555,28 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <label for="checkout-country">"Country"</label>
                                     <select id="checkout-country" name="country" required="" autocomplete="country">
                                         for (code, name, text) in &countries {
-                                            <option value=(*code) selected=(*code == country) data-vat=(text.as_deref().unwrap_or(""))>(*name)</option>
+                                            <option value=(*code) selected=(*code == country) data-vat=(text)>(*name)</option>
                                         }
                                     </select>
                                 </span>
                             </div>
+                            if !cart.shipping_options.is_empty() || cart.shipping_required {
+                                <fieldset class="shipping-methods" data-shipping-methods="">
+                                    <legend>"Delivery method"</legend>
+                                    for option in &cart.shipping_options {
+                                        <label class="method" hidden=(!option.ships_to(&country))>
+                                            <input type="radio" name="shipping_method" value=(&option.id)
+                                                data-amount=(option.amount_cents) data-price=(option.price())
+                                                data-countries=(option.countries.join(" "))
+                                                checked=(shipping.as_ref().is_some_and(|picked| picked.id == option.id))
+                                                disabled=(!option.ships_to(&country))>
+                                            <span class="name">(&option.name)</span>
+                                            <span class="price">(option.price())</span>
+                                        </label>
+                                    }
+                                    <p class="notice" data-no-shipping="" hidden=(shipping.is_some())>"This shop does not deliver to this country."</p>
+                                </fieldset>
+                            }
                             if business {
                                 <label for="checkout-vat">"EU company VAT number (optional, for an invoice without VAT)"</label>
                                 <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
@@ -503,7 +631,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <p class="hint" data-payments-off="">"Card payments are not available in this shop yet."</p>
                             }
                             <p class="notice" role="alert" data-payment-error="" hidden=""></p>
-                            <button class="primary place">"Place order · " (&total)</button>
+                            <button class="primary place">"Place order · " <span data-place-total="">(&total)</span></button>
                         </section>
                     </form>
                 </div>
@@ -583,6 +711,7 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         // is not sent: the field is not shown any more.
         vat_number: business.then(|| draft.vat_number.clone()),
         billing: draft.billing(),
+        shipping_method: Some(draft.shipping_method.clone()),
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {
         Ok(session) => {

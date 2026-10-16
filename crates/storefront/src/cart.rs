@@ -29,6 +29,12 @@
 //! its reason rather than dropped, and so is one a capped code has no use
 //! left for or the shopper's e-mail already used.
 //!
+//! A shop may charge for shipping: [`CartView::shipping_options`] lists the
+//! methods the merchant set up, priced for the cart (free once the goods,
+//! less any discount, reach a method's threshold). The shopper picks one
+//! that ships to their country ([`Checkout::shipping_method`]); a shop
+//! without methods ships for free and none is picked.
+//!
 //! The library keeps no notion of whose cart is whose: the host remembers
 //! the cart id, typically in a cookie.
 
@@ -39,8 +45,8 @@ pub use timada_catalog::format_money;
 use timada_invoicing::tax;
 use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
 pub use timada_orders::{
-    Checkout, OrderDiscount, OrderLine, OrderState, OrderStatus, OrdersError, PAYMENTS_UNAVAILABLE,
-    PaymentSetup, ShippingAddress,
+    Checkout, OrderDiscount, OrderLine, OrderShipping, OrderState, OrderStatus, OrdersError,
+    PAYMENTS_UNAVAILABLE, PaymentSetup, ShippingAddress,
 };
 
 use crate::context::store;
@@ -67,10 +73,12 @@ pub struct PaymentSession {
     /// What the order will hold, priced.
     pub lines: Vec<OrderLine>,
     pub currency: String,
-    /// What is charged: the lines, less the discount.
+    /// What is charged: the lines, less the discount, plus shipping.
     pub total_cents: u64,
     /// The discount code the payment is priced with, if any.
     pub discount: Option<OrderDiscount>,
+    /// The shipping the payment is priced with; `None` when it is included.
+    pub shipping: Option<OrderShipping>,
 }
 
 impl PaymentSession {
@@ -135,8 +143,15 @@ pub struct CartView {
     /// Why the code takes nothing off (`discount_inactive`,
     /// `discount_currency`, …), to word on the page.
     pub discount_refused: Option<&'static str>,
-    /// What paying now charges: the subtotal, less the discount.
+    /// What the goods cost: the subtotal, less the discount. Shipping, when
+    /// the shop charges for it, comes on top ([`CartView::total_with`]).
     pub total_cents: u64,
+    /// The ways the shop ships these goods, priced for them, in the order
+    /// the merchant added them. Empty while shipping is included.
+    pub shipping_options: Vec<ShippingOption>,
+    /// Whether the shopper must pick one of `shipping_options`: the shop has
+    /// shipping methods (even when none is in the cart's currency).
+    pub shipping_required: bool,
     /// Items on the lines that can be sold.
     pub item_count: u32,
     /// The order it became, once checked out.
@@ -170,6 +185,26 @@ impl CartView {
         ))
     }
 
+    /// The shipping options that ship to `country` (ISO 3166-1 alpha-2).
+    pub fn shipping_options_to<'a>(
+        &'a self,
+        country: &'a str,
+    ) -> impl Iterator<Item = &'a ShippingOption> + 'a {
+        self.shipping_options
+            .iter()
+            .filter(move |option| option.ships_to(country))
+    }
+
+    /// The shipping option of that id, if the shop has it.
+    pub fn shipping_option(&self, id: &str) -> Option<&ShippingOption> {
+        self.shipping_options.iter().find(|option| option.id == id)
+    }
+
+    /// What paying charges with `shipping` picked: the goods, plus it.
+    pub fn total_with(&self, shipping: Option<&ShippingOption>) -> u64 {
+        self.total_cents + shipping.map_or(0, |option| option.amount_cents)
+    }
+
     /// The VAT the total includes when the goods go to `country` (ISO
     /// 3166-1 alpha-2), at that destination's rates for what each line is.
     /// An estimate for a page to show: the invoice decides, from the
@@ -177,6 +212,16 @@ impl CartView {
     /// the buyer's VAT number. `None` when no VAT would apply (outside the
     /// EU) or the cart has nothing priced.
     pub fn vat_estimate(&self, country: &str) -> Option<VatEstimate> {
+        self.vat_estimate_with(country, None)
+    }
+
+    /// [`CartView::vat_estimate`] with `shipping` on top: shipping is taxed
+    /// at the rates of the goods it carries, in proportion.
+    pub fn vat_estimate_with(
+        &self,
+        country: &str,
+        shipping: Option<&ShippingOption>,
+    ) -> Option<VatEstimate> {
         let currency = self.currency.as_deref()?;
         let lines: Vec<(&str, u64)> = self
             .lines
@@ -210,9 +255,12 @@ impl CartView {
         if sums.is_empty() {
             return None;
         }
-        // The discount comes off every rate in proportion.
-        let subtotals =
-            timada_invoicing::prorate(&timada_invoicing::vat_breakdown(sums), self.total_cents);
+        // The discount comes off every rate in proportion; shipping comes
+        // on top of them the same way.
+        let subtotals = timada_invoicing::prorate(
+            &timada_invoicing::vat_breakdown(sums),
+            self.total_with(shipping),
+        );
         let rate_bps = match subtotals.as_slice() {
             [only] => Some(only.rate_bps),
             _ => None,
@@ -229,6 +277,33 @@ impl CartView {
     /// sale left in it, not ordered already.
     pub fn can_check_out(&self) -> bool {
         !self.lines.is_empty() && self.unavailable.is_empty() && self.order_id.is_none()
+    }
+}
+
+/// One way the shop ships a cart, priced for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShippingOption {
+    /// What [`Checkout::shipping_method`] names it by.
+    pub id: String,
+    pub name: String,
+    /// What it costs for these goods: 0 once they reach its threshold.
+    pub amount_cents: u64,
+    pub currency: String,
+    /// Two-letter codes; empty means every country.
+    pub countries: Vec<String>,
+}
+
+impl ShippingOption {
+    pub fn ships_to(&self, country: &str) -> bool {
+        self.countries.is_empty() || self.countries.iter().any(|c| c == country)
+    }
+
+    /// The price as a person reads it: `4.90 EUR`, or `Free`.
+    pub fn price(&self) -> String {
+        match self.amount_cents {
+            0 => "Free".to_owned(),
+            cents => timada_catalog::format_money(cents, &self.currency),
+        }
     }
 }
 
@@ -286,6 +361,19 @@ impl Store {
             .quote_cart(cart_id)
             .await
             .map_err(anyhow::Error::from)?;
+        let methods = orders.shipping_methods().await?;
+        let shipping_options = methods
+            .iter()
+            .filter_map(|method| {
+                Some(ShippingOption {
+                    id: method.id.clone(),
+                    name: method.name.clone(),
+                    amount_cents: quote.shipping_for(method)?,
+                    currency: method.currency.clone(),
+                    countries: method.countries.clone(),
+                })
+            })
+            .collect();
         let ids: Vec<&str> = state.lines.iter().map(|l| l.product_id.as_str()).collect();
         let mut products = published_products_by_ids(self.pool(), &ids).await?;
         for product in &mut products {
@@ -345,6 +433,8 @@ impl Store {
             discount: quote.discount,
             discount_refused: quote.discount_refused,
             total_cents: quote.total_cents,
+            shipping_options,
+            shipping_required: !methods.is_empty(),
             order_id: state.order_id,
         }))
     }
@@ -509,6 +599,7 @@ impl Store {
                 currency: payment.currency.clone(),
                 total_cents: payment.total_cents,
                 discount: payment.discount.clone(),
+                shipping: payment.shipping.clone(),
             })),
         })
     }
