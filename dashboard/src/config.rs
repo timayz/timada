@@ -37,6 +37,10 @@ pub struct Config {
     /// Reviews; every setting has a default.
     #[serde(default)]
     pub reviews: ReviewsConfig,
+    /// What storefronts may ask for their shoppers; every setting has a
+    /// default.
+    #[serde(default)]
+    pub store: StoreConfig,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -199,6 +203,72 @@ fn default_request_check_secs() -> u64 {
     60 * 60
 }
 
+/// What storefronts may ask of this node for their shoppers. Each node counts
+/// on its own: behind a balancer over N nodes, a client may get up to N
+/// times these limits.
+#[derive(Debug, Deserialize, Clone)]
+pub struct StoreConfig {
+    /// Sign-in codes one shopper's address may have mailed, at one shop,
+    /// within the window.
+    #[serde(default = "default_shopper_codes_per_ip")]
+    pub shopper_codes_per_ip: u32,
+    /// Sign-in codes one API key may have mailed within the window, whoever
+    /// the shoppers.
+    #[serde(default = "default_shopper_codes_per_key")]
+    pub shopper_codes_per_key: u32,
+    /// The window both limits count over, in seconds.
+    #[serde(default = "default_shopper_codes_window_secs")]
+    pub shopper_codes_window_secs: u64,
+}
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            shopper_codes_per_ip: default_shopper_codes_per_ip(),
+            shopper_codes_per_key: default_shopper_codes_per_key(),
+            shopper_codes_window_secs: default_shopper_codes_window_secs(),
+        }
+    }
+}
+
+fn default_shopper_codes_per_ip() -> u32 {
+    10
+}
+
+fn default_shopper_codes_per_key() -> u32 {
+    100
+}
+
+fn default_shopper_codes_window_secs() -> u64 {
+    10 * 60
+}
+
+impl StoreConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (name, value) in [
+            (
+                "store.shopper_codes_per_ip",
+                u64::from(self.shopper_codes_per_ip),
+            ),
+            (
+                "store.shopper_codes_per_key",
+                u64::from(self.shopper_codes_per_key),
+            ),
+            (
+                "store.shopper_codes_window_secs",
+                self.shopper_codes_window_secs,
+            ),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::Message(format!(
+                    "{name} must be greater than 0"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Invoices.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct InvoicingConfig {
@@ -355,6 +425,7 @@ impl Config {
         config.server.validate()?;
         config.tenants.validate()?;
         config.media.validate()?;
+        config.store.validate()?;
         if let Some(store_api) = &config.store_api {
             store_api.validate()?;
         }
@@ -600,6 +671,48 @@ mod tests {
         };
         let err = missing.validate().unwrap_err();
         assert!(err.to_string().starts_with("store_api.tls_cert"), "{err}");
+    }
+
+    #[test]
+    fn store_limits_default_and_refuse_zero() {
+        let limits = StoreConfig::default();
+        assert_eq!(limits.shopper_codes_per_ip, 10);
+        assert_eq!(limits.shopper_codes_per_key, 100);
+        assert_eq!(limits.shopper_codes_window_secs, 600);
+        assert!(limits.validate().is_ok());
+        for zero in [
+            StoreConfig {
+                shopper_codes_per_ip: 0,
+                ..limits.clone()
+            },
+            StoreConfig {
+                shopper_codes_per_key: 0,
+                ..limits.clone()
+            },
+            StoreConfig {
+                shopper_codes_window_secs: 0,
+                ..limits.clone()
+            },
+        ] {
+            let err = zero.validate().unwrap_err();
+            assert!(err.to_string().starts_with("store.shopper_codes_"), "{err}");
+        }
+    }
+
+    #[test]
+    fn store_limits_read_from_their_section() {
+        let parsed: StoreConfig = config::Config::builder()
+            .add_source(File::from_str(
+                "shopper_codes_per_ip = 3\nshopper_codes_window_secs = 60\n",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(parsed.shopper_codes_per_ip, 3);
+        assert_eq!(parsed.shopper_codes_per_key, 100, "unset keeps its default");
+        assert_eq!(parsed.shopper_codes_window_secs, 60);
     }
 
     #[test]

@@ -21,6 +21,12 @@
 //!   it. Unset, a random one is made at startup, so the cookies of a browser
 //!   are lost on restart
 //! - `HOST` / `PORT` — where to listen (`127.0.0.1` / `3456`)
+//! - `TRUSTED_PROXIES` — the reverse proxies in front of the app, as
+//!   comma-separated addresses or CIDR networks (`10.0.0.0/8,fd00::/8`), whose
+//!   `X-Forwarded-For` names the shopper (optional; unset, the connection's
+//!   peer is the shopper). The dashboard holds each shopper's address to a
+//!   limit of sign-in codes, so behind a proxy this must be set, or every
+//!   shopper shares the proxy's
 //!
 //! Selling (the cart and checkout) needs a key holding `store:checkout`; with
 //! a read-only key the catalog shows but adding to the cart fails.
@@ -31,15 +37,36 @@
 mod app;
 mod shopper;
 
+use std::net::IpAddr;
 use std::path::Path;
 
 use anyhow::Context as _;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use timada_storefront::{Store, StoreConfig, StoreTls};
 use topcoat::cookie::Key;
+use topcoat::router::IpNet;
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_owned())
+}
+
+/// `TRUSTED_PROXIES`: comma-separated addresses or CIDR networks.
+fn trusted_proxies(value: &str) -> anyhow::Result<Vec<IpNet>> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            entry
+                .parse::<IpNet>()
+                .or_else(|_| entry.parse::<IpAddr>().map(IpNet::from))
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "TRUSTED_PROXIES: {entry:?} is not an IP address or a CIDR network"
+                    )
+                })
+        })
+        .collect()
 }
 
 #[tokio::main]
@@ -95,6 +122,8 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    let trusted_proxies = trusted_proxies(&env_or("TRUSTED_PROXIES", ""))?;
+
     let store = Store::connect(config, pool).await?;
 
     let host = env_or("HOST", "127.0.0.1");
@@ -105,7 +134,11 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("cannot bind {host}:{port}"))?;
     tracing::info!("storefront at http://{host}:{port}/");
-    topcoat::serve(listener, app::router(store.clone(), cookie_key)).await?;
+    topcoat::serve(
+        listener,
+        app::router(store.clone(), cookie_key, trusted_proxies),
+    )
+    .await?;
 
     store.shutdown().await;
     Ok(())

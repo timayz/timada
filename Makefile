@@ -38,8 +38,10 @@ migrate:
 # It talks to one node's store API (127.0.0.1:4321) unless told otherwise; to
 # go through Traefik's balancer over the cluster nodes instead:
 #   STORE_ADDR=store.timada.localhost:4320 STORE_TLS_CA=/etc/ssl/certs/ca-certificates.crt ...
+# Traefik reaches it from the Docker bridge, so its X-Forwarded-For names the
+# shopper the dashboard limits sign-in codes for.
 storefront:
-	HOST=0.0.0.0 cargo run -p storefront-example
+	HOST=0.0.0.0 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} cargo run -p storefront-example
 
 storefront.migrate:
 	cargo run -p storefront-example -- migrate

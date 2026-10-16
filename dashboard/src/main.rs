@@ -10,6 +10,7 @@ mod invoicing;
 mod limits;
 mod media;
 mod payments;
+mod rate_limit;
 mod read_only_store;
 mod review_requests;
 mod seal;

@@ -21,7 +21,8 @@ use topcoat::{
     context::Cx,
     cookie::{Key, RouterBuilderCookieExt},
     router::{
-        BodyLimit, Router, RouterBuilderDiscoverExt, href, module_router, page, query_params,
+        BodyLimit, IpNet, Router, RouterBuilderDiscoverExt, TrustedProxies, href, module_router,
+        page, query_params,
     },
     view::{Child, Unescaped, View, attributes, view},
 };
@@ -33,10 +34,14 @@ use menu::{MENU_CSS, MENU_SCRIPT, site_menu};
 /// A review carries up to three photos of up to 8 MiB each.
 const REVIEW_LIMIT: usize = 26 * 1024 * 1024;
 
-pub fn router(store: Store, cookie_key: Key) -> Router {
+/// `trusted_proxies`: the proxies in front of the app, whose
+/// `X-Forwarded-For` names the shopper; the dashboard limits the sign-in
+/// codes each shopper's address may ask for.
+pub fn router(store: Store, cookie_key: Key, trusted_proxies: Vec<IpNet>) -> Router {
     module_router!()
         .discover()
         .layer(BodyLimit::max(REVIEW_LIMIT).at("/orders"))
+        .trusted_proxies(TrustedProxies::new().networks(trusted_proxies))
         .cookies()
         .app_context(cookie_key)
         .store(store)
@@ -354,6 +359,7 @@ pub fn say(code: &str) -> &'static str {
         "code_expired" => "This code has expired: ask for a new one.",
         "too_many_attempts" => "Too many wrong codes: ask for a new one.",
         "code_recently_sent" => "A code was sent less than a minute ago: check your inbox.",
+        "too_many_requests" => "Too many codes were asked for: try again in a few minutes.",
         "too_many_addresses" => "Your account keeps ten addresses: remove one first.",
         "signed_out" => "You were signed out. Please sign in again.",
         _ => "Something went wrong. Please try again.",
