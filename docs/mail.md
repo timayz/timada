@@ -35,7 +35,9 @@ Members with `mail:manage` can also reword the three shop mails, from "Mails to
 shoppers" on `/t/{slug}/mail`. Each mail has an editor with:
 
 - the subject and the whole HTML document;
-- a preview with made-up data;
+- an optional plain-text version, for mail apps that show no HTML. Left empty, it is
+  derived from the HTML;
+- a preview with made-up data, plain text included;
 - "Send me a test", which mails the draft to the member through the shop's server;
 - a history of who saved or reset the mail, and when.
 
@@ -81,18 +83,25 @@ On save, a template is refused with the reason, and nothing is recorded, when:
   with every optional part empty. This catches a `{{ order.discount.code }}` that is
   not inside an `{% if order.discount %}`.
 
+A plain-text version goes through the same checks, except the markup one: it must
+parse, name only the mail's variables, render with both samples, and stay under
+100 KB. Saving the mail without one goes back to the derived text.
+
 Safety rules:
 
 - Every variable is HTML-escaped and the `safe` filter is unavailable, so what a
   shopper typed (a note, an address) shows as text.
 - The subject is plain text on one line.
-- The plain-text part of each mail is derived from its HTML.
+- The plain-text part of each mail is the merchant's plain-text version, or is
+  derived from the HTML when there is none. Variables in the plain text are printed
+  as they are, since a mail app shows that part as text, never as markup.
 - The dashboard shows the preview in a sandboxed frame, so the merchant's HTML never
   runs on the dashboard's origin.
 
 If a saved template still fails at send time, for example by running out of its
-rendering budget, the failure is logged and the built-in wording is sent instead. The
-shopper always gets the mail.
+rendering budget, the failure is logged and the built-in wording, plain text included,
+is sent instead. A plain-text version that fails alone is logged too, and the text
+derived from the HTML is sent with the merchant's HTML. The shopper always gets the mail.
 
 ## Operator settings
 
