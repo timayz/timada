@@ -103,6 +103,7 @@ async fn send_shop_mail(
     kind: ShopMailKind,
     to: &str,
     vars: &MailVars,
+    language: Option<&str>,
 ) -> Result<()> {
     let rendered = match shop.mail_template(kind) {
         Some(template) => match render(&template.subject, &template.html, None, vars) {
@@ -114,6 +115,7 @@ async fn send_shop_mail(
                         Err(err) => tracing::warn!(
                             tenant = %shop.id,
                             mail = kind.key(),
+                            language = language.unwrap_or("-"),
                             error = %err,
                             "the shop's plain-text part failed, sending the text derived from the HTML"
                         ),
@@ -125,6 +127,7 @@ async fn send_shop_mail(
                 tracing::warn!(
                     tenant = %shop.id,
                     mail = kind.key(),
+                    language = language.unwrap_or("-"),
                     error = %err,
                     "the shop's mail template failed, sending the built-in one"
                 );
@@ -180,14 +183,21 @@ pub fn shop_vars(cx: &Cx, shop: &TenantState) -> ShopVars {
     }
 }
 
-/// Mails a shop's sign-in code to one of its shoppers.
-pub async fn send_shopper_code(cx: &Cx, to: &str, shop: &TenantState, code: &str) -> Result<()> {
+/// Mails a shop's sign-in code to one of its shoppers. `language` is the
+/// shopper's, as the storefront reported it with the request.
+pub async fn send_shopper_code(
+    cx: &Cx,
+    to: &str,
+    shop: &TenantState,
+    code: &str,
+    language: Option<&str>,
+) -> Result<()> {
     let vars = MailVars::ShopperCode(ShopperCodeVars {
         shop: shop_vars(cx, shop),
         code: code.to_owned(),
         valid_minutes: CODE_TTL_SECS / 60,
     });
-    send_shop_mail(cx, shop, ShopMailKind::ShopperCode, to, &vars).await
+    send_shop_mail(cx, shop, ShopMailKind::ShopperCode, to, &vars, language).await
 }
 
 fn address_vars(
@@ -282,6 +292,7 @@ pub async fn send_order_confirmation(
         ShopMailKind::OrderConfirmation,
         &order.email,
         &vars,
+        order.language.as_deref(),
     )
     .await
 }
@@ -305,7 +316,15 @@ pub async fn send_review_request(
         link: link.to_owned(),
         valid_days: REVIEW_LINK_TTL_SECS / (24 * 60 * 60),
     });
-    send_shop_mail(cx, shop, ShopMailKind::ReviewRequest, &order.email, &vars).await
+    send_shop_mail(
+        cx,
+        shop,
+        ShopMailKind::ReviewRequest,
+        &order.email,
+        &vars,
+        order.language.as_deref(),
+    )
+    .await
 }
 
 fn subject(kind: EmailFlowKind) -> &'static str {
@@ -387,7 +406,7 @@ mod tests {
             .app_context(ShopMail::new(None, false))
             .build();
 
-        send_shopper_code(&cx, "ada@example.com", &acme(), "654321")
+        send_shopper_code(&cx, "ada@example.com", &acme(), "654321", None)
             .await
             .unwrap();
 
@@ -531,7 +550,7 @@ mod tests {
         send_order_confirmation(&cx, &shop, &order, None)
             .await
             .unwrap();
-        send_shopper_code(&cx, "ada@example.com", &shop, "654321")
+        send_shopper_code(&cx, "ada@example.com", &shop, "654321", None)
             .await
             .unwrap();
 

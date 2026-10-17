@@ -398,6 +398,65 @@ async fn an_order_is_billed_where_the_shopper_says() {
 }
 
 #[tokio::test]
+async fn an_order_remembers_the_shoppers_language() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+
+    // The browser's whole Accept-Language is kept as its primary subtag.
+    let cart = cart_with(&orders, &mug, 1).await;
+    let request_id = orders
+        .request_checkout(
+            SHOPPER,
+            &cart,
+            Checkout {
+                language: Some("fr-FR,fr;q=0.9,en;q=0.8".into()),
+                ..checkout()
+            },
+        )
+        .await
+        .unwrap();
+    let state = orders.load_cart(&cart).await.unwrap().unwrap();
+    let request = state
+        .requests
+        .iter()
+        .find(|request| request.request_id == request_id)
+        .unwrap();
+    assert_eq!(request.language.as_deref(), Some("fr"));
+
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(
+        &orders,
+        &cart,
+        Checkout {
+            language: Some("fr-FR".into()),
+            ..checkout()
+        },
+    )
+    .await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.language.as_deref(), Some("fr"));
+
+    // A browser that says nothing, or nothing readable, leaves it unknown.
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(&orders, &cart, checkout()).await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.language, None);
+
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(
+        &orders,
+        &cart,
+        Checkout {
+            language: Some("*".into()),
+            ..checkout()
+        },
+    )
+    .await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.language, None);
+}
+
+#[tokio::test]
 async fn a_shop_sells_to_businesses_only_once_its_merchant_says_so() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;

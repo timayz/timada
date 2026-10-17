@@ -20,7 +20,7 @@ use anyhow::Context as _;
 use serde::Deserialize;
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
-use topcoat_router::request::client_ip;
+use topcoat_router::request::{client_ip, headers};
 
 use timada_catalog::format_money;
 use timada_orders::OrderStatus;
@@ -178,15 +178,22 @@ impl Store {
     /// Has the dashboard mail a sign-in code to `email`, from the shop.
     /// `ip` is the shopper's address, which the dashboard holds to its own
     /// limit of codes (`too_many_requests` past it); without it, this host's
-    /// address counts for every shopper.
+    /// address counts for every shopper. `language` is the shopper's, as
+    /// the browser states it (a tag or a whole `Accept-Language` value):
+    /// the shop mails in it when it has that wording.
     pub async fn request_sign_in_code(
         &self,
         email: &str,
         ip: Option<IpAddr>,
+        language: Option<&str>,
     ) -> anyhow::Result<ShopperRefusable<()>> {
+        let mut form = vec![("email", email)];
+        if let Some(language) = language {
+            form.push(("language", language));
+        }
         let mut request = self
             .shopper_call(reqwest::Method::POST, "code", None)?
-            .form(&[("email", email)]);
+            .form(&form);
         if let Some(ip) = ip {
             request = request.header(SHOPPER_IP, ip.to_string());
         }
@@ -384,12 +391,24 @@ async fn answer<T>(
     anyhow::bail!("the dashboard did not answer as expected: {status}")
 }
 
+/// The language the request's browser browses in, as the primary subtag
+/// of its `Accept-Language` (`fr`); `None` when it says nothing readable.
+/// For [`Checkout::language`](timada_orders::Checkout) and the sign-in
+/// code, so the shop mails the shopper in their language.
+pub fn request_language(cx: &Cx) -> Option<String> {
+    headers(cx)
+        .get("accept-language")?
+        .to_str()
+        .ok()
+        .and_then(timada_core::primary_language)
+}
+
 /// Has the dashboard mail a sign-in code; see [`Store::request_sign_in_code`].
 /// The shopper's address is the request's client, as the host's trusted
-/// proxies report it.
+/// proxies report it, and their language the request's `Accept-Language`.
 pub async fn request_sign_in_code(cx: &Cx, email: &str) -> Result<ShopperRefusable<()>> {
     store(cx)
-        .request_sign_in_code(email, client_ip(cx))
+        .request_sign_in_code(email, client_ip(cx), request_language(cx).as_deref())
         .await
         .map_err(Error::from_anyhow)
 }

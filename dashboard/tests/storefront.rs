@@ -1345,6 +1345,7 @@ async fn a_store_with_a_checkout_key_sells() {
         vat_number: None,
         billing: None,
         shipping_method: None,
+        language: None,
     };
     let merchant = timada_orders::Command(catalog.0.clone());
     let asking = tokio::spawn({
@@ -1907,7 +1908,7 @@ async fn sign_in_codes_are_held_to_a_limit_per_shopper_and_per_key() {
         .unwrap();
     let ask = async |ip: Option<&str>| {
         store
-            .request_sign_in_code("ada@example.com", ip.map(|ip| ip.parse().unwrap()))
+            .request_sign_in_code("ada@example.com", ip.map(|ip| ip.parse().unwrap()), None)
             .await
             .unwrap()
             .map_err(|refusal| refusal.code())
