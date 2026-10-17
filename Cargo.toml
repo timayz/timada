@@ -22,7 +22,8 @@ topcoat-view-macro = "=0.10.0"
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.19", features = ["sqlite"] }
 # Tracks evento's alpha branch until the release after alpha.35 ships the
-# accord fix for writes another node recovered (timayz/evento#266); go back to
+# accord fix for writes another node recovered (timayz/evento#266) and the
+# group join a lost tenant file rejoins with (timayz/evento#269); go back to
 # a pinned version then. Cargo.lock holds the exact commit.
 evento = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "remote"] }
 evento-sql = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "accord"] }
@@ -100,4 +101,5 @@ debug = false
 [profile.debugging]
 inherits = "dev"
 debug = true
+
 

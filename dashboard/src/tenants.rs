@@ -19,6 +19,10 @@
 //! closed tenant only fetches them once it opens. [`Tenants::start_catch_up`]
 //! therefore opens every tenant once after a restart and holds it while its
 //! peers send what is missing.
+//!
+//! A node whose tenant file is gone (a new disk, a deleted file) cannot get
+//! back what its peers already compacted that way: opening such a tenant
+//! copies it from a peer first (see `needs_join`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -260,12 +264,17 @@ impl Tenants {
         }
 
         let path = self.path_of(&tenant.id);
+        let join = self.cluster.has_peers() && needs_join(&path, tenant);
+        if join {
+            tracing::info!(tenant = %tenant.slug, group = group.0, "tenant file missing; copying it from a peer");
+            start_join(&path).with_context(|| format!("cannot prepare {}", path.display()))?;
+        }
         let (sql, pool) = open_db(&path)
             .await
             .with_context(|| format!("cannot open {}", path.display()))?;
         let node = match self
             .cluster
-            .open_group(group, sql.clone(), pool.clone())
+            .open_group(group, sql.clone(), pool.clone(), join)
             .await
         {
             Ok(node) => node,
@@ -274,6 +283,12 @@ impl Tenants {
                 return Err(err.context(format!("cannot open the group of tenant {}", tenant.slug)));
             }
         };
+        if join {
+            if let Err(err) = std::fs::remove_file(joining_marker(&path)) {
+                tracing::warn!(tenant = %tenant.slug, %err, "cannot remove the join marker");
+            }
+            tracing::info!(tenant = %tenant.slug, group = group.0, "tenant copied from a peer");
+        }
         let mut executor = Evento::new(AccordExecutor::<Sql<sqlx::Sqlite>>::new(node, sql));
         if let Some(region) = &self.region {
             executor = executor.default_routing_key(region.clone());
@@ -607,6 +622,54 @@ impl Tenants {
         self.cluster.close_group(group);
         t.pool.close().await;
     }
+}
+
+/// Whether a tenant's file has to be copied from a peer rather than opened
+/// as is: it is missing (a new disk, a deleted file, a node that was down
+/// when the tenant was created) or a previous copy did not finish. A file
+/// opened on its own would only receive what the peers still hold as
+/// commands, never what they compacted.
+///
+/// A tenant created within the last [`FRESH_CREATION`] is the exception:
+/// every node opens it at once on seeing its creation, and a node still
+/// copying does not hand out a copy, so they would all wait on each other.
+/// Opened as is, such a file still gets everything unless this node lost it
+/// after its peers had compacted, which needs this node's own watermark
+/// first: only a file lost within a minute of the tenant's creation, after
+/// writes, is left incomplete.
+fn needs_join(path: &Path, tenant: &TenantState) -> bool {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(tenant.created_at) <= FRESH_CREATION.as_secs() {
+        return false;
+    }
+    !path.exists() || joining_marker(path).exists()
+}
+
+/// Present while a tenant's file is being copied from a peer.
+fn joining_marker(path: &Path) -> PathBuf {
+    let mut marker = path.as_os_str().to_owned();
+    marker.push(".joining");
+    PathBuf::from(marker)
+}
+
+/// Marks the copy as started, then removes what an unfinished one left.
+fn start_join(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(joining_marker(path), b"")?;
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file = path.as_os_str().to_owned();
+        file.push(suffix);
+        match std::fs::remove_file(PathBuf::from(file)) {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err.into()),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Opens (creating and migrating if needed) a tenant's file: WAL with full

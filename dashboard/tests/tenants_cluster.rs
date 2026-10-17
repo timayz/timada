@@ -1,6 +1,7 @@
 //! The tenant runtime on three nodes in one process: a node that missed a
 //! tenant's writes gets them from the catch-up pass, without anything opening
-//! the tenant there.
+//! the tenant there, and a node that lost a tenant's file copies it back from
+//! a peer.
 //!
 //! The dashboard is a binary crate, so the runtime is reached through the
 //! binary's own test harness (`#[path]` includes of the modules under test),
@@ -184,11 +185,18 @@ async fn a_node_that_missed_writes_catches_up_without_a_request() {
     }
 
     // Node 2 comes back. Sweep gossip alone never opens a tenant, so without
-    // the pass its copy stays behind.
+    // the pass its copy stays behind. Its peers did not compact the writes
+    // meanwhile: compaction waits for every node's watermark, so what node 2
+    // missed is still there to send.
     let t2 = n2.tenants();
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(t2.status(&tenant.id), TenantStatus::Stopped);
     assert_eq!(events_in(&t2.path_of(&tenant.id)).await, 0);
+    for t in [&t0, &t1] {
+        let path = t.path_of(&tenant.id);
+        assert!(commands_in(&path).await > 0, "a peer compacted past node 2");
+        assert_eq!(floor_of(&path).await, None);
+    }
 
     let pass = t2
         .start_catch_up(CatchUp {
@@ -214,6 +222,140 @@ async fn a_node_that_missed_writes_catches_up_without_a_request() {
     t1.shutdown().await;
     t0.shutdown().await;
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A node whose tenant file is gone after its peers compacted the tenant
+/// cannot get the compacted writes from the commands its peers still hold:
+/// it copies the tenant from a peer instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_that_lost_a_tenant_file_copies_it_from_a_peer() {
+    let root = std::env::temp_dir().join(format!("timada-cluster-{}", ulid::Ulid::generate()));
+    let addrs = free_addrs().await;
+    let nodes = futures_join(&root, &addrs).await;
+    let [n0, n1, n2] = &nodes;
+    let (t0, t1, t2) = (n0.tenants(), n1.tenants(), n2.tenants());
+    let tenant = Command(n0.platform.clone())
+        .create_tenant(CreateTenant {
+            name: "acme".into(),
+            owner_user_id: "alice".into(),
+        })
+        .await
+        .unwrap();
+    for node in &nodes {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                node.read_catalog().await;
+                if timada_tenancy::active_tenant_ids(&node.pool)
+                    .await
+                    .unwrap()
+                    .contains(&tenant.id)
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the catalog reaches every node");
+    }
+    t2.open(&tenant).await.unwrap();
+    t1.open(&tenant).await.unwrap();
+    let executor = t0.open(&tenant).await.unwrap();
+    for (version, name) in ["one", "two", "three"].into_iter().enumerate() {
+        evento::append("probe")
+            .original_version(version as u16)
+            .event(&Renamed { name: name.into() })
+            .commit(&executor)
+            .await
+            .unwrap();
+    }
+
+    // Every node compacts the writes away.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let mut done = true;
+            for t in [&t0, &t1, &t2] {
+                let path = t.path_of(&tenant.id);
+                done &= commands_in(&path).await == 0 && floor_of(&path).await.is_some();
+            }
+            if done {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("every node compacts the tenant");
+
+    // Node 2 loses the file. The tenant is older than a fresh creation, so
+    // opening it again copies it from a peer.
+    t2.close(&tenant.id).await;
+    let path = t2.path_of(&tenant.id);
+    std::fs::remove_file(&path).unwrap();
+    let mut known = tenant.clone();
+    known.created_at -= 3600;
+    tokio::time::timeout(Duration::from_secs(30), t2.open(&known))
+        .await
+        .expect("the copy ends")
+        .unwrap();
+    assert_eq!(events_in(&path).await, 3);
+    assert!(floor_of(&path).await.is_some(), "the copied floor is kept");
+    let mut marker = path.as_os_str().to_owned();
+    marker.push(".joining");
+    assert!(!PathBuf::from(marker).exists());
+
+    // It takes part in the next write, which depends on compacted ones.
+    evento::append("probe")
+        .original_version(3)
+        .event(&Renamed {
+            name: "four".into(),
+        })
+        .commit(&executor)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while events_in(&path).await < 4 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the next write reaches node 2");
+
+    t2.shutdown().await;
+    t1.shutdown().await;
+    t0.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+async fn read_only(path: &Path) -> SqlitePool {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(SqliteConnectOptions::new().filename(path).read_only(true))
+        .await
+        .unwrap()
+}
+
+/// Consensus commands the tenant's journal still holds (not compacted).
+async fn commands_in(path: &Path) -> i64 {
+    let pool = read_only(path).await;
+    let count = sqlx::query_scalar("SELECT COUNT(*) FROM accord_commands")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    count
+}
+
+/// The point below which the tenant's journal was compacted, if ever.
+async fn floor_of(path: &Path) -> Option<evento_accord::Timestamp> {
+    use evento_accord::Journal;
+    let pool = read_only(path).await;
+    let floor = evento_sql::SqlJournal::<sqlx::Sqlite>::new(pool.clone())
+        .load_watermark()
+        .await
+        .unwrap();
+    pool.close().await;
+    floor
 }
 
 /// Starts the three nodes together: each waits for its platform group to

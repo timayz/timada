@@ -200,17 +200,48 @@ impl Cluster {
 
     /// Opens a tenant's database as its own group. `sql` and `pool` wrap the
     /// same file: the journal shares the pool, the store applies to `sql`.
+    /// With `join`, the file is new on a node whose peers may already have
+    /// compacted the group: it is filled from a peer's copy before the group
+    /// runs, instead of from the commands the peers still hold, which would
+    /// leave out everything compacted. Without peers there is nothing to
+    /// join and it opens as usual.
     pub async fn open_group(
         &self,
         group: GroupId,
         sql: Sql<sqlx::Sqlite>,
         pool: SqlitePool,
+        join: bool,
     ) -> Result<Node> {
         let store = Arc::new(ExecutorDataStore::new(sql)) as Arc<dyn DataStore>;
         let journal = Arc::new(SqlJournal::<sqlx::Sqlite>::new(pool)) as Arc<dyn Journal>;
+        if join && self.has_peers() {
+            return self
+                .host
+                .open_joining(
+                    group,
+                    self.topology(),
+                    store,
+                    journal,
+                    self.node_config,
+                    &self.contacts(),
+                )
+                .await;
+        }
         self.host
             .open(group, self.topology(), store, journal, self.node_config)
             .await
+    }
+
+    /// The other nodes, starting with the one after this node, so the nodes
+    /// of a cluster do not all ask the same peer first.
+    fn contacts(&self) -> Vec<NodeId> {
+        let me = self.host.id();
+        let at = self.ids.iter().position(|&id| id == me).unwrap_or(0);
+        self.ids[at + 1..]
+            .iter()
+            .chain(&self.ids[..at])
+            .copied()
+            .collect()
     }
 
     /// Stops a group's node; the caller closes its pool afterwards.
