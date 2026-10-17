@@ -55,7 +55,7 @@ pub async fn login(cx: &Cx) -> Result<impl View> {
             </section>
 
             <section class="space-y-3 border-t border-neutral-200 pt-6">
-                <button type="button"
+                <button type="button" disabled=""
                     class="w-full rounded border border-neutral-900 px-4 py-2 font-medium hover:bg-neutral-100"
                     data-passkey-login=""
                     data-start=(href!(super::passkey::login::start::start))

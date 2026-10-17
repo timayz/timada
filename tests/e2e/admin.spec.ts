@@ -38,7 +38,13 @@ test("the administrator lists, signs out, promotes and deletes users", async ({ 
   await expect(row).toContainText("password, 0 providers, 0 passkeys");
   await row.getByRole("link", { name: memberName }).click();
   await expect(admin.getByRole("heading", { name: memberName })).toBeVisible();
-  await expect(admin.locator("section", { hasText: "Sessions" }).locator("li")).toHaveCount(1);
+  // The session is committed after the user, so the read model can list the
+  // member before its session: reload until the row is there.
+  const sessions = admin.locator("section", { hasText: "Sessions" }).locator("li");
+  await expect(async () => {
+    await admin.reload();
+    await expect(sessions).toHaveCount(1, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
 
   // Force sign-out: the member's next request lands on the login page.
   await admin.getByRole("button", { name: "Sign out everywhere" }).click();
