@@ -41,24 +41,31 @@ test("add passkeys to an account, sign out, sign in without a username", async (
   const passkeyRows = page.locator("section", { hasText: "Passkeys" }).locator("li");
   await expect(passkeyRows).toHaveCount(0);
 
+  // A ceremony is two requests, the authenticator and a navigation, so the
+  // checks after a click get the suite's 15 s allowance for server round
+  // trips. The button is disabled until auth.js has wired it, so the click
+  // waits for the script.
+  const ceremony = { timeout: 15_000 };
   await page.getByLabel("Name for the new passkey").fill("First key");
   await page.getByRole("button", { name: "Add a passkey" }).click();
-  await expect(page.getByRole("status")).toContainText("Passkey added.");
-  await expect(passkeyRows).toHaveCount(1);
+  await expect(page.getByRole("status")).toContainText("Passkey added.", ceremony);
+  await expect(passkeyRows).toHaveCount(1, ceremony);
   await expect(page.locator("section", { hasText: "Recent sign-ins" }).locator("li")).toHaveCount(1);
 
   // The first device already holds a credential for this account, so the
   // server's excludeCredentials makes it refuse a second one.
   await page.getByLabel("Name for the new passkey").fill("Second key");
   await page.getByRole("button", { name: "Add a passkey" }).click();
-  await expect(page.locator("[data-auth-error]")).toContainText("already registered");
+  await expect(page.locator("[data-auth-error]")).toContainText("already registered", ceremony);
 
   // A second device can add one, then the first passkey can go.
   await first.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: first.id });
   await virtualAuthenticator(page, first.cdp);
   await page.getByRole("button", { name: "Add a passkey" }).click();
+  // The previous page already says "Passkey added."; the second row is what
+  // proves the new one landed.
+  await expect(passkeyRows).toHaveCount(2, ceremony);
   await expect(page.getByRole("status")).toContainText("Passkey added.");
-  await expect(passkeyRows).toHaveCount(2);
   await passkeyRows.first().getByRole("button", { name: "Remove" }).click();
   await expect(page.getByRole("status")).toContainText("Passkey removed.");
   await expect(passkeyRows).toHaveCount(1);
@@ -77,7 +84,7 @@ test("add passkeys to an account, sign out, sign in without a username", async (
   // Usernameless sign-in: the authenticator picks the resident credential,
   // and no code is needed.
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/$/, ceremony);
   await expect(page.getByText("Signed in as")).toContainText(email);
 
   await page.goto("/auth/account");

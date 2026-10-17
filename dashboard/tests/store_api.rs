@@ -79,6 +79,13 @@ fn tls_files(dir: &std::path::Path) -> (PathBuf, PathBuf, TlsConnector) {
 }
 
 async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
+    // `RUST_LOG=evento_remote=debug,store_api=debug` shows the connection
+    // lifecycle when a run fails; silent otherwise. Tests share one process,
+    // so only the first harness installs it.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
     let dir = std::env::temp_dir().join(format!("timada-store-api-{}", ulid::Ulid::generate()));
     std::fs::create_dir_all(&dir).unwrap();
     let options = SqliteConnectOptions::new()
@@ -365,18 +372,28 @@ async fn revoking_a_key_ends_its_connections() {
             Ok(Ok(_)) => assert!(tokio::time::Instant::now() < deadline, "still served"),
             Ok(Err(err)) => {
                 let msg = format!("{err:#}");
-                assert!(msg.contains("connection lost"), "unexpected error: {msg}");
+                assert!(
+                    msg.contains("connection lost") || msg.contains("timed out"),
+                    "unexpected error: {msg}"
+                );
                 break;
             }
             Err(_) => break,
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // The cut-off client keeps trying to reconnect in the background; drop it
+    // so the checks below see only the server's state, not its retries.
+    drop(client);
     h.wait_for("lease released", |h| h.leases(&acme) == Some(0))
         .await;
+    assert_eq!(
+        h.connections.count(&key_id),
+        0,
+        "a reconnect of the revoked key was accepted"
+    );
     let err = h.refused(Some(&token)).await;
     assert!(err.contains("unauthorized"), "{err}");
-    drop(client);
     h.finish().await;
 }
 
