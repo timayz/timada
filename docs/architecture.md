@@ -18,6 +18,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions |
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
 | `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own store |
+| `crates/catalog-import` | `timada-catalog-import` | Fills a catalog from a snapshot file (`seeds/`), and takes one from a WooCommerce shop (`woo-snapshot`) |
 | `crates/orders` | `timada-orders` | Carts and the orders placed from them, next to the catalog in a tenant's store |
 | `crates/discounts` | `timada-discounts` | Discount codes and how often each was used, and the checkout offers, in a tenant's store |
 | `crates/reviews` | `timada-reviews` | What buyers wrote about the products of their orders, and whether the merchant published it |
