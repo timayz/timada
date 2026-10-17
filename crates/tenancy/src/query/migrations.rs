@@ -13,7 +13,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         TenantList0005,
         ApiKeyScopes0006,
         Companies0007,
-        InvitationsSent0008
+        InvitationsSent0008,
+        MemberAudit0009
     ]
 }
 
@@ -250,6 +251,37 @@ sqlx_migrator::sqlite_migration!(
         (
             "CREATE INDEX tenancy_invitations_invited_by_sent ON tenancy_invitations (invited_by, sent_at)",
             "DROP INDEX tenancy_invitations_invited_by_sent"
+        ),
+    ]
+);
+
+/// The members history of a tenant: one row per event that changed who
+/// belongs to it or who was invited, with the account that did it.
+pub struct MemberAudit0009;
+sqlx_migrator::sqlite_migration!(
+    MemberAudit0009,
+    "tenancy",
+    "0009_member_audit",
+    vec_box![("tenancy", "0008_invitations_sent")],
+    vec_box![
+        (
+            "CREATE TABLE tenancy_member_audit (
+                seq INTEGER PRIMARY KEY,
+                event_id TEXT NOT NULL UNIQUE,
+                tenant_id TEXT NOT NULL,
+                at INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                actor TEXT,
+                user_id TEXT,
+                email TEXT,
+                role TEXT
+            )",
+            "DROP TABLE tenancy_member_audit"
+        ),
+        (
+            "CREATE INDEX tenancy_member_audit_tenant_seq
+                ON tenancy_member_audit (tenant_id, seq)",
+            "DROP INDEX tenancy_member_audit_tenant_seq"
         ),
     ]
 );
