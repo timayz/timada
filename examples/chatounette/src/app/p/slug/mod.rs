@@ -62,6 +62,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let varies = product.price_range().is_some_and(|range| range.varies());
     let currency = product.currency.clone().unwrap_or_else(|| "EUR".to_owned());
+    // The first paragraph introduces the product beside its price; the
+    // rest, when there is more, folds under "Description".
+    let (intro, more): (String, String) = match product.description.split_once("\n\n") {
+        Some((intro, more)) => (intro.trim().to_owned(), more.trim().to_owned()),
+        None => (product.description.trim().to_owned(), String::new()),
+    };
 
     Ok(view! {
         document(
@@ -101,8 +107,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </a>
                             </p>
                         }
-                        if !product.description.is_empty() {
-                            <p class="description">(product.description.lines().next().unwrap_or_default())</p>
+                        if !intro.is_empty() {
+                            <p class="description" data-description="">(&intro)</p>
                         }
 
                         if let Some(code) = query.error.as_deref() {
@@ -160,10 +166,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </table>
                             </details>
                         }
-                        <details open="">
-                            <summary>"Description"</summary>
-                            <p class="description" data-description="">(&product.description)</p>
-                        </details>
+                        if !more.is_empty() {
+                            <details open="">
+                                <summary>"Description"</summary>
+                                <p class="description">(&more)</p>
+                            </details>
+                        }
                         if !product.attributes.is_empty() {
                             <details>
                                 <summary>"Informations complémentaires"</summary>

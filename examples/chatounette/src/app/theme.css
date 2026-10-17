@@ -67,10 +67,14 @@ nav.quick .cart-link { display: inline-flex; align-items: center; gap: .4rem; pa
 nav.quick .count { min-width: 1.3rem; height: 1.3rem; line-height: 1.3rem; border-radius: 1rem; background: var(--coral-dark); color: #fff; text-align: center; font-size: .75rem; }
 .menu-toggle { display: none; }
 @media (max-width: 900px) {
-  .masthead .wrap { grid-template-columns: auto auto 1fr auto; gap: .75rem; }
+  .masthead .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem; }
   .menu-toggle { display: inline-block; color: var(--ink); font-weight: 700; text-decoration: none; }
-  form.search { grid-column: 1 / -1; max-width: none; }
-  nav.quick .quick-support, nav.quick .quick-label { display: none; }
+  .brand { font-size: 1.5rem; margin-right: auto; }
+  form.search { order: 10; flex-basis: 100%; max-width: none; }
+  nav.quick { gap: .75rem; white-space: nowrap; }
+  nav.quick .quick-support, nav.quick .quick-label, nav.quick .cart-total { display: none; }
+  nav.quick .cart-link { padding: .5rem .7rem; }
+  nav.quick .cart-link::before { content: "Panier"; }
 }
 
 /* Category bar: the mega-menu lives in menu.rs */
