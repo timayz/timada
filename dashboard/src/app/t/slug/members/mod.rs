@@ -1,8 +1,10 @@
 //! `/t/{slug}/members`: who belongs to the tenant, the invitations still
 //! waiting, and (with `members:manage`) inviting, moving members between
-//! roles or removing them. Every member sees "Leave" on their own row.
+//! roles or removing them. Every member sees "Leave" on their own row;
+//! [`history`] lists who did what.
 
 pub mod change;
+pub mod history;
 pub mod invite;
 pub mod revoke;
 pub mod revoke_invitation;
@@ -78,6 +80,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 tenant_nav(tenant: &tenant, nav: &nav, current: "members")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
+            <p class="mb-4 text-sm"><a class="underline" href=(href!(history::history, Slug(slug.clone())))>"History"</a></p>
 
             <section class="rounded border border-neutral-200 bg-white p-4">
                 <table class="w-full text-left text-sm">
