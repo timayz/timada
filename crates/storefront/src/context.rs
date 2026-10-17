@@ -3,6 +3,7 @@
 
 use topcoat_core::context::{Cx, app_context};
 use topcoat_core::error::{Error, Result};
+use topcoat_core_macro::memoize;
 use topcoat_router::error::not_found;
 
 use crate::query::{
@@ -69,12 +70,23 @@ pub async fn category_products(
     products(cx, &query).await
 }
 
-/// The live categories as trees, each with how many published products are in
-/// it and below it: what a navigation menu is built from.
-pub async fn categories(cx: &Cx) -> Result<Vec<CategoryNode>> {
+/// The tree, read once per request: the header's menu and the page's own
+/// category share it.
+#[memoize(as_ref)]
+async fn cached_categories(cx: &Cx) -> Result<Vec<CategoryNode>> {
     published_categories(store(cx).pool())
         .await
         .map_err(|err| Error::from_anyhow(err.into()))
+}
+
+/// The live categories as trees, each with how many published products are in
+/// it and below it: what a navigation menu is built from. Read once per
+/// request, however many pages and components ask.
+pub async fn categories(cx: &Cx) -> Result<Vec<CategoryNode>> {
+    match cached_categories(cx).await {
+        Ok(tree) => Ok(tree.clone()),
+        Err(err) => Err(Error::from_anyhow(anyhow::anyhow!("{err:#}"))),
+    }
 }
 
 /// The trees a menu shows: [`categories`] without the ones the merchant hid

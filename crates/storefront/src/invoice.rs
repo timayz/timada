@@ -3,14 +3,14 @@
 //! moment after the payment (or the refund): an order just placed may have
 //! none yet.
 
-use timada_invoicing::{Command as Invoicing, IssuedDocument};
+use timada_invoicing::Command as Invoicing;
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
 use crate::context::store;
 use crate::store::Store;
 
-pub use timada_invoicing::{DocumentKind, format_amount_fr};
+pub use timada_invoicing::{DocumentKind, IssuedDocument, format_amount_fr};
 
 /// A document drawn as PDF, with the file name a browser saves it under.
 pub struct DocumentPdf {

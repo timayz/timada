@@ -586,6 +586,42 @@ pub async fn published_cart_recommendations(
     Ok(published_products(pool, &query).await?.items)
 }
 
+/// The picture a category's tile shows: the newest published product with
+/// a picture in it (or below it), for each of `category_ids`, in one query.
+pub async fn published_category_pictures(
+    pool: &SqlitePool,
+    category_ids: &[String],
+) -> sqlx::Result<std::collections::HashMap<String, Image>> {
+    let ids = serde_json::to_string(category_ids).unwrap_or_else(|_| "[]".to_owned());
+    let rows: Vec<(String, sqlx::types::Json<Vec<Image>>)> = sqlx::query_as(
+        "SELECT category_id, images_json FROM (
+            SELECT cp.category_id, p.images_json,
+                ROW_NUMBER() OVER (
+                    PARTITION BY cp.category_id
+                    ORDER BY cp.updated_at DESC, cp.product_id DESC
+                ) AS rank
+            FROM storefront_category_products cp
+            JOIN storefront_products p ON p.id = cp.product_id
+            WHERE cp.category_id IN (SELECT value FROM json_each(?1))
+                AND p.status = 'published'
+                AND json_array_length(p.images_json) > 0
+        ) WHERE rank = 1",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(category_id, images)| {
+            images
+                .0
+                .into_iter()
+                .next()
+                .map(|image| (category_id, image))
+        })
+        .collect())
+}
+
 /// One published product, by slug.
 pub async fn published_product_by_slug(
     pool: &SqlitePool,

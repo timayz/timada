@@ -38,10 +38,10 @@ use timada_catalog::{
     AddImage, CreateCategory, CreateProduct, DefineVariant, OptionSelection, categories_of_tenant,
 };
 use timada_storefront::{
-    CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
-    SubscriptionState, category_ancestors, find_category, menu_of, published_categories,
-    published_category_by_slug, published_product_by_slug, published_product_categories,
-    published_products, published_related_products,
+    CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, StoreConfig,
+    StoreTls, Storefront, SubscriptionState, category_ancestors, find_category, menu_of,
+    published_categories, published_category_by_slug, published_product_by_slug,
+    published_product_categories, published_products, published_related_products,
 };
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
@@ -1925,6 +1925,184 @@ async fn sign_in_codes_are_held_to_a_limit_per_shopper_and_per_key() {
     // The key has had four codes mailed (the refusal cost it none): no
     // more, whoever the shopper.
     assert_eq!(ask(Some("198.51.100.9")).await, Err("too_many_requests"));
+
+    store.shutdown().await;
+    h.finish().await;
+}
+
+/// With a cookie key, the library serves the shopper's actions under the
+/// store's prefix: the forms post there, the browser is sent back to the
+/// app's pages, and what it must remember travels in a sealed cookie.
+#[tokio::test]
+async fn the_library_serves_the_actions_under_the_prefix() {
+    use topcoat::cookie::Key;
+    use topcoat::router::{
+        Body, Method, Router, StatusCode,
+        header::{CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
+        request::Request,
+    };
+
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h
+        .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
+        .await;
+    let catalog = h.catalog(&acme).await;
+    let mug = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Blue Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &mug.id).await.unwrap();
+
+    let pool = h.local_pool("actions-shop").await;
+    let store = Store::connect(h.config(&token), pool.clone())
+        .await
+        .unwrap();
+    eventually("the product is in the local copy", async || {
+        published(&pool).await == vec!["Blue Mug".to_owned()]
+    })
+    .await;
+    let router = Router::builder()
+        .store(Storefront::new(store.clone()).cookie_key(Key::generate()))
+        .build();
+    let post = |path: &str, body: &str, cookie: Option<&str>| {
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded");
+        if let Some(cookie) = cookie {
+            request = request.header(COOKIE, cookie);
+        }
+        request.body(Body::from(body.to_owned())).unwrap()
+    };
+    let location = |response: &topcoat::router::response::Response| {
+        response
+            .headers()
+            .get(LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+
+    // The first add starts a cart, remembered in a sealed cookie, and sends
+    // the browser back to the product's page with the drawer open.
+    let response = router
+        .handle(post("/store/cart/add", "slug=blue-mug&quantity=2", None))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response).as_deref(), Some("/p/blue-mug#cart"));
+    let set_cookie = response
+        .headers()
+        .get(SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .expect("the cart id is kept in a cookie")
+        .to_owned();
+    assert!(set_cookie.starts_with("cart="), "{set_cookie}");
+    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+    let cookie = set_cookie.split(';').next().unwrap().to_owned();
+
+    // With the cookie, the next add goes to the same cart: no new cookie,
+    // and the drawer opens on the page the form came from.
+    let response = router
+        .handle(post(
+            "/store/cart/add",
+            "slug=blue-mug&quantity=1&from=%2Fc%2Fmugs%3Fpage%3D2",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&response).as_deref(), Some("/c/mugs?page=2#cart"));
+    assert!(response.headers().get(SET_COOKIE).is_none());
+
+    // A refusal is carried back to the page by code.
+    let response = router
+        .handle(post(
+            "/store/cart/add",
+            "slug=blue-mug&quantity=0",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(
+        location(&response).as_deref(),
+        Some("/p/blue-mug?error=invalid_quantity")
+    );
+    let response = router
+        .handle(post(
+            "/store/cart/quantity",
+            &format!("product_id={}&quantity=100&back=drawer&from=%2F", mug.id),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(
+        location(&response).as_deref(),
+        Some("/?cart_error=invalid_quantity#cart")
+    );
+    let response = router
+        .handle(post(
+            "/store/cart/quantity",
+            &format!("product_id={}&quantity=1&back=drawer&from=%2F", mug.id),
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(location(&response).as_deref(), Some("/#cart"));
+
+    // The forms sent from a browser without a cart go to the cart page.
+    let response = router
+        .handle(post("/store/cart/discount", "code=TEN", None))
+        .await;
+    assert_eq!(location(&response).as_deref(), Some("/cart"));
+    let response = router
+        .handle(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/store/checkout/start")
+                .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header("accept", "application/json")
+                .body(Body::from(
+                    "expected_total_cents=0&email=&name=&line1=&line2=&postal_code=&city=&country=&phone=&note=",
+                ))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = topcoat::router::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], br#"{"redirect":"/cart"}"#);
+
+    // An order's document is nobody's to read without the order.
+    let response = router
+        .handle(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/store/orders/o1/documents/d1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    // Signing out always goes home, and the status route is still there.
+    let response = router.handle(post("/store/sign-out", "", None)).await;
+    assert_eq!(location(&response).as_deref(), Some("/"));
+    let response = router
+        .handle(
+            Request::builder()
+                .uri("/store/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
 
     store.shutdown().await;
     h.finish().await;

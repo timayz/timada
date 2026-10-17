@@ -1,29 +1,58 @@
-//! Registration into the host's router: the store in the app context and the
-//! status endpoint under the host's prefix. Hand-written routes, never
-//! `#[route]`: a library's paths are the host's to choose.
+//! Registration into the host's router: the store in the app context, the
+//! status endpoint under the host's prefix, and (with a cookie key) the
+//! shopper cookies and the actions. Hand-written routes, never `#[route]`:
+//! a library's paths are the host's to choose.
 
+use topcoat_cookie::{CookieLayer, Key};
 use topcoat_core::context::Cx;
 use topcoat_router::{
-    Body, HeaderValue, Method, Methods, Path, PathBuf, Route, RouteFuture, RouteId, RouterBuilder,
-    StatusCode,
+    Body, BodyLimit, HeaderValue, Method, Methods, Path, PathBuf, Route, RouteFuture, RouteId,
+    RouterBuilder, StatusCode, TrustedProxies,
     header::{CACHE_CONTROL, CONTENT_TYPE},
     response::Response,
 };
 
 use crate::store::Store;
+use crate::storefront::Storefront;
 
 pub trait RouterBuilderStoreExt {
-    /// Puts `store` in the app context and serves `GET {prefix}/status`.
+    /// Puts the store in the app context and serves `GET {prefix}/status`.
+    /// Given a [`Storefront`] with a cookie key, also installs the shopper
+    /// cookies, the trusted proxies, and the cart, checkout, account and
+    /// review actions under the prefix.
     #[must_use]
-    fn store(self, store: Store) -> Self;
+    fn store(self, storefront: impl Into<Storefront>) -> Self;
 }
 
 impl RouterBuilderStoreExt for RouterBuilder {
-    fn store(mut self, store: Store) -> Self {
+    fn store(mut self, storefront: impl Into<Storefront>) -> Self {
+        let storefront = storefront.into();
+        let store = storefront.store.clone();
         self = self.route(StatusRoute::new(&store));
+        if let Some(key) = &storefront.cookie_key {
+            if storefront.install_cookie_layer {
+                self = self.layer(CookieLayer::new());
+            }
+            if self.get_app_context::<Key>().is_none() {
+                self = self.app_context(key.clone());
+            }
+            if !storefront.trusted_proxies.is_empty() {
+                self = self.trusted_proxies(
+                    TrustedProxies::new().networks(storefront.trusted_proxies.iter().copied()),
+                );
+            }
+            let reviews = format!("{}/reviews", store.prefix().trim_end_matches('/'));
+            self = self.layer(
+                BodyLimit::max(storefront.review_body_limit).at(Path::new(&reviews).to_owned()),
+            );
+            self = crate::actions::register(self, &storefront);
+        }
         // A second registration of the same type would panic.
         if self.get_app_context::<Store>().is_none() {
             self = self.app_context(store);
+        }
+        if self.get_app_context::<Storefront>().is_none() {
+            self = self.app_context(storefront);
         }
         self
     }

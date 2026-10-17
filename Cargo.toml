@@ -19,6 +19,8 @@ topcoat-core = { version = "=0.10.0", features = ["anyhow"] }
 topcoat-router = "=0.10.0"
 topcoat-view = "=0.10.0"
 topcoat-view-macro = "=0.10.0"
+topcoat-cookie = { version = "=0.10.0", features = ["router"] }
+topcoat-core-macro = "=0.10.0"
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.19", features = ["sqlite"] }
 # Tracks evento's alpha branch until the release after alpha.35 ships the
