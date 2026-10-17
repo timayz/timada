@@ -330,6 +330,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </address>
                     </div>
                 }
+                if let Some(language) = &order.language {
+                    <div class="rounded border border-neutral-200 bg-white p-4">
+                        <h2 class="mb-2 text-lg font-medium">"Language"</h2>
+                        <p class="text-sm" data-order-language=(language)>(language)</p>
+                    </div>
+                }
                 if let Some(note) = &order.note {
                     <div class="rounded border border-neutral-200 bg-white p-4">
                         <h2 class="mb-2 text-lg font-medium">"Note from the customer"</h2>

@@ -259,6 +259,7 @@ fn checkout(expected_total_cents: Option<u64>) -> Checkout {
         vat_number: None,
         billing: None,
         shipping_method: None,
+        language: None,
     }
 }
 

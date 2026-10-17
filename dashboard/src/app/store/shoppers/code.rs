@@ -1,6 +1,8 @@
-//! `POST /store/shoppers/code` `email=…`: mails a sign-in code to the
-//! address, from the shop. Any address gets one: the first sign-in creates
-//! the account. 202 `{}` once mailed; 429 `{"error": "code_recently_sent"}`
+//! `POST /store/shoppers/code` `email=…&language=fr`: mails a sign-in code
+//! to the address, from the shop, in the shopper's language when the shop
+//! has that wording (`language` is a tag or a whole `Accept-Language`
+//! value; optional). Any address gets one: the first sign-in creates the
+//! account. 202 `{}` once mailed; 429 `{"error": "code_recently_sent"}`
 //! within a minute of the last one.
 //!
 //! Each key, and each shopper at a shop, may have only so many codes mailed
@@ -35,6 +37,8 @@ const SHOPPER_IP: &str = "x-shopper-ip";
 #[derive(Deserialize)]
 pub struct CodeForm {
     email: String,
+    #[serde(default)]
+    language: Option<String>,
 }
 
 #[route(POST)]
@@ -69,6 +73,17 @@ pub async fn code(cx: &Cx, Form(form): Form<CodeForm>) -> Result<Answer> {
         Ok(issued) => issued,
         Err(err) => return answer_error(err),
     };
-    send_shopper_code(cx, &issued.email, &access.tenant, &issued.code).await?;
+    let language = form
+        .language
+        .as_deref()
+        .and_then(timada_core::primary_language);
+    send_shopper_code(
+        cx,
+        &issued.email,
+        &access.tenant,
+        &issued.code,
+        language.as_deref(),
+    )
+    .await?;
     status(StatusCode::ACCEPTED)
 }
