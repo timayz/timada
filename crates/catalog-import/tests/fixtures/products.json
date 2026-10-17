@@ -1,0 +1,263 @@
+[
+ {
+  "slug": "tapis-rafraichissant-chat-orne-tetes-chats-japonais",
+  "parent": 0,
+  "is_in_stock": true,
+  "name": "Tapis rafraichissant chat orné de têtes de chats japonais",
+  "variations": [
+   {
+    "id": 51832,
+    "attributes": [
+     {
+      "name": "Taille",
+      "value": "m"
+     }
+    ]
+   },
+   {
+    "id": 51833,
+    "attributes": [
+     {
+      "name": "Taille",
+      "value": "s"
+     }
+    ]
+   }
+  ],
+  "type": "variable",
+  "description": "",
+  "average_rating": "0",
+  "sku": "",
+  "categories": [
+   {
+    "id": 2325,
+    "name": "Tapis rafraîchissant pour chat",
+    "slug": "tapis-rafraichissant-chat",
+    "link": "https://www.chatounette.com/couchage-chat/tapis-chats/tapis-rafraichissant-chat/"
+   },
+   {
+    "id": 207,
+    "name": "Couchages pour chats",
+    "slug": "couchage-chat",
+    "link": "https://www.chatounette.com/couchage-chat/"
+   },
+   {
+    "id": 237,
+    "name": "Sac à dos chat",
+    "slug": "sac-a-dos-chat",
+    "link": "https://www.chatounette.com/transport-chat/sac-a-dos-chat/"
+   },
+   {
+    "id": 1812,
+    "name": "Tapis pour chats",
+    "slug": "tapis-chats",
+    "link": "https://www.chatounette.com/couchage-chat/tapis-chats/"
+   },
+   {
+    "id": 208,
+    "name": "Transport chat",
+    "slug": "transport-chat",
+    "link": "https://www.chatounette.com/transport-chat/"
+   }
+  ],
+  "images": [
+   {
+    "id": 51809,
+    "src": "https://www.chatounette.com/wp-content/uploads/2026/07/IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_1.jpg",
+    "alt": "Un tapis rafraichissant chat orné de têtes de chats japonais, avec une surface tissée beige et un côté gris imprimé de chats, posé sur un fond rose clair.",
+    "name": "IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_1.jpg"
+   },
+   {
+    "id": 51810,
+    "src": "https://www.chatounette.com/wp-content/uploads/2026/07/IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_2.jpg",
+    "alt": "",
+    "name": "IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_2.jpg"
+   },
+   {
+    "id": 51811,
+    "src": "https://www.chatounette.com/wp-content/uploads/2026/07/IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_3.jpg",
+    "alt": "",
+    "name": "IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_3.jpg"
+   },
+   {
+    "id": 51812,
+    "src": "https://www.chatounette.com/wp-content/uploads/2026/07/IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_4.jpg",
+    "alt": "",
+    "name": "IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_4.jpg"
+   },
+   {
+    "id": 51813,
+    "src": "https://www.chatounette.com/wp-content/uploads/2026/07/IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_5.jpg",
+    "alt": "",
+    "name": "IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_5.jpg"
+   }
+  ],
+  "permalink": "https://www.chatounette.com/couchage-chat/tapis-chats/tapis-rafraichissant-chat/tapis-rafraichissant-chat-orne-tetes-chats-japonais/",
+  "short_description": "<p>Imaginez votre chat étendu sur un coin frais et confortable, loin de la chaleur des après-midis d&rsquo;été. Ce <strong>tapis rafraichissant chat orné de têtes de chats japonais</strong> lui offre justement cet espace apaisant, doux au toucher, pour s&rsquo;étirer, se lover et savourer chaque sieste en toute tranquillité.</p>",
+  "attributes": [
+   {
+    "id": 14,
+    "name": "Couleur",
+    "taxonomy": "pa_a7796c561c033735a2eb6c",
+    "has_variations": false,
+    "terms": [
+     {
+      "id": 270,
+      "name": "Beige",
+      "slug": "beige"
+     },
+     {
+      "id": 1777,
+      "name": "Bleu Foncé",
+      "slug": "bleu-fonce"
+     }
+    ]
+   },
+   {
+    "id": 0,
+    "name": "Matiere",
+    "taxonomy": null,
+    "has_variations": false,
+    "terms": [
+     {
+      "id": 0,
+      "name": "Rotin tissé (surface)",
+      "slug": "Rotin tissé (surface)"
+     },
+     {
+      "id": 0,
+      "name": "+ Mousse (intérieur)",
+      "slug": "+ Mousse (intérieur)"
+     }
+    ]
+   },
+   {
+    "id": 0,
+    "name": "Dimensions",
+    "taxonomy": null,
+    "has_variations": false,
+    "terms": [
+     {
+      "id": 0,
+      "name": "S : 43 x 30 cm",
+      "slug": "S : 43 x 30 cm"
+     },
+     {
+      "id": 0,
+      "name": "M : 55 x 40 cm",
+      "slug": "M : 55 x 40 cm"
+     }
+    ]
+   },
+   {
+    "id": 15,
+    "name": "Taille",
+    "taxonomy": "pa_87aa0330980ddad2f9e66f",
+    "has_variations": true,
+    "terms": [
+     {
+      "id": 269,
+      "name": "M",
+      "slug": "m",
+      "default": false
+     },
+     {
+      "id": 268,
+      "name": "S",
+      "slug": "s",
+      "default": true
+     }
+    ]
+   }
+  ],
+  "review_count": 0,
+  "prices": {
+   "price": "1990",
+   "regular_price": "1990",
+   "sale_price": "1990",
+   "currency_code": "EUR",
+   "price_range": {
+    "min_amount": "1990",
+    "max_amount": "2990"
+   }
+  },
+  "id": 51814
+ },
+ {
+  "slug": "pendentif-chat-fier-elegant",
+  "parent": 0,
+  "is_in_stock": true,
+  "name": "Pendentif de chat fier et élégant",
+  "variations": [],
+  "type": "simple",
+  "description": "",
+  "average_rating": "0",
+  "sku": "4000210003358-1-1-1-3-2-3-2-3-1-1-1",
+  "categories": [
+   {
+    "id": 1817,
+    "name": "Pendentif chat",
+    "slug": "pendentif-chat",
+    "link": "https://www.chatounette.com/goodies-chat/pendentif-chat/"
+   },
+   {
+    "id": 209,
+    "name": "Goodies chat",
+    "slug": "goodies-chat",
+    "link": "https://www.chatounette.com/goodies-chat/"
+   }
+  ],
+  "images": [
+   {
+    "id": 35371,
+    "src": "https://www.chatounette.com/wp-content/uploads/2023/02/pendentif-de-chat-fier-et-elegant-2.jpeg",
+    "alt": "sur un mannequin pour collier noir, un collier en métal avec un pendentif de chat élégant et fier, avec de jolis détails est présenté",
+    "name": "0ae61045-c963-4965-8dcd-b2ada950bf21"
+   },
+   {
+    "id": 35373,
+    "src": "https://www.chatounette.com/wp-content/uploads/2023/02/pendentif-de-chat-fier-et-elegant-4.jpg",
+    "alt": "",
+    "name": "bf20bed5-c5fe-47b2-841e-894d7bd6fbca"
+   },
+   {
+    "id": 35372,
+    "src": "https://www.chatounette.com/wp-content/uploads/2023/02/pendentif-de-chat-fier-et-elegant-3.jpg",
+    "alt": "",
+    "name": "8df9e77f-5799-402b-ba04-695a91dd14d8"
+   },
+   {
+    "id": 35370,
+    "src": "https://www.chatounette.com/wp-content/uploads/2023/02/pendentif-de-chat-fier-et-elegant.jpg",
+    "alt": "",
+    "name": "ff88fa53-5cde-4f5c-94f5-0ae17030258c"
+   }
+  ],
+  "permalink": "https://www.chatounette.com/goodies-chat/pendentif-chat/pendentif-chat-fier-elegant/",
+  "short_description": "<p><strong>Ce pendentif de chat fier et élégant</strong> est un accessoire aussi mignon qu&rsquo;utile. Son design est à la fois classique et original avec une silhouette de chat debout, prêt à s&rsquo;imaginer danser dans l&rsquo;air. Le pendentif est sculpté avec soin dans un alliage doré durable pour une brillance et une longue durée de vie.</p>\n<p>Un cadeau idéal pour les amoureux des félins, vous allez l&rsquo;adorer.</p>\n<p>&nbsp;</p>",
+  "attributes": [
+   {
+    "id": 0,
+    "name": "Matériau",
+    "taxonomy": null,
+    "has_variations": false,
+    "terms": [
+     {
+      "id": 0,
+      "name": "Acier inoxydable",
+      "slug": "Acier inoxydable"
+     }
+    ]
+   }
+  ],
+  "review_count": 0,
+  "prices": {
+   "price": "4390",
+   "regular_price": "4390",
+   "sale_price": "4390",
+   "currency_code": "EUR",
+   "price_range": null
+  },
+  "id": 35367
+ }
+]

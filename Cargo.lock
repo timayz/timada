@@ -6076,6 +6076,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-catalog-import"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "evento",
+ "flate2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "sqlx_migrator",
+ "timada-catalog",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "timada-core"
 version = "0.1.0"
 dependencies = [
@@ -6110,6 +6130,7 @@ dependencies = [
  "openidconnect",
  "rand 0.9.5",
  "rcgen",
+ "reqwest",
  "rust_iso3166",
  "serde",
  "serde_json",
@@ -6117,6 +6138,7 @@ dependencies = [
  "sqlx",
  "sqlx_migrator",
  "timada-catalog",
+ "timada-catalog-import",
  "timada-core",
  "timada-discounts",
  "timada-identity",

@@ -55,6 +55,9 @@ enum Commands {
     },
     /// Create the database if needed and apply pending migrations
     Migrate,
+    /// Load a catalogue snapshot into a tenant (server stopped), then print
+    /// the settings of a storefront for it
+    Seed(cli::SeedArgs),
     /// Drop the database and recreate it from scratch (debug builds only)
     #[cfg(debug_assertions)]
     Reset,
@@ -73,6 +76,7 @@ async fn main() -> Result<()> {
     }) {
         Commands::Serve { host, port } => cli::serve(config, host, port).await,
         Commands::Migrate => cli::migrate(config).await,
+        Commands::Seed(args) => cli::seed(config, args).await,
         #[cfg(debug_assertions)]
         Commands::Reset => cli::reset(config).await,
     }

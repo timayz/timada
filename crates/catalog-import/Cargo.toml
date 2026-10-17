@@ -1,0 +1,25 @@
+[package]
+name = "timada-catalog-import"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+description = "Loads a catalogue snapshot into a tenant's catalog, and takes one from a WooCommerce shop"
+
+[dependencies]
+timada-catalog = { path = "../catalog" }
+evento.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+# The crypto provider reqwest's rustls needs installed, once per process.
+tokio-rustls.workspace = true
+flate2.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+sqlx.workspace = true
+sqlx_migrator.workspace = true
