@@ -112,8 +112,64 @@ invoice decides it when it is issued, seconds after the payment.
 - **Rates.** A product's kind (standard, books, food, medicines, press) maps to a
   rate level in each EU country through `crates/invoicing/data/tax_categories.json`.
   The rate of each level comes from the `world-tax` crate, pinned exactly.
-  **Have an accountant review the table**: what counts as a reduced-rate good
-  differs from country to country and changes.
+  - The table was reviewed on 2026-10-17 against the Commission's "VAT rates
+    applied in the Member States" (January 2025) and the national changes of 2025
+    and 2026. That review is not a professional opinion: what counts as a
+    reduced-rate good differs from country to country and changes, so **have an
+    accountant confirm the table** before relying on it for a new market.
+  - The file's `_review` block records the date, the sources, what the review
+    changed and what it could not settle. A test fails once the date is more than
+    eighteen months old, so the check comes back on its own.
+  - The categories are coarse on purpose. A country that taxes basic food, daily
+    newspapers or prescription medicines differently from the rest of the kind
+    gets the rate of the wider group; the `_review.to_confirm` list names those.
+
+### Rates by country
+
+The VAT a product of each kind carries when its sale is taxed in that country,
+from the table and the pinned `world-tax` rates. A test rebuilds this table and
+fails when it differs from the data; its message holds the replacement.
+
+<!-- tax-categories:start -->
+| Country | Standard | Books | Food | Medicines | Press |
+|---|---|---|---|---|---|
+| AT | 20 % | 10 % | 10 % | 10 % | 10 % |
+| BE | 21 % | 6 % | 6 % | 6 % | 6 % |
+| BG | 20 % | 9 % | 20 % | 20 % | 9 % |
+| CY | 19 % | 5 % | 5 % | 5 % | 5 % |
+| CZ | 21 % | 0 % | 12 % | 12 % | 12 % |
+| DE | 19 % | 7 % | 7 % | 19 % | 7 % |
+| DK | 25 % | 25 % | 25 % | 25 % | 0 % |
+| EE | 24 % | 9 % | 24 % | 9 % | 9 % |
+| ES | 21 % | 4 % | 10 % | 4 % | 4 % |
+| FI | 25.5 % | 14 % | 14 % | 10 % | 10 % |
+| FR | 20 % | 5.5 % | 5.5 % | 10 % | 2.1 % |
+| GR | 24 % | 6 % | 13 % | 6 % | 6 % |
+| HR | 25 % | 5 % | 5 % | 5 % | 5 % |
+| HU | 27 % | 5 % | 5 % | 5 % | 5 % |
+| IE | 23 % | 0 % | 0 % | 0 % | 9 % |
+| IT | 22 % | 4 % | 10 % | 10 % | 4 % |
+| LT | 21 % | 5 % | 21 % | 5 % | 5 % |
+| LU | 17 % | 3 % | 3 % | 3 % | 3 % |
+| LV | 21 % | 12 % | 21 % | 12 % | 12 % |
+| MT | 18 % | 5 % | 0 % | 0 % | 5 % |
+| NL | 21 % | 9 % | 9 % | 9 % | 9 % |
+| PL | 23 % | 5 % | 5 % | 8 % | 8 % |
+| PT | 23 % | 6 % | 6 % | 6 % | 6 % |
+| RO | 21 % | 11 % | 11 % | 11 % | 11 % |
+| SE | 25 % | 6 % | 12 % | 25 % | 6 % |
+| SI | 22 % | 5 % | 9.5 % | 9.5 % | 5 % |
+| SK | 23 % | 5 % | 5 % | 5 % | 5 % |
+<!-- tax-categories:end -->
+
+Known gaps, waiting on an accountant or on `world-tax`:
+
+- Latvia taxes books and press at 5 % (law of 18 December 2025). The `world-tax`
+  table has no 5 % level for Latvia, so they carry 12 % here.
+- Lithuania abolished its 9 % band on 1 January 2026; books moved to 5 %, but
+  periodicals are not named in that band, so their rate is unconfirmed.
+- Belgium zero-rates daily and weekly newspapers; other periodicals are 6 %.
+- Spain and Italy tax basic foodstuffs at 4 % and other food at 10 %.
 
 ## Numbering
 
@@ -169,3 +225,5 @@ ten years the law asks.
 - Northern Ireland (goods follow EU VAT rules there) and other special territories
   beyond the ones listed above.
 - Shipping costs, which orders do not have yet.
+- A rate the `world-tax` table lacks (Latvia's 5 % on books and press) cannot be
+  expressed; it needs a local override or an upstream fix.

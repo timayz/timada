@@ -377,8 +377,115 @@ mod tests {
         assert_eq!(rate_bps("IE", "books"), 0);
         assert_eq!(rate_bps("IT", "books"), 400);
         assert_eq!(rate_bps("DK", "books"), 2500);
+        // Reviewed on 2026-10-17: Estonia's books are 9 %, not the 13 % of
+        // accommodation; Czechia zero-rates books but not periodicals.
+        assert_eq!(rate_bps("EE", "books"), 900);
+        assert_eq!(rate_bps("CZ", "books"), 0);
+        assert_eq!(rate_bps("CZ", "press"), 1200);
         // An unknown kind is standard.
         assert_eq!(rate_bps("DE", "cars"), 1900);
+    }
+
+    /// The table was last checked against the published rates on the date it
+    /// records. The Commission publishes its schedule yearly; past eighteen
+    /// months the check is due again.
+    #[test]
+    fn the_table_was_reviewed_recently() {
+        let raw: serde_json::Value = serde_json::from_str(CATEGORIES_JSON).unwrap();
+        let reviewed_on = raw["_review"]["reviewed_on"]
+            .as_str()
+            .expect("_review.reviewed_on is a YYYY-MM-DD date");
+        let mut parts = reviewed_on
+            .split('-')
+            .map(|part| part.parse::<i64>().unwrap());
+        let (year, month, day) = (
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+        );
+        // Days since 1970-01-01 (Howard Hinnant's days_from_civil).
+        let year = if month <= 2 { year - 1 } else { year };
+        let era = year.div_euclid(400);
+        let year_of_era = year - era * 400;
+        let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        let reviewed = era * 146_097 + day_of_era - 719_468;
+        let today = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            / 86_400;
+        let age_days = today - reviewed;
+        assert!(age_days >= 0, "reviewed_on {reviewed_on} is in the future");
+        assert!(
+            age_days <= 548,
+            "tax_categories.json was last reviewed on {reviewed_on}, {age_days} days ago: \
+             check it against the Commission's current 'VAT rates applied in the Member \
+             States' and bump _review.reviewed_on"
+        );
+    }
+
+    /// The effective rate of every kind of goods in every EU country, as
+    /// `docs/invoicing.md` shows it to whoever reviews the table.
+    fn rates_table() -> String {
+        let mut kinds: Vec<&str> = categories().keys().map(String::as_str).collect();
+        kinds.sort_unstable();
+        kinds.insert(0, STANDARD);
+        let percent = |bps: u32| -> String {
+            if bps.is_multiple_of(100) {
+                format!("{} %", bps / 100)
+            } else {
+                format!("{}.{} %", bps / 100, bps % 100 / 10)
+            }
+        };
+        let mut members: Vec<&str> = eu_members().iter().map(String::as_str).collect();
+        members.sort_unstable();
+        let mut table = format!(
+            "| Country | {} |\n|---|{}\n",
+            kinds
+                .iter()
+                .map(|kind| {
+                    let mut chars = kind.chars();
+                    chars
+                        .next()
+                        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(" | "),
+            "---|".repeat(kinds.len())
+        );
+        for member in members {
+            let rates: Vec<String> = kinds
+                .iter()
+                .map(|kind| percent(rate_bps(member, kind)))
+                .collect();
+            table.push_str(&format!("| {member} | {} |\n", rates.join(" | ")));
+        }
+        table
+    }
+
+    #[test]
+    fn the_docs_table_matches_the_data() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/invoicing.md");
+        let docs = std::fs::read_to_string(path).unwrap();
+        let (start, end) = (
+            "<!-- tax-categories:start -->",
+            "<!-- tax-categories:end -->",
+        );
+        let from = docs
+            .find(start)
+            .expect("docs/invoicing.md has the start marker")
+            + start.len();
+        let to = docs
+            .find(end)
+            .expect("docs/invoicing.md has the end marker");
+        let expected = rates_table();
+        assert_eq!(
+            docs[from..to].trim(),
+            expected.trim(),
+            "the rates table in docs/invoicing.md is stale; replace it with:\n\n{expected}"
+        );
     }
 
     #[test]
