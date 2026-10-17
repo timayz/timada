@@ -189,6 +189,15 @@ dir = "data/shopper-keys"
 # # from a peer presenting it. Set it through TIMADA__CLUSTER__SECRET rather
 # # than in this file. Required with more than one node.
 # secret = ""
+# # Every finished write is kept on the other nodes until the node that missed
+# # it has it too. A node not heard from on a tenant for this long is no longer
+# # waited for: the others tidy up without it, and when it returns every tenant
+# # it fell behind on is copied back from a peer. 0 never gives a node up.
+# absent_after_secs = 3600
+# # Finished writes a tenant keeps for a node that is away. Past it the tenant
+# # refuses new writes until the node returns or is given up. The admin page of
+# # a tenant shows what it keeps, and the log warns at four fifths.
+# write_backlog = 100000
 
 [monitoring]
 log_level = "info,sqlx=warn"

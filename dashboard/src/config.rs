@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use config::{ConfigError, Environment, File};
 use serde::Deserialize;
@@ -450,6 +451,24 @@ pub struct ClusterConfig {
     /// than one node.
     #[serde(default)]
     pub secret: Option<String>,
+    /// A node not heard from on a tenant for this long is no longer waited
+    /// for: the others tidy up finished writes without it. When it returns,
+    /// every tenant it fell behind on is copied back from a peer. 0 never
+    /// gives a node up.
+    #[serde(default = "default_absent_after_secs")]
+    pub absent_after_secs: u64,
+    /// Finished writes a tenant keeps for a node that is away. Past it the
+    /// tenant refuses new writes until the node returns or is given up.
+    #[serde(default = "default_write_backlog")]
+    pub write_backlog: usize,
+}
+
+fn default_absent_after_secs() -> u64 {
+    3600
+}
+
+fn default_write_backlog() -> usize {
+    100_000
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -602,10 +621,21 @@ impl TenantsConfig {
 }
 
 impl ClusterConfig {
+    /// How long a node may go unheard on a tenant before the others stop
+    /// waiting for it; `None` waits forever.
+    pub fn absent_after(&self) -> Option<Duration> {
+        (self.absent_after_secs > 0).then(|| Duration::from_secs(self.absent_after_secs))
+    }
+
     fn validate(&mut self) -> Result<(), ConfigError> {
         if self.peers.is_empty() {
             return Err(ConfigError::Message(
                 "cluster.peers must list at least one node".into(),
+            ));
+        }
+        if self.write_backlog == 0 {
+            return Err(ConfigError::Message(
+                "cluster.write_backlog must be greater than 0".into(),
             ));
         }
         if self.node_id as usize >= self.peers.len() {
@@ -846,7 +876,24 @@ mod tests {
             listen: None,
             web_peers: web_peers.iter().map(|s| s.to_string()).collect(),
             secret: secret.map(str::to_owned),
+            absent_after_secs: default_absent_after_secs(),
+            write_backlog: default_write_backlog(),
         }
+    }
+
+    #[test]
+    fn cluster_refuses_an_empty_write_backlog() {
+        let mut config = cluster(1, &[], None);
+        config.write_backlog = 0;
+        assert!(config.validate().is_err());
+        let mut config = cluster(1, &[], None);
+        config.absent_after_secs = 0;
+        assert!(config.validate().is_ok());
+        assert_eq!(config.absent_after(), None);
+        assert_eq!(
+            cluster(1, &[], None).absent_after(),
+            Some(Duration::from_secs(3600))
+        );
     }
 
     #[test]
