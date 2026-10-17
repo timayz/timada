@@ -1,5 +1,6 @@
 //! `POST /store/shoppers/delete` with `X-Shopper-Token`: deletes the
-//! shopper's account. The addresses are forgotten and every session ends,
+//! shopper's account. Their key is destroyed, which leaves their personal
+//! data unreadable, and every session ends,
 //! this one included; the orders placed with the address stay with the shop.
 //! 204.
 
@@ -22,7 +23,7 @@ pub async fn delete(cx: &Cx) -> Result<Answer> {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
     match timada_shoppers::Command(hold.executor().clone())
-        .forget(&shopper.id)
+        .forget(&*super::keys(cx, &access.tenant.id), &shopper.id)
         .await
     {
         Ok(()) => status(StatusCode::NO_CONTENT),

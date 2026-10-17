@@ -8,9 +8,17 @@
 //! included, because owning the mailbox is what entitles a shopper to them.
 //!
 //! A shopper may sign out every other browser at once, and may delete their
-//! account: the addresses are forgotten and every session ends, while the
-//! orders stay with the shop. The past events keep what they recorded; the
-//! account is gone for every command, and the address signs in afresh.
+//! account: every session ends, while the orders stay with the shop.
+//!
+//! Events cannot be erased, so they never hold a shopper's personal data in
+//! clear. Each registration draws a random [`ShopperKey`], and the address
+//! signed in with and the addresses shipped to are recorded sealed under it.
+//! The crate never stores a key: the caller keeps them through
+//! [`ShopperKeys`] and destroys the shopper's key when the account is
+//! deleted, which leaves what the account recorded unreadable for good
+//! (crypto-shredding). The account is then gone for every command, and the
+//! address signs in afresh under a new key. What remains are ids:
+//! [`shopper_id`] and [`challenge_id`] are plain hashes of the address.
 //!
 //! Like the other contexts, the crate is pure domain code: no HTTP, no mail
 //! (the caller mails the code [`Command::issue_code`] hands back), no cookies
@@ -19,10 +27,12 @@
 pub mod aggregator;
 mod command;
 mod error;
+mod key;
 mod query;
 mod value_object;
 
 pub use command::*;
 pub use error::*;
+pub use key::*;
 pub use query::*;
 pub use value_object::*;

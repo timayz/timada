@@ -1,3 +1,8 @@
+mod common;
+
+use std::sync::{Arc, LazyLock};
+
+use common::MemoryKeys;
 use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
@@ -7,6 +12,10 @@ use timada_shoppers::{Command, count_shoppers, read_model_subscription, shoppers
 
 const TENANT: &str = "tenant-acme";
 const NOW: u64 = 1_700_000_000;
+
+/// The shoppers' keys, for every test: key ids are random, so they never
+/// collide.
+static KEYS: LazyLock<Arc<MemoryKeys>> = LazyLock::new(Default::default);
 
 /// A fresh in-memory event store with the orders and shoppers read models.
 async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
@@ -39,7 +48,7 @@ async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool, tenant: &s
         .run_once(executor)
         .await
         .unwrap();
-    read_model_subscription::<evento::Sqlite>(pool.clone(), tenant)
+    read_model_subscription::<evento::Sqlite>(pool.clone(), tenant, KEYS.clone())
         .run_once(executor)
         .await
         .unwrap();
@@ -48,7 +57,7 @@ async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool, tenant: &s
 async fn sign_in(shoppers: &Command<evento::Sqlite>, email: &str, now: u64) -> String {
     let issued = shoppers.issue_code(email, now).await.unwrap();
     shoppers
-        .sign_in(email, &issued.code, now)
+        .sign_in(&**KEYS, email, &issued.code, now)
         .await
         .unwrap()
         .shopper_id
@@ -99,8 +108,14 @@ async fn shoppers_are_listed_with_their_orders_and_addresses() {
     // Ada ordered as a guest before she had an account.
     placed(&executor, "order-1", "ada@example.com").await;
     let ada = sign_in(&shoppers, "Ada@Example.com", NOW).await;
-    let paris = shoppers.save_address(&ada, address("Paris")).await.unwrap();
-    shoppers.save_address(&ada, address("Lyon")).await.unwrap();
+    let paris = shoppers
+        .save_address(&**KEYS, &ada, address("Paris"))
+        .await
+        .unwrap();
+    shoppers
+        .save_address(&**KEYS, &ada, address("Lyon"))
+        .await
+        .unwrap();
     shoppers.remove_address(&ada, &paris).await.unwrap();
     placed(&executor, "order-2", "ada@example.com").await;
     let bob = sign_in(&shoppers, "bob@example.com", NOW + 60).await;
@@ -144,12 +159,15 @@ async fn a_forgotten_shopper_leaves_the_list_until_signing_in_again() {
     let (executor, pool) = executor_with_pool().await;
     let shoppers = Command(executor.clone());
     let ada = sign_in(&shoppers, "ada@example.com", NOW).await;
-    shoppers.save_address(&ada, address("Paris")).await.unwrap();
+    shoppers
+        .save_address(&**KEYS, &ada, address("Paris"))
+        .await
+        .unwrap();
     sign_in(&shoppers, "bob@example.com", NOW).await;
     catch_up(&executor, &pool, TENANT).await;
     assert_eq!(count_shoppers(&pool, TENANT).await.unwrap(), 2);
 
-    shoppers.forget(&ada).await.unwrap();
+    shoppers.forget(&**KEYS, &ada).await.unwrap();
     catch_up(&executor, &pool, TENANT).await;
     let rows = shoppers_of_tenant(&pool, TENANT, 10, 0).await.unwrap();
     assert_eq!(rows.len(), 1);

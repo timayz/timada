@@ -13,21 +13,25 @@
 pub mod addresses;
 pub mod code;
 pub mod delete;
+pub mod me;
 pub mod orders;
 pub mod session;
 pub mod sign_out;
 pub mod sign_out_everywhere;
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
-use timada_shoppers::{ShopperError, ShopperState};
+use timada_shoppers::{Shopper, ShopperError, ShopperKeys, ShopperState};
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, app_context},
     router::{StatusCode, content::Json, request::headers},
 };
 
 use crate::auth::now;
 use crate::cluster::Executor;
+use crate::shopper_keys::ShopperKeyVault;
 
 /// The header a signed-in shopper's token travels in.
 pub const SHOPPER_TOKEN: &str = "x-shopper-token";
@@ -86,4 +90,18 @@ pub async fn signed_in(cx: &Cx, executor: &Executor) -> Result<Option<ShopperSta
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     Ok(resolved.map(|resolved| resolved.shopper))
+}
+
+/// The keys of the tenant's shoppers.
+pub fn keys(cx: &Cx, tenant_id: &str) -> Arc<dyn ShopperKeys> {
+    app_context::<Arc<ShopperKeyVault>>(cx).for_tenant(tenant_id)
+}
+
+/// The shopper's personal data, opened with their key: `None` once the key
+/// is destroyed (the account was deleted meanwhile).
+pub async fn opened(cx: &Cx, tenant_id: &str, shopper: &ShopperState) -> Result<Option<Shopper>> {
+    shopper
+        .open_with(&*keys(cx, tenant_id))
+        .await
+        .map_err(topcoat::Error::from_anyhow)
 }

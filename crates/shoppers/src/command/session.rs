@@ -4,7 +4,8 @@ use crate::aggregator::{Registered, SessionEnded, SessionStarted, SessionsRevoke
 use crate::error::ShopperError;
 use crate::value_object::{SESSION_TTL_SECS, generate_token, session_id, shopper_id};
 
-use super::{SessionState, ShopperState, normalize_email};
+use super::{SessionState, ShopperState, email_aad, normalize_email};
+use crate::key::{self, ShopperKey, ShopperKeys, new_key_id};
 
 /// A sign-in that checked out. The token is the browser's to keep; the store
 /// only knows its hash.
@@ -36,10 +37,11 @@ pub struct ResolvedShopper {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Burns the code mailed to `email`, creates the shopper on a first
-    /// sign-in, and opens a session for [`SESSION_TTL_SECS`]. `now` is unix
+    /// sign-in (with a fresh key, kept in `keys` first), and opens a session for [`SESSION_TTL_SECS`]. `now` is unix
     /// seconds.
     pub async fn sign_in(
         &self,
+        keys: &dyn ShopperKeys,
         email: &str,
         code: &str,
         now: u64,
@@ -50,31 +52,36 @@ impl<E: Executor> super::Command<E> {
             .await?;
 
         let shopper_id = shopper_id(&email);
-        let registered = Registered {
-            email: email.clone(),
-        };
-        let registered = match self.load_shopper_any(&shopper_id).await? {
-            Some(shopper) if !shopper.forgotten => Ok(()),
+        let writer = match self.load_shopper_any(&shopper_id).await? {
+            Some(shopper) if !shopper.forgotten => None,
             // The address deleted its account: it registers again, afresh.
-            Some(forgotten) => forgotten
-                .write()?
-                .routing_key_opt(routing_key.clone())
-                .event(&registered)
-                .commit(&self.0)
-                .await
-                .map(|_| ()),
-            None => evento::append(&shopper_id)
-                .original_version(0)
-                .routing_key_opt(routing_key.clone())
-                .event(&registered)
-                .commit(&self.0)
-                .await
-                .map(|_| ()),
+            Some(forgotten) => Some(forgotten.write()?),
+            None => Some(evento::append(&shopper_id).original_version(0).to_owned()),
         };
-        match registered {
-            // A second browser registered the same address at once.
-            Ok(()) | Err(WriteError::InvalidOriginalVersion) => {}
-            Err(err) => return Err(err.into()),
+        if let Some(mut writer) = writer {
+            // The key is kept before the event names it, so no event ever
+            // points at a key nobody holds.
+            let key_id = new_key_id();
+            let key = ShopperKey::generate();
+            let email = key::seal(&key, &email_aad(&shopper_id, &key_id), email.as_bytes())?;
+            keys.put(&key_id, &key).await?;
+            let registered = writer
+                .routing_key_opt(routing_key.clone())
+                .event(&Registered {
+                    key_id: key_id.clone(),
+                    email,
+                })
+                .commit(&self.0)
+                .await;
+            if registered.is_err() {
+                // Nothing names the key: drop it rather than keep it unused.
+                let _ = keys.delete(&key_id).await;
+            }
+            match registered {
+                // A second browser registered the same address at once.
+                Ok(_) | Err(WriteError::InvalidOriginalVersion) => {}
+                Err(err) => return Err(err.into()),
+            }
         }
 
         let token = generate_token();

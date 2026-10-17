@@ -12,7 +12,7 @@ use topcoat::{
     router::{StatusCode, route},
 };
 
-use super::{Answer, SIGNED_OUT, answer, refused, signed_in, status};
+use super::{Answer, SIGNED_OUT, answer, opened, refused, signed_in, status};
 use crate::db::ReadPool;
 
 /// The most orders a history lists.
@@ -26,6 +26,9 @@ pub async fn orders(cx: &Cx) -> Result<Answer> {
     };
     let hold = super::super::hold(cx, &access).await?;
     let Some(shopper) = signed_in(cx, hold.executor()).await? else {
+        return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
+    };
+    let Some(shopper) = opened(cx, &access.tenant.id, &shopper).await? else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
     let rows = orders_of_email(

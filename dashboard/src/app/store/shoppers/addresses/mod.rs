@@ -49,7 +49,7 @@ pub async fn save(cx: &Cx, Form(form): Form<AddressForm>) -> Result<Answer> {
         phone: form.phone,
     };
     match timada_shoppers::Command(hold.executor().clone())
-        .save_address(&shopper.id, address)
+        .save_address(&*super::keys(cx, &access.tenant.id), &shopper.id, address)
         .await
     {
         Ok(id) => answer(StatusCode::CREATED, json!({ "id": id })),

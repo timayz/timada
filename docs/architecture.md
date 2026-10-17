@@ -84,6 +84,8 @@ data/tenants/<id>.db      one per tenant: its catalog, cart, order and review ev
                           its consensus journal
 data/media/<id>/          one per tenant: the product pictures and the review photos,
                           named <image id>.<ext>
+data/shopper-keys/<id>/   one per tenant: each shopper account's key, sealed, named
+                          <key id> (<key id>.gone once the account is deleted)
 <merchant app>/store.db   a storefront replica: subscription cursor, snapshots, product and
                           category rows
 ```
@@ -299,18 +301,43 @@ kill it, it lives ten minutes, another may be mailed a minute later); a
 `ShopperSession`'s id derives from a random token the shopper's browser keeps, so
 reading the store reveals no token. An account also keeps up to ten addresses.
 "Sign out everywhere else" is a cutoff on the `Shopper` (`SessionsRevoked`, as on an
-identity `User`). Deleting an account appends `Forgotten`: the state drops the address
-and the saved addresses, every session is void and the Customers row goes, while the
-orders stay with the shop. The past events keep what they recorded; a later sign-in
-with the address registers it again on the same stream, as a fresh account.
+identity `User`). Deleting an account appends `Forgotten`: every session is void and
+the Customers row goes, while the orders stay with the shop; a later sign-in with the
+address registers it again on the same stream, as a fresh account.
+
+Events cannot be erased, so they never hold a shopper's personal data in clear
+(crypto-shredding). Each registration draws a random 256-bit key: `Registered` carries
+the address signed in with and `AddressSaved` the shipping address, both AES-256-GCM
+under that key and bound to the shopper, the key and the field; a saved address's id
+is an HMAC of its fields under the key, so it says nothing once the key is gone.
+`Registered` and `Forgotten` name the key by a random id; the key itself lives outside
+the store, behind `timada_shoppers::ShopperKeys`. `Forgotten` destroys it, which leaves
+what the account recorded unreadable in every copy of the events, the consensus journals
+included. What remains are ids: the `Shopper` and `ShopperChallenge` stream ids are
+plain hashes of the address, which anyone holding a candidate address can test (the
+shop's orders keep the address anyway).
+
+The dashboard keeps the keys in `shopper_keys.dir/<tenant>/<key id>`, each sealed with
+`[secrets] key` (no section, no shopper accounts), and like a picture on a majority of
+the cluster before `Registered` commits (`PUT /cluster/keys/<tenant>/<key id>`, with
+`cluster.secret`). Nothing serves these files to the outside: a node lacking a key asks
+its peers on the same route with a `GET` carrying the secret. Each node follows the
+tenants' `Shopper` streams (`timada-dashboard/shopper-keys`) to fetch the keys of new
+accounts and destroy those of deleted ones. Destroying writes a `<key id>.gone`
+tombstone before removing the file, so a copy or a fetch still under way cannot bring a
+key back. The read model opens the address for the Customers list with the key, and
+retries until a key on its way from a peer arrives. A backup of this directory brings
+deleted accounts back when restored, so keep it short-lived or skip it; losing it on
+every node loses every account's data.
 
 A storefront signs its shoppers in over HTTP, not through the store API, under
 `/store/shoppers/*` with its key as a bearer token (it must allow `store:checkout`):
 `code` mails the code from the shop's name, `session` checks it and answers the token,
 `sign-out`, `sign-out-everywhere`, `delete`, `addresses` and `addresses/remove` act for
 the shopper whose token is in `X-Shopper-Token`. None of the shopper events are shopper events on the store API, so a
-key cannot sign anyone in by appending them. A storefront resolves a token by loading
-the session over the store API, which the dashboard wrote before it answered.
+key cannot sign anyone in by appending them. A storefront resolves a token with
+`GET /store/shoppers/me`, which answers the account opened with its key: the store API
+only ever hands out the sealed events.
 
 A shopper's orders are the shop's orders placed with their address, guest ones
 included: owning the mailbox is what entitles them to it. `GET /store/shoppers/orders`
@@ -337,7 +364,8 @@ fails when a frozen line changes. The rules:
 - Never edit or remove a persisted variant, field or enum. Add a variant, a companion
   event, or a new event with `#[evento(upcast_to = New)]` on the old one.
 - After adding a shape: `EVENTO_LOCK=update cargo test -p timada-dashboard --test events_lock`
-  and commit the lock.
+  and commit the lock. A shape never deployed anywhere may still change in place:
+  `EVENTO_LOCK=force` rewrites the lock to the code.
 - A snapshotted view whose shape changes bumps `.revision(n)`; its name is pinned
   with `name = "timada-<ctx>/<View>"` so a move does not orphan snapshots.
 

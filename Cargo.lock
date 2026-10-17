@@ -6219,11 +6219,15 @@ dependencies = [
 name = "timada-shoppers"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "bitcode",
  "evento",
+ "hmac 0.12.1",
  "rand 0.9.5",
+ "sha2 0.10.9",
  "sqlx",
  "sqlx_migrator",
  "thiserror 2.0.21",

@@ -4,7 +4,7 @@
 //! in a private (encrypted, authenticated) cookie.
 
 use serde::{Deserialize, Serialize};
-use timada_storefront::{SavedAddress, ShippingAddress, ShopperState, order, shopper, store};
+use timada_storefront::{SavedAddress, ShippingAddress, Shopper, order, shopper, store};
 use topcoat::{
     context::{Cx, memoize},
     cookie::{Cookies, SameSite, UnparsedCookieStore, cookie_store, private_cookies, time},
@@ -266,7 +266,7 @@ pub fn forget_shopper(cx: &Cx) {
 /// The shopper signed in on this browser, read from the store once per
 /// request. A token that no longer signs anyone in reads as signed out.
 #[memoize(as_ref)]
-pub async fn signed_in(cx: &Cx) -> Option<ShopperState> {
+pub async fn signed_in(cx: &Cx) -> Option<Shopper> {
     let token = shopper_token(cx)?;
     match shopper(cx, &token).await {
         Ok(shopper) => shopper,
