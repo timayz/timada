@@ -8,7 +8,7 @@ pictures. The pictures themselves are not here: the seed fetches them when it ru
 
 | File | Shop | Taken | Content |
 |---|---|---|---|
-| `chatounette.json.gz` | https://www.chatounette.com (WooCommerce, French cat shop) | see `fetched_at` inside | 60 categories, 1,330 products, ~5,350 variants |
+| `chatounette.json.gz` | https://www.chatounette.com (WooCommerce, French cat shop) | see `fetched_at` inside | 60 categories, 1,329 products, 5,075 variants, 8,105 picture addresses |
 
 The text and pictures belong to the shop they were taken from; the snapshot is here
 to try the storefront examples against a real-sized catalogue, nothing more.

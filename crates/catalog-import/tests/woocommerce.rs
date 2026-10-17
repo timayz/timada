@@ -180,3 +180,34 @@ fn a_simple_product_keeps_its_price_code_and_facts() {
         product.description
     );
 }
+
+#[test]
+fn a_code_shared_across_variants_is_kept_once_and_avif_pictures_left_out() {
+    let mut products: Vec<WooProduct> = fixture("products.json");
+    let mut variations: Vec<WooProduct> = fixture("variations.json");
+    for variation in &mut variations {
+        variation.sku = "SHARED-1".into();
+    }
+    products[1].sku = "shared-1".into();
+    products[1].name = "Pendentif d&rsquo;or &amp; d&#39;argent".into();
+    products[0]
+        .images
+        .push(timada_catalog_import::woocommerce::WooImage {
+            src: "https://pics.example/modern.avif?x=1".into(),
+            alt: String::new(),
+        });
+    let snapshot = map_catalog(
+        fixture("categories.json"),
+        products,
+        variations,
+        &SiteOptions::default(),
+    );
+    let mat = &snapshot.products[0];
+    let codes: Vec<Option<&str>> = mat.variants.iter().map(|v| v.sku.as_deref()).collect();
+    assert_eq!(codes, [Some("SHARED-1"), None]);
+    assert_eq!(
+        snapshot.products[1].sku, None,
+        "taken by the variant, case aside"
+    );
+    assert_eq!(mat.images.len(), 5, "the AVIF is left out");
+}

@@ -17,4 +17,4 @@ pub mod woocommerce;
 
 pub use import::*;
 pub use snapshot::*;
-pub use text::{html_to_text, truncate_chars};
+pub use text::{decode_entities, html_to_text, truncate_chars};
