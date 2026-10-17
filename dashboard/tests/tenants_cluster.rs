@@ -424,6 +424,57 @@ async fn create_everywhere(nodes: &[Node; 3]) -> timada_tenancy::TenantState {
     tenant
 }
 
+/// A tenant whose events outgrow one snapshot page (4 MiB) still copies
+/// back whole: the copy arrives page by page, so no tenant is too large to
+/// come back from a lost file or from being given up on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_large_tenant_copies_back_in_pages() {
+    let root = std::env::temp_dir().join(format!("timada-cluster-{}", ulid::Ulid::generate()));
+    let addrs = free_addrs().await;
+    let nodes = futures_join(&root, &addrs).await;
+    let [n0, n1, n2] = &nodes;
+    let (t0, t1, t2) = (n0.tenants(), n1.tenants(), n2.tenants());
+    let tenant = create_everywhere(&nodes).await;
+    t2.open(&tenant).await.unwrap();
+    t1.open(&tenant).await.unwrap();
+    let executor = t0.open(&tenant).await.unwrap();
+    // Sixty events of 100 KiB: about 6 MiB, so the copy needs two pages.
+    let count: u16 = 60;
+    for version in 0..count {
+        write(&executor, version, &"x".repeat(100 * 1024)).await.unwrap();
+    }
+    let paths = [
+        t0.path_of(&tenant.id),
+        t1.path_of(&tenant.id),
+        t2.path_of(&tenant.id),
+    ];
+    for path in &paths {
+        await_events(path, i64::from(count), "the writes reach every node").await;
+    }
+    await_compacted(&paths, "every node tidies up").await;
+
+    t2.close(&tenant.id).await;
+    let path = t2.path_of(&tenant.id);
+    std::fs::remove_file(&path).unwrap();
+    let mut known = tenant.clone();
+    known.created_at -= 3600;
+    tokio::time::timeout(Duration::from_secs(60), t2.open(&known))
+        .await
+        .expect("the copy ends")
+        .unwrap();
+    assert_eq!(events_in(&path).await, i64::from(count));
+    assert!(floor_of(&path).await.is_some(), "the copied floor is kept");
+    assert!(!marker_of(&path).exists());
+
+    write(&executor, count, "after").await.unwrap();
+    await_events(&path, i64::from(count) + 1, "the next write reaches node 2").await;
+
+    t2.shutdown().await;
+    t1.shutdown().await;
+    t0.shutdown().await;
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 async fn write(executor: &cluster::Executor, version: u16, name: &str) -> anyhow::Result<()> {
     evento::append("probe")
         .original_version(version)
