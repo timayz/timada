@@ -30,7 +30,7 @@ test("a shop sends its mails through its own server, and back through the platfo
 
   // Nothing listens there: the test mail cannot go out, nothing is kept.
   await page.getByLabel("Server", { exact: true }).fill("localhost");
-  await page.getByLabel("Port").fill("1");
+  await page.getByLabel("Port", { exact: true }).fill("1");
   await page.getByLabel("Security").selectOption("none");
   const from = uniqueEmail("orders");
   await page.getByLabel("Send from address").fill(from);
@@ -39,7 +39,7 @@ test("a shop sends its mails through its own server, and back through the platfo
   await expect(page.locator("[data-mail-server]")).toHaveAttribute("data-mail-server", "platform");
 
   await page.getByLabel("Server", { exact: true }).fill("localhost");
-  await page.getByLabel("Port").fill("1025");
+  await page.getByLabel("Port", { exact: true }).fill("1025");
   await page.getByLabel("Security").selectOption("none");
   await page.getByLabel("Send from address").fill(from);
   await page.getByLabel("Send from name").fill(`${name} Orders`);
