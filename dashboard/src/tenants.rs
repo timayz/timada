@@ -22,11 +22,15 @@
 //!
 //! A node whose tenant file is gone (a new disk, a deleted file) cannot get
 //! back what its peers already compacted that way: opening such a tenant
-//! copies it from a peer first (see `needs_join`).
+//! copies it from a peer first (see `needs_join`). Nor can a node that was
+//! away longer than `cluster.absent_after_secs` while writes went through:
+//! its peers stopped waiting for it and tidied those writes up, and its
+//! copy is told so when it reopens. [`Tenants::rejoin_from_peers`] then
+//! discards the copy and makes the same copy from a peer.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -44,7 +48,7 @@ use timada_tenancy::{Command, TenantState, active_tenant_ids, group_of, tenant_b
 use tokio::sync::Semaphore;
 use tokio::task::{JoinHandle, JoinSet};
 
-use crate::cluster::{Cluster, Executor, PENDING_TTL};
+use crate::cluster::{Cluster, Executor, PENDING_TTL, PeerState};
 use crate::config::TenantsConfig;
 
 /// A read model fed from one tenant's events into the shared database: given
@@ -179,6 +183,13 @@ pub struct Tenants {
     /// Groups a peer's frames are being looked up for, so the transport's
     /// repeated notices do not start a second lookup of the same group.
     reopening: Mutex<HashSet<GroupId>>,
+    /// Groups being copied back from a peer after this node fell behind.
+    rejoining: Mutex<HashSet<GroupId>>,
+    /// Tenants copied back from a peer after this node fell behind on them.
+    rejoins: AtomicUsize,
+    /// Set by [`shutdown`](Self::shutdown): nothing opens afterwards, not
+    /// even on a peer's word.
+    stopped: AtomicBool,
 }
 
 impl Tenants {
@@ -201,9 +212,47 @@ impl Tenants {
             open: Mutex::new(HashMap::new()),
             open_locks: Mutex::new(HashMap::new()),
             reopening: Mutex::new(HashSet::new()),
+            rejoining: Mutex::new(HashSet::new()),
+            rejoins: AtomicUsize::new(0),
+            stopped: AtomicBool::new(false),
         });
         cluster.attach_tenants(tenants.clone());
         tenants
+    }
+
+    /// How many tenants this node copied back from a peer after falling
+    /// behind on them (see [`rejoin_from_peers`](Self::rejoin_from_peers)).
+    /// Read by the cluster tests.
+    #[allow(dead_code)]
+    pub fn rejoins(&self) -> usize {
+        self.rejoins.load(Ordering::Acquire)
+    }
+
+    /// The finished writes a tenant keeps on this node for nodes that are
+    /// away, and the most it may keep; `None` when it is not open here.
+    pub fn backlog(&self, tenant_id: &str) -> Option<(usize, usize)> {
+        let group = GroupId(group_of(tenant_id));
+        self.is_open(group, tenant_id)
+            .then(|| self.cluster.group_backlog(group))
+            .flatten()
+    }
+
+    /// What this node knows of the other nodes on a tenant; empty alone or
+    /// when the tenant is not open here.
+    pub fn peers(&self, tenant_id: &str) -> Vec<PeerState> {
+        let group = GroupId(group_of(tenant_id));
+        if !self.is_open(group, tenant_id) {
+            return Vec::new();
+        }
+        self.cluster.group_peers(group)
+    }
+
+    fn is_open(&self, group: GroupId, tenant_id: &str) -> bool {
+        self.open
+            .lock()
+            .expect("open poisoned")
+            .get(&group)
+            .is_some_and(|t| t.tenant_id == tenant_id)
     }
 
     /// The file of a tenant's database.
@@ -233,6 +282,10 @@ impl Tenants {
             !tenant.is_suspended(),
             "tenant {} is suspended",
             tenant.slug
+        );
+        anyhow::ensure!(
+            !self.stopped.load(Ordering::Acquire),
+            "the tenant runtime is shut down"
         );
         let group = GroupId(group_of(&tenant.id));
         if let Some(executor) = self.touch(group, &tenant.id) {
@@ -441,11 +494,12 @@ impl Tenants {
     /// as long as the transport keeps those frames waiting; giving up on the
     /// first miss would leave the write without a quorum.
     pub fn reopen(self: &Arc<Self>, group: GroupId) {
-        if !self
-            .reopening
-            .lock()
-            .expect("reopening poisoned")
-            .insert(group)
+        if self.stopped.load(Ordering::Acquire)
+            || !self
+                .reopening
+                .lock()
+                .expect("reopening poisoned")
+                .insert(group)
         {
             return;
         }
@@ -489,6 +543,146 @@ impl Tenants {
         };
         if let Err(err) = self.open(&tenant).await {
             tracing::warn!(tenant = %tenant.slug, %err, "cannot reopen the tenant for a peer");
+        }
+    }
+
+    /// The host's rejoin hook: a peer told this node's copy of a tenant that
+    /// it fell behind. This node had been away longer than
+    /// `cluster.absent_after_secs` while writes went through, so the others
+    /// tidied those writes up without it and cannot send them any more; the
+    /// copy refuses everything from then on. It is closed, whatever holds it
+    /// (a store connection on it fails its next call and reconnects), its
+    /// file is discarded, and the tenant is copied back from a peer as a
+    /// lost file would be. If the copy fails, the tenant is left closed with
+    /// the copy marker in place: the next request, peer frame or catch-up
+    /// pass opens it, which copies.
+    pub fn rejoin_from_peers(self: &Arc<Self>, group: GroupId) {
+        if self.stopped.load(Ordering::Acquire)
+            || !self
+                .rejoining
+                .lock()
+                .expect("rejoining poisoned")
+                .insert(group)
+        {
+            return;
+        }
+        let tenants = Arc::clone(self);
+        tokio::spawn(async move {
+            tenants.rejoin(group).await;
+            tenants
+                .rejoining
+                .lock()
+                .expect("rejoining poisoned")
+                .remove(&group);
+        });
+    }
+
+    async fn rejoin(&self, group: GroupId) {
+        let open_lock = Arc::clone(
+            self.open_locks
+                .lock()
+                .expect("open_locks poisoned")
+                .entry(group)
+                .or_default(),
+        );
+        let tenant_id = {
+            // Under the open lock: a request must not reopen the stale file
+            // between its closing and its removal.
+            let _closing = open_lock.lock().await;
+            let Some(t) = self.open.lock().expect("open poisoned").remove(&group) else {
+                return;
+            };
+            let tenant_id = t.tenant_id.clone();
+            tracing::warn!(
+                tenant = %tenant_id,
+                group = group.0,
+                "this node fell behind the other nodes on the tenant; copying it back from a peer"
+            );
+            self.shut(group, t).await;
+            self.rejoins.fetch_add(1, Ordering::AcqRel);
+            let path = self.path_of(&tenant_id);
+            if let Err(err) = start_join(&path) {
+                tracing::error!(tenant = %tenant_id, %err, "cannot discard the tenant's file");
+                return;
+            }
+            tenant_id
+        };
+        let tenant = match Command(self.platform.clone()).load_tenant(&tenant_id).await {
+            Ok(Some(tenant)) => tenant,
+            Ok(None) => return,
+            Err(err) => {
+                tracing::warn!(tenant = %tenant_id, %err, "cannot load the tenant");
+                return;
+            }
+        };
+        // The marker left by `start_join` makes this copy.
+        if let Err(err) = self.open(&tenant).await {
+            tracing::warn!(
+                tenant = %tenant.slug,
+                %err,
+                "cannot copy the tenant back yet; the next open will"
+            );
+        }
+    }
+
+    /// Warns, every `every`, about each open tenant keeping four fifths or
+    /// more of the writes it may keep for a node that is away (once, until
+    /// it drops under half), and about each node this node stopped waiting
+    /// for on a tenant (once per node and tenant). The warnings are the
+    /// operator's alert: a tenant at its limit refuses writes.
+    pub fn watch_backlog(self: &Arc<Self>, every: Duration) -> JoinHandle<()> {
+        let tenants = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut warned_backlog: HashSet<GroupId> = HashSet::new();
+            let mut warned_peers: HashSet<(GroupId, u64)> = HashSet::new();
+            loop {
+                tokio::time::sleep(every).await;
+                tenants.check_backlog(&mut warned_backlog, &mut warned_peers);
+            }
+        })
+    }
+
+    fn check_backlog(
+        &self,
+        warned_backlog: &mut HashSet<GroupId>,
+        warned_peers: &mut HashSet<(GroupId, u64)>,
+    ) {
+        let open: Vec<(GroupId, String)> = self
+            .open
+            .lock()
+            .expect("open poisoned")
+            .iter()
+            .map(|(group, t)| (*group, t.tenant_id.clone()))
+            .collect();
+        for (group, tenant_id) in open {
+            if let Some((kept, limit)) = self.cluster.group_backlog(group) {
+                if kept * 5 >= limit * 4 {
+                    if warned_backlog.insert(group) {
+                        tracing::warn!(
+                            tenant = %tenant_id,
+                            kept,
+                            limit,
+                            "the tenant keeps most of the writes it may for a node that is away; at the limit it refuses writes"
+                        );
+                    }
+                } else if kept * 2 < limit {
+                    warned_backlog.remove(&group);
+                }
+            }
+            for peer in self.cluster.group_peers(group) {
+                if peer.given_up {
+                    if warned_peers.insert((group, peer.id)) {
+                        tracing::warn!(
+                            tenant = %tenant_id,
+                            node = peer.id,
+                            silent_secs = peer.silent_for.as_secs(),
+                            "a node has not been heard from on the tenant and is no longer waited for"
+                        );
+                    }
+                } else {
+                    warned_peers.remove(&(group, peer.id));
+                }
+            }
         }
     }
 
@@ -602,6 +796,7 @@ impl Tenants {
 
     /// Closes every open tenant.
     pub async fn shutdown(&self) {
+        self.stopped.store(true, Ordering::Release);
         let all: Vec<(GroupId, OpenTenant)> =
             self.open.lock().expect("open poisoned").drain().collect();
         for (group, t) in all {
@@ -626,18 +821,21 @@ impl Tenants {
 
 /// Whether a tenant's file has to be copied from a peer rather than opened
 /// as is: it is missing (a new disk, a deleted file, a node that was down
-/// when the tenant was created) or a previous copy did not finish. A file
+/// when the tenant was created), or a copy was started (a previous one did
+/// not finish, or this node fell behind and discarded its file). A file
 /// opened on its own would only receive what the peers still hold as
 /// commands, never what they compacted.
 ///
-/// A tenant created within the last [`FRESH_CREATION`] is the exception:
-/// every node opens it at once on seeing its creation, and a node still
-/// copying does not hand out a copy, so they would all wait on each other.
-/// Opened as is, such a file still gets everything unless this node lost it
-/// after its peers had compacted, which needs this node's own watermark
-/// first: only a file lost within a minute of the tenant's creation, after
-/// writes, is left incomplete.
+/// A missing file of a tenant created within the last [`FRESH_CREATION`] is
+/// the exception: every node opens it at once on seeing its creation, and a
+/// node still copying does not hand out a copy, so they would all wait on
+/// each other. Opened as is, such a file still gets everything its peers
+/// hold, and should they have compacted past it, they say so when it opens
+/// and it is copied then (`Tenants::rejoin_from_peers`).
 fn needs_join(path: &Path, tenant: &TenantState) -> bool {
+    if joining_marker(path).exists() {
+        return true;
+    }
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -645,7 +843,7 @@ fn needs_join(path: &Path, tenant: &TenantState) -> bool {
     if now.saturating_sub(tenant.created_at) <= FRESH_CREATION.as_secs() {
         return false;
     }
-    !path.exists() || joining_marker(path).exists()
+    !path.exists()
 }
 
 /// Present while a tenant's file is being copied from a peer.
