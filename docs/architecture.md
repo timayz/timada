@@ -136,7 +136,10 @@ tenant's products while the events stay isolated by construction.
    arriving from its peers, and leaves it open for the eviction to manage. A node whose
    tenant file is gone (a new disk, a deleted file) cannot get back what its peers
    already tidied up that way: `open` copies the tenant from a peer instead
-   (`needs_join`, a `.joining` marker next to the file while it runs). Every finished
+   (`needs_join`, a `.joining` marker next to the file while it runs). The copy
+   arrives page by page (4 MiB at a time), so a tenant of any size comes back; a
+   copy that fails halfway is discarded whole, since the marker stays and the next
+   open starts the copy over from an empty file. Every finished
    write is kept on the other nodes until the node that missed it has it, so a node
    that stays down makes the others keep everything, up to `cluster.write_backlog`
    writes per tenant, past which the tenant refuses writes. A node not heard from on a
@@ -399,8 +402,9 @@ operators: it names what things do, not the libraries behind them.
   temporary store, and the dashboard's integration tests, which boot the runtime in
   process: `tenants_runtime` (open, evict, reopen, catch-up), `tenants_cluster`
   (three nodes in one process: a node that missed writes catches up, a lost tenant
-  file is copied back, a node away too long is given up and copies the tenant back
-  on return, a tenant at its write backlog refuses writes), `store_api` (TCP, keys, TLS),
+  file is copied back, also one larger than a copy page, a node away too long is
+  given up and copies the tenant back on return, a tenant at its write backlog
+  refuses writes), `store_api` (TCP, keys, TLS),
   `storefront` (the library against a live store), `events_lock`. The review endpoint is
   covered over HTTP by the browser suite.
 - `make e2e`: `scripts/e2e.sh` builds the dashboard and the example storefront, resets
