@@ -631,9 +631,12 @@ impl Tenants {
 /// commands, never what they compacted.
 ///
 /// A tenant created within the last [`FRESH_CREATION`] is the exception:
-/// every node opens it at once on seeing its creation, so none has a copy to
-/// give, and none has compacted it either, since that needs the watermark of
-/// every node, this one included.
+/// every node opens it at once on seeing its creation, and a node still
+/// copying does not hand out a copy, so they would all wait on each other.
+/// Opened as is, such a file still gets everything unless this node lost it
+/// after its peers had compacted, which needs this node's own watermark
+/// first: only a file lost within a minute of the tenant's creation, after
+/// writes, is left incomplete.
 fn needs_join(path: &Path, tenant: &TenantState) -> bool {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
