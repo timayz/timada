@@ -3,22 +3,52 @@
 `timada-storefront` is what a merchant's own [topcoat](https://crates.io/crates/topcoat)
 app depends on to sell from its timada store. It connects to the dashboard's store API
 with the tenant's API key, keeps a local copy of the published catalog in the app's own
-SQLite database, and hands pages the data; the markup is the merchant's.
+SQLite database, and does everything a shop does that is not its look: it works out
+what each page shows (`pages::*`), serves the actions the forms post to (the cart,
+the checkout, the account, the reviews), keeps what the browser must remember in
+sealed cookies, ships the scripts, and words the refusals. The app writes the markup
+and the CSS: a `#[page]` per page whose body is a `view!` around the page's model,
+with the library's headless components where a form or a script needs a contract.
 
 ## Connecting
 
 ```rust
-use timada_storefront::{RouterBuilderStoreExt, Store, StoreConfig, StoreTls};
+use timada_storefront::{EnvDefaults, MoneyFormat, Paths, RouterBuilderStoreExt, Store, StorefrontEnv};
 
-let pool = SqlitePoolOptions::new().connect_with(options).await?;   // the app's database
+let env = StorefrontEnv::from_env(EnvDefaults { db: "shop.db", port: 3456 })?;   // STORE_* and friends
+let pool = env.open_pool().await?;
+let store = Store::connect(env.store_config()?, pool).await?;
+let storefront = env.storefront(store.clone())        // the cookie key, the proxies, Secure cookies
+    .messages(messages::french())                     // English unless set (see "Wording")
+    .money(MoneyFormat::french())                     // `12.50 EUR` unless set
+    .paths(Paths::default().catalog("/boutique"))     // the conventional paths unless set
+    .seller_country("FR")
+    .accent_color("#f46063");
+let router = module_router!().discover().store(storefront).build();
+topcoat::serve(env.bind().await?, router).await?;
+store.shutdown().await;
+```
+
+`StorefrontEnv` reads `STORE_ADDR`, `STORE_TOKEN`, `STORE_DB`, `STORE_TLS_CA`,
+`STORE_TLS_SERVER_NAME`, `STORE_MEDIA_URL`, `STORE_API_URL`, `STORE_COOKIE_KEY`,
+`STORE_SECURE_COOKIES`, `STORE_SELLER_COUNTRY`, `TRUSTED_PROXIES`, `HOST` and `PORT`
+(its module documents each). An app that gets its settings elsewhere builds the
+`StoreConfig` and the `Storefront` itself:
+
+```rust
 let config = StoreConfig::new("store.example.com:4321", token)
     .tls(StoreTls::from_ca_pem(Path::new("store-ca.pem"), "store.example.com")?)
     .prefix("/store");                                              // the default
 let store = Store::connect(config, pool).await?;
-let router = module_router!().discover().store(store.clone()).build();
-topcoat::serve(listener, router).await?;
-store.shutdown().await;
+let storefront = Storefront::new(store).cookie_key(key).trusted_proxies(networks)
+    .cookies(CookieOptions { secure: true, ..CookieOptions::default() });
 ```
+
+`.store(storefront)` puts the store in the app context, serves `GET {prefix}/status`,
+and, once a cookie key is given, installs the cookie layer (unless
+`.cookie_layer(false)`, for an app with its own), the trusted proxies, and the actions
+under the prefix (see "The actions the library serves"). `.store(store)` with a bare
+`Store` still works and serves the status route alone.
 
 - The **token** is created once on the tenant's *API keys* page of the dashboard and
   shown once. A key reaches its tenant's store and nothing else, as far as its scopes
@@ -151,17 +181,166 @@ keys page. Without it a picture keeps its bare `file` name, which suits a host s
 the files itself. The context helpers fill the addresses in; a host reading rows
 directly with `published_products` calls `Product::fill_urls(media_url(cx))` itself.
 
-## The two components
+## A page is markup around its model
+
+Every page the library knows has an async function in `timada_storefront::pages`
+that works out what it shows, written the shop's way, with the links to the app's
+pages, and does the page's redirects and 404s. The app's `#[page]` is the markup:
 
 ```rust
-price(product: &product, attrs: attributes! { class="price" })
-product_image(image: &photo, attrs: attributes! { class="photo" })
+use timada_storefront::pages::{ProductOptions, product_page};
+
+#[page]
+pub async fn index(cx: &Cx) -> Result<impl View> {
+    let page = product_page(cx, path_param::<Slug>(cx), &ProductOptions::default()).await?;
+    Ok(view! {
+        document(title: &page.product.name,
+            for crumb in &page.crumbs { <a href=(&crumb.url)>(&crumb.name)</a> }
+            <h1>(&page.product.name)</h1>
+            <p data-price="">(&page.price)</p>           // "19,90€", or a range
+            if let Some(error) = &page.error { <p role="alert">(&error.text)</p> }
+            add_to_cart_form(product: &page.product, /* ... */)
+        )
+    })
+}
 ```
 
-They render `<span data-price class="price">12.50 EUR</span>` and an `<img data-image
-src alt width height loading="lazy" decoding="async">`. The library ships no other
-markup and no CSS classes (a host's Tailwind build does not scan a dependency anyway):
-everything a page shows is the merchant's own `view!` around `Product` values.
+| page | function | what it carries, besides the data |
+|---|---|---|
+| every page's frame | `shell(cx)` | the menu, the cart's count and total, who is signed in, the header's links |
+| home | `home_page(cx, &HomeOptions)` | the newest products, the best rated among the rest, a tile per top category with the picture of its newest product (one query), the latest reviews |
+| catalogue | `catalog_page(cx, &ListOptions)` | `?q=` and `?page=` read, the previous and next pages |
+| category | `category_page(cx, slug, &ListOptions)` | the breadcrumb, the sub-categories with their counts and links, `?sort=` and `?page=` read, `sorts()` |
+| product | `product_page(cx, slug, &ProductOptions)` | the price line, the rating with the shop's decimal mark, the description split at its first paragraph, the breadcrumb, a page of reviews, the related products, each variant priced, `?error=` worded |
+| cart | `cart_page(cx)` | each line with its amounts and its product's page, the totals, whether it can check out |
+| cart drawer | `cart_drawer(cx, &DrawerOptions)` | the same for the drawer, plus what goes well with the cart and everything the cart script reads |
+| checkout | `checkout_page(cx, &CheckoutOptions)` | the draft the form starts from (a signed-in shopper's address first), the countries with what the VAT line says for each, the shipping methods and the one priced in, the totals, the offers, everything the checkout script reads; redirects to the cart when nothing can be ordered |
+| after the payment | `checkout_complete(cx)` | redirects to the order once it exists (forgetting the cart), to the checkout on a failed or expired payment, else what the waiting page shows |
+| order | `order_page(cx, order_id)` | the lines priced, the documents with their PDF links, a review slot per product (as it stands, or the form to write one); 404 for an unknown order, a redirect to sign in for one the browser does not hold |
+| account | `account_page(cx)`, `delete_account_page(cx)` | the orders with their status wording, the saved addresses; redirects to sign in |
+| sign-in | `sign_in_page(cx)`, `sign_in_code_page(cx)` | where to go after, the address a code went to, `?error=` and `?resent=` read |
+| a mailed review link | `open_review_link(cx, token)` | redirects to the order's reviews when the token is good, else what the "expired" page shows |
+
+Every refusal reaches a page as a `Flash { code, text }`: the code for a `data-*`
+attribute, the text in the shop's words. Amounts come as strings written with the
+shop's `MoneyFormat`. The models own their data, so a page's `view!` reads
+`page.product.name` rather than binding `let product = &page.product` first (a
+reference derived from a local cannot be moved into the view).
+
+## The headless components
+
+The library's components render the one element a behaviour needs, with its hidden
+fields and the `data-*` the scripts read, and nothing else: every class and attribute
+comes from the app through `attrs`, the visible markup through the child nodes.
+
+```rust
+add_to_cart_form(product: &page.product, attrs: attributes! { class="picker" },
+    for option in &page.product.options {
+        <select name=(option_field(option))> /* ... */ </select>
+    }
+    <input name="quantity" type="number" value="1">
+    <button>"Ajouter au panier"</button>
+)
+discount_form(back: Back::Drawer, from: Some(&drawer.from),
+    <input name="code"> <button>"Appliquer"</button>
+)
+```
+
+- The cart: `add_to_cart_form` (`slug`, `variant_id`, `quantity`, `offer`, `back`,
+  `from`; `data-add-to-cart`, which the cart script sends without leaving the page),
+  `offer_form` (an offer's own form, submitted by a button with `form=`),
+  `cart_quantity_form` (a −/+ step, or the child's `quantity` input),
+  `cart_remove_form`, `discount_form`, `cart_drawer_root` (the drawer's `id="cart"`
+  and its `data-*` contract), `drawer_express` and `drawer_pay_error`.
+- The checkout: `checkout_form` (the form's `data-*` contract and
+  `expected_total_cents`), `country_select` (each option carrying what the VAT line
+  says), `shipping_method_input`, `billing_toggle`, `billing_fieldset`,
+  `save_address_checkbox`, `express_section`, `express_mount`, `payment_element`,
+  `payment_error`, `place_button`.
+- The account and the reviews: `sign_in_form`, `sign_in_code_form`,
+  `resend_code_form`, `sign_out_form`, `sign_out_everywhere_form`,
+  `delete_account_form`, `remove_address_form`, `review_form`, `revise_review_form`.
+- The leaves: `price` (`<span data-price>` written the shop's way) and
+  `product_image` (`<img data-image src alt width height loading="lazy">`).
+- The scripts: `cart_script()` after the drawer, `checkout_script(page: &page)` after
+  the checkout's form (it adds the provider's own script when the shop takes
+  payments), `menu_script()` after a menu of `details[data-menu]` elements inside
+  `[data-menu-item]`s. They carry no wording and no colour: those come from the
+  `data-*` the components render (`data-money`, `data-color-primary`,
+  `data-msg-*`). The app's markup supplies the hooks they look for:
+  `[data-cart-link]` and `[data-cart-count]` in the header, `[data-drawer-close]` in
+  the drawer, `[data-checkout-vat]`, `[data-checkout-shipping]`,
+  `[data-checkout-total]`, `[data-place-total]`, `[data-no-shipping]` on the checkout.
+
+The library ships no CSS and no class names (a host's Tailwind build does not scan a
+dependency anyway).
+
+## The actions the library serves
+
+With a cookie key, `.store(storefront)` registers these under the store's prefix
+(`/store` by default). The components above post to them; `actions(cx)` gives their
+URLs for a form the app writes itself.
+
+| route | does |
+|---|---|
+| `POST /store/cart/add` | adds a product (resolving the variant from the option menus), starts the cart when the browser has none, comes back to `from` with the drawer open, or to the product page with the refusal |
+| `POST /store/cart/quantity`, `/store/cart/remove`, `/store/cart/discount` | change a line, take it out, put a code on or off; back to the cart, the checkout or the drawer (`back`) |
+| `POST /store/checkout/start` | asks to pay, for the checkout script: JSON with the `client_secret`, an `error` worded for the shopper, or a `redirect` |
+| `POST /store/checkout/place` | the same form without the script: back to the checkout with the refusal |
+| `GET /checkout/pay` | the old card form page, redirected to the checkout (`Paths::checkout_pay`; `None` serves nothing) |
+| `POST /store/sign-in`, `/store/sign-in/verify` | mails a code, then trades it for a session, then on to `next` |
+| `POST /store/sign-out`, `/store/sign-out-everywhere`, `/store/account/delete`, `/store/addresses/remove` | the account's actions |
+| `POST /store/reviews/submit`, `/store/reviews/revise` | a review with its photos (multipart, 26 MiB at most: `Storefront::review_body_limit`), only for an order the browser holds |
+| `GET /store/orders/{order_id}/documents/{document_id}` | an invoice or credit note as PDF, only for an order the browser holds |
+
+What the browser must remember lives in private cookies sealed with the key: its cart,
+the orders it placed (ten), the checkout form as last filled, the payment going
+through, the shopper's session token, a sign-in on its way. `CookieOptions` sets
+`Secure`, `SameSite`, the path, the ages and a name prefix. The `session` functions
+(`cart_id`, `current_cart`, `browser_cart`, `holds_order`, `signed_in`,
+`checkout_draft`, …) read and write them for an app that adds pages of its own; a
+browser "holds" an order it placed, or one the shopper signed in on it placed with
+their e-mail address.
+
+## Wording
+
+`Messages` is every word the library chooses: how each refusal code reads, an
+order's and a review's status, the countries the checkout lists (and the default
+one), what free, unavailable and included shipping say, the `incl.` before the VAT,
+what a product no longer sold is called, and the two strings the scripts need.
+`Messages::english()` is the default; an app overrides what it wants, once:
+
+```rust
+Messages::english()
+    .codes([("empty_cart", "Votre panier est vide."), /* ... */])
+    .fallback("Une erreur s'est produite.")
+    .order_statuses("Payée", "Expédiée", "Annulée")
+    .countries([("FR", "France"), ("BE", "Belgique")])
+    .shipping_free("Offerte")
+    .vat_prefix("dont")
+```
+
+`say(cx, code)` words a code; the models do it already (`Flash::text`). The
+countries also decide what a wallet may ship to.
+
+## Paths
+
+`Paths` says where the app's pages are, so the actions send the shopper back to
+them; the defaults are `/`, `/catalog`, `/p/{slug}`, `/c/{slug}`, `/cart`,
+`/checkout`, `/checkout/complete`, `/orders/{id}`, `/account`, `/account/delete`,
+`/account/sign-in`, `/account/sign-in/code`, `/pages/{slug}` and `/reviews/{token}`.
+A template has exactly one `{hole}`. `paths(cx)` builds the links with their query
+strings (`cart_url(error)`, `product_reviews_url(slug, page)`, `sign_in_url(next,
+error)`, …), which is what the models carry.
+
+## Money
+
+`MoneyFormat` writes every amount: `international()` is `12.50 EUR` and
+`12.00–18.00 EUR` (what `format_money` writes), `french()` is `19,90€`,
+`1 234,50 USD` and `19,90€ – 29,90€`; a shop builds its own from the decimal mark,
+the grouping, the symbols, and where the unit goes. `money_format(cx)` is the shop's,
+`price_line(&product)` a product's one amount or range, and `descriptor(currency)`
+what the scripts get as `data-money`, so a total a script recomputes reads the same.
 
 ## Cart and checkout
 
@@ -259,9 +438,11 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   holding, prices nothing any more: a payment for the total shown before is refused
   with `price_changed`. The example shows them as "Exclusive offer" cards above the
   checkout's payment, whose Add buttons post to `/cart/add` with `back=checkout`.
-- Who a shopper is, and which orders a browser may look at, is the host's call: the
-  library hands out any order by id. The example keeps the cart id, the payment in
-  progress, the browser's orders and its last address in private cookies.
+- Who a shopper is, and which orders a browser may look at, is decided by the
+  cookies the library keeps (see "The actions the library serves"): `holds_order`
+  says whether this browser placed the order or the shopper signed in on it did. The
+  `Store` methods and the `cx` functions above hand out any cart or order by id, for
+  an app that keeps its own.
 
 ## Reviews
 
@@ -286,10 +467,10 @@ product.rating();          // Some(4.5) once it has a published review
 product.review_count;
 ```
 
-- The library knows nothing of who is who: offer the form only on an order the
-  shopper holds (the example checks its own cookie, as for the order page). The order
-  must be paid and not cancelled and hold the product; one review per product and
-  order. It is signed with the first name and initial the order was shipped to.
+- `order_page` offers the form only on an order the browser holds, and the
+  `/store/reviews/*` actions refuse any other with a 404. The order must be paid and
+  not cancelled and hold the product; one review per product and order. It is signed
+  with the first name and initial the order was shipped to.
 - A review goes to the dashboard (`POST /store/reviews` at the dashboard address)
   with its photos, which the dashboard checks and keeps like product pictures. A key
   needs `store:checkout`. Refusals come back as codes to word in the shop's language
@@ -308,8 +489,9 @@ product.review_count;
 
 A shopper account belongs to the shop. There is no sign-up and no password: the
 shopper asks for a code, the dashboard mails it from the shop's name, and the first
-code they enter creates the account. The library hands back a token for the host to
-keep in its shopper's browser; it never keeps one itself.
+code they enter creates the account. The `/store/sign-in*` actions and the sign-in
+pages do all of this, keeping the token in a sealed cookie (`signed_in(cx)` reads who
+it signs in, once per request); the functions below are what they are built on.
 
 ```rust
 use timada_storefront::{
@@ -406,15 +588,16 @@ says where each snapshot comes from and how to take it again.
 
 ## The examples
 
-`examples/storefront` is a complete app on the library: a catalog page, a category
+`examples/storefront` is a complete app in English: a catalog page, a category
 page, a product page with an add-to-cart form and its reviews, a cart, a one-page
 checkout (steps, details, address and Stripe's Payment and Express Checkout elements
 beside an editable cart with its VAT, reassurance and recent reviews), an order
 confirmation where the shopper reviews what they bought, shopper accounts (sign-in
 from the checkout's "Already a customer?" or the header, `/account` with the orders
 and saved addresses, the checkout prefilled from them), inline styles, no asset
-bundle. Against a dashboard whose
-`[store_api]` listens on `127.0.0.1:4321`:
+bundle. It still carries its own copies of the cookies, the handlers and the
+scripts, from before the library owned them; `examples/chatounette` is the one to
+copy from. Against a dashboard whose `[store_api]` listens on `127.0.0.1:4321`:
 
 ```sh
 STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
@@ -433,15 +616,19 @@ a restart. To sell, tick `store:checkout` on the key. The browser suite
 catalog follows live, then fills a cart, checks out, reviews what it bought, and signs
 a returning shopper in on a second browser.
 
-`examples/chatounette` is a second app on the same library and the same routes, in
-French and in the layout and colours of chatounette.com: a top bar with the promo code,
+`examples/chatounette` is a second app on the library, in French and in the layout
+and colours of chatounette.com, and markup only: its `main.rs` is the "Connecting"
+snippet above with the French `Messages` (`src/messages.rs`), `MoneyFormat::french()`,
+`Paths::default().catalog("/boutique")`, the seller country and the accent colour;
+every page is a `view!` around a `pages::*` model, the forms are the headless
+components, and the scripts the library's. It shows a top bar with the promo code,
 a masthead with the search, the category bar, a home with the newest products, the
 category tiles, the latest reviews and the four promises, listings with the shop's
 sort labels, a product page with its gallery, option menus, reassurance block and
 folding description and facts, the shop's own pages under `/pages/{slug}`, and the
-cart, checkout, orders and account pages of the first example translated. It is meant
-to run against a tenant filled by `make seed.chatounette` (see "Seeding a catalogue"),
-which prints the three settings:
+cart, checkout, orders and account pages. It is meant to run against a tenant
+filled by `make seed.chatounette` (see "Seeding a catalogue"), which prints the
+three settings:
 
 ```sh
 STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
