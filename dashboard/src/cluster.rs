@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -56,8 +56,9 @@ pub struct Cluster {
     /// Shared by every group this node hosts.
     node_config: NodeConfig,
     /// The tenant runtime, once it exists: the transport's unrouted hook asks
-    /// it to open a tenant a peer is already talking about.
-    tenants: Arc<OnceLock<Arc<Tenants>>>,
+    /// it to open a tenant a peer is already talking about, and the host's
+    /// rejoin hook asks it to copy a tenant this node fell behind on.
+    tenants: Arc<Mutex<Option<Arc<Tenants>>>>,
     _tasks: Vec<JoinHandle<()>>,
 }
 
@@ -97,13 +98,13 @@ impl Cluster {
             }
         };
 
-        let tenants: Arc<OnceLock<Arc<Tenants>>> = Arc::new(OnceLock::new());
+        let tenants: Arc<Mutex<Option<Arc<Tenants>>>> = Arc::new(Mutex::new(None));
         let hook = Arc::clone(&tenants);
         let mux = Arc::new(
             MuxTransport::new(id, peers)
                 .with_pending_buffer(PENDING_FRAMES_PER_GROUP, PENDING_GROUPS, PENDING_TTL)
                 .with_unrouted_handler(move |group| {
-                    if let Some(tenants) = hook.get() {
+                    if let Some(tenants) = attached(&hook) {
                         tenants.reopen(group);
                     }
                 }),
@@ -111,7 +112,14 @@ impl Cluster {
         let serve = mux.serve(listener);
         let scheduler = SweepScheduler::new(SweepConfig::default());
         let sweep = scheduler.start();
-        let host = Arc::new(GroupHost::new(mux, scheduler));
+        let hook = Arc::clone(&tenants);
+        let host = Arc::new(
+            GroupHost::new(mux, scheduler).with_rejoin_handler(move |group| {
+                if let Some(tenants) = attached(&hook) {
+                    tenants.rejoin_from_peers(group);
+                }
+            }),
+        );
 
         // Pages load an aggregate right after writing it, possibly on another
         // node. With several nodes, a read-index barrier makes each
@@ -128,6 +136,13 @@ impl Cluster {
         // even though recovery then commits it. Three seconds outlasts the
         // reopen; a coordinator that really died is recovered that much later.
         // Alone, a node has no peer to open late and keeps the default.
+        //
+        // A node that stays down holds every finished write on the others
+        // until it returns (they compact only what every node has applied),
+        // so past `absent_after` the others stop waiting for it; a node away
+        // that long copies each tenant it fell behind on back from a peer
+        // (`Tenants::rejoin_from_peers`). `write_backlog` caps what a tenant
+        // keeps meanwhile. Alone, a node has no one to wait for.
         let defaults = NodeConfig::default();
         let node_config = NodeConfig {
             linearizable_reads: ids.len() > 1,
@@ -136,6 +151,11 @@ impl Cluster {
             } else {
                 defaults.recovery_timeout
             },
+            peer_absence_limit: match cluster {
+                Some(cluster) if ids.len() > 1 => cluster.absent_after(),
+                _ => None,
+            },
+            max_commands: cluster.map_or(defaults.max_commands, |cluster| cluster.write_backlog),
             ..defaults
         };
 
@@ -148,11 +168,15 @@ impl Cluster {
         })
     }
 
-    /// Lets the transport open tenants on demand. Called once.
+    /// Lets the transport open tenants on demand, and the host copy one back.
+    /// A runtime attached later replaces the one before it (a test restarts
+    /// a node's runtime; a server attaches one).
     pub fn attach_tenants(&self, tenants: Arc<Tenants>) {
-        if self.tenants.set(tenants).is_err() {
-            tracing::warn!("the tenant runtime was attached twice; keeping the first");
+        let mut attached = self.tenants.lock().expect("tenants poisoned");
+        if attached.is_some() {
+            tracing::debug!("the tenant runtime was attached again; using the new one");
         }
+        *attached = Some(tenants);
     }
 
     fn topology(&self) -> Arc<dyn Topology> {
@@ -272,4 +296,49 @@ impl Cluster {
             .get(group)
             .is_some_and(|node| node.command_count() > 0)
     }
+
+    /// The finished writes a group still keeps for nodes that are away, and
+    /// the most it may keep before refusing new ones; `None` when the group
+    /// is not open here.
+    pub fn group_backlog(&self, group: GroupId) -> Option<(usize, usize)> {
+        self.host
+            .get(group)
+            .map(|node| (node.command_count(), node.config().max_commands))
+    }
+
+    /// What this node knows of the other nodes on a group: empty alone or
+    /// when the group is not open here.
+    pub fn group_peers(&self, group: GroupId) -> Vec<PeerState> {
+        let Some(node) = self.host.get(group) else {
+            return Vec::new();
+        };
+        let absent = node.absent_peers();
+        self.ids
+            .iter()
+            .filter(|&&id| id != node.id())
+            .map(|&id| PeerState {
+                id: id.0,
+                silent_for: node.silent_for(id),
+                given_up: absent.contains(&id),
+            })
+            .collect()
+    }
+}
+
+/// Another node, as seen from one group on this node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerState {
+    /// Its index into `cluster.peers`.
+    pub id: u64,
+    /// How long since it was last heard from on the group (since the group
+    /// opened here, if never).
+    pub silent_for: Duration,
+    /// Whether this node stopped waiting for it (`cluster.absent_after_secs`).
+    pub given_up: bool,
+}
+
+/// The attached tenant runtime, if any. A hook runs on the transport's or the
+/// host's task: it takes the lock briefly and never calls back into them.
+fn attached(slot: &Mutex<Option<Arc<Tenants>>>) -> Option<Arc<Tenants>> {
+    slot.lock().expect("tenants poisoned").clone()
 }

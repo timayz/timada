@@ -19,6 +19,7 @@ use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, index as tenant_page};
 use crate::app::tenants::tenancy;
 use crate::auth::{now, unix_seconds, user_labels};
+use crate::cluster::PeerState;
 use crate::db::ReadPool;
 use crate::tenants::{TenantStatus, Tenants};
 use crate::ui::{document, format_time, notice};
@@ -29,6 +30,33 @@ module_param!(pub tenant_id);
 struct TenantQuery {
     error: Option<String>,
     message: Option<String>,
+}
+
+/// How another node stands on this tenant, for the overview.
+fn peer_label(peer: &PeerState) -> String {
+    let silent = peer.silent_for.as_secs();
+    if peer.given_up {
+        format!(
+            "no longer waited for, silent for {}",
+            format_silence(silent)
+        )
+    } else if silent >= 10 {
+        format!("not heard from for {}", format_silence(silent))
+    } else {
+        "in touch".to_owned()
+    }
+}
+
+fn format_silence(secs: u64) -> String {
+    if secs >= 2 * 24 * 3600 {
+        format!("{} days", secs / (24 * 3600))
+    } else if secs >= 2 * 3600 {
+        format!("{} h", secs / 3600)
+    } else if secs >= 120 {
+        format!("{} min", secs / 60)
+    } else {
+        format!("{secs} s")
+    }
 }
 
 pub fn admin_tenant_url(
@@ -56,6 +84,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let runtime = app_context::<Arc<Tenants>>(cx);
     let status = runtime.status(&tenant.id);
+    let backlog = runtime.backlog(&tenant.id);
+    let peers = runtime.peers(&tenant.id);
     let pending =
         count_open_invitations_of_tenant(app_context::<ReadPool>(cx), &tenant.id, now()).await?;
     let mut ids: Vec<String> = tenant.members.keys().cloned().collect();
@@ -97,6 +127,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                         if let Some(reason) = &tenant.suspended { ": " (reason) }
                     </dd>
+                    if let Some((kept, limit)) = backlog {
+                        <dt class="text-neutral-500">"Writes kept"</dt>
+                        <dd data-tenant-backlog=(kept)>
+                            (kept) " of " (limit) " for nodes that are away"
+                        </dd>
+                    }
+                    if !peers.is_empty() {
+                        <dt class="text-neutral-500">"Other nodes"</dt>
+                        <dd>
+                            <ul data-tenant-peers="">
+                                for peer in &peers {
+                                    <li data-node=(peer.id) data-given-up=(if peer.given_up { "true" } else { "false" })>
+                                        "Node " (peer.id) " · " (peer_label(peer))
+                                    </li>
+                                }
+                            </ul>
+                        </dd>
+                    }
                 </dl>
             </section>
 

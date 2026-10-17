@@ -133,8 +133,21 @@ tenant's products while the events stay isolated by construction.
    down would fetch the writes it missed only once something opens the tenant there:
    at startup in a cluster, `start_catch_up` waits for the platform store to settle,
    then opens every active tenant (four at a time), holds it until events stop
-   arriving from its peers, and leaves it open for the eviction to manage. The list of
-   per-tenant read models is `tenant_subscriptions()` in `serve.rs`; adding a
+   arriving from its peers, and leaves it open for the eviction to manage. A node whose
+   tenant file is gone (a new disk, a deleted file) cannot get back what its peers
+   already tidied up that way: `open` copies the tenant from a peer instead
+   (`needs_join`, a `.joining` marker next to the file while it runs). Every finished
+   write is kept on the other nodes until the node that missed it has it, so a node
+   that stays down makes the others keep everything, up to `cluster.write_backlog`
+   writes per tenant, past which the tenant refuses writes. A node not heard from on a
+   tenant for `cluster.absent_after_secs` (an hour by default) is therefore given up:
+   the others tidy up without it, and when its copy of the tenant reopens, they tell it
+   it fell behind; `rejoin_from_peers` then closes that copy, whatever holds it,
+   discards the file and makes the same copy a lost file gets. A node back before
+   anything was tidied up past it is simply waited for again. The admin page of a
+   tenant shows the writes it keeps and how each other node stands; `watch_backlog`
+   warns in the log at four fifths of the limit and whenever a node is given up. The
+   list of per-tenant read models is `tenant_subscriptions()` in `serve.rs`; adding a
    tenant-scoped context means adding one entry there.
 3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens
    with an API key token; the resolver loads the key by the token's hash, leases the
@@ -385,7 +398,9 @@ operators: it names what things do, not the libraries behind them.
 - `cargo test --workspace` (inside `nix develop`): the crates' domain tests over a
   temporary store, and the dashboard's integration tests, which boot the runtime in
   process: `tenants_runtime` (open, evict, reopen, catch-up), `tenants_cluster`
-  (three nodes in one process: a node that missed writes catches up), `store_api` (TCP, keys, TLS),
+  (three nodes in one process: a node that missed writes catches up, a lost tenant
+  file is copied back, a node away too long is given up and copies the tenant back
+  on return, a tenant at its write backlog refuses writes), `store_api` (TCP, keys, TLS),
   `storefront` (the library against a live store), `events_lock`. The review endpoint is
   covered over HTTP by the browser suite.
 - `make e2e`: `scripts/e2e.sh` builds the dashboard and the example storefront, resets
