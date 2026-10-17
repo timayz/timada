@@ -199,6 +199,8 @@ pub fn describe_error(code: &str) -> &'static str {
             "The test mail did not go out: check the server, port, security, user name and password. Nothing was saved."
         }
         "unknown_mail" => "This shop sends no such mail.",
+        "invalid_mail_languages" => "Pick the languages from the list.",
+        "unknown_language" => "This shop does not send mails in that language.",
         "invalid_mail_branding" => {
             "An accent colour is written #rrggbb, and the footer is at most 500 characters."
         }
