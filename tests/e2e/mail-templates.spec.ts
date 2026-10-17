@@ -203,7 +203,7 @@ test("a shop gives all its mails a logo, an accent colour and a footer", async (
   await expect(look.getByLabel("Accent colour")).toHaveValue("#c0ffee");
 
   // The editor's preview carries the look too.
-  await page.locator('[data-mail-template="shopper_code"]').getByRole("link").click();
+  await page.locator('[data-mail-template="shopper_code"]').getByRole("link", { name: "Sign-in code" }).click();
   await expect(page.frameLocator("iframe").getByText(`${name} SARL`)).toBeVisible();
 
   const first = uniqueEmail("shopper");

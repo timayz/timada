@@ -153,7 +153,7 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
                     <label class="block text-sm" for="new-passkey-name">"Name for the new passkey"</label>
                     <div class="mt-1 flex gap-2">
                         <input id="new-passkey-name" class="rounded border border-neutral-300 px-3 py-1" type="text" value="My passkey" maxlength="64">
-                        <button type="button"
+                        <button type="button" disabled=""
                             class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700"
                             data-passkey-register=""
                             data-user-id=(user_id)

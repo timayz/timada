@@ -52,6 +52,8 @@ function showError(error) {
   box.classList.remove("hidden");
 }
 
+// The buttons are rendered disabled and come alive here, once a listener is
+// attached: a click before this module has run would otherwise do nothing.
 function wire(selector, action) {
   for (const button of document.querySelectorAll(selector)) {
     button.addEventListener("click", (event) => {
@@ -63,6 +65,7 @@ function wire(selector, action) {
           button.disabled = false;
         });
     });
+    button.disabled = false;
   }
 }
 
