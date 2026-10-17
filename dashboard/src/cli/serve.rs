@@ -118,6 +118,12 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             &executor,
         )
         .await?,
+        start_read_model(
+            "members history",
+            timada_tenancy::member_audit_subscription(write_pool.clone()),
+            &executor,
+        )
+        .await?,
         // Not a read model, but the same lifecycle: every node opens a tenant
         // as soon as its creation arrives.
         start_read_model(

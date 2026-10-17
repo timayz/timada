@@ -29,7 +29,8 @@ impl<E: Executor> super::Command<E> {
         if role == ROLE_OWNER && !tenant.is_owner(actor_user_id) {
             return Err(TenancyError::Forbidden);
         }
-        self.grant(tenant, user_id, role, routing_key).await
+        self.grant(actor_user_id, tenant, user_id, role, routing_key)
+            .await
     }
 
     /// Moves a member to another role. Needs `members:manage`; to or from
@@ -65,6 +66,7 @@ impl<E: Executor> super::Command<E> {
         tenant
             .write()?
             .routing_key_opt(routing_key)
+            .requested_by(actor_user_id)
             .event(&MemberRoleChanged {
                 user_id: user_id.to_owned(),
                 role: role.to_owned(),
@@ -102,6 +104,7 @@ impl<E: Executor> super::Command<E> {
         tenant
             .write()?
             .routing_key_opt(routing_key)
+            .requested_by(actor_user_id)
             .event(&MemberRevoked {
                 user_id: user_id.to_owned(),
             })
@@ -113,9 +116,11 @@ impl<E: Executor> super::Command<E> {
 
 impl<E: Executor> Command<E> {
     /// Appends the grant once the caller has settled who may do it (an actor
-    /// with `members:manage`, or an accepted invitation).
+    /// with `members:manage`, or an accepted invitation, whose actor is the
+    /// account joining).
     pub(crate) async fn grant(
         &self,
+        actor_user_id: &str,
         tenant: TenantState,
         user_id: &str,
         role: &str,
@@ -130,6 +135,7 @@ impl<E: Executor> Command<E> {
         tenant
             .write()?
             .routing_key_opt(routing_key)
+            .requested_by(actor_user_id)
             .event(&MemberGranted {
                 user_id: user_id.to_owned(),
                 role: role.to_owned(),
