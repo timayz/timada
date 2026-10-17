@@ -57,7 +57,7 @@ snapshot.chatounette:
 # Traefik reaches it from the Docker bridge, so its X-Forwarded-For names the
 # shopper the dashboard limits sign-in codes for.
 storefront:
-	HOST=0.0.0.0 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} cargo run -p storefront-example
+	HOST=0.0.0.0 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_COOKIE_KEY=$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront-example
 
 storefront.migrate:
 	cargo run -p storefront-example -- migrate
@@ -66,7 +66,7 @@ storefront.migrate:
 # `make seed.chatounette` printed:
 #   STORE_TOKEN=... STORE_MEDIA_URL=... STORE_API_URL=https://timada.localhost make chatounette
 chatounette:
-	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} cargo run -p chatounette-example
+	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_COOKIE_KEY=$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p chatounette-example
 
 chatounette.migrate:
 	cargo run -p chatounette-example -- migrate
