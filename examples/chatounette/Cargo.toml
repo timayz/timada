@@ -1,0 +1,23 @@
+[package]
+name = "chatounette-example"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+publish = false
+description = "A French cat shop on timada-storefront, in the layout and colours of chatounette.com, seeded from seeds/chatounette.json.gz"
+
+[[bin]]
+name = "chatounette"
+path = "src/main.rs"
+
+[dependencies]
+timada-storefront = { path = "../../crates/storefront" }
+timada-core = { path = "../../crates/core" }
+topcoat = { version = "=0.10.0", features = ["anyhow", "multipart"] }
+tokio.workspace = true
+sqlx.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true

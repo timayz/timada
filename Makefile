@@ -1,10 +1,10 @@
-.PHONY: dev storefront storefront.migrate seed.chatounette snapshot.chatounette lint fmt fmt-check test check machete e2e
+.PHONY: dev storefront storefront.migrate chatounette chatounette.migrate seed.chatounette snapshot.chatounette lint fmt fmt-check test check machete e2e
 
 start: up dev
 
 cert:
 	mkdir -p .docker/traefik/certs
-	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost storefront.localhost store.timada.localhost
+	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost storefront.localhost chatounette.localhost store.timada.localhost
 
 cert.install:
 		sudo mkcert -install
@@ -57,10 +57,19 @@ snapshot.chatounette:
 # Traefik reaches it from the Docker bridge, so its X-Forwarded-For names the
 # shopper the dashboard limits sign-in codes for.
 storefront:
-	HOST=0.0.0.0 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} cargo run -p storefront-example
+	HOST=0.0.0.0 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront-example
 
 storefront.migrate:
 	cargo run -p storefront-example -- migrate
+
+# The Chatounette clone at https://chatounette.localhost, with the settings
+# `make seed.chatounette` printed:
+#   STORE_TOKEN=... STORE_MEDIA_URL=... STORE_API_URL=https://timada.localhost make chatounette
+chatounette:
+	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p chatounette-example
+
+chatounette.migrate:
+	cargo run -p chatounette-example -- migrate
 
 # Browser tests on a fresh database behind the compose Traefik, with the compose
 # dex container as the OIDC provider (`make up` first).
