@@ -152,6 +152,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // A restarted node brings its tenant copies up to date in the background
     // instead of waiting for something to open each one.
     let catch_up = tenants.start_catch_up(CatchUp::default());
+    // The operator's alert for a node that stays away: a tenant nearing the
+    // writes it may keep for it, or a node given up on.
+    let backlog_watch = tenants.watch_backlog(std::time::Duration::from_secs(60));
     // A few days after an order left, its buyer is asked for a review.
     let review_requests = crate::review_requests::ReviewRequests::new(
         read_pool.clone(),
@@ -197,6 +200,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     if let Some(catch_up) = catch_up {
         catch_up.abort();
     }
+    backlog_watch.abort();
     review_requests.abort();
     tenants.shutdown().await;
     for subscription in &read_models {
