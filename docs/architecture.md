@@ -28,6 +28,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
 | `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
 | `examples/storefront` | `storefront-example` | A minimal merchant app on the library, driven by the browser suite |
+| `examples/chatounette` | `chatounette-example` | A French cat shop in chatounette.com's layout and colours on the library, fed by `seeds/chatounette.json.gz` |
 | `tests/e2e` | | Playwright suite against the running dashboard |
 | `events.lock` | | Every persisted shape, frozen (see *Evolving events*) |
 
