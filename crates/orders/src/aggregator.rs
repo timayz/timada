@@ -123,6 +123,14 @@ pub enum Cart {
         method_id: String,
         chosen_by: String,
     },
+    /// The language the shopper browsed in, as its primary subtag (`fr`),
+    /// written with the `CheckoutRequested` of the same request. Without
+    /// it the shop mails the shopper in its default language.
+    LanguageGiven {
+        request_id: String,
+        language: String,
+        given_by: String,
+    },
     /// What shipping the payment of a request is priced with, written with
     /// its `PaymentRequested`: the payment's total is the lines, less any
     /// discount, plus `amount_cents`.
@@ -200,6 +208,10 @@ pub enum Order {
         amount_cents: u64,
         charged_by: String,
     },
+    /// The language the shopper checked out in, as its primary subtag
+    /// (`fr`), written with `Placed`; the shop's mails about the order go
+    /// out in it. Without it they go out in the shop's default language.
+    LanguageSet { language: String, set_by: String },
 }
 
 /// The index `reference → order`: one stream per reference, with the

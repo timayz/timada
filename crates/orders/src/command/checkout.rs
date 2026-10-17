@@ -5,8 +5,8 @@ use ulid::Ulid;
 
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
-    Claimed, DiscountGranted, Discounted, PaymentRefused, PaymentRequested, Placed,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen,
+    Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet, PaymentRefused,
+    PaymentRequested, Placed, ShippingCharged, ShippingGranted, ShippingMethodChosen,
 };
 use crate::error::OrdersError;
 use crate::value_object::{
@@ -45,6 +45,10 @@ pub struct Checkout {
     /// The id of the shipping method picked, in a shop that has some: one
     /// that ships to `shipping`'s country, in the cart's currency.
     pub shipping_method: Option<String>,
+    /// The language the shopper browses in, as the browser states it (a
+    /// tag or a whole `Accept-Language` value); kept as its primary subtag,
+    /// dropped when it is not one. The shop mails the shopper in it.
+    pub language: Option<String>,
 }
 
 /// The order a payment made.
@@ -506,6 +510,10 @@ impl<E: Executor> super::Command<E> {
             .shipping_method
             .map(|id| id.trim().to_owned())
             .filter(|id| !id.is_empty());
+        let language = checkout
+            .language
+            .as_deref()
+            .and_then(timada_core::primary_language);
         if vat_number.is_some() && !self.accepts_business_buyers().await? {
             return Err(OrdersError::BusinessBuyersRefused);
         }
@@ -544,6 +552,13 @@ impl<E: Executor> super::Command<E> {
                 request_id: request_id.clone(),
                 method_id,
                 chosen_by: actor.to_owned(),
+            });
+        }
+        if let Some(language) = language {
+            write.event(&LanguageGiven {
+                request_id: request_id.clone(),
+                language,
+                given_by: actor.to_owned(),
             });
         }
         write.commit(&self.0).await?;
@@ -716,6 +731,12 @@ impl<E: Executor> super::Command<E> {
                 name: shipping.name.clone(),
                 amount_cents: shipping.amount_cents,
                 charged_by: actor.to_owned(),
+            });
+        }
+        if let Some(language) = &request.language {
+            write.event(&LanguageSet {
+                language: language.clone(),
+                set_by: actor.to_owned(),
             });
         }
         let placed = write.commit(&self.0).await;
