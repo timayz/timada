@@ -372,6 +372,38 @@ delete_account(cx, &token).await?;                 // its key is destroyed, sess
 is `running`, `restarting` with the last error, or `stopped` with the reason; `products`
 counts the published rows of the local copy.
 
+## Seeding a catalogue
+
+A tenant can be filled from a snapshot in `seeds/` instead of the back-office forms,
+with the server stopped (two processes on one node's files would each run their own
+consensus over the same journal, so the command refuses to run while the server's port
+is in use):
+
+```sh
+timada-dashboard --config config/dev.local.toml seed \
+    --snapshot seeds/chatounette.json.gz --tenant Chatounette --owner me@example.com
+```
+
+`--owner` is the e-mail of a registered user (register at `/auth/register` first); the
+tenant is created under their ownership when no tenant has the slug (`--slug` to name
+it). The categories and products go in through the catalog's commands, their pictures
+are fetched into the node's media directory (`--skip-images` to leave them out,
+`--limit N` for a quick run), the shop gets a delivery method (France, Belgium,
+Switzerland, free from 65 €) and the promo code `MONSTER10` (10 %) so a storefront can
+sell at once, and a key holding `store:read` and `store:checkout` is minted. The command
+ends with the storefront's settings on stdout:
+
+```
+STORE_TOKEN=tk_…
+STORE_MEDIA_URL=https://timada.localhost/media/<tenant id>
+STORE_API_URL=https://timada.localhost
+```
+
+A second run skips what is already there (by slug), so a run that stopped halfway can
+be started again. The read models of the back office catch up when the server next
+starts. `make seed.chatounette` wraps the command for the dev config; `seeds/README.md`
+says where each snapshot comes from and how to take it again.
+
 ## The example
 
 `examples/storefront` is a complete app on the library: a catalog page, a category

@@ -25,6 +25,7 @@ config.workspace = true
 timada-identity = { path = "../crates/identity" }
 timada-tenancy = { path = "../crates/tenancy" }
 timada-catalog = { path = "../crates/catalog" }
+timada-catalog-import = { path = "../crates/catalog-import" }
 timada-orders = { path = "../crates/orders" }
 timada-discounts = { path = "../crates/discounts" }
 timada-reviews = { path = "../crates/reviews" }
@@ -49,6 +50,7 @@ sha2.workspace = true
 aes-gcm.workspace = true
 rand.workspace = true
 rust_iso3166.workspace = true
+reqwest.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

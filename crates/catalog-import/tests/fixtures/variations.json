@@ -1,0 +1,66 @@
+[
+ {
+  "slug": "tapis-rafraichissant-chat-orne-de-tetes-de-chats-japonais-s",
+  "parent": 51814,
+  "is_in_stock": true,
+  "name": "Tapis rafraichissant chat orné de têtes de chats japonais",
+  "variations": [],
+  "type": "variation",
+  "description": "",
+  "average_rating": "0",
+  "sku": "",
+  "categories": [],
+  "images": [
+   {
+    "id": 51809,
+    "src": "https://www.chatounette.com/wp-content/uploads/2026/07/IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_1.jpg",
+    "alt": "Un tapis rafraichissant chat orné de têtes de chats japonais, avec une surface tissée beige et un côté gris imprimé de chats, posé sur un fond rose clair.",
+    "name": "IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_1.jpg"
+   }
+  ],
+  "permalink": "https://www.chatounette.com/couchage-chat/tapis-chats/tapis-rafraichissant-chat/tapis-rafraichissant-chat-orne-tetes-chats-japonais/?attribute_pa_87aa0330980ddad2f9e66f=s",
+  "short_description": "",
+  "attributes": [],
+  "review_count": 0,
+  "prices": {
+   "price": "1990",
+   "regular_price": "1990",
+   "sale_price": "1990",
+   "currency_code": "EUR",
+   "price_range": null
+  },
+  "id": 51833
+ },
+ {
+  "slug": "tapis-rafraichissant-chat-orne-de-tetes-de-chats-japonais-m",
+  "parent": 51814,
+  "is_in_stock": true,
+  "name": "Tapis rafraichissant chat orné de têtes de chats japonais",
+  "variations": [],
+  "type": "variation",
+  "description": "",
+  "average_rating": "0",
+  "sku": "",
+  "categories": [],
+  "images": [
+   {
+    "id": 51809,
+    "src": "https://www.chatounette.com/wp-content/uploads/2026/07/IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_1.jpg",
+    "alt": "Un tapis rafraichissant chat orné de têtes de chats japonais, avec une surface tissée beige et un côté gris imprimé de chats, posé sur un fond rose clair.",
+    "name": "IMG_07_30_tapis_rafraichissant_chat_orne_tetes_chats_japonais_1.jpg"
+   }
+  ],
+  "permalink": "https://www.chatounette.com/couchage-chat/tapis-chats/tapis-rafraichissant-chat/tapis-rafraichissant-chat-orne-tetes-chats-japonais/?attribute_pa_87aa0330980ddad2f9e66f=m",
+  "short_description": "",
+  "attributes": [],
+  "review_count": 0,
+  "prices": {
+   "price": "2990",
+   "regular_price": "2990",
+   "sale_price": "2990",
+   "currency_code": "EUR",
+   "price_range": null
+  },
+  "id": 51832
+ }
+]
