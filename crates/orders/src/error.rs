@@ -104,7 +104,12 @@ impl OrdersError {
     /// Whether the message can be shown to the person who made the request
     /// (as opposed to an infrastructure failure).
     pub fn is_user_facing(&self) -> bool {
-        !matches!(self, Self::Write(_) | Self::Other(_))
+        match self {
+            // A write the store is not taking right now is told to the person.
+            Self::Write(err) => timada_core::write_refusal(err).is_some(),
+            Self::Other(_) => false,
+            _ => true,
+        }
     }
 
     /// A stable code for the refusal, for a page to carry in a URL and word
@@ -156,7 +161,8 @@ impl OrdersError {
             Self::TooManyShippingMethods => "too_many_shipping_methods",
             Self::ShippingMethodNotFound => "shipping_method_not_found",
             Self::ShippingUnavailable => "shipping_unavailable",
-            Self::Write(_) | Self::Other(_) => return None,
+            Self::Write(err) => return timada_core::write_refusal(err),
+            Self::Other(_) => return None,
         })
     }
 }

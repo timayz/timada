@@ -39,7 +39,8 @@ pub fn error_code(err: &IdentityError) -> &'static str {
         IdentityError::InvalidEmail => "invalid_email",
         IdentityError::WeakPassword => "weak_password",
         IdentityError::WrongPassword => "wrong_password",
-        IdentityError::InvalidState | IdentityError::Write(_) | IdentityError::Other(_) => "failed",
+        IdentityError::Write(err) => timada_core::write_refusal(err).unwrap_or("failed"),
+        IdentityError::InvalidState | IdentityError::Other(_) => "failed",
     }
 }
 

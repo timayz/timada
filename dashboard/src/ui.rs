@@ -245,6 +245,9 @@ pub fn describe_error(code: &str) -> &'static str {
         "invoicing_not_configured" => {
             "Shoppers cannot pay until the legal identity on the Invoicing page is filled in."
         }
+        "writes_paused" => {
+            "Changes are temporarily not accepted while a node is away. Please try again in a few minutes."
+        }
         _ => "Something went wrong. Please try again.",
     }
 }

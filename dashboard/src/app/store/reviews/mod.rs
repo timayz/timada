@@ -52,8 +52,12 @@ pub struct Answer {
 }
 
 pub(super) fn refused(code: &'static str) -> (StatusCode, Json<Answer>) {
+    refused_with(StatusCode::UNPROCESSABLE_ENTITY, code)
+}
+
+pub(super) fn refused_with(status: StatusCode, code: &'static str) -> (StatusCode, Json<Answer>) {
     (
-        StatusCode::UNPROCESSABLE_ENTITY,
+        status,
         Json(Answer {
             id: None,
             error: Some(code),
@@ -227,7 +231,37 @@ pub async fn submit(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
 
 pub(super) fn answer_error(err: ReviewError) -> Result<(StatusCode, Json<Answer>)> {
     match err.code() {
+        // The shop is not taking writes for the moment: not the shopper's
+        // doing, so a 503 the storefront can word as "try again later".
+        Some(code) if code == timada_core::WRITES_PAUSED => {
+            Ok(refused_with(StatusCode::SERVICE_UNAVAILABLE, code))
+        }
         Some(code) if err.is_user_facing() => Ok(refused(code)),
         _ => Err(topcoat::Error::from_anyhow(err.into())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A shop not taking writes for the moment answers 503 with the code a
+    /// storefront words as "try again later"; a refusal of the review itself
+    /// stays 422, and a real failure is not an answer at all.
+    #[test]
+    fn a_paused_store_answers_service_unavailable() {
+        let paused = ReviewError::Write(evento::WriteError::Unavailable(anyhow::anyhow!(
+            "backlog at cap"
+        )));
+        let (status, Json(answer)) = answer_error(paused).expect("an answer");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(answer.error, Some(timada_core::WRITES_PAUSED));
+
+        let (status, Json(answer)) = answer_error(ReviewError::InvalidRating).expect("an answer");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(answer.error, Some(REVIEW_INVALID_RATING));
+
+        let broken = ReviewError::Write(evento::WriteError::Unknown(anyhow::anyhow!("disk gone")));
+        assert!(answer_error(broken).is_err());
     }
 }

@@ -368,7 +368,8 @@ async fn answer<T>(
     if status == expected {
         return read(&body).map(Ok);
     }
-    let refusable = matches!(status.as_u16(), 401 | 422 | 429);
+    // 503 is the shop not taking writes for the moment (`writes_paused`).
+    let refusable = matches!(status.as_u16(), 401 | 422 | 429 | 503);
     let error = serde_json::from_slice::<Refused>(&body)
         .ok()
         .and_then(|refused| refused.error);

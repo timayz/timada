@@ -124,7 +124,9 @@ async fn on_checkout_requested<E: Executor>(
                 refuse(DISCOUNT_ALREADY_USED).await?;
                 return Ok(());
             }
-            Err(err) if err.is_user_facing() => {
+            // A store not taking writes for the moment is not a refusal of
+            // the code: the error retries the payment request later.
+            Err(err) if err.is_user_facing() && err.code() != Some(timada_core::WRITES_PAUSED) => {
                 refuse(DISCOUNT_UNKNOWN).await?;
                 return Ok(());
             }
