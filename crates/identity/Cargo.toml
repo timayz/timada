@@ -6,6 +6,7 @@ authors.workspace = true
 
 [dependencies]
 evento.workspace = true
+timada-core = { path = "../core" }
 bitcode.workspace = true
 argon2.workspace = true
 tokio.workspace = true

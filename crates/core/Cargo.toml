@@ -5,3 +5,7 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+evento.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true

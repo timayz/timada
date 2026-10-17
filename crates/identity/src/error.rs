@@ -52,6 +52,11 @@ impl IdentityError {
     /// Whether the message can be shown to the person who made the request
     /// (as opposed to an infrastructure failure).
     pub fn is_user_facing(&self) -> bool {
-        !matches!(self, Self::Write(_) | Self::Other(_))
+        match self {
+            // A write the store is not taking right now is told to the person.
+            Self::Write(err) => timada_core::write_refusal(err).is_some(),
+            Self::Other(_) => false,
+            _ => true,
+        }
     }
 }

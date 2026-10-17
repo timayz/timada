@@ -54,6 +54,7 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::SeriesCodeTaken => "series_code_taken",
         TenancyError::InvalidSeriesCode => "invalid_series_code",
         TenancyError::InvalidLegalIdentity => "invalid_legal_identity",
-        TenancyError::Write(_) | TenancyError::Other(_) => "failed",
+        TenancyError::Write(err) => timada_core::write_refusal(err).unwrap_or("failed"),
+        TenancyError::Other(_) => "failed",
     }
 }
