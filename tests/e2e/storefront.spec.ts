@@ -1777,3 +1777,50 @@ test("a buyer is mailed a link to review a fulfilled order, which opens it on an
     await stripe.stop();
   }
 });
+
+// A browser that asks for French: the storefront passes the language on
+// with the sign-in code and the checkout, and the order keeps it.
+test.describe("a French-speaking shopper", () => {
+  test.use({ locale: "fr-FR" });
+
+  test("the order remembers the language the shopper checked out in", async ({ page, request }) => {
+    const stripe = new FakeStripe();
+    await stripe.start();
+    try {
+      await registerWithEmail(page, uniqueEmail("merchant"));
+      const { name, slug } = uniqueTenant("Bilingual Shop");
+      await createTenant(page, name);
+      await publishProduct(page, slug, "Blue Mug", "12.50");
+      await setLegalIdentity(page, slug);
+      await page.goto(`/t/${slug}/payments`);
+      const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+      await page.getByLabel("Publishable key").fill("pk_test_e2e");
+      await page.getByLabel("Secret key").fill("sk_test_e2e");
+      await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+      await page.getByRole("button", { name: "Save" }).click();
+      await expect(page.getByRole("status")).toContainText("Stripe connected.");
+      await startStorefront(request, await mintKey(page, slug, true), 1);
+
+      await page.goto(`${STOREFRONT}/p/blue-mug`);
+      await addToCart(page);
+      await placeOrder(page, true);
+      const intent = stripe.lastIntent()!;
+      stripe.pay(intent.id);
+      expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+      await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+      await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+      const reference = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+
+      // The merchant sees the language on the order.
+      const row = page.locator(`[data-order="${reference}"]`);
+      await expect(async () => {
+        await page.goto(`/t/${slug}/orders`);
+        await expect(row).toHaveCount(1, { timeout: 1000 });
+      }).toPass({ timeout: 15_000 });
+      await row.getByRole("link", { name: reference }).click();
+      await expect(page.locator("[data-order-language]")).toHaveText("fr");
+    } finally {
+      await stripe.stop();
+    }
+  });
+});

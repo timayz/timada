@@ -27,9 +27,10 @@ use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
     BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, ConfirmationMailed,
     Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded,
-    ItemRemoved, MethodAdded, MethodChanged, MethodRemoved, PaymentRefused, PaymentRequested,
-    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded, ShippingCharged,
-    ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet,
+    ItemRemoved, LanguageGiven, LanguageSet, MethodAdded, MethodChanged, MethodRemoved,
+    PaymentRefused, PaymentRequested, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet,
+    Refunded, ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
+    StorefrontAddressSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -121,6 +122,9 @@ pub struct CheckoutRequest {
     pub billing: Option<ShippingAddress>,
     /// The shipping method picked, in a shop that has some.
     pub shipping_method: Option<String>,
+    /// The shopper's language, a primary subtag (`fr`), when the browser
+    /// said one.
+    pub language: Option<String>,
     pub answer: Option<PaymentAnswer>,
 }
 
@@ -214,6 +218,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_discount_granted())
         .handler(on_shipping_method_chosen())
         .handler(on_shipping_granted())
+        .handler(on_language_given())
         .strict()
 }
 
@@ -288,6 +293,7 @@ async fn on_checkout_requested(
         vat_number: None,
         billing: None,
         shipping_method: None,
+        language: None,
         answer: None,
     });
     cart.updated_at = event.timestamp;
@@ -424,6 +430,21 @@ async fn on_shipping_method_chosen(
 }
 
 #[evento::handler]
+async fn on_language_given(
+    event: Event<LanguageGiven>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|request| request.request_id == event.data.request_id)
+    {
+        request.language = Some(event.data.language.to_owned());
+    }
+    Ok(())
+}
+
+#[evento::handler]
 async fn on_shipping_granted(
     event: Event<ShippingGranted>,
     cart: &mut CartState,
@@ -513,6 +534,10 @@ pub struct OrderState {
     pub discount: Option<OrderDiscount>,
     /// The shipping it was paid with; `None` when shipping was included.
     pub shipping_charge: Option<OrderShipping>,
+    /// The language the shopper checked out in, a primary subtag (`fr`);
+    /// `None` when the browser did not say. The shop's mails about the
+    /// order go out in it.
+    pub language: Option<String>,
     /// What went back to the shopper, in minor units, all refunds together.
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
@@ -554,6 +579,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_discounted())
         .handler(on_billing_address_set())
         .handler(on_shipping_charged())
+        .handler(on_language_set())
         .strict()
 }
 
@@ -605,6 +631,12 @@ async fn on_shipping_charged(
         name: event.data.name.to_owned(),
         amount_cents: event.data.amount_cents,
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_language_set(event: Event<LanguageSet>, order: &mut OrderState) -> anyhow::Result<()> {
+    order.language = Some(event.data.language.to_owned());
     Ok(())
 }
 

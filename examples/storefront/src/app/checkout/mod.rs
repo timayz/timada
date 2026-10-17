@@ -16,7 +16,7 @@ pub mod start;
 
 use timada_storefront::{
     CartView, Checkout, OfferView, OrdersError, VatEstimate, accepts_business_buyers, format_money,
-    menu, payment_setup, recent_reviews, save_address, start_payment,
+    menu, payment_setup, recent_reviews, request_language, save_address, start_payment,
 };
 use topcoat::{
     Result,
@@ -798,6 +798,8 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         vat_number: business.then(|| draft.vat_number.clone()),
         billing: draft.billing(),
         shipping_method: Some(draft.shipping_method.clone()),
+        // The shop mails about the order in the shopper's language.
+        language: request_language(cx),
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {
         Ok(session) => {

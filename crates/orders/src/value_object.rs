@@ -101,7 +101,7 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
 
     use crate::aggregator::{
         BillingAddressGiven, BuyerIdentified, Cart, CheckoutRequested, Created, DiscountApplied,
-        DiscountRemoved, ItemAdded, ItemRemoved, QuantitySet, ShippingMethodChosen,
+        DiscountRemoved, ItemAdded, ItemRemoved, LanguageGiven, QuantitySet, ShippingMethodChosen,
     };
 
     aggregate_type == Cart::aggregate_type()
@@ -116,6 +116,7 @@ pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
             DiscountApplied::event_name(),
             DiscountRemoved::event_name(),
             ShippingMethodChosen::event_name(),
+            LanguageGiven::event_name(),
         ]
         .contains(&name)
 }

@@ -441,7 +441,9 @@ async fn a_large_tenant_copies_back_in_pages() {
     // Sixty events of 100 KiB: about 6 MiB, so the copy needs two pages.
     let count: u16 = 60;
     for version in 0..count {
-        write(&executor, version, &"x".repeat(100 * 1024)).await.unwrap();
+        write(&executor, version, &"x".repeat(100 * 1024))
+            .await
+            .unwrap();
     }
     let paths = [
         t0.path_of(&tenant.id),

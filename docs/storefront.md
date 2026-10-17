@@ -193,6 +193,7 @@ let session = start_payment(cx, &cart_id, Checkout {
     email, shipping, note,
     shipping_method: method.map(|m| m.id.clone()),
     expected_total_cents: Some(view.total_with(method)),   // the total the shopper saw
+    language: request_language(cx),                        // the browser's Accept-Language
     ..Default::default()
 }).await?;
 // Ok(session): confirm with Stripe using session.client_secret; confirmPayment
@@ -349,6 +350,12 @@ delete_account(cx, &token).await?;                 // its key is destroyed, sess
   (`X-Shopper-IP`), so behind a reverse proxy the host must trust it
   (`.trusted_proxies(…)` on its router), or all its shoppers share one address.
   `Store::request_sign_in_code` takes the address itself.
+- `request_sign_in_code(cx, …)` also reports the request's language, the primary
+  subtag of its `Accept-Language` (`language=fr`); `request_language(cx)` reads it
+  for `Checkout::language` too. The dashboard keeps the language on the order and
+  mails the shopper in it when the shop has that wording, else in the shop's
+  default language (see [mail](mail.md)). `Store::request_sign_in_code` takes the
+  language itself, as its third argument.
 - A session lasts 30 days. Saving an address it already keeps moves it first.
 - Deleting an account forgets its addresses and ends every session, the caller's
   too: forget the token, and anything else the browser keeps about the shopper. The
