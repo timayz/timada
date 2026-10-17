@@ -140,9 +140,9 @@ event timada-reviews/ReviewRequest::RequestMailed { order_id: String, email: Str
 event timada-reviews/ReviewRequests::RequestDelaySet { days: u8, set_by: String }
 event timada-reviews/ReviewRequests::RequestsDisabled { disabled_by: String }
 event timada-shoppers/Shopper::AddressRemoved { address_id: String }
-event timada-shoppers/Shopper::AddressSaved { address_id: String, address: ShippingAddress }
-event timada-shoppers/Shopper::Forgotten unit
-event timada-shoppers/Shopper::Registered { email: String }
+event timada-shoppers/Shopper::AddressSaved { address_id: String, address: Vec<u8> }
+event timada-shoppers/Shopper::Forgotten { key_id: String }
+event timada-shoppers/Shopper::Registered { key_id: String, email: Vec<u8> }
 event timada-shoppers/Shopper::SessionsRevoked { except_session: Option<String> }
 event timada-shoppers/ShopperChallenge::AttemptFailed unit
 event timada-shoppers/ShopperChallenge::CodeConsumed unit

@@ -68,9 +68,11 @@ smtp_url = "smtp://localhost:1025"
 
 # The key that seals the secrets merchants hand over (their mail server
 # passwords, and their payment keys unless payments.secret_key is set) before
-# they are stored. At least 32 characters, the same on every node; changing it
-# makes the stored secrets unreadable, and merchants then enter them again.
-# Without it, shops cannot set up a mail server of their own.
+# they are stored, and the shopper keys below. At least 32 characters, the
+# same on every node; changing it makes the stored secrets unreadable, and
+# merchants then enter them again, and every shopper account loses its
+# addresses. Without it, shops cannot set up a mail server of their own and
+# shoppers cannot create accounts.
 # Set TIMADA__SECRETS__KEY in production.
 # [secrets]
 # key = "at least 32 characters, the same on every node"
@@ -94,6 +96,16 @@ dir = "data/media"
 # has to work from outside the server. Shown on each tenant's API keys page for
 # its storefront to be configured with.
 public_url = "https://timada.localhost/media"
+
+[shopper_keys]
+# Directory holding one key per shopper account, one sub-directory per tenant.
+# A shopper's e-mail address and saved addresses are recorded only encrypted
+# with their key, so deleting an account deletes its key and leaves what the
+# account recorded unreadable for good. Every node keeps every key, sealed
+# with secrets.key. Keep backups of this directory short-lived, or not at all:
+# restoring an old copy brings deleted accounts' data back. Losing it on every
+# node loses every account's data.
+dir = "data/shopper-keys"
 
 # Card payments. Each tenant connects its own Stripe account on
 # /t/<slug>/payments; the account's secrets are kept encrypted with
