@@ -76,6 +76,11 @@ test("an invited address joins through registration and gets its role", async ({
   await expect(guest.getByText("(you)")).toBeVisible();
   await expect(guest.getByRole("button", { name: "Send invitation" })).toHaveCount(0);
   expect((await guest.goto(`/t/${slug}/roles`))?.status()).toBe(403);
+  // ...the members history included (a read model: it may lag a moment).
+  await expect(async () => {
+    await guest.goto(`/t/${slug}/members/history`);
+    await expect(guest.locator("[data-audit-row]", { hasText: "joined as Support" })).toHaveCount(1, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
   // The used link now just points the member at the tenant.
   await guest.goto(link);
   await expect(guest.locator("[data-invitation=member]")).toBeVisible();
@@ -100,6 +105,20 @@ test("an invited address joins through registration and gets its role", async ({
   await guestRow.getByRole("button", { name: "Remove" }).click();
   await expect(owner.getByRole("status")).toContainText("Member removed.");
   expect((await guest.goto(`/t/${slug}`))?.status()).toBe(403);
+
+  // The history says who did each of it, newest first.
+  await owner.getByRole("link", { name: "History" }).click();
+  await expect(owner).toHaveURL(new RegExp(`/t/${slug}/members/history`));
+  const rows = owner.locator("[data-audit-row]");
+  const guestLabel = guestEmail.toLowerCase();
+  await expect(async () => {
+    await owner.reload();
+    await expect(rows.first()).toContainText(`removed ${guestLabel}`, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(rows.filter({ hasText: `moved ${guestLabel} to Manager` })).toHaveCount(1);
+  await expect(rows.filter({ hasText: /invited third-.* as Support/ })).toContainText(guestLabel);
+  await expect(rows.filter({ hasText: `invited ${guestLabel} as Support` })).toHaveCount(1);
+  await expect(rows.filter({ hasText: "joined as Support" })).toContainText(guestLabel);
 
   await ownerContext.close();
   await guestContext.close();

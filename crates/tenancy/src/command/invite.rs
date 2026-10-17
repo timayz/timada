@@ -74,6 +74,7 @@ impl<E: Executor> super::Command<E> {
         evento::append(&id)
             .original_version(0)
             .routing_key_opt(routing_key)
+            .requested_by(actor_user_id)
             .event(&Sent {
                 tenant_id: tenant.id,
                 email,
@@ -116,12 +117,19 @@ impl<E: Executor> super::Command<E> {
         let tenant_id = invitation.tenant_id.clone();
         let tenant = self.require_active(&tenant_id).await?;
         if !tenant.members.contains_key(&cmd.user_id) {
-            self.grant(tenant, &cmd.user_id, &invitation.role, routing_key.clone())
-                .await?;
+            self.grant(
+                &cmd.user_id,
+                tenant,
+                &cmd.user_id,
+                &invitation.role,
+                routing_key.clone(),
+            )
+            .await?;
         }
         invitation
             .write()?
             .routing_key_opt(routing_key)
+            .requested_by(cmd.user_id.clone())
             .event(&Accepted {
                 user_id: cmd.user_id,
                 accepted_at: now,
@@ -153,6 +161,7 @@ impl<E: Executor> super::Command<E> {
         invitation
             .write()?
             .routing_key_opt(routing_key)
+            .requested_by(actor_user_id)
             .event(&Revoked {
                 revoked_by: actor_user_id.to_owned(),
             })

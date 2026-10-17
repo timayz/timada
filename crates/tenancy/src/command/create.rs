@@ -51,6 +51,7 @@ impl<E: Executor> super::Command<E> {
         let created = evento::append(&tenant_id)
             .original_version(0)
             .routing_key_opt(routing_key.clone())
+            .requested_by(cmd.owner_user_id.clone())
             .event(&Created {
                 slug: slug.clone(),
                 name,
