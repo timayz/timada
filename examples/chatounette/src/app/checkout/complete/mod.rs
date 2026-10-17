@@ -3,66 +3,29 @@
 //! take a moment longer than the browser's way back: until then the page
 //! says so and looks again.
 
-use timada_storefront::{menu, order_of_cart};
+use timada_storefront::pages::checkout_complete;
 use topcoat::{
     Result,
     context::Cx,
-    router::{
-        error::{RouterErrorExt, redirect},
-        href, page, query_params,
-    },
+    router::page,
     view::{Unescaped, View, view},
 };
 
-use crate::app::checkout::checkout_url;
 use crate::app::document;
-use crate::shopper::{
-    checkout_draft, forget_cart, forget_payment, payment_in_progress, remember_order,
-    save_checkout_draft,
-};
 
 /// Looks again in two seconds.
 const RELOAD_SCRIPT: &str = "setTimeout(() => location.reload(), 2000);";
 
-#[topcoat::router::query_params(error = bad_request)]
-struct CompleteQuery {
-    /// What Stripe says about the confirmation: `succeeded`, `processing`
-    /// or `failed`.
-    redirect_status: Option<String>,
-}
-
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let query = query_params::<CompleteQuery>(cx)?;
-    let progress =
-        payment_in_progress(cx).ok_or_redirect(checkout_url(cx, Some("payment_expired")))?;
-    if query.redirect_status.as_deref() == Some("failed") {
-        return Err(redirect(checkout_url(cx, Some("payment_failed"))).into());
-    }
-    if let Some(order) = order_of_cart(cx, &progress.cart_id).await? {
-        remember_order(cx, &order.id)?;
-        forget_cart(cx);
-        forget_payment(cx);
-        // The address stays for the next order; the note was for this one.
-        let mut draft = checkout_draft(cx);
-        draft.note.clear();
-        save_checkout_draft(cx, draft)?;
-        let to = href!(
-            crate::app::orders::order_id::index,
-            crate::app::orders::order_id::OrderId(order.id)
-        )
-        .resolve(cx);
-        return Err(redirect(to).into());
-    }
-    let nav = menu(cx).await?;
+    let waiting = checkout_complete(cx).await?;
 
     Ok(view! {
         document(
             title: "Confirmation du paiement",
-            nav: &nav,
             <h1>"Confirmation de votre paiement…"</h1>
             <p data-payment-confirming="">"Cela prend quelques secondes. La page se rafraîchit toute seule."</p>
-            <p><a href=(href!(index))>"Vérifier à nouveau"</a></p>
+            <p><a href=(&waiting.retry_url)>"Vérifier à nouveau"</a></p>
             <script>(Unescaped::new_unchecked(RELOAD_SCRIPT))</script>
         )
     })

@@ -1,11 +1,12 @@
 //! The shop's menu: one bar of top-level categories, each opening a panel
 //! that starts with "All <category>" and lists what is under it, two more
 //! levels deep. The merchant leaves a category out of it from the back
-//! office; the page builds it from [`timada_storefront::menu`].
+//! office; the page builds it from the library's menu.
 //!
 //! Without JS each category is a `<details>` and the small-screen menu opens
-//! on `#menu`. [`MENU_SCRIPT`] adds hover, one panel at a time, Escape and a
-//! click outside.
+//! on `#menu`. The library's menu script adds hover, one panel at a time,
+//! Escape and a click outside; it reads `details[data-menu]` and the
+//! `[data-menu-item]` around each.
 
 use timada_storefront::CategoryNode;
 use topcoat::{
@@ -23,9 +24,9 @@ pub async fn site_menu(nav: &[CategoryNode]) -> Result<impl View> {
         <nav id="menu" class="sections" aria-label="Catégories">
             <a class="menu-close" href="#">"Fermer le menu"</a>
             <ul class="menu-bar">
-                <li class="menu-item"><a class="menu-top" href=(href!(boutique::index)) data-menu-all="">"Nos produits"</a></li>
+                <li class="menu-item" data-menu-item=""><a class="menu-top" href=(href!(boutique::index)) data-menu-all="">"Nos produits"</a></li>
                 for node in nav {
-                    <li class="menu-item">
+                    <li class="menu-item" data-menu-item="">
                         if node.children.is_empty() {
                             <a class="menu-top" data-category=(&node.category.slug) data-products=(node.product_count)
                                 href=(href!(c::slug::index, c::slug::Slug(node.category.slug.clone())))>
@@ -103,37 +104,3 @@ ul.menu-columns ul li { margin: .15rem 0; }
   ul.menu-columns { columns: auto; }
 }
 "#;
-
-/// Opens a panel on hover where there is a mouse, keeps one open at a time,
-/// and closes it on Escape or a click elsewhere. Static and trusted.
-pub const MENU_SCRIPT: &str = r##"
-(() => {
-const menus = [...document.querySelectorAll("details[data-menu]")];
-if (!menus.length) return;
-const hover = matchMedia("(hover: hover) and (pointer: fine) and (min-width: 901px)");
-
-for (const menu of menus) {
-  const item = menu.closest(".menu-item");
-  const summary = menu.querySelector("summary");
-  item.addEventListener("mouseenter", () => { if (hover.matches) menu.open = true; });
-  item.addEventListener("mouseleave", () => { if (hover.matches) menu.open = false; });
-  // The pointer that opened it on the way in would close it again on click.
-  summary.addEventListener("click", (event) => {
-    if (hover.matches && event.detail > 0 && menu.open) event.preventDefault();
-  });
-  menu.addEventListener("toggle", () => {
-    if (menu.open) for (const other of menus) if (other !== menu) other.open = false;
-  });
-}
-document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  const menu = menus.find((menu) => menu.open);
-  if (!menu) return;
-  menu.open = false;
-  menu.querySelector("summary").focus();
-});
-document.addEventListener("click", (event) => {
-  for (const menu of menus) if (menu.open && !menu.contains(event.target)) menu.open = false;
-});
-})();
-"##;

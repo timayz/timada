@@ -2,7 +2,6 @@
 //! this demonstration shop (nothing here is legal advice, and no real
 //! company stands behind it).
 
-use timada_storefront::menu;
 use topcoat::{
     Result,
     context::Cx,
@@ -94,11 +93,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .iter()
         .find(|page| page.slug == slug)
         .ok_or_else(not_found)?;
-    let nav = menu(cx).await?;
     Ok(view! {
         document(
             title: page.title,
-            nav: &nav,
             <div class="wrap">
                 <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">
                     <a href=(href!(crate::app::index))>"Accueil"</a> " / " (page.title)

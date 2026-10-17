@@ -1,115 +1,51 @@
 //! The cart drawer: the cart sliding in from the right on every page, with
 //! what goes well with it beside. Without the page's script it opens on the
 //! `#cart` fragment the cart forms come back to; with it, nothing reloads
-//! (see `CART_SCRIPT` in the layout).
+//! (the library's cart script).
 
 use timada_storefront::{
-    CartView, Product, cart_recommendations, payment_setup, price, product_image,
+    Back, add_to_cart_form, cart_drawer_root, discount_form, drawer_express, drawer_pay_error,
+    pages::{DrawerOptions, cart_drawer as drawer_model},
+    price, product_image,
 };
 use topcoat::{
     Result,
     context::Cx,
-    router::{href, query_params, request::original_uri},
+    router::href,
     view::{View, attributes, view},
 };
 
-use super::{add::add, discount, drawer_url, summary_line};
-use crate::app::checkout::countries::COUNTRIES;
-use crate::app::say;
-
-/// How many products the "frequently bought together" column offers.
-const OFFERED: u32 = 6;
-
-#[topcoat::router::query_params(error = bad_request)]
-struct DrawerQuery {
-    /// A refusal from a form sent from the drawer, by code.
-    cart_error: Option<String>,
-}
+use super::summary_line;
 
 /// The cart drawer, closed until the `#cart` fragment or the page's script
-/// opens it. `cart` is this browser's cart, if it has one.
+/// opens it.
 #[topcoat::view::component]
-pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<impl View> {
-    let query = query_params::<DrawerQuery>(cx)?;
-    // Where the drawer's forms come back to: this page, as the shopper sees
-    // it, without the refusal it may already show.
-    let from = original_uri(cx)
-        .path_and_query()
-        .map(|path| path.as_str())
-        .unwrap_or("/");
-    let from = drawer_url(from, None).trim_end_matches("#cart").to_owned();
-    let cart = cart.filter(|cart| !cart.is_empty()).cloned();
-    let offered: Vec<Product> = match &cart {
-        Some(cart) => cart_recommendations(cx, cart, OFFERED).await?,
-        None => Vec::new(),
-    };
-    let setup = match &cart {
-        Some(cart) if cart.can_check_out() => payment_setup(cx).await?,
-        _ => None,
-    };
-    let count = cart
-        .as_ref()
-        .map(|cart| cart.item_count)
-        .unwrap_or_default();
-    let currency = cart
-        .as_ref()
-        .and_then(|cart| cart.currency.clone())
-        .unwrap_or_default();
-    let total = cart
-        .as_ref()
-        .and_then(|cart| cart.total())
-        .unwrap_or_default();
-    let total_cents = cart
-        .as_ref()
-        .map(|cart| cart.total_cents)
-        .unwrap_or_default();
-    let publishable_key = setup
-        .as_ref()
-        .map(|setup| setup.publishable_key.clone())
-        .unwrap_or_default();
-    let countries = COUNTRIES
-        .iter()
-        .map(|(code, _)| *code)
-        .collect::<Vec<_>>()
-        .join(",");
-    let rates = cart
-        .as_ref()
-        .map(crate::app::checkout::express_rates)
-        .unwrap_or_else(|| "[]".to_owned());
-    let error = query.cart_error.clone();
-    // A refused code leaves the promo box open, to type it again.
-    let promo_refused = error
-        .as_deref()
-        .is_some_and(|code| code.starts_with("discount_"));
+pub async fn cart_drawer(cx: &Cx) -> Result<impl View> {
+    let drawer = drawer_model(cx, &DrawerOptions::default()).await?;
+    let from = drawer.from.clone();
 
     Ok(view! {
-        <div id="cart" class="drawer" data-cart-drawer="" data-count=(count)
-            data-publishable-key=(&publishable_key) data-amount=(total_cents)
-            data-currency=(currency.to_lowercase()) data-countries=(&countries) data-shipping=(&rates)
-            data-start-path=(href!(crate::app::checkout::start::start))
-            data-return-path=(href!(crate::app::checkout::complete::index))>
+        cart_drawer_root(drawer: &drawer, attrs: attributes! { class="drawer" },
             <a class="drawer-backdrop" href="#" tabindex="-1" aria-hidden="true" data-drawer-close=""></a>
             <div class="drawer-sheet">
                 <section class="drawer-panel" role="dialog" aria-labelledby="cart-drawer-title">
                     <header class="drawer-head">
-                        <h2 id="cart-drawer-title">"Votre panier (" (count) ")"</h2>
+                        <h2 id="cart-drawer-title">"Votre panier (" (drawer.count) ")"</h2>
                         <a class="drawer-close" href="#" aria-label="Fermer le panier" data-drawer-close="">"×"</a>
                     </header>
-                    if let Some(code) = error.as_deref() {
-                        <p class="notice" role="alert" data-cart-error=(code)>(say(code))</p>
+                    if let Some(error) = &drawer.error {
+                        <p class="notice" role="alert" data-cart-error=(&error.code)>(&error.text)</p>
                     }
-                    if let Some(cart) = &cart {
+                    if let Some(cart) = &drawer.cart {
                         <div class="summary">
                             <ul class="lines">
-                                for line in cart.lines.iter().chain(&cart.unavailable) {
-                                    summary_line(line: line, currency: &currency, back: "drawer", from: &from)
+                                for item in &drawer.lines {
+                                    summary_line(item: item, back: Back::Drawer, from: Some(from.as_str()))
                                 }
                             </ul>
-                            <details class="promo" open=(cart.discount_code.is_some() || promo_refused)>
+                            <details class="promo" open=(drawer.promo_open)>
                                 <summary>"Vous avez un code promo ?"</summary>
-                                <form class="discount" method="post" action=(href!(discount::discount))>
-                                    <input type="hidden" name="back" value="drawer">
-                                    <input type="hidden" name="from" value=(&from)>
+                                discount_form(back: Back::Drawer, from: Some(from.as_str()), attrs: attributes! { class="discount" },
                                     if let Some(code) = &cart.discount_code {
                                         <span>"Code " <code>(code)</code></span>
                                         <button name="remove" value="1">"Retirer le code"</button>
@@ -120,43 +56,42 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
                                         </label>
                                         <button>"Appliquer"</button>
                                     }
-                                </form>
-                                if let Some(refused) = cart.discount_refused {
-                                    <p class="notice" data-discount-refused=(refused)>(say(refused))</p>
+                                )
+                                if let Some(refused) = &drawer.discount_refused {
+                                    <p class="notice" data-discount-refused=(&refused.code)>(&refused.text)</p>
                                 }
                             </details>
                             <dl class="totals">
                                 <dt>"Sous-total"</dt>
-                                <dd data-drawer-subtotal="">(cart.subtotal().unwrap_or_default())</dd>
-                                if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
+                                <dd data-drawer-subtotal="">(&drawer.subtotal)</dd>
+                                if let (Some(discount), Some(amount)) = (&cart.discount, &drawer.discount_amount) {
                                     <dt>"Code promo " <code>(&discount.code)</code></dt>
                                     <dd data-drawer-discount=(&discount.code)>(amount)</dd>
                                 }
                                 <dt class="total">"Total"</dt>
-                                <dd class="total"><strong class="price" data-drawer-total="">(&total)</strong></dd>
+                                <dd class="total"><strong class="price" data-drawer-total="">(&drawer.total)</strong></dd>
                             </dl>
                             <p class="hint">"Taxes et frais de livraison calculés à l'étape de paiement."</p>
                         </div>
-                        if setup.is_some() {
-                            <div class="drawer-express" data-drawer-express="" hidden="">
-                                <div id="drawer-express-checkout"></div>
-                                <p class="notice" role="alert" data-drawer-pay-error="" hidden=""></p>
-                            </div>
+                        if drawer.has_payments {
+                            drawer_express(attrs: attributes! { class="drawer-express" },
+                                drawer_pay_error(attrs: attributes! { class="notice" })
+                            )
                         }
-                        if cart.can_check_out() {
-                            <a class="place" href=(href!(crate::app::checkout::index))>"Commander · " (&total)</a>
+                        if drawer.can_check_out {
+                            <a class="place" href=(&drawer.checkout_url)>"Commander · " (&drawer.total)</a>
                         }
                         <a class="drawer-continue" href="#" data-drawer-close="">"Continuer mes achats"</a>
                     } else {
                         <p class="drawer-empty" data-cart-empty="">"Votre panier est vide."</p>
-                        <a class="drawer-continue" href=(href!(crate::app::index))>"Continuer mes achats"</a>
+                        <a class="drawer-continue" href=(&drawer.home_url)>"Continuer mes achats"</a>
                     }
                 </section>
-                if !offered.is_empty() {
+                if !drawer.offered.is_empty() {
                     <section class="upsell" aria-labelledby="cart-upsell-title" data-upsell="">
                         <h2 id="cart-upsell-title">"Vous aimerez aussi"</h2>
                         <ul>
-                            for product in &offered {
+                            for product in &drawer.offered {
                                 <li data-offer=(&product.slug)>
                                     <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::Slug(product.slug.clone())))>
                                         if let Some(image) = product.image() {
@@ -166,12 +101,9 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
                                     </a>
                                     price(product: product, attrs: attributes! { class="price" })
                                     if product.options.is_empty() {
-                                        <form method="post" action=(href!(add))>
-                                            <input type="hidden" name="slug" value=(&product.slug)>
-                                            <input type="hidden" name="quantity" value="1">
-                                            <input type="hidden" name="from" value=(&from)>
+                                        add_to_cart_form(product: product, quantity: Some(1), from: Some(from.as_str()),
                                             <button aria-label=(format!("Ajouter {}", product.name))>"Ajouter"</button>
-                                        </form>
+                                        )
                                     } else {
                                         <a class="offer-options" href=(href!(crate::app::p::slug::index, crate::app::p::slug::Slug(product.slug.clone())))
                                             aria-label=(format!("Choisir les options de {}", product.name))>"Choisir les options"</a>
@@ -182,7 +114,7 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
                     </section>
                 }
             </div>
-        </div>
+        )
     })
 }
 
@@ -240,247 +172,3 @@ pub const DRAWER_CSS: &str = r#"
   .drawer, .drawer-backdrop, .drawer-sheet { transition: none; }
 }
 "#;
-
-/// Opens and closes the drawer, sends its forms (and the product page's add
-/// form) without leaving the page, and offers Apple Pay / Google Pay from it.
-/// A form's answer is the page it comes back to, rendered whole: the new
-/// drawer is taken from it. Static and trusted: everything it needs comes
-/// from the drawer's `data-` attributes.
-pub const CART_SCRIPT: &str = r##"
-(() => {
-let drawer = document.querySelector("[data-cart-drawer]");
-if (!drawer) return;
-const link = document.querySelector("[data-cart-link]");
-let opener = null;
-
-function open() {
-  if (!drawer.classList.contains("open")) opener = document.activeElement;
-  drawer.classList.remove("shut");
-  drawer.classList.add("open");
-  drawer.querySelector(".drawer-close")?.focus({ preventScroll: true });
-  express();
-}
-function close() {
-  drawer.classList.remove("open");
-  drawer.classList.add("shut");
-  (opener || link)?.focus({ preventScroll: true });
-}
-function clearHash() {
-  const url = new URL(location.href);
-  url.searchParams.delete("cart_error");
-  url.hash = "";
-  history.replaceState(history.state, "", url);
-}
-
-link?.addEventListener("click", (event) => { event.preventDefault(); open(); });
-document.addEventListener("click", (event) => {
-  if (event.target.closest("[data-drawer-close]") && drawer.contains(event.target)) {
-    event.preventDefault();
-    close();
-  }
-});
-document.addEventListener("keydown", (event) => {
-  if (!drawer.classList.contains("open")) return;
-  if (event.key === "Escape") { close(); return; }
-  if (event.key !== "Tab") return;
-  // Keep the focus in the drawer while it is open.
-  const focusable = [...drawer.querySelectorAll("a[href], button:not([disabled]), input, summary, iframe")]
-    .filter((el) => el.tabIndex >= 0 && el.offsetParent !== null);
-  if (!focusable.length) return;
-  const first = focusable[0], last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-});
-if (location.hash === "#cart") { open(); clearHash(); }
-
-// The drawer of a page rendered by the server replaces this one; Stripe's
-// buttons, already mounted, move across.
-function swap(next) {
-  const label = document.activeElement?.getAttribute("aria-label");
-  const mounted = drawer.querySelector("[data-drawer-express]");
-  const slot = next.querySelector("[data-drawer-express]");
-  if (mounted && slot && stripeElements) slot.replaceWith(mounted);
-  // Nothing to pay for any more: mount afresh when there is again.
-  else if (!slot) stripeElements = null;
-  next.classList.add("open");
-  drawer.replaceWith(next);
-  drawer = next;
-  const count = document.querySelector("[data-cart-count]");
-  if (count) {
-    count.textContent = drawer.dataset.count;
-    count.hidden = drawer.dataset.count === "0";
-  }
-  if (stripeElements && Number(drawer.dataset.amount) > 0) {
-    stripeElements.update({ amount: Number(drawer.dataset.amount) });
-  }
-  const again = label && [...drawer.querySelectorAll("[aria-label]")].find((el) => el.getAttribute("aria-label") === label);
-  (again || drawer.querySelector(".drawer-close"))?.focus({ preventScroll: true });
-  express();
-}
-
-document.addEventListener("submit", async (event) => {
-  const form = event.target;
-  const inDrawer = drawer.contains(form);
-  if (!inDrawer && !form.matches("form.picker")) return;
-  event.preventDefault();
-  const button = event.submitter;
-  const body = new URLSearchParams(new FormData(form, button));
-  if (!inDrawer) body.set("from", location.pathname + location.search);
-  const buttons = [...form.querySelectorAll("button:not([disabled])")];
-  buttons.forEach((b) => { b.disabled = true; });
-  try {
-    const response = await fetch(form.action, { method: "POST", body });
-    const url = new URL(response.url);
-    // A refusal on the product page is shown there.
-    if (url.searchParams.has("error")) { location.assign(url); return; }
-    const page = new DOMParser().parseFromString(await response.text(), "text/html");
-    const next = page.querySelector("[data-cart-drawer]");
-    if (!next) { location.assign(url); return; }
-    if (!drawer.classList.contains("open")) opener = button || document.activeElement;
-    swap(document.importNode(next, true));
-  } catch {
-    form.submit();
-  } finally {
-    // The product page's form stays; the drawer's were replaced.
-    buttons.forEach((b) => { b.disabled = false; });
-  }
-});
-
-// Apple Pay / Google Pay, once the drawer is open on a cart that can be
-// paid for: Stripe.js loads then, not with every page.
-let stripe = null;
-let stripeElements = null;
-let loading = null;
-function loadStripe() {
-  loading ||= new Promise((resolve, reject) => {
-    if (window.Stripe) { resolve(); return; }
-    const script = document.createElement("script");
-    script.src = "https://js.stripe.com/v3/";
-    script.onload = resolve;
-    script.onerror = reject;
-    document.head.append(script);
-  });
-  return loading;
-}
-function payError(message) {
-  const error = drawer.querySelector("[data-drawer-pay-error]");
-  if (!error) return;
-  error.textContent = message;
-  error.hidden = false;
-}
-async function express() {
-  const slot = drawer.querySelector("[data-drawer-express]");
-  const key = drawer.dataset.publishableKey;
-  if (!slot || !key || stripeElements) return;
-  try { await loadStripe(); } catch { return; }
-  if (stripeElements || !window.Stripe) return;
-  stripe = Stripe(key);
-  stripeElements = stripe.elements({
-    mode: "payment",
-    amount: Number(drawer.dataset.amount),
-    currency: drawer.dataset.currency,
-    appearance: { variables: { colorPrimary: "#f46063", borderRadius: "6px" } },
-  });
-  const button = stripeElements.create("expressCheckout", { buttonHeight: 44 });
-  button.mount("#drawer-express-checkout");
-  button.on("ready", ({ availablePaymentMethods }) => {
-    if (availablePaymentMethods) drawer.querySelector("[data-drawer-express]").hidden = false;
-  });
-  // The shop's shipping methods; none when shipping is included.
-  const rates = () => JSON.parse(drawer.dataset.shipping || "[]");
-  const ratesTo = (code) => rates()
-    .filter((rate) => !code || !rate.countries.length || rate.countries.includes(code))
-    .map(({ id, displayName, amount }) => ({ id, displayName, amount }));
-  const goods = () => Number(drawer.dataset.amount);
-  button.on("click", (event) => event.resolve({
-    emailRequired: true,
-    shippingAddressRequired: true,
-    // A whole address, else wallets hand only its country and postal code.
-    billingAddressRequired: true,
-    allowedShippingCountries: drawer.dataset.countries.split(","),
-    shippingRates: rates().length
-      ? ratesTo(null)
-      : [{ id: "standard", displayName: "Livraison standard", amount: 0 }],
-  }));
-  // Only the methods that ship to the wallet's address, priced in.
-  button.on("shippingaddresschange", (event) => {
-    if (!rates().length) { event.resolve(); return; }
-    const here = ratesTo(event.address.country);
-    if (!here.length) { event.reject(); return; }
-    stripeElements.update({ amount: goods() + here[0].amount });
-    event.resolve({ shippingRates: here });
-  });
-  button.on("shippingratechange", (event) => {
-    if (rates().length) stripeElements.update({ amount: goods() + event.shippingRate.amount });
-    event.resolve();
-  });
-  button.on("confirm", async (event) => {
-    if (!(await pay(event))) event.paymentFailed({ reason: "fail" });
-  });
-}
-
-// The wallet's billing address, when it is not the delivery one.
-function walletBilling(billing, shipping) {
-  const at = billing.address, to = shipping.address || {};
-  if (!at?.line1) return null;
-  const same = (a, b) => (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
-  return ["line1", "line2", "postal_code", "city", "country"]
-    .every((key) => same(at[key], to[key])) ? null : at;
-}
-
-// The wallet's details stand in for the checkout's form. Resolves false when
-// the shopper stays on the page.
-async function pay(event) {
-  const billing = event.billingDetails || {};
-  const shipping = event.shippingAddress || {};
-  const address = shipping.address || {};
-  const rate = event.shippingRate || {};
-  const shipped = JSON.parse(drawer.dataset.shipping || "[]").length > 0;
-  const body = new URLSearchParams({
-    expected_total_cents: String(Number(drawer.dataset.amount) + (shipped ? rate.amount || 0 : 0)),
-    shipping_method: shipped ? rate.id || "" : "",
-    email: billing.email || "",
-    name: shipping.name || billing.name || "",
-    phone: billing.phone || "",
-    line1: address.line1 || "",
-    line2: address.line2 || "",
-    postal_code: address.postal_code || "",
-    city: address.city || "",
-    country: address.country || "",
-    note: "",
-    vat_number: "",
-  });
-  // Billed elsewhere when the wallet says so.
-  const other = walletBilling(billing, shipping);
-  if (other) {
-    body.set("billing_different", "1");
-    body.set("billing_name", billing.name || shipping.name || "");
-    for (const key of ["line1", "line2", "postal_code", "city", "country"]) {
-      body.set(`billing_${key}`, other[key] || "");
-    }
-  }
-  try {
-    const { error: invalid } = await stripeElements.submit();
-    if (invalid) { payError(invalid.message); return false; }
-    const response = await fetch(drawer.dataset.startPath, {
-      method: "POST",
-      body,
-      headers: { accept: "application/json" },
-    });
-    const answer = await response.json();
-    if (answer.redirect) { location.assign(answer.redirect); return true; }
-    if (answer.error) { payError(answer.error); return false; }
-    const { error: refused } = await stripe.confirmPayment({
-      elements: stripeElements,
-      clientSecret: answer.client_secret,
-      confirmParams: { return_url: new URL(drawer.dataset.returnPath, location.href).href },
-    });
-    payError(refused.message);
-    return false;
-  } catch {
-    payError("Une erreur est survenue. Veuillez réessayer.");
-    return false;
-  }
-}
-})();
-"##;
