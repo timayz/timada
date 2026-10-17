@@ -8,6 +8,7 @@ authors.workspace = true
 timada-catalog = { path = "../catalog" }
 timada-discounts = { path = "../discounts" }
 evento.workspace = true
+timada-core = { path = "../core" }
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true

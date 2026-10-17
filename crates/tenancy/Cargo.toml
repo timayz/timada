@@ -6,6 +6,7 @@ authors.workspace = true
 
 [dependencies]
 evento.workspace = true
+timada-core = { path = "../core" }
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true

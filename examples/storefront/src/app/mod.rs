@@ -373,6 +373,9 @@ pub fn say(code: &str) -> &'static str {
         "too_many_requests" => "Too many codes were asked for: try again in a few minutes.",
         "too_many_addresses" => "Your account keeps ten addresses: remove one first.",
         "signed_out" => "You were signed out. Please sign in again.",
+        "writes_paused" => {
+            "This shop is temporarily not accepting changes. Please try again in a few minutes."
+        }
         _ => "Something went wrong. Please try again.",
     }
 }

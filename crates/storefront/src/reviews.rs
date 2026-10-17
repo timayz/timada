@@ -321,7 +321,9 @@ impl Store {
             .await
             .context("cannot reach the dashboard")?;
         let status = response.status();
-        if status.is_success() || status.as_u16() == 422 {
+        // 422: the review was refused; 503: the shop is not taking writes
+        // for the moment (`writes_paused`). Both carry a code to show.
+        if status.is_success() || matches!(status.as_u16(), 422 | 503) {
             let answer: Answer = response
                 .json()
                 .await
