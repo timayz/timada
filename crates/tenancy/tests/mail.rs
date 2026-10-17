@@ -2,7 +2,8 @@ mod common;
 
 use common::*;
 use timada_tenancy::{
-    ConfigureMailServer, DefineRole, SaveMailTemplate, SetMailBranding, ShopMailKind, TenancyError,
+    ConfigureMailServer, DefineRole, SaveMailTemplate, SetMailBranding, SetMailLanguages,
+    ShopMailKind, TenancyError,
 };
 
 fn role(name: &str, permission: &str) -> DefineRole {
@@ -130,12 +131,13 @@ async fn an_owner_words_a_mail_and_resets_it() {
         &alice,
         &tenant.id,
         kind.key(),
+        "en",
         wording("  Code for {{ shop.name }} ", "<p>{{ code }}</p>", None),
     )
     .await
     .unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    let saved = state.mail_template(kind).unwrap();
+    let saved = state.mail_template_in(kind, "en").unwrap();
     assert_eq!(saved.subject, "Code for {{ shop.name }}");
     assert_eq!(saved.html, "<p>{{ code }}</p>");
     assert_eq!(saved.text, None);
@@ -146,6 +148,7 @@ async fn an_owner_words_a_mail_and_resets_it() {
         &alice,
         &tenant.id,
         kind.key(),
+        "en",
         wording("Code for {{ shop.name }}", "<p>{{ code }}</p>", Some("  ")),
     )
     .await
@@ -156,6 +159,7 @@ async fn an_owner_words_a_mail_and_resets_it() {
             &alice,
             &tenant.id,
             kind.key(),
+            "en",
             wording("Code", "<p>{{ nope }}</p>", None),
         )
         .await
@@ -170,27 +174,28 @@ async fn an_owner_words_a_mail_and_resets_it() {
             &alice,
             &tenant.id,
             "welcome",
+            "en",
             wording("Hi", "<p>Hi</p>", None),
         )
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::UnknownMail), "{err}");
     let err = cmd
-        .reset_mail_template(&new_id(), &tenant.id, kind.key())
+        .reset_mail_template(&new_id(), &tenant.id, kind.key(), "en")
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::Forbidden), "{err}");
 
-    cmd.reset_mail_template(&alice, &tenant.id, kind.key())
+    cmd.reset_mail_template(&alice, &tenant.id, kind.key(), "en")
         .await
         .unwrap();
-    cmd.reset_mail_template(&alice, &tenant.id, kind.key())
+    cmd.reset_mail_template(&alice, &tenant.id, kind.key(), "en")
         .await
         .unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    assert!(state.mail_template(kind).is_none());
+    assert!(state.mail_template_in(kind, "en").is_none());
     let changes: Vec<_> = state
-        .mail_template_changes(kind)
+        .mail_template_changes(kind, "en")
         .map(|change| (change.by.as_str(), change.reset))
         .collect();
     assert_eq!(changes, [(alice.as_str(), true), (alice.as_str(), false)]);
@@ -204,7 +209,7 @@ async fn an_owner_writes_the_plain_text_of_a_mail() {
     let kind = ShopMailKind::ShopperCode;
     let saved_text = |state: &timada_tenancy::TenantState| {
         state
-            .mail_template(kind)
+            .mail_template_in(kind, "en")
             .and_then(|template| template.text.clone())
     };
 
@@ -212,6 +217,7 @@ async fn an_owner_writes_the_plain_text_of_a_mail() {
         &alice,
         &tenant.id,
         kind.key(),
+        "en",
         wording("Code", "<p>{{ code }}</p>", Some("Your code: {{ code }}")),
     )
     .await
@@ -226,6 +232,7 @@ async fn an_owner_writes_the_plain_text_of_a_mail() {
             &alice,
             &tenant.id,
             kind.key(),
+            "en",
             wording("Code", "<p>{{ code }}</p>", Some("{{ order.reference }}")),
         )
         .await
@@ -241,29 +248,31 @@ async fn an_owner_writes_the_plain_text_of_a_mail() {
         &alice,
         &tenant.id,
         kind.key(),
+        "en",
         wording("Code", "<p>{{ code }}</p>", None),
     )
     .await
     .unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    assert!(state.mail_template(kind).is_some());
+    assert!(state.mail_template_in(kind, "en").is_some());
     assert_eq!(saved_text(&state), None);
 
     cmd.save_mail_template(
         &alice,
         &tenant.id,
         kind.key(),
+        "en",
         wording("Code", "<p>{{ code }}</p>", Some("Code: {{ code }}")),
     )
     .await
     .unwrap();
-    cmd.reset_mail_template(&alice, &tenant.id, kind.key())
+    cmd.reset_mail_template(&alice, &tenant.id, kind.key(), "en")
         .await
         .unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    assert!(state.mail_template(kind).is_none());
+    assert!(state.mail_template_in(kind, "en").is_none());
     let saves = state
-        .mail_template_changes(kind)
+        .mail_template_changes(kind, "en")
         .filter(|change| !change.reset)
         .count();
     assert_eq!(
@@ -290,6 +299,7 @@ async fn wording_a_mail_needs_mail_manage() {
             &bob,
             &tenant.id,
             kind.key(),
+            "en",
             wording(kind.default_subject(), kind.default_html(), None),
         )
         .await
@@ -353,4 +363,209 @@ async fn an_owner_brands_the_mails_and_clears_it() {
     cmd.clear_mail_branding(&alice, &tenant.id).await.unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
     assert!(state.mail_branding.is_none());
+}
+
+/// The languages a shop picks, as the settings form sends them.
+fn languages(default: &str, others: &[&str]) -> SetMailLanguages {
+    SetMailLanguages {
+        default: default.into(),
+        others: others.iter().map(|code| (*code).to_owned()).collect(),
+    }
+}
+
+#[tokio::test]
+async fn a_shop_picks_the_languages_it_mails_in() {
+    let cmd = command().await;
+    let alice = new_id();
+    let bob = new_id();
+    let tenant = create_tenant(&cmd, "Acme", &alice).await;
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.mail_default_language(), "en", "English until picked");
+    assert_eq!(state.mail_languages(), ["en"]);
+    assert!(state.mails_in("en") && !state.mails_in("fr"));
+
+    // Repeats and the default among the others are dropped; the rest come
+    // in the list's order, whatever the case typed.
+    cmd.set_mail_languages(
+        &alice,
+        &tenant.id,
+        languages(" FR ", &["de", "fr", "es", "de"]),
+    )
+    .await
+    .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.mail_default_language(), "fr");
+    assert_eq!(state.mail_languages(), ["fr", "de", "es"]);
+    assert_eq!(state.mail_languages.as_ref().unwrap().set_by, alice);
+    assert!(state.mails_in("es") && !state.mails_in("en"));
+
+    for bad in [
+        languages("zz", &[]),
+        languages("fr", &["xx"]),
+        languages("", &[]),
+    ] {
+        let err = cmd
+            .set_mail_languages(&alice, &tenant.id, bad)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TenancyError::InvalidMailLanguages), "{err}");
+    }
+    cmd.define_role(&alice, &tenant.id, role("clerk", "orders:manage"))
+        .await
+        .unwrap();
+    cmd.grant_member(&alice, &tenant.id, &bob, "clerk")
+        .await
+        .unwrap();
+    let err = cmd
+        .set_mail_languages(&bob, &tenant.id, languages("en", &[]))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::Forbidden), "{err}");
+
+    // Picking the same again records nothing.
+    cmd.set_mail_languages(&alice, &tenant.id, languages("fr", &["es", "de"]))
+        .await
+        .unwrap();
+    let again = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(again.mail_languages, state.mail_languages);
+}
+
+#[tokio::test]
+async fn a_mail_is_worded_per_language() {
+    let cmd = command().await;
+    let alice = new_id();
+    let tenant = create_tenant(&cmd, "Acme", &alice).await;
+    let kind = ShopMailKind::ShopperCode;
+
+    // Not a language the shop mails in yet.
+    let french = wording(
+        "Code pour {{ shop.name }}",
+        "<p>Bonjour {{ code }}</p>",
+        None,
+    );
+    let err = cmd
+        .save_mail_template(&alice, &tenant.id, kind.key(), "fr", french.clone())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::UnknownLanguage), "{err}");
+    let err = cmd
+        .reset_mail_template(&alice, &tenant.id, kind.key(), "fr")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::UnknownLanguage), "{err}");
+
+    cmd.set_mail_languages(&alice, &tenant.id, languages("en", &["fr"]))
+        .await
+        .unwrap();
+    cmd.save_mail_template(&alice, &tenant.id, kind.key(), " FR ", french)
+        .await
+        .unwrap();
+    cmd.save_mail_template(
+        &alice,
+        &tenant.id,
+        kind.key(),
+        "en",
+        wording(
+            "Code for {{ shop.name }}",
+            "<p>Hello {{ code }}</p>",
+            Some("Hi {{ code }}"),
+        ),
+    )
+    .await
+    .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(
+        state.mail_template_in(kind, "fr").unwrap().html,
+        "<p>Bonjour {{ code }}</p>"
+    );
+    assert_eq!(
+        state.mail_template_in(kind, "en").unwrap().html,
+        "<p>Hello {{ code }}</p>"
+    );
+    assert_eq!(
+        state.mail_template_in(kind, "en").unwrap().text.as_deref(),
+        Some("Hi {{ code }}")
+    );
+    assert_eq!(state.mail_template_in(kind, "fr").unwrap().text, None);
+
+    // A shopper gets theirs, or the default language's: a German speaker,
+    // and one whose language is unknown, are mailed in English.
+    let subject = |language: Option<&str>| {
+        state
+            .mail_template_for(kind, language)
+            .map(|template| template.subject.as_str())
+    };
+    assert_eq!(subject(Some("fr")), Some("Code pour {{ shop.name }}"));
+    assert_eq!(subject(Some("de")), Some("Code for {{ shop.name }}"));
+    assert_eq!(subject(None), Some("Code for {{ shop.name }}"));
+    // Another mail, worded in French only: an English speaker gets the
+    // built-in wording, not the French one.
+    cmd.save_mail_template(
+        &alice,
+        &tenant.id,
+        ShopMailKind::ReviewRequest.key(),
+        "fr",
+        wording("Votre avis", "<p>{{ link }}</p>", None),
+    )
+    .await
+    .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert!(
+        state
+            .mail_template_for(ShopMailKind::ReviewRequest, Some("fr"))
+            .is_some()
+    );
+    assert!(
+        state
+            .mail_template_for(ShopMailKind::ReviewRequest, Some("en"))
+            .is_none()
+    );
+    assert!(
+        state
+            .mail_template_for(ShopMailKind::ReviewRequest, None)
+            .is_none()
+    );
+
+    // Each language has its own history, and its own reset.
+    cmd.reset_mail_template(&alice, &tenant.id, kind.key(), "fr")
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert!(state.mail_template_in(kind, "fr").is_none());
+    assert!(state.mail_template_in(kind, "en").is_some());
+    let changes = |language: &str| -> Vec<bool> {
+        state
+            .mail_template_changes(kind, language)
+            .map(|change| change.reset)
+            .collect()
+    };
+    assert_eq!(changes("fr"), [true, false]);
+    assert_eq!(changes("en"), [false]);
+
+    // A language dropped keeps its wording, out of use, until picked again.
+    cmd.save_mail_template(
+        &alice,
+        &tenant.id,
+        kind.key(),
+        "fr",
+        wording("Code", "<p>{{ code }}</p>", None),
+    )
+    .await
+    .unwrap();
+    cmd.set_mail_languages(&alice, &tenant.id, languages("en", &[]))
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert!(state.mail_template_in(kind, "fr").is_none());
+    assert_eq!(
+        state
+            .mail_template_for(kind, Some("fr"))
+            .map(|template| template.subject.as_str()),
+        Some("Code for {{ shop.name }}")
+    );
+    cmd.set_mail_languages(&alice, &tenant.id, languages("en", &["fr"]))
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.mail_template_in(kind, "fr").unwrap().subject, "Code");
 }

@@ -1,10 +1,11 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
-    MailBrandingCleared, MailBrandingSet, MailServerConfigured, MailServerRemoved,
-    MailTemplateReset, MailTemplateSaved, MailTemplateTextSaved,
+    MailBrandingCleared, MailBrandingSet, MailLanguagesSet, MailServerConfigured,
+    MailServerRemoved, MailTemplateResetIn, MailTemplateSavedIn, MailTemplateTextSavedIn,
 };
 use crate::error::TenancyError;
+use crate::languages::{is_language, language_rank};
 use crate::mail_template::{ShopMailKind, validate, validate_text};
 use crate::value_object::{MAIL_SECURITIES, PERMISSION_MAIL_MANAGE};
 
@@ -28,6 +29,17 @@ pub struct SetMailBranding {
     pub logo_size: u64,
     pub accent: Option<String>,
     pub footer: Option<String>,
+}
+
+/// The languages a shop mails in, as ISO 639-1 codes from
+/// [`LANGUAGES`](crate::LANGUAGES).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SetMailLanguages {
+    /// What a shopper gets when their language is not among `others`.
+    pub default: String,
+    /// The other languages the shop words its mails in; `default` among
+    /// them, and repeats, are dropped.
+    pub others: Vec<String>,
 }
 
 /// The merchant's wording of one of the shop's mails.
@@ -58,6 +70,17 @@ fn is_media_file(file: &str) -> bool {
             && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
             && ext.bytes().all(|byte| byte.is_ascii_alphanumeric())
     })
+}
+
+/// A language code from the list, lowercased; `InvalidMailLanguages`
+/// for any other.
+fn normalize_language(code: &str) -> Result<String, TenancyError> {
+    let code = code.trim().to_ascii_lowercase();
+    if is_language(&code) {
+        Ok(code)
+    } else {
+        Err(TenancyError::InvalidMailLanguages)
+    }
 }
 
 /// Trimmed, `None` when blank.
@@ -138,22 +161,70 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Words one of the shop's mails the merchant's way. The template is
-    /// checked first ([`validate`], and [`validate_text`] for a plain-text
-    /// part): a refused one says why. A blank or missing `text` sends the
-    /// text derived from the HTML. Needs `mail:manage`.
+    /// Picks the languages the shop mails in. A code not in the list is
+    /// refused; `default` is dropped from `others`, as are repeats. The
+    /// wordings saved in a language dropped here are kept, out of use,
+    /// until it is picked again. Needs `mail:manage`.
+    pub async fn set_mail_languages(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        cmd: SetMailLanguages,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let default = normalize_language(&cmd.default)?;
+        let mut others = cmd
+            .others
+            .iter()
+            .map(|code| normalize_language(code))
+            .collect::<Result<Vec<_>, _>>()?;
+        others.sort_by_key(|code| language_rank(code));
+        others.dedup();
+        others.retain(|code| *code != default);
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        if tenant.mail_default_language() == default
+            && tenant.mail_languages()[1..] == others.iter().map(String::as_str).collect::<Vec<_>>()
+        {
+            return Ok(());
+        }
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&MailLanguagesSet {
+                default,
+                others,
+                set_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Words one of the shop's mails the merchant's way, in one of the
+    /// languages the shop mails in (`UnknownLanguage` otherwise). The
+    /// template is checked first ([`validate`], and [`validate_text`] for a
+    /// plain-text part): a refused one says why. A blank or missing `text`
+    /// sends the text derived from the HTML. Needs `mail:manage`.
     pub async fn save_mail_template(
         &self,
         actor_user_id: &str,
         tenant_id: &str,
         mail: &str,
+        language: &str,
         cmd: SaveMailTemplate,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
         let kind = ShopMailKind::from_key(mail).ok_or(TenancyError::UnknownMail)?;
+        let language = language.trim().to_ascii_lowercase();
         let tenant = self.require_active(tenant_id).await?;
         if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
             return Err(TenancyError::Forbidden);
+        }
+        if !tenant.mails_in(&language) {
+            return Err(TenancyError::UnknownLanguage);
         }
         let subject = cmd.subject.trim();
         let html = cmd.html.as_str();
@@ -162,23 +233,28 @@ impl<E: Executor> super::Command<E> {
         if let Some(text) = text {
             validate_text(kind, text)?;
         }
-        if tenant.mail_template(kind).is_some_and(|saved| {
-            saved.subject == subject && saved.html == html && saved.text.as_deref() == text
-        }) {
+        if tenant
+            .mail_template_in(kind, &language)
+            .is_some_and(|saved| {
+                saved.subject == subject && saved.html == html && saved.text.as_deref() == text
+            })
+        {
             return Ok(());
         }
         let mut write = tenant.write()?;
         let write = write
             .routing_key_opt(routing_key)
-            .event(&MailTemplateSaved {
+            .event(&MailTemplateSavedIn {
                 mail: kind.key().to_owned(),
+                language: language.clone(),
                 subject: subject.to_owned(),
                 html: html.to_owned(),
                 saved_by: actor_user_id.to_owned(),
             });
         if let Some(text) = text {
-            write.event(&MailTemplateTextSaved {
+            write.event(&MailTemplateTextSavedIn {
                 mail: kind.key().to_owned(),
+                language,
                 text: text.to_owned(),
             });
         }
@@ -186,28 +262,35 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Sends one of the shop's mails in the built-in wording again; a mail
-    /// already in it is a no-op. Needs `mail:manage`.
+    /// Sends one of the shop's mails, in one of its languages, in the
+    /// built-in wording again; a mail already in it is a no-op. Needs
+    /// `mail:manage`.
     pub async fn reset_mail_template(
         &self,
         actor_user_id: &str,
         tenant_id: &str,
         mail: &str,
+        language: &str,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
         let kind = ShopMailKind::from_key(mail).ok_or(TenancyError::UnknownMail)?;
+        let language = language.trim().to_ascii_lowercase();
         let tenant = self.require_active(tenant_id).await?;
         if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
             return Err(TenancyError::Forbidden);
         }
-        if tenant.mail_template(kind).is_none() {
+        if !tenant.mails_in(&language) {
+            return Err(TenancyError::UnknownLanguage);
+        }
+        if tenant.mail_template_in(kind, &language).is_none() {
             return Ok(());
         }
         tenant
             .write()?
             .routing_key_opt(routing_key)
-            .event(&MailTemplateReset {
+            .event(&MailTemplateResetIn {
                 mail: kind.key().to_owned(),
+                language,
                 reset_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)

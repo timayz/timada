@@ -18,6 +18,10 @@ pub enum TenancyError {
     InvalidMailServer,
     #[error("unknown mail")]
     UnknownMail,
+    #[error("pick the languages from the list")]
+    InvalidMailLanguages,
+    #[error("this shop does not mail in that language")]
+    UnknownLanguage,
     #[error("an accent colour is #rrggbb, and a footer at most 500 characters")]
     InvalidMailBranding,
     #[error(transparent)]

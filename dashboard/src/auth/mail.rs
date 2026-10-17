@@ -86,10 +86,12 @@ pub async fn send_invitation(
 }
 
 /// Sends one of a shop's mails to `to`, in the merchant's wording when the
-/// shop has one ([`TenantState::mail_template`]) and in the built-in one
-/// otherwise. The mail speaks for the shop, not for the platform: it comes
-/// from the shop's own server and address when it has one, under the shop's
-/// name in any case.
+/// shop has one and in the built-in one otherwise. The wording is the
+/// shopper's `language`'s when the shop mails in it and worded the mail,
+/// else the default language's ([`TenantState::mail_template_for`]). The
+/// mail speaks for the shop, not for the platform: it comes from the
+/// shop's own server and address when it has one, under the shop's name in
+/// any case.
 ///
 /// A merchant's template that fails to render (it was checked when saved,
 /// but an order may hold what the sample did not) is logged and the
@@ -105,7 +107,7 @@ async fn send_shop_mail(
     vars: &MailVars,
     language: Option<&str>,
 ) -> Result<()> {
-    let rendered = match shop.mail_template(kind) {
+    let rendered = match shop.mail_template_for(kind, language) {
         Some(template) => match render(&template.subject, &template.html, None, vars) {
             Ok(mut rendered) => {
                 // The merchant's plain text goes only with the merchant's HTML.
@@ -535,15 +537,19 @@ mod tests {
         let mut shop = acme();
         let mut template = worded("Order {{ order.reference }}", "<p>Thanks!</p>");
         template.text = Some("Plain thanks for {{ order.reference }} & {{ order.note }}".into());
-        shop.mail_templates
-            .insert(ShopMailKind::OrderConfirmation.key().into(), template);
+        shop.mail_templates.insert(
+            (ShopMailKind::OrderConfirmation.key().into(), "en".into()),
+            template,
+        );
         let mut broken = worded("Code", "<p>Your code: {{ code }}</p>");
         broken.text = Some(
             "{{ code }} {% for i in range(100000) %}{% for j in range(100000) %}.{% endfor %}{% endfor %}"
                 .into(),
         );
-        shop.mail_templates
-            .insert(ShopMailKind::ShopperCode.key().into(), broken);
+        shop.mail_templates.insert(
+            (ShopMailKind::ShopperCode.key().into(), "en".into()),
+            broken,
+        );
         let mut order = paid_order();
         order.note = Some("<b>fragile</b>".into());
 
@@ -587,7 +593,7 @@ mod tests {
             .build();
         let mut shop = acme();
         shop.mail_templates.insert(
-            ShopMailKind::OrderConfirmation.key().into(),
+            (ShopMailKind::OrderConfirmation.key().into(), "en".into()),
             worded(
                 "Merci ! Commande {{ order.reference }}",
                 "<p>Bonjour, voici votre commande chez {{ shop.name }} :</p>\
@@ -623,8 +629,10 @@ mod tests {
         let mut shop = acme();
         let mut template = worded("Order", "<p>{{ order.billing_address.city }}</p>");
         template.text = Some("Plain order {{ order.reference }}".into());
-        shop.mail_templates
-            .insert(ShopMailKind::OrderConfirmation.key().into(), template);
+        shop.mail_templates.insert(
+            (ShopMailKind::OrderConfirmation.key().into(), "en".into()),
+            template,
+        );
 
         send_order_confirmation(&cx, &shop, &paid_order(), None)
             .await
@@ -635,6 +643,73 @@ mod tests {
         assert_eq!(sent[0].subject(), "Your Acme Tea order K7Q4-MZP2");
         // The merchant's plain text does not go with the built-in HTML.
         assert_eq!(sent[0].text(), &TextBody::FromHtml);
+    }
+
+    #[tokio::test]
+    async fn a_shopper_gets_the_mail_in_their_language() {
+        let transport = MemoryTransport::new();
+        let cx = CxTestBuilder::new()
+            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
+            .build();
+        let mut shop = acme();
+        shop.mail_languages = Some(timada_tenancy::MailLanguages {
+            default: "en".into(),
+            others: vec!["fr".into()],
+            ..Default::default()
+        });
+        let kind = ShopMailKind::OrderConfirmation;
+        shop.mail_templates.insert(
+            (kind.key().into(), "en".into()),
+            worded("Thanks for {{ order.reference }}", "<p>Thanks</p>"),
+        );
+        shop.mail_templates.insert(
+            (kind.key().into(), "fr".into()),
+            worded("Merci pour {{ order.reference }}", "<p>Merci</p>"),
+        );
+        let in_language = |language: Option<&str>| {
+            let mut order = paid_order();
+            order.language = language.map(str::to_owned);
+            order
+        };
+
+        // Theirs; the default's when theirs is not one of the shop's, or
+        // unknown.
+        send_order_confirmation(&cx, &shop, &in_language(Some("fr")), None)
+            .await
+            .unwrap();
+        send_order_confirmation(&cx, &shop, &in_language(Some("de")), None)
+            .await
+            .unwrap();
+        send_order_confirmation(&cx, &shop, &in_language(None), None)
+            .await
+            .unwrap();
+        // Worded in French only: the built-in English for everyone else.
+        shop.mail_templates
+            .remove(&(kind.key().to_owned(), "en".to_owned()));
+        send_order_confirmation(&cx, &shop, &in_language(Some("fr")), None)
+            .await
+            .unwrap();
+        send_order_confirmation(&cx, &shop, &in_language(None), None)
+            .await
+            .unwrap();
+
+        let subjects: Vec<_> = transport
+            .sent()
+            .iter()
+            .map(|mail| mail.subject().to_owned())
+            .collect();
+        assert_eq!(
+            subjects,
+            [
+                "Merci pour K7Q4-MZP2",
+                "Thanks for K7Q4-MZP2",
+                "Thanks for K7Q4-MZP2",
+                "Merci pour K7Q4-MZP2",
+                "Your Acme Tea order K7Q4-MZP2",
+            ]
+        );
     }
 
     #[tokio::test]

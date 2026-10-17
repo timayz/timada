@@ -32,7 +32,8 @@ is not retried.
 ## A shop's own wording
 
 Members with `mail:manage` can also reword the three shop mails, from "Mails to
-shoppers" on `/t/{slug}/mail`. Each mail has an editor with:
+shoppers" on `/t/{slug}/mail`. Each mail has an editor per language the shop mails in
+(see [Several languages](#several-languages)), with:
 
 - the subject and the whole HTML document;
 - an optional plain-text version, for mail apps that show no HTML. Left empty, it is
@@ -102,6 +103,36 @@ If a saved template still fails at send time, for example by running out of its
 rendering budget, the failure is logged and the built-in wording, plain text included,
 is sent instead. A plain-text version that fails alone is logged too, and the text
 derived from the HTML is sent with the merchant's HTML. The shopper always gets the mail.
+
+## Several languages
+
+A shop may word each mail in several languages. Under "Languages" on `/t/{slug}/mail`
+the merchant picks a default language and any others, from a fixed list of ISO 639-1
+codes with their English names. A shop that never picked any mails in English, and
+every wording saved before it could pick is an English wording. The built-in wording is
+English whatever the shop's languages.
+
+"Mails to shoppers" then lists each mail once per language, each with its own editor at
+`/t/{slug}/mail/templates/{kind}/{language}` (the address without a language opens the
+default language's), its own plain-text version, history and "Back to the built-in
+wording". The editors of the same mail link to one another.
+
+The shopper's language comes from the storefront: the primary subtag of the browser's
+`Accept-Language` (`fr` from `fr-FR,fr;q=0.9,en;q=0.8`), sent with the sign-in code
+request and with the checkout, and kept on the order (`Cart::LanguageGiven`,
+`Order::LanguageSet`). The order page in the dashboard shows it. At send time a mail
+goes out:
+
+1. in the shopper's language, when the shop mails in it and has worded the mail in it;
+2. else in the shop's default language, when the merchant worded the mail in it;
+3. else in the built-in English wording.
+
+A shopper whose language is unknown, or not one the shop mails in, gets the default
+language's wording. A mail worded only in a language that is not the default goes out
+built-in to everyone else: no other language stands in for the default.
+
+Dropping a language from the list keeps its wordings, out of use, until it is picked
+again; they are then used as before.
 
 ## Operator settings
 
