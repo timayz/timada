@@ -98,7 +98,8 @@ pub fn error_code(err: &CatalogError) -> &'static str {
         CatalogError::SkuTaken => "sku_taken",
         CatalogError::InvalidAttribute => "invalid_attribute",
         CatalogError::TooManyAttributes => "too_many_attributes",
-        CatalogError::Write(_) | CatalogError::Other(_) => "failed",
+        CatalogError::Write(err) => timada_core::write_refusal(err).unwrap_or("failed"),
+        CatalogError::Other(_) => "failed",
     }
 }
 
@@ -236,4 +237,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A store not taking writes for the moment is told to the person as
+    /// `writes_paused`; any other write failure stays the generic code.
+    #[test]
+    fn a_paused_store_has_its_own_code() {
+        let paused = CatalogError::Write(evento::WriteError::Unavailable(anyhow::anyhow!(
+            "backlog at cap"
+        )));
+        assert!(paused.is_user_facing());
+        assert_eq!(error_code(&paused), timada_core::WRITES_PAUSED);
+        let broken = CatalogError::Write(evento::WriteError::Unknown(anyhow::anyhow!("disk gone")));
+        assert!(!broken.is_user_facing());
+        assert_eq!(error_code(&broken), "failed");
+    }
 }

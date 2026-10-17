@@ -653,6 +653,14 @@ async fn a_tenant_at_its_write_backlog_refuses_writes() {
     let err = write(&executor, 3, "four")
         .await
         .expect_err("the tenant refuses the write past its backlog");
+    let refusal = err
+        .downcast_ref::<evento::WriteError>()
+        .and_then(timada_core::write_refusal);
+    assert_eq!(
+        refusal,
+        Some(timada_core::WRITES_PAUSED),
+        "a backlog at its cap is the `writes_paused` refusal: {err:#}"
+    );
     assert!(
         format!("{err:#}").contains("backlog"),
         "unexpected error: {err:#}"

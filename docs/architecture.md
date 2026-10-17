@@ -139,7 +139,11 @@ tenant's products while the events stay isolated by construction.
    (`needs_join`, a `.joining` marker next to the file while it runs). Every finished
    write is kept on the other nodes until the node that missed it has it, so a node
    that stays down makes the others keep everything, up to `cluster.write_backlog`
-   writes per tenant, past which the tenant refuses writes. A node not heard from on a
+   writes per tenant, past which the tenant refuses writes: a page then shows that
+   changes are temporarily not accepted (the `writes_paused` code of
+   `timada_core::write_refusal`, which every context's `is_user_facing`/`code`
+   recognise), the store HTTP endpoints answer 503 with that code, and the store
+   API carries it as a refusal a storefront shows the same way. A node not heard from on a
    tenant for `cluster.absent_after_secs` (an hour by default) is therefore given up:
    the others tidy up without it, and when its copy of the tenant reopens, they tell it
    it fell behind; `rejoin_from_peers` then closes that copy, whatever holds it,
