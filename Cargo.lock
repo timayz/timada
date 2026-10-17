@@ -761,6 +761,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "chatounette-example"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "timada-core",
+ "timada-storefront",
+ "tokio",
+ "topcoat",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "chinese-number"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

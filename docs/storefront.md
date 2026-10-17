@@ -404,7 +404,7 @@ be started again. The read models of the back office catch up when the server ne
 starts. `make seed.chatounette` wraps the command for the dev config; `seeds/README.md`
 says where each snapshot comes from and how to take it again.
 
-## The example
+## The examples
 
 `examples/storefront` is a complete app on the library: a catalog page, a category
 page, a product page with an add-to-cart form and its reviews, a cart, a one-page
@@ -432,3 +432,24 @@ a restart. To sell, tick `store:checkout` on the key. The browser suite
 (`tests/e2e/storefront.spec.ts`) boots it with a key minted in the dashboard, checks the
 catalog follows live, then fills a cart, checks out, reviews what it bought, and signs
 a returning shopper in on a second browser.
+
+`examples/chatounette` is a second app on the same library and the same routes, in
+French and in the layout and colours of chatounette.com: a top bar with the promo code,
+a masthead with the search, the category bar, a home with the newest products, the
+category tiles, the latest reviews and the four promises, listings with the shop's
+sort labels, a product page with its gallery, option menus, reassurance block and
+folding description and facts, the shop's own pages under `/pages/{slug}`, and the
+cart, checkout, orders and account pages of the first example translated. It is meant
+to run against a tenant filled by `make seed.chatounette` (see "Seeding a catalogue"),
+which prints the three settings:
+
+```sh
+STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
+    STORE_API_URL=https://timada.localhost make chatounette
+open https://chatounette.localhost/
+```
+
+It listens on 3457 (`PORT`), keeps its copy of the catalog in `chatounette.db`
+(`STORE_DB`) and takes the same other knobs. `tests/e2e/chatounette.spec.ts` boots it
+on a small catalogue made in the dashboard and walks the home, a category, a product,
+the cart and a shop page.

@@ -1,9 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { MAILDEV, latestCode, mailCount, registerWithEmail, uniqueEmail } from "./email";
+import { ExampleApp, PNG, mintKey, publishProduct } from "./storefront";
 import { FakeStripe, fakeStripeJs, stripeSignature } from "./stripe";
 import { FakeVies } from "./vies";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
@@ -16,9 +13,9 @@ import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 // and pays for it with Stripe (a stand-in, see stripe.ts); the merchant then
 // fulfils the order or cancels and refunds it.
 
-const STORE_ADDR = process.env.E2E_STORE_ADDR ?? "127.0.0.1:4321";
 const STOREFRONT_PORT = Number(process.env.E2E_STOREFRONT_PORT ?? 3456);
-const STOREFRONT = `http://127.0.0.1:${STOREFRONT_PORT}`;
+const app = new ExampleApp("storefront", STOREFRONT_PORT);
+const STOREFRONT = app.url;
 
 /// A shop mail's HTML escapes "/" in its links as "&#x2f;"; undo it so a
 /// link can be matched as the shopper's mail client reads it.
@@ -26,106 +23,13 @@ function unescapeSlashes(html: string | undefined): string {
   return (html ?? "").replaceAll("&#x2f;", "/");
 }
 
-let child: ChildProcess | undefined;
-let dir: string | undefined;
-
 test.beforeEach(async ({ page }) => {
   await fakeStripeJs(page);
 });
 
 test.afterEach(async () => {
-  child?.kill();
-  child = undefined;
-  if (dir) {
-    fs.rmSync(dir, { recursive: true, force: true });
-    dir = undefined;
-  }
+  app.stop();
 });
-
-/// A 1x1 PNG, as the bytes a browser posts when a file is chosen.
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-  "base64",
-);
-
-/// Mints a key on the tenant's page and reads it, with the address the
-/// tenant's pictures are served from and the dashboard's own. `sell` adds
-/// store:checkout to the default read scope.
-async function mintKey(
-  page: Page,
-  slug: string,
-  sell = false,
-): Promise<{ token: string; mediaUrl: string; apiUrl: string }> {
-  await page.goto(`/t/${slug}/api-keys`);
-  await page.getByLabel("Label").fill("Example storefront");
-  if (sell) {
-    await page.getByRole("checkbox", { name: "store:checkout" }).first().check();
-  }
-  await page.getByRole("button", { name: "Create key" }).click();
-  const token = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
-  expect(token).toMatch(/^tk_/);
-  const mediaUrl = (await page.locator("[data-media-url]").textContent())?.trim() ?? "";
-  expect(mediaUrl).toContain("/media/");
-  const apiUrl = (await page.locator("[data-api-url]").textContent())?.trim() ?? "";
-  expect(apiUrl).toMatch(/^https?:\/\//);
-  return { token, mediaUrl, apiUrl };
-}
-
-/// Boots the example storefront with `token` and waits for it to have synced
-/// at least `products` products.
-async function startStorefront(
-  request: APIRequestContext,
-  { token, mediaUrl, apiUrl }: { token: string; mediaUrl: string; apiUrl?: string },
-  products: number,
-) {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "timada-storefront-"));
-  child = spawn(path.resolve("target/debug/storefront"), [], {
-    env: {
-      ...process.env,
-      STORE_ADDR,
-      STORE_TOKEN: token,
-      STORE_MEDIA_URL: mediaUrl,
-      ...(apiUrl ? { STORE_API_URL: apiUrl } : {}),
-      STORE_DB: path.join(dir, "storefront.db"),
-      HOST: "127.0.0.1",
-      PORT: String(STOREFRONT_PORT),
-    },
-    stdio: "inherit",
-  });
-  await expect(async () => {
-    const response = await request.get(`${STOREFRONT}/store/status`);
-    expect(response.ok()).toBe(true);
-    const status = (await response.json()) as { connected: boolean; products: number };
-    expect(status.connected).toBe(true);
-    expect(status.products).toBeGreaterThanOrEqual(products);
-  }).toPass({ timeout: 30_000 });
-}
-
-/// Creates a published product priced at `amount`, filed under the category
-/// whose menu text contains `category` when one is given.
-async function publishProduct(page: Page, slug: string, name: string, amount: string, category?: string) {
-  await page.goto(`/t/${slug}/products`);
-  await page.getByLabel("Name").fill(name);
-  await page.getByRole("button", { name: "Create product" }).click();
-  await expect(page.getByRole("status")).toContainText("Product created.");
-  const url = page.url().split("?")[0];
-  await page.getByLabel("Price").fill(amount);
-  await page.getByRole("button", { name: "Set price" }).click();
-  if (category) {
-    await expect(async () => {
-      await page.goto(url);
-      await expect(page.getByLabel("Category")).toContainText(category, { timeout: 1000 });
-    }).toPass({ timeout: 15_000 });
-    const select = page.getByLabel("Category");
-    const value = await select.locator("option", { hasText: category }).first().getAttribute("value");
-    await select.selectOption(value ?? "");
-    await page.getByRole("button", { name: "Add to category" }).click();
-    await expect(page.getByRole("status")).toContainText("Added to the category.");
-  }
-  await page.getByRole("button", { name: "Publish" }).click();
-  await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
-  return url;
-}
 
 test("a storefront serves the tenant's published catalog with its key", async ({ page, request }) => {
   await registerWithEmail(page, uniqueEmail("merchant"));
@@ -152,7 +56,7 @@ test("a storefront serves the tenant's published catalog with its key", async ({
   // A key, shown once; the storefront boots with it and syncs the catalog
   // into its own file.
   const key = await mintKey(page, slug);
-  await startStorefront(request, key, 1);
+  await app.start(request, key, 1);
 
   await page.goto(`${STOREFRONT}/`);
   const card = page.locator("[data-product=blue-mug]");
@@ -213,7 +117,7 @@ test("a storefront browses the categories its products are filed under", async (
   await publishProduct(page, slug, "Feather Wand", "9.90", "Toys");
 
   const key = await mintKey(page, slug);
-  await startStorefront(request, key, 3);
+  await app.start(request, key, 3);
 
   // The menu carries the tree with its counts; Bedding counts its subtree.
   // Bedding opens a panel led by "All Bedding"; Toys has nothing under it.
@@ -315,7 +219,7 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
   await publishProduct(page, slug, "Red Plate", "8");
 
   const key = await mintKey(page, slug, true);
-  await startStorefront(request, key, 2);
+  await app.start(request, key, 2);
 
   // Into the cart, from two product pages.
   await page.goto(`${STOREFRONT}/p/blue-mug`);
@@ -457,7 +361,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(page.locator("[data-publishable-key]")).toHaveText("pk_test_e2e");
 
     const key = await mintKey(page, slug, true);
-    await startStorefront(request, key, 2);
+    await app.start(request, key, 2);
 
     // Two mugs. The checkout shows Stripe's form for the total before any
     // payment is open, and the VAT the total includes where the goods go.
@@ -617,7 +521,7 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
     await page.getByLabel("Percentage or amount").fill("10");
     await page.getByRole("button", { name: "Create discount" }).click();
     await expect(page.getByRole("status")).toContainText("Discount created.");
-    await startStorefront(request, await mintKey(page, slug, true), 2);
+    await app.start(request, await mintKey(page, slug, true), 2);
 
     // Added from the product page: the drawer slides in, the page stays.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
@@ -754,7 +658,7 @@ test("a shopper pays less with a discount code, once", async ({ page, request })
     await page.getByLabel("Once per shopper e-mail").check();
     await page.getByRole("button", { name: "Create discount" }).click();
     await expect(page.getByRole("status")).toContainText("Discount created.");
-    await startStorefront(request, await mintKey(page, slug, true), 1);
+    await app.start(request, await mintKey(page, slug, true), 1);
 
     // A typo is refused at once; the right code takes 2.50 off two mugs.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
@@ -853,7 +757,7 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
     await page.getByRole("checkbox", { name: "France FR" }).check();
     await page.getByRole("button", { name: "Add shipping method" }).click();
     await expect(page.getByRole("status")).toContainText("Shipping method added.");
-    await startStorefront(request, await mintKey(page, slug, true), 1);
+    await app.start(request, await mintKey(page, slug, true), 1);
 
     // Two mugs: the first method is picked, its price on top.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
@@ -952,7 +856,7 @@ test("a buyer's review waits for the merchant, who publishes, trims and takes it
     await expect(page.getByRole("status")).toContainText("Stripe connected.");
     const reader = await mintKey(page, slug);
     const seller = await mintKey(page, slug, true);
-    await startStorefront(request, seller, 1);
+    await app.start(request, seller, 1);
 
     // One mug, paid for.
     await page.goto(`${STOREFRONT}/p/blue-mug`);
@@ -1094,7 +998,7 @@ test("a shopper reviews what they bought from the order page, shown once the sho
     await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("status")).toContainText("Stripe connected.");
-    await startStorefront(request, await mintKey(page, slug, true), 2);
+    await app.start(request, await mintKey(page, slug, true), 2);
 
     // A mug and a plate, paid for.
     for (const product of ["blue-mug", "red-plate"]) {
@@ -1260,7 +1164,7 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({ page
     await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("status")).toContainText("Stripe connected.");
-    await startStorefront(request, await mintKey(page, slug, true), 1);
+    await app.start(request, await mintKey(page, slug, true), 1);
 
     // Each order: a mug, paid, then told to the dashboard.
     const addMug = async () => {
@@ -1449,7 +1353,7 @@ test("a returning shopper signs in with a mailed code and finds their orders and
     await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("status")).toContainText("Stripe connected.");
-    await startStorefront(request, await mintKey(page, slug, true), 2);
+    await app.start(request, await mintKey(page, slug, true), 2);
     // The confirmations link to the orders on the storefront.
     await page.goto(`/t/${slug}/api-keys`);
     await page.getByLabel("Where shoppers find the shop").fill(STOREFRONT);
@@ -1699,7 +1603,7 @@ test("a buyer is mailed a link to review a fulfilled order, which opens it on an
     await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("status")).toContainText("Stripe connected.");
-    await startStorefront(request, await mintKey(page, slug, true), 1);
+    await app.start(request, await mintKey(page, slug, true), 1);
 
     // No storefront address yet: the Reviews page says no mail goes out.
     await page.goto(`/t/${slug}/reviews`);
@@ -1817,7 +1721,7 @@ test.describe("a French-speaking shopper", () => {
       await page.getByRole("button", { name: "Save" }).click();
       await expect(page.getByRole("status")).toContainText("Saved");
 
-      await startStorefront(request, await mintKey(page, slug, true), 1);
+      await app.start(request, await mintKey(page, slug, true), 1);
 
       // Signing in: the code comes in French.
       const shopper = uniqueEmail("shopper");
