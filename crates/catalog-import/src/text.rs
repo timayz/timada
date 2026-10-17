@@ -163,8 +163,9 @@ const ENTITIES: &[(&str, &str)] = &[
     ("bull", "\u{2022}"),
 ];
 
-/// Decodes the named entities above and every numeric one.
-fn decode_entities(text: &str) -> String {
+/// Decodes the named entities above and every numeric one, in text that
+/// carries no tags (a name, a caption).
+pub fn decode_entities(text: &str) -> String {
     if !text.contains('&') {
         return text.to_owned();
     }
@@ -271,7 +272,10 @@ mod tests {
             "text"
         );
         assert_eq!(html_to_text("  plain   text  "), "plain text");
-        assert_eq!(html_to_text("Tom & Jérôme ; Zoé &eacute;"), "Tom & Jérôme ; Zoé é");
+        assert_eq!(
+            html_to_text("Tom & Jérôme ; Zoé &eacute;"),
+            "Tom & Jérôme ; Zoé é"
+        );
     }
 
     #[test]

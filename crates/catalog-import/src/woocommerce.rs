@@ -22,7 +22,7 @@ use crate::snapshot::{
     AttributeSeed, CategorySeed, ImageSeed, OptionSeed, ProductSeed, SelectionSeed, Snapshot,
     VariantSeed,
 };
-use crate::text::{clamp_chars, html_to_text, truncate_chars};
+use crate::text::{clamp_chars, decode_entities, html_to_text, truncate_chars};
 
 /// How the shop's categories are laid out in the snapshot.
 #[derive(Debug, Clone, Default)]
@@ -233,15 +233,27 @@ pub fn map_catalog(
             map
         });
     let mut used_slugs = HashSet::new();
+    // Codes are claimed shop-wide, and shops reuse a supplier's code across
+    // a product's colours: the first keeps it, the others go without.
+    let mut used_skus: HashSet<String> = HashSet::new();
+    let mut claim =
+        |sku: Option<String>| sku.filter(|sku| used_skus.insert(sku.to_ascii_uppercase()));
     let products = products
         .iter()
         .filter_map(|product| {
             let variations = by_parent.get(&product.id).map(Vec::as_slice).unwrap_or(&[]);
-            let seed = map_product(product, variations, &known)?;
+            let mut seed = map_product(product, variations, &known)?;
             if !used_slugs.insert(seed.slug.clone()) {
                 tracing::warn!(slug = %seed.slug, id = product.id, "duplicate slug, product skipped");
                 return None;
             }
+            // The variants first: a shop gives a variation its parent's
+            // code when it has none of its own, and the catalog records
+            // codes on what it sells.
+            for variant in &mut seed.variants {
+                variant.sku = claim(variant.sku.take());
+            }
+            seed.sku = claim(seed.sku.take());
             Some(seed)
         })
         .collect();
@@ -307,7 +319,7 @@ fn map_categories(categories: Vec<WooCategory>, options: &SiteOptions) -> Vec<Ca
         for (position, category) in siblings.iter().enumerate() {
             out.push(CategorySeed {
                 slug: fit_slug(&category.slug, &category.name),
-                name: clamp_chars(&category.name, MAX_CATEGORY_NAME_LEN),
+                name: plain(&category.name, MAX_CATEGORY_NAME_LEN),
                 description: truncate_chars(
                     &html_to_text(&category.description),
                     MAX_CATEGORY_DESCRIPTION_LEN,
@@ -319,7 +331,7 @@ fn map_categories(categories: Vec<WooCategory>, options: &SiteOptions) -> Vec<Ca
                 in_menu: !options.hidden.contains(&category.slug),
                 image: category.image.as_ref().map(|image| ImageSeed {
                     url: image.src.clone(),
-                    alt: clamp_chars(&image.alt, MAX_ALT_LEN),
+                    alt: plain(&image.alt, MAX_ALT_LEN),
                 }),
             });
         }
@@ -332,7 +344,7 @@ fn map_product(
     variations: &[&WooProduct],
     known: &HashSet<&str>,
 ) -> Option<ProductSeed> {
-    let name = clamp_chars(&product.name, MAX_NAME_LEN);
+    let name = plain(&product.name, MAX_NAME_LEN);
     if name.is_empty() {
         tracing::warn!(id = product.id, "product without a name, skipped");
         return None;
@@ -359,11 +371,11 @@ fn map_product(
     let mut images: Vec<ImageSeed> = product
         .images
         .iter()
-        .filter(|image| !image.src.is_empty() && seen.insert(image.src.as_str()))
+        .filter(|image| takeable(&image.src) && seen.insert(image.src.as_str()))
         .take(MAX_IMAGES_PER_PRODUCT)
         .map(|image| ImageSeed {
             url: image.src.clone(),
-            alt: clamp_chars(&image.alt, MAX_ALT_LEN),
+            alt: plain(&image.alt, MAX_ALT_LEN),
         })
         .collect();
 
@@ -383,10 +395,10 @@ fn map_product(
                 tracing::warn!(id = product.id, option = %attribute.name, "too many options, dropped");
                 continue;
             }
-            let name = clamp_chars(&attribute.name, MAX_OPTION_NAME_LEN);
+            let name = plain(&attribute.name, MAX_OPTION_NAME_LEN);
             let mut values: Vec<String> = Vec::new();
             for term in &attribute.terms {
-                let value = clamp_chars(&term.name, MAX_OPTION_NAME_LEN);
+                let value = plain(&term.name, MAX_OPTION_NAME_LEN);
                 if value.is_empty() || values.iter().any(|v| v.eq_ignore_ascii_case(&value)) {
                     continue;
                 }
@@ -408,13 +420,13 @@ fn map_product(
                 .filter(|t| !t.is_empty())
                 .collect::<Vec<_>>()
                 .join(", ");
-            let name = clamp_chars(&attribute.name, MAX_ATTRIBUTE_NAME_LEN);
+            let name = plain(&attribute.name, MAX_ATTRIBUTE_NAME_LEN);
             if name.is_empty() || value.is_empty() || attributes.len() >= MAX_ATTRIBUTES {
                 continue;
             }
             attributes.push(AttributeSeed {
                 name,
-                value: clamp_chars(&value, MAX_ATTRIBUTE_VALUE_LEN),
+                value: plain(&value, MAX_ATTRIBUTE_VALUE_LEN),
             });
         }
     }
@@ -455,7 +467,7 @@ fn map_product(
             }
             let image = listed
                 .and_then(|v| v.images.first())
-                .filter(|image| !image.src.is_empty())
+                .filter(|image| takeable(&image.src))
                 .and_then(|image| {
                     if let Some(index) = images.iter().position(|i| i.url == image.src) {
                         return Some(index);
@@ -463,7 +475,7 @@ fn map_product(
                     if images.len() < MAX_IMAGES_PER_PRODUCT {
                         images.push(ImageSeed {
                             url: image.src.clone(),
-                            alt: clamp_chars(&image.alt, MAX_ALT_LEN),
+                            alt: plain(&image.alt, MAX_ALT_LEN),
                         });
                         return Some(images.len() - 1);
                     }
@@ -537,7 +549,7 @@ fn selections_of(
             .terms
             .iter()
             .find(|t| t.slug == value || t.name.eq_ignore_ascii_case(value))
-            .map(|t| clamp_chars(&t.name, MAX_OPTION_NAME_LEN))
+            .map(|t| plain(&t.name, MAX_OPTION_NAME_LEN))
             .or_else(|| {
                 // A value the attribute does not list: taken as typed when
                 // the option knows it.
@@ -556,6 +568,19 @@ fn selections_of(
         });
     }
     Some(selections)
+}
+
+/// A name or a caption as the shop wrote it: entities decoded, cut to fit.
+fn plain(text: &str, max: usize) -> String {
+    clamp_chars(&decode_entities(text), max)
+}
+
+/// Whether the catalog can take a picture at this address: it accepts JPEG,
+/// PNG, WebP and GIF, so an AVIF (which some shops serve) is left out here
+/// rather than fetched for nothing.
+fn takeable(src: &str) -> bool {
+    let path = src.split(['?', '#']).next().unwrap_or_default();
+    !path.is_empty() && !path.to_ascii_lowercase().ends_with(".avif")
 }
 
 /// The Store API's amounts are minor units as strings (`"1990"`).
