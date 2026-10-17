@@ -117,6 +117,37 @@ pub enum Tenant {
         mail: String,
         reset_by: String,
     },
+    /// The languages the shop mails in, as ISO 639-1 codes: a shopper is
+    /// mailed in theirs when it is one of `others` and worded, else in
+    /// `default`. A shop that never set them mails in English, and the
+    /// wordings saved before this (the three events above) are English.
+    MailLanguagesSet {
+        default: String,
+        others: Vec<String>,
+        set_by: String,
+    },
+    /// The merchant's wording of one mail in one of the shop's languages;
+    /// see [`MailTemplateSaved`].
+    MailTemplateSavedIn {
+        mail: String,
+        language: String,
+        subject: String,
+        html: String,
+        saved_by: String,
+    },
+    /// The plain-text part of a wording in one language, committed right
+    /// after its [`MailTemplateSavedIn`]; see [`MailTemplateTextSaved`].
+    MailTemplateTextSavedIn {
+        mail: String,
+        language: String,
+        text: String,
+    },
+    /// The mail, in that language, goes back to the built-in wording.
+    MailTemplateResetIn {
+        mail: String,
+        language: String,
+        reset_by: String,
+    },
     /// The look all the shop's mails share. `logo_file` is a picture in the
     /// tenant's media (`<id>.<ext>`, `logo_size` bytes); `accent` is a
     /// `#rrggbb` colour; `footer` is plain text. Each is `None` when unset.

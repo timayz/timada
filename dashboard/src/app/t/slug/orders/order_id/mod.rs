@@ -333,7 +333,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 if let Some(language) = &order.language {
                     <div class="rounded border border-neutral-200 bg-white p-4">
                         <h2 class="mb-2 text-lg font-medium">"Language"</h2>
-                        <p class="text-sm" data-order-language=(language)>(language)</p>
+                        <p class="text-sm" data-order-language=(language)>(timada_tenancy::language_name(language).unwrap_or(language))</p>
                     </div>
                 }
                 if let Some(note) = &order.note {

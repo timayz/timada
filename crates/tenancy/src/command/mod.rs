@@ -36,8 +36,9 @@ use crate::aggregator::api_key::{
 };
 use crate::aggregator::{
     Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailBrandingCleared,
-    MailBrandingSet, MailServerConfigured, MailServerRemoved, MailTemplateReset, MailTemplateSaved,
-    MailTemplateTextSaved, MemberGranted, MemberRevoked, MemberRoleChanged, PaymentsConfigured,
+    MailBrandingSet, MailLanguagesSet, MailServerConfigured, MailServerRemoved, MailTemplateReset,
+    MailTemplateResetIn, MailTemplateSaved, MailTemplateSavedIn, MailTemplateTextSaved,
+    MailTemplateTextSavedIn, MemberGranted, MemberRevoked, MemberRoleChanged, PaymentsConfigured,
     PaymentsRemoved, Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated,
     Sent, Suspended,
 };
@@ -85,12 +86,15 @@ pub struct TenantState {
     pub company: Option<TenantCompany>,
     /// The merchant's own mail server, once set up.
     pub mail_server: Option<MailServerSettings>,
+    /// The languages the shop mails in, once picked; English until then.
+    pub mail_languages: Option<MailLanguages>,
     /// The merchant's wording of the shop's mails, by
-    /// [`ShopMailKind`](crate::ShopMailKind) key. A mail not here is sent
-    /// in the built-in wording.
-    pub mail_templates: BTreeMap<String, MailTemplate>,
+    /// [`ShopMailKind`](crate::ShopMailKind) key and language code. A mail
+    /// not here is sent in the built-in wording. Wordings saved before the
+    /// shop could pick languages are English.
+    pub mail_templates: BTreeMap<(String, String), MailTemplate>,
     /// Who changed the mails' wording and when, newest last; the last
-    /// [`MAIL_TEMPLATE_HISTORY`] changes of each mail.
+    /// [`MAIL_TEMPLATE_HISTORY`] changes of each mail in each language.
     pub mail_template_history: Vec<MailTemplateChange>,
     /// The look all the shop's mails share, once set.
     pub mail_branding: Option<MailBranding>,
@@ -110,8 +114,21 @@ pub struct MailBranding {
     pub set_at: u64,
 }
 
-/// How many changes of one mail's wording the tenant remembers.
+/// How many changes of one mail's wording, in one language, the tenant
+/// remembers.
 pub const MAIL_TEMPLATE_HISTORY: usize = 20;
+
+/// The languages a shop mails in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MailLanguages {
+    /// What a shopper gets when their language is not among `others`.
+    pub default: String,
+    /// The other languages the shop words its mails in, without `default`.
+    pub others: Vec<String>,
+    pub set_by: String,
+    /// Unix seconds.
+    pub set_at: u64,
+}
 
 /// The merchant's wording of one mail.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -126,10 +143,11 @@ pub struct MailTemplate {
     pub saved_at: u64,
 }
 
-/// One change to a mail's wording.
+/// One change to a mail's wording in one language.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MailTemplateChange {
     pub mail: String,
+    pub language: String,
     pub by: String,
     /// Unix seconds.
     pub at: u64,
@@ -246,6 +264,10 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_mail_template_saved())
         .handler(on_mail_template_text_saved())
         .handler(on_mail_template_reset())
+        .handler(on_mail_languages_set())
+        .handler(on_mail_template_saved_in())
+        .handler(on_mail_template_text_saved_in())
+        .handler(on_mail_template_reset_in())
         .handler(on_mail_branding_set())
         .handler(on_mail_branding_cleared())
         .strict()
@@ -401,35 +423,107 @@ async fn on_mail_server_removed(
 }
 
 impl TenantState {
-    /// The merchant's wording of `kind`, when not the built-in one.
-    pub fn mail_template(&self, kind: crate::ShopMailKind) -> Option<&MailTemplate> {
-        self.mail_templates.get(kind.key())
+    /// The language the shop mails in when a shopper's is not one of its
+    /// others, or unknown: the one it picked, else English.
+    pub fn mail_default_language(&self) -> &str {
+        self.mail_languages
+            .as_ref()
+            .map_or(crate::DEFAULT_LANGUAGE, |languages| &languages.default)
     }
 
-    /// Who changed `kind`'s wording and when, newest first.
-    pub fn mail_template_changes(
+    /// Every language the shop mails in, the default first.
+    pub fn mail_languages(&self) -> Vec<&str> {
+        let mut languages = vec![self.mail_default_language()];
+        if let Some(picked) = &self.mail_languages {
+            languages.extend(picked.others.iter().map(String::as_str));
+        }
+        languages
+    }
+
+    /// Whether the shop mails in `language`.
+    pub fn mails_in(&self, language: &str) -> bool {
+        self.mail_languages().contains(&language)
+    }
+
+    /// The merchant's wording of `kind` in `language`, when not the
+    /// built-in one. A wording in a language the shop no longer mails in
+    /// is kept, but not found here.
+    pub fn mail_template_in(
         &self,
         kind: crate::ShopMailKind,
-    ) -> impl Iterator<Item = &MailTemplateChange> {
+        language: &str,
+    ) -> Option<&MailTemplate> {
+        if !self.mails_in(language) {
+            return None;
+        }
+        self.mail_templates
+            .get(&(kind.key().to_owned(), language.to_owned()))
+    }
+
+    /// The wording `kind` goes out in to a shopper speaking `language`:
+    /// theirs when the shop mails in it and worded it, else the default
+    /// language's, else `None` for the built-in wording. A shopper whose
+    /// language is unknown gets the default language's.
+    pub fn mail_template_for(
+        &self,
+        kind: crate::ShopMailKind,
+        language: Option<&str>,
+    ) -> Option<&MailTemplate> {
+        language
+            .and_then(|language| self.mail_template_in(kind, language))
+            .or_else(|| self.mail_template_in(kind, self.mail_default_language()))
+    }
+
+    /// Who changed `kind`'s wording in `language` and when, newest first.
+    pub fn mail_template_changes<'a>(
+        &'a self,
+        kind: crate::ShopMailKind,
+        language: &'a str,
+    ) -> impl Iterator<Item = &'a MailTemplateChange> {
         self.mail_template_history
             .iter()
             .rev()
-            .filter(move |change| change.mail == kind.key())
+            .filter(move |change| change.mail == kind.key() && change.language == language)
+    }
+
+    fn save_mail_template(&mut self, mail: &str, language: &str, template: MailTemplate, at: u64) {
+        let by = template.saved_by.clone();
+        self.mail_templates
+            .insert((mail.to_owned(), language.to_owned()), template);
+        self.record_mail_template_change(MailTemplateChange {
+            mail: mail.to_owned(),
+            language: language.to_owned(),
+            by,
+            at,
+            reset: false,
+        });
+    }
+
+    fn reset_mail_template(&mut self, mail: &str, language: &str, by: &str, at: u64) {
+        self.mail_templates
+            .remove(&(mail.to_owned(), language.to_owned()));
+        self.record_mail_template_change(MailTemplateChange {
+            mail: mail.to_owned(),
+            language: language.to_owned(),
+            by: by.to_owned(),
+            at,
+            reset: true,
+        });
     }
 
     fn record_mail_template_change(&mut self, change: MailTemplateChange) {
-        let mail = change.mail.clone();
-        self.mail_template_history.push(change);
+        let same = |other: &MailTemplateChange| {
+            other.mail == change.mail && other.language == change.language
+        };
+        let oldest = self.mail_template_history.iter().position(same);
         let kept = self
             .mail_template_history
             .iter()
-            .filter(|change| change.mail == mail)
+            .filter(|c| same(c))
             .count();
-        if kept > MAIL_TEMPLATE_HISTORY
-            && let Some(oldest) = self
-                .mail_template_history
-                .iter()
-                .position(|change| change.mail == mail)
+        self.mail_template_history.push(change);
+        if kept >= MAIL_TEMPLATE_HISTORY
+            && let Some(oldest) = oldest
         {
             self.mail_template_history.remove(oldest);
         }
@@ -437,13 +531,28 @@ impl TenantState {
 }
 
 #[evento::handler]
-async fn on_mail_template_saved(
-    event: Event<MailTemplateSaved>,
+async fn on_mail_languages_set(
+    event: Event<MailLanguagesSet>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.mail_languages = Some(MailLanguages {
+        default: event.data.default.to_owned(),
+        others: event.data.others.to_owned(),
+        set_by: event.data.set_by.to_owned(),
+        set_at: event.timestamp,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_template_saved_in(
+    event: Event<MailTemplateSavedIn>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     let data = &event.data;
-    tenant.mail_templates.insert(
-        data.mail.to_owned(),
+    tenant.save_mail_template(
+        &data.mail,
+        &data.language,
         MailTemplate {
             subject: data.subject.to_owned(),
             html: data.html.to_owned(),
@@ -451,13 +560,52 @@ async fn on_mail_template_saved(
             saved_by: data.saved_by.to_owned(),
             saved_at: event.timestamp,
         },
+        event.timestamp,
     );
-    tenant.record_mail_template_change(MailTemplateChange {
-        mail: data.mail.to_owned(),
-        by: data.saved_by.to_owned(),
-        at: event.timestamp,
-        reset: false,
-    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_template_text_saved_in(
+    event: Event<MailTemplateTextSavedIn>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let key = (event.data.mail.to_owned(), event.data.language.to_owned());
+    if let Some(template) = tenant.mail_templates.get_mut(&key) {
+        template.text = Some(event.data.text.to_owned());
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_template_reset_in(
+    event: Event<MailTemplateResetIn>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    tenant.reset_mail_template(&data.mail, &data.language, &data.reset_by, event.timestamp);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_template_saved(
+    event: Event<MailTemplateSaved>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    // Saved before a shop could pick languages: English.
+    let data = &event.data;
+    tenant.save_mail_template(
+        &data.mail,
+        crate::DEFAULT_LANGUAGE,
+        MailTemplate {
+            subject: data.subject.to_owned(),
+            html: data.html.to_owned(),
+            text: None,
+            saved_by: data.saved_by.to_owned(),
+            saved_at: event.timestamp,
+        },
+        event.timestamp,
+    );
     Ok(())
 }
 
@@ -466,7 +614,11 @@ async fn on_mail_template_text_saved(
     event: Event<MailTemplateTextSaved>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
-    if let Some(template) = tenant.mail_templates.get_mut(event.data.mail.as_str()) {
+    let key = (
+        event.data.mail.to_owned(),
+        crate::DEFAULT_LANGUAGE.to_owned(),
+    );
+    if let Some(template) = tenant.mail_templates.get_mut(&key) {
         template.text = Some(event.data.text.to_owned());
     }
     Ok(())
@@ -477,13 +629,13 @@ async fn on_mail_template_reset(
     event: Event<MailTemplateReset>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
-    tenant.mail_templates.remove(event.data.mail.as_str());
-    tenant.record_mail_template_change(MailTemplateChange {
-        mail: event.data.mail.to_owned(),
-        by: event.data.reset_by.to_owned(),
-        at: event.timestamp,
-        reset: true,
-    });
+    let data = &event.data;
+    tenant.reset_mail_template(
+        &data.mail,
+        crate::DEFAULT_LANGUAGE,
+        &data.reset_by,
+        event.timestamp,
+    );
     Ok(())
 }
 

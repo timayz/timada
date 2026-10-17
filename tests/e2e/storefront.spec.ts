@@ -1779,11 +1779,12 @@ test("a buyer is mailed a link to review a fulfilled order, which opens it on an
 });
 
 // A browser that asks for French: the storefront passes the language on
-// with the sign-in code and the checkout, and the order keeps it.
+// with the sign-in code and the checkout, the shop's French wordings are
+// used, and the order keeps the language.
 test.describe("a French-speaking shopper", () => {
   test.use({ locale: "fr-FR" });
 
-  test("the order remembers the language the shopper checked out in", async ({ page, request }) => {
+  test("is mailed in French, and the order remembers the language", async ({ page, request }) => {
     const stripe = new FakeStripe();
     await stripe.start();
     try {
@@ -1799,17 +1800,52 @@ test.describe("a French-speaking shopper", () => {
       await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
       await page.getByRole("button", { name: "Save" }).click();
       await expect(page.getByRole("status")).toContainText("Stripe connected.");
+
+      // The shop mails in English and French, and words two mails in French.
+      await page.goto(`/t/${slug}/mail`);
+      await page.locator("[data-mail-languages]").getByRole("checkbox", { name: "French" }).check();
+      await page.locator("[data-mail-languages]").getByRole("button", { name: "Save languages" }).click();
+      await expect(page.getByRole("status")).toContainText("these languages");
+      await page.goto(`/t/${slug}/mail/templates/shopper_code/fr`);
+      await page.getByLabel("Subject").fill("Votre code {{ shop.name }}");
+      await page.getByLabel("Body (HTML)").fill("<p>Bonjour, votre code : <b>{{ code }}</b></p>");
+      await page.getByRole("button", { name: "Save" }).click();
+      await expect(page.getByRole("status")).toContainText("Saved");
+      await page.goto(`/t/${slug}/mail/templates/order_confirmation/fr`);
+      await page.getByLabel("Subject").fill("Votre commande {{ order.reference }}");
+      await page.getByLabel("Body (HTML)").fill("<p>Merci pour votre commande chez {{ shop.name }}.</p>");
+      await page.getByRole("button", { name: "Save" }).click();
+      await expect(page.getByRole("status")).toContainText("Saved");
+
       await startStorefront(request, await mintKey(page, slug, true), 1);
 
+      // Signing in: the code comes in French.
+      const shopper = uniqueEmail("shopper");
+      await page.goto(`${STOREFRONT}/account/sign-in`);
+      await signInToShop(page, shopper);
+      await expect(page).toHaveURL(`${STOREFRONT}/account`);
+      const code = await mailTo(request, shopper, `Votre code ${name}`);
+      expect(code.html).toMatch(/Bonjour, votre code : <b>\d{6}<\/b>/);
+
+      // Ordering: so does the confirmation, and the order keeps the language.
       await page.goto(`${STOREFRONT}/p/blue-mug`);
       await addToCart(page);
-      await placeOrder(page, true);
+      await page.goto(`${STOREFRONT}/checkout`);
+      await page.getByLabel("Full name").fill("Ada Lovelace");
+      await page.getByLabel("Street address", { exact: true }).fill("1 rue de la Paix");
+      await page.getByLabel("Postal code", { exact: true }).fill("75002");
+      await page.getByLabel("City", { exact: true }).fill("Paris");
+      await page.getByLabel("Country", { exact: true }).selectOption("FR");
+      await page.getByRole("button", { name: "Place order" }).click();
+      await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
       const intent = stripe.lastIntent()!;
       stripe.pay(intent.id);
       expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
       await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
       await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
       const reference = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+      const confirmation = await mailTo(request, shopper, `Votre commande ${reference}`);
+      expect(confirmation.html).toContain(`Merci pour votre commande chez ${name}.`);
 
       // The merchant sees the language on the order.
       const row = page.locator(`[data-order="${reference}"]`);
@@ -1818,9 +1854,22 @@ test.describe("a French-speaking shopper", () => {
         await expect(row).toHaveCount(1, { timeout: 1000 });
       }).toPass({ timeout: 15_000 });
       await row.getByRole("link", { name: reference }).click();
-      await expect(page.locator("[data-order-language]")).toHaveText("fr");
+      await expect(page.locator("[data-order-language]")).toHaveText("French");
     } finally {
       await stripe.stop();
     }
   });
 });
+
+type Sent = { to: { address: string }[]; subject: string; html?: string };
+
+/// The latest mail to `email` whose subject starts with `subject`.
+async function mailTo(request: APIRequestContext, email: string, subject: string): Promise<Sent> {
+  let found: Sent | undefined;
+  await expect(async () => {
+    const all = (await (await request.get(`${MAILDEV}/email`)).json()) as Sent[];
+    found = all.filter((m) => m.to.some((to) => to.address === email) && m.subject.startsWith(subject)).at(-1);
+    expect(found, `no "${subject}" mail to ${email}`).toBeDefined();
+  }).toPass({ timeout: 15_000 });
+  return found!;
+}

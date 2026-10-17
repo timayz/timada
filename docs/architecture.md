@@ -192,7 +192,9 @@ tenant's products while the events stay isolated by construction.
    sealed under `[secrets] key`; secrets never enter the tenant store, which
    replicates to storefronts. Hosts on this machine or a private network are refused
    unless `mail.allow_private_hosts` is set. Account codes and invitations always go
-   through the platform's server. Details: `docs/mail.md`.
+   through the platform's server. Each shop mail may be worded per language: the
+   shopper's language comes from the storefront's `Accept-Language` and is kept on
+   the order (`LanguageGiven`/`LanguageSet`). Details: `docs/mail.md`.
 6. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
    roles as roles. Policies are not loaded at startup: every tenant-scoped request loads
    the tenant's strict state, whose version says which events it reflects, and the

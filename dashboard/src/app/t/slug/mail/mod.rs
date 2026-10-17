@@ -5,6 +5,7 @@
 
 pub mod branding;
 pub mod configure;
+pub mod languages;
 pub mod remove;
 pub mod templates;
 
@@ -12,8 +13,8 @@ use std::sync::Arc;
 
 use timada_identity::UserState;
 use timada_tenancy::{
-    MAIL_SECURITY_NONE, MAIL_SECURITY_STARTTLS, MAIL_SECURITY_TLS, MAX_MAIL_FOOTER_LEN,
-    PERMISSION_MAIL_MANAGE, ShopMailKind,
+    LANGUAGES, MAIL_SECURITY_NONE, MAIL_SECURITY_STARTTLS, MAIL_SECURITY_TLS, MAX_MAIL_FOOTER_LEN,
+    PERMISSION_MAIL_MANAGE, ShopMailKind, language_name,
 };
 use topcoat::{
     Result,
@@ -90,9 +91,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         MAIL_SECURITY_STARTTLS.to_owned()
     };
     let has_password = current.password_sealed.is_some();
+    let shop_languages: Vec<String> = tenant
+        .mail_languages()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let default_language = tenant.mail_default_language().to_owned();
     let editors: Vec<String> = ShopMailKind::ALL
         .iter()
-        .filter_map(|kind| tenant.mail_template(*kind))
+        .flat_map(|kind| {
+            shop_languages
+                .iter()
+                .filter_map(|language| tenant.mail_template_in(*kind, language))
+        })
         .map(|template| template.saved_by.clone())
         .collect();
     let labels = user_labels(cx, &editors).await?;
@@ -102,17 +113,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_deref()
         .map(|file| app_context::<Arc<Media>>(cx).url(&tenant.id, file));
     let max_footer = MAX_MAIL_FOOTER_LEN.to_string();
-    let mails: Vec<(ShopMailKind, Option<(String, u64)>)> = ShopMailKind::ALL
+    // Each mail, and for each language the shop mails in, who worded it.
+    type Wording = (String, &'static str, Option<(String, u64)>);
+    let mails: Vec<(ShopMailKind, Vec<Wording>)> = ShopMailKind::ALL
         .into_iter()
         .map(|kind| {
-            let edited = tenant.mail_template(kind).map(|template| {
-                let by = labels
-                    .get(&template.saved_by)
-                    .cloned()
-                    .unwrap_or_else(|| template.saved_by.clone());
-                (by, template.saved_at)
-            });
-            (kind, edited)
+            let wordings = shop_languages
+                .iter()
+                .map(|language| {
+                    let edited = tenant.mail_template_in(kind, language).map(|template| {
+                        let by = labels
+                            .get(&template.saved_by)
+                            .cloned()
+                            .unwrap_or_else(|| template.saved_by.clone());
+                        (by, template.saved_at)
+                    });
+                    (
+                        language.clone(),
+                        language_name(language).unwrap_or("Unknown"),
+                        edited,
+                    )
+                })
+                .collect();
+            (kind, wordings)
         })
         .collect();
 
@@ -161,28 +184,65 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
             </section>
 
+            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-mail-languages="">
+                <h2 class="mb-2 text-lg font-medium">"Languages"</h2>
+                <p class="mb-4 text-sm text-neutral-600">
+                    "Your shop mails each shopper in the language they browse in, when you have worded the mail in it; "
+                    "otherwise in the default language. The built-in wording is English."
+                </p>
+                <form method="post" action=(href!(languages::save, Slug(slug.clone()))) class="space-y-3">
+                    <label class="block text-sm" for="mail-default-language">"Default language"</label>
+                    <select id="mail-default-language" name="default" class="w-full max-w-xs rounded border border-neutral-300 px-3 py-2">
+                        for (code, name) in LANGUAGES {
+                            <option value=(code) selected=(*code == default_language)>(name)</option>
+                        }
+                    </select>
+                    <fieldset>
+                        <legend class="block text-sm">"Also in"</legend>
+                        <div class="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-3 md:grid-cols-4">
+                            for (code, name) in LANGUAGES {
+                                <label class="flex items-center gap-2 py-0.5 text-sm" data-language-option=(code)>
+                                    <input type="checkbox" name=(format!("{}{code}", languages::LANGUAGE_FIELD_PREFIX)) value="on"
+                                        checked=(*code != default_language && shop_languages.iter().any(|language| language == code))>
+                                    (name)
+                                </label>
+                            }
+                        </div>
+                    </fieldset>
+                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save languages"</button>
+                </form>
+            </section>
+
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-mail-templates="">
                 <h2 class="mb-2 text-lg font-medium">"Mails to shoppers"</h2>
                 <p class="mb-4 text-sm text-neutral-600">
-                    "Word the mails your shop sends in your own way. A mail you have not changed goes out as below."
+                    "Word the mails your shop sends in your own way, in each of its languages. A mail you have not changed goes out as below."
                 </p>
                 <ul class="divide-y divide-neutral-200">
-                    for (kind, edited) in &mails {
-                        <li class="flex items-center justify-between py-2" data-mail-template=(kind.key())>
-                            <div>
-                                <a class="font-medium underline"
-                                    href=(href!(templates::kind::index, Slug(slug.clone()), templates::kind::Kind(kind.key().to_owned())))>
-                                    (kind.label())
-                                </a>
-                                <p class="text-sm text-neutral-500">(kind.description())</p>
-                            </div>
-                            <span class="text-sm text-neutral-600">
-                                if let Some((by, at)) = edited {
-                                    "Edited by " (by) " on " <time datetime=(at)>(format_time(*at))</time>
-                                } else {
-                                    "Built-in wording"
+                    for (kind, wordings) in &mails {
+                        <li class="py-2" data-mail-template=(kind.key())>
+                            <a class="font-medium underline"
+                                href=(href!(templates::kind::index, Slug(slug.clone()), templates::kind::Kind(kind.key().to_owned())))>
+                                (kind.label())
+                            </a>
+                            <p class="text-sm text-neutral-500">(kind.description())</p>
+                            <ul class="mt-1 space-y-0.5">
+                                for (code, name, edited) in wordings {
+                                    <li class="flex items-center justify-between text-sm" data-language=(code)>
+                                        <a class="underline"
+                                            href=(href!(templates::kind::language::index, Slug(slug.clone()), templates::kind::Kind(kind.key().to_owned()), templates::kind::language::Language(code.clone())))>
+                                            (name)
+                                        </a>
+                                        <span class="text-neutral-600">
+                                            if let Some((by, at)) = edited {
+                                                "Edited by " (by) " on " <time datetime=(at)>(format_time(*at))</time>
+                                            } else {
+                                                "Built-in wording"
+                                            }
+                                        </span>
+                                    </li>
                                 }
-                            </span>
+                            </ul>
                         </li>
                     }
                 </ul>
