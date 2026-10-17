@@ -21,6 +21,7 @@ use crate::aggregator::{
     AddressRemoved, AddressSaved, AttemptFailed, CodeConsumed, CodeIssued, Forgotten, Registered,
     SessionEnded, SessionStarted, SessionsRevoked,
 };
+use crate::key::{self, ShopperKey, ShopperKeys};
 use crate::value_object::{challenge_id, session_id, shopper_id};
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -34,13 +35,35 @@ impl<E: Executor> Deref for Command<E> {
     }
 }
 
-/// An address a shopper ships to.
+/// An address a shopper ships to, opened.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SavedAddress {
     pub id: String,
     pub address: ShippingAddress,
     /// Unix seconds.
     pub saved_at: u64,
+}
+
+/// An address a shopper ships to, as the events hold it: sealed under the
+/// shopper's key.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SealedAddress {
+    pub id: String,
+    pub sealed: Vec<u8>,
+    /// Unix seconds.
+    pub saved_at: u64,
+}
+
+/// A shopper with their personal data opened by their key.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Shopper {
+    pub id: String,
+    /// Normalized.
+    pub email: String,
+    /// Unix seconds of the first sign-in (since the last deletion).
+    pub registered_at: u64,
+    /// Most recently saved first.
+    pub addresses: Vec<SavedAddress>,
 }
 
 /// The latest "sign out everywhere" on a shopper. Sessions started up to it
@@ -70,22 +93,83 @@ fn event_millis(event: &evento::Event) -> u64 {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ShopperState {
     pub id: String,
-    /// Normalized; empty once forgotten.
-    pub email: String,
+    /// The key the personal data is sealed under; empty once forgotten.
+    pub key_id: String,
+    /// The normalized address signed in with, sealed; empty once forgotten.
+    pub email: Vec<u8>,
     /// Unix seconds of the first sign-in (since the last deletion).
     pub registered_at: u64,
     /// Most recently saved first.
-    pub addresses: Vec<SavedAddress>,
+    pub addresses: Vec<SealedAddress>,
     pub sessions_revoked: Option<SessionsRevocation>,
     /// The shopper deleted their account; every command treats it as gone
     /// until the address signs in again.
     pub forgotten: bool,
 }
 
-impl ShopperState {
+impl Shopper {
     pub fn address(&self, address_id: &str) -> Option<&SavedAddress> {
         self.addresses.iter().find(|saved| saved.id == address_id)
     }
+}
+
+impl ShopperState {
+    pub fn address(&self, address_id: &str) -> Option<&SealedAddress> {
+        self.addresses.iter().find(|saved| saved.id == address_id)
+    }
+
+    /// The personal data, opened with the key `key_id` names. Fails under
+    /// any other key.
+    pub fn open(&self, key: &ShopperKey) -> anyhow::Result<Shopper> {
+        let email = key::open(key, &email_aad(&self.id, &self.key_id), &self.email)?;
+        let addresses = self
+            .addresses
+            .iter()
+            .map(|saved| {
+                let bytes = key::open(
+                    key,
+                    &address_aad(&self.id, &self.key_id, &saved.id),
+                    &saved.sealed,
+                )?;
+                Ok(SavedAddress {
+                    id: saved.id.to_owned(),
+                    address: bitcode::decode(&bytes)?,
+                    saved_at: saved.saved_at,
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+        Ok(Shopper {
+            id: self.id.to_owned(),
+            email: String::from_utf8(email)?,
+            registered_at: self.registered_at,
+            addresses,
+        })
+    }
+}
+
+impl ShopperState {
+    /// The personal data, opened with the key `keys` hold: `None` once the
+    /// shopper is forgotten or the key destroyed; an error when the key
+    /// cannot be read yet.
+    pub async fn open_with(&self, keys: &dyn ShopperKeys) -> anyhow::Result<Option<Shopper>> {
+        if self.forgotten || self.key_id.is_empty() {
+            return Ok(None);
+        }
+        let Some(key) = keys.get(&self.key_id).await? else {
+            return Ok(None);
+        };
+        self.open(&key).map(Some)
+    }
+}
+
+/// What a sealed address signed in with is bound to.
+pub(crate) fn email_aad(shopper_id: &str, key_id: &str) -> Vec<u8> {
+    key::aad(shopper_id, key_id, "email")
+}
+
+/// What a sealed saved address is bound to.
+pub(crate) fn address_aad(shopper_id: &str, key_id: &str, address_id: &str) -> Vec<u8> {
+    key::aad(shopper_id, key_id, &format!("address:{address_id}"))
 }
 
 pub fn shopper_projection<E: Executor>() -> Projection<E, ShopperState> {
@@ -101,6 +185,7 @@ pub fn shopper_projection<E: Executor>() -> Projection<E, ShopperState> {
 #[evento::handler]
 async fn on_registered(event: Event<Registered>, state: &mut ShopperState) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
+    state.key_id = event.data.key_id.to_owned();
     state.email = event.data.email.to_owned();
     state.registered_at = event.timestamp;
     state.addresses.clear();
@@ -118,9 +203,9 @@ async fn on_address_saved(
         .retain(|saved| saved.id != event.data.address_id);
     state.addresses.insert(
         0,
-        SavedAddress {
+        SealedAddress {
             id: event.data.address_id.to_owned(),
-            address: event.data.address.to_owned(),
+            sealed: event.data.address.to_owned(),
             saved_at: event.timestamp,
         },
     );
@@ -152,6 +237,7 @@ async fn on_sessions_revoked(
 
 #[evento::handler]
 async fn on_forgotten(event: Event<Forgotten>, state: &mut ShopperState) -> anyhow::Result<()> {
+    state.key_id.clear();
     state.email.clear();
     state.addresses.clear();
     state.forgotten = true;

@@ -27,11 +27,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use evento::subscription::{Context, SubscriptionBuilder};
 use evento::{Executor, metadata::Event};
-use openidconnect::reqwest;
 use timada_catalog::aggregator::{ImageAdded, ImageRemoved};
 use timada_catalog::{MAX_IMAGE_BYTES, product_projection};
 use timada_reviews::aggregator::{
@@ -48,13 +46,11 @@ use topcoat::router::{
     PathBuf as RoutePathBuf, header::CACHE_CONTROL, response::Response,
 };
 
-use crate::config::{ClusterConfig, MediaConfig};
+use crate::config::MediaConfig;
+use crate::peers::{self, Peers, is_id};
 
 /// The kinds of picture the shop takes, by extension.
 const EXTENSIONS: [&str; 4] = ["jpg", "png", "webp", "gif"];
-
-/// How long one copy to or from a peer may take.
-const PEER_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The route a node takes a copy of a picture on, below `/cluster/media`.
 pub const PEER_ROUTE: &str = "/cluster/media";
@@ -64,18 +60,7 @@ pub struct Media {
     dir: PathBuf,
     public_url: String,
     /// The other nodes, when there are any.
-    peers: Option<Peers>,
-}
-
-struct Peers {
-    /// Web addresses of the other nodes, no trailing slash.
-    urls: Vec<String>,
-    /// `Bearer <cluster.secret>`.
-    authorization: String,
-    /// Copies the other nodes must acknowledge before an upload is recorded:
-    /// with this node's own, a majority of the cluster.
-    quorum: usize,
-    client: reqwest::Client,
+    peers: Option<Arc<Peers>>,
 }
 
 /// What a picture turned out to be, once its first bytes were read.
@@ -89,35 +74,12 @@ pub struct SniffedImage {
 }
 
 impl Media {
-    pub fn new(config: &MediaConfig, cluster: Option<&ClusterConfig>) -> anyhow::Result<Self> {
-        let peers = match cluster {
-            Some(cluster) if cluster.peers.len() > 1 => {
-                let urls = cluster
-                    .web_peers
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| *index as u64 != cluster.node_id)
-                    .map(|(_, url)| url.clone())
-                    .collect();
-                // Validated by `Config::load`.
-                let secret = cluster.secret.as_deref().unwrap_or_default();
-                Some(Peers {
-                    urls,
-                    authorization: format!("Bearer {secret}"),
-                    quorum: cluster.peers.len() / 2,
-                    client: reqwest::Client::builder()
-                        .redirect(reqwest::redirect::Policy::none())
-                        .timeout(PEER_TIMEOUT)
-                        .build()?,
-                })
-            }
-            _ => None,
-        };
-        Ok(Self {
+    pub fn new(config: &MediaConfig, peers: Option<Arc<Peers>>) -> Self {
+        Self {
             dir: config.dir.clone(),
             public_url: config.public_url.clone(),
             peers,
-        })
+        }
     }
 
     /// The directory the files are served from.
@@ -187,48 +149,13 @@ impl Media {
         let Some(peers) = &self.peers else {
             return Ok(());
         };
-        let bytes = bytes::Bytes::from(bytes);
-        let (tx, mut rx) = tokio::sync::mpsc::channel(peers.urls.len());
-        for url in &peers.urls {
-            let request = peers
-                .client
-                .put(format!("{url}{PEER_ROUTE}/{tenant_id}/{file}"))
-                .header(reqwest::header::AUTHORIZATION, &peers.authorization)
-                .body(bytes.clone());
-            let (tx, url) = (tx.clone(), url.clone());
-            tokio::spawn(async move {
-                let copied = match request.send().await {
-                    Ok(response) if response.status().is_success() => Ok(()),
-                    Ok(response) => Err(anyhow::anyhow!("answered {}", response.status())),
-                    Err(err) => Err(err.into()),
-                };
-                if let Err(err) = &copied {
-                    tracing::warn!(peer = %url, %err, "cannot copy a picture to a peer");
-                }
-                // The upload may already have its majority and be gone.
-                let _ = tx.send(copied.is_ok()).await;
-            });
-        }
-        drop(tx);
-        let (mut copied, mut failed) = (0, 0);
-        while let Some(ok) = rx.recv().await {
-            if ok {
-                copied += 1;
-            } else {
-                failed += 1;
-            }
-            if copied >= peers.quorum {
-                return Ok(());
-            }
-            if failed > peers.urls.len() - peers.quorum {
-                break;
-            }
-        }
-        anyhow::bail!(
-            "only {copied} of {} other nodes took the picture, {} needed",
-            peers.urls.len(),
-            peers.quorum
-        )
+        peers
+            .put_to_quorum(
+                &format!("{PEER_ROUTE}/{tenant_id}/{file}"),
+                bytes.into(),
+                "picture",
+            )
+            .await
     }
 
     /// Makes sure this node holds a picture the catalog references, fetching
@@ -254,10 +181,10 @@ impl Media {
                 "picture {tenant_id}/{file} is missing and there is no peer to fetch it from"
             );
         };
-        for url in &peers.urls {
+        for url in peers.urls() {
             let fetched = async {
                 let response = peers
-                    .client
+                    .client()
                     .get(format!("{url}{MEDIA_PATH}/{tenant_id}/{file}"))
                     .send()
                     .await?
@@ -291,17 +218,7 @@ impl Media {
     /// Whether a request carries the cluster's secret. Without peers no
     /// request does: a single node takes no copies.
     pub fn authorizes(&self, header: Option<&[u8]>) -> bool {
-        let (Some(peers), Some(header)) = (&self.peers, header) else {
-            return false;
-        };
-        let expected = peers.authorization.as_bytes();
-        // Constant time, so the answer says nothing about how close a guess was.
-        header.len() == expected.len()
-            && header
-                .iter()
-                .zip(expected)
-                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-                == 0
+        peers::authorizes(self.peers.as_deref(), header)
     }
 
     /// Takes a copy a peer sends: checks the names cannot leave the media
@@ -341,16 +258,6 @@ impl Media {
             tracing::warn!(path = %path.display(), %err, "cannot delete a picture");
         }
     }
-}
-
-/// A tenant or picture id: letters, digits, `-` and `_`, so it names one
-/// entry of a directory and nothing above it.
-fn is_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 /// The cursor identity of the subscription that keeps this node's copies in
@@ -595,6 +502,8 @@ mod tests {
     ];
     const GIF: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xFF\xFF\xFF";
 
+    use crate::peers::test_support::{SECRET, down, peer};
+
     #[test]
     fn knows_a_picture_from_anything_else() {
         let png = Media::sniff(PNG).expect("a PNG");
@@ -618,8 +527,7 @@ mod tests {
                 public_url: "https://shop.example/media".into(),
             },
             None,
-        )
-        .expect("a media store");
+        );
         assert_eq!(media.tenant_url("t-1"), "https://shop.example/media/t-1");
         assert_eq!(
             media.url("t-1", "img-1.png"),
@@ -633,108 +541,21 @@ mod tests {
         Media {
             dir,
             public_url: "https://shop.example/media".into(),
-            peers: Some(Peers {
-                urls: peers,
-                authorization: "Bearer a-secret-shared-by-every-node-of-it".into(),
-                quorum: nodes / 2,
-                client: reqwest::Client::new(),
-            }),
+            peers: Some(Arc::new(Peers::for_test(peers, nodes))),
         }
     }
 
-    /// A peer answering every request with `status` and `body`.
-    async fn peer(status: u16, body: &'static [u8]) -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            while let Ok((mut stream, _)) = listener.accept().await {
-                tokio::spawn(async move {
-                    // Read the head, then as much body as it announces.
-                    let mut request = Vec::new();
-                    let mut chunk = [0u8; 4096];
-                    let length = loop {
-                        let read = stream.read(&mut chunk).await.unwrap_or(0);
-                        if read == 0 {
-                            return;
-                        }
-                        request.extend_from_slice(&chunk[..read]);
-                        if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                            let head = String::from_utf8_lossy(&request[..end]).to_lowercase();
-                            let length = head
-                                .lines()
-                                .find_map(|line| line.strip_prefix("content-length:"))
-                                .and_then(|value| value.trim().parse::<usize>().ok())
-                                .unwrap_or(0);
-                            break end + 4 + length;
-                        }
-                    };
-                    while request.len() < length {
-                        let read = stream.read(&mut chunk).await.unwrap_or(0);
-                        if read == 0 {
-                            break;
-                        }
-                        request.extend_from_slice(&chunk[..read]);
-                    }
-                    let head = format!(
-                        "HTTP/1.1 {status} X\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-                        body.len()
-                    );
-                    let _ = stream.write_all(head.as_bytes()).await;
-                    let _ = stream.write_all(body).await;
-                });
-            }
-        });
-        format!("http://{addr}")
-    }
-
-    /// An address nothing listens on.
-    async fn down() -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        format!("http://{}", listener.local_addr().unwrap())
-    }
-
     #[tokio::test]
-    async fn an_upload_needs_a_majority_of_the_cluster() {
-        // Three nodes: this one and one peer are a majority.
+    async fn an_upload_is_copied_to_a_majority_of_the_cluster() {
         let three = media(vec![peer(204, b"").await, down().await], 3);
         assert!(three.replicate("t1", "i1.png", PNG.to_vec()).await.is_ok());
-
-        // This one alone is not.
         let alone = media(vec![peer(401, b"").await, down().await], 3);
         assert!(alone.replicate("t1", "i1.png", PNG.to_vec()).await.is_err());
-
-        // Five nodes: two peers more are needed.
-        let five_ok = media(
-            vec![
-                peer(204, b"").await,
-                peer(204, b"").await,
-                down().await,
-                peer(500, b"").await,
-            ],
-            5,
-        );
-        assert!(
-            five_ok
-                .replicate("t1", "i1.png", PNG.to_vec())
-                .await
-                .is_ok()
-        );
-        let five_short = media(
-            vec![
-                peer(204, b"").await,
-                down().await,
-                down().await,
-                peer(422, b"").await,
-            ],
-            5,
-        );
-        assert!(
-            five_short
-                .replicate("t1", "i1.png", PNG.to_vec())
-                .await
-                .is_err()
-        );
+        let single = Media {
+            peers: None,
+            ..alone
+        };
+        assert!(single.replicate("t1", "i1.png", PNG.to_vec()).await.is_ok());
     }
 
     #[tokio::test]
@@ -765,15 +586,13 @@ mod tests {
     #[tokio::test]
     async fn a_copy_needs_the_secret_and_a_name_inside_the_directory() {
         let media = media(vec![], 1);
-        assert!(media.authorizes(Some(b"Bearer a-secret-shared-by-every-node-of-it")));
-        assert!(!media.authorizes(Some(b"Bearer a-secret-shared-by-every-node-of-iX")));
-        assert!(!media.authorizes(Some(b"Bearer ")));
+        assert!(media.authorizes(Some(SECRET.as_bytes())));
         assert!(!media.authorizes(None));
         let single = Media {
             peers: None,
             ..media
         };
-        assert!(!single.authorizes(Some(b"Bearer a-secret-shared-by-every-node-of-it")));
+        assert!(!single.authorizes(Some(SECRET.as_bytes())));
 
         let media = super::tests::media(vec![], 3);
         for (tenant, file) in [

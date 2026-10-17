@@ -1,5 +1,7 @@
 use timada_orders::ShippingAddress;
 
+use crate::key::ShopperKey;
+
 /// How long a mailed code stays valid, in seconds.
 pub const CODE_TTL_SECS: u64 = 10 * 60;
 
@@ -16,7 +18,9 @@ pub const SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 /// The most addresses one shopper keeps.
 pub const MAX_ADDRESSES: usize = 10;
 
-/// Aggregate id of the shopper behind a normalized address.
+/// Aggregate id of the shopper behind a normalized address. It is a plain
+/// hash: anyone holding a candidate address can test it, even once the
+/// shopper is forgotten (the shop's orders keep the address anyway).
 pub fn shopper_id(email: &str) -> String {
     evento::hash_ids(vec!["shopper", email])
 }
@@ -39,19 +43,29 @@ pub fn session_id(token: &str) -> String {
     evento::hash_ids(vec!["shopper-session", token])
 }
 
-/// The id of a saved address, from its (normalized) fields.
-pub fn address_id(shopper_id: &str, address: &ShippingAddress) -> String {
-    evento::hash_ids(vec![
-        "address",
-        shopper_id,
-        &address.name,
+/// The id of a saved address, from its (normalized) fields keyed by the
+/// shopper's key: the same address saved twice names the same entry, and
+/// once the key is destroyed the id says nothing of the address.
+pub fn address_id(key: &ShopperKey, address: &ShippingAddress) -> String {
+    use base64::Engine;
+    use hmac::{Hmac, Mac};
+
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes())
+        .expect("HMAC takes a key of any length");
+    mac.update(b"timada-shoppers/address");
+    for field in [
+        address.name.as_str(),
         &address.line1,
         address.line2.as_deref().unwrap_or_default(),
         &address.postal_code,
         &address.city,
         &address.country,
         address.phone.as_deref().unwrap_or_default(),
-    ])
+    ] {
+        mac.update(&(field.len() as u32).to_be_bytes());
+        mac.update(field.as_bytes());
+    }
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
 }
 
 /// A uniformly random six-digit code, zero-padded.

@@ -20,6 +20,9 @@ dir = "data/e2e-tenants"
 dir = "data/e2e-media"
 public_url = "https://timada.localhost/media"
 
+[shopper_keys]
+dir = "data/e2e-shopper-keys"
+
 # The browser suite cannot drive it (the Rust integration test does); it is
 # here so the server under test boots the listener too.
 [store_api]

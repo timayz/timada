@@ -1,22 +1,29 @@
 //! The persisted shapes. Every variant is frozen once merged (`events.lock`):
 //! a change of shape is a new variant, never a changed field. No field is an
 //! enum, so the lock never freezes one.
-
-use timada_orders::ShippingAddress;
+//!
+//! What would name a person (the address signed in with, the addresses
+//! shipped to) is sealed under the shopper's own key ([`crate::ShopperKey`]),
+//! which the store never holds. Deleting the account destroys the key, so
+//! the events below keep nothing readable about the shopper.
 
 /// A shop's customer. Its id is [`shopper_id`](crate::shopper_id) of the
 /// address, so the stream doubles as the address's uniqueness index.
 #[evento::aggregate(name = "timada-shoppers/Shopper")]
 pub enum Shopper {
-    /// The first sign-in that proved `email` (normalized).
+    /// The first sign-in that proved an address (normalized). `email` is
+    /// that address sealed under the key `key_id` names, drawn for this
+    /// registration.
     Registered {
-        email: String,
+        key_id: String,
+        email: Vec<u8>,
     },
-    /// An address to ship to again. `address_id` derives from its fields, so
-    /// saving the same address twice names the same entry.
+    /// An address to ship to again. `address_id` derives from its fields
+    /// keyed by the shopper's key, so saving the same address twice names
+    /// the same entry; `address` is the `ShippingAddress` sealed under it.
     AddressSaved {
         address_id: String,
-        address: ShippingAddress,
+        address: Vec<u8>,
     },
     AddressRemoved {
         address_id: String,
@@ -26,10 +33,13 @@ pub enum Shopper {
     SessionsRevoked {
         except_session: Option<String>,
     },
-    /// The shopper deleted their account: the addresses are forgotten and
-    /// every session is void. Their orders stay with the shop. A later
-    /// sign-in with the same address registers it afresh on this stream.
-    Forgotten,
+    /// The shopper deleted their account: the key `key_id` names is
+    /// destroyed, so what it sealed is unreadable, and every session is
+    /// void. Their orders stay with the shop. A later sign-in with the same
+    /// address registers it afresh on this stream, under a new key.
+    Forgotten {
+        key_id: String,
+    },
 }
 
 /// The one-time codes mailed to one address. Its id is

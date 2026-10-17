@@ -3,14 +3,19 @@ use timada_orders::{ShippingAddress, normalize_shipping};
 
 use crate::aggregator::{AddressRemoved, AddressSaved};
 use crate::error::ShopperError;
+use crate::key::{self, ShopperKeys};
 use crate::value_object::{MAX_ADDRESSES, address_id};
+
+use super::address_aad;
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Keeps an address to ship to again and returns its id. Saving one the
+    /// Keeps an address to ship to again, sealed under the shopper's key,
+    /// and returns its id. Saving one the
     /// shopper already has moves it first; an eleventh is refused.
     pub async fn save_address(
         &self,
+        keys: &dyn ShopperKeys,
         shopper_id: &str,
         address: ShippingAddress,
         routing_key: Option<String>,
@@ -20,7 +25,12 @@ impl<E: Executor> super::Command<E> {
             .load_shopper(shopper_id)
             .await?
             .ok_or(ShopperError::NotFound)?;
-        let id = address_id(&shopper.id, &address);
+        // A destroyed key is an account deleted meanwhile.
+        let key = keys
+            .get(&shopper.key_id)
+            .await?
+            .ok_or(ShopperError::NotFound)?;
+        let id = address_id(&key, &address);
         let known = shopper.address(&id).is_some();
         if known
             && shopper
@@ -37,8 +47,12 @@ impl<E: Executor> super::Command<E> {
             .write()?
             .routing_key_opt(routing_key)
             .event(&AddressSaved {
+                address: key::seal(
+                    &key,
+                    &address_aad(&shopper.id, &shopper.key_id, &id),
+                    &bitcode::encode(&address),
+                )?,
                 address_id: id.clone(),
-                address,
             })
             .commit(&self.0)
             .await?;
