@@ -58,7 +58,7 @@ pub async fn new(cx: &Cx) -> Result<impl View> {
                 subtitle: Some("What its invoices say about it. You become its owner."),
             )
             notice(error: query.error.as_deref())
-            <form method="post" action=(href!(create)) class="max-w-3xl">
+            <form method="post" action=(href!(create))>
                 <input type="hidden" name="tenant" value=(&tenant)>
                 identity_fields(legal: &legal)
                 button(attrs: attributes! { type="submit" }, "Register")

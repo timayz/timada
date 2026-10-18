@@ -166,8 +166,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Members"),
-                description: Some(&pending_label),
-                attrs: attributes! { data-tenant-members="" },
+                <p class="mb-3 text-sm text-muted-foreground" data-pending-invitations="">(&pending_label)</p>
                 table(
                     table_header(
                         table_row(

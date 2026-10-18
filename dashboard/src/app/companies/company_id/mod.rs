@@ -169,7 +169,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 </form>
             )
 
-            <form method="post" action=(href!(save::save, CompanyId(id.clone()))) class="max-w-3xl">
+            <form method="post" action=(href!(save::save, CompanyId(id.clone())))>
                 identity_fields(legal: &legal)
                 button(attrs: attributes! { type="submit" }, "Save")
             </form>
