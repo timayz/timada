@@ -8,12 +8,16 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{CompanyId, require_owned};
+use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document};
+use crate::ui::{Shell, document, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct OssQuery {
@@ -55,51 +59,52 @@ pub async fn oss(cx: &Cx) -> Result<impl View> {
     };
     let previous = link(step(&quarter, false));
     let next = link(step(&quarter, true));
-    let title = format!("One-Stop Shop {quarter} · {}", company.name());
+    let name = company.name().to_owned();
+    let title = format!("One-Stop Shop {quarter} · {name}");
 
     Ok(view! {
         document(
             title: &title,
             shell: Shell::page("companies"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"One-Stop Shop return"</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(super::index, CompanyId(company.id.clone())))>(company.name())</a>
+            page_header(
+                title: "One-Stop Shop return",
+                subtitle: Some(&name),
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::index, CompanyId(company.id.clone())))>"Back to " (&name)</a>
+            )
+            section_card(
+                description: Some("Sales of every tenant of the company to consumers in other EU countries, taxed at their rates, as invoiced in the quarter (UTC), credit notes deducted. Declare them on the OSS return of impots.gouv.fr."),
+                <nav class="mb-4 flex flex-wrap items-center gap-3 text-sm" aria-label="Quarters">
+                    <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(previous)>"Previous quarter"</a>
+                    <strong class="px-2 text-base tabular-nums" data-oss-quarter="">(&quarter)</strong>
+                    <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(next)>"Next quarter"</a>
                 </nav>
-            </header>
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 flex items-center gap-4 text-sm">
-                    <a class="underline" href=(previous)>"Previous quarter"</a>
-                    <strong data-oss-quarter="">(&quarter)</strong>
-                    <a class="underline" href=(next)>"Next quarter"</a>
-                </p>
-                <p class="mb-4 text-sm text-neutral-600">
-                    "Sales of every tenant of the company to consumers in other EU countries, taxed at their rates, as invoiced in the quarter (UTC), credit notes deducted. Declare them on the OSS return of impots.gouv.fr."
-                </p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Country"</th>
-                            <th class="py-2 font-medium">"Rate"</th>
-                            <th class="py-2 text-right font-medium">"Taxable amount"</th>
-                            <th class="py-2 text-right font-medium">"VAT"</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Country")
+                            table_head("Rate")
+                            table_head(attrs: attributes! { class="text-right" }, "Taxable amount")
+                            table_head(attrs: attributes! { class="text-right" }, "VAT")
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="4" data-oss-empty="">"Nothing to declare this quarter."</td></tr>
+                            table_row(
+                                table_cell(attrs: attributes! { colspan="4" class="text-muted-foreground" data-oss-empty="" }, "Nothing to declare this quarter.")
+                            )
                         }
                         for row in &rows {
-                            <tr data-oss-row=(format!("{}-{}", row.country, row.rate_bps))>
-                                <td class="py-2">(&row.country)</td>
-                                <td class="py-2">(format_rate_fr(row.rate_bps.max(0) as u32))</td>
-                                <td class="py-2 text-right">(format_amount_fr(row.base_cents.max(0) as u64, &row.currency))</td>
-                                <td class="py-2 text-right" data-oss-vat="">(format_amount_fr(row.vat_cents.max(0) as u64, &row.currency))</td>
-                            </tr>
+                            table_row(
+                                attrs: attributes! { data-oss-row=(format!("{}-{}", row.country, row.rate_bps)) },
+                                table_cell((&row.country))
+                                table_cell((format_rate_fr(row.rate_bps.max(0) as u32)))
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" }, (format_amount_fr(row.base_cents.max(0) as u64, &row.currency)))
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" data-oss-vat="" }, (format_amount_fr(row.vat_cents.max(0) as u64, &row.currency)))
+                            )
                         }
-                    </tbody>
-                </table>
-            </section>
+                    )
+                )
+            )
         )
     })
 }

@@ -9,8 +9,9 @@ use timada_tenancy::{InvitationState, TenantState};
 use topcoat::{
     Result,
     context::Cx,
+    icon::icon,
     router::{href, module_param, page, path_param, query_params},
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use crate::app::auth::{Flash, login_url, register_url};
@@ -20,7 +21,9 @@ use crate::auth::{
     cookies::{InviteFlow, invite_flow},
     current_user, now,
 };
-use crate::ui::{Shell, document, notice};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::components::card::CARD;
+use crate::ui::{LINK, auth_document, icons, notice};
 
 module_param!(pub token);
 
@@ -114,52 +117,64 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         _ => String::new(),
     };
     let tenant_name = tenant.as_ref().map(|t| t.name.clone()).unwrap_or_default();
+    let state = match offer {
+        Offer::Invalid => "invalid",
+        Offer::Member { .. } => "member",
+        Offer::Join => "open",
+        Offer::SignIn { .. } => "sign-in",
+    };
 
     Ok(view! {
-        document(
+        auth_document(
             title: "Invitation",
-            shell: Shell::page(""),
-            <h1 class="mb-6 text-2xl font-semibold">"Invitation"</h1>
-            notice(error: query.error.as_deref())
+            <section class=(class!(CARD, "gap-5 px-6")) data-invitation=(state)>
+                <div class="flex flex-col items-center gap-3 text-center">
+                    <span class=(class!(
+                        "flex size-12 items-center justify-center rounded-xl [&>svg]:size-6",
+                        if matches!(offer, Offer::Invalid) { "bg-muted text-muted-foreground" } else { "bg-primary/10 text-primary" },
+                    ))>
+                        icon(data: icons::INVITATIONS)
+                    </span>
+                    <h1 class="text-2xl font-bold tracking-tight">"Invitation"</h1>
+                    <p class="text-sm text-muted-foreground">
+                        (match &offer {
+                            Offer::Invalid => "This invitation is no longer valid.".to_owned(),
+                            Offer::Member { .. } => format!("You are already a member of {tenant_name}."),
+                            Offer::Join | Offer::SignIn { .. } => format!("You are invited to join {tenant_name} as {role}."),
+                        })
+                    </p>
+                </div>
+                notice(error: query.error.as_deref())
 
-            match offer {
-                Offer::Invalid => {
-                    <section class="rounded border border-neutral-200 bg-white p-4" data-invitation="invalid">
-                        <p class="text-sm">"This invitation is no longer valid. It may have been used, withdrawn, or it expired. Ask the person who invited you for a new one."</p>
-                        <p class="mt-3 text-sm"><a class="underline" href=(href!(crate::app::home))>"Dashboard"</a></p>
-                    </section>
-                }
-                Offer::Member { slug } => {
-                    <section class="rounded border border-neutral-200 bg-white p-4" data-invitation="member">
-                        <p class="text-sm">"You are already a member of " <strong>(&tenant_name)</strong> "."</p>
-                        <p class="mt-3 text-sm"><a class="underline" href=(href!(crate::app::t::slug::index, Slug(slug)))>"Open " (&tenant_name)</a></p>
-                    </section>
-                }
-                Offer::Join => {
-                    <section class="rounded border border-neutral-200 bg-white p-4" data-invitation="open">
-                        <p class="text-sm">"You are invited to join " <strong>(&tenant_name)</strong> " as " <strong>(&role)</strong> "."</p>
-                        <form method="post" action=(href!(accept::accept, Token(token.to_owned()))) class="mt-4 flex items-center gap-4">
-                            <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Accept the invitation"</button>
-                            <a class="text-sm underline" href=(href!(crate::app::home))>"Not now"</a>
+                match offer {
+                    Offer::Invalid => {
+                        <p class="text-center text-sm">"It may have been used, withdrawn, or it expired. Ask the person who invited you for a new one."</p>
+                        <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Md)) href=(href!(crate::app::home))>"Go to the dashboard"</a>
+                    }
+                    Offer::Member { slug } => {
+                        <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(href!(crate::app::t::slug::index, Slug(slug)))>"Open " (&tenant_name)</a>
+                    }
+                    Offer::Join => {
+                        <form method="post" action=(href!(accept::accept, Token(token.to_owned()))) class="flex flex-col gap-2">
+                            button(attrs: attributes! { type="submit" class="w-full" }, icon(data: icons::CHECK) "Accept the invitation")
+                            <a class=(button_variants(ButtonVariant::Ghost, ButtonSize::Md)) href=(href!(crate::app::home))>"Not now"</a>
                         </form>
                         if let Some(user) = user {
-                            <p class="mt-4 text-xs text-neutral-500">
-                                "You are signed in as " (&user.label) ". "
-                                <a class="underline" href=(login_url(cx, None))>"Not you? Switch account"</a>
+                            <p class="text-center text-xs text-muted-foreground">
+                                "You are signed in as " <strong>(&user.label)</strong> ". "
+                                <a class=(LINK) href=(login_url(cx, None))>"Not you? Switch account"</a>
                             </p>
                         }
-                    </section>
+                    }
+                    Offer::SignIn { email } => {
+                        <p class="text-center text-sm">"Create an account or sign in to accept; you will come back here."</p>
+                        <div class="flex flex-col gap-2">
+                            <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(register_url(cx, None, Some(&email)))>"Create an account"</a>
+                            <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Md)) href=(login_url(cx, None))>icon(data: icons::LOG_IN) "Sign in"</a>
+                        </div>
+                    }
                 }
-                Offer::SignIn { email } => {
-                    <section class="rounded border border-neutral-200 bg-white p-4" data-invitation="sign-in">
-                        <p class="text-sm">"You are invited to join " <strong>(&tenant_name)</strong> " as " <strong>(&role)</strong> ". Create an account or sign in to accept; you will come back here."</p>
-                        <p class="mt-4 flex items-center gap-4 text-sm">
-                            <a class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700" href=(register_url(cx, None, Some(&email)))>"Create an account"</a>
-                            <a class="underline" href=(login_url(cx, None))>"Sign in"</a>
-                        </p>
-                    </section>
-                }
-            }
+            </section>
         )
     })
 }

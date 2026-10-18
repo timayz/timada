@@ -10,14 +10,23 @@ use timada_tenancy::{LegalIdentity, companies_of_user};
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{href, page, query_params},
-    view::{View, component, view},
+    view::{Child, View, attributes, class, component, view},
 };
 
 use crate::app::auth::Flash;
 use crate::auth::require_user;
+use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
+use crate::components::card::CARD;
+use crate::components::checkbox::checkbox;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, notice};
+use crate::ui::{LINK, Shell, document, empty_state, icons, notice, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct CompaniesQuery {
@@ -38,28 +47,45 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Companies",
             shell: Shell::page("companies"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Companies"</h1>
-            </header>
+            page_header(
+                title: "Companies",
+                subtitle: Some("A company is who sells in law: its tenants' invoices name it, and they count together towards its VAT obligations."),
+                <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(href!(new::new))>
+                    icon(data: icons::PLUS)
+                    "Register a company"
+                </a>
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <div class="mb-2 flex items-center justify-between">
-                    <h2 class="text-lg font-medium">"Your companies"</h2>
-                    <a class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700" href=(href!(new::new))>"Register a company"</a>
-                </div>
-                <p class="mb-2 text-sm text-neutral-600">"A company is who sells in law: its tenants' invoices name it, and they count together towards its VAT obligations."</p>
+            section_card(
+                title: Some("Your companies"),
                 if mine.is_empty() {
-                    <p class="text-sm text-neutral-500">"You own no company yet."</p>
+                    empty_state(
+                        title: "No company yet",
+                        hint: Some("Register the company your tenants sell as, then link them from their Invoicing page."),
+                        symbol: Some(icons::COMPANIES),
+                    )
+                } else {
+                    table(
+                        table_header(
+                            table_row(
+                                table_head("Company")
+                                table_head("SIREN")
+                            )
+                        )
+                        table_body(
+                            for row in &mine {
+                                table_row(
+                                    attrs: attributes! { data-company=(&row.siren) },
+                                    table_cell(
+                                        <a class=(LINK) href=(href!(company_id::index, company_id::CompanyId(row.id.clone())))>(&row.legal_name)</a>
+                                    )
+                                    table_cell(<code class="text-xs">(&row.siren)</code>)
+                                )
+                            }
+                        )
+                    )
                 }
-                <ul class="divide-y divide-neutral-100 text-sm">
-                    for row in &mine {
-                        <li class="flex items-center justify-between py-2" data-company=(&row.siren)>
-                            <a class="underline" href=(href!(company_id::index, company_id::CompanyId(row.id.clone())))>(&row.legal_name)</a>
-                            <span class="font-mono text-neutral-500">"SIREN " (&row.siren)</span>
-                        </li>
-                    }
-                </ul>
-            </section>
+            )
         )
     })
 }
@@ -120,6 +146,25 @@ fn format_capital(cents: u64) -> String {
     }
 }
 
+/// A `<fieldset>` drawn as a card. The legend floats so the browser lays it
+/// out as the card's heading rather than on its border.
+#[component]
+async fn identity_group(
+    legend: &str,
+    #[default] description: Option<&str>,
+    #[default] child: Child<'_>,
+) -> Result<impl View> {
+    Ok(view! {
+        <fieldset class=(class!(CARD, "mb-6 gap-4 px-6"))>
+            <legend class="float-left w-full text-base font-semibold">(legend)</legend>
+            if let Some(description) = description {
+                <p class="-mt-2 text-sm text-muted-foreground">(description)</p>
+            }
+            <div class="grid gap-4 sm:grid-cols-2">(child)</div>
+        </fieldset>
+    })
+}
+
 /// The fields of the identity form, filled with `legal`.
 #[component]
 pub async fn identity_fields(legal: &LegalIdentity) -> Result<impl View> {
@@ -128,63 +173,77 @@ pub async fn identity_fields(legal: &LegalIdentity) -> Result<impl View> {
         .map(format_capital)
         .unwrap_or_default();
     Ok(view! {
-        <fieldset class="space-y-3 rounded border border-neutral-200 bg-white p-4">
-            <legend class="px-1 text-lg font-medium">"Company"</legend>
-            <label class="block text-sm" for="legal-name">"Legal name"</label>
-            <input id="legal-name" name="legal_name" required="" maxlength="120" value=(&legal.legal_name)
-                class="w-full rounded border border-neutral-300 px-3 py-2">
-            <label class="block text-sm" for="legal-form">"Legal form (SAS, SARL, EI…)"</label>
-            <input id="legal-form" name="legal_form" required="" maxlength="40" value=(&legal.legal_form)
-                class="w-full rounded border border-neutral-300 px-3 py-2">
-            <label class="block text-sm" for="legal-capital">"Share capital in euros (blank for none)"</label>
-            <input id="legal-capital" name="share_capital" inputmode="decimal" value=(&capital)
-                class="w-full rounded border border-neutral-300 px-3 py-2">
-            <label class="block text-sm" for="legal-siret">"SIRET"</label>
-            <input id="legal-siret" name="siret" required="" inputmode="numeric" value=(&legal.siret)
-                class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-            <label class="block text-sm" for="legal-rcs">"RCS city (blank if not registered)"</label>
-            <input id="legal-rcs" name="rcs_city" maxlength="100" value=(legal.rcs_city.as_deref().unwrap_or(""))
-                class="w-full rounded border border-neutral-300 px-3 py-2">
-            <label class="block text-sm" for="legal-email">"Contact e-mail"</label>
-            <input id="legal-email" name="contact_email" type="email" required="" value=(&legal.contact_email)
-                class="w-full rounded border border-neutral-300 px-3 py-2">
-        </fieldset>
+        identity_group(
+            legend: "Company",
+            field(
+                attrs: attributes! { class="sm:col-span-2" },
+                field_label(attrs: attributes! { for="legal-name" }, "Legal name")
+                input(attrs: attributes! { id="legal-name" name="legal_name" required="" maxlength="120" value=(&legal.legal_name) })
+            )
+            field(
+                field_label(attrs: attributes! { for="legal-form" }, "Legal form (SAS, SARL, EI…)")
+                input(attrs: attributes! { id="legal-form" name="legal_form" required="" maxlength="40" value=(&legal.legal_form) })
+            )
+            field(
+                field_label(attrs: attributes! { for="legal-capital" }, "Share capital in euros (blank for none)")
+                input(attrs: attributes! { id="legal-capital" name="share_capital" inputmode="decimal" value=(&capital) })
+            )
+            field(
+                field_label(attrs: attributes! { for="legal-siret" }, "SIRET")
+                input(attrs: attributes! { id="legal-siret" name="siret" required="" inputmode="numeric" value=(&legal.siret) class="font-mono" })
+            )
+            field(
+                field_label(attrs: attributes! { for="legal-rcs" }, "RCS city (blank if not registered)")
+                input(attrs: attributes! { id="legal-rcs" name="rcs_city" maxlength="100" value=(legal.rcs_city.as_deref().unwrap_or("")) })
+            )
+            field(
+                attrs: attributes! { class="sm:col-span-2" },
+                field_label(attrs: attributes! { for="legal-email" }, "Contact e-mail")
+                input(attrs: attributes! { id="legal-email" name="contact_email" type="email" required="" value=(&legal.contact_email) })
+            )
+        )
 
-        <fieldset class="space-y-3 rounded border border-neutral-200 bg-white p-4">
-            <legend class="px-1 text-lg font-medium">"Registered address"</legend>
-            <label class="block text-sm" for="legal-line1">"Address"</label>
-            <input id="legal-line1" name="line1" required="" maxlength="200" value=(&legal.line1)
-                class="w-full rounded border border-neutral-300 px-3 py-2">
-            <label class="block text-sm" for="legal-line2">"Address, line 2"</label>
-            <input id="legal-line2" name="line2" maxlength="200" value=(legal.line2.as_deref().unwrap_or(""))
-                class="w-full rounded border border-neutral-300 px-3 py-2">
-            <label class="block text-sm" for="legal-postal">"Postal code"</label>
-            <input id="legal-postal" name="postal_code" required="" maxlength="20" value=(&legal.postal_code)
-                class="w-full rounded border border-neutral-300 px-3 py-2">
-            <label class="block text-sm" for="legal-city">"City"</label>
-            <input id="legal-city" name="city" required="" maxlength="100" value=(&legal.city)
-                class="w-full rounded border border-neutral-300 px-3 py-2">
-            <label class="block text-sm" for="legal-country">"Country (two letters)"</label>
-            <input id="legal-country" name="country" required="" maxlength="2" value=(&legal.country)
-                class="w-24 rounded border border-neutral-300 px-3 py-2 uppercase">
-        </fieldset>
+        identity_group(
+            legend: "Registered address",
+            field(
+                attrs: attributes! { class="sm:col-span-2" },
+                field_label(attrs: attributes! { for="legal-line1" }, "Address")
+                input(attrs: attributes! { id="legal-line1" name="line1" required="" maxlength="200" value=(&legal.line1) })
+            )
+            field(
+                attrs: attributes! { class="sm:col-span-2" },
+                field_label(attrs: attributes! { for="legal-line2" }, "Address, line 2")
+                input(attrs: attributes! { id="legal-line2" name="line2" maxlength="200" value=(legal.line2.as_deref().unwrap_or("")) })
+            )
+            field(
+                field_label(attrs: attributes! { for="legal-postal" }, "Postal code")
+                input(attrs: attributes! { id="legal-postal" name="postal_code" required="" maxlength="20" value=(&legal.postal_code) })
+            )
+            field(
+                field_label(attrs: attributes! { for="legal-city" }, "City")
+                input(attrs: attributes! { id="legal-city" name="city" required="" maxlength="100" value=(&legal.city) })
+            )
+            field(
+                field_label(attrs: attributes! { for="legal-country" }, "Country (two letters)")
+                input(attrs: attributes! { id="legal-country" name="country" required="" maxlength="2" value=(&legal.country) class="w-24 uppercase" })
+            )
+        )
 
-        <fieldset class="space-y-3 rounded border border-neutral-200 bg-white p-4">
-            <legend class="px-1 text-lg font-medium">"VAT"</legend>
-            <p class="text-sm text-neutral-600">
-                "Prices in the catalog include VAT. Without a VAT number, invoices say "
-                <q>"TVA non applicable, art. 293 B du CGI"</q>"."
-            </p>
-            <label class="block text-sm" for="legal-vat">"Intra-community VAT number (blank under the exemption)"</label>
-            <input id="legal-vat" name="vat_number" maxlength="40" placeholder="FR00123456789" value=(legal.vat_number.as_deref().unwrap_or(""))
-                class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-            <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" name="oss_registered" value="on" checked=(legal.oss_registered)>
-                "Registered for the EU One-Stop Shop (OSS): charge other EU countries' VAT to their consumers from the first euro"
+        identity_group(
+            legend: "VAT",
+            description: Some("Prices in the catalog include VAT. Without a VAT number, invoices say “TVA non applicable, art. 293 B du CGI”."),
+            field(
+                attrs: attributes! { class="sm:col-span-2" },
+                field_label(attrs: attributes! { for="legal-vat" }, "Intra-community VAT number (blank under the exemption)")
+                input(attrs: attributes! { id="legal-vat" name="vat_number" maxlength="40" placeholder="FR00123456789" value=(legal.vat_number.as_deref().unwrap_or("")) class="font-mono" })
+            )
+            <label class="flex items-start gap-2 text-sm sm:col-span-2">
+                checkbox(attrs: attributes! { name="oss_registered" value="on" checked=(legal.oss_registered) class="mt-0.5" })
+                <span>"Registered for the EU One-Stop Shop (OSS): charge other EU countries' VAT to their consumers from the first euro"</span>
             </label>
-            <p class="text-sm text-neutral-600">
+            <p class="text-sm text-muted-foreground sm:col-span-2">
                 "Without it, other EU countries' VAT applies once your sales to their consumers pass €10,000 in the year."
             </p>
-        </fieldset>
+        )
     })
 }
