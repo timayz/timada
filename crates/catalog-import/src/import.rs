@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -26,12 +27,18 @@ pub struct StoredImage {
     pub height: Option<u32>,
 }
 
-/// Where a product's pictures come from and go: the host fetches the bytes
-/// at a URL and keeps them where its catalog serves pictures from. `None`
-/// means the picture is left out (not found, not a picture, too large);
+/// Where a product's pictures go: the host keeps the bytes where its
+/// catalog serves pictures from, taking them from the snapshot's files
+/// ([`Images::store`]) or, for a picture the snapshot lacks, fetching them
+/// at its address ([`Images::fetch`]). `None` means the picture is left out
+/// (not found, not a picture, too large);
 /// the import goes on without it.
 pub trait Images: Send + Sync {
+    /// Fetches a picture the snapshot has no file for.
     fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, anyhow::Result<Option<StoredImage>>>;
+
+    /// Keeps a picture read from the snapshot's files.
+    fn store<'a>(&'a self, bytes: Vec<u8>) -> BoxFuture<'a, anyhow::Result<Option<StoredImage>>>;
 
     /// Drops a picture the catalog ended up not recording.
     fn discard<'a>(&'a self, image: &'a StoredImage) -> BoxFuture<'a, ()> {
@@ -47,13 +54,17 @@ impl Images for NoImages {
     fn fetch<'a>(&'a self, _url: &'a str) -> BoxFuture<'a, anyhow::Result<Option<StoredImage>>> {
         Box::pin(async { Ok(None) })
     }
+
+    fn store<'a>(&'a self, _bytes: Vec<u8>) -> BoxFuture<'a, anyhow::Result<Option<StoredImage>>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ImportOptions {
     /// At most this many products (categories are always all loaded).
     pub limit: Option<usize>,
-    /// Pictures fetched at once.
+    /// Pictures read or fetched at once.
     pub concurrency: usize,
 }
 
@@ -102,7 +113,17 @@ pub async fn import<E: Executor>(
         if catalog.load_product_by_slug(&seed.slug).await?.is_some() {
             report.products_skipped += 1;
         } else {
-            match import_product(catalog, actor, seed, &categories, images.clone(), options).await {
+            match import_product(
+                catalog,
+                actor,
+                snapshot,
+                seed,
+                &categories,
+                images.clone(),
+                options,
+            )
+            .await
+            {
                 Ok(outcome) => {
                     report.products_created += 1;
                     report.variants += outcome.variants;
@@ -213,6 +234,25 @@ async fn import_categories<E: Executor>(
     Ok(ids)
 }
 
+/// A picture into the host's keeping: from its file when the snapshot has
+/// one, else from the shop. A file named but unreadable (a snapshot taken
+/// elsewhere, say) falls back on the shop too, with a note in the log.
+async fn keep_picture(
+    images: &dyn Images,
+    file: Option<PathBuf>,
+    url: &str,
+) -> anyhow::Result<Option<StoredImage>> {
+    if let Some(path) = file {
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => return images.store(bytes).await,
+            Err(err) => {
+                tracing::warn!(path = %path.display(), %err, url, "picture file unreadable, fetching it");
+            }
+        }
+    }
+    images.fetch(url).await
+}
+
 #[derive(Default)]
 struct ProductOutcome {
     variants: usize,
@@ -223,6 +263,7 @@ struct ProductOutcome {
 async fn import_product<E: Executor>(
     catalog: &Command<E>,
     actor: &str,
+    snapshot: &Snapshot,
     seed: &ProductSeed,
     categories: &HashMap<String, String>,
     images: Arc<dyn Images>,
@@ -254,7 +295,11 @@ async fn import_product<E: Executor>(
         }
         Err(err) => return Err(err.into()),
     };
-    match fill_product(catalog, actor, &product, seed, categories, images, options).await {
+    match fill_product(
+        catalog, actor, snapshot, &product, seed, categories, images, options,
+    )
+    .await
+    {
         Ok(outcome) => Ok(outcome),
         Err(err) => {
             // Half a product is worse than none: taken off, which frees the
@@ -267,9 +312,11 @@ async fn import_product<E: Executor>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fill_product<E: Executor>(
     catalog: &Command<E>,
     actor: &str,
+    snapshot: &Snapshot,
     product: &ProductState,
     seed: &ProductSeed,
     categories: &HashMap<String, String>,
@@ -302,8 +349,9 @@ async fn fill_product<E: Executor>(
         }
     }
 
-    // The pictures, fetched a few at a time, recorded in the snapshot's
-    // order. `image_ids[i]` is the id of `seed.images[i]` once recorded.
+    // The pictures, read from the snapshot's files (or fetched, for those
+    // it lacks) a few at a time, recorded in the snapshot's order.
+    // `image_ids[i]` is the id of `seed.images[i]` once recorded.
     let mut image_ids: Vec<Option<String>> = vec![None; seed.images.len()];
     let mut fetched: Vec<Option<StoredImage>> = Vec::with_capacity(seed.images.len());
     for chunk in seed.images.chunks(options.concurrency.max(1)) {
@@ -311,7 +359,8 @@ async fn fill_product<E: Executor>(
         for (offset, image) in chunk.iter().enumerate() {
             let images = images.clone();
             let url = image.url.clone();
-            set.spawn(async move { (offset, images.fetch(&url).await) });
+            let file = snapshot.picture_path(image);
+            set.spawn(async move { (offset, keep_picture(&*images, file, &url).await) });
         }
         let mut results: Vec<Option<StoredImage>> = vec![None; chunk.len()];
         while let Some(joined) = set.join_next().await {

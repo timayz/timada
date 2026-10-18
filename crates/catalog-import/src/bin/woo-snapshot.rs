@@ -1,12 +1,16 @@
-//! Takes a catalogue snapshot from a WooCommerce shop:
+//! Takes a catalogue snapshot from a WooCommerce shop into a directory:
+//! `catalog.json.gz` and, under `pictures/`, every picture it names, so a
+//! seed from it needs no network. Taken again into the same directory, only
+//! the pictures not there yet are fetched.
 //!
 //! ```sh
-//! woo-snapshot --site https://www.chatounette.com --out examples/chatounette/seed/catalog.json.gz
+//! woo-snapshot --site https://www.chatounette.com --out seeds/chatounette
 //! ```
 
 use std::path::PathBuf;
 
 use clap::Parser;
+use timada_catalog_import::CATALOG_FILE;
 use timada_catalog_import::woocommerce::{SiteOptions, snapshot_site};
 
 #[derive(Parser)]
@@ -18,9 +22,15 @@ struct Cli {
     /// The shop's address, e.g. https://www.chatounette.com
     #[arg(long)]
     site: String,
-    /// Where to write the snapshot; gzipped when it ends in .gz
+    /// The snapshot directory to write (catalog.json.gz and pictures/)
     #[arg(long)]
     out: PathBuf,
+    /// Leave the pictures to the seed to fetch
+    #[arg(long)]
+    no_pictures: bool,
+    /// Pictures fetched at once
+    #[arg(long, default_value_t = 8)]
+    concurrency: usize,
     /// Top-level category slugs in the order the menu shows them, comma-separated
     #[arg(long, value_delimiter = ',')]
     menu_order: Vec<String>,
@@ -46,15 +56,29 @@ async fn main() -> anyhow::Result<()> {
         menu_order: cli.menu_order,
         hidden: cli.hide,
     };
-    let snapshot = snapshot_site(&client, &cli.site, &options).await?;
-    snapshot.write(&cli.out)?;
+    let mut snapshot = snapshot_site(&client, &cli.site, &options).await?;
+    // The catalogue first, so a fetch of the pictures that stops leaves one.
+    let catalog = cli.out.join(CATALOG_FILE);
+    snapshot.write(&catalog)?;
     tracing::info!(
-        path = %cli.out.display(),
+        path = %catalog.display(),
         categories = snapshot.categories.len(),
         products = snapshot.products.len(),
         variants = snapshot.products.iter().map(|p| p.variants.len()).sum::<usize>(),
-        pictures = snapshot.products.iter().map(|p| p.images.len()).sum::<usize>(),
-        "snapshot written"
+        pictures = snapshot.images().count(),
+        "catalogue written"
     );
+    if !cli.no_pictures {
+        let report = snapshot
+            .fetch_pictures(&client, &cli.out, cli.concurrency)
+            .await?;
+        snapshot.write(&catalog)?;
+        tracing::info!(
+            kept = report.kept,
+            fetched = report.fetched,
+            failed = report.failed.len(),
+            "pictures written"
+        );
+    }
     Ok(())
 }

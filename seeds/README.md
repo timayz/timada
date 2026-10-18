@@ -1,18 +1,25 @@
 # Catalogue seeds
 
 Snapshots a tenant can be filled with, through `timada-dashboard seed` (see
-`docs/storefront.md`, "Seeding a catalogue"). A snapshot is the catalogue as the
-catalog takes it: categories (a tree, each in or out of the menu), products with
-their text, price or options and variants, facts, and the addresses of their
-pictures. The pictures themselves are not here: the seed fetches them when it runs.
+`docs/storefront.md`, "Seeding a catalogue"). A snapshot is a directory: the catalogue
+as the catalog takes it in `catalog.json.gz` (categories, a tree, each in or out of the
+menu; products with their text, price or options and variants, facts, and their
+pictures' addresses) and, under `pictures/`, the pictures themselves, one file per
+address, so a seed needs no network.
 
-| File | Shop | Taken | Content |
-|---|---|---|---|
-| `chatounette.json.gz` | https://www.chatounette.com (WooCommerce, French cat shop) | see `fetched_at` inside | 60 categories, 1,329 products, 5,075 variants, 8,105 picture addresses |
+Snapshots are not in git (this directory is ignored but for this file): with the
+pictures they weigh hundreds of megabytes, and the text and pictures belong to the
+shop they were taken from. Take one locally:
 
-The text and pictures belong to the shop they were taken from; the snapshot is here
-to try the storefront examples against a real-sized catalogue, nothing more.
+| Target | Shop | Content |
+|---|---|---|
+| `make snapshot.chatounette` → `seeds/chatounette/` | https://www.chatounette.com (WooCommerce, French cat shop) | ~60 categories, ~1,300 products, ~5,000 variants, ~8,000 pictures (~650 MB) |
 
-To take it again from the live shop (its public Store API), `make snapshot.chatounette`,
-which runs the `woo-snapshot` binary of `crates/catalog-import` with the shop's menu
-order and the categories its menu leaves out.
+It runs the `woo-snapshot` binary of `crates/catalog-import` over the shop's public
+Store API with the shop's menu order and the categories its menu leaves out, then
+fetches the pictures. Run again into the same directory, it refreshes the catalogue
+and fetches only the pictures not there yet. A picture the fetch could not get is
+left to the seed, which fetches it from the shop (`--no-pictures` leaves them all).
+
+The snapshot is here to try the storefront examples against a real-sized catalogue,
+nothing more.

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 publish = false
-description = "A French cat shop on timada-storefront, in the layout and colours of chatounette.com, seeded from seeds/chatounette.json.gz"
+description = "A French cat shop on timada-storefront, in the layout and colours of chatounette.com, seeded from the seeds/chatounette snapshot"
 
 [[bin]]
 name = "chatounette"

@@ -30,20 +30,21 @@ reset:
 migrate:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml migrate
 
-# Fills the "Chatounette" tenant with the catalogue in seeds/chatounette.json.gz
-# (its pictures are fetched from the shop), owned by the registered user
-# OWNER names, and prints the STORE_* settings for the example storefront.
-# Runs with the server stopped:
+# Fills the "Chatounette" tenant with the snapshot in seeds/chatounette
+# (taken by `make snapshot.chatounette`, pictures included), owned by the
+# registered user OWNER names, and prints the STORE_* settings for the
+# example storefront. Runs with the server stopped:
 #   OWNER=me@example.com make seed.chatounette
 seed.chatounette:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml seed \
-		--snapshot seeds/chatounette.json.gz --tenant Chatounette --owner "$${OWNER:?set OWNER to the owner's e-mail}" \
+		--snapshot seeds/chatounette --tenant Chatounette --owner "$${OWNER:?set OWNER to the owner's e-mail}" \
 		--storefront-url "$${STOREFRONT_URL-https://chatounette.localhost}"
 
-# Takes the snapshot again from the live shop (see seeds/README.md).
+# Takes the snapshot from the live shop, pictures included (see
+# seeds/README.md); run again, it fetches only the pictures not there yet.
 snapshot.chatounette:
 	cargo run -p timada-catalog-import --bin woo-snapshot -- --site https://www.chatounette.com \
-		--out seeds/chatounette.json.gz --hide ventes-privees \
+		--out seeds/chatounette --hide ventes-privees \
 		--menu-order accessoires-pour-chat,couchage-chat,goodies-chat,jeux-pour-chat,transport-chat,toilette-chat,vetement-pour-chat
 
 # The example storefront at https://storefront.localhost, listening on every

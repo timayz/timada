@@ -404,18 +404,21 @@ counts the published rows of the local copy.
 A tenant can be filled from a snapshot in `seeds/` instead of the back-office forms,
 with the server stopped (two processes on one node's files would each run their own
 consensus over the same journal, so the command refuses to run while the server's port
-is in use):
+is in use). A snapshot is a directory holding `catalog.json.gz` and the pictures it
+names under `pictures/`; snapshots are taken locally and not in git (`seeds/README.md`):
 
 ```sh
+make snapshot.chatounette   # once: the catalogue and its pictures into seeds/chatounette
 timada-dashboard --config config/dev.local.toml seed \
-    --snapshot seeds/chatounette.json.gz --tenant Chatounette --owner me@example.com
+    --snapshot seeds/chatounette --tenant Chatounette --owner me@example.com
 ```
 
 `--owner` is the e-mail of a registered user (register at `/auth/register` first); the
 tenant is created under their ownership when no tenant has the slug (`--slug` to name
 it). The categories and products go in through the catalog's commands, their pictures
-are fetched into the node's media directory (`--skip-images` to leave them out,
-`--limit N` for a quick run), the shop gets a delivery method (France, Belgium,
+are copied from the snapshot into the node's media directory (a picture the snapshot
+lacks is fetched from the shop; `--skip-images` leaves them all out, `--limit N` makes
+a quick run), the shop gets a delivery method (France, Belgium,
 Switzerland, free from 65 €) and the promo code `MONSTER10` (10 %) so a storefront can
 sell at once, and a key holding `store:read` and `store:checkout` is minted. The command
 ends with the storefront's settings on stdout:
@@ -429,7 +432,7 @@ STORE_API_URL=https://timada.localhost
 A second run skips what is already there (by slug), so a run that stopped halfway can
 be started again. The read models of the back office catch up when the server next
 starts. `make seed.chatounette` wraps the command for the dev config; `seeds/README.md`
-says where each snapshot comes from and how to take it again.
+says where each snapshot comes from and how to take it.
 
 ## The examples
 

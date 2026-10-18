@@ -1,7 +1,8 @@
 //! `seed`: fills a tenant with a catalogue snapshot, with the server
 //! stopped. Makes the tenant when it is missing, loads the categories and
-//! products through the catalog's commands (fetching their pictures into
-//! this node's media directory), gives the shop one delivery method and a
+//! products through the catalog's commands (copying their pictures from the
+//! snapshot into this node's media directory, or fetching from the shop the
+//! ones the snapshot lacks), gives the shop one delivery method and a
 //! promo code so a storefront can sell right away, then mints a key for
 //! that storefront and prints its settings.
 
@@ -22,7 +23,8 @@ use crate::tenants::Tenants;
 
 #[derive(Args, Debug)]
 pub struct SeedArgs {
-    /// The catalogue to load (a snapshot file, gzipped when it ends in .gz)
+    /// The catalogue to load: a snapshot directory (catalog.json.gz and its
+    /// pictures), or a catalogue file alone
     #[arg(long)]
     pub snapshot: PathBuf,
     /// The tenant's name; created when no tenant has its slug
@@ -40,7 +42,7 @@ pub struct SeedArgs {
     /// Leave the pictures out
     #[arg(long)]
     pub skip_images: bool,
-    /// Pictures fetched at once
+    /// Pictures copied or fetched at once
     #[arg(long, default_value_t = 8)]
     pub concurrency: usize,
     /// Where the shop's storefront is reached, as its mails link to it
@@ -63,10 +65,13 @@ const PROMO_PERCENT: u32 = 1_000;
 pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     refuse_if_serving(&config).await?;
     let snapshot = Snapshot::read(&args.snapshot)?;
+    let pictures = snapshot.images().count();
     tracing::info!(
         source = %snapshot.source,
         categories = snapshot.categories.len(),
         products = snapshot.products.len(),
+        pictures,
+        pictures_in_snapshot = snapshot.images().filter(|i| i.file.is_some()).count(),
         "snapshot read"
     );
     super::migrate(config.clone()).await?;
@@ -283,12 +288,52 @@ async fn open_shop(executor: &Executor, actor: &str, storefront_url: Option<&str
     Ok(())
 }
 
-/// Pictures fetched from the shop the snapshot came from, kept where this
-/// node serves them (and on a majority of the cluster, like an upload).
+/// Pictures from the snapshot's files, or fetched from the shop it came
+/// from, kept where this node serves them (and on a majority of the
+/// cluster, like an upload).
 struct MediaImages {
     client: reqwest::Client,
     media: Arc<Media>,
     tenant_id: String,
+}
+
+impl MediaImages {
+    /// Checks the bytes are a picture the shop takes, then stores them
+    /// under a fresh id; `what` names them in the log.
+    async fn keep(&self, bytes: bytes::Bytes, what: &str) -> anyhow::Result<Option<StoredImage>> {
+        if bytes.is_empty() || bytes.len() as u64 > MAX_IMAGE_BYTES {
+            tracing::warn!(
+                what,
+                size = bytes.len(),
+                "picture empty or too large, left out"
+            );
+            return Ok(None);
+        }
+        let Some(sniffed) = Media::sniff(&bytes) else {
+            tracing::warn!(what, "not a picture the shop accepts, left out");
+            return Ok(None);
+        };
+        let image_id = new_image_id();
+        let file = format!("{image_id}.{}", sniffed.ext);
+        self.media
+            .store(&self.tenant_id, &image_id, sniffed.ext, &bytes)
+            .await?;
+        if let Err(err) = self
+            .media
+            .replicate(&self.tenant_id, &file, bytes.to_vec())
+            .await
+        {
+            self.media.remove(&self.tenant_id, &file).await;
+            return Err(err);
+        }
+        Ok(Some(StoredImage {
+            image_id,
+            ext: sniffed.ext.to_owned(),
+            size: bytes.len() as u64,
+            width: sniffed.width,
+            height: sniffed.height,
+        }))
+    }
 }
 
 impl Images for MediaImages {
@@ -303,39 +348,12 @@ impl Images for MediaImages {
                 return Ok(None);
             }
             let bytes = response.bytes().await?;
-            if bytes.is_empty() || bytes.len() as u64 > MAX_IMAGE_BYTES {
-                tracing::warn!(
-                    url,
-                    size = bytes.len(),
-                    "picture empty or too large, left out"
-                );
-                return Ok(None);
-            }
-            let Some(sniffed) = Media::sniff(&bytes) else {
-                tracing::warn!(url, "not a picture the shop accepts, left out");
-                return Ok(None);
-            };
-            let image_id = new_image_id();
-            let file = format!("{image_id}.{}", sniffed.ext);
-            self.media
-                .store(&self.tenant_id, &image_id, sniffed.ext, &bytes)
-                .await?;
-            if let Err(err) = self
-                .media
-                .replicate(&self.tenant_id, &file, bytes.to_vec())
-                .await
-            {
-                self.media.remove(&self.tenant_id, &file).await;
-                return Err(err);
-            }
-            Ok(Some(StoredImage {
-                image_id,
-                ext: sniffed.ext.to_owned(),
-                size: bytes.len() as u64,
-                width: sniffed.width,
-                height: sniffed.height,
-            }))
+            self.keep(bytes, url).await
         })
+    }
+
+    fn store<'a>(&'a self, bytes: Vec<u8>) -> BoxFuture<'a, anyhow::Result<Option<StoredImage>>> {
+        Box::pin(async move { self.keep(bytes::Bytes::from(bytes), "snapshot").await })
     }
 
     fn discard<'a>(&'a self, image: &'a StoredImage) -> BoxFuture<'a, ()> {

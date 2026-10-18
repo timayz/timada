@@ -6096,12 +6096,14 @@ name = "timada-catalog-import"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "clap",
  "evento",
  "flate2",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "sqlx_migrator",
  "timada-catalog",

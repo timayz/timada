@@ -262,6 +262,7 @@ pub fn map_catalog(
         fetched_at: 0,
         categories,
         products,
+        dir: Default::default(),
     }
 }
 
@@ -332,6 +333,7 @@ fn map_categories(categories: Vec<WooCategory>, options: &SiteOptions) -> Vec<Ca
                 image: category.image.as_ref().map(|image| ImageSeed {
                     url: image.src.clone(),
                     alt: plain(&image.alt, MAX_ALT_LEN),
+                    file: None,
                 }),
             });
         }
@@ -376,6 +378,7 @@ fn map_product(
         .map(|image| ImageSeed {
             url: image.src.clone(),
             alt: plain(&image.alt, MAX_ALT_LEN),
+            file: None,
         })
         .collect();
 
@@ -476,6 +479,7 @@ fn map_product(
                         images.push(ImageSeed {
                             url: image.src.clone(),
                             alt: plain(&image.alt, MAX_ALT_LEN),
+                            file: None,
                         });
                         return Some(images.len() - 1);
                     }
