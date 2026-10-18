@@ -363,6 +363,32 @@ delete_account(cx, &token).await?;                 // its key is destroyed, sess
   orders placed with the address stay with the shop (and in the shopper's next
   account, if they sign in again with it).
 
+## Contact form
+
+A shop's contact form sends a message to the merchant's back office, where it waits
+under *Messages* until answered (from the merchant's own mailbox) and marked handled.
+The library hands it to the dashboard and keeps nothing.
+
+```rust
+use timada_storefront::{MessageDraft, send_message, takes_messages};
+
+if takes_messages(cx) {                          // the host gave the dashboard's address
+    let sent = send_message(cx, MessageDraft { first_name, last_name, email, body }).await?;
+    // Ok(message id), or Err(MessageRefusal) with a code to word
+}
+```
+
+- The message goes to the dashboard (`POST /store/contact` at the dashboard
+  address) with a key that allows `store:checkout`, the visitor's address (as the
+  host's trusted proxies report it) and the primary subtag of their
+  `Accept-Language`, so the merchant answers in their language.
+- A refusal is a `MessageRefusal` to word for the visitor (`code()`):
+  `message_invalid_name` (a first and a last name, 80 characters at most each),
+  `message_invalid_email`, `message_invalid_body` (10 to 4000 characters),
+  `too_many_requests` (the dashboard counts messages per visitor and per key within
+  `[store]`'s window) or `writes_paused`. The limits are exported
+  (`MIN_MESSAGE_LEN`, `MAX_MESSAGE_LEN`, `MAX_MESSAGE_NAME_LEN`).
+
 ## `GET /store/status`
 
 ```json

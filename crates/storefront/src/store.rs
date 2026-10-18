@@ -140,6 +140,8 @@ impl Store {
 
     /// Whether reviews can be handed in: the host gave the dashboard's
     /// address ([`StoreConfig::api_url`](crate::StoreConfig::api_url)).
+    /// [`takes_messages`](Self::takes_messages) says the same of the
+    /// contact form.
     pub fn takes_reviews(&self) -> bool {
         self.inner.api.is_some()
     }
