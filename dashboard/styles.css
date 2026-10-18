@@ -13,7 +13,8 @@
    that reason (its primary, destructive and tinted-badge text fall short);
    the hues and chromas are.
 
-   The rail is Katalyst's dark sidebar variant under both page schemes. */
+   The rail follows the page scheme: Katalyst's light sidebar variant on the
+   light page, its dark one on the dark page. */
 
 @import "tailwindcss" source(none);
 
@@ -135,18 +136,18 @@
   --topbar: oklch(0.99 0 0);
   --topbar-foreground: oklch(0.2 0 0);
   --topbar-border: oklch(0.92 0 0);
-  --sidebar: oklch(0.2 0 0);
-  --sidebar-foreground: oklch(0.88 0 0);
-  --sidebar-muted: oklch(0.65 0 0);
-  --sidebar-primary: oklch(0.66 0.14 213);
-  --sidebar-primary-foreground: oklch(0.145 0 0);
-  --sidebar-accent: oklch(0.32 0 0);
-  --sidebar-accent-foreground: oklch(0.98 0 0);
-  --sidebar-border: oklch(0.3 0 0);
-  --sidebar-ring: oklch(0.66 0.14 213);
-  --sidebar-icon: oklch(0.72 0 0);
-  --sidebar-icon-muted: oklch(0.55 0 0);
-  --sidebar-icon-active: oklch(0.92 0 0);
+  --sidebar: oklch(0.99 0 0);
+  --sidebar-foreground: oklch(0.2 0 0);
+  --sidebar-muted: oklch(0.52 0 0);
+  --sidebar-primary: oklch(0.5 0.14 213);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.95 0.01 264.38);
+  --sidebar-accent-foreground: oklch(0.145 0 0);
+  --sidebar-border: oklch(0.92 0 0);
+  --sidebar-ring: oklch(0.5 0.14 213);
+  --sidebar-icon: oklch(0.45 0 0);
+  --sidebar-icon-muted: oklch(0.6 0 0);
+  --sidebar-icon-active: oklch(0.2 0 0);
   --shadow-xs: 0 1px 2px oklch(0.24 0.02 260 / 12%);
   --shadow-sm:
     0 1px 2px oklch(0.24 0.02 260 / 10%),
