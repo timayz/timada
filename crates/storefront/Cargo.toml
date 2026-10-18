@@ -26,5 +26,6 @@ timada-catalog = { path = "../catalog" }
 timada-orders = { path = "../orders" }
 timada-reviews = { path = "../reviews" }
 timada-shoppers = { path = "../shoppers" }
+timada-support = { path = "../support" }
 reqwest.workspace = true
 timada-invoicing = { path = "../invoicing", features = ["pdf"] }

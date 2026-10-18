@@ -229,6 +229,19 @@ section.related { margin-top: 3rem; }
 article.page { max-width: 46rem; margin: 0 auto; }
 article.page p { color: var(--ink-soft); }
 
+/* Support: the contact form beside the questions, as the live page */
+.support { display: grid; gap: 1.5rem; align-items: start; margin-top: 1rem; }
+@media (min-width: 900px) { .support { grid-template-columns: 1fr 1fr; } }
+.support h2 { font-size: 1.3rem; margin: 0 0 1rem; }
+.support .btn { margin-top: 1rem; }
+.faq details { border-top: 1px solid var(--line); padding: .75rem 0; }
+.faq details:last-of-type { border-bottom: 1px solid var(--line); }
+.faq summary { cursor: pointer; font-weight: 800; list-style: none; display: flex; justify-content: space-between; gap: 1rem; }
+.faq summary::after { content: '+'; color: var(--coral-dark); flex: none; }
+.faq details[open] summary::after { content: '−'; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq details p { margin: .6rem 0 0; color: var(--ink-soft); font-size: .95rem; }
+
 /* Cart page, checkout, sign-in, history: the classes the shared pages use. */
 table.cart { border-collapse: collapse; width: 100%; margin: 1rem 0; }
 table.cart th, table.cart td { border-bottom: 1px solid var(--line); padding: .6rem; text-align: left; vertical-align: middle; }

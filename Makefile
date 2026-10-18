@@ -55,18 +55,19 @@ snapshot.chatounette:
 # go through Traefik's balancer over the cluster nodes instead:
 #   STORE_ADDR=store.timada.localhost:4320 STORE_TLS_CA=/etc/ssl/certs/ca-certificates.crt ...
 # Traefik reaches it from the Docker bridge, so its X-Forwarded-For names the
-# shopper the dashboard limits sign-in codes for.
+# shopper the dashboard limits sign-in codes for. STORE_API_URL is the dashboard
+# the reviews, sign-ins and contact messages go to; the dev one unless set.
 storefront:
-	HOST=0.0.0.0 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront-example
+	HOST=0.0.0.0 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront-example
 
 storefront.migrate:
 	cargo run -p storefront-example -- migrate
 
 # The Chatounette clone at https://chatounette.localhost, with the settings
-# `make seed.chatounette` printed:
-#   STORE_TOKEN=... STORE_MEDIA_URL=... STORE_API_URL=https://timada.localhost make chatounette
+# `make seed.chatounette` printed (STORE_API_URL defaults to the dev dashboard):
+#   STORE_TOKEN=... STORE_MEDIA_URL=... make chatounette
 chatounette:
-	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p chatounette-example
+	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p chatounette-example
 
 chatounette.migrate:
 	cargo run -p chatounette-example -- migrate

@@ -14,7 +14,9 @@ use crate::app::document;
 
 module_param!(pub slug);
 
-/// A page: its slug, its title, its paragraphs.
+/// A page: its slug, its title, its paragraphs. The support page has a
+/// module of its own (`/support-client`) and only lends its entry to the
+/// search.
 pub struct StaticPage {
     pub slug: &'static str,
     pub title: &'static str,
@@ -75,14 +77,6 @@ pub const PAGES: &[StaticPage] = &[
             "Chatounette est née de deux amoureux des chats qui ne trouvaient pas, en une seule boutique, tout ce dont leurs compagnons avaient besoin : un couchage vraiment douillet, des jouets qui résistent, des accessoires jolis sans être fragiles.",
             "Nous testons ce que nous vendons avec nos propres chats, Moustache et Praline, qui ont un avis très arrêté sur les griffoirs.",
             "Cette version de la boutique est une démonstration de la plateforme timada : la vitrine, le panier, le paiement et les avis fonctionnent comme dans une vraie boutique, sans qu'aucun colis ne parte.",
-        ],
-    },
-    StaticPage {
-        slug: "support-client",
-        title: "Support client",
-        paragraphs: &[
-            "Une question sur un article, une commande, un retour ? Le service client répond du lundi au samedi, de 9h à 18h, par e-mail à contact@chatounette.localhost ou au 01 89 76 02 12.",
-            "Pour suivre une commande, ouvrez la page Mon compte : chaque commande y affiche son état, sa facture et, après la livraison, un espace pour donner votre avis.",
         ],
     },
 ];

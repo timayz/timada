@@ -16,7 +16,7 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
-use crate::app::{boutique, c, p, pages, price_line};
+use crate::app::{boutique, c, p, pages, price_line, support_client};
 
 /// How many of each the dropdown shows.
 const PRODUCTS: u32 = 4;
@@ -78,6 +78,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let own_pages: Vec<&pages::slug::StaticPage> = pages::slug::PAGES
         .iter()
+        .chain(std::iter::once(&support_client::SEARCH_ENTRY))
         .filter(|page| {
             starts_a_word(page.title) || page.paragraphs.iter().any(|p| starts_a_word(p))
         })
@@ -89,6 +90,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let all = href!(boutique::index)
         .query(AllResults { q: &q })
         .resolve(cx);
+    // The support page is its own route; the others are static pages.
+    let page_link = |slug: &str| {
+        if slug == support_client::SEARCH_ENTRY.slug {
+            href!(support_client::index).resolve(cx)
+        } else {
+            href!(pages::slug::index, pages::slug::Slug(slug.to_owned())).resolve(cx)
+        }
+    };
 
     Ok(view! {
         <div class="search-panel" data-search-results="" data-query=(&q)>
@@ -134,7 +143,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <ul class="search-list search-pages">
                         for page in &own_pages {
                             <li>
-                                <a class="search-row" href=(href!(pages::slug::index, pages::slug::Slug(page.slug.to_owned()))) data-search-page=(page.slug)>
+                                <a class="search-row" href=(page_link(page.slug)) data-search-page=(page.slug)>
                                     <span class="search-name">(page.title)</span>
                                     <small class="search-kind">"Page"</small>
                                 </a>
