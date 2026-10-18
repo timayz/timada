@@ -21,12 +21,13 @@ use timada_tenancy::{
 use topcoat::{
     Result,
     context::Cx,
+    icon::icon,
     router::{
         content::Form,
         error::{not_found, see_other},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, component, view},
+    view::{View, attributes, class, component, view},
 };
 
 use super::super::super::own_address;
@@ -36,7 +37,13 @@ use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::tenants::{error_code, tenancy};
 use crate::auth::mail::{send_rendered, shop_vars};
 use crate::auth::{require_user, user_labels};
-use crate::ui::{Shell, document, format_time, notice};
+use crate::components::alert::{AlertVariant, alert, alert_description};
+use crate::components::badge::{BadgeVariant, badge_variants};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::components::field::{field, field_description, field_label};
+use crate::components::input::input;
+use crate::components::textarea::textarea;
+use crate::ui::{Shell, document, format_time, icons, notice, page_header, section_card};
 
 module_param!(pub language);
 
@@ -324,30 +331,29 @@ async fn editor(
         .collect();
     let variables = kind.variables();
     let max_subject = MAX_MAIL_SUBJECT_LEN.to_string();
+    let heading = format!("{} · {}", kind.label(), name);
     Ok(view! {
         document(
             title: &title,
             shell: Shell::tenant(tenant, nav, ""),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">(kind.label()) <span class="text-neutral-500">" · " (name)</span></h1>
-            </header>
-            <p class="mb-4 text-sm">
-                <a class="underline" href=(href!(super::super::super::index, Slug(slug.clone())))>"Back to Mail"</a>
-            </p>
+            page_header(
+                title: &heading,
+                subtitle: Some(kind.description()),
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::super::super::index, Slug(slug.clone())))>"Back to Mail"</a>
+            )
             notice(error: error, message: message)
 
-            <p class="mb-2 text-sm text-neutral-600">
-                (kind.description()) " "
+            <p class="mb-4 text-sm text-muted-foreground">
                 if edited { "In " (name) " it goes out in your wording." } else { "In " (name) " it goes out in the built-in wording." }
                 if is_default { " Shoppers whose language the shop does not mail in get this one." }
             </p>
             if siblings.len() > 1 {
-                <nav aria-label="Languages" class="mb-4 flex flex-wrap gap-2 text-sm" data-mail-languages-nav="">
+                <nav aria-label="Languages" class="mb-6 flex flex-wrap gap-2" data-mail-languages-nav="">
                     for (code, sibling, current) in &siblings {
                         if *current {
-                            <span aria-current="page" class="rounded bg-neutral-900 px-2 py-1 text-white">(sibling)</span>
+                            <span aria-current="page" class=(badge_variants(BadgeVariant::Tinted))>(sibling)</span>
                         } else {
-                            <a class="rounded border border-neutral-300 px-2 py-1 hover:bg-neutral-50"
+                            <a class=(class!(badge_variants(BadgeVariant::Outline), "hover:bg-foreground/5"))
                                 href=(href!(index, Slug(slug.clone()), Kind(kind.key().to_owned()), Language(code.clone())))>(sibling)</a>
                         }
                     }
@@ -355,78 +361,100 @@ async fn editor(
             }
 
             <div class="grid gap-6 lg:grid-cols-2">
-                <section class="rounded border border-neutral-200 bg-white p-4">
+                section_card(
+                    attrs: attributes! { class="mb-0" },
                     <form method="post" data-mail-language=(language)
-                        action=(href!(submit, Slug(slug.clone()), Kind(kind.key().to_owned()), Language(language.to_owned()))) class="space-y-3">
-                        <label class="block text-sm" for="mail-subject">"Subject"</label>
-                        <input id="mail-subject" name="subject" required="" maxlength=(&max_subject) value=(subject)
-                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono text-sm">
-                        <label class="block text-sm" for="mail-html">"Body (HTML)"</label>
-                        <textarea id="mail-html" name="html" required="" rows="24" spellcheck="false"
-                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono text-xs">(html)</textarea>
-                        <label class="block text-sm" for="mail-text">"Plain-text version"</label>
-                        <p id="mail-text-hint" class="text-xs text-neutral-500">
-                            "For mail apps that show no HTML. Leave it empty to derive it from the HTML."
-                        </p>
-                        <textarea id="mail-text" name="text" rows="10" spellcheck="false" aria-describedby="mail-text-hint"
-                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono text-xs">(text)</textarea>
+                        action=(href!(submit, Slug(slug.clone()), Kind(kind.key().to_owned()), Language(language.to_owned()))) class="flex flex-col gap-4">
+                        field(
+                            field_label(attrs: attributes! { for="mail-subject" }, "Subject")
+                            input(attrs: attributes! {
+                                id="mail-subject" name="subject" required="" maxlength=(&max_subject) value=(subject) class="font-mono"
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-html" }, "Body (HTML)")
+                            textarea(
+                                attrs: attributes! { id="mail-html" name="html" required="" rows="24" spellcheck="false" class="font-mono text-xs" },
+                                (html)
+                            )
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-text" }, "Plain-text version")
+                            field_description(
+                                attrs: attributes! { id="mail-text-hint" },
+                                "For mail apps that show no HTML. Leave it empty to derive it from the HTML."
+                            )
+                            textarea(
+                                attrs: attributes! {
+                                    id="mail-text" name="text" rows="10" spellcheck="false" aria-describedby="mail-text-hint" class="font-mono text-xs"
+                                },
+                                (text)
+                            )
+                        )
                         if let Err(err) = checked {
-                            <p role="alert" data-template-error="" class="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">
-                                (err.to_string())
-                            </p>
+                            alert(
+                                variant: AlertVariant::Destructive,
+                                attrs: attributes! { role="alert" data-template-error="" },
+                                icon(data: icons::ERROR)
+                                alert_description((err.to_string()))
+                            )
                         }
                         <div class="flex flex-wrap gap-2">
-                            <button name="action" value="save" class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save"</button>
-                            <button name="action" value="preview" class="rounded border border-neutral-300 px-4 py-2 hover:bg-neutral-50">"Preview"</button>
-                            <button name="action" value="test" class="rounded border border-neutral-300 px-4 py-2 hover:bg-neutral-50">"Send me a test"</button>
+                            button(attrs: attributes! { type="submit" name="action" value="save" }, "Save")
+                            button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" name="action" value="preview" }, "Preview")
+                            button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" name="action" value="test" }, "Send me a test")
                         </div>
                     </form>
                     if edited {
                         <form method="post" class="mt-4" action=(href!(reset::reset, Slug(slug.clone()), Kind(kind.key().to_owned()), Language(language.to_owned())))>
-                            <button class="rounded border border-red-300 px-3 py-1 text-sm text-red-800 hover:bg-red-50">"Back to the built-in wording"</button>
+                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Back to the built-in wording")
                         </form>
                     }
-                </section>
+                )
 
-                <section class="rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">"Preview"</h2>
+                section_card(
+                    title: Some("Preview"),
+                    attrs: attributes! { class="mb-0" },
                     if let Ok(rendered) = checked {
-                        <p class="mb-2 text-sm"><span class="text-neutral-500">"Subject: "</span><span data-preview-subject="">(&rendered.subject)</span></p>
+                        <p class="mb-2 text-sm"><span class="text-muted-foreground">"Subject: "</span><span data-preview-subject="">(&rendered.subject)</span></p>
+                        // The mail's own HTML rarely paints a background: white under it
+                        // whatever the dashboard's scheme, as a mail app would.
                         <iframe sandbox="" title="Preview of the mail" srcdoc=(&rendered.html)
-                            class="h-[36rem] w-full rounded border border-neutral-200 bg-white"></iframe>
+                            class="h-[36rem] w-full rounded-lg border border-border bg-white"></iframe>
                         <h3 class="mt-4 mb-1 text-sm font-medium">"Plain-text version"</h3>
                         if let Some(text) = &rendered.text {
-                            <pre data-preview-text="" class="max-h-64 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 p-3 font-mono text-xs">(text)</pre>
+                            <pre data-preview-text="" class="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted p-3 font-mono text-xs">(text)</pre>
                         } else {
-                            <p data-preview-text="" class="text-sm text-neutral-500">"Derived from the HTML."</p>
+                            <p data-preview-text="" class="text-sm text-muted-foreground">"Derived from the HTML."</p>
                         }
-                        <p class="mt-2 text-xs text-neutral-500">"With made-up data; your mails use the shopper's."</p>
+                        <p class="mt-2 text-xs text-muted-foreground">"With made-up data; your mails use the shopper's."</p>
                     } else {
-                        <p class="text-sm text-neutral-500">"Fix the template to see it."</p>
+                        <p class="text-sm text-muted-foreground">"Fix the template to see it."</p>
                     }
-                </section>
+                )
             </div>
 
-            <section class="mt-6 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Variables"</h2>
-                <p class="mb-3 text-sm text-neutral-600">
+            section_card(
+                title: Some("Variables"),
+                attrs: attributes! { class="mt-6" },
+                <p class="mb-3 text-sm text-muted-foreground">
                     "Write " <code>"{{ name }}"</code> " to print one; in the HTML what it holds is escaped, so it shows as text. "
                     "Lists go in " <code>"{% for … %} … {% endfor %}"</code> ", parts that may be missing in "
                     <code>"{% if … %} … {% endif %}"</code> ". Scripts, frames, forms and event handlers are refused, "
                     "and links start with https://."
                 </p>
-                <dl class="grid grid-cols-[14rem_1fr] gap-y-2 text-sm" data-template-variables="">
+                <dl class="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[14rem_minmax(0,1fr)]" data-template-variables="">
                     for variable in &variables {
                         <dt><code>"{{ " (variable.name) " }}"</code></dt>
-                        <dd class="text-neutral-700">(variable.description)</dd>
+                        <dd class="text-muted-foreground">(variable.description)</dd>
                     }
                 </dl>
-            </section>
+            )
 
             if !changes.is_empty() {
-                <section class="mt-6 rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">"History"</h2>
-                    <ul class="text-sm" data-template-history="">
+                section_card(
+                    title: Some("History"),
+                    <ul class="space-y-1 text-sm" data-template-history="">
                         for change in changes {
                             <li>
                                 if change.reset { "Back to the built-in wording" } else { "Saved" }
@@ -435,7 +463,7 @@ async fn editor(
                             </li>
                         }
                     </ul>
-                </section>
+                )
             }
         )
     })

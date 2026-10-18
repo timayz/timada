@@ -19,16 +19,26 @@ use timada_tenancy::{
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::auth::{require_user, user_labels};
+use crate::components::alert::{AlertVariant, alert, alert_description};
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::checkbox::checkbox;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::textarea::textarea;
 use crate::media::Media;
 use crate::shop_mail::ShopMail;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, document, fact, facts, format_time, icons, notice, page_header, section_card,
+};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct MailQuery {
@@ -139,101 +149,114 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         })
         .collect();
 
+    let server_title = if settings.is_some() {
+        "Change the server"
+    } else {
+        "Send from your own server"
+    };
+
     Ok(view! {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "mail"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Mail"</h1>
-            </header>
+            page_header(title: "Mail", subtitle: Some("The mails your shop sends its shoppers, and the server they go out through."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             if !enabled {
-                <p role="alert" class="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                    "Shop mail servers are not enabled on this platform: the operator has to set them up first."
-                </p>
+                alert(
+                    variant: AlertVariant::Warning,
+                    attrs: attributes! { role="alert" class="mb-6" },
+                    icon(data: icons::WARNING)
+                    alert_description(
+                        "Shop mail servers are not enabled on this platform: the operator has to set them up first."
+                    )
+                )
             }
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Mail server"</h2>
+            section_card(
+                title: Some("Mail server"),
                 if let Some(settings) = &settings {
-                    <dl class="mb-4 grid grid-cols-[12rem_1fr] gap-y-1 text-sm" data-mail-server="own">
-                        <dt class="text-neutral-500">"Server"</dt>
-                        <dd><code data-mail-host="">(&settings.host) ":" (settings.port)</code></dd>
-                        <dt class="text-neutral-500">"Security"</dt><dd>(security_label(&settings.security))</dd>
-                        <dt class="text-neutral-500">"User name"</dt>
-                        <dd>(settings.username.as_deref().unwrap_or("None"))</dd>
-                        <dt class="text-neutral-500">"Password"</dt>
-                        <dd>(if settings.password_sealed.is_some() { "Saved, never shown again" } else { "None" })</dd>
-                        <dt class="text-neutral-500">"Sent from"</dt>
-                        <dd data-mail-from="">
-                            (settings.from_name.as_deref().unwrap_or(&tenant.name))
-                            " <" (&settings.from_address) ">"
-                        </dd>
-                        <dt class="text-neutral-500">"Since"</dt>
-                        <dd><time datetime=(settings.configured_at)>(format_time(settings.configured_at))</time></dd>
-                    </dl>
+                    <div class="mb-4" data-mail-server="own">
+                        facts(
+                            fact(term: "Server", <code data-mail-host="">(&settings.host) ":" (settings.port)</code>)
+                            fact(term: "Security", (security_label(&settings.security)))
+                            fact(term: "User name", (settings.username.as_deref().unwrap_or("None")))
+                            fact(term: "Password", (if settings.password_sealed.is_some() { "Saved, never shown again" } else { "None" }))
+                            fact(
+                                term: "Sent from",
+                                attrs: attributes! { data-mail-from="" },
+                                (settings.from_name.as_deref().unwrap_or(&tenant.name))
+                                " <" (&settings.from_address) ">"
+                            )
+                            fact(term: "Since", <time datetime=(settings.configured_at)>(format_time(settings.configured_at))</time>)
+                        )
+                    </div>
                     <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
-                        <button class="rounded border border-red-300 px-3 py-1 text-sm text-red-800 hover:bg-red-50">"Use the platform's server"</button>
+                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Use the platform's server")
                     </form>
                 } else {
-                    <p class="mb-2 text-sm" data-mail-server="platform">
+                    <p class="text-sm text-muted-foreground" data-mail-server="platform">
                         "Not set up: your order confirmations, review requests and sign-in codes go out through the platform's server, under the name "
-                        <strong>(&tenant.name)</strong> "."
+                        <strong class="text-foreground">(&tenant.name)</strong> "."
                     </p>
                 }
-            </section>
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-mail-languages="">
-                <h2 class="mb-2 text-lg font-medium">"Languages"</h2>
-                <p class="mb-4 text-sm text-neutral-600">
-                    "Your shop mails each shopper in the language they browse in, when you have worded the mail in it; "
-                    "otherwise in the default language. The built-in wording is English."
-                </p>
-                <form method="post" action=(href!(languages::save, Slug(slug.clone()))) class="space-y-3">
-                    <label class="block text-sm" for="mail-default-language">"Default language"</label>
-                    <select id="mail-default-language" name="default" class="w-full max-w-xs rounded border border-neutral-300 px-3 py-2">
-                        for (code, name) in LANGUAGES {
-                            <option value=(code) selected=(*code == default_language)>(name)</option>
-                        }
-                    </select>
-                    <fieldset>
-                        <legend class="block text-sm">"Also in"</legend>
-                        <div class="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-3 md:grid-cols-4">
+            section_card(
+                title: Some("Languages"),
+                description: Some("Your shop mails each shopper in the language they browse in, when you have worded the mail in it; otherwise in the default language. The built-in wording is English."),
+                attrs: attributes! { data-mail-languages="" },
+                <form method="post" action=(href!(languages::save, Slug(slug.clone()))) class="flex flex-col gap-4">
+                    field(
+                        attrs: attributes! { class="max-w-xs" },
+                        field_label(attrs: attributes! { for="mail-default-language" }, "Default language")
+                        select(
+                            attrs: attributes! { id="mail-default-language" name="default" },
+                            for (code, name) in LANGUAGES {
+                                <option value=(code) selected=(*code == default_language)>(name)</option>
+                            }
+                        )
+                    )
+                    <fieldset class="min-w-0">
+                        <legend class="text-sm font-medium">"Also in"</legend>
+                        <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3 md:grid-cols-4">
                             for (code, name) in LANGUAGES {
                                 <label class="flex items-center gap-2 py-0.5 text-sm" data-language-option=(code)>
-                                    <input type="checkbox" name=(format!("{}{code}", languages::LANGUAGE_FIELD_PREFIX)) value="on"
-                                        checked=(*code != default_language && shop_languages.iter().any(|language| language == code))>
+                                    checkbox(attrs: attributes! {
+                                        name=(format!("{}{code}", languages::LANGUAGE_FIELD_PREFIX)) value="on"
+                                        checked=(*code != default_language && shop_languages.iter().any(|language| language == code))
+                                    })
                                     (name)
                                 </label>
                             }
                         </div>
                     </fieldset>
-                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save languages"</button>
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Save languages")
+                    </div>
                 </form>
-            </section>
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-mail-templates="">
-                <h2 class="mb-2 text-lg font-medium">"Mails to shoppers"</h2>
-                <p class="mb-4 text-sm text-neutral-600">
-                    "Word the mails your shop sends in your own way, in each of its languages. A mail you have not changed goes out as below."
-                </p>
-                <ul class="divide-y divide-neutral-200">
+            section_card(
+                title: Some("Mails to shoppers"),
+                description: Some("Word the mails your shop sends in your own way, in each of its languages. A mail you have not changed goes out as below."),
+                attrs: attributes! { data-mail-templates="" },
+                <ul class="divide-y divide-border">
                     for (kind, wordings) in &mails {
-                        <li class="py-2" data-mail-template=(kind.key())>
-                            <a class="font-medium underline"
+                        <li class="py-3" data-mail-template=(kind.key())>
+                            <a class=(LINK)
                                 href=(href!(templates::kind::index, Slug(slug.clone()), templates::kind::Kind(kind.key().to_owned())))>
                                 (kind.label())
                             </a>
-                            <p class="text-sm text-neutral-500">(kind.description())</p>
-                            <ul class="mt-1 space-y-0.5">
+                            <p class="text-sm text-muted-foreground">(kind.description())</p>
+                            <ul class="mt-2 space-y-1">
                                 for (code, name, edited) in wordings {
-                                    <li class="flex items-center justify-between text-sm" data-language=(code)>
-                                        <a class="underline"
+                                    <li class="flex items-center justify-between gap-4 text-sm" data-language=(code)>
+                                        <a class=(LINK)
                                             href=(href!(templates::kind::language::index, Slug(slug.clone()), templates::kind::Kind(kind.key().to_owned()), templates::kind::language::Language(code.clone())))>
                                             (name)
                                         </a>
-                                        <span class="text-neutral-600">
+                                        <span class="text-muted-foreground">
                                             if let Some((by, at)) = edited {
                                                 "Edited by " (by) " on " <time datetime=(at)>(format_time(*at))</time>
                                             } else {
@@ -246,87 +269,127 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </li>
                     }
                 </ul>
-            </section>
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-mail-branding="">
-                <h2 class="mb-2 text-lg font-medium">"Look of your mails"</h2>
-                <p class="mb-4 text-sm text-neutral-600">
+            section_card(
+                title: Some("Look of your mails"),
+                attrs: attributes! { data-mail-branding="" },
+                <p class="mb-4 text-sm text-muted-foreground">
                     "A logo, an accent colour and a footer, shared by all the mails above. In your own wording, use "
                     <code>"{{ shop.logo_url }}"</code> ", " <code>"{{ shop.accent }}"</code> " and " <code>"{{ shop.footer }}"</code> "."
                 </p>
-                <form method="post" enctype="multipart/form-data" action=(href!(branding::save, Slug(slug.clone()))) class="space-y-3">
+                <form method="post" enctype="multipart/form-data" action=(href!(branding::save, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
                     if let Some(logo_url) = &logo_url {
-                        <img src=(logo_url) alt="Your logo" data-mail-logo="" class="max-h-16 rounded border border-neutral-200 p-1">
+                        <img src=(logo_url) alt="Your logo" data-mail-logo="" class="max-h-16 self-start rounded-lg border border-border bg-card p-1">
                         <label class="flex items-center gap-2 text-sm">
-                            <input type="checkbox" name="remove_logo" value="1">
+                            checkbox(attrs: attributes! { name="remove_logo" value="1" })
                             "Remove the logo"
                         </label>
                     }
-                    <label class="block text-sm" for="mail-logo">
-                        if logo_url.is_some() { "Replace the logo" } else { "Logo" }
-                    </label>
-                    <input id="mail-logo" name="logo" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="block text-sm">
-                    <label class="block text-sm" for="mail-accent">"Accent colour"</label>
-                    <input id="mail-accent" name="accent" maxlength="7" placeholder="#1a73e8" pattern="#[0-9a-fA-F]{6}"
-                        value=(branding.accent.as_deref().unwrap_or_default())
-                        class="w-40 rounded border border-neutral-300 px-3 py-2 font-mono">
-                    <label class="block text-sm" for="mail-footer">"Footer"</label>
-                    <textarea id="mail-footer" name="footer" rows="3" maxlength=(&max_footer)
-                        placeholder="Your shop's address, a line about returns…"
-                        class="w-full rounded border border-neutral-300 px-3 py-2">(branding.footer.as_deref().unwrap_or_default())</textarea>
-                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save the look"</button>
+                    field(
+                        field_label(
+                            attrs: attributes! { for="mail-logo" },
+                            if logo_url.is_some() { "Replace the logo" } else { "Logo" }
+                        )
+                        input(attrs: attributes! { id="mail-logo" name="logo" type="file" accept="image/png,image/jpeg,image/webp,image/gif" })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="mail-accent" }, "Accent colour")
+                        input(attrs: attributes! {
+                            id="mail-accent" name="accent" maxlength="7" placeholder="#1a73e8" pattern="#[0-9a-fA-F]{6}"
+                            value=(branding.accent.as_deref().unwrap_or_default()) class="w-40 font-mono"
+                        })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="mail-footer" }, "Footer")
+                        textarea(
+                            attrs: attributes! {
+                                id="mail-footer" name="footer" rows="3" maxlength=(&max_footer)
+                                placeholder="Your shop's address, a line about returns…"
+                            },
+                            (branding.footer.as_deref().unwrap_or_default())
+                        )
+                    )
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Save the look")
+                    </div>
                 </form>
                 if tenant.mail_branding.is_some() {
-                    <form method="post" class="mt-3" action=(href!(branding::clear::clear, Slug(slug.clone())))>
-                        <button class="rounded border border-red-300 px-3 py-1 text-sm text-red-800 hover:bg-red-50">"Back to the plain look"</button>
+                    <form method="post" class="mt-4" action=(href!(branding::clear::clear, Slug(slug.clone())))>
+                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Back to the plain look")
                     </form>
                 }
-            </section>
+            )
 
             if enabled {
-                <section class="rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">
-                        if settings.is_some() { "Change the server" } else { "Send from your own server" }
-                    </h2>
-                    <p class="mb-4 text-sm text-neutral-600">
-                        "Your mail provider gives these settings for sending (SMTP). Saving sends a test mail through them first: they are kept only if it goes out."
-                    </p>
-                    <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="space-y-3">
-                        <label class="block text-sm" for="mail-host">"Server"</label>
-                        <input id="mail-host" name="host" required="" maxlength="253" placeholder="smtp.example.com" value=(&current.host)
-                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                        <label class="block text-sm" for="mail-port">"Port"</label>
-                        <input id="mail-port" name="port" type="number" min="1" max="65535" required="" value=(&port)
-                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                        <label class="block text-sm" for="mail-security">"Security"</label>
-                        <select id="mail-security" name="security" class="w-full rounded border border-neutral-300 px-3 py-2">
-                            for (value, label) in [
-                                (MAIL_SECURITY_STARTTLS, "STARTTLS (usually port 587)"),
-                                (MAIL_SECURITY_TLS, "TLS (usually port 465)"),
-                                (MAIL_SECURITY_NONE, "None (not encrypted)"),
-                            ] {
-                                <option value=(value) selected=(security == value)>(label)</option>
-                            }
-                        </select>
-                        <label class="block text-sm" for="mail-username">"User name"</label>
-                        <input id="mail-username" name="username" maxlength="254" autocomplete="off" value=(current.username.as_deref().unwrap_or_default())
-                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                        <label class="block text-sm" for="mail-password">"Password"</label>
-                        <input id="mail-password" name="password" type="password" autocomplete="off"
-                            placeholder=(if has_password { "Leave blank to keep the saved one" } else { "" })
-                            class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                        <label class="block text-sm" for="mail-from-address">"Send from address"</label>
-                        <input id="mail-from-address" name="from_address" type="email" required="" maxlength="254" placeholder="orders@example.com" value=(&current.from_address)
-                            class="w-full rounded border border-neutral-300 px-3 py-2">
-                        <label class="block text-sm" for="mail-from-name">"Send from name"</label>
-                        <input id="mail-from-name" name="from_name" maxlength="80" placeholder=(&tenant.name) value=(current.from_name.as_deref().unwrap_or_default())
-                            class="w-full rounded border border-neutral-300 px-3 py-2">
-                        <label class="block text-sm" for="mail-test-to">"Send the test mail to"</label>
-                        <input id="mail-test-to" name="test_to" type="email" required="" maxlength="254" value=(&test_to)
-                            class="w-full rounded border border-neutral-300 px-3 py-2">
-                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Test and save"</button>
+                section_card(
+                    title: Some(server_title),
+                    description: Some("Your mail provider gives these settings for sending (SMTP). Saving sends a test mail through them first: they are kept only if it goes out."),
+                    <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="grid max-w-3xl gap-4 md:grid-cols-2">
+                        field(
+                            field_label(attrs: attributes! { for="mail-host" }, "Server")
+                            input(attrs: attributes! {
+                                id="mail-host" name="host" required="" maxlength="253" placeholder="smtp.example.com" value=(&current.host) class="font-mono"
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-port" }, "Port")
+                            input(attrs: attributes! {
+                                id="mail-port" name="port" type="number" min="1" max="65535" required="" value=(&port) class="font-mono"
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-security" }, "Security")
+                            select(
+                                attrs: attributes! { id="mail-security" name="security" },
+                                for (value, label) in [
+                                    (MAIL_SECURITY_STARTTLS, "STARTTLS (usually port 587)"),
+                                    (MAIL_SECURITY_TLS, "TLS (usually port 465)"),
+                                    (MAIL_SECURITY_NONE, "None (not encrypted)"),
+                                ] {
+                                    <option value=(value) selected=(security == value)>(label)</option>
+                                }
+                            )
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-username" }, "User name")
+                            input(attrs: attributes! {
+                                id="mail-username" name="username" maxlength="254" autocomplete="off"
+                                value=(current.username.as_deref().unwrap_or_default()) class="font-mono"
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-password" }, "Password")
+                            input(attrs: attributes! {
+                                id="mail-password" name="password" type="password" autocomplete="off"
+                                placeholder=(if has_password { "Leave blank to keep the saved one" } else { "" }) class="font-mono"
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-from-address" }, "Send from address")
+                            input(attrs: attributes! {
+                                id="mail-from-address" name="from_address" type="email" required="" maxlength="254"
+                                placeholder="orders@example.com" value=(&current.from_address)
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-from-name" }, "Send from name")
+                            input(attrs: attributes! {
+                                id="mail-from-name" name="from_name" maxlength="80" placeholder=(&tenant.name)
+                                value=(current.from_name.as_deref().unwrap_or_default())
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-test-to" }, "Send the test mail to")
+                            input(attrs: attributes! {
+                                id="mail-test-to" name="test_to" type="email" required="" maxlength="254" value=(&test_to)
+                            })
+                        )
+                        <div class="md:col-span-2">
+                            button(attrs: attributes! { type="submit" }, "Test and save")
+                        </div>
                     </form>
-                </section>
+                )
             }
         )
     })

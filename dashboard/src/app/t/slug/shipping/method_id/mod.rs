@@ -14,13 +14,17 @@ use topcoat::{
         error::{SeeOther, not_found, see_other},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{amount_field, countries_field, error_code, orders, shipping_url};
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
-use crate::ui::{Shell, document, notice};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::ui::{Shell, document, notice, page_header, section_card};
 
 module_param!(pub method_id);
 
@@ -113,42 +117,59 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
-            shell: Shell::tenant(&tenant, &nav, ""),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold" data-shipping-name="">(&method.name)</h1>
-            </header>
+            shell: Shell::tenant(&tenant, &nav, "shipping"),
+            page_header(
+                title: &method.name,
+                subtitle: Some("One way the shop ships."),
+                h1_attrs: attributes! { data-shipping-name="" },
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(back)>"All shipping methods"</a>
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm"><a class="underline" href=(back)>"All shipping methods"</a></p>
-                <form method="post" action=(href!(change::change, Slug(slug.clone()), MethodId(id.clone()))) class="space-y-3">
-                    <label class="block text-sm" for="shipping-name">"Name"</label>
-                    <input id="shipping-name" name="name" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="text" maxlength=(MAX_SHIPPING_NAME_LEN) required="" value=(&method.name)>
-                    <label class="block text-sm" for="shipping-price">"Price"</label>
-                    <div class="flex gap-2">
-                        <input id="shipping-price" name="price" class="w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" inputmode="decimal" required="" value=(&price)>
-                        <select name="currency" aria-label="Currency" class="rounded border border-neutral-300 px-3 py-2">
-                            for currency in CURRENCIES {
-                                <option value=(*currency) selected=(method.currency == *currency)>(*currency)</option>
-                            }
-                        </select>
-                    </div>
-                    <label class="block text-sm" for="shipping-free">"Free from (optional)"</label>
-                    <input id="shipping-free" name="free_above" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="text" inputmode="decimal" value=(&free_above)>
+            section_card(
+                title: Some("Settings"),
+                <form method="post" action=(href!(change::change, Slug(slug.clone()), MethodId(id.clone()))) class="flex max-w-xl flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="shipping-name" }, "Name")
+                        input(attrs: attributes! {
+                            id="shipping-name" name="name" type="text"
+                            maxlength=(MAX_SHIPPING_NAME_LEN) required="" value=(&method.name)
+                        })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="shipping-price" }, "Price")
+                        <div class="flex gap-2">
+                            input(attrs: attributes! {
+                                id="shipping-price" name="price" type="text" inputmode="decimal" required="" value=(&price)
+                            })
+                            select(
+                                attrs: attributes! { name="currency" aria-label="Currency" class="w-28 shrink-0" },
+                                for currency in CURRENCIES {
+                                    <option value=(*currency) selected=(method.currency == *currency)>(*currency)</option>
+                                }
+                            )
+                        </div>
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="shipping-free" }, "Free from (optional)")
+                        input(attrs: attributes! {
+                            id="shipping-free" name="free_above" type="text" inputmode="decimal" value=(&free_above)
+                        })
+                    )
                     countries_field(id: "shipping-countries", selected: &method.countries)
-                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save shipping method"</button>
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Save shipping method")
+                    </div>
                 </form>
-            </section>
+            )
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
+            section_card(
+                title: Some("Remove this method"),
+                description: Some("A shopper who picked it and has not paid yet is asked to pick another. Orders already placed keep what they paid."),
                 <form method="post" action=(href!(remove::remove, Slug(slug.clone()), MethodId(id.clone())))>
-                    <button class="rounded border border-red-300 px-4 py-2 font-medium text-red-700">"Remove"</button>
+                    button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Remove")
                 </form>
-                <p class="mt-2 text-sm text-neutral-500">"A shopper who picked it and has not paid yet is asked to pick another. Orders already placed keep what they paid."</p>
-            </section>
+            )
         )
     })
 }

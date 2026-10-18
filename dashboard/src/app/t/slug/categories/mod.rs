@@ -14,13 +14,21 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
+use crate::components::badge::{BadgeVariant, badge};
+use crate::components::button::button;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, notice};
+use crate::ui::{LINK, Shell, document, empty_row, notice, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct CategoriesQuery {
@@ -133,73 +141,84 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "categories"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Categories"</h1>
-            </header>
+            page_header(title: "Categories", subtitle: Some("The tree shoppers browse the catalog by."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm text-neutral-500">
+            section_card(
+                <p class="mb-4 text-sm text-muted-foreground">
                     "Categories are what a shopper browses: a top-level one holds sub-categories, three levels deep at most. A product belongs to as many as fit it."
                 </p>
-                <p class="mb-4 text-sm text-neutral-500">
+                <p class="mb-4 text-sm text-muted-foreground">
                     "A category's page in the shop lists what is filed under it and under every sub-category below it, so a product in a sub-category counts for its parents too."
                 </p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Name"</th>
-                            <th class="py-2 font-medium">"Slug"</th>
-                            <th class="py-2 font-medium">"On its page"</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Name")
+                            table_head("Slug")
+                            table_head("On its page")
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="3">"No category yet."</td></tr>
+                            empty_row(colspan: 3, text: "No category yet.")
                         }
                         for row in &rows {
-                            <tr data-category=(&row.category.slug) data-category-depth=(row.depth)>
-                                <td class=(format!("py-2 {}", indent(row.depth)))>
-                                    <a class="underline" href=(href!(category_id::index, Slug(slug.clone()), category_id::CategoryId(row.category.id.clone())))>(&row.category.name)</a>
+                            table_row(
+                                attrs: attributes! { data-category=(&row.category.slug) data-category-depth=(row.depth) },
+                                table_cell(
+                                    attrs: attributes! { class=(indent(row.depth)) },
+                                    <a class=(LINK) href=(href!(category_id::index, Slug(slug.clone()), category_id::CategoryId(row.category.id.clone())))>(&row.category.name)</a>
                                     if !row.category.in_menu {
-                                        " " <span class="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-600" data-hidden-from-menu="">"Hidden from menu"</span>
+                                        " " badge(variant: BadgeVariant::Secondary, attrs: attributes! { data-hidden-from-menu="" }, "Hidden from menu")
                                     }
-                                </td>
-                                <td class="py-2"><code>(&row.category.slug)</code></td>
-                                <td class="py-2">
-                                    <span data-category-count=(row.category.subtree_count)>(row.category.subtree_count)</span>
+                                )
+                                table_cell(<code class="text-xs">(&row.category.slug)</code>)
+                                table_cell(
+                                    <span class="tabular-nums" data-category-count=(row.category.subtree_count)>(row.category.subtree_count)</span>
                                     if row.inherits() {
-                                        <span class="text-neutral-500" data-category-direct=(row.category.product_count)>
+                                        <span class="text-muted-foreground" data-category-direct=(row.category.product_count)>
                                             " (" (row.category.product_count) " filed here)"
                                         </span>
                                     }
-                                </td>
-                            </tr>
+                                )
+                            )
                         }
-                    </tbody>
-                </table>
-            </section>
+                    )
+                )
+            )
 
             if can_manage {
-                <section class="rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">"Create a category"</h2>
-                    <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="space-y-3">
-                        <label class="block text-sm" for="new-category-name">"Name"</label>
-                        <input id="new-category-name" name="name" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" maxlength=(MAX_CATEGORY_NAME_LEN) required="" placeholder="Cat bedding">
-                        <label class="block text-sm" for="new-category-parent">"Parent"</label>
-                        <select id="new-category-parent" name="parent_id" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">
-                            <option value="">"Top level"</option>
-                            for parent in &parents {
-                                <option value=(&parent.id)>(&parent.label)</option>
-                            }
-                        </select>
-                        <label class="block text-sm" for="new-category-slug">"Slug (optional)"</label>
-                        <input id="new-category-slug" name="slug" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" placeholder="cat-bedding">
-                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Create category"</button>
+                section_card(
+                    title: Some("Create a category"),
+                    description: Some("A top-level category, or one under another. The slug derives from the name unless given."),
+                    <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                        field(
+                            field_label(attrs: attributes! { for="new-category-name" }, "Name")
+                            input(attrs: attributes! {
+                                id="new-category-name" name="name" type="text"
+                                maxlength=(MAX_CATEGORY_NAME_LEN) required="" placeholder="Cat bedding"
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="new-category-parent" }, "Parent")
+                            select(
+                                attrs: attributes! { id="new-category-parent" name="parent_id" },
+                                <option value="">"Top level"</option>
+                                for parent in &parents {
+                                    <option value=(&parent.id)>(&parent.label)</option>
+                                }
+                            )
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="new-category-slug" }, "Slug (optional)")
+                            input(attrs: attributes! { id="new-category-slug" name="slug" type="text" placeholder="cat-bedding" })
+                        )
+                        <div>
+                            button(attrs: attributes! { type="submit" }, "Create category")
+                        </div>
                     </form>
-                </section>
+                )
             }
         )
     })

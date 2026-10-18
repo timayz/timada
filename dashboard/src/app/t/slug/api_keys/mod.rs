@@ -19,18 +19,30 @@ use timada_tenancy::{
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::auth::cookies::{ApiKeyReveal, api_key_reveal, is_fresh};
 use crate::auth::{now, user_labels};
+use crate::components::alert::{AlertVariant, alert, alert_description};
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::checkbox::checkbox;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::config::Config;
 use crate::db::ReadPool;
 use crate::media::Media;
-use crate::ui::{Shell, describe_api_key_scope, document, format_time, notice};
+use crate::ui::{
+    Shell, Tone, describe_api_key_scope, document, empty_row, fact, facts, format_time, icons,
+    notice, page_header, section_card, status_badge,
+};
 
 /// The form field of a scope checkbox: `scope:<scope>`.
 const SCOPE_FIELD_PREFIX: &str = "scope:";
@@ -97,144 +109,157 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "api_keys"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"API keys"</h1>
-            </header>
+            page_header(title: "API keys", subtitle: Some("What a storefront presents to connect to this tenant's store."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             if let Some(reveal) = &reveal {
-                <section class="mb-8 rounded border border-amber-300 bg-amber-50 p-4" data-api-key-reveal=(&reveal.key_id)>
-                    <h2 class="text-lg font-medium">"Your new key " <q>(&reveal.label)</q></h2>
-                    <p class="mt-1 text-sm text-amber-900">
-                        "Copy it now: this is the only time it is shown. A storefront presents it when it connects to this tenant's store."
-                    </p>
-                    <code class="mt-3 block select-all rounded border border-amber-200 bg-white px-3 py-2 font-mono text-sm" data-api-key-token="">(&reveal.token)</code>
-                    <p class="mt-3 text-sm text-amber-900">
-                        (match &store_api {
-                            Some(api) => match &api.public_addr {
-                                Some(addr) => format!("Storefronts connect to {addr} with it."),
-                                None => "Storefronts connect to this node's store API with it.".to_owned(),
-                            },
-                            None => "The store API is not enabled on this node yet; the key will work once it is.".to_owned(),
-                        })
-                    </p>
+                <section class="mb-6" data-api-key-reveal=(&reveal.key_id)>
+                    alert(
+                        variant: AlertVariant::Warning,
+                        icon(data: icons::API_KEYS)
+                        <h2 class="col-start-2 font-medium tracking-tight">"Your new key " <q>(&reveal.label)</q></h2>
+                        alert_description(
+                            <p>"Copy it now: this is the only time it is shown. A storefront presents it when it connects to this tenant's store."</p>
+                            <code class="mt-3 block select-all rounded-md border border-warning/40 bg-card px-3 py-2 font-mono text-sm text-foreground" data-api-key-token="">(&reveal.token)</code>
+                            <p class="mt-3">
+                                (match &store_api {
+                                    Some(api) => match &api.public_addr {
+                                        Some(addr) => format!("Storefronts connect to {addr} with it."),
+                                        None => "Storefronts connect to this node's store API with it.".to_owned(),
+                                    },
+                                    None => "The store API is not enabled on this node yet; the key will work once it is.".to_owned(),
+                                })
+                            </p>
+                        )
+                    )
                 </section>
             }
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"What a storefront needs"</h2>
-                <dl class="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
-                    <dt class="text-neutral-500">"Store address"</dt>
-                    <dd data-store-addr="">
+            section_card(
+                title: Some("What a storefront needs"),
+                description: Some("A storefront loads the product pictures from the picture address, and hands in shoppers' reviews at the dashboard address; set both alongside the key."),
+                facts(
+                    fact(
+                        term: "Store address",
+                        attrs: attributes! { data-store-addr="" },
                         (match &store_api {
                             Some(api) => api.public_addr.clone().unwrap_or_else(|| api.listen.to_string()),
                             None => "not enabled on this node".to_owned(),
                         })
-                    </dd>
-                    <dt class="text-neutral-500">"Picture address"</dt>
-                    <dd><code data-media-url="">(&media_url)</code></dd>
-                    <dt class="text-neutral-500">"Dashboard address"</dt>
-                    <dd><code data-api-url="">(&api_url)</code></dd>
-                </dl>
-                <p class="mt-3 text-sm text-neutral-500">
-                    "A storefront loads the product pictures from the picture address, and hands in shoppers' reviews at the dashboard address; set both alongside the key."
-                </p>
-            </section>
+                    )
+                    fact(term: "Picture address", <code data-media-url="">(&media_url)</code>)
+                    fact(term: "Dashboard address", <code data-api-url="">(&api_url)</code>)
+                )
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Storefront address"</h2>
-                <form method="post" action=(href!(storefront::storefront, Slug(slug.clone()))) class="space-y-3">
-                    <label class="block text-sm" for="storefront-url">"Where shoppers find the shop"</label>
-                    <input id="storefront-url" name="url" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="url" maxlength="200" value=(&storefront_url) placeholder="https://shop.example">
-                    <p class="text-sm text-neutral-500">
-                        "The confirmation mailed to a shopper after payment links to the order at this address followed by /orders/ and the order's id. Leave it blank to mail confirmations without a link."
-                    </p>
-                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save address"</button>
+            section_card(
+                title: Some("Storefront address"),
+                description: Some("The confirmation mailed to a shopper after payment links to the order at this address followed by /orders/ and the order's id. Leave it blank to mail confirmations without a link."),
+                <form method="post" action=(href!(storefront::storefront, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="storefront-url" }, "Where shoppers find the shop")
+                        input(attrs: attributes! {
+                            id="storefront-url" name="url" type="url" maxlength="200"
+                            value=(&storefront_url) placeholder="https://shop.example"
+                        })
+                    )
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Save address")
+                    </div>
                 </form>
-            </section>
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-3 text-sm text-neutral-500">
-                    "A key reads this tenant's event store; one with store:write also writes to it. Give a storefront that only shows the catalogue a read-only key, and one that sells store:read with store:checkout, which lets it fill carts and place orders and nothing else. Changing a key's scopes reconnects the stores using it. Revoke a key the moment it may have leaked."
-                </p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Label"</th>
-                            <th class="py-2 font-medium">"Key"</th>
-                            <th class="py-2 font-medium">"Scopes"</th>
-                            <th class="py-2 font-medium">"Created"</th>
-                            <th class="py-2 font-medium">"Status"</th>
-                            <th class="py-2 font-medium"><span class="sr-only">"Actions"</span></th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+            section_card(
+                title: Some("Keys"),
+                description: Some("A key reads this tenant's event store; one with store:write also writes to it. Give a storefront that only shows the catalogue a read-only key, and one that sells store:read with store:checkout, which lets it fill carts and place orders and nothing else. Changing a key's scopes reconnects the stores using it. Revoke a key the moment it may have leaked."),
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Label")
+                            table_head("Key")
+                            table_head("Scopes")
+                            table_head("Created")
+                            table_head("Status")
+                            table_head(<span class="sr-only">"Actions"</span>)
+                        )
+                    )
+                    table_body(
                         if keys.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="6">"No key yet."</td></tr>
+                            empty_row(colspan: 6, text: "No key yet.")
                         }
                         for key in &keys {
-                            <tr data-api-key=(&key.hint)>
-                                <td class="py-2">(&key.label)</td>
-                                <td class="py-2"><code>(&key.hint) "…"</code></td>
-                                <td class="py-2" data-api-key-scopes=(&key.scope_list)>
+                            table_row(
+                                attrs: attributes! { data-api-key=(&key.hint) },
+                                table_cell(attrs: attributes! { class="font-medium" }, (&key.label))
+                                table_cell(<code>(&key.hint) "…"</code>)
+                                table_cell(
+                                    attrs: attributes! { class="whitespace-normal" data-api-key-scopes=(&key.scope_list) },
                                     if key.is_active() {
                                         <form method="post" action=(href!(scopes::scopes, Slug(slug.clone()))) class="flex flex-wrap items-center gap-x-3 gap-y-1">
                                             <input type="hidden" name="key_id" value=(&key.id)>
                                             for scope in API_KEY_SCOPES {
-                                                <label class="flex items-center gap-1" title=(describe_api_key_scope(scope))>
-                                                    <input type="checkbox" name=(format!("{SCOPE_FIELD_PREFIX}{scope}")) value="on" checked=(key.has_scope(scope))>
+                                                <label class="flex items-center gap-1.5" title=(describe_api_key_scope(scope))>
+                                                    checkbox(attrs: attributes! { name=(format!("{SCOPE_FIELD_PREFIX}{scope}")) value="on" checked=(key.has_scope(scope)) })
                                                     <code>(*scope)</code>
                                                 </label>
                                             }
-                                            <button class="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100">"Save scopes"</button>
+                                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save scopes")
                                         </form>
                                     } else {
-                                        <code class="text-neutral-500">(&key.scope_list)</code>
+                                        <code class="text-muted-foreground">(&key.scope_list)</code>
                                     }
-                                </td>
-                                <td class="py-2">
-                                    (labels.get(&key.created_by).cloned().unwrap_or_else(|| key.created_by.clone()))
-                                    ", " <time datetime=(key.created_at)>(format_time(key.created_at as u64))</time>
-                                </td>
-                                <td class="py-2" data-api-key-status=(if key.is_active() { "active" } else { "revoked" })>
-                                    (match key.revoked_at {
-                                        None => "Active".to_owned(),
-                                        Some(at) => format!("Revoked {}", format_time(at as u64)),
-                                    })
-                                </td>
-                                <td class="py-2 text-right">
+                                )
+                                table_cell(
+                                    <span class="block">(labels.get(&key.created_by).cloned().unwrap_or_else(|| key.created_by.clone()))</span>
+                                    <time class="block text-xs text-muted-foreground" datetime=(key.created_at)>(format_time(key.created_at as u64))</time>
+                                )
+                                table_cell(
+                                    attrs: attributes! { data-api-key-status=(if key.is_active() { "active" } else { "revoked" }) },
+                                    if let Some(at) = key.revoked_at {
+                                        status_badge(tone: Tone::Neutral, (format!("Revoked {}", format_time(at as u64))))
+                                    } else {
+                                        status_badge(tone: Tone::Success, "Active")
+                                    }
+                                )
+                                table_cell(
+                                    attrs: attributes! { class="text-right" },
                                     if key.is_active() {
                                         <form method="post" action=(href!(revoke::revoke, Slug(slug.clone())))>
                                             <input type="hidden" name="key_id" value=(&key.id)>
-                                            <button class="rounded border border-red-700 px-2 py-1 text-xs text-red-700 hover:bg-red-50">"Revoke"</button>
+                                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Revoke")
                                         </form>
                                     }
-                                </td>
-                            </tr>
+                                )
+                            )
                         }
-                    </tbody>
-                </table>
-            </section>
+                    )
+                )
+            )
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Create a key"</h2>
-                <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="space-y-3">
-                    <label class="block text-sm" for="new-key-label">"Label"</label>
-                    <input id="new-key-label" name="label" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="text" maxlength=(MAX_API_KEY_LABEL_LEN) required="" placeholder="Web storefront">
-                    <fieldset class="space-y-1 text-sm">
-                        <legend class="mb-1 text-sm">"Scopes"</legend>
+            section_card(
+                title: Some("Create a key"),
+                <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="new-key-label" }, "Label")
+                        input(attrs: attributes! {
+                            id="new-key-label" name="label" type="text"
+                            maxlength=(MAX_API_KEY_LABEL_LEN) required="" placeholder="Web storefront"
+                        })
+                    )
+                    <fieldset class="flex flex-col gap-1.5 text-sm">
+                        <legend class="mb-2 text-sm font-medium">"Scopes"</legend>
                         for scope in API_KEY_SCOPES {
                             <label class="flex items-center gap-2">
-                                <input type="checkbox" name=(format!("{SCOPE_FIELD_PREFIX}{scope}")) value="on" checked=(*scope == SCOPE_STORE_READ)>
-                                <span>(describe_api_key_scope(scope)) " " <code class="text-neutral-500">(*scope)</code></span>
+                                checkbox(attrs: attributes! { name=(format!("{SCOPE_FIELD_PREFIX}{scope}")) value="on" checked=(*scope == SCOPE_STORE_READ) })
+                                <span>(describe_api_key_scope(scope)) " " <code class="text-muted-foreground">(*scope)</code></span>
                             </label>
                         }
                     </fieldset>
-                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Create key"</button>
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Create key")
+                    </div>
                 </form>
-            </section>
+            )
         )
     })
 }

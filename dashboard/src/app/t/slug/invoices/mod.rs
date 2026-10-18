@@ -11,13 +11,19 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::cluster::Executor;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time};
+use crate::ui::{
+    LINK, Shell, Tone, document, empty_row, format_time, page_header, pager, section_card,
+    status_badge,
+};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -90,58 +96,60 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "invoices"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Invoices"</h1>
-            </header>
+            page_header(title: "Invoices", subtitle: Some("The invoices and credit notes the shop issued."))
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm text-neutral-600">
-                    "Every paid order gets an invoice, every refund a credit note, numbered in one series per year and kind. They never change once issued. The company's One-Stop Shop return is on its page."
-                </p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Number"</th>
-                            <th class="py-2 font-medium">"Kind"</th>
-                            <th class="py-2 font-medium">"Issued"</th>
-                            <th class="py-2 font-medium">"Order"</th>
-                            <th class="py-2 font-medium">"Customer"</th>
-                            <th class="py-2 font-medium">"VAT"</th>
-                            <th class="py-2 text-right font-medium">"Total"</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+            section_card(
+                description: Some("Every paid order gets an invoice, every refund a credit note, numbered in one series per year and kind. They never change once issued. The company's One-Stop Shop return is on its page."),
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Number")
+                            table_head("Kind")
+                            table_head("Issued")
+                            table_head("Order")
+                            table_head("Customer")
+                            table_head("VAT")
+                            table_head(attrs: attributes! { class="text-right" }, "Total")
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="7">"No invoice yet."</td></tr>
+                            empty_row(colspan: 7, text: "No invoice yet.")
                         }
                         for row in &rows {
-                            <tr data-document=(&row.label)>
-                                <td class="py-2">
-                                    <a class="font-mono underline" href=(pdf_href(cx, &slug, &row.id))>(&row.label)</a>
-                                </td>
-                                <td class="py-2">(if row.is_credit_note() { "Credit note" } else { "Invoice" })</td>
-                                <td class="py-2"><time datetime=(row.issued_at)>(format_time(row.issued_at as u64))</time></td>
-                                <td class="py-2">
-                                    <a class="font-mono underline" href=(href!(super::orders::order_id::index, Slug(slug.clone()), super::orders::order_id::OrderId(row.order_id.clone())))>(&row.order_reference)</a>
-                                </td>
-                                <td class="py-2">(&row.buyer_name)</td>
-                                <td class="py-2" data-document-regime=(&row.regime)>(regime_label(&row.regime, &row.tax_country))</td>
-                                <td class="py-2 text-right">
+                            table_row(
+                                attrs: attributes! { data-document=(&row.label) },
+                                table_cell(
+                                    <a class=(class!(LINK, "font-mono")) href=(pdf_href(cx, &slug, &row.id))>(&row.label)</a>
+                                )
+                                table_cell(
+                                    status_badge(
+                                        tone: if row.is_credit_note() { Tone::Warning } else { Tone::Success },
+                                        (if row.is_credit_note() { "Credit note" } else { "Invoice" })
+                                    )
+                                )
+                                table_cell(<time datetime=(row.issued_at)>(format_time(row.issued_at as u64))</time>)
+                                table_cell(
+                                    <a class=(class!(LINK, "font-mono")) href=(href!(super::orders::order_id::index, Slug(slug.clone()), super::orders::order_id::OrderId(row.order_id.clone())))>(&row.order_reference)</a>
+                                )
+                                table_cell((&row.buyer_name))
+                                table_cell(attrs: attributes! { data-document-regime=(&row.regime) }, (regime_label(&row.regime, &row.tax_country)))
+                                table_cell(
+                                    attrs: attributes! { class="text-right tabular-nums" },
                                     if row.is_credit_note() { "−" }
                                     (row.total_label())
-                                </td>
-                            </tr>
+                                )
+                            )
                         }
-                    </tbody>
-                </table>
-                if pages > 1 {
-                    <p class="mt-4 flex items-center gap-4 text-sm">
-                        if page_number > 1 { <a class="underline" href=(page_link(page_number - 1))>"Previous"</a> }
-                        <span>"Page " (page_number) " of " (pages)</span>
-                        if page_number < pages { <a class="underline" href=(page_link(page_number + 1))>"Next"</a> }
-                    </p>
-                }
-            </section>
+                    )
+                )
+                pager(
+                    page: page_number,
+                    pages: pages,
+                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
+                    next: (page_number < pages).then(|| page_link(page_number + 1)),
+                )
+            )
         )
     })
 }

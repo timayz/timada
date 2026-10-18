@@ -16,15 +16,26 @@ use timada_tenancy::{PERMISSION_REVIEWS_MANAGE, PERMISSION_REVIEWS_READ};
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
+use crate::components::alert::{AlertVariant, alert, alert_description};
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, empty_row, filter_bar, format_time, icons, notice, page_header,
+    pager, section_card, status_badge,
+};
 
 const PAGE_SIZE: u32 = 50;
 /// The `status` of the list showing every review.
@@ -173,38 +184,43 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "reviews"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Reviews"</h1>
-            </header>
+            page_header(title: "Reviews", subtitle: Some("What shoppers wrote about the products they bought."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-review-requests=(ask_after.map_or("off".to_owned(), |days| days.to_string()))>
-                <h2 class="mb-2 text-lg font-medium">"Review requests"</h2>
-                <p class="mb-4 text-sm text-neutral-500">
-                    "Some days after an order is marked fulfilled, its buyer gets a mail from the shop with a link to review what they bought. The link opens their order on the storefront for 60 days."
-                </p>
+            section_card(
+                title: Some("Review requests"),
+                description: Some("Some days after an order is marked fulfilled, its buyer gets a mail from the shop with a link to review what they bought. The link opens their order on the storefront for 60 days."),
+                attrs: attributes! { data-review-requests=(ask_after.map_or("off".to_owned(), |days| days.to_string())) },
                 if !has_storefront {
-                    <p class="mb-4 text-sm" data-review-requests-no-storefront="">
-                        "No mail goes out until the storefront address is set on the "
-                        <a class="underline" href=(href!(crate::app::t::slug::api_keys::index, Slug(slug.clone())))>"API keys page"</a> "."
-                    </p>
+                    alert(
+                        variant: AlertVariant::Info,
+                        attrs: attributes! { class="mb-4" data-review-requests-no-storefront="" },
+                        icon(data: icons::INFO)
+                        alert_description(
+                            "No mail goes out until the storefront address is set on the "
+                            <a class=(LINK) href=(href!(crate::app::t::slug::api_keys::index, Slug(slug.clone())))>"API keys page"</a> "."
+                        )
+                    )
                 }
                 if can_manage {
-                    <form method="post" action=(href!(requests::requests, Slug(slug.clone()))) class="flex flex-wrap items-end gap-2">
-                        <label class="text-sm">
-                            <span class="mb-1 block text-neutral-500">"Ask buyers"</span>
-                            <select name="ask" class="rounded border border-neutral-300 px-3 py-2">
+                    <form method="post" action=(href!(requests::requests, Slug(slug.clone()))) class="flex flex-wrap items-end gap-3">
+                        <label class="flex flex-col gap-2 text-sm font-medium">
+                            <span>"Ask buyers"</span>
+                            select(
+                                attrs: attributes! { name="ask" class="w-32" },
                                 <option value="on" selected=(ask_after.is_some())>"Yes"</option>
                                 <option value="off" selected=(ask_after.is_none())>"Never"</option>
-                            </select>
+                            )
                         </label>
-                        <label class="text-sm">
-                            <span class="mb-1 block text-neutral-500">"Days after fulfilment"</span>
-                            <input type="number" name="days" min="0" max=(MAX_REQUEST_DELAY_DAYS)
+                        <label class="flex flex-col gap-2 text-sm font-medium">
+                            <span>"Days after fulfilment"</span>
+                            input(attrs: attributes! {
+                                type="number" name="days" min="0" max=(MAX_REQUEST_DELAY_DAYS)
                                 value=(ask_after.unwrap_or(DEFAULT_REQUEST_DELAY_DAYS))
-                                class="w-24 rounded border border-neutral-300 px-3 py-2">
+                                class="w-24"
+                            })
                         </label>
-                        <button class="rounded bg-neutral-900 px-3 py-2 text-white">"Save"</button>
+                        button(attrs: attributes! { type="submit" }, "Save")
                     </form>
                 } else {
                     <p class="text-sm">
@@ -214,87 +230,99 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     </p>
                 }
-            </section>
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm text-neutral-500">
-                    "A shopper reviews a product from the page of the order they bought it with, or from the link the review request mailed them. Nothing shows on the shop until it is published here; a rejected review never comes back."
-                </p>
-                <form method="get" class="mb-4 flex flex-wrap gap-2">
+            section_card(
+                description: Some("A shopper reviews a product from the page of the order they bought it with, or from the link the review request mailed them. Nothing shows on the shop until it is published here; a rejected review never comes back."),
+                filter_bar(
                     if let Some(product) = product {
                         <input type="hidden" name="product" value=(product)>
                     }
                     <label class="sr-only" for="reviews-status">"Status"</label>
-                    <select id="reviews-status" name="status" class="rounded border border-neutral-300 px-3 py-2">
+                    select(
+                        attrs: attributes! { id="reviews-status" name="status" class="w-44" },
                         for option in ReviewStatus::ALL {
                             <option value=(option.as_str()) selected=(status == Some(option))>(status_label(option))</option>
                         }
                         <option value=(ALL) selected=(status.is_none())>"Every status"</option>
-                    </select>
+                    )
                     <label class="sr-only" for="reviews-rating">"Stars"</label>
-                    <select id="reviews-rating" name="rating" class="rounded border border-neutral-300 px-3 py-2">
+                    select(
+                        attrs: attributes! { id="reviews-rating" name="rating" class="w-36" },
                         <option value="">"Any stars"</option>
                         for stars_count in (1u8..=5).rev() {
                             <option value=(stars_count) selected=(rating == Some(stars_count))>(stars(stars_count))</option>
                         }
-                    </select>
-                    <button class="rounded border border-neutral-300 px-3 py-2">"Filter"</button>
-                </form>
+                    )
+                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Filter")
+                )
                 if let Some(product) = product {
                     <p class="mb-4 text-sm" data-reviews-product=(product)>
                         "Reviews of " (product_name.unwrap_or_else(|| "one product".to_owned())) ". "
-                        <a class="underline" href=(reviews_url(cx, &slug, None, None))>"Every product"</a>
+                        <a class=(LINK) href=(reviews_url(cx, &slug, None, None))>"Every product"</a>
                     </p>
                 }
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Product"</th>
-                            <th class="py-2 font-medium">"Stars"</th>
-                            <th class="py-2 font-medium">"Review"</th>
-                            <th class="py-2 font-medium">"By"</th>
-                            <th class="py-2 font-medium">"Status"</th>
-                            <th class="py-2 font-medium">"Written"</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Product")
+                            table_head("Stars")
+                            table_head("Review")
+                            table_head("By")
+                            table_head("Status")
+                            table_head("Written")
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="6">"No review here."</td></tr>
+                            empty_row(colspan: 6, text: "No review here.")
                         }
                         for row in &rows {
-                            <tr data-review=(&row.id) data-review-status=(&row.status)>
-                                <td class="py-2">
-                                    (&row.product_name)
+                            table_row(
+                                attrs: attributes! { data-review=(&row.id) data-review-status=(&row.status) },
+                                table_cell(
+                                    attrs: attributes! { class="whitespace-normal" },
+                                    <span class="font-medium">(&row.product_name)</span>
                                     if let Some(label) = &row.variant_label {
-                                        <span class="text-neutral-500">" · " (label)</span>
+                                        <span class="text-muted-foreground">" · " (label)</span>
                                     }
-                                </td>
-                                <td class="py-2" aria-label=(format!("{} out of 5", row.rating))>(stars(row.rating as u8))</td>
-                                <td class="py-2">
-                                    <a class="underline" href=(href!(review_id::index, Slug(slug.clone()), review_id::ReviewId(row.id.clone())))>
+                                )
+                                table_cell(attrs: attributes! { aria-label=(format!("{} out of 5", row.rating)) }, (stars(row.rating as u8)))
+                                table_cell(
+                                    attrs: attributes! { class="whitespace-normal" },
+                                    <a class=(LINK) href=(href!(review_id::index, Slug(slug.clone()), review_id::ReviewId(row.id.clone())))>
                                         (row.title.clone().unwrap_or_else(|| excerpt(&row.body)))
                                     </a>
                                     if row.photo_count > 0 {
-                                        <span class="text-neutral-500">" · " (row.photo_count) " photo(s)"</span>
+                                        <span class="text-muted-foreground">" · " (row.photo_count) " photo(s)"</span>
                                     }
-                                </td>
-                                <td class="py-2">(&row.author_name)</td>
-                                <td class="py-2">(status_of(&row.status))</td>
-                                <td class="py-2"><time datetime=(row.submitted_at)>(format_time(row.submitted_at as u64))</time></td>
-                            </tr>
+                                )
+                                table_cell((&row.author_name))
+                                table_cell(status_badge(tone: review_tone(&row.status), (status_of(&row.status))))
+                                table_cell(<time datetime=(row.submitted_at)>(format_time(row.submitted_at as u64))</time>)
+                            )
                         }
-                    </tbody>
-                </table>
-                if pages > 1 {
-                    <p class="mt-4 flex items-center gap-4 text-sm">
-                        if page_number > 1 { <a class="underline" href=(page_link(page_number - 1))>"Previous"</a> }
-                        <span>"Page " (page_number) " of " (pages)</span>
-                        if page_number < pages { <a class="underline" href=(page_link(page_number + 1))>"Next"</a> }
-                    </p>
-                }
-            </section>
+                    )
+                )
+                pager(
+                    page: i64::from(page_number),
+                    pages: i64::from(pages),
+                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
+                    next: (page_number < pages).then(|| page_link(page_number + 1)),
+                )
+            )
         )
     })
+}
+
+/// The colour of a review's stored status.
+fn review_tone(status: &str) -> Tone {
+    match ReviewStatus::parse(status) {
+        Some(ReviewStatus::Pending) => Tone::Warning,
+        Some(ReviewStatus::Published) => Tone::Success,
+        Some(ReviewStatus::Rejected) => Tone::Danger,
+        None => Tone::Neutral,
+    }
 }
 
 /// The start of a text, for a row that has no title.

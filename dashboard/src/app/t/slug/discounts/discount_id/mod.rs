@@ -14,14 +14,18 @@ use topcoat::{
         error::{SeeOther, not_found, see_other},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{describe_limits, describe_window, discounts, discounts_url, error_code};
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::auth::user_labels;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::ui::{
+    Shell, Tone, document, fact, facts, format_time, notice, page_header, section_card,
+    status_badge,
+};
 
 module_param!(pub discount_id);
 
@@ -150,54 +154,69 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
-            shell: Shell::tenant(&tenant, &nav, ""),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold"><code data-discount-code="">(&discount.code)</code></h1>
-            </header>
+            shell: Shell::tenant(&tenant, &nav, "discounts"),
+            page_header(
+                title: &discount.code,
+                subtitle: Some("One discount code, read from its own record."),
+                h1_attrs: attributes! { data-discount-code="" },
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(back)>"All discounts"</a>
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm"><a class="underline" href=(back)>"All discounts"</a></p>
-                <dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
-                    <dt class="text-neutral-500">"Status"</dt>
-                    <dd data-discount-status=(discount.status.as_str())>(status)</dd>
-                    <dt class="text-neutral-500">"Takes off"</dt>
-                    <dd data-discount-value="">(value) " of the items"</dd>
-                    <dt class="text-neutral-500">"When"</dt>
-                    <dd>(window)</dd>
-                    <dt class="text-neutral-500">"Limits"</dt>
-                    <dd>(limits)</dd>
+            section_card(
+                facts(
+                    fact(
+                        term: "Status",
+                        attrs: attributes! { data-discount-status=(discount.status.as_str()) },
+                        status_badge(tone: status_tone(&discount, status), (status))
+                    )
+                    fact(term: "Takes off", attrs: attributes! { data-discount-value="" }, (value) " of the items")
+                    fact(term: "When", (window))
+                    fact(term: "Limits", (limits))
                     if let Some(max) = discount.max_uses {
-                        <dt class="text-neutral-500">"Used"</dt>
-                        <dd data-discount-used=(spent)>
+                        fact(
+                            term: "Used",
+                            attrs: attributes! { data-discount-used=(spent) },
                             (spent) " of " (max)
                             if held > 0 {
-                                <span class="text-neutral-500">" (" (held) " held by checkouts being paid)"</span>
+                                <span class="text-muted-foreground">" (" (held) " held by checkouts being paid)"</span>
                             }
-                        </dd>
+                        )
                     }
-                    <dt class="text-neutral-500">"Created"</dt>
-                    <dd>(format_time(discount.created_at)) " by " (created_by)</dd>
-                </dl>
-            </section>
+                    fact(term: "Created", (format_time(discount.created_at)) " by " (created_by))
+                )
+            )
 
             if can_manage && !discount.is_archived() {
-                <section class="flex gap-3 rounded border border-neutral-200 bg-white p-4">
-                    if discount.status == DiscountStatus::Active {
-                        <form method="post" action=(href!(deactivate::deactivate, Slug(slug.clone()), DiscountId(id.clone())))>
-                            <button class="rounded border border-neutral-300 px-4 py-2 font-medium">"Deactivate"</button>
+                section_card(
+                    title: Some("Actions"),
+                    description: Some("Archiving frees the code for a new discount. A checkout already being paid keeps the discount it was shown."),
+                    <div class="flex flex-wrap gap-3">
+                        if discount.status == DiscountStatus::Active {
+                            <form method="post" action=(href!(deactivate::deactivate, Slug(slug.clone()), DiscountId(id.clone())))>
+                                button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Deactivate")
+                            </form>
+                        } else {
+                            <form method="post" action=(href!(reactivate::reactivate, Slug(slug.clone()), DiscountId(id.clone())))>
+                                button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Reactivate")
+                            </form>
+                        }
+                        <form method="post" action=(href!(archive::archive, Slug(slug.clone()), DiscountId(id.clone())))>
+                            button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" }, "Archive")
                         </form>
-                    } else {
-                        <form method="post" action=(href!(reactivate::reactivate, Slug(slug.clone()), DiscountId(id.clone())))>
-                            <button class="rounded border border-neutral-300 px-4 py-2 font-medium">"Reactivate"</button>
-                        </form>
-                    }
-                    <form method="post" action=(href!(archive::archive, Slug(slug.clone()), DiscountId(id.clone())))>
-                        <button class="rounded border border-red-300 px-4 py-2 font-medium text-red-700">"Archive"</button>
-                    </form>
-                </section>
-                <p class="mt-2 text-sm text-neutral-500">"Archiving frees the code for a new discount. A checkout already being paid keeps the discount it was shown."</p>
+                    </div>
+                )
             }
         )
     })
+}
+
+/// The colour of where a discount stands.
+fn status_tone(discount: &DiscountState, status: &str) -> Tone {
+    match discount.status {
+        DiscountStatus::Archived => Tone::Neutral,
+        DiscountStatus::Inactive => Tone::Warning,
+        DiscountStatus::Active if status == "Active" => Tone::Success,
+        DiscountStatus::Active => Tone::Info,
+    }
 }

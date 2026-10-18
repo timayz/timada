@@ -15,14 +15,24 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
+    section_card, status_badge,
+};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -112,6 +122,15 @@ pub fn status_label(status: timada_catalog::ProductStatus) -> &'static str {
     }
 }
 
+/// The colour of a product's state.
+pub fn status_tone(status: timada_catalog::ProductStatus) -> Tone {
+    match status {
+        timada_catalog::ProductStatus::Draft => Tone::Info,
+        timada_catalog::ProductStatus::Published => Tone::Success,
+        timada_catalog::ProductStatus::Archived => Tone::Neutral,
+    }
+}
+
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
@@ -161,79 +180,85 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "products"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Products"</h1>
-            </header>
+            page_header(title: "Products", subtitle: Some("The catalog shoppers browse."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <form method="get" class="mb-4 flex gap-2">
+            section_card(
+                filter_bar(
                     <label class="sr-only" for="products-search">"Search"</label>
-                    <input id="products-search" name="q" type="search" value=(q.unwrap_or(""))
-                        class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="Name or slug">
+                    input(attrs: attributes! {
+                        id="products-search" name="q" type="search" value=(q.unwrap_or(""))
+                        class="sm:max-w-xs" placeholder="Name or slug"
+                    })
                     if !category_rows.is_empty() {
                         <label class="sr-only" for="products-category">"Category"</label>
-                        <select id="products-category" name="category" class="rounded border border-neutral-300 px-3 py-2">
+                        select(
+                            attrs: attributes! { id="products-category" name="category" class="w-48" },
                             <option value="">"Every category"</option>
                             for row in &category_rows {
                                 <option value=(&row.id) selected=(category == Some(row.id.as_str()))>(&row.name)</option>
                             }
-                        </select>
+                        )
                     }
-                    <button class="rounded border border-neutral-300 px-3 py-2">"Search"</button>
-                </form>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Name"</th>
-                            <th class="py-2 font-medium">"Slug"</th>
-                            <th class="py-2 font-medium">"Price"</th>
-                            <th class="py-2 font-medium">"Status"</th>
-                            <th class="py-2 font-medium">"Changed"</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Search")
+                )
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Name")
+                            table_head("Slug")
+                            table_head(attrs: attributes! { class="text-right" }, "Price")
+                            table_head("Status")
+                            table_head("Changed")
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="5">"No product yet."</td></tr>
+                            empty_row(colspan: 5, text: "No product yet.")
                         }
                         for row in &rows {
-                            <tr data-product=(&row.slug) data-product-status=(&row.status)>
-                                <td class="py-2">
-                                    <a class="underline" href=(href!(product_id::index, Slug(slug.clone()), product_id::ProductId(row.id.clone())))>(&row.name)</a>
-                                </td>
-                                <td class="py-2"><code>(&row.slug)</code></td>
-                                <td class="py-2" data-product-price="">(row.price_label().unwrap_or_else(|| "—".to_owned()))</td>
-                                <td class="py-2">(status_label(row.status()))</td>
-                                <td class="py-2"><time datetime=(row.updated_at)>(format_time(row.updated_at as u64))</time></td>
-                            </tr>
+                            table_row(
+                                attrs: attributes! { data-product=(&row.slug) data-product-status=(&row.status) },
+                                table_cell(
+                                    <a class=(LINK) href=(href!(product_id::index, Slug(slug.clone()), product_id::ProductId(row.id.clone())))>(&row.name)</a>
+                                )
+                                table_cell(<code class="text-xs">(&row.slug)</code>)
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" data-product-price="" }, (row.price_label().unwrap_or_else(|| "—".to_owned())))
+                                table_cell(status_badge(tone: status_tone(row.status()), (status_label(row.status()))))
+                                table_cell(<time datetime=(row.updated_at)>(format_time(row.updated_at as u64))</time>)
+                            )
                         }
-                    </tbody>
-                </table>
-                if pages > 1 {
-                    <p class="mt-4 flex items-center gap-4 text-sm">
-                        if page_number > 1 { <a class="underline" href=(page_link(page_number - 1))>"Previous"</a> }
-                        <span>"Page " (page_number) " of " (pages)</span>
-                        if page_number < pages { <a class="underline" href=(page_link(page_number + 1))>"Next"</a> }
-                    </p>
-                }
-            </section>
+                    )
+                )
+                pager(
+                    page: page_number,
+                    pages: pages,
+                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
+                    next: (page_number < pages).then(|| page_link(page_number + 1)),
+                )
+            )
 
             if can_manage {
-                <section class="rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">"Create a product"</h2>
-                    <p class="mb-3 text-sm text-neutral-500">
-                        "A new product is a draft: set its price and publish it from its page. The slug derives from the name unless given."
-                    </p>
-                    <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="space-y-3">
-                        <label class="block text-sm" for="new-product-name">"Name"</label>
-                        <input id="new-product-name" name="name" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" maxlength=(MAX_NAME_LEN) required="" placeholder="Blue mug">
-                        <label class="block text-sm" for="new-product-slug">"Slug (optional)"</label>
-                        <input id="new-product-slug" name="slug" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" placeholder="blue-mug">
-                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Create product"</button>
+                section_card(
+                    title: Some("Create a product"),
+                    description: Some("A new product is a draft: set its price and publish it from its page. The slug derives from the name unless given."),
+                    <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                        field(
+                            field_label(attrs: attributes! { for="new-product-name" }, "Name")
+                            input(attrs: attributes! {
+                                id="new-product-name" name="name" type="text"
+                                maxlength=(MAX_NAME_LEN) required="" placeholder="Blue mug"
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="new-product-slug" }, "Slug (optional)")
+                            input(attrs: attributes! { id="new-product-slug" name="slug" type="text" placeholder="blue-mug" })
+                        )
+                        <div>
+                            button(attrs: attributes! { type="submit" }, "Create product")
+                        </div>
                     </form>
-                </section>
+                )
             }
         )
     })

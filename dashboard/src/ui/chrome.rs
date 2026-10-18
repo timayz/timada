@@ -257,7 +257,7 @@ fn allowed(nav: &TenantNav, key: &str) -> bool {
 }
 
 /// The address of a tenant's section.
-fn section_url(cx: &Cx, slug: &str, key: &str) -> String {
+pub fn section_url(cx: &Cx, slug: &str, key: &str) -> String {
     use crate::app::t::slug as t;
     let slug = Slug(slug.to_owned());
     match key {

@@ -18,13 +18,21 @@ use topcoat::{
     Result,
     context::Cx,
     router::{href, page, query_params},
-    view::{Unescaped, View, component, view},
+    view::{Unescaped, View, attributes, component, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
-use crate::ui::{Shell, document, notice};
+use crate::components::button::button;
+use crate::components::checkbox::checkbox;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
+use crate::ui::{LINK, Shell, document, empty_row, notice, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct ShippingQuery {
@@ -128,19 +136,21 @@ pub async fn countries_field(id: &str, selected: &[String]) -> Result<impl View>
     let list = format!("{id}-list");
 
     Ok(view! {
-        <fieldset id=(id)>
-            <legend class="block text-sm">"Countries (optional)"</legend>
-            <input type="search" aria-label="Filter countries" placeholder="Filter countries" hidden=""
-                class="mt-1 w-full rounded border border-neutral-300 px-3 py-2" data-country-filter=(&list)>
-            <div id=(&list) class="mt-2 max-h-64 overflow-y-auto rounded border border-neutral-300 p-2">
+        <fieldset id=(id) class="flex flex-col gap-2">
+            <legend class="text-sm font-medium">"Countries (optional)"</legend>
+            input(attrs: attributes! {
+                type="search" aria-label="Filter countries" placeholder="Filter countries" hidden=""
+                data-country-filter=(&list)
+            })
+            <div id=(&list) class="max-h-64 overflow-y-auto rounded-lg border border-border p-2 text-sm">
                 for (code, name, checked) in &rows {
                     <label class="flex items-center gap-2 py-0.5" data-country=(code)>
-                        <input type="checkbox" name=(format!("{COUNTRY_FIELD_PREFIX}{code}")) value="on" checked=(*checked)>
-                        <span>(name) " " <code class="text-neutral-500">(code)</code></span>
+                        checkbox(attrs: attributes! { name=(format!("{COUNTRY_FIELD_PREFIX}{code}")) value="on" checked=(*checked) })
+                        <span>(name) " " <code class="text-muted-foreground">(code)</code></span>
                     </label>
                 }
             </div>
-            <p class="mt-1 text-sm text-neutral-500">"Tick the countries it ships to. Leave them all unticked to ship everywhere."</p>
+            <p class="text-sm text-muted-foreground">"Tick the countries it ships to. Leave them all unticked to ship everywhere."</p>
             <script>(Unescaped::new_unchecked(COUNTRY_FILTER_SCRIPT))</script>
         </fieldset>
     })
@@ -188,66 +198,77 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "shipping"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Shipping"</h1>
-            </header>
+            page_header(title: "Shipping", subtitle: Some("The ways the shop ships, and what each costs."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm text-neutral-500">
-                    "A shopper picks one of the methods that ship to their country, and pays its price on top of the items. Without any method, shipping is included in the prices. The invoice charges shipping at the VAT rates of the goods it carries."
-                </p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Method"</th>
-                            <th class="py-2 font-medium">"Price"</th>
-                            <th class="py-2 font-medium">"Free"</th>
-                            <th class="py-2 font-medium">"Countries"</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+            section_card(
+                title: Some("Shipping methods"),
+                description: Some("A shopper picks one of the methods that ship to their country, and pays its price on top of the items. Without any method, shipping is included in the prices. The invoice charges shipping at the VAT rates of the goods it carries."),
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Method")
+                            table_head("Price")
+                            table_head("Free")
+                            table_head("Countries")
+                        )
+                    )
+                    table_body(
                         if methods.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="4">"No shipping method: shipping is included."</td></tr>
+                            empty_row(colspan: 4, text: "No shipping method: shipping is included.")
                         }
                         for method in &methods {
-                            <tr data-shipping-method=(&method.name)>
-                                <td class="py-2">
-                                    <a class="underline" href=(href!(method_id::index, Slug(slug.clone()), method_id::MethodId(method.id.clone())))>(&method.name)</a>
-                                </td>
-                                <td class="py-2" data-shipping-price="">(format_money(method.price_cents, &method.currency))</td>
-                                <td class="py-2" data-shipping-free="">(describe_free_above(method))</td>
-                                <td class="py-2" data-shipping-countries="">(describe_countries(method))</td>
-                            </tr>
+                            table_row(
+                                attrs: attributes! { data-shipping-method=(&method.name) },
+                                table_cell(
+                                    <a class=(LINK) href=(href!(method_id::index, Slug(slug.clone()), method_id::MethodId(method.id.clone())))>(&method.name)</a>
+                                )
+                                table_cell(attrs: attributes! { class="tabular-nums" data-shipping-price="" }, (format_money(method.price_cents, &method.currency)))
+                                table_cell(attrs: attributes! { data-shipping-free="" }, (describe_free_above(method)))
+                                table_cell(attrs: attributes! { class="whitespace-normal" data-shipping-countries="" }, (describe_countries(method)))
+                            )
                         }
-                    </tbody>
-                </table>
-            </section>
+                    )
+                )
+            )
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Add a shipping method"</h2>
-                <form method="post" action=(href!(add::add, Slug(slug.clone()))) class="space-y-3">
-                    <label class="block text-sm" for="new-shipping-name">"Name"</label>
-                    <input id="new-shipping-name" name="name" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="text" maxlength=(MAX_SHIPPING_NAME_LEN) required="" placeholder="Tracked delivery">
-                    <label class="block text-sm" for="new-shipping-price">"Price"</label>
-                    <div class="flex gap-2">
-                        <input id="new-shipping-price" name="price" class="w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" inputmode="decimal" required="" placeholder="4.90">
-                        <select name="currency" aria-label="Currency" class="rounded border border-neutral-300 px-3 py-2">
-                            for currency in CURRENCIES {
-                                <option value=(*currency)>(*currency)</option>
-                            }
-                        </select>
-                    </div>
-                    <label class="block text-sm" for="new-shipping-free">"Free from (optional)"</label>
-                    <input id="new-shipping-free" name="free_above" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="text" inputmode="decimal" placeholder="50.00">
-                    <p class="text-sm text-neutral-500">"Shipping costs nothing once the items, less any discount, reach this amount."</p>
+            section_card(
+                title: Some("Add a shipping method"),
+                <form method="post" action=(href!(add::add, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="new-shipping-name" }, "Name")
+                        input(attrs: attributes! {
+                            id="new-shipping-name" name="name" type="text"
+                            maxlength=(MAX_SHIPPING_NAME_LEN) required="" placeholder="Tracked delivery"
+                        })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="new-shipping-price" }, "Price")
+                        <div class="flex gap-2">
+                            input(attrs: attributes! {
+                                id="new-shipping-price" name="price" type="text" inputmode="decimal" required="" placeholder="4.90"
+                            })
+                            select(
+                                attrs: attributes! { name="currency" aria-label="Currency" class="w-28 shrink-0" },
+                                for currency in CURRENCIES {
+                                    <option value=(*currency)>(*currency)</option>
+                                }
+                            )
+                        </div>
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="new-shipping-free" }, "Free from (optional)")
+                        input(attrs: attributes! {
+                            id="new-shipping-free" name="free_above" type="text" inputmode="decimal" placeholder="50.00"
+                        })
+                        <p class="text-sm text-muted-foreground">"Shipping costs nothing once the items, less any discount, reach this amount."</p>
+                    )
                     countries_field(id: "new-shipping-countries", selected: &[])
-                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Add shipping method"</button>
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Add shipping method")
+                    </div>
                 </form>
-            </section>
+            )
         )
     })
 }

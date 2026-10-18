@@ -12,14 +12,20 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::orders::orders_of_email_url;
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, document, empty_row, format_time, notice, page_header, pager, section_card,
+};
 
 const PAGE_SIZE: u32 = 50;
 
@@ -82,69 +88,69 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "customers"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Customers"</h1>
-            </header>
+            page_header(title: "Customers", subtitle: Some("The shoppers who signed in to the shop."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm text-neutral-500">
+            section_card(
+                <p class="mb-4 text-sm text-muted-foreground">
                     "A shopper gets an account the first time they sign in to the shop with a mailed code. Their orders are every order placed with their address, those placed before they signed in included."
                 </p>
                 if can_manage {
-                    <p class="mb-4 text-sm text-neutral-500">
+                    <p class="mb-4 text-sm text-muted-foreground">
                         "Deleting a customer forgets their saved addresses and signs them out everywhere; the orders they placed stay with the shop."
                     </p>
                 }
-                <p class="mb-4 text-sm" data-customer-count=(total)>(total) " customer(s)"</p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"E-mail"</th>
-                            <th class="py-2 font-medium">"Customer since"</th>
-                            <th class="py-2 font-medium">"Orders"</th>
-                            <th class="py-2 font-medium">"Saved addresses"</th>
+                <p class="mb-4 text-sm font-medium" data-customer-count=(total)>(total) " customer(s)"</p>
+                table(
+                    table_header(
+                        table_row(
+                            table_head("E-mail")
+                            table_head("Customer since")
+                            table_head(attrs: attributes! { class="text-right" }, "Orders")
+                            table_head(attrs: attributes! { class="text-right" }, "Saved addresses")
                             if can_manage {
-                                <th class="py-2 text-right font-medium">"Actions"</th>
+                                table_head(attrs: attributes! { class="text-right" }, "Actions")
                             }
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan=(if can_manage { 5 } else { 4 })>"No customer here."</td></tr>
+                            empty_row(colspan: if can_manage { 5 } else { 4 }, text: "No customer here.")
                         }
                         for row in &rows {
-                            <tr data-customer=(&row.email)>
-                                <td class="py-2">(&row.email)</td>
-                                <td class="py-2"><time datetime=(row.registered_at)>(format_time(row.registered_at as u64))</time></td>
-                                <td class="py-2" data-customer-orders=(row.order_count)>
+                            table_row(
+                                attrs: attributes! { data-customer=(&row.email) },
+                                table_cell(attrs: attributes! { class="font-medium" }, (&row.email))
+                                table_cell(<time datetime=(row.registered_at)>(format_time(row.registered_at as u64))</time>)
+                                table_cell(
+                                    attrs: attributes! { class="text-right tabular-nums" data-customer-orders=(row.order_count) },
                                     if nav.orders && row.order_count > 0 {
-                                        <a class="underline" href=(orders_of_email_url(cx, &slug, &row.email))>(row.order_count)</a>
+                                        <a class=(LINK) href=(orders_of_email_url(cx, &slug, &row.email))>(row.order_count)</a>
                                     } else {
                                         (row.order_count)
                                     }
-                                </td>
-                                <td class="py-2" data-customer-addresses=(row.address_count)>(row.address_count)</td>
+                                )
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" data-customer-addresses=(row.address_count) }, (row.address_count))
                                 if can_manage {
-                                    <td class="py-2 text-right">
+                                    table_cell(
+                                        attrs: attributes! { class="text-right" },
                                         <form method="post" action=(href!(delete::delete, Slug(slug.clone())))>
                                             <input type="hidden" name="shopper_id" value=(&row.id)>
-                                            <button class="rounded border border-red-700 px-2 py-1 text-xs text-red-700 hover:bg-red-50">"Delete"</button>
+                                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Delete")
                                         </form>
-                                    </td>
+                                    )
                                 }
-                            </tr>
+                            )
                         }
-                    </tbody>
-                </table>
-                if pages > 1 {
-                    <p class="mt-4 flex items-center gap-4 text-sm">
-                        if page_number > 1 { <a class="underline" href=(page_link(page_number - 1))>"Previous"</a> }
-                        <span>"Page " (page_number) " of " (pages)</span>
-                        if page_number < pages { <a class="underline" href=(page_link(page_number + 1))>"Next"</a> }
-                    </p>
-                }
-            </section>
+                    )
+                )
+                pager(
+                    page: i64::from(page_number),
+                    pages: i64::from(pages),
+                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
+                    next: (page_number < pages).then(|| page_link(page_number + 1)),
+                )
+            )
         )
     })
 }

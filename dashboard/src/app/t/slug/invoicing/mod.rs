@@ -12,16 +12,25 @@ use timada_tenancy::{PERMISSION_TENANT_MANAGE, companies_of_user};
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::app::companies::{company_id, new::new_company_url};
 use crate::app::tenants::tenancy;
+use crate::components::alert::{AlertVariant, alert, alert_description};
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, fact, facts, icons, notice, page_header, section_card,
+    status_badge,
+};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct InvoicingQuery {
@@ -77,80 +86,92 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "invoicing"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Invoicing"</h1>
-            </header>
+            page_header(title: "Invoicing", subtitle: Some("The company the tenant sells as, and whom it sells to."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             if let Some(company) = &company {
-                <section class="mb-6 rounded border border-neutral-200 bg-white p-4 text-sm" data-invoicing="linked">
-                    <h2 class="mb-2 text-lg font-medium">"Sells as"</h2>
-                    <dl class="grid grid-cols-[10rem_1fr] gap-y-1">
-                        <dt class="text-neutral-500">"Company"</dt>
-                        <dd data-linked-company=(&company.siren)>
+                section_card(
+                    title: Some("Sells as"),
+                    attrs: attributes! { data-invoicing="linked" },
+                    facts(
+                        fact(
+                            term: "Company",
+                            attrs: attributes! { data-linked-company=(&company.siren) },
                             if owns {
-                                <a class="underline" href=(href!(company_id::index, company_id::CompanyId(company.id.clone())))>(company.name())</a>
+                                <a class=(LINK) href=(href!(company_id::index, company_id::CompanyId(company.id.clone())))>(company.name())</a>
                             } else {
                                 (company.name())
                             }
-                        </dd>
-                        <dt class="text-neutral-500">"SIREN"</dt><dd class="font-mono">(&company.siren)</dd>
-                        <dt class="text-neutral-500">"Invoice numbers"</dt>
-                        <dd class="font-mono" data-series=(&code)>
-                            (&first_number)
-                        </dd>
-                    </dl>
-                    <form method="post" action=(href!(unlink::unlink, Slug(slug.clone()))) class="mt-3">
-                        <button class="rounded border border-red-300 px-3 py-1 text-red-800 hover:bg-red-50">"Stop selling as this company"</button>
+                        )
+                        fact(term: "SIREN", attrs: attributes! { class="font-mono" }, (&company.siren))
+                        fact(term: "Invoice numbers", attrs: attributes! { class="font-mono" data-series=(&code) }, (&first_number))
+                    )
+                    <form method="post" action=(href!(unlink::unlink, Slug(slug.clone()))) class="mt-4">
+                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop selling as this company")
                     </form>
-                </section>
+                )
             } else {
-                <p role="alert" data-invoicing="none" class="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                    "Not set up: shoppers cannot pay until the tenant sells as a company its invoices can name."
-                </p>
+                alert(
+                    variant: AlertVariant::Warning,
+                    attrs: attributes! { role="alert" class="mb-6" data-invoicing="none" },
+                    icon(data: icons::WARNING)
+                    alert_description("Not set up: shoppers cannot pay until the tenant sells as a company its invoices can name.")
+                )
             }
 
-            <section class="rounded border border-neutral-200 bg-white p-4 text-sm">
-                <h2 class="mb-2 text-lg font-medium">
-                    if company.is_some() { "Sell as another company, or under another code" } else { "Sell as a company" }
-                </h2>
+            section_card(
+                title: Some(if company.is_some() { "Sell as another company, or under another code" } else { "Sell as a company" }),
                 if mine.is_empty() {
-                    <p class="mb-2 text-neutral-600">"You own no company yet."</p>
+                    <p class="mb-4 text-sm text-muted-foreground">"You own no company yet."</p>
                 } else {
-                    <form method="post" action=(href!(link::link, Slug(slug.clone()))) class="mb-4 space-y-3">
-                        <label class="block" for="link-company">"Company"</label>
-                        <select id="link-company" name="company_id" class="rounded border border-neutral-300 px-3 py-2">
-                            for row in &mine {
-                                <option value=(&row.id)>(&row.legal_name) " (" (&row.siren) ")"</option>
-                            }
-                        </select>
-                        <label class="block" for="link-code">"Series code (blank for the company's first tenant)"</label>
-                        <input id="link-code" name="series_code" maxlength="10" placeholder="PRO" value=(&code)
-                            class="w-40 rounded border border-neutral-300 px-3 py-2 font-mono uppercase">
-                        <p class="text-xs text-neutral-500">"Each tenant of a company numbers its invoices in its own series: PRO gives PRO-F2026-000001. A code stays the tenant's for good."</p>
-                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Link"</button>
+                    <form method="post" action=(href!(link::link, Slug(slug.clone()))) class="mb-4 flex max-w-xl flex-col gap-4">
+                        field(
+                            field_label(attrs: attributes! { for="link-company" }, "Company")
+                            select(
+                                attrs: attributes! { id="link-company" name="company_id" },
+                                for row in &mine {
+                                    <option value=(&row.id)>(&row.legal_name) " (" (&row.siren) ")"</option>
+                                }
+                            )
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="link-code" }, "Series code (blank for the company's first tenant)")
+                            input(attrs: attributes! {
+                                id="link-code" name="series_code" maxlength="10" placeholder="PRO" value=(&code)
+                                class="w-40 font-mono uppercase"
+                            })
+                            <p class="text-xs text-muted-foreground">"Each tenant of a company numbers its invoices in its own series: PRO gives PRO-F2026-000001. A code stays the tenant's for good."</p>
+                        )
+                        <div>
+                            button(attrs: attributes! { type="submit" }, "Link")
+                        </div>
                     </form>
                 }
-                <a class="underline" href=(&create)>"Register a new company"</a>
-            </section>
+                <a class=(class!(LINK, "text-sm")) href=(&create)>"Register a new company"</a>
+            )
 
-            <section class="mt-6 rounded border border-neutral-200 bg-white p-4 text-sm" data-business-buyers=(if business { "on" } else { "off" })>
-                <h2 class="mb-2 text-lg font-medium">"Business buyers"</h2>
-                if business {
-                    <p class="mb-3 text-neutral-600">"Shoppers may give an EU company VAT number at checkout: a sale to a business in another EU country is invoiced without VAT (reverse charge), once VIES confirms the number."</p>
-                } else {
-                    <p class="mb-3 text-neutral-600">"The shop sells to consumers only: checkout asks for no VAT number and every invoice carries VAT."</p>
-                }
+            section_card(
+                title: Some("Business buyers"),
+                attrs: attributes! { data-business-buyers=(if business { "on" } else { "off" }) },
+                <div class="mb-4 flex flex-wrap items-center gap-3 text-sm">
+                    if business {
+                        status_badge(tone: Tone::Success, "Accepted")
+                        <p class="text-muted-foreground">"Shoppers may give an EU company VAT number at checkout: a sale to a business in another EU country is invoiced without VAT (reverse charge), once VIES confirms the number."</p>
+                    } else {
+                        status_badge(tone: Tone::Neutral, "Consumers only")
+                        <p class="text-muted-foreground">"The shop sells to consumers only: checkout asks for no VAT number and every invoice carries VAT."</p>
+                    }
+                </div>
                 <form method="post" action=(href!(business_buyers::business_buyers, Slug(slug.clone())))>
                     if business {
                         <input type="hidden" name="accept" value="off">
-                        <button class="rounded border border-neutral-300 px-3 py-1 hover:bg-neutral-50">"Stop accepting business buyers"</button>
+                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop accepting business buyers")
                     } else {
                         <input type="hidden" name="accept" value="on">
-                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Accept business buyers"</button>
+                        button(attrs: attributes! { type="submit" }, "Accept business buyers")
                     }
                 </form>
-            </section>
+            )
         )
     })
 }
