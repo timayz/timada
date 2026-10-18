@@ -11,7 +11,7 @@ use topcoat::{
         error::{SeeOther, redirect, see_other},
         href, page, query_params, route,
     },
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use crate::app::auth::{error_code, home_url, register_url, verify_url};
@@ -19,7 +19,11 @@ use crate::auth::{
     cookies::{EmailFlow, EmailFlowKind, email_flow},
     current_user, identity, now,
 };
-use crate::ui::{document, notice};
+use crate::components::button::button;
+use crate::components::card::CARD;
+use crate::components::field::{field, field_description, field_label};
+use crate::components::input::input;
+use crate::ui::{LINK, auth_document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct RegisterQuery {
@@ -36,26 +40,38 @@ pub async fn register(cx: &Cx) -> Result<impl View> {
     let query = query_params::<RegisterQuery>(cx)?;
 
     Ok(view! {
-        document(
+        auth_document(
             title: "Create an account",
-            <h1 class="mb-6 text-2xl font-semibold">"Create your Timada account"</h1>
-            notice(error: query.error.as_deref())
+            <div class=(class!(CARD, "gap-5 px-6"))>
+                <div class="text-center">
+                    <h1 class="text-2xl font-bold tracking-tight">"Create your Timada account"</h1>
+                    <p class="mt-1 text-sm text-muted-foreground">"We will e-mail you a code to confirm the address."</p>
+                </div>
+                notice(error: query.error.as_deref())
 
-            <form method="post" action=(href!(submit)) class="mb-6 space-y-3 rounded border border-neutral-200 bg-white p-4">
-                <label class="block text-sm" for="email">"E-mail address"</label>
-                <input id="email" name="email" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                    type="email" autocomplete="email" maxlength="254" required="" value=(query.email.as_deref().unwrap_or_default())>
-                <label class="block text-sm" for="password">"Password"</label>
-                <input id="password" name="password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                    type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
-                <p class="text-xs text-neutral-500">"8 characters or more. We will e-mail you a code to confirm the address."</p>
-                <button class="w-full rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Create account"</button>
-            </form>
+                <form method="post" action=(href!(submit)) class="flex flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="email" }, "E-mail address")
+                        input(attrs: attributes! {
+                            id="email" name="email" type="email" autocomplete="email" maxlength="254" required=""
+                            value=(query.email.as_deref().unwrap_or_default())
+                        })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="password" }, "Password")
+                        input(attrs: attributes! {
+                            id="password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required=""
+                        })
+                        field_description("8 characters or more.")
+                    )
+                    button(attrs: attributes! { class="w-full" }, "Create account")
+                </form>
 
-            <p class="text-sm">
-                "Already have an account? "
-                <a class="underline" href=(href!(super::login::login))>"Sign in"</a>
-            </p>
+                <p class="text-center text-sm text-muted-foreground">
+                    "Already have an account? "
+                    <a class=(LINK) href=(href!(super::login::login))>"Sign in"</a>
+                </p>
+            </div>
         )
     })
 }

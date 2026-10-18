@@ -32,11 +32,11 @@ use topcoat::{
 use super::super::super::own_address;
 use super::{Kind, require_kind};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::tenants::{error_code, tenancy};
 use crate::auth::mail::{send_rendered, shop_vars};
 use crate::auth::{require_user, user_labels};
-use crate::ui::{document, format_time, notice};
+use crate::ui::{Shell, document, format_time, notice};
 
 module_param!(pub language);
 
@@ -327,9 +327,9 @@ async fn editor(
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(tenant, nav, ""),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">(kind.label()) <span class="text-neutral-500">" · " (name)</span></h1>
-                tenant_nav(tenant: tenant, nav: nav, current: "")
             </header>
             <p class="mb-4 text-sm">
                 <a class="underline" href=(href!(super::super::super::index, Slug(slug.clone())))>"Back to Mail"</a>

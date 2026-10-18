@@ -23,7 +23,7 @@ use crate::app::t::slug::Slug;
 use crate::app::tenants::tenancy;
 use crate::auth::{require_user, user_labels};
 use crate::db::ReadPool;
-use crate::ui::{document, notice};
+use crate::ui::{Shell, document, notice};
 
 module_param!(pub company_id);
 
@@ -87,10 +87,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::page("companies"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold" data-company-siren=(&company.siren)>(company.name())</h1>
                 <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(super::index))>"Companies"</a>
                     <a class="underline" href=(href!(oss::oss, CompanyId(id.clone())))>"One-Stop Shop return"</a>
                 </nav>
             </header>

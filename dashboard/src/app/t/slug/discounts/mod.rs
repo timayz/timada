@@ -18,11 +18,11 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::db::ReadPool;
-use crate::ui::{document, format_date, notice};
+use crate::ui::{Shell, document, format_date, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct DiscountsQuery {
@@ -108,9 +108,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "discounts"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Discounts"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "discounts")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

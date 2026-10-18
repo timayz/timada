@@ -19,8 +19,8 @@ use topcoat::{
 
 use super::{amount_field, countries_field, error_code, orders, shipping_url};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
-use crate::ui::{document, notice};
+use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::ui::{Shell, document, notice};
 
 module_param!(pub method_id);
 
@@ -113,9 +113,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, ""),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold" data-shipping-name="">(&method.name)</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

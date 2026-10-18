@@ -11,7 +11,7 @@ use topcoat::{
         href, page, query_params, route,
     },
     session,
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use crate::app::auth::{
@@ -22,7 +22,11 @@ use crate::auth::{
     cookies::{EmailFlow, EmailFlowKind, email_flow, is_fresh},
     current_user, identity, login_context, now, sign_in_as,
 };
-use crate::ui::{document, notice};
+use crate::components::button::button;
+use crate::components::card::CARD;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::ui::{LINK, auth_document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct VerifyQuery {
@@ -54,40 +58,54 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
     };
 
     Ok(view! {
-        document(
+        auth_document(
             title: title,
-            <h1 class="mb-6 text-2xl font-semibold">(title)</h1>
-            notice(error: query.error.as_deref(), message: query.message.as_deref())
-            <p class="mb-4 text-sm text-neutral-600">
-                "We sent a 6-digit code to " <strong>(&flow.email)</strong> ". It is valid for 10 minutes."
-            </p>
+            <div class=(class!(CARD, "gap-5 px-6"))>
+                <div class="text-center">
+                    <h1 class="text-2xl font-bold tracking-tight">(title)</h1>
+                    <p class="mt-1 text-sm text-muted-foreground">
+                        "We sent a 6-digit code to " <strong class="text-foreground">(&flow.email)</strong> ". It is valid for 10 minutes."
+                    </p>
+                </div>
+                notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <form method="post" action=(href!(submit)) class="mb-4 space-y-3 rounded border border-neutral-200 bg-white p-4">
-                <label class="block text-sm" for="code">"Code"</label>
-                <input id="code" name="code" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2 tracking-widest"
-                    type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required="" autofocus="">
-                if kind == EmailFlowKind::ResetPassword {
-                    <label class="block text-sm" for="password">"New password"</label>
-                    <input id="password" name="password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
-                    <label class="block text-sm" for="password-confirm">"Confirm the new password"</label>
-                    <input id="password-confirm" name="password_confirm" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
-                }
-                <button class="w-full rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">(action)</button>
-            </form>
-
-            <div class="flex items-center justify-between text-sm">
-                <form method="post" action=(href!(super::resend::resend))>
-                    <button class="underline">"Send a new code"</button>
+                <form method="post" action=(href!(submit)) class="flex flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="code" }, "Code")
+                        input(attrs: attributes! {
+                            id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+                            autocomplete="one-time-code" required="" autofocus="" class="text-center text-lg tracking-[0.5em]"
+                        })
+                    )
+                    if kind == EmailFlowKind::ResetPassword {
+                        field(
+                            field_label(attrs: attributes! { for="password" }, "New password")
+                            input(attrs: attributes! {
+                                id="password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required=""
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="password-confirm" }, "Confirm the new password")
+                            input(attrs: attributes! {
+                                id="password-confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" required=""
+                            })
+                        )
+                    }
+                    button(attrs: attributes! { class="w-full" }, (action))
                 </form>
-                if kind == EmailFlowKind::Register {
-                    <a class="underline" href=(href!(crate::app::auth::register::register))>"Use another address"</a>
-                } else if kind == EmailFlowKind::AddEmail {
-                    <a class="underline" href=(href!(crate::app::auth::account::account))>"Back to your account"</a>
-                } else {
-                    <a class="underline" href=(href!(crate::app::auth::login::login))>"Back to sign in"</a>
-                }
+
+                <div class="flex items-center justify-between text-sm">
+                    <form method="post" action=(href!(super::resend::resend))>
+                        <button class=(LINK)>"Send a new code"</button>
+                    </form>
+                    if kind == EmailFlowKind::Register {
+                        <a class=(LINK) href=(href!(crate::app::auth::register::register))>"Use another address"</a>
+                    } else if kind == EmailFlowKind::AddEmail {
+                        <a class=(LINK) href=(href!(crate::app::auth::account::account))>"Back to your account"</a>
+                    } else {
+                        <a class=(LINK) href=(href!(crate::app::auth::login::login))>"Back to sign in"</a>
+                    }
+                </div>
             </div>
         )
     })

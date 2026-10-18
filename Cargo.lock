@@ -6634,6 +6634,7 @@ dependencies = [
  "topcoat-runtime-macro",
  "topcoat-session",
  "topcoat-tailwind",
+ "topcoat-ui-registry",
  "topcoat-view",
  "topcoat-view-macro",
 ]
@@ -6758,9 +6759,13 @@ version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0fff5d75e3ce64d829298966478b1600ddaf7d59443b98fe6a988083a811e78"
 dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
  "topcoat-core",
  "topcoat-view",
  "topcoat-view-macro",
+ "ureq",
 ]
 
 [[package]]
@@ -6966,6 +6971,12 @@ dependencies = [
  "topcoat-core",
  "ureq",
 ]
+
+[[package]]
+name = "topcoat-ui-registry"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26f89db150ff2c4c2086b134f73886b7883b204729f6325b61c8c100825359df"
 
 [[package]]
 name = "topcoat-view"

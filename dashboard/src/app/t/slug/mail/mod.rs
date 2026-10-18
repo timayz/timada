@@ -23,12 +23,12 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::auth::{require_user, user_labels};
 use crate::media::Media;
 use crate::shop_mail::ShopMail;
-use crate::ui::{document, format_time, notice};
+use crate::ui::{Shell, document, format_time, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct MailQuery {
@@ -142,9 +142,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "mail"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Mail"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "mail")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

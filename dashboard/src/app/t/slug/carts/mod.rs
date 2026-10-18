@@ -11,9 +11,9 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::db::ReadPool;
-use crate::ui::{document, format_time};
+use crate::ui::{Shell, document, format_time};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -55,9 +55,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "carts"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Open carts"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "carts")
             </header>
 
             <section class="rounded border border-neutral-200 bg-white p-4">
