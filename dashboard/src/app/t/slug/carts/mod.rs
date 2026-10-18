@@ -8,12 +8,17 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time};
+use crate::ui::{
+    Shell, Tone, document, empty_row, format_time, page_header, pager, section_card, status_badge,
+};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -56,49 +61,51 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "carts"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Open carts"</h1>
-            </header>
+            page_header(title: "Open carts", subtitle: Some("What shoppers are filling and have not ordered yet."))
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-3 text-sm text-neutral-500">
-                    "Carts holding something that were not ordered yet. A cart becomes an order at checkout and leaves this list."
-                </p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Cart"</th>
-                            <th class="py-2 font-medium">"Products"</th>
-                            <th class="py-2 font-medium">"Items"</th>
-                            <th class="py-2 font-medium">"State"</th>
-                            <th class="py-2 font-medium">"Started"</th>
-                            <th class="py-2 font-medium">"Last change"</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+            section_card(
+                description: Some("Carts holding something that were not ordered yet. A cart becomes an order at checkout and leaves this list."),
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Cart")
+                            table_head(attrs: attributes! { class="text-right" }, "Products")
+                            table_head(attrs: attributes! { class="text-right" }, "Items")
+                            table_head("State")
+                            table_head("Started")
+                            table_head("Last change")
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="6">"No open cart."</td></tr>
+                            empty_row(colspan: 6, text: "No open cart.")
                         }
                         for row in &rows {
-                            <tr data-cart=(&row.id)>
-                                <td class="py-2"><code>(&row.id)</code></td>
-                                <td class="py-2">(row.line_count)</td>
-                                <td class="py-2" data-cart-items="">(row.item_count)</td>
-                                <td class="py-2" data-cart-status=(&row.status)>(if row.status == "paying" { "Paying" } else { "Filling" })</td>
-                                <td class="py-2"><time datetime=(row.created_at)>(format_time(row.created_at as u64))</time></td>
-                                <td class="py-2"><time datetime=(row.updated_at)>(format_time(row.updated_at as u64))</time></td>
-                            </tr>
+                            table_row(
+                                attrs: attributes! { data-cart=(&row.id) },
+                                table_cell(<code class="text-xs">(&row.id)</code>)
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" }, (row.line_count))
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" data-cart-items="" }, (row.item_count))
+                                table_cell(
+                                    status_badge(
+                                        tone: if row.status == "paying" { Tone::Info } else { Tone::Neutral },
+                                        attrs: attributes! { data-cart-status=(&row.status) },
+                                        (if row.status == "paying" { "Paying" } else { "Filling" })
+                                    )
+                                )
+                                table_cell(<time datetime=(row.created_at)>(format_time(row.created_at as u64))</time>)
+                                table_cell(<time datetime=(row.updated_at)>(format_time(row.updated_at as u64))</time>)
+                            )
                         }
-                    </tbody>
-                </table>
-                if pages > 1 {
-                    <p class="mt-4 flex items-center gap-4 text-sm">
-                        if page_number > 1 { <a class="underline" href=(page_link(page_number - 1))>"Previous"</a> }
-                        <span>"Page " (page_number) " of " (pages)</span>
-                        if page_number < pages { <a class="underline" href=(page_link(page_number + 1))>"Next"</a> }
-                    </p>
-                }
-            </section>
+                    )
+                )
+                pager(
+                    page: page_number,
+                    pages: pages,
+                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
+                    next: (page_number < pages).then(|| page_link(page_number + 1)),
+                )
+            )
         )
     })
 }
