@@ -6,15 +6,20 @@
 //! The import writes through [`timada_catalog::Command`] like the dashboard's
 //! pages do, so every rule of the catalog holds; it is idempotent on slugs
 //! (a category or product already there is left alone), which makes a run
-//! that stopped halfway resumable. Pictures are fetched by the host through
-//! the [`Images`] trait, since where they are kept is the host's business.
-//! Pure domain code: no permission checks, no HTTP server.
+//! that stopped halfway resumable. A snapshot carries its pictures as files
+//! beside the catalogue (fetched once from the shop, see
+//! [`Snapshot::fetch_pictures`]), and the host keeps them where its catalog
+//! serves pictures from through the [`Images`] trait, which also fetches
+//! the ones a snapshot lacks. Pure domain code: no permission checks, no
+//! HTTP server.
 
 mod import;
+mod pictures;
 mod snapshot;
 mod text;
 pub mod woocommerce;
 
 pub use import::*;
+pub use pictures::*;
 pub use snapshot::*;
 pub use text::{decode_entities, html_to_text, truncate_chars};
