@@ -28,7 +28,6 @@ pub const MEMBERS: IconData = iconify_icon!("lucide:users-round");
 pub const ROLES: IconData = iconify_icon!("lucide:shield");
 pub const API_KEYS: IconData = iconify_icon!("lucide:key-round");
 pub const INVITATIONS: IconData = iconify_icon!("lucide:mail-open");
-pub const DATABASE: IconData = iconify_icon!("lucide:database");
 
 // Chrome.
 pub const SUN: IconData = iconify_icon!("lucide:sun");
@@ -38,13 +37,10 @@ pub const LOG_OUT: IconData = iconify_icon!("lucide:log-out");
 pub const LOG_IN: IconData = iconify_icon!("lucide:log-in");
 pub const CLOSE: IconData = iconify_icon!("lucide:x");
 pub const PLUS: IconData = iconify_icon!("lucide:plus");
-pub const SEARCH: IconData = iconify_icon!("lucide:search");
-pub const CHEVRON_RIGHT: IconData = iconify_icon!("lucide:chevron-right");
 
 // Notices and states.
 pub const CHECK: IconData = iconify_icon!("lucide:circle-check");
 pub const WARNING: IconData = iconify_icon!("lucide:triangle-alert");
 pub const INFO: IconData = iconify_icon!("lucide:info");
 pub const ERROR: IconData = iconify_icon!("lucide:circle-x");
-pub const INBOX: IconData = iconify_icon!("lucide:inbox");
 pub const CLOCK: IconData = iconify_icon!("lucide:clock");
