@@ -19,6 +19,7 @@ tokio-rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 deunicode.workspace = true
 tracing.workspace = true
 timada-catalog = { path = "../catalog" }
