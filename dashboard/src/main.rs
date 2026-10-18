@@ -3,6 +3,7 @@ mod auth;
 mod authz;
 mod cli;
 mod cluster;
+mod components;
 mod config;
 mod confirmations;
 mod db;

@@ -1,1 +1,283 @@
-@import "tailwindcss";
+/* The back office's design tokens, in the Katalyst look (an admin template:
+   https://katalyst.5studios.net) over the topcoat UI registry's token names.
+
+   Installed by `topcoat ui init` as the registry's neutral theme, then
+   rewritten; the vendored components under `src/components` refer to tokens
+   only, so the look lives here.
+
+   Three colour schemes: the `light` or `dark` class on <html> (the theme
+   cookie), or neither, which follows the operating system. The `.dark` block
+   and the media-query block below carry the same values, and
+   `tests/styles.rs` fails the build when they drift or when a text/background
+   pair no longer meets WCAG 2.2 AA. A few lightnesses are not Katalyst's for
+   that reason (its primary, destructive and tinted-badge text fall short);
+   the hues and chromas are.
+
+   The rail follows the page scheme: Katalyst's light sidebar variant on the
+   light page, its dark one on the dark page. */
+
+@import "tailwindcss" source(none);
+
+/* The Lucide set under `icons/` is not markup: scan the sources only. */
+@source "./src/**/*.rs";
+
+/* `dark:` utilities apply under the class, or under the OS preference when
+   no class says otherwise. */
+@custom-variant dark {
+  &:where(.dark, .dark *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:not(.light, .light *)) {
+      @slot;
+    }
+  }
+}
+
+/* The tokens as Tailwind utilities (`bg-background`, `text-success-text`,
+   `border-topbar-border`, ...). The indirection through plain variables on
+   `:root` and `.dark` is what lets the values swap with the scheme. */
+@theme inline {
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-text: var(--destructive-text);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-text: var(--success-text);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-text: var(--warning-text);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-info-text: var(--info-text);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-topbar: var(--topbar);
+  --color-topbar-foreground: var(--topbar-foreground);
+  --color-topbar-border: var(--topbar-border);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-icon: var(--sidebar-icon);
+  --color-sidebar-icon-muted: var(--sidebar-icon-muted);
+  --color-sidebar-icon-active: var(--sidebar-icon-active);
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+}
+
+/* Light page.
+
+   `*-foreground` is text on a surface filled with the colour; `*-text` is the
+   colour as text, on the page or on its own 10 % tint (the status badges). */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.985 0.002 247.839);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.5 0.14 213);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.96 0.02 264.38);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.96 0.01 264.38);
+  --muted-foreground: oklch(0.55 0 0);
+  --accent: oklch(0.96 0.02 264.38);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.55 0.2082 25.38);
+  --destructive-foreground: oklch(0.985 0 0);
+  --destructive-text: oklch(0.5 0.13 25.38);
+  --success: oklch(0.7205 0.192 149.49);
+  --success-foreground: oklch(0.145 0 0);
+  --success-text: oklch(0.47 0.13 149.49);
+  --warning: oklch(0.7697 0.1645 70.61);
+  --warning-foreground: oklch(0.145 0 0);
+  --warning-text: oklch(0.47 0.13 70.61);
+  --info: oklch(0.623 0.214 259.815);
+  --info-foreground: oklch(0.145 0 0);
+  --info-text: oklch(0.47 0.13 259.815);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --topbar: oklch(0.99 0 0);
+  --topbar-foreground: oklch(0.2 0 0);
+  --topbar-border: oklch(0.92 0 0);
+  --sidebar: oklch(0.99 0 0);
+  --sidebar-foreground: oklch(0.2 0 0);
+  --sidebar-muted: oklch(0.52 0 0);
+  --sidebar-primary: oklch(0.5 0.14 213);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.95 0.01 264.38);
+  --sidebar-accent-foreground: oklch(0.145 0 0);
+  --sidebar-border: oklch(0.92 0 0);
+  --sidebar-ring: oklch(0.5 0.14 213);
+  --sidebar-icon: oklch(0.45 0 0);
+  --sidebar-icon-muted: oklch(0.6 0 0);
+  --sidebar-icon-active: oklch(0.2 0 0);
+  --shadow-xs: 0 1px 2px oklch(0.24 0.02 260 / 12%);
+  --shadow-sm:
+    0 1px 2px oklch(0.24 0.02 260 / 10%),
+    0 2px 8px -2px oklch(0.24 0.02 260 / 9%);
+}
+
+/* Dark page. Written twice, between the markers, for the class and for the
+   OS preference; keep both copies identical. */
+/* dark:palette */
+.dark {
+  --background: oklch(0.145 0.01 264.38);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0.01 264.38);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0.01 264.38);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.74 0.14 213);
+  --primary-foreground: oklch(0.145 0.01 264.38);
+  --secondary: oklch(0.269 0.02 264.38);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0.02 264.38);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0.02 264.38);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.145 0.01 264.38);
+  --destructive-text: oklch(0.75 0.15 22.216);
+  --success: oklch(0.7205 0.192 149.49);
+  --success-foreground: oklch(0.145 0 0);
+  --success-text: oklch(0.75 0.15 149.49);
+  --warning: oklch(0.795 0.184 86.05);
+  --warning-foreground: oklch(0.145 0 0);
+  --warning-text: oklch(0.8 0.15 86.05);
+  --info: oklch(0.623 0.214 259.82);
+  --info-foreground: oklch(0.145 0 0);
+  --info-text: oklch(0.72 0.15 259.82);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.66 0.14 213);
+  --topbar: oklch(0.18 0 0);
+  --topbar-foreground: oklch(0.92 0 0);
+  --topbar-border: oklch(0.3 0 0);
+  --sidebar: oklch(0.18 0 0);
+  --sidebar-foreground: oklch(0.9 0 0);
+  --sidebar-muted: oklch(0.65 0 0);
+  --sidebar-primary: oklch(0.66 0.14 213);
+  --sidebar-primary-foreground: oklch(0.145 0 0);
+  --sidebar-accent: oklch(0.3 0 0);
+  --sidebar-accent-foreground: oklch(0.98 0 0);
+  --sidebar-border: oklch(0.26 0 0);
+  --sidebar-ring: oklch(0.66 0.14 213);
+  --sidebar-icon: oklch(0.74 0 0);
+  --sidebar-icon-muted: oklch(0.58 0 0);
+  --sidebar-icon-active: oklch(0.98 0 0);
+  --shadow-xs: 0 1px 2px oklch(0 0 0 / 35%);
+  --shadow-sm:
+    0 1px 2px oklch(0 0 0 / 35%),
+    0 2px 8px -2px oklch(0 0 0 / 30%);
+}
+/* dark:palette */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --background: oklch(0.145 0.01 264.38);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0.01 264.38);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0.01 264.38);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.74 0.14 213);
+    --primary-foreground: oklch(0.145 0.01 264.38);
+    --secondary: oklch(0.269 0.02 264.38);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0.02 264.38);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0.02 264.38);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --destructive-foreground: oklch(0.145 0.01 264.38);
+    --destructive-text: oklch(0.75 0.15 22.216);
+    --success: oklch(0.7205 0.192 149.49);
+    --success-foreground: oklch(0.145 0 0);
+    --success-text: oklch(0.75 0.15 149.49);
+    --warning: oklch(0.795 0.184 86.05);
+    --warning-foreground: oklch(0.145 0 0);
+    --warning-text: oklch(0.8 0.15 86.05);
+    --info: oklch(0.623 0.214 259.82);
+    --info-foreground: oklch(0.145 0 0);
+    --info-text: oklch(0.72 0.15 259.82);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.66 0.14 213);
+    --topbar: oklch(0.18 0 0);
+    --topbar-foreground: oklch(0.92 0 0);
+    --topbar-border: oklch(0.3 0 0);
+    --sidebar: oklch(0.18 0 0);
+    --sidebar-foreground: oklch(0.9 0 0);
+    --sidebar-muted: oklch(0.65 0 0);
+    --sidebar-primary: oklch(0.66 0.14 213);
+    --sidebar-primary-foreground: oklch(0.145 0 0);
+    --sidebar-accent: oklch(0.3 0 0);
+    --sidebar-accent-foreground: oklch(0.98 0 0);
+    --sidebar-border: oklch(0.26 0 0);
+    --sidebar-ring: oklch(0.66 0.14 213);
+    --sidebar-icon: oklch(0.74 0 0);
+    --sidebar-icon-muted: oklch(0.58 0 0);
+    --sidebar-icon-active: oklch(0.98 0 0);
+    --shadow-xs: 0 1px 2px oklch(0 0 0 / 35%);
+    --shadow-sm:
+      0 1px 2px oklch(0 0 0 / 35%),
+      0 2px 8px -2px oklch(0 0 0 / 30%);
+  }
+}
+/* dark:palette */
+
+@layer base {
+  body {
+    @apply bg-background font-sans text-foreground;
+  }
+  /* Form controls take the scheme's colours even where a page still styles
+     its own border. */
+  input,
+  select,
+  textarea {
+    background-color: transparent;
+    color: inherit;
+  }
+  select {
+    background-color: var(--card);
+  }
+  ::placeholder {
+    color: var(--muted-foreground);
+  }
+}

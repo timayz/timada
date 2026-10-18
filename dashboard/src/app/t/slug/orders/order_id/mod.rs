@@ -21,8 +21,8 @@ use topcoat::{
 
 use super::orders;
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
-use crate::ui::{document, format_time, notice};
+use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::ui::{Shell, document, format_time, notice};
 
 module_param!(pub order_id);
 
@@ -180,9 +180,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, ""),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Order " <span class="font-mono">(&order.reference)</span></h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

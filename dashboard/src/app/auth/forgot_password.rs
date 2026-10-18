@@ -12,7 +12,7 @@ use topcoat::{
         error::{SeeOther, see_other},
         href, page, query_params, route,
     },
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use crate::app::auth::{forgot_password_url, verify_url};
@@ -20,7 +20,11 @@ use crate::auth::{
     cookies::{EmailFlow, EmailFlowKind, email_flow},
     now,
 };
-use crate::ui::{document, notice};
+use crate::components::button::button;
+use crate::components::card::CARD;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::ui::{LINK, auth_document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct ForgotQuery {
@@ -31,20 +35,27 @@ struct ForgotQuery {
 pub async fn forgot_password(cx: &Cx) -> Result<impl View> {
     let query = query_params::<ForgotQuery>(cx)?;
     Ok(view! {
-        document(
+        auth_document(
             title: "Forgot password",
-            <h1 class="mb-6 text-2xl font-semibold">"Reset your password"</h1>
-            notice(error: query.error.as_deref())
-            <form method="post" action=(href!(submit)) class="mb-6 space-y-3 rounded border border-neutral-200 bg-white p-4">
-                <label class="block text-sm" for="email">"E-mail address"</label>
-                <input id="email" name="email" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                    type="email" autocomplete="username" maxlength="254" required="">
-                <p class="text-xs text-neutral-500">"We will e-mail you a code to choose a new password."</p>
-                <button class="w-full rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Send me a code"</button>
-            </form>
-            <p class="text-sm">
-                <a class="underline" href=(href!(super::login::login))>"Back to sign in"</a>
-            </p>
+            <div class=(class!(CARD, "gap-5 px-6"))>
+                <div class="text-center">
+                    <h1 class="text-2xl font-bold tracking-tight">"Reset your password"</h1>
+                    <p class="mt-1 text-sm text-muted-foreground">"We will e-mail you a code to choose a new password."</p>
+                </div>
+                notice(error: query.error.as_deref())
+                <form method="post" action=(href!(submit)) class="flex flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="email" }, "E-mail address")
+                        input(attrs: attributes! {
+                            id="email" name="email" type="email" autocomplete="username" maxlength="254" required=""
+                        })
+                    )
+                    button(attrs: attributes! { class="w-full" }, "Send me a code")
+                </form>
+                <p class="text-center text-sm text-muted-foreground">
+                    <a class=(LINK) href=(href!(super::login::login))>"Back to sign in"</a>
+                </p>
+            </div>
         )
     })
 }

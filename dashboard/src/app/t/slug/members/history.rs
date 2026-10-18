@@ -13,10 +13,10 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::super::{Slug, TenantNav, require_tenant, role_label, tenant_nav};
+use super::super::{Slug, TenantNav, require_tenant, role_label};
 use crate::auth::user_labels;
 use crate::db::ReadPool;
-use crate::ui::{document, format_time};
+use crate::ui::{Shell, document, format_time};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -80,9 +80,9 @@ pub async fn history(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "members"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Members history"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "members")
             </header>
             <p class="mb-4 text-sm"><a class="underline" href=(members_link)>"Back to members"</a></p>
 

@@ -20,11 +20,11 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant, role_label, tenant_nav};
+use super::{Slug, TenantAccess, TenantNav, require_tenant, role_label};
 use crate::app::auth::Flash;
 use crate::auth::{now, user_labels};
 use crate::db::ReadPool;
-use crate::ui::{document, format_time, notice};
+use crate::ui::{Shell, document, format_time, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct MembersQuery {
@@ -75,9 +75,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "members"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Members"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "members")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
             <p class="mb-4 text-sm"><a class="underline" href=(href!(history::history, Slug(slug.clone())))>"History"</a></p>

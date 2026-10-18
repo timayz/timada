@@ -17,7 +17,7 @@ use topcoat::{
 use super::{error_code, tenancy};
 use crate::app::t::slug::tenant_url;
 use crate::auth::require_user;
-use crate::ui::{document, notice};
+use crate::ui::{Shell, document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct NewQuery {
@@ -46,11 +46,9 @@ pub async fn new(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: "Create a tenant",
+            shell: Shell::page(""),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Create a tenant"</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                </nav>
             </header>
             notice(error: query.error.as_deref())
 

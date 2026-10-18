@@ -16,7 +16,7 @@ use crate::app::admin::require_admin;
 use crate::app::auth::Flash;
 use crate::auth::{identity, now, oidc::Providers, webauthn::authenticator_name};
 use crate::db::ReadPool;
-use crate::ui::{document, format_time, notice, session_row};
+use crate::ui::{Shell, document, format_time, notice, session_row};
 
 module_param!(pub user_id);
 
@@ -53,15 +53,12 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::page("admin_users"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">
                     (&user.label)
                     if user.deleted { " " <span class="rounded bg-neutral-200 px-2 text-sm font-normal text-neutral-700">"deleted"</span> }
                 </h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(super::users))>"Users"</a>
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                </nav>
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

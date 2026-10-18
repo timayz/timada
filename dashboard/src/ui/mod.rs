@@ -1,34 +1,22 @@
-//! Shared page furniture.
+//! Shared page furniture: the document shell ([`chrome`]), the page-level
+//! helpers ([`page`]), the browser preferences ([`theme`]), the icons
+//! ([`icons`]), the wording of errors and permissions, and the dates.
+
+pub mod chrome;
+pub mod icons;
+pub mod page;
+pub mod theme;
+
+pub use chrome::{Shell, auth_document, document};
+pub use page::*;
 
 use topcoat::{
     Result,
-    asset::asset,
-    tailwind,
-    view::{Child, View, component, view},
+    icon::icon,
+    view::{View, attributes, component, view},
 };
 
-/// The HTML document every page renders into.
-#[component]
-pub async fn document(title: &str, #[default] child: Child<'_>) -> Result<impl View> {
-    Ok(view! {
-        <!DOCTYPE html>
-        <html lang="en">
-            <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>(title)</title>
-                <link rel="stylesheet" href=(tailwind::stylesheet!())>
-                <script type="module" src=(asset!("./app/auth/auth.js"))></script>
-                topcoat::dev::script()
-            </head>
-            <body class="min-h-screen bg-neutral-50 text-neutral-900">
-                <main class="mx-auto max-w-3xl p-8">
-                    (child)
-                </main>
-            </body>
-        </html>
-    })
-}
+use crate::components::alert::{AlertVariant, alert, alert_description};
 
 /// A notice above a page's content: `error` codes from a redirect, or a
 /// confirmation message.
@@ -39,16 +27,23 @@ pub async fn notice(
 ) -> Result<impl View> {
     Ok(view! {
         if let Some(error) = error {
-            <p role="alert" class="mb-4 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">
-                (describe_error(error))
-            </p>
+            alert(
+                variant: AlertVariant::Destructive,
+                attrs: attributes! { role="alert" class="mb-4" },
+                icon(data: icons::ERROR)
+                alert_description((describe_error(error)))
+            )
         }
         if let Some(message) = message {
-            <p role="status" class="mb-4 rounded border border-green-300 bg-green-50 p-3 text-sm text-green-800">
-                (message)
-            </p>
+            alert(
+                variant: AlertVariant::Success,
+                attrs: attributes! { role="status" class="mb-4" },
+                icon(data: icons::CHECK)
+                alert_description((message))
+            )
         }
-        <p role="alert" data-auth-error="" class="mb-4 hidden rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800"></p>
+        // `auth.js` fills this one in and takes `hidden` off it.
+        <p role="alert" data-auth-error="" class="mb-4 hidden rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive-text"></p>
     })
 }
 
@@ -359,11 +354,11 @@ pub async fn session_row(
     #[default] current: bool,
 ) -> Result<impl View> {
     Ok(view! {
-        <li class="py-2 text-sm">
+        <li class="py-2.5 text-sm">
             <time datetime=(started_at)>(format_time(started_at))</time>
             if let Some(ip) = ip { " · " (ip) }
             if current { " · " <strong>"this browser"</strong> }
-            if let Some(ua) = user_agent { <span class="block truncate text-neutral-500">(ua)</span> }
+            if let Some(ua) = user_agent { <span class="block truncate text-muted-foreground">(ua)</span> }
         </li>
     })
 }

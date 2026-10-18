@@ -15,9 +15,9 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
-use crate::ui::{describe_permission, document, notice};
+use crate::ui::{Shell, describe_permission, document, notice};
 
 /// The form field of a permission checkbox: `perm:<permission>`.
 const PERMISSION_FIELD_PREFIX: &str = "perm:";
@@ -57,9 +57,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "roles"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Roles"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "roles")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

@@ -26,10 +26,10 @@ use topcoat::{
 use super::{Choice, error_code, rows_of};
 use crate::app::auth::Flash;
 use crate::app::t::slug::products::catalog;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::auth::user_labels;
 use crate::db::ReadPool;
-use crate::ui::{document, format_time, notice};
+use crate::ui::{Shell, document, format_time, notice};
 
 module_param!(pub category_id);
 
@@ -176,6 +176,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "categories"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold" data-category-id=(&category.id)>
                     (&category.name)
@@ -183,7 +184,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         " " <span class="rounded bg-neutral-100 px-2 text-sm font-normal text-neutral-700" data-category-archived="">"Archived"</span>
                     }
                 </h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "categories")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

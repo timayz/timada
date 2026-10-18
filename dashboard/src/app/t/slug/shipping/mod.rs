@@ -21,10 +21,10 @@ use topcoat::{
     view::{Unescaped, View, component, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
-use crate::ui::{document, notice};
+use crate::ui::{Shell, document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct ShippingQuery {
@@ -187,9 +187,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "shipping"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Shipping"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "shipping")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

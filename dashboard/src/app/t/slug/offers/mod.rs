@@ -20,10 +20,10 @@ use topcoat::{
 };
 
 use super::discounts::{describe_window, discounts};
-use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::db::ReadPool;
-use crate::ui::{document, notice};
+use crate::ui::{Shell, document, notice};
 
 /// How many products the pickers list, most recently changed first.
 const PICKER_PRODUCTS: i64 = 200;
@@ -185,9 +185,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "offers"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Offers"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "offers")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

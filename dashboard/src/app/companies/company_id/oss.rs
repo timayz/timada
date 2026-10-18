@@ -13,7 +13,7 @@ use topcoat::{
 
 use super::{CompanyId, require_owned};
 use crate::db::ReadPool;
-use crate::ui::document;
+use crate::ui::{Shell, document};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct OssQuery {
@@ -60,6 +60,7 @@ pub async fn oss(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::page("companies"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"One-Stop Shop return"</h1>
                 <nav class="flex items-center gap-4 text-sm">

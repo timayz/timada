@@ -16,10 +16,10 @@ use topcoat::{
 };
 
 use super::orders::orders_of_email_url;
-use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::db::ReadPool;
-use crate::ui::{document, format_time, notice};
+use crate::ui::{Shell, document, format_time, notice};
 
 const PAGE_SIZE: u32 = 50;
 
@@ -81,9 +81,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "customers"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Customers"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "customers")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
