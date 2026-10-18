@@ -24,9 +24,9 @@ sqlx_migrator = { version = "0.19", features = ["sqlite"] }
 # Tracks evento's alpha branch until the release after alpha.35 ships the
 # accord fix for writes another node recovered (timayz/evento#266), the
 # group join a lost tenant file rejoins with (timayz/evento#269), the
-# absent-peer compaction (timayz/evento#270) and the paged copy of a tenant
-# (timayz/evento#271); go back to a pinned version then. Cargo.lock holds the
-# exact commit.
+# absent-peer compaction (timayz/evento#270), the paged copy of a tenant
+# (timayz/evento#271) and the paced journal truncation (timayz/evento#273);
+# go back to a pinned version then. Cargo.lock holds the exact commit.
 evento = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "remote"] }
 evento-sql = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "accord"] }
 evento-sql-migrator = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "accord"] }

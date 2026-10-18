@@ -1857,7 +1857,7 @@ dependencies = [
 [[package]]
 name = "evento"
 version = "2.0.0-alpha.35"
-source = "git+https://github.com/timayz/evento?branch=alpha#8c820d11b3d0d0f578ad1b0cd5e8a451a849f1cb"
+source = "git+https://github.com/timayz/evento?branch=alpha#9457c5f5f902e708d6f79460f3c68ea346b72bdb"
 dependencies = [
  "evento-core",
  "evento-remote",
@@ -1869,7 +1869,7 @@ dependencies = [
 [[package]]
 name = "evento-accord"
 version = "2.0.0-alpha.35"
-source = "git+https://github.com/timayz/evento?branch=alpha#8c820d11b3d0d0f578ad1b0cd5e8a451a849f1cb"
+source = "git+https://github.com/timayz/evento?branch=alpha#9457c5f5f902e708d6f79460f3c68ea346b72bdb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1888,7 +1888,7 @@ dependencies = [
 [[package]]
 name = "evento-core"
 version = "2.0.0-alpha.35"
-source = "git+https://github.com/timayz/evento?branch=alpha#8c820d11b3d0d0f578ad1b0cd5e8a451a849f1cb"
+source = "git+https://github.com/timayz/evento?branch=alpha#9457c5f5f902e708d6f79460f3c68ea346b72bdb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1908,7 +1908,7 @@ dependencies = [
 [[package]]
 name = "evento-lock"
 version = "2.0.0-alpha.35"
-source = "git+https://github.com/timayz/evento?branch=alpha#8c820d11b3d0d0f578ad1b0cd5e8a451a849f1cb"
+source = "git+https://github.com/timayz/evento?branch=alpha#9457c5f5f902e708d6f79460f3c68ea346b72bdb"
 dependencies = [
  "anyhow",
  "quote",
@@ -1919,7 +1919,7 @@ dependencies = [
 [[package]]
 name = "evento-macro"
 version = "2.0.0-alpha.35"
-source = "git+https://github.com/timayz/evento?branch=alpha#8c820d11b3d0d0f578ad1b0cd5e8a451a849f1cb"
+source = "git+https://github.com/timayz/evento?branch=alpha#9457c5f5f902e708d6f79460f3c68ea346b72bdb"
 dependencies = [
  "convert_case 0.12.0",
  "quote",
@@ -1929,7 +1929,7 @@ dependencies = [
 [[package]]
 name = "evento-remote"
 version = "2.0.0-alpha.35"
-source = "git+https://github.com/timayz/evento?branch=alpha#8c820d11b3d0d0f578ad1b0cd5e8a451a849f1cb"
+source = "git+https://github.com/timayz/evento?branch=alpha#9457c5f5f902e708d6f79460f3c68ea346b72bdb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1948,7 +1948,7 @@ dependencies = [
 [[package]]
 name = "evento-sql"
 version = "2.0.0-alpha.35"
-source = "git+https://github.com/timayz/evento?branch=alpha#8c820d11b3d0d0f578ad1b0cd5e8a451a849f1cb"
+source = "git+https://github.com/timayz/evento?branch=alpha#9457c5f5f902e708d6f79460f3c68ea346b72bdb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1965,7 +1965,7 @@ dependencies = [
 [[package]]
 name = "evento-sql-migrator"
 version = "2.0.0-alpha.35"
-source = "git+https://github.com/timayz/evento?branch=alpha#8c820d11b3d0d0f578ad1b0cd5e8a451a849f1cb"
+source = "git+https://github.com/timayz/evento?branch=alpha#9457c5f5f902e708d6f79460f3c68ea346b72bdb"
 dependencies = [
  "async-trait",
  "evento-sql",
