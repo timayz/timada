@@ -23,6 +23,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/discounts` | `timada-discounts` | Discount codes and how often each was used, and the checkout offers, in a tenant's store |
 | `crates/reviews` | `timada-reviews` | What buyers wrote about the products of their orders, and whether the merchant published it |
 | `crates/shoppers` | `timada-shoppers` | A shop's customers who sign in: mailed codes, sessions, saved addresses, in a tenant's store |
+| `crates/support` | `timada-support` | The messages visitors send through a shop's contact form, and whether the merchant handled them |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
@@ -208,9 +209,10 @@ tenant's products while the events stay isolated by construction.
 8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
-   orders, open carts, discounts, checkout offers, reviews, payments), `/stripe/webhooks/{tenant_id}`,
+   orders, open carts, discounts, checkout offers, reviews, messages, payments), `/stripe/webhooks/{tenant_id}`,
    `/store/reviews` (a storefront handing in a review, see *Reviews*), `/store/shoppers/*`
-   (a storefront signing its shoppers in, see *Shopper accounts*), `/invitations/{token}`,
+   (a storefront signing its shoppers in, see *Shopper accounts*), `/store/contact` (a
+   storefront handing in a message from its contact form, see *Support messages*), `/invitations/{token}`,
    `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.
 
 Shutdown stops the HTTP server, then the store API (its leases hold tenants open), the
@@ -367,6 +369,29 @@ A shopper's orders are the shop's orders placed with their address, guest ones
 included: owning the mailbox is what entitles them to it. `GET /store/shoppers/orders`
 lists them from `orders_orders` (indexed on the tenant and the e-mail), so an order paid
 a moment ago may show a second later.
+
+## Support messages
+
+A shop's contact form writes a `Message` stream in the tenant's store
+(`timada-support`): who wrote (first and last name, the address to answer at), what,
+and in which language the browser browsed (the primary `Accept-Language` subtag), so
+the merchant answers in it. The id is a fresh ULID. The merchant reads the messages
+on `/t/{slug}/messages` (`support:read`, from the `support_messages` read model),
+answers from their own mailbox (the row links `mailto:` the address; the platform
+sends no mail here) and marks the message handled (`support:manage`); a message
+marked too soon is reopened. The name, address and text are recorded as written,
+like an order's shipping details; sealing them under a per-message key, as shopper
+accounts are, and an erasure command are follow-ups.
+
+A storefront hands a message in over HTTP, not through the store API:
+`POST /store/contact`, form-encoded, with its key as a bearer token (it must allow
+`store:checkout`). Anyone may fill a contact form, so the dashboard counts: each key,
+and each visitor at a shop (the address the storefront reports in `X-Shopper-IP`,
+else the caller's), may hand in only so many messages within `[store]`'s window
+(`contact_messages_per_ip`, `contact_messages_per_key`,
+`contact_messages_window_secs`), past which it answers 429 `too_many_requests` and
+records nothing. The limiter is the one the sign-in codes use, in this node's
+memory, counted apart from the codes.
 
 ## The storefront side
 

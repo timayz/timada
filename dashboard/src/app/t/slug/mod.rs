@@ -11,6 +11,7 @@ pub mod invoices;
 pub mod invoicing;
 pub mod mail;
 pub mod members;
+pub mod messages;
 pub mod offers;
 pub mod orders;
 pub mod payments;
@@ -26,8 +27,8 @@ use timada_tenancy::{
     PERMISSION_API_KEYS_MANAGE, PERMISSION_CUSTOMERS_READ, PERMISSION_DISCOUNTS_READ,
     PERMISSION_MAIL_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ORDERS_READ,
     PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ,
-    PERMISSION_ROLES_MANAGE, PERMISSION_SHIPPING_MANAGE, PERMISSION_TENANT_MANAGE, ROLE_OWNER,
-    TenantState,
+    PERMISSION_ROLES_MANAGE, PERMISSION_SHIPPING_MANAGE, PERMISSION_SUPPORT_READ,
+    PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
 };
 use topcoat::{
     Result,
@@ -159,6 +160,7 @@ pub struct TenantNav {
     pub discounts: bool,
     pub offers: bool,
     pub reviews: bool,
+    pub messages: bool,
     pub invoices: bool,
     pub payments: bool,
     pub shipping: bool,
@@ -188,6 +190,7 @@ impl TenantNav {
             // Checkout offers are discounts of another shape.
             offers: discounts,
             reviews: access.can(cx, PERMISSION_REVIEWS_READ).await?,
+            messages: access.can(cx, PERMISSION_SUPPORT_READ).await?,
             // Invoices are what the orders were billed as.
             invoices: orders,
             payments: access.can(cx, PERMISSION_PAYMENTS_MANAGE).await?,
@@ -204,7 +207,7 @@ impl TenantNav {
 /// The header links of a tenant page: the tenant's home, each section the
 /// member may see, the dashboard and the account. `current` names the
 /// section being shown (`"home"`, `"products"`, `"categories"`, `"orders"`,
-/// `"carts"`, `"customers"`, `"discounts"`, `"offers"`, `"reviews"`, `"invoices"`, `"payments"`, `"shipping"`, `"mail"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
+/// `"carts"`, `"customers"`, `"discounts"`, `"offers"`, `"reviews"`, `"messages"`, `"invoices"`, `"payments"`, `"shipping"`, `"mail"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
 /// section), which gets
 /// no link.
 #[component]
@@ -238,6 +241,9 @@ pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) ->
             }
             if nav.reviews && current != "reviews" {
                 <a class="underline" href=(href!(reviews::index, Slug(slug.clone())))>"Reviews"</a>
+            }
+            if nav.messages && current != "messages" {
+                <a class="underline" href=(href!(messages::index, Slug(slug.clone())))>"Messages"</a>
             }
             if nav.invoices && current != "invoices" {
                 <a class="underline" href=(href!(invoices::index, Slug(slug.clone())))>"Invoices"</a>

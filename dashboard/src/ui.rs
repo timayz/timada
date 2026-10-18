@@ -283,6 +283,8 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "customers:manage" => "Delete shopper accounts (includes seeing them)",
         "mail:manage" => "Set up the mail server the shop's mails go out through",
         "shipping:manage" => "Set up the ways the shop ships and what they cost",
+        "support:read" => "See the messages shoppers sent through the contact form",
+        "support:manage" => "Mark messages handled and reopen them (includes seeing them)",
         _ => "Unknown permission",
     }
 }

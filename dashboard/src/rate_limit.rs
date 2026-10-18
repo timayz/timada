@@ -2,8 +2,9 @@
 //! this node's memory. With several nodes behind a balancer, each counts on
 //! its own, so a client spread over N of them gets up to N times the limit.
 //!
-//! The one policy built on it so far is how often a storefront may have a
-//! sign-in code mailed ([`allow_shopper_code`]).
+//! The policies built on it are how often a storefront may have a sign-in
+//! code mailed ([`allow_shopper_code`]) and how often it may hand in a
+//! message from its contact form ([`allow_contact_message`]).
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
@@ -121,21 +122,86 @@ pub fn allow_shopper_code(
     shopper_ip: Option<&str>,
     peer: Option<IpAddr>,
 ) -> bool {
-    let window = Duration::from_secs(limits.shopper_codes_window_secs);
-    let key = format!("shopper-code:key:{key_id}");
-    let ip = shopper_ip
+    allow_from_storefront(
+        limiter,
+        "shopper-code",
+        &StorefrontLimits {
+            per_key: limits.shopper_codes_per_key,
+            per_ip: limits.shopper_codes_per_ip,
+            window: Duration::from_secs(limits.shopper_codes_window_secs),
+        },
+        Caller {
+            key_id,
+            tenant_id,
+            shopper_ip,
+            peer,
+        },
+    )
+}
+
+/// Whether a storefront may hand in one more message from its contact form,
+/// the way [`allow_shopper_code`] decides for codes: under both its key's
+/// limit and its visitor's, counted only when let through.
+pub fn allow_contact_message(
+    limiter: &RateLimiter,
+    limits: &StoreConfig,
+    key_id: &str,
+    tenant_id: &str,
+    shopper_ip: Option<&str>,
+    peer: Option<IpAddr>,
+) -> bool {
+    allow_from_storefront(
+        limiter,
+        "contact",
+        &StorefrontLimits {
+            per_key: limits.contact_messages_per_key,
+            per_ip: limits.contact_messages_per_ip,
+            window: Duration::from_secs(limits.contact_messages_window_secs),
+        },
+        Caller {
+            key_id,
+            tenant_id,
+            shopper_ip,
+            peer,
+        },
+    )
+}
+
+/// The limits of one storefront policy.
+struct StorefrontLimits {
+    per_key: u32,
+    per_ip: u32,
+    window: Duration,
+}
+
+/// Who asks: the storefront's key at its shop, and the visitor behind it.
+struct Caller<'a> {
+    key_id: &'a str,
+    tenant_id: &'a str,
+    shopper_ip: Option<&'a str>,
+    peer: Option<IpAddr>,
+}
+
+/// What the storefront policies share: a key counted under `what:key:…` and
+/// the visitor, when their address is known, under `what:ip:…` at that shop.
+fn allow_from_storefront(
+    limiter: &RateLimiter,
+    what: &str,
+    limits: &StorefrontLimits,
+    caller: Caller<'_>,
+) -> bool {
+    let key = format!("{what}:key:{}", caller.key_id);
+    let ip = caller
+        .shopper_ip
         .and_then(|value| value.trim().parse::<IpAddr>().ok())
-        .or(peer)
-        .map(|ip| format!("shopper-code:ip:{tenant_id}:{ip}"));
+        .or(caller.peer)
+        .map(|ip| format!("{what}:ip:{}:{ip}", caller.tenant_id));
     match ip {
         Some(ip) => limiter.check_all(
-            &[
-                (key.as_str(), limits.shopper_codes_per_key),
-                (ip.as_str(), limits.shopper_codes_per_ip),
-            ],
-            window,
+            &[(key.as_str(), limits.per_key), (ip.as_str(), limits.per_ip)],
+            limits.window,
         ),
-        None => limiter.check(&key, limits.shopper_codes_per_key, window),
+        None => limiter.check(&key, limits.per_key, limits.window),
     }
 }
 
@@ -188,6 +254,9 @@ mod tests {
             shopper_codes_per_ip: per_ip,
             shopper_codes_per_key: per_key,
             shopper_codes_window_secs: 600,
+            contact_messages_per_ip: per_ip,
+            contact_messages_per_key: per_key,
+            contact_messages_window_secs: 3600,
         }
     }
 
@@ -282,5 +351,40 @@ mod tests {
         }
         assert!(ask("203.0.113.2"));
         assert!(!ask("203.0.113.3"));
+    }
+
+    #[test]
+    fn messages_are_counted_apart_from_codes() {
+        let limiter = RateLimiter::new();
+        let one_each = limits(1, 100);
+        let ip = Some("203.0.113.9");
+        assert!(allow_contact_message(
+            &limiter, &one_each, "k1", "t1", ip, None
+        ));
+        assert!(!allow_contact_message(
+            &limiter, &one_each, "k1", "t1", ip, None
+        ));
+        // A visitor out of messages may still have a sign-in code mailed.
+        assert!(allow_shopper_code(
+            &limiter, &one_each, "k1", "t1", ip, None
+        ));
+        // And the key's own share holds whatever the visitors.
+        let tight = limits(100, 1);
+        assert!(allow_contact_message(
+            &limiter,
+            &tight,
+            "k2",
+            "t1",
+            Some("203.0.113.1"),
+            None
+        ));
+        assert!(!allow_contact_message(
+            &limiter,
+            &tight,
+            "k2",
+            "t1",
+            Some("203.0.113.2"),
+            None
+        ));
     }
 }
