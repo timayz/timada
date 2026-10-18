@@ -31,6 +31,7 @@ mod reviews;
 mod router;
 mod shoppers;
 mod store;
+mod support;
 
 pub use cart::*;
 pub use components::*;
@@ -44,3 +45,4 @@ pub use reviews::*;
 pub use router::*;
 pub use shoppers::*;
 pub use store::*;
+pub use support::*;
