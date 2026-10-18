@@ -20,7 +20,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         Reviews0006,
         CategoryMenu0007,
         ReviewReplies0008,
-        ProductOptions0009
+        ProductOptions0009,
+        Stock0010
     ]
 }
 
@@ -352,6 +353,37 @@ sqlx_migrator::sqlite_migration!(
             "DROP INDEX storefront_product_options_value"
         ),
         BackfillProductOptions,
+    ]
+);
+
+pub struct Stock0010;
+sqlx_migrator::sqlite_migration!(
+    Stock0010,
+    "storefront",
+    "0010_stock",
+    vec_box![("storefront", "0009_product_options")],
+    vec_box![
+        // What is on the shelf of each thing the shop counts (`variant_id`
+        // '' for a product without variants). The product row carries what a
+        // page shows of it, worked out when the stock or the product changes.
+        (
+            "CREATE TABLE storefront_stock (
+                product_id TEXT NOT NULL,
+                variant_id TEXT NOT NULL DEFAULT '',
+                tracked INTEGER NOT NULL,
+                on_hand INTEGER NOT NULL,
+                PRIMARY KEY (product_id, variant_id)
+            )",
+            "DROP TABLE storefront_stock"
+        ),
+        (
+            "ALTER TABLE storefront_products ADD COLUMN stock_json TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE storefront_products DROP COLUMN stock_json"
+        ),
+        (
+            "ALTER TABLE storefront_products ADD COLUMN in_stock INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE storefront_products DROP COLUMN in_stock"
+        ),
     ]
 );
 

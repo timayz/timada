@@ -17,7 +17,11 @@ use sqlx::SqlitePool;
 
 use crate::aggregator::Product;
 use crate::aggregator::category::Category;
-use crate::command::{CategoryState, ProductState, category_projection, product_projection};
+use crate::aggregator::stock::StockItem;
+use crate::command::{
+    CategoryState, ProductState, StockState, StockSummary, category_projection, product_projection,
+    stock_projection,
+};
 use crate::query::refresh_category_counts;
 
 /// The cursor identity of the read-model subscription, in each tenant's store.
@@ -39,7 +43,88 @@ pub fn read_model_subscription<E: Executor>(
         .data(TenantId(tenant_id.to_owned()))
         .handler(on_product_event())
         .handler(on_category_event())
+        .handler(on_stock_event())
         .any_routing_key()
+}
+
+#[evento::subscription_all]
+async fn on_stock_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<StockItem>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let tenant: TenantId = context.extract();
+    let Some(stock) = stock_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    let product = product_projection()
+        .load(&stock.product_id)
+        .execute(context.executor)
+        .await?;
+    upsert_stock(&pool, &tenant.0, &stock, product.as_ref()).await
+}
+
+/// Writes the row of one thing's stock, and the summary of its product when
+/// the product is known.
+pub async fn upsert_stock(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    stock: &StockState,
+    product: Option<&ProductState>,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO catalog_stock (tenant_id, product_id, variant_id, tracked, on_hand, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (tenant_id, product_id, variant_id) DO UPDATE SET
+            tracked = excluded.tracked, on_hand = excluded.on_hand,
+            updated_at = excluded.updated_at",
+    )
+    .bind(tenant_id)
+    .bind(&stock.product_id)
+    .bind(stock.variant_id.as_deref().unwrap_or(""))
+    .bind(stock.tracked)
+    .bind(i64::from(stock.on_hand))
+    .bind(stock.updated_at as i64)
+    .execute(&mut *tx)
+    .await?;
+    if let Some(product) = product {
+        refresh_stock_state(&mut tx, tenant_id, product).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Works out a product's stock summary again from its stock rows.
+async fn refresh_stock_state(
+    tx: &mut sqlx::SqliteConnection,
+    tenant_id: &str,
+    product: &ProductState,
+) -> anyhow::Result<()> {
+    let rows: Vec<(String, bool, i64)> = sqlx::query_as(
+        "SELECT variant_id, tracked, on_hand FROM catalog_stock
+         WHERE tenant_id = ?1 AND product_id = ?2",
+    )
+    .bind(tenant_id)
+    .bind(&product.id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let summary = StockSummary::of(product, |variant_id| {
+        rows.iter()
+            .find(|(id, tracked, _)| *tracked && id == variant_id.unwrap_or(""))
+            .map(|(_, _, on_hand)| (*on_hand).max(0) as u32)
+    });
+    sqlx::query("UPDATE catalog_products SET stock_state = ?3 WHERE tenant_id = ?1 AND id = ?2")
+        .bind(tenant_id)
+        .bind(&product.id)
+        .bind(summary.as_str())
+        .execute(&mut *tx)
+        .await?;
+    Ok(())
 }
 
 #[evento::subscription_all]
@@ -182,6 +267,8 @@ pub async fn upsert_product(
     {
         refresh_category_counts(&mut tx, tenant_id).await?;
     }
+    // A variant added or removed changes what the summary counts.
+    refresh_stock_state(&mut tx, tenant_id, product).await?;
     tx.commit().await?;
     Ok(())
 }

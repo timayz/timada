@@ -48,6 +48,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let related = related_products(cx, &product, RELATED).await?;
     // The first category it is filed under carries the breadcrumb.
     let crumb = product_categories(cx, &product).await?.into_iter().next();
+    let sold_out = !product.in_stock;
+    // A product without variants says how many are left once few are.
+    let few_left = product
+        .left(None)
+        .filter(|left| product.variants.is_empty() && (1..=5).contains(left));
 
     Ok(view! {
         document(
@@ -82,6 +87,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if let Some(code) = query.error.as_deref() {
                 <p class="notice" role="alert">(say(code))</p>
             }
+            if sold_out {
+                <p class="stock" data-stock="sold-out">"Sold out"</p>
+            } else if let Some(left) = few_left {
+                <p class="stock" data-stock=(left)>"Only " (left) " left"</p>
+            }
             // Plain HTML: the menus pick the variant on the server, so a
             // shopper with no JavaScript buys the same way; the table below
             // prices every combination.
@@ -101,7 +111,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <label for="quantity">"Quantity"</label>
                     <input id="quantity" name="quantity" type="number" min="1" max="99" value="1">
                 </p>
-                <button class="primary">"Add to cart"</button>
+                <button class="primary" disabled=(sold_out)>"Add to cart"</button>
             </form>
             if !product.options.is_empty() {
                 <table class="variants" data-variants="">
@@ -111,15 +121,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <th scope="col">(&option.name)</th>
                             }
                             <th scope="col">"Price"</th>
+                            <th scope="col">"Stock"</th>
                         </tr>
                     </thead>
                     <tbody>
                         for variant in &product.variants {
-                            <tr data-variant=(&variant.id) data-price=(variant.amount_cents)>
+                            <tr data-variant=(&variant.id) data-price=(variant.amount_cents) data-sold-out=(product.is_sold_out(Some(&variant.id)))>
                                 for option in &product.options {
                                     <td>(variant.value_of(&option.id).unwrap_or("—"))</td>
                                 }
                                 <td class="price">(variant.price())</td>
+                                <td>
+                                    match product.left(Some(&variant.id)) {
+                                        Some(0) => "Sold out",
+                                        Some(left) if left <= 5 => (format!("Only {left} left")),
+                                        _ => "In stock",
+                                    }
+                                </td>
                             </tr>
                         }
                     </tbody>
