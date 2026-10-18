@@ -1,6 +1,6 @@
 //! Encrypts the tenants' secrets (payment keys, mail server passwords)
-//! before they are recorded, and the shopper keys before they are written to
-//! disk. The events replicate to every node and live
+//! before they are recorded, and the personal-data keys before they are
+//! written to disk. The events replicate to every node and live
 //! forever, so what they hold is AES-256-GCM ciphertext under a key derived
 //! from the operator's secret: a random 12-byte nonce followed by the sealed
 //! bytes.
@@ -32,8 +32,10 @@ pub fn mail_sealer(config: &Config) -> Option<Sealer> {
     Some(Sealer::new("mail", &secrets.key))
 }
 
-/// What seals the shopper keys on disk: `None` without `secrets.key`.
-pub fn shoppers_sealer(config: &Config) -> Option<Sealer> {
+/// What seals the personal-data keys on disk ([`crate::key_vault`]): `None`
+/// without `secrets.key`. The purpose stays `shoppers`, its first use: it
+/// labels the derived key, and the files already on disk were sealed under it.
+pub fn keys_sealer(config: &Config) -> Option<Sealer> {
     let secrets = config.secrets.as_ref()?;
     Some(Sealer::new("shoppers", &secrets.key))
 }

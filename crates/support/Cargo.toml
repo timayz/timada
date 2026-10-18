@@ -16,6 +16,7 @@ sqlx_migrator.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+async-trait.workspace = true
 
 # `#[evento::aggregate]` expands to `bitcode::` paths, so the crate must name the
 # dependency even though no source file mentions it.

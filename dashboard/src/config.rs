@@ -22,7 +22,9 @@ pub struct Config {
     pub cluster: Option<ClusterConfig>,
     pub tenants: TenantsConfig,
     pub media: MediaConfig,
-    pub shopper_keys: ShopperKeysConfig,
+    /// `[data_keys]`; `[shopper_keys]`, its first name, still reads.
+    #[serde(alias = "shopper_keys")]
+    pub data_keys: DataKeysConfig,
     /// Absent: this node does not expose the store API.
     #[serde(default)]
     pub store_api: Option<StoreApiConfig>,
@@ -161,12 +163,12 @@ pub struct TenantsConfig {
     pub max_open: Option<usize>,
 }
 
-/// The keys that open each shopper account's personal data: one file per
-/// account, copied to every node and sealed with `secrets.key`. Deleting an
-/// account deletes its key, which leaves what the account recorded
-/// unreadable for good.
+/// The keys that open personal data (each shopper account's, each contact
+/// message's): one file per key, copied to every node and sealed with
+/// `secrets.key`. Deleting an account or erasing a message deletes its key,
+/// which leaves what it recorded unreadable for good.
 #[derive(Debug, Deserialize, Clone)]
-pub struct ShopperKeysConfig {
+pub struct DataKeysConfig {
     /// Directory holding one sub-directory per tenant. Created on demand.
     pub dir: PathBuf,
 }
@@ -531,7 +533,7 @@ impl Config {
             .set_default("tenants.dir", "data/tenants")?
             .set_default("media.dir", "data/media")?
             .set_default("media.public_url", "https://timada.localhost/media")?
-            .set_default("shopper_keys.dir", "data/shopper-keys")?
+            .set_default("data_keys.dir", "data/shopper-keys")?
             .set_default("auth.session_lifetime_secs", 14 * 24 * 60 * 60)?
             .set_default("auth.rp_name", "Timada")?
             .set_default("mail.from", "Timada <no-reply@timada.localhost>")?

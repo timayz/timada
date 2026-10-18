@@ -10,6 +10,7 @@ pub enum SupportError {
     InvalidEmail,
     #[error("a message says something in {MIN_MESSAGE_LEN} to {MAX_MESSAGE_LEN} characters")]
     InvalidBody,
+    /// Unknown, or erased.
     #[error("message not found")]
     NotFound,
     #[error(transparent)]

@@ -1,9 +1,13 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
-use timada_support::{Command, MessageState, ReceiveMessage};
+use timada_core::{Key, Keys};
+use timada_support::{Command, Message, ReceiveMessage};
 
 pub type Support = Command<evento::Sqlite>;
 
@@ -47,6 +51,60 @@ pub fn draft(body: &str) -> ReceiveMessage {
     }
 }
 
-pub async fn receive(support: &Support, body: &str) -> MessageState {
-    support.receive_message(VISITOR, draft(body)).await.unwrap()
+pub async fn receive(support: &Support, keys: &MemoryKeys, body: &str) -> Message {
+    support
+        .receive_message(keys, VISITOR, draft(body))
+        .await
+        .unwrap()
+}
+
+/// Message keys kept in memory.
+#[derive(Default)]
+pub struct MemoryKeys {
+    keys: Mutex<HashMap<String, Key>>,
+    /// Every `put` fails, as when no majority of nodes can be reached.
+    pub refuse: bool,
+}
+
+impl MemoryKeys {
+    pub fn refusing() -> Self {
+        Self {
+            refuse: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn has(&self, key_id: &str) -> bool {
+        self.keys.lock().unwrap().contains_key(key_id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.keys.lock().unwrap().len()
+    }
+
+    /// Forgets every key without a trace, as a node that never got them.
+    pub fn lose_all(&self) {
+        self.keys.lock().unwrap().clear();
+    }
+}
+
+#[async_trait::async_trait]
+impl Keys for MemoryKeys {
+    async fn put(&self, key_id: &str, key: &Key) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.refuse, "no majority holds the key");
+        self.keys
+            .lock()
+            .unwrap()
+            .insert(key_id.to_owned(), key.clone());
+        Ok(())
+    }
+
+    async fn get(&self, key_id: &str) -> anyhow::Result<Option<Key>> {
+        Ok(self.keys.lock().unwrap().get(key_id).cloned())
+    }
+
+    async fn delete(&self, key_id: &str) -> anyhow::Result<()> {
+        self.keys.lock().unwrap().remove(key_id);
+        Ok(())
+    }
 }

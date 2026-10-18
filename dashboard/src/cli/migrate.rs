@@ -55,10 +55,10 @@ pub async fn reset(config: Config) -> Result<()> {
         tracing::warn!(dir = %media.display(), "removing the uploaded pictures");
         std::fs::remove_dir_all(media)?;
     }
-    let shopper_keys = &config.shopper_keys.dir;
-    if shopper_keys.is_dir() {
-        tracing::warn!(dir = %shopper_keys.display(), "removing the shopper keys");
-        std::fs::remove_dir_all(shopper_keys)?;
+    let keys = &config.data_keys.dir;
+    if keys.is_dir() {
+        tracing::warn!(dir = %keys.display(), "removing the personal-data keys");
+        std::fs::remove_dir_all(keys)?;
     }
 
     migrate(config).await?;

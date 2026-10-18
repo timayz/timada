@@ -465,4 +465,13 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   await expect(page.getByRole("button", { name: "Reopen" })).toBeVisible();
   await page.goto(`/t/${slug}/messages`);
   await expect(page.getByText("No message here.")).toBeVisible();
+
+  // The visitor asks to be forgotten: the message is erased for good.
+  await page.goto(`/t/${slug}/messages?status=handled`);
+  await page.getByRole("button", { name: "Erase" }).click();
+  await expect(page.getByRole("status")).toContainText("Message erased");
+  await expect(async () => {
+    await page.goto(`/t/${slug}/messages?status=all`);
+    await expect(page.getByText("No message here.")).toBeVisible();
+  }).toPass();
 });

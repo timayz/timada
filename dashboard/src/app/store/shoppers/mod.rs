@@ -22,7 +22,8 @@ pub mod sign_out_everywhere;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use timada_shoppers::{Shopper, ShopperError, ShopperKeys, ShopperState};
+use timada_core::Keys;
+use timada_shoppers::{Shopper, ShopperError, ShopperState};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -31,7 +32,7 @@ use topcoat::{
 
 use crate::auth::now;
 use crate::cluster::Executor;
-use crate::shopper_keys::ShopperKeyVault;
+use crate::key_vault::KeyVault;
 
 /// The header a signed-in shopper's token travels in.
 pub const SHOPPER_TOKEN: &str = "x-shopper-token";
@@ -97,9 +98,9 @@ pub async fn signed_in(cx: &Cx, executor: &Executor) -> Result<Option<ShopperSta
     Ok(resolved.map(|resolved| resolved.shopper))
 }
 
-/// The keys of the tenant's shoppers.
-pub fn keys(cx: &Cx, tenant_id: &str) -> Arc<dyn ShopperKeys> {
-    app_context::<Arc<ShopperKeyVault>>(cx).for_tenant(tenant_id)
+/// The keys of the tenant's personal data (its shoppers', its messages').
+pub fn keys(cx: &Cx, tenant_id: &str) -> Arc<dyn Keys> {
+    app_context::<Arc<KeyVault>>(cx).for_tenant(tenant_id)
 }
 
 /// The shopper's personal data, opened with their key: `None` once the key

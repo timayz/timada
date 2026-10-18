@@ -5,7 +5,7 @@ use crate::error::ShopperError;
 use crate::value_object::{SESSION_TTL_SECS, generate_token, session_id, shopper_id};
 
 use super::{SessionState, ShopperState, email_aad, normalize_email};
-use crate::key::{self, ShopperKey, ShopperKeys, new_key_id};
+use timada_core::keys::{self as key, Key as ShopperKey, Keys as ShopperKeys, new_key_id};
 
 /// A sign-in that checked out. The token is the browser's to keep; the store
 /// only knows its hash.

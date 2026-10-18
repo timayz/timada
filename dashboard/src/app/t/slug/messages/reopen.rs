@@ -16,7 +16,7 @@ pub async fn reopen(cx: &Cx, Form(form): Form<MessageForm>) -> Result<SeeOther> 
         cx,
         form,
         "Message reopened; the list updates in a moment.",
-        async |support, actor, id| support.reopen_message(actor, id).await,
+        async |support, access, id| support.reopen_message(&access.user_id, id).await,
     )
     .await
 }

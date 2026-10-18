@@ -97,14 +97,16 @@ dir = "data/media"
 # its storefront to be configured with.
 public_url = "https://timada.localhost/media"
 
-[shopper_keys]
-# Directory holding one key per shopper account, one sub-directory per tenant.
-# A shopper's e-mail address and saved addresses are recorded only encrypted
-# with their key, so deleting an account deletes its key and leaves what the
-# account recorded unreadable for good. Every node keeps every key, sealed
-# with secrets.key. Keep backups of this directory short-lived, or not at all:
-# restoring an old copy brings deleted accounts' data back. Losing it on every
-# node loses every account's data.
+[data_keys]
+# Directory holding the keys personal data is encrypted with: one per shopper
+# account and one per contact-form message, one sub-directory per tenant. A
+# shopper's e-mail address and saved addresses, and what a visitor wrote
+# through the contact form, are recorded only encrypted with their key, so
+# deleting an account or erasing a message deletes its key and leaves what was
+# recorded unreadable for good. Every node keeps every key, sealed with
+# secrets.key. Keep backups of this directory short-lived, or not at all:
+# restoring an old copy brings deleted data back. Losing it on every node
+# loses every account and every message.
 dir = "data/shopper-keys"
 
 # Card payments. Each tenant connects its own Stripe account on

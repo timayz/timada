@@ -3,7 +3,11 @@
 //! The write model folds *all* events of a message (`strict()`), so the
 //! version it observes, and `write()` sends as `original_version`, never
 //! goes stale. It is not snapshotted: a message is a handful of events.
+//!
+//! The write model is sealed, as the events are: [`MessageState::open_with`]
+//! gives the plaintext [`Message`] while the key exists.
 
+mod forget;
 mod message;
 
 use std::ops::Deref;
@@ -11,8 +15,9 @@ use std::ops::Deref;
 pub use message::*;
 
 use evento::{Executor, Projection, metadata::Event};
+use timada_core::keys::{self, Key, Keys};
 
-use crate::aggregator::{Handled, Received, Reopened};
+use crate::aggregator::{Forgotten, Handled, Received, Reopened};
 use crate::value_object::MessageStatus;
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -26,15 +31,18 @@ impl<E: Executor> Deref for Command<E> {
     }
 }
 
+/// The write model: what the visitor wrote stays sealed here.
 #[evento::projection(id = id, name = "timada-support/MessageState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct MessageState {
     pub id: String,
-    pub first_name: String,
-    pub last_name: String,
-    pub email: String,
-    pub body: String,
+    /// Names the key the fields below are sealed under; empty once forgotten.
+    pub key_id: String,
+    pub first_name: Vec<u8>,
+    pub last_name: Vec<u8>,
+    pub email: Vec<u8>,
+    pub body: Vec<u8>,
     pub language: Option<String>,
     pub status: MessageStatus,
     /// Unix seconds of `Received`.
@@ -43,9 +51,26 @@ pub struct MessageState {
     pub handled_at: Option<u64>,
     /// Unix seconds of the last event.
     pub updated_at: u64,
+    /// Erased: the key is destroyed and the sealed fields cleared.
+    pub forgotten: bool,
 }
 
-impl MessageState {
+/// A message as the visitor wrote it, opened with its key.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Message {
+    pub id: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub email: String,
+    pub body: String,
+    pub language: Option<String>,
+    pub status: MessageStatus,
+    pub received_at: u64,
+    pub handled_at: Option<u64>,
+    pub updated_at: u64,
+}
+
+impl Message {
     pub fn is_handled(&self) -> bool {
         self.status == MessageStatus::Handled
     }
@@ -56,11 +81,62 @@ impl MessageState {
     }
 }
 
+impl MessageState {
+    pub fn is_handled(&self) -> bool {
+        self.status == MessageStatus::Handled
+    }
+
+    /// Opens the fields under `key`, which must be the one `key_id` names.
+    pub fn open(&self, key: &Key) -> anyhow::Result<Message> {
+        anyhow::ensure!(!self.forgotten, "the message was erased");
+        let field = |name: &str, sealed: &[u8]| -> anyhow::Result<String> {
+            let bytes = keys::open(key, &field_aad(&self.id, &self.key_id, name), sealed)?;
+            Ok(String::from_utf8(bytes)?)
+        };
+        Ok(Message {
+            id: self.id.clone(),
+            first_name: field(FIRST_NAME, &self.first_name)?,
+            last_name: field(LAST_NAME, &self.last_name)?,
+            email: field(EMAIL, &self.email)?,
+            body: field(BODY, &self.body)?,
+            language: self.language.clone(),
+            status: self.status,
+            received_at: self.received_at,
+            handled_at: self.handled_at,
+            updated_at: self.updated_at,
+        })
+    }
+
+    /// Opens the fields with the key `keys` holds: `None` once the message is
+    /// erased or its key destroyed, an error while the key cannot be read.
+    pub async fn open_with(&self, keys: &dyn Keys) -> anyhow::Result<Option<Message>> {
+        if self.forgotten || self.key_id.is_empty() {
+            return Ok(None);
+        }
+        match keys.get(&self.key_id).await? {
+            Some(key) => Ok(Some(self.open(&key)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+pub(crate) const FIRST_NAME: &str = "first_name";
+pub(crate) const LAST_NAME: &str = "last_name";
+pub(crate) const EMAIL: &str = "email";
+pub(crate) const BODY: &str = "body";
+
+/// What a field is bound to when sealed: the message, its key and the
+/// field's name, so no sealed value can be moved and still open.
+pub(crate) fn field_aad(message_id: &str, key_id: &str, field: &str) -> Vec<u8> {
+    keys::aad(message_id, key_id, field)
+}
+
 pub fn message_projection<E: Executor>() -> Projection<E, MessageState> {
     Projection::new::<crate::aggregator::Message>()
         .handler(on_received())
         .handler(on_handled())
         .handler(on_reopened())
+        .handler(on_forgotten())
         .strict()
 }
 
@@ -68,6 +144,7 @@ pub fn message_projection<E: Executor>() -> Projection<E, MessageState> {
 async fn on_received(event: Event<Received>, message: &mut MessageState) -> anyhow::Result<()> {
     let data = &event.data;
     message.id = event.aggregate_id.to_owned();
+    message.key_id = data.key_id.to_owned();
     message.first_name = data.first_name.to_owned();
     message.last_name = data.last_name.to_owned();
     message.email = data.email.to_owned();
@@ -76,6 +153,7 @@ async fn on_received(event: Event<Received>, message: &mut MessageState) -> anyh
     message.status = MessageStatus::Open;
     message.received_at = event.timestamp;
     message.updated_at = event.timestamp;
+    message.forgotten = false;
     Ok(())
 }
 
@@ -95,8 +173,32 @@ async fn on_reopened(event: Event<Reopened>, message: &mut MessageState) -> anyh
     Ok(())
 }
 
+#[evento::handler]
+async fn on_forgotten(event: Event<Forgotten>, message: &mut MessageState) -> anyhow::Result<()> {
+    message.key_id.clear();
+    message.first_name.clear();
+    message.last_name.clear();
+    message.email.clear();
+    message.body.clear();
+    message.forgotten = true;
+    message.updated_at = event.timestamp;
+    Ok(())
+}
+
 impl<E: Executor> Command<E> {
+    /// The sealed write model of a message that is not erased.
     pub async fn load_message(&self, message_id: &str) -> anyhow::Result<Option<MessageState>> {
+        Ok(self
+            .load_message_any(message_id)
+            .await?
+            .filter(|message| !message.forgotten))
+    }
+
+    /// The sealed write model, erased or not.
+    pub(crate) async fn load_message_any(
+        &self,
+        message_id: &str,
+    ) -> anyhow::Result<Option<MessageState>> {
         message_projection().load(message_id).execute(&self.0).await
     }
 }

@@ -95,7 +95,7 @@ test("handling a message needs support:manage", async ({
     reader.getByRole("columnheader", { name: "Actions" }),
   ).toHaveCount(0);
   // And posting the forms directly is refused.
-  for (const action of ["handle", "reopen"]) {
+  for (const action of ["handle", "reopen", "forget"]) {
     const refused = await reader.request.post(`/t/${slug}/messages/${action}`, {
       form: { message_id: "unknown" },
       maxRedirects: 0,
@@ -103,12 +103,14 @@ test("handling a message needs support:manage", async ({
     expect(refused.status()).toBe(403);
   }
   // The owner may, and an unknown message is told apart.
-  const unknown = await owner.request.post(`/t/${slug}/messages/handle`, {
-    form: { message_id: "unknown" },
-    maxRedirects: 0,
-  });
-  expect(unknown.status()).toBe(303);
-  expect(unknown.headers()["location"]).toContain("error=message_not_found");
+  for (const action of ["handle", "forget"]) {
+    const unknown = await owner.request.post(`/t/${slug}/messages/${action}`, {
+      form: { message_id: "unknown" },
+      maxRedirects: 0,
+    });
+    expect(unknown.status()).toBe(303);
+    expect(unknown.headers()["location"]).toContain("error=message_not_found");
+  }
 
   await ownerContext.close();
   await readerContext.close();

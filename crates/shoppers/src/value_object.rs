@@ -1,6 +1,6 @@
 use timada_orders::ShippingAddress;
 
-use crate::key::ShopperKey;
+use timada_core::Key as ShopperKey;
 
 /// How long a mailed code stays valid, in seconds.
 pub const CODE_TTL_SECS: u64 = 10 * 60;

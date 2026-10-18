@@ -6,8 +6,15 @@
 //! handled once answered (by mail, outside the platform). Messages live in
 //! the tenant's own event store and the crate is pure domain code: no
 //! permission checks, no HTTP, no rate limiting (whoever takes the form
-//! decides how often one visitor may send). The name, address and text are
-//! recorded as written, like an order's shipping details.
+//! decides how often one visitor may send).
+//!
+//! Events cannot be erased, so they never hold what the visitor wrote in
+//! clear: each message draws a random key ([`timada_core::Key`]) and its
+//! name, address and text are recorded sealed under it. The crate never
+//! stores a key: the caller keeps them through [`timada_core::Keys`] and
+//! destroys the message's key when the merchant erases it
+//! ([`Command::forget_message`]), which leaves what the message recorded
+//! unreadable for good (crypto-shredding). The language is kept in clear.
 
 pub mod aggregator;
 mod command;

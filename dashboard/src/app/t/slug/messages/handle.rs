@@ -15,7 +15,7 @@ pub async fn handle(cx: &Cx, Form(form): Form<MessageForm>) -> Result<SeeOther> 
         cx,
         form,
         "Message marked handled; the list updates in a moment.",
-        async |support, actor, id| support.handle_message(actor, id).await,
+        async |support, access, id| support.handle_message(&access.user_id, id).await,
     )
     .await
 }

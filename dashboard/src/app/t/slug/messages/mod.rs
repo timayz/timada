@@ -1,9 +1,11 @@
 //! `/t/{slug}/messages`: what visitors sent through the shop's contact form,
 //! for members with `support:read`; those with `support:manage` mark a
 //! message handled once they answered it (by mail, from the address it
-//! carries) and reopen one marked too soon. The list comes from the shared
-//! read model (a moment behind) and opens on the messages waiting.
+//! carries), reopen one marked too soon, and erase one whose sender asks to
+//! be forgotten (its key is destroyed, its row dropped). The list comes from
+//! the shared read model (a moment behind) and opens on the messages waiting.
 
+pub mod forget;
 pub mod handle;
 pub mod reopen;
 
@@ -82,7 +84,11 @@ pub struct MessageForm {
 /// and the outcome goes back to the list.
 async fn act<F>(cx: &Cx, form: MessageForm, message: &'static str, run: F) -> Result<SeeOther>
 where
-    F: AsyncFnOnce(&Command<Executor>, &str, &str) -> std::result::Result<(), SupportError>,
+    F: AsyncFnOnce(
+        &Command<Executor>,
+        &TenantAccess,
+        &str,
+    ) -> std::result::Result<(), SupportError>,
 {
     let access = require_tenant(cx).await?;
     access
@@ -90,7 +96,7 @@ where
         .await?;
     let slug = access.tenant.slug.clone();
     let gateway = support(&access)?;
-    match run(&gateway, &access.user_id, &form.message_id).await {
+    match run(&gateway, &access, &form.message_id).await {
         Ok(()) => Ok(see_other(messages_url(cx, &slug, None, Some(message)))),
         Err(err) if err.is_user_facing() => {
             Ok(see_other(messages_url(cx, &slug, err.code(), None)))
@@ -156,7 +162,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
                 <p class="mb-4 text-sm text-neutral-500">
-                    "What visitors wrote in the shop's contact form, with the address to answer at. Answer from your own mailbox, then mark the message handled here."
+                    "What visitors wrote in the shop's contact form, with the address to answer at. Answer from your own mailbox, then mark the message handled here. Erase a message when its sender asks to be forgotten: what they wrote is gone for good."
                 </p>
                 <form method="get" class="mb-4 flex flex-wrap gap-2">
                     <label class="sr-only" for="messages-status">"Status"</label>
@@ -203,7 +209,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <td class="py-2 align-top"><time datetime=(row.received_at)>(format_time(row.received_at as u64))</time></td>
                                 <td class="py-2 align-top">(status_of(&row.status))</td>
                                 if can_manage {
-                                    <td class="py-2 text-right align-top">
+                                    <td class="py-2 align-top">
+                                      <div class="flex justify-end gap-2">
                                         if row.status == MessageStatus::Handled.as_str() {
                                             <form method="post" action=(href!(reopen::reopen, Slug(slug.clone())))>
                                                 <input type="hidden" name="message_id" value=(&row.id)>
@@ -215,6 +222,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                 <button class="rounded border border-neutral-900 px-2 py-1 text-xs hover:bg-neutral-50">"Mark handled"</button>
                                             </form>
                                         }
+                                        <form method="post" action=(href!(forget::forget, Slug(slug.clone())))>
+                                            <input type="hidden" name="message_id" value=(&row.id)>
+                                            <button class="rounded border border-red-700 px-2 py-1 text-xs text-red-700 hover:bg-red-50">"Erase"</button>
+                                        </form>
+                                      </div>
                                     </td>
                                 }
                             </tr>

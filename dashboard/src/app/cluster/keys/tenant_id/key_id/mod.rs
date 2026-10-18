@@ -1,5 +1,5 @@
-//! One shopper key: a peer stores it here before recording the account, and
-//! a peer lacking it asks for it here. Only the nodes may: nothing outside
+//! One key personal data is sealed under: a peer stores it here before
+//! recording what it seals, and a peer lacking it asks for it here. Only the nodes may: nothing outside
 //! the cluster ever reads a key.
 
 use std::sync::Arc;
@@ -19,11 +19,11 @@ use topcoat::{
 };
 
 use super::TenantId;
-use crate::shopper_keys::ShopperKeyVault;
+use crate::key_vault::KeyVault;
 
 module_param!(pub key_id);
 
-fn authorized(cx: &Cx, vault: &ShopperKeyVault) -> bool {
+fn authorized(cx: &Cx, vault: &KeyVault) -> bool {
     vault.authorizes(headers(cx).get(AUTHORIZATION).map(|value| value.as_bytes()))
 }
 
@@ -31,7 +31,7 @@ fn authorized(cx: &Cx, vault: &ShopperKeyVault) -> bool {
 /// bytes that are not a key, or a key this node destroyed.
 #[route(PUT)]
 pub async fn put(cx: &Cx, bytes: Bytes) -> Result<StatusCode> {
-    let vault = app_context::<Arc<ShopperKeyVault>>(cx);
+    let vault = app_context::<Arc<KeyVault>>(cx);
     if !authorized(cx, vault) {
         return Ok(StatusCode::UNAUTHORIZED);
     }
@@ -50,7 +50,7 @@ pub async fn put(cx: &Cx, bytes: Bytes) -> Result<StatusCode> {
 /// does not hold it.
 #[route(GET)]
 pub async fn get(cx: &Cx) -> Result<Response> {
-    let vault = app_context::<Arc<ShopperKeyVault>>(cx);
+    let vault = app_context::<Arc<KeyVault>>(cx);
     if !authorized(cx, vault) {
         return StatusCode::UNAUTHORIZED.into_response(cx);
     }

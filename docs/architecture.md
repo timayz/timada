@@ -87,8 +87,8 @@ data/tenants/<id>.db      one per tenant: its catalog, cart, order and review ev
                           its consensus journal
 data/media/<id>/          one per tenant: the product pictures and the review photos,
                           named <image id>.<ext>
-data/shopper-keys/<id>/   one per tenant: each shopper account's key, sealed, named
-                          <key id> (<key id>.gone once the account is deleted)
+data/shopper-keys/<id>/   one per tenant: each shopper account's and each contact message's
+                          key, sealed, named <key id> (<key id>.gone once destroyed)
 <merchant app>/store.db   a storefront replica: subscription cursor, snapshots, product and
                           category rows
 ```
@@ -343,9 +343,13 @@ included. What remains are ids: the `Shopper` and `ShopperChallenge` stream ids 
 plain hashes of the address, which anyone holding a candidate address can test (the
 shop's orders keep the address anyway).
 
-The dashboard keeps the keys in `shopper_keys.dir/<tenant>/<key id>`, each sealed with
-`[secrets] key` (no section, no shopper accounts), and like a picture on a majority of
-the cluster before `Registered` commits (`PUT /cluster/keys/<tenant>/<key id>`, with
+The sealing itself (`timada_core::keys`: a random 256-bit key, AES-GCM, the ciphertext
+bound to the owner id, the key id and the field's name) and the `Keys` trait the
+contexts ask for keys through are shared by every context that records personal data;
+the support messages use them too (below). The dashboard keeps the keys in
+`data_keys.dir/<tenant>/<key id>`, each sealed with `[secrets] key` (no section, no
+shopper accounts and no contact messages), and like a picture on a majority of the
+cluster before `Registered` commits (`PUT /cluster/keys/<tenant>/<key id>`, with
 `cluster.secret`). Nothing serves these files to the outside: a node lacking a key asks
 its peers on the same route with a `GET` carrying the secret. Each node follows the
 tenants' `Shopper` streams (`timada-dashboard/shopper-keys`) to fetch the keys of new
@@ -379,9 +383,19 @@ the merchant answers in it. The id is a fresh ULID. The merchant reads the messa
 on `/t/{slug}/messages` (`support:read`, from the `support_messages` read model),
 answers from their own mailbox (the row links `mailto:` the address; the platform
 sends no mail here) and marks the message handled (`support:manage`); a message
-marked too soon is reopened. The name, address and text are recorded as written,
-like an order's shipping details; sealing them under a per-message key, as shopper
-accounts are, and an erasure command are follow-ups.
+marked too soon is reopened.
+
+The name, address and text are personal data, and events cannot be erased: like a
+shopper account, each message draws a random key and `Received` holds the four fields
+sealed under it (bound to the message id, the key id and the field's name; the
+language stays in clear). The key lives in the same vault as the shoppers' keys, put on
+a majority of the cluster before `Received` commits, and each node follows the
+`Message` streams (`timada-dashboard/message-keys`) to fetch new keys and destroy
+those of erased messages. `Forgotten` (`POST /t/{slug}/messages/forget`,
+`support:manage`, the "Erase" button of the row) records the erasure a sender asked
+for and destroys the key: the read model drops the row, and the message answers "not
+found" to every command from then on. The read model opens each message with its key
+for the inbox, and retries until a key on its way from a peer arrives.
 
 A storefront hands a message in over HTTP, not through the store API:
 `POST /store/contact`, form-encoded, with its key as a bearer token (it must allow
