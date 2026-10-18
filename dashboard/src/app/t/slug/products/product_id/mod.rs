@@ -33,7 +33,7 @@ use topcoat::{
         error::{SeeOther, not_found, see_other},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use super::{catalog, error_code, status_label};
@@ -41,9 +41,22 @@ use crate::app::auth::Flash;
 use crate::app::t::slug::categories::{Choice, rows_of};
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::auth::user_labels;
+use crate::components::badge::{BadgeVariant, badge};
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::card::CARD;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
+use crate::components::textarea::textarea;
 use crate::db::ReadPool;
 use crate::media::Media;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, empty_row, fact, facts, format_time, notice, page_header,
+    section_card, status_badge,
+};
 use timada_invoicing::format_rate_fr;
 use timada_invoicing::tax::rate_bps;
 
@@ -316,409 +329,489 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, ""),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold" data-product-id=(&product.id)>
-                    (&product.name)
-                    " " <span class="rounded bg-neutral-100 px-2 text-sm font-normal text-neutral-700" data-product-status=(product.status.as_str())>(status_label(product.status))</span>
-                </h1>
-            </header>
+            page_header(
+                title: &product.name,
+                h1_attrs: attributes! { data-product-id=(&product.id) },
+                status_badge(
+                    tone: status_tone(product.status),
+                    attrs: attributes! { data-product-status=(product.status.as_str()) },
+                    (status_label(product.status))
+                )
+                if editable {
+                    if product.is_published() {
+                        <form method="post" action=(href!(unpublish::unpublish, Slug(slug.clone()), ProductId(product.id.clone())))>
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Unpublish")
+                        </form>
+                    } else {
+                        <form method="post" action=(href!(publish::publish, Slug(slug.clone()), ProductId(product.id.clone())))>
+                            button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Publish")
+                        </form>
+                    }
+                    <form method="post" action=(href!(archive::archive, Slug(slug.clone()), ProductId(product.id.clone())))>
+                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Archive")
+                    </form>
+                }
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Overview"</h2>
-                <dl class="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
-                    <dt class="text-neutral-500">"Slug"</dt><dd><code>(&product.slug)</code></dd>
-                    <dt class="text-neutral-500">"Price"</dt>
-                    <dd data-product-price="" data-product-price-range=(&price_label)>(&price_label)</dd>
-                    <dt class="text-neutral-500">"VAT"</dt>
-                    <dd data-product-vat="">(&tax_label)</dd>
-                    <dt class="text-neutral-500">"Reviews"</dt>
-                    <dd data-product-rating=(rating.review_count)>
+            section_card(
+                title: Some("Overview"),
+                facts(
+                    fact(term: "Slug", <code>(&product.slug)</code>)
+                    fact(term: "Price", attrs: attributes! { data-product-price="" data-product-price-range=(&price_label) }, (&price_label))
+                    fact(term: "VAT", attrs: attributes! { data-product-vat="" }, (&tax_label))
+                    fact(
+                        term: "Reviews",
+                        attrs: attributes! { data-product-rating=(rating.review_count) },
                         (&rating_label)
                         if can_read_reviews {
-                            " · " <a class="underline" href=(crate::app::t::slug::reviews::product_reviews_url(cx, &slug, &product.id))>"See its reviews"</a>
+                            " · " <a class=(LINK) href=(crate::app::t::slug::reviews::product_reviews_url(cx, &slug, &product.id))>"See its reviews"</a>
                         }
-                    </dd>
-                    <dt class="text-neutral-500">"Description"</dt>
-                    <dd data-product-description="" class="whitespace-pre-line">(if product.description.is_empty() { "—" } else { product.description.as_str() })</dd>
-                    <dt class="text-neutral-500">"Created"</dt>
-                    <dd>(&created_by) ", " <time datetime=(product.created_at)>(format_time(product.created_at))</time></dd>
-                    <dt class="text-neutral-500">"Changed"</dt>
-                    <dd><time datetime=(product.updated_at)>(format_time(product.updated_at))</time></dd>
-                </dl>
-            </section>
+                    )
+                    fact(
+                        term: "Description",
+                        attrs: attributes! { data-product-description="" class="whitespace-pre-line" },
+                        (if product.description.is_empty() { "—" } else { product.description.as_str() })
+                    )
+                    fact(term: "Created", (&created_by) ", " <time datetime=(product.created_at)>(format_time(product.created_at))</time>)
+                    fact(term: "Changed", <time datetime=(product.updated_at)>(format_time(product.updated_at))</time>)
+                )
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Pictures"</h2>
+            section_card(
+                title: Some("Pictures"),
                 if gallery.is_empty() {
-                    <p class="text-sm text-neutral-500">"No picture yet. The first one is what a listing shows."</p>
+                    <p class="text-sm text-muted-foreground">"No picture yet. The first one is what a listing shows."</p>
                 }
                 <ul class="grid gap-4 sm:grid-cols-2">
                     for (position, (image, url)) in gallery.iter().enumerate() {
-                        <li class="flex gap-3 rounded border border-neutral-200 p-3" data-image=(&image.id)>
-                            <img class="h-24 w-24 shrink-0 rounded object-cover" src=(url) alt=(&image.alt)
+                        <li class="flex gap-3 rounded-lg border border-border p-3" data-image=(&image.id)>
+                            <img class="h-24 w-24 shrink-0 rounded-md object-cover" src=(url) alt=(&image.alt)
                                 width=(image.width.unwrap_or(96)) height=(image.height.unwrap_or(96)) loading="lazy">
                             <div class="min-w-0 flex-1 text-sm">
                                 if position == 0 {
-                                    <p class="mb-1 text-xs text-neutral-500" data-image-first="">"Shown in listings"</p>
+                                    <p class="mb-1 text-xs text-muted-foreground" data-image-first="">"Shown in listings"</p>
                                 }
                                 if editable {
                                     <form method="post" action=(href!(images::image_id::alt::alt, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
                                         <label class="sr-only" for=(format!("alt-{}", image.id))>"What it shows"</label>
-                                        <input id=(format!("alt-{}", image.id)) name="alt" type="text" maxlength=(MAX_ALT_LEN)
-                                            class="w-full rounded border border-neutral-300 px-2 py-1" placeholder="What it shows" value=(&image.alt)>
-                                        <button class="mt-2 rounded border border-neutral-300 px-2 py-1 text-xs">"Save"</button>
+                                        input(attrs: attributes! {
+                                            id=(format!("alt-{}", image.id)) name="alt" type="text" maxlength=(MAX_ALT_LEN)
+                                            class="h-8 px-2" placeholder="What it shows" value=(&image.alt)
+                                        })
+                                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="mt-2 h-7 px-2 text-xs" }, "Save")
                                     </form>
-                                    <div class="mt-2 flex gap-2">
+                                    <div class="mt-2 flex flex-wrap items-center gap-2">
                                         if position > 0 {
                                             <form method="post" action=(href!(images::image_id::up::up, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
-                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs" aria-label="Move earlier">"↑"</button>
+                                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" aria-label="Move earlier" }, "↑")
                                             </form>
                                         }
                                         if position < last {
                                             <form method="post" action=(href!(images::image_id::down::down, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
-                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs" aria-label="Move later">"↓"</button>
+                                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" aria-label="Move later" }, "↓")
                                             </form>
                                         }
                                         <form method="post" action=(href!(images::image_id::remove::remove, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
-                                            <button class="rounded border border-neutral-300 px-2 py-1 text-xs text-red-700">"Remove"</button>
+                                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove")
                                         </form>
                                     </div>
                                 } else {
-                                    <p class="truncate text-neutral-500">(if image.alt.is_empty() { "—" } else { image.alt.as_str() })</p>
+                                    <p class="truncate text-muted-foreground">(if image.alt.is_empty() { "—" } else { image.alt.as_str() })</p>
                                 }
                             </div>
                         </li>
                     }
                 </ul>
                 if editable && !gallery_full {
-                    <form method="post" enctype="multipart/form-data" class="mt-4 space-y-2"
+                    <form method="post" enctype="multipart/form-data" class="mt-4 flex max-w-xl flex-col gap-4"
                         action=(href!(images::upload::upload, Slug(slug.clone()), ProductId(product.id.clone())))>
-                        <label class="block text-sm font-medium" for="product-image">"Add a picture"</label>
-                        <input id="product-image" name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required="" class="block text-sm">
-                        <label class="block text-sm" for="product-image-alt">"What it shows (optional)"</label>
-                        <input id="product-image-alt" name="alt" type="text" maxlength=(MAX_ALT_LEN)
-                            class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="A blue mug on a desk">
-                        <button class="rounded border border-neutral-300 px-3 py-1 text-sm">"Upload"</button>
+                        field(
+                            field_label(attrs: attributes! { for="product-image" }, "Add a picture")
+                            input(attrs: attributes! {
+                                id="product-image" name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required=""
+                                class="pt-1.5"
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="product-image-alt" }, "What it shows (optional)")
+                            input(attrs: attributes! {
+                                id="product-image-alt" name="alt" type="text" maxlength=(MAX_ALT_LEN) placeholder="A blue mug on a desk"
+                            })
+                        )
+                        <div>
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Upload")
+                        </div>
                     </form>
                 } else if editable {
-                    <p class="mt-4 text-sm text-neutral-500">"This product carries as many pictures as it can. Remove one to add another."</p>
+                    <p class="mt-4 text-sm text-muted-foreground">"This product carries as many pictures as it can. Remove one to add another."</p>
                 }
-            </section>
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Categories"</h2>
+            section_card(
+                title: Some("Categories"),
                 if memberships.is_empty() {
-                    <p class="text-sm text-neutral-500">"In no category yet. A shopper finds a product by browsing the categories it is in."</p>
+                    <p class="text-sm text-muted-foreground">"In no category yet. A shopper finds a product by browsing the categories it is in."</p>
                 }
-                <ul class="divide-y divide-neutral-100 text-sm">
+                <ul class="divide-y divide-border text-sm">
                     for membership in &memberships {
-                        <li class="flex items-center justify-between py-2" data-membership=(&membership.slug)>
-                            <span>
+                        <li class="flex items-center justify-between gap-3 py-2" data-membership=(&membership.slug)>
+                            <span class="flex items-center gap-2">
                                 if membership.archived {
-                                    (&membership.name) " " <span class="rounded bg-neutral-100 px-2 text-xs text-neutral-700">"archived"</span>
+                                    (&membership.name)
+                                    badge(variant: BadgeVariant::Secondary, "archived")
                                 } else {
-                                    <a class="underline" href=(href!(crate::app::t::slug::categories::category_id::index, Slug(slug.clone()), crate::app::t::slug::categories::category_id::CategoryId(membership.id.clone())))>(&membership.name)</a>
+                                    <a class=(LINK) href=(href!(crate::app::t::slug::categories::category_id::index, Slug(slug.clone()), crate::app::t::slug::categories::category_id::CategoryId(membership.id.clone())))>(&membership.name)</a>
                                 }
                             </span>
                             if editable {
                                 <form method="post" action=(href!(uncategorize::uncategorize, Slug(slug.clone()), ProductId(product.id.clone())))>
                                     <input type="hidden" name="category_id" value=(&membership.id)>
-                                    <button class="rounded border border-neutral-300 px-2 py-1 text-xs">"Remove"</button>
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove")
                                 </form>
                             }
                         </li>
                     }
                 </ul>
                 if editable && !joinable.is_empty() {
-                    <form method="post" action=(href!(categorize::categorize, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-3 flex gap-2">
+                    <form method="post" action=(href!(categorize::categorize, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-3 flex flex-wrap items-center gap-2">
                         <label class="sr-only" for="product-category">"Category"</label>
-                        <select id="product-category" name="category_id" class="w-full rounded border border-neutral-300 px-3 py-2" required="">
+                        select(
+                            attrs: attributes! { id="product-category" name="category_id" required="" class="min-w-0 flex-1 sm:max-w-sm" },
                             for choice in &joinable {
                                 <option value=(&choice.id)>(&choice.label)</option>
                             }
-                        </select>
-                        <button class="rounded border border-neutral-300 px-3 py-2 text-sm">"Add to category"</button>
+                        )
+                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Add to category")
                     </form>
                 }
-            </section>
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Options"</h2>
-                <p class="mb-3 text-sm text-neutral-500">
-                    "A product that comes in several colours or sizes varies by them. Settle the options first: once it sells variants they cannot change."
-                </p>
+            section_card(
+                title: Some("Options"),
+                description: Some("A product that comes in several colours or sizes varies by them. Settle the options first: once it sells variants they cannot change."),
                 if options.is_empty() {
-                    <p class="text-sm text-neutral-500">"This product does not vary. It sells at the price above."</p>
+                    <p class="text-sm text-muted-foreground">"This product does not vary. It sells at the price above."</p>
                 }
-                <ul class="space-y-3">
+                <ul class="flex flex-col gap-3">
                     for option in &options {
-                        <li class="rounded border border-neutral-200 p-3" data-option=(&option.id)>
+                        <li class="rounded-lg border border-border p-3" data-option=(&option.id)>
                             if editable && !options_locked {
-                                <form method="post" action=(href!(options::option_id::values::values, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="space-y-2">
-                                    <label class="block text-sm font-medium" for=(format!("option-name-{}", option.id))>"Name of " (&option.name)</label>
-                                    <input id=(format!("option-name-{}", option.id)) name="name" type="text" maxlength=(MAX_OPTION_NAME_LEN) required=""
-                                        class="w-full rounded border border-neutral-300 px-3 py-2" value=(&option.name)>
-                                    <label class="block text-sm" for=(format!("option-values-{}", option.id))>"Values of " (&option.name) ", one a line"</label>
-                                    <textarea id=(format!("option-values-{}", option.id)) name="values" rows="3"
-                                        class="w-full rounded border border-neutral-300 px-3 py-2">(&option.values)</textarea>
-                                    <button class="rounded border border-neutral-300 px-3 py-1 text-sm">"Save option"</button>
+                                <form method="post" action=(href!(options::option_id::values::values, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="flex flex-col gap-3">
+                                    field(
+                                        field_label(attrs: attributes! { for=(format!("option-name-{}", option.id)) }, "Name of " (&option.name))
+                                        input(attrs: attributes! {
+                                            id=(format!("option-name-{}", option.id)) name="name" type="text" maxlength=(MAX_OPTION_NAME_LEN) required=""
+                                            value=(&option.name)
+                                        })
+                                    )
+                                    field(
+                                        field_label(attrs: attributes! { for=(format!("option-values-{}", option.id)) }, "Values of " (&option.name) ", one a line")
+                                        textarea(attrs: attributes! { id=(format!("option-values-{}", option.id)) name="values" rows="3" }, (&option.values))
+                                    )
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save option")
+                                    </div>
                                 </form>
                                 <form method="post" action=(href!(options::option_id::remove::remove, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="mt-2">
-                                    <button class="rounded border border-neutral-300 px-3 py-1 text-xs text-red-700">"Remove option"</button>
+                                    button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove option")
                                 </form>
                             } else {
                                 <p class="text-sm"><strong>(&option.name)</strong></p>
-                                <p class="whitespace-pre-line text-sm text-neutral-500">(&option.values)</p>
+                                <p class="whitespace-pre-line text-sm text-muted-foreground">(&option.values)</p>
                             }
                         </li>
                     }
                 </ul>
                 if options_locked {
-                    <p class="mt-3 text-sm text-neutral-500">"Remove every variant before changing the options."</p>
+                    <p class="mt-3 text-sm text-muted-foreground">"Remove every variant before changing the options."</p>
                 }
                 if can_add_option {
-                    <form method="post" action=(href!(options::define::define, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 space-y-2">
-                        <label class="block text-sm font-medium" for="new-option-name">"Add an option"</label>
-                        <input id="new-option-name" name="name" type="text" maxlength=(MAX_OPTION_NAME_LEN) required=""
-                            class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="Colour">
-                        <label class="block text-sm" for="new-option-values">"Values, one a line"</label>
-                        <textarea id="new-option-values" name="values" rows="3" required=""
-                            class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="Beige&#10;Blue&#10;Grey"></textarea>
-                        <button class="rounded border border-neutral-300 px-3 py-1 text-sm">"Add option"</button>
+                    <form method="post" action=(href!(options::define::define, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 flex max-w-xl flex-col gap-4">
+                        field(
+                            field_label(attrs: attributes! { for="new-option-name" }, "Add an option")
+                            input(attrs: attributes! {
+                                id="new-option-name" name="name" type="text" maxlength=(MAX_OPTION_NAME_LEN) required="" placeholder="Colour"
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="new-option-values" }, "Values, one a line")
+                            textarea(attrs: attributes! { id="new-option-values" name="values" rows="3" required="" placeholder="Beige&#10;Blue&#10;Grey" })
+                        )
+                        <div>
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Add option")
+                        </div>
                     </form>
                 }
-            </section>
+            )
 
             if !options.is_empty() {
-                <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">"Variants"</h2>
-                    <p class="mb-3 text-sm text-neutral-500">
-                        "One combination a shopper buys, with its own price. A product with variants is published without a price of its own."
-                    </p>
-                    <table class="w-full text-left text-sm" data-variants="">
-                        <thead>
-                            <tr class="border-b border-neutral-200 text-neutral-500">
-                                <th class="py-2 font-medium">"Combination"</th>
-                                <th class="py-2 font-medium">"Price"</th>
-                                <th class="py-2 font-medium">"Code"</th>
-                                <th class="py-2 font-medium">"Picture"</th>
-                                <th class="py-2 font-medium"><span class="sr-only">"Actions"</span></th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-neutral-100">
+                section_card(
+                    title: Some("Variants"),
+                    description: Some("One combination a shopper buys, with its own price. A product with variants is published without a price of its own."),
+                    table(
+                        attrs: attributes! { data-variants="" },
+                        table_header(
+                            table_row(
+                                table_head("Combination")
+                                table_head("Price")
+                                table_head("Code")
+                                table_head("Picture")
+                                table_head(<span class="sr-only">"Actions"</span>)
+                            )
+                        )
+                        table_body(
                             if variants.is_empty() {
-                                <tr><td class="py-2 text-neutral-500" colspan="5">"No variant yet."</td></tr>
+                                empty_row(colspan: 5, text: "No variant yet.")
                             }
                             for variant in &variants {
-                                <tr data-variant=(&variant.id)>
-                                    <td class="py-2" data-variant-selections=(&variant.selections)>(&variant.selections)</td>
-                                    <td class="py-2">
+                                table_row(
+                                    attrs: attributes! { data-variant=(&variant.id) },
+                                    table_cell(attrs: attributes! { data-variant-selections=(&variant.selections) }, (&variant.selections))
+                                    table_cell(
                                         if editable {
-                                            <form method="post" action=(href!(variants::variant_id::price::price, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex gap-1">
+                                            <form method="post" action=(href!(variants::variant_id::price::price, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex items-center gap-1">
                                                 <label class="sr-only" for=(format!("variant-amount-{}", variant.id))>"Price of " (&variant.selections)</label>
-                                                <input id=(format!("variant-amount-{}", variant.id)) name="amount" type="text" inputmode="decimal" required=""
-                                                    class="w-20 rounded border border-neutral-300 px-2 py-1" value=(&variant.amount)>
+                                                input(attrs: attributes! {
+                                                    id=(format!("variant-amount-{}", variant.id)) name="amount" type="text" inputmode="decimal" required=""
+                                                    class="h-8 w-20 px-2" value=(&variant.amount)
+                                                })
                                                 <label class="sr-only" for=(format!("variant-currency-{}", variant.id))>"Currency of " (&variant.selections)</label>
-                                                <select id=(format!("variant-currency-{}", variant.id)) name="currency" class="rounded border border-neutral-300 px-1 py-1">
+                                                select(
+                                                    attrs: attributes! { id=(format!("variant-currency-{}", variant.id)) name="currency" class="w-24" },
                                                     for currency in CURRENCIES {
                                                         <option value=(*currency) selected=(variant.currency == *currency)>(*currency)</option>
                                                     }
-                                                </select>
-                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs">"Set"</button>
+                                                )
+                                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Set")
                                             </form>
                                         } else {
                                             (&variant.amount) " " (&variant.currency)
                                         }
-                                    </td>
-                                    <td class="py-2">
+                                    )
+                                    table_cell(
                                         if editable {
-                                            <form method="post" action=(href!(variants::variant_id::sku::sku, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex gap-1">
+                                            <form method="post" action=(href!(variants::variant_id::sku::sku, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex items-center gap-1">
                                                 <label class="sr-only" for=(format!("variant-sku-{}", variant.id))>"Code of " (&variant.selections)</label>
-                                                <input id=(format!("variant-sku-{}", variant.id)) name="sku" type="text" maxlength=(MAX_SKU_LEN)
-                                                    class="w-28 rounded border border-neutral-300 px-2 py-1" value=(&variant.sku)>
-                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs">"Save"</button>
+                                                input(attrs: attributes! {
+                                                    id=(format!("variant-sku-{}", variant.id)) name="sku" type="text" maxlength=(MAX_SKU_LEN)
+                                                    class="h-8 w-28 px-2" value=(&variant.sku)
+                                                })
+                                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Save")
                                             </form>
                                         } else if variant.sku.is_empty() { "—" } else { <code>(&variant.sku)</code> }
-                                    </td>
-                                    <td class="py-2">
+                                    )
+                                    table_cell(
                                         if editable && !picture_choices.is_empty() {
-                                            <form method="post" action=(href!(variants::variant_id::image::image, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex gap-1">
+                                            <form method="post" action=(href!(variants::variant_id::image::image, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex items-center gap-1">
                                                 <label class="sr-only" for=(format!("variant-image-{}", variant.id))>"Picture of " (&variant.selections)</label>
-                                                <select id=(format!("variant-image-{}", variant.id)) name="image_id" class="rounded border border-neutral-300 px-1 py-1">
+                                                select(
+                                                    attrs: attributes! { id=(format!("variant-image-{}", variant.id)) name="image_id" class="w-36" },
                                                     <option value="" selected=(variant.image_id.is_empty())>"None"</option>
                                                     for (id, label) in &picture_choices {
                                                         <option value=(id) selected=(&variant.image_id == id)>(label)</option>
                                                     }
-                                                </select>
-                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs">"Set"</button>
+                                                )
+                                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Set")
                                             </form>
                                         } else { "—" }
-                                    </td>
-                                    <td class="py-2 text-right">
+                                    )
+                                    table_cell(
+                                        attrs: attributes! { class="text-right" },
                                         if editable {
                                             <form method="post" action=(href!(variants::variant_id::remove::remove, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone())))>
-                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs text-red-700">"Remove"</button>
+                                                button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove")
                                             </form>
                                         }
-                                    </td>
-                                </tr>
+                                    )
+                                )
                             }
-                        </tbody>
-                    </table>
+                        )
+                    )
                     if can_add_variant {
-                        <form method="post" action=(href!(variants::define::define, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 space-y-2">
-                            <h3 class="text-sm font-medium">"Add a variant"</h3>
+                        <form method="post" action=(href!(variants::define::define, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 flex max-w-xl flex-col gap-4">
+                            <h3 class="text-sm font-semibold">"Add a variant"</h3>
                             for option in &options {
-                                <label class="block text-sm" for=(format!("pick-{}", option.id))>(&option.name)</label>
-                                <select id=(format!("pick-{}", option.id)) name=(format!("option:{}", option.id)) required=""
-                                    class="w-full rounded border border-neutral-300 px-3 py-2">
-                                    for value in option.values.lines() {
-                                        <option value=(value)>(value)</option>
-                                    }
-                                </select>
+                                field(
+                                    field_label(attrs: attributes! { for=(format!("pick-{}", option.id)) }, (&option.name))
+                                    select(
+                                        attrs: attributes! { id=(format!("pick-{}", option.id)) name=(format!("option:{}", option.id)) required="" },
+                                        for value in option.values.lines() {
+                                            <option value=(value)>(value)</option>
+                                        }
+                                    )
+                                )
                             }
-                            <div class="flex gap-2">
-                                <div class="flex-1">
-                                    <label class="block text-sm" for="variant-amount">"Variant price"</label>
-                                    <input id="variant-amount" name="amount" type="text" inputmode="decimal" required=""
-                                        class="mt-1 w-full rounded border border-neutral-300 px-3 py-2" placeholder="22.90">
-                                </div>
-                                <div>
-                                    <label class="block text-sm" for="variant-currency">"Variant currency"</label>
-                                    <select id="variant-currency" name="currency" class="mt-1 rounded border border-neutral-300 px-3 py-2">
+                            <div class="flex flex-wrap gap-4">
+                                field(
+                                    attrs: attributes! { class="min-w-0 flex-1" },
+                                    field_label(attrs: attributes! { for="variant-amount" }, "Variant price")
+                                    input(attrs: attributes! {
+                                        id="variant-amount" name="amount" type="text" inputmode="decimal" required="" placeholder="22.90"
+                                    })
+                                )
+                                field(
+                                    field_label(attrs: attributes! { for="variant-currency" }, "Variant currency")
+                                    select(
+                                        attrs: attributes! { id="variant-currency" name="currency" class="w-28" },
                                         for currency in CURRENCIES {
                                             <option value=(*currency) selected=(price_currency == *currency)>(*currency)</option>
                                         }
-                                    </select>
-                                </div>
+                                    )
+                                )
                             </div>
-                            <label class="block text-sm" for="variant-sku">"Variant code (optional)"</label>
-                            <input id="variant-sku" name="sku" type="text" maxlength=(MAX_SKU_LEN)
-                                class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="harness-beige-s">
+                            field(
+                                field_label(attrs: attributes! { for="variant-sku" }, "Variant code (optional)")
+                                input(attrs: attributes! {
+                                    id="variant-sku" name="sku" type="text" maxlength=(MAX_SKU_LEN) placeholder="harness-beige-s"
+                                })
+                            )
                             if !picture_choices.is_empty() {
-                                <label class="block text-sm" for="variant-picture">"Variant picture (optional)"</label>
-                                <select id="variant-picture" name="image_id" class="w-full rounded border border-neutral-300 px-3 py-2">
-                                    <option value="">"None"</option>
-                                    for (id, label) in &picture_choices {
-                                        <option value=(id)>(label)</option>
-                                    }
-                                </select>
+                                field(
+                                    field_label(attrs: attributes! { for="variant-picture" }, "Variant picture (optional)")
+                                    select(
+                                        attrs: attributes! { id="variant-picture" name="image_id" },
+                                        <option value="">"None"</option>
+                                        for (id, label) in &picture_choices {
+                                            <option value=(id)>(label)</option>
+                                        }
+                                    )
+                                )
                             }
-                            <button class="rounded border border-neutral-300 px-3 py-1 text-sm">"Add variant"</button>
+                            <div>
+                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Add variant")
+                            </div>
                         </form>
                     }
-                </section>
+                )
             }
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Facts"</h2>
-                <p class="mb-3 text-sm text-neutral-500">
-                    "What a shopper reads beside the description: what it is made of, how big it is."
-                </p>
-                <table class="w-full text-left text-sm" data-attributes="">
-                    <tbody class="divide-y divide-neutral-100">
+            section_card(
+                title: Some("Facts"),
+                description: Some("What a shopper reads beside the description: what it is made of, how big it is."),
+                table(
+                    attrs: attributes! { data-attributes="" },
+                    table_body(
                         if attributes.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="3">"No fact yet."</td></tr>
+                            empty_row(colspan: 3, text: "No fact yet.")
                         }
                         for attribute in &attributes {
-                            <tr data-attribute=(&attribute.name)>
-                                <th class="py-2 pr-4 text-left font-medium" scope="row">(&attribute.name)</th>
-                                <td class="py-2">(&attribute.value)</td>
-                                <td class="py-2 text-right">
+                            table_row(
+                                attrs: attributes! { data-attribute=(&attribute.name) },
+                                <th class="p-3 pr-4 text-left align-middle font-medium" scope="row">(&attribute.name)</th>
+                                table_cell((&attribute.value))
+                                table_cell(
+                                    attrs: attributes! { class="text-right" },
                                     if editable {
                                         <form method="post" action=(href!(attributes::remove::remove, Slug(slug.clone()), ProductId(product.id.clone())))>
                                             <input type="hidden" name="name" value=(&attribute.name)>
-                                            <button class="rounded border border-neutral-300 px-2 py-1 text-xs text-red-700">"Remove"</button>
+                                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove")
                                         </form>
                                     }
-                                </td>
-                            </tr>
+                                )
+                            )
                         }
-                    </tbody>
-                </table>
+                    )
+                )
                 if editable {
-                    <form method="post" action=(href!(attributes::set::set, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 flex gap-2">
-                        <div class="flex-1">
-                            <label class="block text-sm" for="attribute-name">"Fact name"</label>
-                            <input id="attribute-name" name="name" type="text" maxlength=(MAX_ATTRIBUTE_NAME_LEN) required=""
-                                class="mt-1 w-full rounded border border-neutral-300 px-3 py-2" placeholder="Material">
-                        </div>
-                        <div class="flex-1">
-                            <label class="block text-sm" for="attribute-value">"Fact value"</label>
-                            <input id="attribute-value" name="value" type="text" maxlength=(MAX_ATTRIBUTE_VALUE_LEN) required=""
-                                class="mt-1 w-full rounded border border-neutral-300 px-3 py-2" placeholder="Nylon">
-                        </div>
-                        <button class="self-end rounded border border-neutral-300 px-3 py-2 text-sm">"Set fact"</button>
+                    <form method="post" action=(href!(attributes::set::set, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 flex flex-wrap items-end gap-2">
+                        field(
+                            attrs: attributes! { class="min-w-0 flex-1" },
+                            field_label(attrs: attributes! { for="attribute-name" }, "Fact name")
+                            input(attrs: attributes! {
+                                id="attribute-name" name="name" type="text" maxlength=(MAX_ATTRIBUTE_NAME_LEN) required="" placeholder="Material"
+                            })
+                        )
+                        field(
+                            attrs: attributes! { class="min-w-0 flex-1" },
+                            field_label(attrs: attributes! { for="attribute-value" }, "Fact value")
+                            input(attrs: attributes! {
+                                id="attribute-value" name="value" type="text" maxlength=(MAX_ATTRIBUTE_VALUE_LEN) required="" placeholder="Nylon"
+                            })
+                        )
+                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-9" }, "Set fact")
                     </form>
                 }
-            </section>
+            )
 
             if product.is_archived() {
-                <p class="mb-8 text-sm text-neutral-500">"An archived product cannot change any more."</p>
+                <p class="mb-6 text-sm text-muted-foreground">"An archived product cannot change any more."</p>
             }
 
             if editable {
-                <section class="mb-8 grid gap-4 md:grid-cols-2">
-                    <form method="post" action=(href!(rename::rename, Slug(slug.clone()), ProductId(product.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
-                        <label class="block text-sm font-medium" for="product-name">"Name"</label>
-                        <input id="product-name" name="name" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" maxlength=(MAX_NAME_LEN) required="" value=(&product.name)>
-                        <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Rename"</button>
-                    </form>
-                    <form method="post" action=(href!(price::price, Slug(slug.clone()), ProductId(product.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
-                        <label class="block text-sm font-medium" for="product-amount">"Price"</label>
-                        <div class="mt-1 flex gap-2">
-                            <input id="product-amount" name="amount" class="w-full rounded border border-neutral-300 px-3 py-2"
-                                type="text" inputmode="decimal" required="" placeholder="12.50" value=(&current_amount)>
-                            <label class="sr-only" for="product-currency">"Currency"</label>
-                            <select id="product-currency" name="currency" class="rounded border border-neutral-300 px-3 py-2">
-                                for currency in CURRENCIES {
-                                    <option value=(*currency) selected=(current_currency == *currency)>(*currency)</option>
-                                }
-                            </select>
+                <section class="mb-6 grid gap-4 md:grid-cols-2">
+                    <form method="post" action=(href!(rename::rename, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                        field(
+                            field_label(attrs: attributes! { for="product-name" }, "Name")
+                            input(attrs: attributes! {
+                                id="product-name" name="name" type="text" maxlength=(MAX_NAME_LEN) required="" value=(&product.name)
+                            })
+                        )
+                        <div>
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Rename")
                         </div>
-                        <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Set price"</button>
+                    </form>
+                    <form method="post" action=(href!(price::price, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                        field(
+                            field_label(attrs: attributes! { for="product-amount" }, "Price")
+                            <div class="flex gap-2">
+                                input(attrs: attributes! {
+                                    id="product-amount" name="amount" type="text" inputmode="decimal" required="" placeholder="12.50" value=(&current_amount)
+                                })
+                                <label class="sr-only" for="product-currency">"Currency"</label>
+                                select(
+                                    attrs: attributes! { id="product-currency" name="currency" class="w-28 shrink-0" },
+                                    for currency in CURRENCIES {
+                                        <option value=(*currency) selected=(current_currency == *currency)>(*currency)</option>
+                                    }
+                                )
+                            </div>
+                        )
+                        <div>
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Set price")
+                        </div>
                     </form>
                     if charges_vat {
-                        <form method="post" action=(href!(tax_category::tax_category, Slug(slug.clone()), ProductId(product.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
-                            <label class="block text-sm font-medium" for="product-tax">"Kind of goods, for VAT"</label>
-                            <select id="product-tax" name="category" class="mt-1 rounded border border-neutral-300 px-3 py-2">
-                                for (key, label) in TAX_CATEGORIES.iter().copied() {
-                                    <option value=(key) selected=(product.tax_category() == key)>
-                                        (label) " (" (format_rate_fr(rate_bps("FR", key))) " in France)"
-                                    </option>
-                                }
-                            </select>
-                            <p class="mt-1 text-xs text-neutral-500">"Each country taxes a kind at its own rate; most goods are standard."</p>
-                            <button class="mt-3 block rounded border border-neutral-300 px-3 py-1 text-sm">"Set kind"</button>
+                        <form method="post" action=(href!(tax_category::tax_category, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                            field(
+                                field_label(attrs: attributes! { for="product-tax" }, "Kind of goods, for VAT")
+                                select(
+                                    attrs: attributes! { id="product-tax" name="category" },
+                                    for (key, label) in TAX_CATEGORIES.iter().copied() {
+                                        <option value=(key) selected=(product.tax_category() == key)>
+                                            (label) " (" (format_rate_fr(rate_bps("FR", key))) " in France)"
+                                        </option>
+                                    }
+                                )
+                                <p class="text-xs text-muted-foreground">"Each country taxes a kind at its own rate; most goods are standard."</p>
+                            )
+                            <div>
+                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Set kind")
+                            </div>
                         </form>
                     }
-                    <form method="post" action=(href!(describe::describe, Slug(slug.clone()), ProductId(product.id.clone()))) class="rounded border border-neutral-200 bg-white p-4 md:col-span-2">
-                        <label class="block text-sm font-medium" for="product-description">"Description"</label>
-                        <textarea id="product-description" name="description" rows="5" maxlength=(MAX_DESCRIPTION_LEN)
-                            class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">(&product.description)</textarea>
-                        <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Save description"</button>
-                    </form>
-                </section>
-
-                <section class="flex flex-wrap items-center gap-3">
-                    if product.is_published() {
-                        <form method="post" action=(href!(unpublish::unpublish, Slug(slug.clone()), ProductId(product.id.clone())))>
-                            <button class="rounded border border-neutral-300 px-3 py-1 text-sm">"Unpublish"</button>
-                        </form>
-                    } else {
-                        <form method="post" action=(href!(publish::publish, Slug(slug.clone()), ProductId(product.id.clone())))>
-                            <button class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700">"Publish"</button>
-                        </form>
-                    }
-                    <form method="post" action=(href!(archive::archive, Slug(slug.clone()), ProductId(product.id.clone())))>
-                        <button class="rounded border border-red-700 px-3 py-1 text-sm text-red-700 hover:bg-red-50">"Archive"</button>
+                    <form method="post" action=(href!(describe::describe, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6 md:col-span-2"))>
+                        field(
+                            field_label(attrs: attributes! { for="product-description" }, "Description")
+                            textarea(attrs: attributes! { id="product-description" name="description" rows="5" maxlength=(MAX_DESCRIPTION_LEN) }, (&product.description))
+                        )
+                        <div>
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save description")
+                        </div>
                     </form>
                 </section>
             }
         )
     })
+}
+
+/// The colour of a product's status.
+fn status_tone(status: timada_catalog::ProductStatus) -> Tone {
+    match status {
+        timada_catalog::ProductStatus::Draft => Tone::Info,
+        timada_catalog::ProductStatus::Published => Tone::Success,
+        timada_catalog::ProductStatus::Archived => Tone::Neutral,
+    }
 }
 
 #[derive(serde::Deserialize)]
