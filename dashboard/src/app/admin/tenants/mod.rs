@@ -9,13 +9,21 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use crate::app::admin::require_admin;
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::input::input;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
 use crate::tenants::{TenantStatus, Tenants};
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
+    section_card, status_badge,
+};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -48,6 +56,15 @@ pub fn status_label(suspended: bool, status: TenantStatus) -> &'static str {
     }
 }
 
+/// The colour of that word.
+pub fn status_tone(suspended: bool, status: TenantStatus) -> Tone {
+    match (suspended, status) {
+        (true, _) => Tone::Warning,
+        (false, TenantStatus::Running { .. }) => Tone::Success,
+        (false, TenantStatus::Stopped) => Tone::Neutral,
+    }
+}
+
 #[page]
 pub async fn tenants(cx: &Cx) -> Result<impl View> {
     require_admin(cx).await?;
@@ -68,58 +85,70 @@ pub async fn tenants(cx: &Cx) -> Result<impl View> {
             })
             .resolve(cx)
     };
+    let summary = format!(
+        "{total} tenant{}, {} running on this node",
+        if total == 1 { "" } else { "s" },
+        runtime.open_count()
+    );
 
     Ok(view! {
         document(
             title: "Tenants",
             shell: Shell::page("admin_tenants"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Tenants"</h1>
-            </header>
+            page_header(title: "Tenants", subtitle: Some("Every tenant on the platform."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <form method="get" class="mb-4 flex gap-2" role="search">
-                <label class="sr-only" for="tenants-q">"Search tenants"</label>
-                <input id="tenants-q" class="w-full rounded border border-neutral-300 px-3 py-1" type="search" name="q" value=(q.unwrap_or("")) placeholder="Slug or name">
-                <button class="rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100">"Search"</button>
-            </form>
-            <p class="mb-2 text-sm text-neutral-500">
-                (total) " tenant" (if total == 1 { "" } else { "s" })
-                ", " (runtime.open_count()) " running on this node"
-            </p>
-
-            <table class="w-full text-left text-sm">
-                <thead class="border-b border-neutral-300 text-neutral-500">
-                    <tr>
-                        <th class="py-2 pr-3 font-medium">"Name"</th>
-                        <th class="py-2 pr-3 font-medium">"Slug"</th>
-                        <th class="py-2 pr-3 font-medium">"Members"</th>
-                        <th class="py-2 pr-3 font-medium">"Created"</th>
-                        <th class="py-2 font-medium">"Status"</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-neutral-100">
-                    for row in &rows {
-                        <tr class=(if row.suspended { "text-neutral-400" } else { "" })>
-                            <td class="py-2 pr-3">
-                                <a class="underline" href=(href!(tenant_id::index, tenant_id::TenantId(row.id.clone())))>(&row.name)</a>
-                            </td>
-                            <td class="py-2 pr-3"><code>(&row.slug)</code></td>
-                            <td class="py-2 pr-3">(row.member_count)</td>
-                            <td class="py-2 pr-3"><time datetime=(row.created_at)>(format_time(row.created_at as u64))</time></td>
-                            <td class="py-2" data-tenant-status="">(status_label(row.suspended, runtime.status(&row.id)))</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-
-            if pages > 1 {
-                <nav class="mt-4 flex gap-3 text-sm" aria-label="Pages">
-                    if page_number > 1 { <a class="underline" href=(page_link(page_number - 1))>"Previous"</a> }
-                    <span>"Page " (page_number) " of " (pages)</span>
-                    if page_number < pages { <a class="underline" href=(page_link(page_number + 1))>"Next"</a> }
-                </nav>
-            }
+            section_card(
+                filter_bar(
+                    <label class="sr-only" for="tenants-q">"Search tenants"</label>
+                    input(attrs: attributes! {
+                        id="tenants-q" name="q" type="search" value=(q.unwrap_or(""))
+                        class="sm:max-w-xs" placeholder="Slug or name"
+                    })
+                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Search")
+                    <span class="ml-auto text-sm text-muted-foreground">(&summary)</span>
+                )
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Name")
+                            table_head("Slug")
+                            table_head(attrs: attributes! { class="text-right" }, "Members")
+                            table_head("Created")
+                            table_head("Status")
+                        )
+                    )
+                    table_body(
+                        if rows.is_empty() {
+                            empty_row(colspan: 5, text: "No tenant matches.")
+                        }
+                        for row in &rows {
+                            table_row(
+                                attrs: attributes! { class=(if row.suspended { "text-muted-foreground" } else { "" }) },
+                                table_cell(
+                                    <a class=(LINK) href=(href!(tenant_id::index, tenant_id::TenantId(row.id.clone())))>(&row.name)</a>
+                                )
+                                table_cell(<code class="text-xs">(&row.slug)</code>)
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" }, (row.member_count))
+                                table_cell(<time datetime=(row.created_at)>(format_time(row.created_at as u64))</time>)
+                                table_cell(
+                                    status_badge(
+                                        tone: status_tone(row.suspended, runtime.status(&row.id)),
+                                        attrs: attributes! { data-tenant-status="" },
+                                        (status_label(row.suspended, runtime.status(&row.id)))
+                                    )
+                                )
+                            )
+                        }
+                    )
+                )
+                pager(
+                    page: page_number,
+                    pages: pages,
+                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
+                    next: (page_number < pages).then(|| page_link(page_number + 1)),
+                )
+            )
         )
     })
 }

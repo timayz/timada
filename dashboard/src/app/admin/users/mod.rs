@@ -7,12 +7,20 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use crate::app::admin::require_admin;
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::input::input;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
+    section_card, status_badge,
+};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -46,6 +54,21 @@ pub fn users_url(cx: &Cx, message: Option<&str>) -> String {
         .resolve(cx)
 }
 
+/// "Administrator" or "Member".
+pub fn role_label(is_admin: bool) -> &'static str {
+    if is_admin { "Administrator" } else { "Member" }
+}
+
+/// "password, 2 providers, 1 passkey": how the account signs in.
+fn methods_label(has_password: bool, oauth2_count: i64, passkey_count: i64) -> String {
+    format!(
+        "{}{oauth2_count} provider{}, {passkey_count} passkey{}",
+        if has_password { "password, " } else { "" },
+        if oauth2_count == 1 { "" } else { "s" },
+        if passkey_count == 1 { "" } else { "s" },
+    )
+}
+
 #[page]
 pub async fn users(cx: &Cx) -> Result<impl View> {
     let me = require_admin(cx).await?;
@@ -65,63 +88,69 @@ pub async fn users(cx: &Cx) -> Result<impl View> {
             })
             .resolve(cx)
     };
+    let summary = format!("{total} user{}", if total == 1 { "" } else { "s" });
 
     Ok(view! {
         document(
             title: "Users",
             shell: Shell::page("admin_users"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Users"</h1>
-            </header>
+            page_header(title: "Users", subtitle: Some("Everyone with an account on the platform."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <form method="get" class="mb-4 flex gap-2" role="search">
-                <label class="sr-only" for="users-q">"Search users"</label>
-                <input id="users-q" class="w-full rounded border border-neutral-300 px-3 py-1" type="search" name="q" value=(q.unwrap_or("")) placeholder="Account or name">
-                <button class="rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100">"Search"</button>
-            </form>
-            <p class="mb-2 text-sm text-neutral-500">(total) " user" (if total == 1 { "" } else { "s" })</p>
-
-            <table class="w-full text-left text-sm">
-                <thead class="border-b border-neutral-300 text-neutral-500">
-                    <tr>
-                        <th class="py-2 pr-3 font-medium">"Name"</th>
-                        <th class="py-2 pr-3 font-medium">"Account"</th>
-                        <th class="py-2 pr-3 font-medium">"Role"</th>
-                        <th class="py-2 pr-3 font-medium">"Sign-in methods"</th>
-                        <th class="py-2 font-medium">"Last sign-in"</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-neutral-100">
-                    for row in &rows {
-                        <tr class=(if row.deleted { "text-neutral-400" } else { "" })>
-                            <td class="py-2 pr-3">
-                                <a class="underline" href=(href!(user_id::user, user_id::UserId(row.id.clone())))>(&row.label)</a>
-                                if row.id == me.id { " " <span class="text-neutral-500">"(you)"</span> }
-                                if row.deleted { " " <span class="rounded bg-neutral-200 px-1 text-xs text-neutral-700">"deleted"</span> }
-                            </td>
-                            <td class="py-2 pr-3">(&row.account)</td>
-                            <td class="py-2 pr-3">(if row.is_admin { "Administrator" } else { "Member" })</td>
-                            <td class="py-2 pr-3">(if row.has_password { "password, " } else { "" }) (row.oauth2_count) " provider" (if row.oauth2_count == 1 { "" } else { "s" }) ", " (row.passkey_count) " passkey" (if row.passkey_count == 1 { "" } else { "s" })</td>
-                            <td class="py-2">
-                                if let Some(at) = row.last_sign_in_at {
-                                    <time datetime=(at)>(format_time(at as u64))</time>
-                                } else {
-                                    "never"
-                                }
-                            </td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-
-            if pages > 1 {
-                <nav class="mt-4 flex gap-3 text-sm" aria-label="Pages">
-                    if page_number > 1 { <a class="underline" href=(page_link(page_number - 1))>"Previous"</a> }
-                    <span>"Page " (page_number) " of " (pages)</span>
-                    if page_number < pages { <a class="underline" href=(page_link(page_number + 1))>"Next"</a> }
-                </nav>
-            }
+            section_card(
+                filter_bar(
+                    <label class="sr-only" for="users-q">"Search users"</label>
+                    input(attrs: attributes! {
+                        id="users-q" name="q" type="search" value=(q.unwrap_or(""))
+                        class="sm:max-w-xs" placeholder="Account or name"
+                    })
+                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Search")
+                    <span class="ml-auto text-sm text-muted-foreground">(&summary)</span>
+                )
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Name")
+                            table_head("Role")
+                            table_head("Sign-in methods")
+                            table_head("Last sign-in")
+                        )
+                    )
+                    table_body(
+                        if rows.is_empty() {
+                            empty_row(colspan: 4, text: "No user matches.")
+                        }
+                        for row in &rows {
+                            table_row(
+                                attrs: attributes! { class=(if row.deleted { "text-muted-foreground" } else { "" }) },
+                                table_cell(
+                                    <span class="flex flex-wrap items-center gap-2">
+                                        <a class=(LINK) href=(href!(user_id::user, user_id::UserId(row.id.clone())))>(&row.label)</a>
+                                        if row.id == me.id { <span class="text-muted-foreground">"(you)"</span> }
+                                        if row.deleted { status_badge(tone: Tone::Neutral, "deleted") }
+                                    </span>
+                                    <span class="block text-xs text-muted-foreground">(&row.account)</span>
+                                )
+                                table_cell((role_label(row.is_admin)))
+                                table_cell((methods_label(row.has_password, row.oauth2_count, row.passkey_count)))
+                                table_cell(
+                                    if let Some(at) = row.last_sign_in_at {
+                                        <time datetime=(at)>(format_time(at as u64))</time>
+                                    } else {
+                                        "never"
+                                    }
+                                )
+                            )
+                        }
+                    )
+                )
+                pager(
+                    page: page_number,
+                    pages: pages,
+                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
+                    next: (page_number < pages).then(|| page_link(page_number + 1)),
+                )
+            )
         )
     })
 }

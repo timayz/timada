@@ -13,8 +13,9 @@ use timada_tenancy::{CompanyState, tenants_of_company};
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{error::not_found, href, module_param, page, path_param, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::identity_fields;
@@ -22,8 +23,11 @@ use crate::app::auth::Flash;
 use crate::app::t::slug::Slug;
 use crate::app::tenants::tenancy;
 use crate::auth::{require_user, user_labels};
+use crate::components::alert::{AlertVariant, alert, alert_description};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::components::input::input;
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, notice};
+use crate::ui::{LINK, Shell, document, icons, notice, page_header, section_card};
 
 module_param!(pub company_id);
 
@@ -83,75 +87,91 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let exempt_past_threshold = distance.passed && !legal.is_vat_registered();
     let id = company.id.clone();
     let title = format!("{} · Companies", company.name());
+    let siren = format!("SIREN {}", company.siren);
+    let distance_title = format!("Sales to EU consumers abroad, {year}");
 
     Ok(view! {
         document(
             title: &title,
             shell: Shell::page("companies"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold" data-company-siren=(&company.siren)>(company.name())</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(oss::oss, CompanyId(id.clone())))>"One-Stop Shop return"</a>
-                </nav>
-            </header>
+            page_header(
+                title: &company.name(),
+                subtitle: Some(&siren),
+                h1_attrs: attributes! { data-company-siren=(&company.siren) },
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(oss::oss, CompanyId(id.clone())))>
+                    icon(data: icons::INVOICING)
+                    "One-Stop Shop return"
+                </a>
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-6 rounded border border-neutral-200 bg-white p-4 text-sm" data-eu-distance=(distance.sales_cents)>
-                <h2 class="mb-1 text-lg font-medium">"Sales to EU consumers abroad, " (year)</h2>
-                <p>
-                    <strong>(&sales)</strong> " excluding VAT, every tenant together, of the " (&threshold) " a year above which their countries' VAT applies."
+            section_card(
+                title: Some(&distance_title),
+                attrs: attributes! { data-eu-distance=(distance.sales_cents) },
+                <p class="text-sm">
+                    <strong class="text-lg tabular-nums">(&sales)</strong> " excluding VAT, every tenant together, of the " (&threshold) " a year above which their countries' VAT applies."
                     if distance.passed { " " <strong data-eu-threshold-passed="">"Threshold passed: their VAT applies for the rest of the year and all of next."</strong> }
                 </p>
                 if exempt_past_threshold {
-                    <p role="alert" class="mt-2 rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
-                        "Past the threshold, the exemption no longer covers these sales: register for VAT and the One-Stop Shop, then enter the VAT number below."
-                    </p>
+                    alert(
+                        variant: AlertVariant::Warning,
+                        attrs: attributes! { role="alert" class="mt-4" },
+                        icon(data: icons::WARNING)
+                        alert_description(
+                            "Past the threshold, the exemption no longer covers these sales: register for VAT and the One-Stop Shop, then enter the VAT number below."
+                        )
+                    )
                 }
-            </section>
+            )
 
-            <section class="mb-6 rounded border border-neutral-200 bg-white p-4 text-sm">
-                <h2 class="mb-2 text-lg font-medium">"Tenants selling as this company"</h2>
+            section_card(
+                title: Some("Tenants selling as this company"),
+                description: Some("Each one's invoices are numbered in its own series."),
                 if tenants.is_empty() {
-                    <p class="text-neutral-500">"None yet: link one from its Invoicing page."</p>
+                    <p class="text-sm text-muted-foreground">"None yet: link one from its Invoicing page."</p>
+                } else {
+                    <ul class="divide-y divide-border text-sm">
+                        for tenant in &tenants {
+                            <li class="flex flex-wrap items-center justify-between gap-2 py-2.5" data-company-tenant=(&tenant.slug)>
+                                <a class=(LINK) href=(href!(crate::app::t::slug::index, Slug(tenant.slug.clone())))>(&tenant.name)</a>
+                                <code class="text-xs" data-series-code=(&tenant.series_code)>
+                                    if tenant.series_code.is_empty() { "F/A…" } else { (&tenant.series_code) "-F/A…" }
+                                </code>
+                            </li>
+                        }
+                    </ul>
                 }
-                <ul class="divide-y divide-neutral-100">
-                    for tenant in &tenants {
-                        <li class="flex items-center justify-between py-2" data-company-tenant=(&tenant.slug)>
-                            <a class="underline" href=(href!(crate::app::t::slug::index, Slug(tenant.slug.clone())))>(&tenant.name)</a>
-                            <span class="font-mono" data-series-code=(&tenant.series_code)>
-                                if tenant.series_code.is_empty() { "F/A…" } else { (&tenant.series_code) "-F/A…" }
-                            </span>
-                        </li>
-                    }
-                </ul>
-            </section>
+            )
 
-            <section class="mb-6 rounded border border-neutral-200 bg-white p-4 text-sm">
-                <h2 class="mb-2 text-lg font-medium">"Owners"</h2>
-                <ul class="mb-3 divide-y divide-neutral-100">
+            section_card(
+                title: Some("Owners"),
+                description: Some("Owners edit the company and link tenants to it. A registered user is added by e-mail."),
+                <ul class="divide-y divide-border text-sm">
                     for owner in &owners {
-                        <li class="flex items-center justify-between py-2" data-company-owner=(labels.get(owner).map_or(owner.as_str(), String::as_str))>
-                            (labels.get(owner).map_or(owner.as_str(), String::as_str))
+                        <li class="flex flex-wrap items-center justify-between gap-2 py-2.5" data-company-owner=(labels.get(owner).map_or(owner.as_str(), String::as_str))>
+                            <span class="font-medium">(labels.get(owner).map_or(owner.as_str(), String::as_str))</span>
                             if owners.len() > 1 {
                                 <form method="post" action=(href!(remove_owner::remove_owner, CompanyId(id.clone())))>
                                     <input type="hidden" name="user_id" value=(owner)>
-                                    <button class="text-red-800 underline">"Remove"</button>
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="text-destructive-text" }, "Remove")
                                 </form>
                             }
                         </li>
                     }
                 </ul>
-                <form method="post" action=(href!(owners::add_owner, CompanyId(id.clone()))) class="flex gap-2">
+                <form method="post" action=(href!(owners::add_owner, CompanyId(id.clone()))) class="mt-4 flex flex-wrap gap-2">
                     <label class="sr-only" for="owner-email">"E-mail of the new owner"</label>
-                    <input id="owner-email" name="email" type="email" required="" placeholder="E-mail of a registered user"
-                        class="w-full rounded border border-neutral-300 px-3 py-2">
-                    <button class="rounded border border-neutral-300 px-3 py-2">"Add owner"</button>
+                    input(attrs: attributes! {
+                        id="owner-email" name="email" type="email" required=""
+                        placeholder="E-mail of a registered user" class="sm:max-w-sm"
+                    })
+                    button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, icon(data: icons::PLUS) "Add owner")
                 </form>
-            </section>
+            )
 
-            <form method="post" action=(href!(save::save, CompanyId(id.clone()))) class="space-y-6">
+            <form method="post" action=(href!(save::save, CompanyId(id.clone())))>
                 identity_fields(legal: &legal)
-                <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save"</button>
+                button(attrs: attributes! { type="submit" }, "Save")
             </form>
         )
     })

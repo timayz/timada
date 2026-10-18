@@ -363,6 +363,24 @@ pub async fn session_row(
     })
 }
 
+/// A row of a sign-ins list: when, how, from where, on what.
+#[component]
+pub async fn sign_in_row(
+    at: u64,
+    method: String,
+    ip: Option<&str>,
+    user_agent: Option<&str>,
+) -> Result<impl View> {
+    Ok(view! {
+        <li class="py-2.5 text-sm">
+            <time datetime=(at)>(format_time(at))</time>
+            " · " (method)
+            if let Some(ip) = ip { " · " (ip) }
+            if let Some(ua) = user_agent { <span class="block truncate text-muted-foreground">(ua)</span> }
+        </li>
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

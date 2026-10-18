@@ -11,14 +11,15 @@ use topcoat::{
         error::{SeeOther, see_other},
         href, page, query_params, route,
     },
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{IdentityForm, company_id, identity_fields};
 use crate::app::t::slug::invoicing::invoicing_url;
 use crate::app::tenants::{error_code, tenancy};
 use crate::auth::require_user;
-use crate::ui::{Shell, document, notice};
+use crate::components::button::button;
+use crate::ui::{Shell, document, notice, page_header};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct NewQuery {
@@ -52,14 +53,15 @@ pub async fn new(cx: &Cx) -> Result<impl View> {
         document(
             title: "Register a company",
             shell: Shell::page("companies"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Register a company"</h1>
-            </header>
+            page_header(
+                title: "Register a company",
+                subtitle: Some("What its invoices say about it. You become its owner."),
+            )
             notice(error: query.error.as_deref())
-            <form method="post" action=(href!(create)) class="space-y-6">
+            <form method="post" action=(href!(create))>
                 <input type="hidden" name="tenant" value=(&tenant)>
                 identity_fields(legal: &legal)
-                <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Register"</button>
+                button(attrs: attributes! { type="submit" }, "Register")
             </form>
         )
     })
