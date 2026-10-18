@@ -21,8 +21,8 @@ use crate::aggregator::{
     AddressRemoved, AddressSaved, AttemptFailed, CodeConsumed, CodeIssued, Forgotten, Registered,
     SessionEnded, SessionStarted, SessionsRevoked,
 };
-use crate::key::{self, ShopperKey, ShopperKeys};
 use crate::value_object::{challenge_id, session_id, shopper_id};
+use timada_core::keys::{self as key, Key as ShopperKey, Keys as ShopperKeys};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor>(pub E);

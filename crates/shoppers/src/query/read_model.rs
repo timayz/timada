@@ -20,7 +20,7 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::command::{Shopper, shopper_projection};
-use crate::key::ShopperKeys;
+use timada_core::Keys as ShopperKeys;
 
 /// The cursor identity of the read-model subscription, in each tenant's store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-shoppers/read-models";

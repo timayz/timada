@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::Forgotten;
 use crate::error::ShopperError;
-use crate::key::ShopperKeys;
+use timada_core::Keys as ShopperKeys;
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {

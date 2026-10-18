@@ -11,7 +11,8 @@
 //! account: every session ends, while the orders stay with the shop.
 //!
 //! Events cannot be erased, so they never hold a shopper's personal data in
-//! clear. Each registration draws a random [`ShopperKey`], and the address
+//! clear. Each registration draws a random [`ShopperKey`] (the shared
+//! [`timada_core::keys`]), and the address
 //! signed in with and the addresses shipped to are recorded sealed under it.
 //! The crate never stores a key: the caller keeps them through
 //! [`ShopperKeys`] and destroys the shopper's key when the account is
@@ -27,12 +28,12 @@
 pub mod aggregator;
 mod command;
 mod error;
-mod key;
 mod query;
 mod value_object;
 
 pub use command::*;
 pub use error::*;
-pub use key::*;
 pub use query::*;
+pub use timada_core::keys::new_key_id;
+pub use timada_core::{Key as ShopperKey, Keys as ShopperKeys};
 pub use value_object::*;

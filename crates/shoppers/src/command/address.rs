@@ -3,8 +3,8 @@ use timada_orders::{ShippingAddress, normalize_shipping};
 
 use crate::aggregator::{AddressRemoved, AddressSaved};
 use crate::error::ShopperError;
-use crate::key::{self, ShopperKeys};
 use crate::value_object::{MAX_ADDRESSES, address_id};
+use timada_core::keys::{self as key, Keys as ShopperKeys};
 
 use super::address_aad;
 

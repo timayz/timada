@@ -6115,8 +6115,12 @@ dependencies = [
 name = "timada-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
+ "async-trait",
+ "base64 0.22.1",
  "evento",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -6269,7 +6273,6 @@ dependencies = [
 name = "timada-shoppers"
 version = "0.1.0"
 dependencies = [
- "aes-gcm",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -6320,6 +6323,7 @@ name = "timada-support"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bitcode",
  "evento",
  "sqlx",
