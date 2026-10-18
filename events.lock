@@ -2,6 +2,14 @@
 # `event` and `type` lines are frozen — add a new variant instead of editing
 # one. A `view` line may change when its projection's `.revision(n)` grows.
 
+event timada-aliexpress/Product::ImportFailed { reason: String, failed_by: String }
+event timada-aliexpress/Product::ImportRequested { ae_product_id: String, requested_by: String }
+event timada-aliexpress/Product::ImportStarted { started_by: String }
+event timada-aliexpress/Product::Imported { product_id: String, skus: Vec<SkuLink>, imported_by: String }
+event timada-aliexpress/Product::PricingSet { pricing: Option<timada_tenancy::PricingRule>, set_by: String }
+event timada-aliexpress/Product::SyncFailed { reason: String, failed_by: String }
+event timada-aliexpress/Product::Synced { skus: Vec<SkuLink>, offline: bool, synced_by: String }
+event timada-aliexpress/Product::Unlinked { unlinked_by: String }
 event timada-catalog/Category::Archived { archived_by: String }
 event timada-catalog/Category::Created { slug: String, name: String, parent_id: Option<String>, created_by: String }
 event timada-catalog/Category::Described { description: String, described_by: String }
@@ -176,6 +184,9 @@ event timada-tenancy/CompanySiren::Released { released_by: String }
 event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }
+event timada-tenancy/Tenant::AliexpressAuthorized { access_token_sealed: Vec<u8>, refresh_token_sealed: Vec<u8>, expires_at: u64, refresh_expires_at: u64, account: String, authorized_by: String }
+event timada-tenancy/Tenant::AliexpressConfigured { app_key: String, app_secret_sealed: Vec<u8>, ship_to_country: String, currency: String, language: String, pricing: Option<PricingRule>, configured_by: String }
+event timada-tenancy/Tenant::AliexpressRemoved { removed_by: String }
 event timada-tenancy/Tenant::CompanyLinked { company_id: String, series_code: String, linked_by: String }
 event timada-tenancy/Tenant::CompanyUnlinked { unlinked_by: String }
 event timada-tenancy/Tenant::Created { slug: String, name: String, created_by: String }
@@ -204,6 +215,7 @@ event timada-tenancy/Tenant::Suspended { reason: String }
 event timada-tenancy/TenantSlug::Claimed { tenant_id: String }
 event timada-tenancy/TenantSlug::Released unit
 
+type timada_aliexpress::aggregator::SkuLink { sku_id: String, variant_id: Option<String>, cost_cents: u64, available: u32 }
 type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
 type timada_identity::value_object::ChallengePurpose enum { Register, SignIn, ResetPassword }
 type timada_identity::value_object::SignInMethod enum { OAuth2, Passkey }
@@ -215,3 +227,5 @@ type timada_orders::value_object::OrderLine { product_id: String, variant_id: Op
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, country: String, phone: Option<String> }
 type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32> }
+type timada_tenancy::value_object::PricingRule { multiplier_bps: u32, plus_cents: u64, rounding: Rounding }
+type timada_tenancy::value_object::Rounding enum { Cent, Ninety9, Whole }

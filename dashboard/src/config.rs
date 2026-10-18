@@ -48,6 +48,9 @@ pub struct Config {
     /// How many invitations members may send; every setting has a default.
     #[serde(default)]
     pub invitations: InvitationsConfig,
+    /// Products imported from AliExpress; every setting has a default.
+    #[serde(default)]
+    pub aliexpress: AliexpressConfig,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -382,6 +385,21 @@ impl InvitationsConfig {
         }
         Ok(())
     }
+}
+
+/// Products a shop imports from AliExpress through its own app. The app's
+/// secret and tokens are kept encrypted under `secrets.key`: without it, no
+/// shop can connect.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct AliexpressConfig {
+    /// Where AliExpress's open platform is reached; its own address when
+    /// unset. Tests point it at a stand-in.
+    #[serde(default)]
+    pub api_url: Option<String>,
+    /// Where a merchant's AliExpress account says yes to their app;
+    /// AliExpress's own page when unset.
+    #[serde(default)]
+    pub authorize_url: Option<String>,
 }
 
 /// Invoices.

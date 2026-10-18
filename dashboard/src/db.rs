@@ -147,5 +147,6 @@ pub fn migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
     migrator.add_migrations(timada_reviews::migrations())?;
     migrator.add_migrations(timada_support::migrations())?;
     migrator.add_migrations(timada_invoicing::migrations())?;
+    migrator.add_migrations(timada_aliexpress::migrations())?;
     Ok(migrator)
 }

@@ -1,0 +1,25 @@
+[package]
+name = "timada-aliexpress"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+evento.workspace = true
+timada-catalog = { path = "../catalog" }
+timada-catalog-import = { path = "../catalog-import" }
+timada-tenancy = { path = "../tenancy" }
+bitcode.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+# Calls AliExpress's open platform; signs each call with the app's secret.
+reqwest.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+sqlx = { workspace = true, features = ["derive"] }
+sqlx_migrator.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+

@@ -123,7 +123,7 @@ struct Section {
 
 /// A tenant's sections, in rail order. The labels are what the pages and
 /// the browser tests call them.
-static SECTIONS: [Section; 17] = [
+static SECTIONS: [Section; 18] = [
     Section {
         key: "products",
         label: "Products",
@@ -191,6 +191,12 @@ static SECTIONS: [Section; 17] = [
         group: Group::Settings,
     },
     Section {
+        key: "aliexpress",
+        label: "AliExpress",
+        icon: icons::ALIEXPRESS,
+        group: Group::Settings,
+    },
+    Section {
         key: "shipping",
         label: "Shipping",
         icon: icons::SHIPPING,
@@ -246,6 +252,7 @@ fn allowed(nav: &TenantNav, key: &str) -> bool {
         "reviews" => nav.reviews,
         "messages" => nav.messages,
         "payments" => nav.payments,
+        "aliexpress" => nav.aliexpress,
         "shipping" => nav.shipping,
         "mail" => nav.mail,
         "invoicing" => nav.invoicing,
@@ -272,6 +279,7 @@ pub fn section_url(cx: &Cx, slug: &str, key: &str) -> String {
         "reviews" => href!(t::reviews::index, slug).resolve(cx),
         "messages" => href!(t::messages::index, slug).resolve(cx),
         "payments" => href!(t::payments::index, slug).resolve(cx),
+        "aliexpress" => href!(t::aliexpress::index, slug).resolve(cx),
         "shipping" => href!(t::shipping::index, slug).resolve(cx),
         "mail" => href!(t::mail::index, slug).resolve(cx),
         "invoicing" => href!(t::invoicing::index, slug).resolve(cx),

@@ -21,6 +21,7 @@ pub const OFFERS: IconData = iconify_icon!("lucide:tag");
 pub const REVIEWS: IconData = iconify_icon!("lucide:star");
 pub const MESSAGES: IconData = iconify_icon!("lucide:message-square");
 pub const PAYMENTS: IconData = iconify_icon!("lucide:credit-card");
+pub const ALIEXPRESS: IconData = iconify_icon!("lucide:package-plus");
 pub const SHIPPING: IconData = iconify_icon!("lucide:truck");
 pub const MAIL: IconData = iconify_icon!("lucide:mail");
 pub const INVOICING: IconData = iconify_icon!("lucide:receipt");

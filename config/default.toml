@@ -163,6 +163,16 @@ dir = "data/shopper-keys"
 # # The window both limits count over, in seconds.
 # window_secs = 86400
 
+# Products a shop imports from AliExpress, through the merchant's own
+# AliExpress app (registered on AliExpress's open platform, with
+# dropshipping access). The app's secret and the tokens of the account it
+# acts for are kept encrypted under `secrets.key`; without it no shop can
+# connect. Only the addresses of AliExpress's own services can be changed
+# (tests point them at a stand-in).
+# [aliexpress]
+# api_url = "https://api-sg.aliexpress.com"
+# authorize_url = "https://api-sg.aliexpress.com/oauth/authorize"
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events. A connected storefront keeps its tenant's database open.

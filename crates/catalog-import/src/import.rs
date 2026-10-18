@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -66,6 +66,9 @@ pub struct ImportOptions {
     pub limit: Option<usize>,
     /// Pictures read or fetched at once.
     pub concurrency: usize,
+    /// Whether a product goes on sale once filled in; a draft otherwise,
+    /// for the merchant to check first.
+    pub publish: bool,
 }
 
 impl Default for ImportOptions {
@@ -73,8 +76,46 @@ impl Default for ImportOptions {
         Self {
             limit: None,
             concurrency: 8,
+            publish: true,
         }
     }
+}
+
+/// One product an import created.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ImportedProduct {
+    pub product_id: String,
+    pub slug: String,
+    /// The id of each of the seed's variants, in the seed's order; `None`
+    /// for one the catalog refused.
+    pub variant_ids: Vec<Option<String>>,
+    pub images: usize,
+    pub warnings: Vec<String>,
+}
+
+/// Creates one product from `seed` as `actor` and fills it in (published
+/// when `options` says so), whether or not one already has its slug: a slug
+/// taken gets one derived from the name. Its pictures are read from
+/// `pictures_dir` when the seed names a file, fetched otherwise. Something
+/// the catalog refuses takes the product off again and is the error.
+pub async fn import_one<E: Executor>(
+    catalog: &Command<E>,
+    actor: &str,
+    seed: &ProductSeed,
+    pictures_dir: &Path,
+    images: Arc<dyn Images>,
+    options: &ImportOptions,
+) -> anyhow::Result<ImportedProduct> {
+    import_product(
+        catalog,
+        actor,
+        pictures_dir,
+        seed,
+        &HashMap::new(),
+        images,
+        options,
+    )
+    .await
 }
 
 /// What a run did.
@@ -116,7 +157,7 @@ pub async fn import<E: Executor>(
             match import_product(
                 catalog,
                 actor,
-                snapshot,
+                &snapshot.dir,
                 seed,
                 &categories,
                 images.clone(),
@@ -126,7 +167,7 @@ pub async fn import<E: Executor>(
             {
                 Ok(outcome) => {
                     report.products_created += 1;
-                    report.variants += outcome.variants;
+                    report.variants += outcome.variant_ids.iter().flatten().count();
                     report.images += outcome.images;
                     report.warnings.extend(outcome.warnings);
                 }
@@ -253,22 +294,15 @@ async fn keep_picture(
     images.fetch(url).await
 }
 
-#[derive(Default)]
-struct ProductOutcome {
-    variants: usize,
-    images: usize,
-    warnings: Vec<String>,
-}
-
 async fn import_product<E: Executor>(
     catalog: &Command<E>,
     actor: &str,
-    snapshot: &Snapshot,
+    pictures_dir: &Path,
     seed: &ProductSeed,
     categories: &HashMap<String, String>,
     images: Arc<dyn Images>,
     options: &ImportOptions,
-) -> anyhow::Result<ProductOutcome> {
+) -> anyhow::Result<ImportedProduct> {
     let product = match catalog
         .create_product(
             actor,
@@ -296,7 +330,14 @@ async fn import_product<E: Executor>(
         Err(err) => return Err(err.into()),
     };
     match fill_product(
-        catalog, actor, snapshot, &product, seed, categories, images, options,
+        catalog,
+        actor,
+        pictures_dir,
+        &product,
+        seed,
+        categories,
+        images,
+        options,
     )
     .await
     {
@@ -316,15 +357,19 @@ async fn import_product<E: Executor>(
 async fn fill_product<E: Executor>(
     catalog: &Command<E>,
     actor: &str,
-    snapshot: &Snapshot,
+    pictures_dir: &Path,
     product: &ProductState,
     seed: &ProductSeed,
     categories: &HashMap<String, String>,
     images: Arc<dyn Images>,
     options: &ImportOptions,
-) -> anyhow::Result<ProductOutcome> {
+) -> anyhow::Result<ImportedProduct> {
     let id = product.id.as_str();
-    let mut outcome = ProductOutcome::default();
+    let mut outcome = ImportedProduct {
+        product_id: product.id.clone(),
+        slug: product.slug.clone(),
+        ..Default::default()
+    };
     if !seed.description.is_empty() {
         catalog
             .describe_product(actor, id, &seed.description)
@@ -359,7 +404,7 @@ async fn fill_product<E: Executor>(
         for (offset, image) in chunk.iter().enumerate() {
             let images = images.clone();
             let url = image.url.clone();
-            let file = snapshot.picture_path(image);
+            let file = image.file.as_ref().map(|file| pictures_dir.join(file));
             set.spawn(async move { (offset, keep_picture(&*images, file, &url).await) });
         }
         let mut results: Vec<Option<StoredImage>> = vec![None; chunk.len()];
@@ -463,9 +508,10 @@ async fn fill_product<E: Executor>(
                 other => other,
             };
             match defined {
-                Ok(_) => outcome.variants += 1,
-                Err(CatalogError::VariantExists) => {}
+                Ok(variant_id) => outcome.variant_ids.push(Some(variant_id)),
+                Err(CatalogError::VariantExists) => outcome.variant_ids.push(None),
                 Err(err) => {
+                    outcome.variant_ids.push(None);
                     outcome.warnings.push(format!(
                         "{}: variant {:?}: {err}",
                         seed.slug, variant.selections
@@ -474,6 +520,8 @@ async fn fill_product<E: Executor>(
             }
         }
     }
-    catalog.publish_product(actor, id).await?;
+    if options.publish {
+        catalog.publish_product(actor, id).await?;
+    }
     Ok(outcome)
 }

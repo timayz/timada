@@ -323,6 +323,52 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         None => "No published review".to_owned(),
     };
     let editable = can_manage && !product.is_archived();
+    // The AliExpress item it was imported from, read from its own stream.
+    let can_aliexpress = access
+        .can(cx, timada_tenancy::PERMISSION_ALIEXPRESS_MANAGE)
+        .await?;
+    let link = match timada_aliexpress::link_of_product(pool, &access.tenant.id, &product.id)
+        .await
+        .map_err(|err| topcoat::Error::from_anyhow(err.into()))?
+    {
+        Some(row) => timada_aliexpress::Command(access.executor()?.clone())
+            .load_link_by_id(&row.id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+            .filter(|link| link.is_linked()),
+        None => None,
+    };
+    let link_costs: Vec<(String, String, u32)> = link
+        .as_ref()
+        .map(|link| {
+            link.skus
+                .iter()
+                .map(|sku| {
+                    let label = sku
+                        .variant_id
+                        .as_deref()
+                        .and_then(|id| product.variant(id))
+                        .map(|variant| {
+                            VariantRow::of(variant, &product, StockView::default()).selections
+                        })
+                        .unwrap_or_else(|| product.name.clone());
+                    let cost =
+                        format_money(sku.cost_cents, product.currency().unwrap_or(CURRENCIES[0]));
+                    (label, cost, sku.available)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let link_rule = link.as_ref().and_then(|link| link.pricing);
+    let link_rule_fields = crate::app::t::slug::aliexpress::RuleFields::of(link_rule);
+    let link_rule_label = link_rule
+        .map(|rule| {
+            crate::app::t::slug::aliexpress::rule_label(
+                Some(rule),
+                product.currency().unwrap_or(CURRENCIES[0]),
+            )
+        })
+        .unwrap_or_else(|| "The shop's".to_owned());
     let gallery_full = gallery.len() >= MAX_IMAGES_PER_PRODUCT;
     let last = gallery.len().saturating_sub(1);
     // The view takes what it renders, so the menus and rows are built as
@@ -816,6 +862,68 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <div>
                                 button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Add variant")
                             </div>
+                        </form>
+                    }
+                )
+            }
+
+            if let Some(link) = &link {
+                section_card(
+                    title: Some("AliExpress"),
+                    description: Some("Imported from AliExpress: its stock, and its price when a rule prices it, are read again from there."),
+                    <div data-product-aliexpress=(&link.ae_product_id) data-aliexpress-offline=(link.offline)>
+                        facts(
+                            fact(term: "Item", <a class=(LINK) href=(format!("https://www.aliexpress.com/item/{}.html", link.ae_product_id)) rel="noopener noreferrer" target="_blank">(&link.ae_product_id)</a>)
+                            fact(term: "Last read",
+                                if let Some(at) = link.last_synced_at {
+                                    <time datetime=(at)>(format_time(at))</time>
+                                } else { "—" }
+                            )
+                            if link.offline {
+                                fact(term: "On AliExpress", status_badge(tone: crate::ui::Tone::Warning, "No longer sold"))
+                            }
+                            if let Some(error) = &link.last_error {
+                                fact(term: "Last problem", (error))
+                            }
+                            fact(term: "Price rule", attrs: attributes! { data-product-aliexpress-rule="" }, (&link_rule_label))
+                        )
+                        <ul class="mt-3 text-sm" data-aliexpress-costs="">
+                            for (label, cost, available) in &link_costs {
+                                <li>(label) " · costs " (cost) " · " (available) " on AliExpress"</li>
+                            }
+                        </ul>
+                    </div>
+                    if can_aliexpress {
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::sync::sync, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                <input type="hidden" name="back" value=(&product.id)>
+                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Sync now")
+                            </form>
+                            <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::unlink::unlink, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                <input type="hidden" name="back" value=(&product.id)>
+                                button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop keeping in step")
+                            </form>
+                        </div>
+                        <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::pricing::pricing, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone()))) class="mt-4 flex flex-wrap items-end gap-2">
+                            <input type="hidden" name="back" value=(&product.id)>
+                            field(
+                                field_label(attrs: attributes! { for="link-multiplier" }, "Its own rule: multiply the cost by")
+                                input(attrs: attributes! { id="link-multiplier" name="multiplier" inputmode="decimal" placeholder="The shop's" class="w-28" value=(&link_rule_fields.multiplier) })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="link-plus" }, "Then add")
+                                input(attrs: attributes! { id="link-plus" name="plus" inputmode="decimal" class="w-24" value=(&link_rule_fields.plus) })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="link-rounding" }, "Round")
+                                select(
+                                    attrs: attributes! { id="link-rounding" name="rounding" class="w-44" },
+                                    for (value, label) in crate::app::t::slug::aliexpress::ROUNDINGS {
+                                        <option value=(value) selected=(link_rule_fields.rounding == value)>(label)</option>
+                                    }
+                                )
+                            )
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save rule")
                         </form>
                     }
                 )

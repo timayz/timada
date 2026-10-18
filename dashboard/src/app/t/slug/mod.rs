@@ -2,6 +2,7 @@
 //! members and roles pages; every one of them starts with [`require_tenant`]
 //! and then asks the [`TenantAccess`] for the permission it needs.
 
+pub mod aliexpress;
 pub mod api_keys;
 pub mod carts;
 pub mod categories;
@@ -31,11 +32,11 @@ use timada_shoppers::count_shoppers;
 use timada_support::{MessageFilter, MessageStatus, count_messages};
 use timada_tenancy::count_open_invitations_of_tenant;
 use timada_tenancy::{
-    PERMISSION_API_KEYS_MANAGE, PERMISSION_CUSTOMERS_READ, PERMISSION_DISCOUNTS_READ,
-    PERMISSION_MAIL_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ORDERS_READ,
-    PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ,
-    PERMISSION_ROLES_MANAGE, PERMISSION_SHIPPING_MANAGE, PERMISSION_SUPPORT_READ,
-    PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
+    PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_API_KEYS_MANAGE, PERMISSION_CUSTOMERS_READ,
+    PERMISSION_DISCOUNTS_READ, PERMISSION_MAIL_MANAGE, PERMISSION_MEMBERS_READ,
+    PERMISSION_ORDERS_READ, PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ,
+    PERMISSION_REVIEWS_READ, PERMISSION_ROLES_MANAGE, PERMISSION_SHIPPING_MANAGE,
+    PERMISSION_SUPPORT_READ, PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
 };
 use topcoat::{
     Result,
@@ -180,6 +181,7 @@ pub struct TenantNav {
     pub messages: bool,
     pub invoices: bool,
     pub payments: bool,
+    pub aliexpress: bool,
     pub shipping: bool,
     pub mail: bool,
     pub invoicing: bool,
@@ -211,6 +213,7 @@ impl TenantNav {
             // Invoices are what the orders were billed as.
             invoices: orders,
             payments: access.can(cx, PERMISSION_PAYMENTS_MANAGE).await?,
+            aliexpress: access.can(cx, PERMISSION_ALIEXPRESS_MANAGE).await?,
             shipping: access.can(cx, PERMISSION_SHIPPING_MANAGE).await?,
             mail: access.can(cx, PERMISSION_MAIL_MANAGE).await?,
             invoicing: access.can(cx, PERMISSION_TENANT_MANAGE).await?,

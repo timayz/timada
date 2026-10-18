@@ -11,14 +11,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
-use timada_catalog::{MAX_IMAGE_BYTES, new_image_id};
-use timada_catalog_import::{BoxFuture, Images, ImportOptions, NoImages, Snapshot, StoredImage};
+use timada_catalog_import::{Images, ImportOptions, NoImages, Snapshot};
 use timada_tenancy::{CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ};
 
 use crate::cluster::{Cluster, Executor};
 use crate::config::Config;
 use crate::db;
 use crate::media::Media;
+use crate::media_images::MediaImages;
 use crate::tenants::Tenants;
 
 #[derive(Args, Debug)]
@@ -155,14 +155,16 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         Arc::new(NoImages)
     } else {
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
-        Arc::new(MediaImages {
-            client: reqwest::Client::builder()
+        // The operator names the snapshot: its addresses may be anywhere.
+        Arc::new(MediaImages::new(
+            reqwest::Client::builder()
                 .user_agent("timada-dashboard seed")
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
-            media: media.clone(),
-            tenant_id: tenant.id.clone(),
-        })
+            media.clone(),
+            tenant.id.clone(),
+            false,
+        ))
     };
     let report = timada_catalog_import::import(
         &timada_catalog::Command(executor.clone()),
@@ -172,6 +174,7 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         &ImportOptions {
             limit: args.limit,
             concurrency: args.concurrency,
+            ..Default::default()
         },
     )
     .await?;
@@ -286,84 +289,4 @@ async fn open_shop(executor: &Executor, actor: &str, storefront_url: Option<&str
         tracing::info!(code = PROMO_CODE, "promo code added");
     }
     Ok(())
-}
-
-/// Pictures from the snapshot's files, or fetched from the shop it came
-/// from, kept where this node serves them (and on a majority of the
-/// cluster, like an upload).
-struct MediaImages {
-    client: reqwest::Client,
-    media: Arc<Media>,
-    tenant_id: String,
-}
-
-impl MediaImages {
-    /// Checks the bytes are a picture the shop takes, then stores them
-    /// under a fresh id; `what` names them in the log.
-    async fn keep(&self, bytes: bytes::Bytes, what: &str) -> anyhow::Result<Option<StoredImage>> {
-        if bytes.is_empty() || bytes.len() as u64 > MAX_IMAGE_BYTES {
-            tracing::warn!(
-                what,
-                size = bytes.len(),
-                "picture empty or too large, left out"
-            );
-            return Ok(None);
-        }
-        let Some(sniffed) = Media::sniff(&bytes) else {
-            tracing::warn!(what, "not a picture the shop accepts, left out");
-            return Ok(None);
-        };
-        let image_id = new_image_id();
-        let file = format!("{image_id}.{}", sniffed.ext);
-        self.media
-            .store(&self.tenant_id, &image_id, sniffed.ext, &bytes)
-            .await?;
-        if let Err(err) = self
-            .media
-            .replicate(&self.tenant_id, &file, bytes.to_vec())
-            .await
-        {
-            self.media.remove(&self.tenant_id, &file).await;
-            return Err(err);
-        }
-        Ok(Some(StoredImage {
-            image_id,
-            ext: sniffed.ext.to_owned(),
-            size: bytes.len() as u64,
-            width: sniffed.width,
-            height: sniffed.height,
-        }))
-    }
-}
-
-impl Images for MediaImages {
-    fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, anyhow::Result<Option<StoredImage>>> {
-        Box::pin(async move {
-            let response = self.client.get(url).send().await?.error_for_status()?;
-            if response
-                .content_length()
-                .is_some_and(|length| length > MAX_IMAGE_BYTES)
-            {
-                tracing::warn!(url, "picture too large, left out");
-                return Ok(None);
-            }
-            let bytes = response.bytes().await?;
-            self.keep(bytes, url).await
-        })
-    }
-
-    fn store<'a>(&'a self, bytes: Vec<u8>) -> BoxFuture<'a, anyhow::Result<Option<StoredImage>>> {
-        Box::pin(async move { self.keep(bytes::Bytes::from(bytes), "snapshot").await })
-    }
-
-    fn discard<'a>(&'a self, image: &'a StoredImage) -> BoxFuture<'a, ()> {
-        Box::pin(async move {
-            self.media
-                .remove(
-                    &self.tenant_id,
-                    &format!("{}.{}", image.image_id, image.ext),
-                )
-                .await;
-        })
-    }
 }
