@@ -420,7 +420,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             )
 
             if !tiles.is_empty() {
-                <div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                <div class="mb-6 grid grid-cols-2 gap-4 xl:grid-cols-4">
                     for tile in &tiles {
                         stat_tile(
                             label: tile.label,
