@@ -255,6 +255,15 @@ pub struct ProductQuery {
     pub categories: Vec<String>,
     /// Products to leave out, by id: what "related products" needs.
     pub exclude: Vec<String>,
+    /// The least a product may cost, in minor units: one whose dearest
+    /// price is under it is out.
+    pub min_cents: Option<i64>,
+    /// The most a product may cost: one whose cheapest price is over it is
+    /// out.
+    pub max_cents: Option<i64>,
+    /// `(option key, value key)` pairs a product must every one of, as
+    /// [`facet_key`] writes them: "Colour: Rose".
+    pub options: Vec<(String, String)>,
     pub sort: ProductSort,
 }
 
@@ -267,6 +276,9 @@ impl Default for ProductQuery {
             category: None,
             categories: Vec::new(),
             exclude: Vec::new(),
+            min_cents: None,
+            max_cents: None,
+            options: Vec::new(),
             sort: ProductSort::default(),
         }
     }
@@ -313,10 +325,41 @@ impl ProductQuery {
         self
     }
 
+    /// Only products a shopper could pay between `min` and `max` for, in
+    /// minor units, either bound optional: a product is in when its price
+    /// range overlaps the band, so one sold from 9.90 to 59.90 shows under
+    /// "up to 50" and under "50 to 70" alike. One with no price never matches
+    /// a band.
+    pub fn priced_between(mut self, min: Option<i64>, max: Option<i64>) -> Self {
+        self.min_cents = min;
+        self.max_cents = max;
+        self
+    }
+
+    /// Only products whose option `name` takes `value`, both compared the way
+    /// [`facet_key`] folds them. Several calls narrow further (every pair
+    /// must hold).
+    pub fn with_option(mut self, name: &str, value: &str) -> Self {
+        self.options.push((facet_key(name), facet_key(value)));
+        self
+    }
+
     pub fn sort(mut self, sort: ProductSort) -> Self {
         self.sort = sort;
         self
     }
+}
+
+/// One value an option takes across the products of a listing, and how many
+/// of them take it: what a filter's links are made of.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FacetValue {
+    /// What a link carries, as [`facet_key`] writes it: `rose-fonce`.
+    pub key: String,
+    /// The value as a merchant wrote it: `Rose foncé`. When products spell
+    /// it differently, one of the spellings.
+    pub label: String,
+    pub count: i64,
 }
 
 /// The products of one page and what is around it.
@@ -377,10 +420,12 @@ macro_rules! products_from {
 }
 
 /// What a page of products is filtered by besides the search, shared by the
-/// count and the list so the two never disagree. `?2` is the JSON array of
-/// category ids (`[]` for every category), `?3` the JSON ids to leave out, `?4`
-/// a category whose page it is (read from what the subscription stored for
-/// it, so a sub-category costs nothing more).
+/// count, the list and the facets so they never disagree. `?2` is the JSON
+/// array of category ids (`[]` for every category), `?3` the JSON ids to leave
+/// out, `?4` a category whose page it is (read from what the subscription
+/// stored for it, so a sub-category costs nothing more), `?7` and `?8` the
+/// price band a product's own range must overlap, `?9` the JSON array of
+/// `[option key, value key]` pairs it must every one of (`[]` for none).
 macro_rules! products_where {
     () => {
         "AND p.status = 'published'
@@ -388,7 +433,15 @@ macro_rules! products_where {
                 WHERE category_id IN (SELECT value FROM json_each(?2))))
            AND (?3 = '[]' OR p.id NOT IN (SELECT value FROM json_each(?3)))
            AND (?4 IS NULL OR p.id IN (SELECT product_id FROM storefront_category_products
-                WHERE category_id = ?4)) "
+                WHERE category_id = ?4))
+           AND (?7 IS NULL OR p.max_amount_cents >= ?7)
+           AND (?8 IS NULL OR p.min_amount_cents <= ?8)
+           AND (?9 = '[]' OR (SELECT count(*) FROM json_each(?9) o
+                WHERE EXISTS (SELECT 1 FROM storefront_product_options po
+                    WHERE po.product_id = p.id
+                      AND po.name_key = json_extract(o.value, '$[0]')
+                      AND po.value_key = json_extract(o.value, '$[1]')))
+                = json_array_length(?9)) "
     };
 }
 
@@ -443,6 +496,30 @@ const PAGES: [&str; 4] = products_pages!(pattern);
 const COUNT: &str = products_count!(pattern);
 const SEARCH_PAGES: [&str; 4] = products_pages!(phrase);
 const SEARCH_COUNT: &str = products_count!(phrase);
+
+/// The values option `?10` takes among the products the filter keeps, each
+/// with its count, in key order; one spelling per key.
+macro_rules! products_facet {
+    ($from:ident) => {
+        concat!(
+            "SELECT po.value_key, min(po.value), count(*)
+             FROM storefront_product_options po
+             WHERE po.name_key = ?10
+               AND po.product_id IN (SELECT p.id ",
+            products_from!($from),
+            products_where!(),
+            ") GROUP BY po.value_key ORDER BY po.value_key"
+        )
+    };
+}
+
+const FACET: &str = products_facet!(pattern);
+const SEARCH_FACET: &str = products_facet!(phrase);
+
+/// The `?9` bind: the pairs as a JSON array of two-element arrays.
+fn options_json(options: &[(String, String)]) -> String {
+    serde_json::to_string(options).unwrap_or_else(|_| "[]".to_owned())
+}
 
 impl ProductSort {
     /// Its statement among the four of [`products_pages`].
@@ -506,6 +583,7 @@ pub async fn published_products(
     // A JSON array, read back by `json_each`: one bind for any number of ids.
     let categories = serde_json::to_string(&query.categories).unwrap_or_else(|_| "[]".to_owned());
     let exclude = serde_json::to_string(&query.exclude).unwrap_or_else(|_| "[]".to_owned());
+    let options = options_json(&query.options);
     let offset = i64::from(page - 1) * per_page;
     // A category's page as it is, with nothing else to match: the count and
     // the order the subscription stored.
@@ -513,6 +591,9 @@ pub async fn published_products(
         && search.is_none()
         && query.categories.is_empty()
         && query.exclude.is_empty()
+        && query.min_cents.is_none()
+        && query.max_cents.is_none()
+        && query.options.is_empty()
     {
         let total: i64 =
             sqlx::query_scalar("SELECT subtree_count FROM storefront_categories WHERE id = ?1")
@@ -544,6 +625,11 @@ pub async fn published_products(
         .bind(&categories)
         .bind(&exclude)
         .bind(query.category.as_deref())
+        .bind(per_page)
+        .bind(offset)
+        .bind(query.min_cents)
+        .bind(query.max_cents)
+        .bind(&options)
         .fetch_one(pool)
         .await?;
     let items = sqlx::query_as(pages[query.sort.index()])
@@ -553,6 +639,9 @@ pub async fn published_products(
         .bind(query.category.as_deref())
         .bind(per_page)
         .bind(offset)
+        .bind(query.min_cents)
+        .bind(query.max_cents)
+        .bind(&options)
         .fetch_all(pool)
         .await?;
     Ok(ProductPage {
@@ -561,6 +650,53 @@ pub async fn published_products(
         per_page: per_page as u32,
         total,
     })
+}
+
+/// The values `option` takes among the published products `query` matches,
+/// each with how many take it, in key order: the links of a filter. The
+/// query's own pairs on `option` are set aside, so the listing filtered to
+/// "Colour: Rose" still offers the other colours; its band and its other
+/// options hold.
+pub async fn published_option_values(
+    pool: &SqlitePool,
+    query: &ProductQuery,
+    option: &str,
+) -> sqlx::Result<Vec<FacetValue>> {
+    let name_key = facet_key(option);
+    let phrase = query.q.as_deref().and_then(phrase);
+    let statement = if phrase.is_some() {
+        SEARCH_FACET
+    } else {
+        FACET
+    };
+    let search = phrase.or_else(|| query.q.as_deref().map(contains));
+    let categories = serde_json::to_string(&query.categories).unwrap_or_else(|_| "[]".to_owned());
+    let exclude = serde_json::to_string(&query.exclude).unwrap_or_else(|_| "[]".to_owned());
+    let others: Vec<(String, String)> = query
+        .options
+        .iter()
+        .filter(|(name, _)| *name != name_key)
+        .cloned()
+        .collect();
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(statement)
+        .bind(&search)
+        .bind(&categories)
+        .bind(&exclude)
+        .bind(query.category.as_deref())
+        // `?5` and `?6` are the page's limit and offset, which a facet has
+        // no use for; every number up to the last one still needs a value.
+        .bind(0i64)
+        .bind(0i64)
+        .bind(query.min_cents)
+        .bind(query.max_cents)
+        .bind(options_json(&others))
+        .bind(&name_key)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(key, label, count)| FacetValue { key, label, count })
+        .collect())
 }
 
 /// What goes well with a cart holding `product_ids`: the published products
@@ -712,6 +848,12 @@ pub fn search_key(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// What a filter carries and compares: [`search_key`] with its spaces as
+/// dashes, so "Rose foncé" is `rose-fonce` in a link and in the rows alike.
+pub fn facet_key(text: &str) -> String {
+    search_key(text).replace(' ', "-")
 }
 
 /// The categories among `nodes` (and everything under them) whose name
@@ -889,6 +1031,14 @@ mod tests {
     }
 
     #[test]
+    fn facet_key_dashes_the_spaces() {
+        assert_eq!(facet_key("Rose foncé"), "rose-fonce");
+        assert_eq!(facet_key("  Bleu   Foncé "), "bleu-fonce");
+        assert_eq!(facet_key("36-37"), "36-37");
+        assert_eq!(facet_key(""), "");
+    }
+
+    #[test]
     fn search_key_drops_accents_case_and_extra_spaces() {
         assert_eq!(search_key("  Litière   DE voyage "), "litiere de voyage");
         assert_eq!(search_key("Été"), "ete");
@@ -922,5 +1072,318 @@ mod tests {
         assert!(search_categories(&tree, "   ", 10).is_empty());
         assert!(search_categories(&tree, "lit", 0).is_empty());
         assert!(search_categories(&tree, "chien", 10).is_empty());
+    }
+}
+
+/// The filters over a small catalog in an in-memory database.
+#[cfg(test)]
+mod sql {
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    use super::*;
+    use crate::migrations::{migrate, migrate_plan};
+
+    /// One connection, or each one of the pool would be its own empty
+    /// database.
+    async fn pool() -> SqlitePool {
+        let options = SqliteConnectOptions::new()
+            .filename(":memory:")
+            .create_if_missing(true);
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap()
+    }
+
+    async fn insert_product(
+        pool: &SqlitePool,
+        id: &str,
+        status: &str,
+        range: Option<(i64, i64)>,
+        colours: &[&str],
+    ) {
+        let options = if colours.is_empty() {
+            "[]".to_owned()
+        } else {
+            serde_json::to_string(&[ProductOption {
+                id: "opt-colour".to_owned(),
+                name: "Couleur".to_owned(),
+                values: colours.iter().map(|c| (*c).to_owned()).collect(),
+            }])
+            .unwrap()
+        };
+        sqlx::query(
+            "INSERT INTO storefront_products (id, slug, name, description, amount_cents,
+                currency, status, updated_at, options_json, min_amount_cents, max_amount_cents)
+             VALUES (?1, ?1, ?1, '', ?2, 'EUR', ?3, 1, ?4, ?5, ?6)",
+        )
+        .bind(id)
+        .bind(range.map(|(min, _)| min))
+        .bind(status)
+        .bind(&options)
+        .bind(range.map(|(min, _)| min))
+        .bind(range.map(|(_, max)| max))
+        .execute(pool)
+        .await
+        .unwrap();
+        // What the subscription writes beside the row.
+        sqlx::query(
+            "INSERT INTO storefront_products_fts (rowid, slug, name)
+             SELECT rowid, slug, name FROM storefront_products WHERE id = ?1",
+        )
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+        for colour in colours {
+            sqlx::query(crate::read_model::INSERT_OPTION)
+                .bind(id)
+                .bind("couleur")
+                .bind(facet_key(colour))
+                .bind("Couleur")
+                .bind(colour)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    /// A collar from 9.90 to 59.90 in rose or blue, a grey basket at 34.90,
+    /// an unpriced service, and a draft nobody sees; the first two in a
+    /// category whose stored count is 2.
+    async fn catalog() -> SqlitePool {
+        let pool = pool().await;
+        migrate(&pool).await.unwrap();
+        insert_product(
+            &pool,
+            "collar",
+            "published",
+            Some((990, 5990)),
+            &["Rose", "Bleu"],
+        )
+        .await;
+        insert_product(&pool, "basket", "published", Some((3490, 3490)), &["Gris"]).await;
+        insert_product(&pool, "service", "published", None, &[]).await;
+        insert_product(&pool, "draft", "draft", Some((1000, 1000)), &["Rose"]).await;
+        sqlx::query(
+            "INSERT INTO storefront_categories (id, slug, name, description, position,
+                archived, updated_at, product_count, subtree_count)
+             VALUES ('cat', 'cat', 'Cat', '', 0, 0, 1, 2, 2)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for product in ["collar", "basket"] {
+            sqlx::query(
+                "INSERT INTO storefront_category_products (category_id, product_id,
+                    updated_at, min_amount_cents, max_amount_cents)
+                 SELECT 'cat', id, updated_at, min_amount_cents, max_amount_cents
+                 FROM storefront_products WHERE id = ?1",
+            )
+            .bind(product)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        pool
+    }
+
+    async fn ids(pool: &SqlitePool, query: ProductQuery) -> (Vec<String>, i64) {
+        let page = published_products(pool, &query).await.unwrap();
+        (page.items.into_iter().map(|p| p.id).collect(), page.total)
+    }
+
+    fn owned(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_band_keeps_what_overlaps_it_and_drops_the_unpriced() {
+        let pool = catalog().await;
+        let all = ProductQuery::default().sort(ProductSort::PriceAsc);
+        assert_eq!(
+            ids(&pool, all.clone()).await,
+            (owned(&["collar", "basket", "service"]), 3)
+        );
+        // The collar reaches into both bands; the basket sits in one.
+        assert_eq!(
+            ids(&pool, all.clone().priced_between(Some(0), Some(5000))).await,
+            (owned(&["collar", "basket"]), 2)
+        );
+        assert_eq!(
+            ids(&pool, all.clone().priced_between(Some(5000), Some(7000))).await,
+            (owned(&["collar"]), 1)
+        );
+        assert_eq!(
+            ids(&pool, all.clone().priced_between(Some(7000), Some(10000)))
+                .await
+                .1,
+            0
+        );
+        // Either bound alone.
+        assert_eq!(
+            ids(&pool, all.clone().priced_between(Some(2000), None)).await,
+            (owned(&["collar", "basket"]), 2)
+        );
+        assert_eq!(
+            ids(&pool, all.priced_between(None, Some(1000))).await,
+            (owned(&["collar"]), 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_option_keeps_the_products_taking_its_value() {
+        let pool = catalog().await;
+        let all = ProductQuery::default().sort(ProductSort::PriceAsc);
+        assert_eq!(
+            ids(&pool, all.clone().with_option("Couleur", "rose")).await,
+            (owned(&["collar"]), 1)
+        );
+        // Folded both sides: the link's key and the merchant's spelling.
+        assert_eq!(
+            ids(&pool, all.clone().with_option("couleur", "Gris")).await,
+            (owned(&["basket"]), 1)
+        );
+        assert_eq!(
+            ids(&pool, all.clone().with_option("Couleur", "vert"))
+                .await
+                .1,
+            0
+        );
+        // Two pairs must both hold.
+        let both = all
+            .clone()
+            .with_option("Couleur", "Rose")
+            .with_option("Couleur", "Bleu");
+        assert_eq!(ids(&pool, both).await, (owned(&["collar"]), 1));
+        let apart = all
+            .clone()
+            .with_option("Couleur", "Rose")
+            .with_option("Couleur", "Gris");
+        assert_eq!(ids(&pool, apart).await.1, 0);
+        // With a band.
+        let dear = all
+            .with_option("Couleur", "Rose")
+            .priced_between(Some(7000), None);
+        assert_eq!(ids(&pool, dear).await.1, 0);
+    }
+
+    #[tokio::test]
+    async fn a_filtered_category_counts_what_it_lists() {
+        let pool = catalog().await;
+        let category = ProductQuery::default()
+            .in_category("cat")
+            .sort(ProductSort::PriceAsc);
+        // Unfiltered: the stored count and order.
+        assert_eq!(
+            ids(&pool, category.clone()).await,
+            (owned(&["collar", "basket"]), 2)
+        );
+        assert_eq!(
+            ids(&pool, category.clone().with_option("Couleur", "Gris")).await,
+            (owned(&["basket"]), 1)
+        );
+        assert_eq!(
+            ids(&pool, category.priced_between(Some(5000), Some(7000))).await,
+            (owned(&["collar"]), 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_facet_counts_the_listing_and_sets_its_own_filter_aside() {
+        let pool = catalog().await;
+        async fn values(pool: &SqlitePool, query: &ProductQuery) -> Vec<(String, String, i64)> {
+            published_option_values(pool, query, "Couleur")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|v| (v.key, v.label, v.count))
+                .collect()
+        }
+        let all = ProductQuery::default();
+        assert_eq!(
+            values(&pool, &all).await,
+            vec![
+                ("bleu".into(), "Bleu".into(), 1),
+                ("gris".into(), "Gris".into(), 1),
+                ("rose".into(), "Rose".into(), 1),
+            ]
+        );
+        // The active colour does not hide the others; the band does narrow.
+        assert_eq!(
+            values(&pool, &all.clone().with_option("Couleur", "rose"))
+                .await
+                .len(),
+            3
+        );
+        assert_eq!(
+            values(&pool, &all.clone().priced_between(Some(5000), Some(7000))).await,
+            vec![
+                ("bleu".into(), "Bleu".into(), 1),
+                ("rose".into(), "Rose".into(), 1)
+            ]
+        );
+        // A category, a search, an unknown option.
+        let category = all
+            .clone()
+            .in_category("cat")
+            .with_option("Couleur", "gris");
+        assert_eq!(values(&pool, &category).await.len(), 3);
+        assert_eq!(
+            values(&pool, &all.clone().search("bask")).await,
+            vec![("gris".into(), "Gris".into(), 1)]
+        );
+        assert!(
+            published_option_values(&pool, &all, "Taille")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_migration_backfills_the_rows_already_copied() {
+        let pool = pool().await;
+        migrate_plan(
+            &pool,
+            &evento::migrator::Plan::apply_name("storefront", &Some("0008_review_replies".into())),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO storefront_products (id, slug, name, description, status, updated_at,
+                options_json)
+             VALUES ('old', 'old', 'Old', '', 'published', 1,
+                '[{\"id\":\"o\",\"name\":\"Couleur\",\"values\":[\"Rose foncé\",\"Bleu\"]}]')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        migrate(&pool).await.unwrap();
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+            "SELECT name_key, value_key, name, value FROM storefront_product_options
+             WHERE product_id = 'old' ORDER BY value_key",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "couleur".into(),
+                    "bleu".into(),
+                    "Couleur".into(),
+                    "Bleu".into()
+                ),
+                (
+                    "couleur".into(),
+                    "rose-fonce".into(),
+                    "Couleur".into(),
+                    "Rose foncé".into()
+                ),
+            ]
+        );
     }
 }
