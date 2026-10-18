@@ -58,9 +58,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         crate::seal::mail_sealer(&config),
         config.mail.allow_private_hosts,
     );
-    // The confirmations are mailed from the tenants' subscriptions, outside
-    // any request: they get their own transport.
-    let order_mail = {
+    // The order confirmations and the notices of contact messages are
+    // mailed from the tenants' subscriptions, outside any request: they get
+    // their own transport.
+    let background_mail = {
         let mailer = auth::mail::build(&config.mail)?;
         let mut app = topcoat::context::AppContext::new();
         app.insert(mailer.transport);
@@ -84,7 +85,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             Arc::new(crate::vies::ViesClient::new(
                 config.invoicing.vies_url.clone(),
             )),
-            order_mail.clone(),
+            background_mail.clone(),
+            read_pool.clone(),
+            url.clone(),
         ),
     );
     let connections = StoreConnections::new();
@@ -162,7 +165,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         read_pool.clone(),
         executor.clone(),
         tenants.clone(),
-        order_mail,
+        background_mail,
     )
     .start(std::time::Duration::from_secs(
         config.reviews.request_check_secs.max(1),
@@ -220,15 +223,19 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 /// fed into the shared database (the catalog's product list, the orders and
 /// carts, the customers, the invoices, the reviews, the support messages), this node's copies of the product
 /// pictures, review photos and personal-data keys, the answers the dashboard writes back
-/// (payments, invoices) and the order confirmations it mails. Every
-/// tenant-scoped bounded context registers its subscription here.
+/// (payments, invoices), the order confirmations it mails and the notices
+/// of contact messages it mails the members. Every tenant-scoped bounded
+/// context registers its subscription here.
+#[allow(clippy::too_many_arguments)]
 fn tenant_subscriptions(
     media: Arc<crate::media::Media>,
     keys: Arc<crate::key_vault::KeyVault>,
     payments: Arc<crate::payments::Payments>,
     platform: Executor,
     vies: Arc<dyn crate::vies::Vies>,
-    order_mail: Arc<topcoat::context::AppContext>,
+    background_mail: Arc<topcoat::context::AppContext>,
+    read_pool: sqlx::SqlitePool,
+    base_url: String,
 ) -> Vec<TenantSubscription> {
     vec![
         Arc::new(|pool, tenant_id, _: &Executor| {
@@ -271,8 +278,11 @@ fn tenant_subscriptions(
                 crate::shopper_keys::subscription(keys.clone(), tenant_id)
             }
         }),
-        Arc::new(move |_, tenant_id, _: &Executor| {
-            crate::message_keys::subscription(keys.clone(), tenant_id)
+        Arc::new({
+            let keys = keys.clone();
+            move |_, tenant_id, _: &Executor| {
+                crate::message_keys::subscription(keys.clone(), tenant_id)
+            }
         }),
         Arc::new(move |_, tenant_id, executor: &Executor| {
             crate::payments::subscription(payments.clone(), tenant_id, executor.clone())
@@ -282,10 +292,25 @@ fn tenant_subscriptions(
         }),
         Arc::new({
             let platform = platform.clone();
+            let background_mail = background_mail.clone();
             move |_, tenant_id, executor: &Executor| {
                 crate::confirmations::subscription(
                     platform.clone(),
-                    order_mail.clone(),
+                    background_mail.clone(),
+                    tenant_id,
+                    executor.clone(),
+                )
+            }
+        }),
+        Arc::new({
+            let platform = platform.clone();
+            move |_, tenant_id, executor: &Executor| {
+                crate::message_notifications::subscription(
+                    platform.clone(),
+                    read_pool.clone(),
+                    background_mail.clone(),
+                    base_url.clone(),
+                    keys.for_tenant(tenant_id),
                     tenant_id,
                     executor.clone(),
                 )

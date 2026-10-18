@@ -155,6 +155,7 @@ event timada-support/Message::Forgotten { key_id: String, forgotten_by: String }
 event timada-support/Message::Handled { handled_by: String }
 event timada-support/Message::Received { key_id: String, first_name: Vec<u8>, last_name: Vec<u8>, email: Vec<u8>, body: Vec<u8>, language: Option<String>, received_by: String }
 event timada-support/Message::Reopened { reopened_by: String }
+event timada-support/MessageNotification::Notified { message_id: String, mailed_by: String }
 event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, created_by: String, created_at: u64 }
 event timada-tenancy/ApiKey::Revoked { revoked_by: String, revoked_at: u64 }
 event timada-tenancy/ApiKey::Scoped { scopes: Vec<String>, scoped_by: String, scoped_at: u64 }

@@ -37,3 +37,15 @@ pub enum Message {
         forgotten_by: String,
     },
 }
+
+/// The merchant's notice that one message arrived. One stream per message,
+/// with the id [`message_notification_id`](crate::message_notification_id):
+/// the node that writes it first is the one that mails, so the members get
+/// one notice however many nodes follow the tenant.
+#[evento::aggregate(name = "timada-support/MessageNotification")]
+pub enum MessageNotification {
+    Notified {
+        message_id: String,
+        mailed_by: String,
+    },
+}
