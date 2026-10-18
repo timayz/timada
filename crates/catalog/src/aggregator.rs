@@ -234,3 +234,53 @@ pub mod category {
         Released,
     }
 }
+
+/// The stock events, in their own module: the macro names an event struct
+/// after its variant, and `Released` already belongs to the indexes above.
+pub mod stock {
+    /// How many of one thing the shop holds: a product without variants, or
+    /// one variant of a product. One stream per thing, with the deterministic
+    /// id [`stock_item_id`](crate::stock_item_id), so a product stream stays
+    /// short however often it sells. A thing without a stream (or untracked)
+    /// sells without limit.
+    #[evento::aggregate(name = "timada-catalog/StockItem")]
+    pub enum StockItem {
+        /// The shop counts it from now on, starting at `on_hand`.
+        Tracked {
+            product_id: String,
+            variant_id: Option<String>,
+            on_hand: u32,
+            tracked_by: String,
+        },
+        /// Sells without limit again; the checkouts it held are let go.
+        Untracked { untracked_by: String },
+        /// Counted again: what is on the shelf now.
+        OnHandSet { on_hand: u32, set_by: String },
+        /// Held for a checkout until `expires_at` (unix seconds, excluded),
+        /// unless its order spends it first. Reserving again for the same
+        /// cart replaces the hold.
+        Reserved {
+            cart_id: String,
+            quantity: u32,
+            expires_at: u64,
+            reserved_by: String,
+        },
+        Released {
+            cart_id: String,
+            released_by: String,
+        },
+        /// Sold: the paid order of a checkout takes `quantity` off the shelf.
+        Consumed {
+            cart_id: String,
+            order_id: String,
+            quantity: u32,
+            consumed_by: String,
+        },
+        /// Back on the shelf: the order that took them was cancelled.
+        Restored {
+            order_id: String,
+            quantity: u32,
+            restored_by: String,
+        },
+    }
+}

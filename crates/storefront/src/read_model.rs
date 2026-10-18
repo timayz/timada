@@ -18,9 +18,10 @@ use evento::{
 use sqlx::SqlitePool;
 use timada_catalog::aggregator::Product;
 use timada_catalog::aggregator::category::Category;
+use timada_catalog::aggregator::stock::StockItem;
 use timada_catalog::{
-    CategoryLink, CategoryState, ProductState, category_counts, category_projection,
-    product_projection,
+    CategoryLink, CategoryState, ProductState, StockState, StockSummary, category_counts,
+    category_projection, product_projection, stock_projection,
 };
 use timada_reviews::aggregator::Review;
 use timada_reviews::{ReviewState, review_projection};
@@ -35,6 +36,7 @@ pub fn catalog_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilde
         .data(pool)
         .handler(on_product_event())
         .handler(on_category_event())
+        .handler(on_stock_event())
         .handler(on_review_event())
         .any_routing_key()
 }
@@ -53,6 +55,94 @@ async fn on_product_event<E: Executor>(
         return Ok(());
     };
     upsert_product(&pool, &product).await
+}
+
+#[evento::subscription_all]
+async fn on_stock_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<StockItem>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let Some(stock) = stock_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    let product = product_projection()
+        .load(&stock.product_id)
+        .execute(context.executor)
+        .await?;
+    upsert_stock(&pool, &stock, product.as_ref()).await
+}
+
+/// The stock row of one thing, and what its product's row says of it.
+async fn upsert_stock(
+    pool: &SqlitePool,
+    stock: &StockState,
+    product: Option<&ProductState>,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO storefront_stock (product_id, variant_id, tracked, on_hand)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (product_id, variant_id) DO UPDATE SET
+            tracked = excluded.tracked, on_hand = excluded.on_hand",
+    )
+    .bind(&stock.product_id)
+    .bind(stock.variant_id.as_deref().unwrap_or(""))
+    .bind(stock.tracked)
+    .bind(i64::from(stock.on_hand))
+    .execute(&mut *tx)
+    .await?;
+    if let Some(product) = product {
+        refresh_stock(&mut tx, product).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Works out what the product's row says of its stock from the stock rows:
+/// `stock_json` maps each counted thing it still sells (`""` for a product
+/// without variants) to what is on its shelf, `in_stock` whether anything of
+/// it can be bought. What a checkout holds is left out: it lapses on its
+/// own, and the cart and the payment check it exactly.
+async fn refresh_stock(
+    tx: &mut sqlx::SqliteConnection,
+    product: &ProductState,
+) -> anyhow::Result<()> {
+    let rows: Vec<(String, bool, i64)> = sqlx::query_as(
+        "SELECT variant_id, tracked, on_hand FROM storefront_stock WHERE product_id = ?1",
+    )
+    .bind(&product.id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let on_hand = |variant_id: Option<&str>| {
+        rows.iter()
+            .find(|(id, tracked, _)| *tracked && id == variant_id.unwrap_or(""))
+            .map(|(_, _, on_hand)| (*on_hand).max(0) as u32)
+    };
+    let mut counted = std::collections::BTreeMap::new();
+    if product.variants.is_empty() {
+        if let Some(left) = on_hand(None) {
+            counted.insert(String::new(), left);
+        }
+    } else {
+        for variant in &product.variants {
+            if let Some(left) = on_hand(Some(&variant.id)) {
+                counted.insert(variant.id.clone(), left);
+            }
+        }
+    }
+    let in_stock = StockSummary::of(product, on_hand) != StockSummary::SoldOut;
+    sqlx::query("UPDATE storefront_products SET stock_json = ?2, in_stock = ?3 WHERE id = ?1")
+        .bind(&product.id)
+        .bind(serde_json::to_string(&counted)?)
+        .bind(in_stock)
+        .execute(&mut *tx)
+        .await?;
+    Ok(())
 }
 
 #[evento::subscription_all]
@@ -274,6 +364,8 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
         .execute(&mut *tx)
         .await?;
     }
+    // A variant added or removed changes what is counted.
+    refresh_stock(&mut tx, product).await?;
     tx.commit().await?;
     Ok(())
 }

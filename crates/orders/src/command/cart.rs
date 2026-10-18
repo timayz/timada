@@ -1,5 +1,5 @@
 use evento::{Executor, ProjectionAggregate};
-use timada_catalog::{ProductState, product_projection};
+use timada_catalog::{ProductState, product_projection, stock_item_id, stock_projection};
 use timada_discounts::{
     DISCOUNT_UNKNOWN, DiscountState, discount_code_id, discount_code_projection,
     discount_projection, normalize_code,
@@ -66,6 +66,14 @@ impl<E: Executor> super::Command<E> {
             _ => {}
         }
         let product = self.require_sellable(&item).await?;
+        let wanted = existing.map_or(0, |line| line.quantity) + item.quantity;
+        self.require_in_stock(
+            cart_id,
+            &item.product_id,
+            item.variant_id.as_deref(),
+            wanted,
+        )
+        .await?;
         if existing.is_none()
             && let Some(first) = cart.lines.first()
         {
@@ -106,6 +114,16 @@ impl<E: Executor> super::Command<E> {
         };
         if line.quantity == item.quantity {
             return Ok(cart);
+        }
+        // Fewer is always fine; more needs what is left.
+        if item.quantity > line.quantity {
+            self.require_in_stock(
+                cart_id,
+                &item.product_id,
+                item.variant_id.as_deref(),
+                item.quantity,
+            )
+            .await?;
         }
         let mut write = cart.write()?;
         write.routing_key_opt(routing_key);
@@ -240,6 +258,32 @@ impl<E: Executor> super::Command<E> {
             return Err(OrdersError::CheckedOut);
         }
         Ok(cart)
+    }
+
+    /// `OutOfStock` when the cart wants more of a thing than is left of it:
+    /// what other checkouts hold counts, the cart's own hold does not. An
+    /// untracked thing has no limit.
+    pub(crate) async fn require_in_stock(
+        &self,
+        cart_id: &str,
+        product_id: &str,
+        variant_id: Option<&str>,
+        quantity: u32,
+    ) -> Result<(), OrdersError> {
+        let Some(stock) = stock_projection()
+            .load(stock_item_id(product_id, variant_id))
+            .execute(&self.0)
+            .await?
+        else {
+            return Ok(());
+        };
+        match stock.available_for(Some(cart_id), timada_discounts::unix_now()) {
+            Some(available) if available < quantity => Err(OrdersError::OutOfStock {
+                product_id: product_id.to_owned(),
+                available,
+            }),
+            _ => Ok(()),
+        }
     }
 
     /// The product of an item, when a shopper can buy it as asked: published,

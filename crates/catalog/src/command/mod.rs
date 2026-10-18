@@ -15,6 +15,7 @@ mod lifecycle;
 mod option;
 mod sku_index;
 mod slug_index;
+mod stock;
 mod variant;
 
 use std::collections::BTreeSet;
@@ -24,6 +25,7 @@ use std::ops::Deref;
 pub use category::*;
 pub use create::*;
 pub use image::*;
+pub use stock::*;
 pub use variant::*;
 
 use evento::{Executor, Projection, metadata::Event};

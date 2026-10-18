@@ -42,6 +42,9 @@ main > .wrap { padding: 1.5rem 0 3rem; }
 .muted { color: var(--muted); }
 .stars { color: var(--teal); letter-spacing: .05em; }
 p.notice { padding: .75rem 1rem; border-radius: var(--radius); background: var(--coral-wash); border: 1px solid var(--coral-tint); }
+p.stock { font-weight: 600; color: var(--coral-dark); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+tr[data-sold-out] { color: var(--muted, #8a879f); }
 
 /* Top bar */
 .topbar { background: var(--ink); color: #fff; font-size: .8rem; }

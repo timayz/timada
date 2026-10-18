@@ -503,6 +503,7 @@ pub fn say(code: &str) -> &'static str {
         "invalid_quantity" => "Choisissez une quantité de 1 à 99.",
         "too_many_lines" => "Votre panier est plein : commandez d'abord ce qu'il contient.",
         "product_unavailable" => "Désolé, ce produit n'est plus en vente.",
+        "out_of_stock" => "Désolé, il n'en reste pas assez.",
         "variant_required" => "Choisissez d'abord une option.",
         "variant_not_found" => "Cette combinaison n'est pas en vente.",
         "mixed_currencies" => "Ce produit est vendu dans une autre devise que votre panier.",

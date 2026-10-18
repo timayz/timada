@@ -499,6 +499,91 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
   }
 });
 
+test("a counted product sells no more than is left, and a cancelled order puts it back", async ({ page, request }) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Stock Shop");
+    await createTenant(page, name);
+    const mugUrl = await publishProduct(page, slug, "Last Mug", "10");
+
+    // Not counted, it sells without limit; counted, the page says how many.
+    await page.goto(mugUrl);
+    await expect(page.locator("[data-stock]")).toHaveAttribute("data-stock", "untracked");
+    await page.getByLabel("On the shelf").fill("1");
+    await page.getByRole("button", { name: "Set stock" }).click();
+    await expect(page.getByRole("status")).toContainText("Stock set.");
+    await expect(page.locator("[data-stock]")).toHaveAttribute("data-stock", "1");
+
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    const key = await mintKey(page, slug, true);
+    await app.start(request, key, 1);
+
+    // The shop shows what is left, and refuses a cart that wants more.
+    await expect(async () => {
+      await page.goto(`${STOREFRONT}/p/last-mug`);
+      await expect(page.locator("p.stock")).toHaveAttribute("data-stock", "1", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await page.getByLabel("Quantity").fill("2");
+    await page.getByRole("button", { name: "Add to cart" }).click();
+    await expect(page).toHaveURL(/error=out_of_stock/);
+    await expect(page.getByRole("alert")).toContainText("not enough of these left");
+
+    // The last one is paid for: the shelf is empty and the shop says so.
+    await page.getByLabel("Quantity").fill("1");
+    await addToCart(page);
+    await placeOrder(page, true);
+    const intent = stripe.lastIntent()!;
+    stripe.pay(intent.id);
+    expect((await paymentSucceeded(request, webhookUrl, intent.id, "whsec_e2e")).status()).toBe(204);
+    await page.goto(`${STOREFRONT}/checkout/complete?redirect_status=succeeded`);
+    await expect(page).toHaveURL(new RegExp(`${STOREFRONT}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+    const reference = (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+    await expect(async () => {
+      await page.goto(mugUrl);
+      await expect(page.locator("[data-stock]")).toHaveAttribute("data-stock", "0", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(async () => {
+      await page.goto(`/t/${slug}/products`);
+      await expect(page.locator("[data-product=last-mug] [data-product-stock]")).toHaveAttribute(
+        "data-product-stock",
+        "sold_out",
+        { timeout: 1000 },
+      );
+    }).toPass({ timeout: 15_000 });
+    await expect(async () => {
+      await page.goto(`${STOREFRONT}/p/last-mug`);
+      await expect(page.locator("p.stock")).toHaveAttribute("data-stock", "sold-out", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(page.getByRole("button", { name: "Add to cart" })).toBeDisabled();
+
+    // Cancelled, the order puts its mug back on the shelf.
+    const row = page.locator(`[data-order="${reference}"]`);
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders`);
+      await expect(row).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await row.getByRole("link", { name: reference }).click();
+    await page.getByLabel("Reason for cancelling").fill("Broken in the warehouse");
+    await page.getByRole("button", { name: "Cancel and refund" }).click();
+    await expect(page.getByRole("status")).toContainText("Order cancelled and refunded.");
+    await expect(async () => {
+      await page.goto(mugUrl);
+      await expect(page.locator("[data-stock]")).toHaveAttribute("data-stock", "1", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+  } finally {
+    await stripe.stop();
+  }
+});
+
 test("the cart drawer: changed in place, with offers, a code and express pay", async ({ page, browser, request }) => {
   test.setTimeout(90_000);
   const stripe = new FakeStripe();

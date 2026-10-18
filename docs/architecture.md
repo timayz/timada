@@ -251,6 +251,31 @@ Codes are unique across a tenant through the same index-aggregate pattern as slu
 (`timada-catalog/ProductSku`), compared without regard to case. A variant that goes,
 and an archived product, give their codes back.
 
+## Stock
+
+A shop may count what it holds of a product without variants, or of each variant.
+Each counted thing is its own stream (`timada-catalog/StockItem`, deterministic id
+from the product and variant), so a product's stream stays short however often it
+sells. A thing without a stream, or untracked, sells without limit: counting is
+opt-in.
+
+Stock is held the way a capped discount code is:
+
+- Adding to a cart, or raising a line, is refused (`out_of_stock`) when less is left
+  than the cart wants. What other checkouts hold counts, the cart's own hold does not.
+- When the shopper asks to pay, the dashboard reserves the cart's lines with an
+  optimistic write on each stream before opening the payment. Two checkouts never take
+  the last one twice. A refused or failed payment releases the hold; an abandoned one
+  lapses after `RESERVATION_SECS` (its expiry is read, never scheduled).
+- The paid order consumes the hold (subscription `timada-orders/stock-usage`), and a
+  cancelled order puts its quantity back. Both are idempotent per order.
+
+The read models (`catalog_stock`, `storefront_stock`, and the `stock_state` /
+`stock_json` / `in_stock` columns of the product rows) carry what is on the shelf,
+worked out when the stock or the product changes. They leave holds out, since a hold
+lapses without an event: a page may say "in stock" while the last one waits for
+another shopper's payment, and the cart then refuses it.
+
 ## Product pictures
 
 The event store records what a picture is, never its bytes: an id, the format, the

@@ -8,6 +8,7 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
+use timada_catalog::CatalogError;
 use timada_discounts::{
     DISCOUNT_ALREADY_USED, DISCOUNT_EXHAUSTED, DISCOUNT_UNKNOWN, DiscountError, RESERVATION_SECS,
 };
@@ -24,6 +25,9 @@ pub const SUBSCRIPTION: &str = "timada-dashboard/payments";
 /// A request older than this is history being replayed (a node catching up)
 /// or one nobody waits for any more: it is refused, never charged.
 const ANSWER_WINDOW_SECS: u64 = 10 * 60;
+
+/// The refusal of a checkout that wants more than is left.
+const OUT_OF_STOCK: &str = "out_of_stock";
 
 #[derive(Clone)]
 struct Tenant(String);
@@ -133,13 +137,41 @@ async fn on_checkout_requested<E: Executor>(
             Err(err) => return Err(err.into()),
         }
     }
-    let release = async || {
+    let release_discount = async || {
         if let Some(discount_id) = &discount_id
             && let Err(err) = discounts
                 .release_use(DASHBOARD_ACTOR, discount_id, &cart_id, &email)
                 .await
         {
             tracing::warn!(%cart_id, %err, "cannot give a discount's use back");
+        }
+    };
+    // The goods are held the same way, so two shoppers never pay for the
+    // last one.
+    let catalog = timada_catalog::Command(store.0.clone());
+    let stock_lines = timada_orders::stock_lines(&pending.lines);
+    match catalog
+        .reserve_stock(DASHBOARD_ACTOR, &cart_id, &stock_lines, RESERVATION_SECS)
+        .await
+    {
+        Ok(()) => {}
+        Err(CatalogError::OutOfStock { .. }) => {
+            release_discount().await;
+            refuse(OUT_OF_STOCK).await?;
+            return Ok(());
+        }
+        Err(err) => {
+            release_discount().await;
+            return Err(err.into());
+        }
+    }
+    let release = async || {
+        release_discount().await;
+        if let Err(err) = catalog
+            .release_stock(DASHBOARD_ACTOR, &cart_id, &stock_lines)
+            .await
+        {
+            tracing::warn!(%cart_id, %err, "cannot give back the stock a checkout held");
         }
     };
     let opened = payments

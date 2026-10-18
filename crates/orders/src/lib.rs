@@ -27,10 +27,12 @@ mod command;
 mod discount_usage;
 mod error;
 mod query;
+mod stock_usage;
 mod value_object;
 
 pub use command::*;
 pub use discount_usage::*;
 pub use error::*;
 pub use query::*;
+pub use stock_usage::*;
 pub use value_object::*;

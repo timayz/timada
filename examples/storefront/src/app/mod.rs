@@ -119,6 +119,8 @@ pub async fn document(
                     "table.cart img { width: 4rem; height: 4rem; object-fit: cover; border-radius: .25rem; }"
                     "table.cart input[type=number] { width: 4rem; }"
                     "p.notice { padding: .75rem; border-radius: .25rem; background: #fff4e5; border: 1px solid #f5c27a; }"
+                    "p.stock { font-weight: 600; color: #b42318; }"
+                    "button:disabled { opacity: .5; cursor: not-allowed; }"
                     "form.checkout label { display: block; margin-top: .75rem; }"
                     "form.checkout input, form.checkout textarea { width: 100%; max-width: 28rem; padding: .4rem; }"
                     "button.primary { margin-top: 1rem; padding: .6rem 1.2rem; font-size: 1rem; }"
@@ -319,6 +321,7 @@ pub fn say(code: &str) -> &'static str {
         "invalid_quantity" => "Choose a quantity from 1 to 99.",
         "too_many_lines" => "Your cart is full: order what is in it first.",
         "product_unavailable" => "Sorry, this product is no longer on sale.",
+        "out_of_stock" => "Sorry, there are not enough of these left.",
         "variant_required" => "Choose an option first.",
         "variant_not_found" => "This combination is not sold.",
         "mixed_currencies" => "This product is sold in another currency than your cart.",

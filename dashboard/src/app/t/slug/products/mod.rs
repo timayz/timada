@@ -69,6 +69,15 @@ pub fn catalog(access: &TenantAccess) -> Result<Command<Executor>> {
     Ok(Command(access.executor()?.clone()))
 }
 
+/// How a listing words a product's stock.
+pub fn stock_label(state: &str) -> &'static str {
+    match timada_catalog::StockSummary::parse(state) {
+        timada_catalog::StockSummary::Untracked => "Not counted",
+        timada_catalog::StockSummary::InStock => "In stock",
+        timada_catalog::StockSummary::SoldOut => "Sold out",
+    }
+}
+
 /// The query-string code of a user-facing catalog error.
 pub fn error_code(err: &CatalogError) -> &'static str {
     match err {
@@ -108,6 +117,8 @@ pub fn error_code(err: &CatalogError) -> &'static str {
         CatalogError::SkuTaken => "sku_taken",
         CatalogError::InvalidAttribute => "invalid_attribute",
         CatalogError::TooManyAttributes => "too_many_attributes",
+        CatalogError::InvalidStock => "invalid_stock",
+        CatalogError::OutOfStock { .. } => "out_of_stock",
         CatalogError::Write(err) => timada_core::write_refusal(err).unwrap_or("failed"),
         CatalogError::Other(_) => "failed",
     }
@@ -208,13 +219,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_head("Name")
                             table_head("Slug")
                             table_head(attrs: attributes! { class="text-right" }, "Price")
+                            table_head("Stock")
                             table_head("Status")
                             table_head("Changed")
                         )
                     )
                     table_body(
                         if rows.is_empty() {
-                            empty_row(colspan: 5, text: "No product yet.")
+                            empty_row(colspan: 6, text: "No product yet.")
                         }
                         for row in &rows {
                             table_row(
@@ -224,6 +236,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 )
                                 table_cell(<code class="text-xs">(&row.slug)</code>)
                                 table_cell(attrs: attributes! { class="text-right tabular-nums" data-product-price="" }, (row.price_label().unwrap_or_else(|| "—".to_owned())))
+                                table_cell(attrs: attributes! { data-product-stock=(&row.stock_state) }, (stock_label(&row.stock_state)))
                                 table_cell(status_badge(tone: status_tone(row.status()), (status_label(row.status()))))
                                 table_cell(<time datetime=(row.updated_at)>(format_time(row.updated_at as u64))</time>)
                             )

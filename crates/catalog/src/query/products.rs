@@ -29,6 +29,9 @@ pub struct ProductRow {
     pub min_amount_cents: Option<i64>,
     pub max_amount_cents: Option<i64>,
     pub variant_count: i64,
+    /// `untracked` (sells without limit), `in_stock` or `sold_out`, as
+    /// [`StockSummary`](crate::StockSummary) says it.
+    pub stock_state: String,
 }
 
 impl ProductRow {
@@ -138,7 +141,8 @@ macro_rules! products_page {
         concat!(
             "SELECT p.tenant_id, p.id, p.slug, p.name, p.description, p.amount_cents,
                 p.currency, p.status, p.created_by, p.created_at, p.updated_at, p.thumbnail,
-                p.image_count, p.min_amount_cents, p.max_amount_cents, p.variant_count ",
+                p.image_count, p.min_amount_cents, p.max_amount_cents, p.variant_count,
+                p.stock_state ",
             products_from!($from),
             products_where!(),
             "ORDER BY p.updated_at DESC, p.id DESC LIMIT ?4 OFFSET ?5"
@@ -214,7 +218,7 @@ pub async fn product_by_id(
     sqlx::query_as(
         "SELECT tenant_id, id, slug, name, description, amount_cents, currency, status,
             created_by, created_at, updated_at, thumbnail, image_count,
-            min_amount_cents, max_amount_cents, variant_count
+            min_amount_cents, max_amount_cents, variant_count, stock_state
          FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
     )
     .bind(tenant_id)

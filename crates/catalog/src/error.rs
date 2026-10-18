@@ -74,6 +74,14 @@ pub enum CatalogError {
     TooManyAttributes,
     #[error("unknown tax category")]
     InvalidTaxCategory,
+    #[error("a stock is a whole number between 0 and 1,000,000")]
+    InvalidStock,
+    #[error("only {available} left")]
+    OutOfStock {
+        product_id: String,
+        variant_id: Option<String>,
+        available: u32,
+    },
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]

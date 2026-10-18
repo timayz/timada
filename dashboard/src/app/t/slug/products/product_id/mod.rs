@@ -10,6 +10,7 @@ pub mod options;
 pub mod price;
 pub mod publish;
 pub mod rename;
+pub mod stock;
 pub mod tax_category;
 pub mod uncategorize;
 pub mod unpublish;
@@ -158,10 +159,78 @@ pub struct VariantRow {
     pub amount: String,
     pub currency: String,
     pub image_id: String,
+    pub stock: StockView,
+}
+
+/// The stock of one thing, ready to render.
+#[derive(Clone, Default)]
+pub struct StockView {
+    pub tracked: bool,
+    /// On the shelf, as the form wants it typed; empty when untracked.
+    pub on_hand: String,
+    /// What checkouts waiting for their payment hold.
+    pub held: u32,
+}
+
+impl StockView {
+    fn of(stock: Option<&timada_catalog::StockState>, now: u64) -> Self {
+        match stock.filter(|stock| stock.tracked) {
+            Some(stock) => Self {
+                tracked: true,
+                on_hand: stock.on_hand.to_string(),
+                held: stock.held_at(now, None),
+            },
+            None => Self::default(),
+        }
+    }
+
+    /// `12 on hand · 2 held`, or `Not counted`.
+    fn label(&self) -> String {
+        match (self.tracked, self.held) {
+            (false, _) => "Not counted".to_owned(),
+            (true, 0) => format!("{} on hand", self.on_hand),
+            (true, held) => format!("{} on hand · {held} held", self.on_hand),
+        }
+    }
+
+    /// What `data-stock` says: the count, or `untracked`.
+    fn data(&self) -> &str {
+        if self.tracked {
+            &self.on_hand
+        } else {
+            "untracked"
+        }
+    }
+}
+
+/// The stock of each thing the product sells, read from their own streams
+/// so a change shows at once: one entry per variant, or one for a product
+/// without variants.
+async fn stocks_of(access: &TenantAccess, product: &ProductState) -> Result<Vec<StockView>> {
+    let gateway = catalog(access)?;
+    let now = crate::auth::now();
+    let ids: Vec<Option<&str>> = if product.variants.is_empty() {
+        vec![None]
+    } else {
+        product
+            .variants
+            .iter()
+            .map(|v| Some(v.id.as_str()))
+            .collect()
+    };
+    let mut stocks = Vec::with_capacity(ids.len());
+    for variant_id in ids {
+        let stock = gateway
+            .load_stock(&product.id, variant_id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        stocks.push(StockView::of(stock.as_ref(), now));
+    }
+    Ok(stocks)
 }
 
 impl VariantRow {
-    fn of(variant: &ProductVariant, product: &ProductState) -> Self {
+    fn of(variant: &ProductVariant, product: &ProductState, stock: StockView) -> Self {
         let selections = variant
             .selections
             .iter()
@@ -185,8 +254,13 @@ impl VariantRow {
             ),
             currency: variant.price.currency.clone(),
             image_id: variant.image_id.clone().unwrap_or_default(),
+            stock,
         }
     }
+}
+
+fn has_variants_of(product: &ProductState) -> bool {
+    !product.variants.is_empty()
 }
 
 /// The categories a product is in, live ones first: read from their own
@@ -254,11 +328,20 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // The view takes what it renders, so the menus and rows are built as
     // owned values first.
     let options: Vec<OptionRow> = product.options.iter().map(OptionRow::of).collect();
+    let stocks = stocks_of(&access, &product).await?;
     let variants: Vec<VariantRow> = product
         .variants
         .iter()
-        .map(|variant| VariantRow::of(variant, &product))
+        .zip(stocks.iter().cloned())
+        .map(|(variant, stock)| VariantRow::of(variant, &product, stock))
         .collect();
+    // A product without variants is counted on its own.
+    let own_stock = (!has_variants_of(&product)).then(|| stocks[0].clone());
+    let own_stock_label = own_stock.as_ref().map(StockView::label).unwrap_or_default();
+    let own_stock_data = own_stock
+        .as_ref()
+        .map(|stock| stock.data().to_owned())
+        .unwrap_or_default();
     let picture_choices: Vec<(String, String)> = product
         .images
         .iter()
@@ -360,6 +443,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     fact(term: "Slug", <code>(&product.slug)</code>)
                     fact(term: "Price", attrs: attributes! { data-product-price="" data-product-price-range=(&price_label) }, (&price_label))
                     fact(term: "VAT", attrs: attributes! { data-product-vat="" }, (&tax_label))
+                    if let Some(stock) = &own_stock {
+                        fact(
+                            term: "Stock",
+                            attrs: attributes! { data-stock=(&own_stock_data) data-stock-held=(stock.held) },
+                            (&own_stock_label)
+                        )
+                    }
                     fact(
                         term: "Reviews",
                         attrs: attributes! { data-product-rating=(rating.review_count) },
@@ -377,6 +467,28 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     fact(term: "Changed", <time datetime=(product.updated_at)>(format_time(product.updated_at))</time>)
                 )
             )
+
+            if let Some(stock) = &own_stock {
+                if editable {
+                    section_card(
+                        title: Some("Stock"),
+                        description: Some("How many are on the shelf. A product whose stock is not counted sells without limit; one counted at 0 is sold out."),
+                        <form method="post" action=(href!(stock::stock, Slug(slug.clone()), ProductId(product.id.clone()))) class="flex flex-wrap items-end gap-2">
+                            field(
+                                field_label(attrs: attributes! { for="product-stock" }, "On the shelf")
+                                input(attrs: attributes! {
+                                    id="product-stock" name="on_hand" type="number" min="0" max=(timada_catalog::MAX_STOCK) step="1"
+                                    class="w-32" value=(&stock.on_hand)
+                                })
+                            )
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Set stock")
+                            if stock.tracked {
+                                button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" name="untrack" value="1" }, "Stop counting")
+                            }
+                        </form>
+                    )
+                }
+            }
 
             section_card(
                 title: Some("Pictures"),
@@ -556,13 +668,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_head("Combination")
                                 table_head("Price")
                                 table_head("Code")
+                                table_head("Stock")
                                 table_head("Picture")
                                 table_head(<span class="sr-only">"Actions"</span>)
                             )
                         )
                         table_body(
                             if variants.is_empty() {
-                                empty_row(colspan: 5, text: "No variant yet.")
+                                empty_row(colspan: 6, text: "No variant yet.")
                             }
                             for variant in &variants {
                                 table_row(
@@ -600,6 +713,28 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                 button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Save")
                                             </form>
                                         } else if variant.sku.is_empty() { "—" } else { <code>(&variant.sku)</code> }
+                                    )
+                                    table_cell(
+                                        attrs: attributes! { data-stock=(variant.stock.data()) data-stock-held=(variant.stock.held) },
+                                        if editable {
+                                            <form method="post" action=(href!(stock::stock, Slug(slug.clone()), ProductId(product.id.clone()))) class="flex items-center gap-1">
+                                                <input type="hidden" name="variant_id" value=(&variant.id)>
+                                                <label class="sr-only" for=(format!("variant-stock-{}", variant.id))>"Stock of " (&variant.selections)</label>
+                                                input(attrs: attributes! {
+                                                    id=(format!("variant-stock-{}", variant.id)) name="on_hand" type="number" min="0" max=(timada_catalog::MAX_STOCK) step="1"
+                                                    class="h-8 w-20 px-2" value=(&variant.stock.on_hand) placeholder="∞"
+                                                })
+                                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" aria-label=(format!("Set the stock of {}", variant.selections)) }, "Set")
+                                                if variant.stock.tracked {
+                                                    button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" name="untrack" value="1" class="h-7 px-2 text-xs" aria-label=(format!("Stop counting {}", variant.selections)) }, "∞")
+                                                }
+                                            </form>
+                                            if variant.stock.held > 0 {
+                                                <p class="mt-1 text-xs text-muted-foreground">(variant.stock.held) " held"</p>
+                                            }
+                                        } else {
+                                            (variant.stock.label())
+                                        }
                                     )
                                     table_cell(
                                         if editable && !picture_choices.is_empty() {

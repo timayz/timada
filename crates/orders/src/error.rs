@@ -12,6 +12,8 @@ pub enum OrdersError {
     TooManyLines,
     #[error("this product is not on sale")]
     Unavailable { product_id: String },
+    #[error("only {available} left of this product")]
+    OutOfStock { product_id: String, available: u32 },
     #[error("pick one of the product's variants")]
     VariantRequired,
     #[error("variant not found")]
@@ -90,6 +92,7 @@ const KNOWN_CODES: &[&str] = &[
     "cart_not_found",
     "cart_checked_out",
     "product_unavailable",
+    "out_of_stock",
     "variant_required",
     "variant_not_found",
     "mixed_currencies",
@@ -121,6 +124,7 @@ impl OrdersError {
             Self::InvalidQuantity => "invalid_quantity",
             Self::TooManyLines => "too_many_lines",
             Self::Unavailable { .. } => "product_unavailable",
+            Self::OutOfStock { .. } => "out_of_stock",
             Self::VariantRequired => "variant_required",
             Self::VariantNotFound => "variant_not_found",
             Self::MixedCurrencies => "mixed_currencies",

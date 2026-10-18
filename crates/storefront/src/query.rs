@@ -138,9 +138,27 @@ pub struct Product {
     pub review_count: i64,
     /// Their average times a hundred (`435` is 4.35 stars); 0 without any.
     pub rating_x100: i64,
+    /// What is on the shelf of each thing the shop counts: a variant's id,
+    /// or `""` for a product without variants. A thing missing here sells
+    /// without limit.
+    #[sqlx(json, rename = "stock_json")]
+    pub stock: std::collections::BTreeMap<String, u32>,
+    /// Whether anything of it can still be bought.
+    pub in_stock: bool,
 }
 
 impl Product {
+    /// How many are left of the product (`variant_id` `None`) or of one of
+    /// its variants; `None` when the shop does not count it (no limit).
+    pub fn left(&self, variant_id: Option<&str>) -> Option<u32> {
+        self.stock.get(variant_id.unwrap_or("")).copied()
+    }
+
+    /// Whether that product or variant is sold out.
+    pub fn is_sold_out(&self, variant_id: Option<&str>) -> bool {
+        self.left(variant_id) == Some(0)
+    }
+
     /// The average of its published reviews, to one decimal (`4.4`); `None`
     /// before the first one.
     pub fn rating(&self) -> Option<f64> {
@@ -454,7 +472,7 @@ macro_rules! products_page {
             "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
                 p.updated_at, p.images_json, p.options_json, p.variants_json,
                 p.attributes_json, p.min_amount_cents, p.max_amount_cents, p.review_count,
-                p.rating_x100 ",
+                p.rating_x100, p.stock_json, p.in_stock ",
             products_from!($from),
             products_where!(),
             $order,
@@ -543,7 +561,7 @@ macro_rules! category_page {
             "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
                 p.updated_at, p.images_json, p.options_json, p.variants_json,
                 p.attributes_json, p.min_amount_cents, p.max_amount_cents, p.review_count,
-                p.rating_x100
+                p.rating_x100, p.stock_json, p.in_stock
              FROM storefront_category_products cp
              JOIN storefront_products p ON p.id = cp.product_id
              WHERE cp.category_id = ?1 ",
@@ -730,7 +748,7 @@ pub async fn published_product_by_slug(
     sqlx::query_as(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
-            min_amount_cents, max_amount_cents, review_count, rating_x100
+            min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock
          FROM storefront_products WHERE slug = ?1 AND status = 'published'",
     )
     .bind(slug)
@@ -748,7 +766,7 @@ pub async fn published_products_by_ids(
     sqlx::query_as(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
-            min_amount_cents, max_amount_cents, review_count, rating_x100
+            min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock
          FROM storefront_products
          WHERE id IN (SELECT value FROM json_each(?1)) AND status = 'published'",
     )

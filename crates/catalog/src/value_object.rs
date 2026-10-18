@@ -85,6 +85,15 @@ pub fn product_sku_id(sku: &str) -> String {
     evento::hash_ids(vec!["product-sku", &sku_key(sku)])
 }
 
+/// The stock stream of a product without variants (`variant_id` `None`) or
+/// of one of its variants.
+pub fn stock_item_id(product_id: &str, variant_id: Option<&str>) -> String {
+    evento::hash_ids(vec!["stock", product_id, variant_id.unwrap_or("")])
+}
+
+/// The most a shop counts of one thing.
+pub const MAX_STOCK: u32 = 1_000_000;
+
 /// What two codes are compared by: case and surrounding space do not make
 /// two different codes.
 pub fn sku_key(sku: &str) -> String {

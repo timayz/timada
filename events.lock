@@ -41,6 +41,13 @@ event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: Strin
 event timada-catalog/ProductSku::Released unit
 event timada-catalog/ProductSlug::Claimed { product_id: String }
 event timada-catalog/ProductSlug::Released unit
+event timada-catalog/StockItem::Consumed { cart_id: String, order_id: String, quantity: u32, consumed_by: String }
+event timada-catalog/StockItem::OnHandSet { on_hand: u32, set_by: String }
+event timada-catalog/StockItem::Released { cart_id: String, released_by: String }
+event timada-catalog/StockItem::Reserved { cart_id: String, quantity: u32, expires_at: u64, reserved_by: String }
+event timada-catalog/StockItem::Restored { order_id: String, quantity: u32, restored_by: String }
+event timada-catalog/StockItem::Tracked { product_id: String, variant_id: Option<String>, on_hand: u32, tracked_by: String }
+event timada-catalog/StockItem::Untracked { untracked_by: String }
 event timada-discounts/Discount::Archived { archived_by: String }
 event timada-discounts/Discount::Created { code: String, percent_bps: Option<u32>, amount_cents: Option<u64>, currency: Option<String>, starts_at: Option<u64>, ends_at: Option<u64>, max_uses: Option<u32>, once_per_email: bool, created_by: String }
 event timada-discounts/Discount::Deactivated { deactivated_by: String }
