@@ -11,13 +11,22 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::cluster::Executor;
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
+    section_card, status_badge,
+};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -102,62 +111,75 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "orders"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Orders"</h1>
-            </header>
+            page_header(title: "Orders", subtitle: Some("What shoppers placed on the storefronts."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <form method="get" class="mb-4 flex gap-2">
+            section_card(
+                filter_bar(
                     <label class="sr-only" for="orders-search">"Search"</label>
-                    <input id="orders-search" name="q" type="search" value=(q.unwrap_or(""))
-                        class="w-full rounded border border-neutral-300 px-3 py-2" placeholder="Reference, e-mail or name">
+                    input(attrs: attributes! {
+                        id="orders-search" name="q" type="search" value=(q.unwrap_or(""))
+                        class="sm:max-w-xs" placeholder="Reference, e-mail or name"
+                    })
                     <label class="sr-only" for="orders-status">"Status"</label>
-                    <select id="orders-status" name="status" class="rounded border border-neutral-300 px-3 py-2">
+                    select(
+                        attrs: attributes! { id="orders-status" name="status" class="w-44" },
                         <option value="">"Every status"</option>
                         for option in OrderStatus::ALL {
                             <option value=(option.as_str()) selected=(status == Some(option))>(option.label())</option>
                         }
-                    </select>
-                    <button class="rounded border border-neutral-300 px-3 py-2">"Filter"</button>
-                </form>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Reference"</th>
-                            <th class="py-2 font-medium">"Placed"</th>
-                            <th class="py-2 font-medium">"Customer"</th>
-                            <th class="py-2 font-medium">"Items"</th>
-                            <th class="py-2 font-medium">"Total"</th>
-                            <th class="py-2 font-medium">"Status"</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+                    )
+                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Filter")
+                )
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Reference")
+                            table_head("Placed")
+                            table_head("Customer")
+                            table_head(attrs: attributes! { class="text-right" }, "Items")
+                            table_head(attrs: attributes! { class="text-right" }, "Total")
+                            table_head("Status")
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="6">"No order yet."</td></tr>
+                            empty_row(colspan: 6, text: "No order yet.")
                         }
                         for row in &rows {
-                            <tr data-order=(&row.reference) data-order-status=(&row.status)>
-                                <td class="py-2">
-                                    <a class="font-mono underline" href=(href!(order_id::index, Slug(slug.clone()), order_id::OrderId(row.id.clone())))>(&row.reference)</a>
-                                </td>
-                                <td class="py-2"><time datetime=(row.placed_at)>(format_time(row.placed_at as u64))</time></td>
-                                <td class="py-2">(&row.name) <span class="text-neutral-500">" · " (&row.email)</span></td>
-                                <td class="py-2">(row.item_count)</td>
-                                <td class="py-2" data-order-total="">(row.total_label())</td>
-                                <td class="py-2">(row.status().label())</td>
-                            </tr>
+                            table_row(
+                                attrs: attributes! { data-order=(&row.reference) data-order-status=(&row.status) },
+                                table_cell(
+                                    <a class=(class!(LINK, "font-mono")) href=(href!(order_id::index, Slug(slug.clone()), order_id::OrderId(row.id.clone())))>(&row.reference)</a>
+                                )
+                                table_cell(<time datetime=(row.placed_at)>(format_time(row.placed_at as u64))</time>)
+                                table_cell(
+                                    <span class="block font-medium">(&row.name)</span>
+                                    <span class="block text-xs text-muted-foreground">(&row.email)</span>
+                                )
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" }, (row.item_count))
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" data-order-total="" }, (row.total_label()))
+                                table_cell(status_badge(tone: order_tone(row.status()), (row.status().label())))
+                            )
                         }
-                    </tbody>
-                </table>
-                if pages > 1 {
-                    <p class="mt-4 flex items-center gap-4 text-sm">
-                        if page_number > 1 { <a class="underline" href=(page_link(page_number - 1))>"Previous"</a> }
-                        <span>"Page " (page_number) " of " (pages)</span>
-                        if page_number < pages { <a class="underline" href=(page_link(page_number + 1))>"Next"</a> }
-                    </p>
-                }
-            </section>
+                    )
+                )
+                pager(
+                    page: page_number,
+                    pages: pages,
+                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
+                    next: (page_number < pages).then(|| page_link(page_number + 1)),
+                )
+            )
         )
     })
+}
+
+/// The colour of an order's status.
+fn order_tone(status: OrderStatus) -> Tone {
+    match status {
+        OrderStatus::Paid => Tone::Info,
+        OrderStatus::Fulfilled => Tone::Success,
+        OrderStatus::Cancelled => Tone::Danger,
+    }
 }

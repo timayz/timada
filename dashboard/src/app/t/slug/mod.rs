@@ -23,6 +23,13 @@ pub mod shipping;
 
 use std::sync::Arc;
 
+use timada_catalog::{ProductFilter, count_products};
+use timada_invoicing::count_documents;
+use timada_orders::{OrderFilter, count_open_carts, count_orders};
+use timada_reviews::{ReviewFilter, ReviewStatus, count_reviews};
+use timada_shoppers::count_shoppers;
+use timada_support::{MessageFilter, MessageStatus, count_messages};
+use timada_tenancy::count_open_invitations_of_tenant;
 use timada_tenancy::{
     PERMISSION_API_KEYS_MANAGE, PERMISSION_CUSTOMERS_READ, PERMISSION_DISCOUNTS_READ,
     PERMISSION_MAIL_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_ORDERS_READ,
@@ -33,20 +40,30 @@ use timada_tenancy::{
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::{IconData, icon},
     router::{
         error::{forbidden, not_found},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use crate::app::auth::Flash;
 use crate::app::tenants::tenancy;
-use crate::auth::{require_user, unix_seconds};
+use crate::auth::{now, require_user, unix_seconds};
 use crate::authz::Authorizer;
 use crate::cluster::Executor;
+use crate::components::alert::{AlertVariant, alert, alert_description};
+use crate::components::badge::{BadgeVariant, badge};
+use crate::components::button::button;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::db::ReadPool;
 use crate::tenants::{RequestHold, TenantStatus, Tenants};
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    Shell, Tone, chrome::section_url, document, fact, facts, format_time, icons, notice,
+    section_card, stat_tile, status_badge,
+};
 
 module_param!(pub slug);
 
@@ -204,6 +221,132 @@ impl TenantNav {
     }
 }
 
+/// One figure of the tenant's home: what a section counts, read from the
+/// shared read model so a suspended tenant's home still shows it.
+struct Tile {
+    label: &'static str,
+    value: String,
+    symbol: IconData,
+    href: String,
+    tone: Tone,
+    hint: Option<String>,
+}
+
+/// The tiles the member may see, in the order of the rail. A figure that
+/// asks for attention (reviews or messages waiting) is drawn in the warning
+/// colour while it is above zero.
+async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Tile>> {
+    let pool = app_context::<ReadPool>(cx);
+    let id = tenant.id.as_str();
+    let link = |key: &str| section_url(cx, &tenant.slug, key);
+    let attention = |n: u64| if n > 0 { Tone::Warning } else { Tone::Neutral };
+    let mut tiles = Vec::new();
+    if nav.products {
+        let n = count_products(pool, id, &ProductFilter::default()).await?;
+        tiles.push(Tile {
+            label: "Products",
+            value: n.to_string(),
+            symbol: icons::PRODUCTS,
+            href: link("products"),
+            tone: Tone::Primary,
+            hint: None,
+        });
+    }
+    if nav.orders {
+        let n = count_orders(pool, id, &OrderFilter::default()).await?;
+        tiles.push(Tile {
+            label: "Orders",
+            value: n.to_string(),
+            symbol: icons::ORDERS,
+            href: link("orders"),
+            tone: Tone::Info,
+            hint: None,
+        });
+        let n = count_open_carts(pool, id).await?;
+        tiles.push(Tile {
+            label: "Open carts",
+            value: n.to_string(),
+            symbol: icons::CARTS,
+            href: link("carts"),
+            tone: Tone::Neutral,
+            hint: None,
+        });
+    }
+    if nav.customers {
+        let n = count_shoppers(pool, id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        tiles.push(Tile {
+            label: "Customers",
+            value: n.to_string(),
+            symbol: icons::CUSTOMERS,
+            href: link("customers"),
+            tone: Tone::Primary,
+            hint: None,
+        });
+    }
+    if nav.reviews {
+        let filter = ReviewFilter {
+            status: Some(ReviewStatus::Pending),
+            ..ReviewFilter::default()
+        };
+        let n = count_reviews(pool, id, &filter)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        tiles.push(Tile {
+            label: "Pending reviews",
+            value: n.to_string(),
+            symbol: icons::REVIEWS,
+            href: link("reviews"),
+            tone: attention(n),
+            hint: None,
+        });
+    }
+    if nav.messages {
+        let filter = MessageFilter {
+            status: Some(MessageStatus::Open),
+        };
+        let n = count_messages(pool, id, &filter)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        tiles.push(Tile {
+            label: "Open messages",
+            value: n.to_string(),
+            symbol: icons::MESSAGES,
+            href: link("messages"),
+            tone: attention(n),
+            hint: None,
+        });
+    }
+    if nav.invoices {
+        let n = count_documents(pool, id).await?;
+        tiles.push(Tile {
+            label: "Invoices",
+            value: n.to_string(),
+            symbol: icons::INVOICES,
+            href: link("invoices"),
+            tone: Tone::Success,
+            hint: None,
+        });
+    }
+    if nav.members {
+        let invitations = count_open_invitations_of_tenant(pool, id, now()).await?;
+        tiles.push(Tile {
+            label: "Members",
+            value: tenant.members.len().to_string(),
+            symbol: icons::MEMBERS,
+            href: link("members"),
+            tone: Tone::Neutral,
+            hint: Some(match invitations {
+                0 => "No open invitation".to_owned(),
+                1 => "1 open invitation".to_owned(),
+                n => format!("{n} open invitations"),
+            }),
+        });
+    }
+    Ok(tiles)
+}
+
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
@@ -213,59 +356,101 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let TenantAccess { tenant, role, .. } = access;
     let role = role_label(&tenant, &role);
     let status = app_context::<Arc<Tenants>>(cx).status(&tenant.id);
+    let tiles = tiles(cx, &tenant, &nav).await?;
+    let members = match tenant.members.len() {
+        1 => "1 member".to_owned(),
+        n => format!("{n} members"),
+    };
 
     Ok(view! {
         document(
             title: &tenant.name,
             shell: Shell::tenant(&tenant, &nav, "home"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">
-                    (&tenant.name)
-                    if tenant.is_suspended() { " " <span class="rounded bg-amber-100 px-2 text-sm font-normal text-amber-800">"suspended"</span> }
-                </h1>
-            </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             if let Some(reason) = &tenant.suspended {
-                <p role="alert" class="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                    "This tenant is suspended by the platform: " (reason) ". Its data is offline until an administrator resumes it."
-                </p>
+                alert(
+                    variant: AlertVariant::Warning,
+                    attrs: attributes! { role="alert" class="mb-6" },
+                    icon(data: icons::WARNING)
+                    alert_description(
+                        "This tenant is suspended by the platform: " (reason) ". Its data is offline until an administrator resumes it."
+                    )
+                )
             }
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Overview"</h2>
-                <dl class="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
-                    <dt class="text-neutral-500">"Address"</dt><dd><code>"/t/" (&tenant.slug)</code></dd>
-                    <dt class="text-neutral-500">"Your role"</dt><dd>(&role)</dd>
-                    <dt class="text-neutral-500">"Members"</dt><dd>(tenant.members.len())</dd>
-                    <dt class="text-neutral-500">"Created"</dt><dd><time datetime=(tenant.created_at)>(format_time(tenant.created_at))</time></dd>
-                    <dt class="text-neutral-500">"Database"</dt>
-                    <dd data-tenant-status=(if matches!(status, TenantStatus::Running { .. }) { "running" } else { "stopped" })>
-                        (match status {
-                            TenantStatus::Running { since, leases } => {
-                                let since = format_time(unix_seconds(since));
-                                match leases {
-                                    0 => format!("Running since {since}"),
-                                    1 => format!("Running since {since} · 1 store connection"),
-                                    n => format!("Running since {since} · {n} store connections"),
-                                }
+            section_card(
+                <div class="flex flex-wrap items-start justify-between gap-x-10 gap-y-6">
+                    <div class="min-w-0">
+                        <div class="flex flex-wrap items-center gap-3">
+                            <h1 class="text-2xl font-bold tracking-tight md:text-3xl">(&tenant.name)</h1>
+                            if tenant.is_suspended() {
+                                status_badge(tone: Tone::Warning, "suspended")
                             }
-                            TenantStatus::Stopped => "Stopped".to_owned(),
-                        })
-                    </dd>
-                </dl>
-            </section>
+                        </div>
+                        <p class="mt-2 text-sm text-muted-foreground">
+                            <code class="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">"/t/" (&tenant.slug)</code>
+                            " · " (&members)
+                        </p>
+                    </div>
+                    <div class="w-full lg:w-auto lg:min-w-[26rem]">
+                        facts(
+                            fact(term: "Your role", badge(variant: BadgeVariant::Tinted, (&role)))
+                            fact(term: "Created", <time datetime=(tenant.created_at)>(format_time(tenant.created_at))</time>)
+                            fact(
+                                term: "Database",
+                                attrs: attributes! {
+                                    data-tenant-status=(if matches!(status, TenantStatus::Running { .. }) { "running" } else { "stopped" })
+                                },
+                                (match status {
+                                    TenantStatus::Running { since, leases } => {
+                                        let since = format_time(unix_seconds(since));
+                                        match leases {
+                                            0 => format!("Running since {since}"),
+                                            1 => format!("Running since {since} · 1 store connection"),
+                                            n => format!("Running since {since} · {n} store connections"),
+                                        }
+                                    }
+                                    TenantStatus::Stopped => "Stopped".to_owned(),
+                                })
+                            )
+                        )
+                    </div>
+                </div>
+            )
+
+            if !tiles.is_empty() {
+                <div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    for tile in &tiles {
+                        stat_tile(
+                            label: tile.label,
+                            value: tile.value.clone(),
+                            symbol: tile.symbol.clone(),
+                            href: tile.href.clone(),
+                            tone: tile.tone,
+                            hint: tile.hint.as_deref(),
+                        )
+                    }
+                </div>
+            }
 
             if can_manage {
-                <section class="rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">"Settings"</h2>
-                    <form method="post" action=(href!(rename::rename, Slug(tenant.slug.clone()))) class="space-y-3">
-                        <label class="block text-sm" for="tenant-name">"Name"</label>
-                        <input id="tenant-name" name="name" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" maxlength=(timada_tenancy::MAX_NAME_LEN) required="" value=(&tenant.name)>
-                        <button class="rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100">"Rename"</button>
+                section_card(
+                    title: Some("Settings"),
+                    description: Some("The name members and the platform see this tenant under."),
+                    <form method="post" action=(href!(rename::rename, Slug(tenant.slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                        field(
+                            field_label(attrs: attributes! { for="tenant-name" }, "Name")
+                            input(attrs: attributes! {
+                                id="tenant-name" name="name" type="text"
+                                maxlength=(timada_tenancy::MAX_NAME_LEN) required="" value=(&tenant.name)
+                            })
+                        )
+                        <div>
+                            button(attrs: attributes! { type="submit" }, "Rename")
+                        </div>
                     </form>
-                </section>
+                )
             }
         )
     })
