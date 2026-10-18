@@ -1,6 +1,8 @@
 //! Events. Every variant and every field is frozen once it ships (bitcode is
 //! positional); evolve by adding variants.
 
+use crate::value_object::PricingRule;
+
 /// A merchant on the platform. Roles are free-form names a tenant defines
 /// for itself (`RoleDefined`); `owner` is built in and unrestricted (see
 /// [`ROLE_OWNER`](crate::ROLE_OWNER)).
@@ -161,6 +163,36 @@ pub enum Tenant {
     /// The mails go back to the plain look.
     MailBrandingCleared {
         cleared_by: String,
+    },
+    /// The merchant's own AliExpress app, which the shop imports products
+    /// through and keeps their price and stock in step with. The secret is
+    /// sealed by the host, as the payment secrets are. Products are fetched
+    /// as shipped to `ship_to_country`, priced in `currency` and worded in
+    /// `language`; `pricing` turns what AliExpress charges into the shop's
+    /// price (`None`: the merchant prices by hand).
+    AliexpressConfigured {
+        app_key: String,
+        app_secret_sealed: Vec<u8>,
+        ship_to_country: String,
+        currency: String,
+        language: String,
+        pricing: Option<PricingRule>,
+        configured_by: String,
+    },
+    /// The AliExpress account the app acts for said yes: its tokens, sealed
+    /// by the host, and when they lapse (unix seconds). Written again each
+    /// time they are refreshed.
+    AliexpressAuthorized {
+        access_token_sealed: Vec<u8>,
+        refresh_token_sealed: Vec<u8>,
+        expires_at: u64,
+        refresh_expires_at: u64,
+        account: String,
+        authorized_by: String,
+    },
+    /// The shop no longer imports from AliExpress.
+    AliexpressRemoved {
+        removed_by: String,
     },
 }
 

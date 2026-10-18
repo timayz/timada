@@ -135,6 +135,17 @@ impl std::fmt::Debug for ApiKeyReveal {
     }
 }
 
+/// A merchant on their way to AliExpress to connect the shop's account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AliexpressFlow {
+    pub tenant_id: String,
+    /// The member who started it; the callback requires the same one.
+    pub user_id: String,
+    /// `state` sent to AliExpress; must come back unchanged.
+    pub state: String,
+    pub issued_at: u64,
+}
+
 fn flow_jar(cx: &Cx) -> impl Cookies + '_ {
     // `Lax`, not `Strict`: the OIDC callback is a top-level cross-site
     // navigation and must still carry the cookie.
@@ -176,6 +187,10 @@ pub fn api_key_reveal(cx: &Cx) -> UnparsedCookieStore<ApiKeyReveal, impl Cookies
         flow_jar(cx).default_max_age(time::Duration::seconds(API_KEY_REVEAL_MAX_AGE_SECS as i64)),
         "api_key_reveal",
     )
+}
+
+pub fn aliexpress_flow(cx: &Cx) -> UnparsedCookieStore<AliexpressFlow, impl Cookies + '_> {
+    cookie_store(flow_jar(cx), "aliexpress_flow")
 }
 
 /// Whether a flow started at `issued_at` may still finish at `now`.

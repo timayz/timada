@@ -1,0 +1,63 @@
+{
+  "aliexpress_ds_product_get_response": {
+    "rsp_code": "200",
+    "rsp_msg": "Call succeeds",
+    "result": {
+      "ae_item_base_info_dto": {
+        "product_id": 1005006123456789,
+        "subject": "Cat Harness &amp; Leash Set",
+        "detail": "<p>Soft <b>mesh</b> harness.</p><p>Adjustable.</p>",
+        "currency_code": "EUR",
+        "product_status_type": "onSelling"
+      },
+      "ae_multimedia_info_dto": {
+        "image_urls": "https://ae01.alicdn.com/kf/main1.jpg;https://ae01.alicdn.com/kf/main2.jpg"
+      },
+      "ae_item_sku_info_dtos": {
+        "ae_item_sku_info_d_t_o": [
+          {
+            "sku_id": "12000037001",
+            "offer_sale_price": "4.31",
+            "sku_price": "6.00",
+            "sku_available_stock": 120,
+            "sku_stock": true,
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                { "sku_property_name": "Color", "sku_property_value": "Pink", "property_value_definition_name": "Rose", "sku_image": "https://ae01.alicdn.com/kf/rose.jpg" },
+                { "sku_property_name": "Size", "sku_property_value": "S" }
+              ]
+            }
+          },
+          {
+            "id": "12000037002",
+            "sku_price": 5.5,
+            "s_k_u_available_stock": "0",
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                { "sku_property_name": "Color", "sku_property_value": "Blue" },
+                { "sku_property_name": "Size", "sku_property_value": "S" }
+              ]
+            }
+          },
+          {
+            "sku_id": "12000037003",
+            "sku_price": "0",
+            "sku_available_stock": 9,
+            "ae_sku_property_dtos": {
+              "ae_sku_property_d_t_o": [
+                { "sku_property_name": "Color", "sku_property_value": "Grey" },
+                { "sku_property_name": "Size", "sku_property_value": "L" }
+              ]
+            }
+          }
+        ]
+      },
+      "ae_item_properties": {
+        "ae_item_property": [
+          { "attr_name": "Material", "attr_value": "Nylon" },
+          { "attr_name": "Origin", "attr_value": "CN" }
+        ]
+      }
+    }
+  }
+}

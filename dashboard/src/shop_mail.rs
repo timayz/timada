@@ -8,7 +8,6 @@
 //! ones recorded are not used.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -154,15 +153,7 @@ impl ShopMail {
         if self.0.allow_private_hosts {
             return Ok(());
         }
-        let addresses: Vec<IpAddr> = tokio::net::lookup_host((host, port))
-            .await
-            .with_context(|| format!("cannot resolve {host}"))?
-            .map(|address| address.ip())
-            .collect();
-        anyhow::ensure!(!addresses.is_empty(), "{host} has no address");
-        if let Some(address) = addresses.iter().find(|address| !is_public(**address)) {
-            anyhow::bail!("{host} resolves to {address}, which is not a public address");
-        }
+        crate::net::check_public_host(host, port).await?;
         Ok(())
     }
 
@@ -222,40 +213,10 @@ pub async fn shop_sender(cx: &Cx, tenant: &TenantState) -> topcoat::Result<ShopS
     Ok(sender)
 }
 
-/// Whether `address` is reachable from the internet: not loopback, private,
-/// link-local, shared (CGNAT), unspecified, broadcast, documentation or
-/// multicast.
-fn is_public(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            !(v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-                || v4.is_multicast()
-                || a == 0
-                || (a == 100 && (64..128).contains(&b)))
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public(IpAddr::V4(v4));
-            }
-            let first = v6.segments()[0];
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::is_public;
 
     const KEY: &str = "a-secrets-key-of-thirty-two-chars!!";
 

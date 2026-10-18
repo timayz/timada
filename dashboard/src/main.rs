@@ -1,3 +1,4 @@
+mod aliexpress;
 mod app;
 mod auth;
 mod authz;
@@ -11,8 +12,10 @@ mod invoicing;
 mod key_vault;
 mod limits;
 mod media;
+mod media_images;
 mod message_keys;
 mod message_notifications;
+mod net;
 mod payments;
 mod peers;
 mod rate_limit;

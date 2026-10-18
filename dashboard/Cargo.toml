@@ -26,6 +26,7 @@ clap.workspace = true
 config.workspace = true
 timada-identity = { path = "../crates/identity" }
 timada-tenancy = { path = "../crates/tenancy" }
+timada-aliexpress = { path = "../crates/aliexpress" }
 timada-catalog = { path = "../crates/catalog" }
 timada-catalog-import = { path = "../crates/catalog-import" }
 timada-orders = { path = "../crates/orders" }

@@ -69,6 +69,8 @@ pub struct Services {
     pub payments: Arc<crate::payments::Payments>,
     /// The shops' own mail servers.
     pub shop_mail: crate::shop_mail::ShopMail,
+    /// The shops' own AliExpress apps.
+    pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
     /// The live store connections, so revoking a key ends them.
     pub store: Arc<StoreConnections>,
     pub config: Config,
@@ -88,6 +90,7 @@ pub fn router(services: Services) -> Router {
         keys,
         payments,
         shop_mail,
+        aliexpress,
         store,
         config,
     } = services;
@@ -138,6 +141,7 @@ pub fn router(services: Services) -> Router {
         .app_context(media)
         .app_context(keys)
         .app_context(payments)
+        .app_context(aliexpress)
         .app_context(store)
         // How often each storefront and shopper has had a sign-in code mailed
         // from this node.

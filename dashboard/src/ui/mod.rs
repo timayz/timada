@@ -218,6 +218,28 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_tax_category" => "Choose one of the tax categories.",
         "invalid_stock" => "A stock is a whole number from 0 to 1,000,000.",
         "out_of_stock" => "There is not enough of it left.",
+        "invalid_aliexpress_key" => "An AliExpress app key is 1 to 64 letters and digits.",
+        "invalid_aliexpress_market" => {
+            "Give a two-letter country (FR), a currency and a two-letter language (fr)."
+        }
+        "invalid_pricing_rule" => {
+            "A price rule multiplies the cost by 1 to 100 (2.5) and adds at most 10,000 (1.00)."
+        }
+        "aliexpress_not_configured" => "Set up the AliExpress app first.",
+        "aliexpress_not_connected" => "Connect the AliExpress account first.",
+        "aliexpress_secret_required" => "Enter the app secret: the app key changed.",
+        "aliexpress_connect_expired" => {
+            "The connection took too long or was started elsewhere. Try again."
+        }
+        "aliexpress_connect_refused" => "AliExpress did not connect the account. Try again.",
+        "invalid_aliexpress_product" => "Give an AliExpress product number or its address.",
+        "aliexpress_already_linked" => "This product is already imported.",
+        "aliexpress_importing" => "This product is being imported.",
+        "aliexpress_not_found" => "This product was not imported from AliExpress.",
+        "aliexpress_sync_failed" => "AliExpress did not answer. The product is read again later.",
+        "secrets_disabled" => {
+            "No secret can be kept on this platform: the operator has to set secrets.key first."
+        }
         "oss_without_vat_number" => "The One-Stop Shop needs a VAT number.",
         "company_not_found" => "This company does not exist.",
         "siren_taken" => {
@@ -282,6 +304,9 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "shipping:manage" => "Set up the ways the shop ships and what they cost",
         "support:read" => "See the messages shoppers sent through the contact form",
         "support:manage" => "Mark messages handled and reopen them (includes seeing them)",
+        "aliexpress:manage" => {
+            "Connect the AliExpress app, import products from it and keep them in step"
+        }
         _ => "Unknown permission",
     }
 }

@@ -19,6 +19,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
 | `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own store |
 | `crates/catalog-import` | `timada-catalog-import` | Fills a catalog from a snapshot directory (`seeds/`, catalogue + pictures), and takes one from a WooCommerce shop (`woo-snapshot`) |
+| `crates/aliexpress` | `timada-aliexpress` | The items a shop imports from AliExpress: the signed open-platform client, the mapping to a draft, what a read changes, one link stream per item in a tenant's store (see `docs/aliexpress.md`) |
 | `crates/orders` | `timada-orders` | Carts and the orders placed from them, next to the catalog in a tenant's store |
 | `crates/discounts` | `timada-discounts` | Discount codes and how often each was used, and the checkout offers, in a tenant's store |
 | `crates/reviews` | `timada-reviews` | What buyers wrote about the products of their orders, and whether the merchant published it |
@@ -39,7 +40,9 @@ Typst in `timada-invoicing` behind its `pdf` feature,
 an order from the products it loads, and from `timada-discounts`, for its currencies
 and amounts; `timada-reviews` depends on `timada-orders`, to check that a reviewer
 bought what they review, and `timada-shoppers` on it, for the shape of an address and
-the rule an e-mail is kept under); the dashboard depends on every crate;
+the rule an e-mail is kept under; `timada-aliexpress` depends on the catalog, the
+import and tenancy, for what it fills and the shop's price rule, and on reqwest, the
+one context crate that calls out); the dashboard depends on every crate;
 nothing depends on the dashboard.
 
 ## Bounded contexts
