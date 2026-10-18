@@ -1900,6 +1900,7 @@ async fn sign_in_codes_are_held_to_a_limit_per_shopper_and_per_key() {
             shopper_codes_per_ip: 2,
             shopper_codes_per_key: 4,
             shopper_codes_window_secs: 600,
+            ..config::StoreConfig::default()
         },
     )
     .await;

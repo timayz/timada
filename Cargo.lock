@@ -6163,6 +6163,7 @@ dependencies = [
  "timada-reviews",
  "timada-shoppers",
  "timada-storefront",
+ "timada-support",
  "timada-tenancy",
  "tokio",
  "tokio-rustls",
@@ -6311,6 +6312,21 @@ dependencies = [
  "topcoat-view",
  "topcoat-view-macro",
  "tracing",
+]
+
+[[package]]
+name = "timada-support"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror 2.0.21",
+ "timada-core",
+ "tokio",
+ "ulid",
 ]
 
 [[package]]

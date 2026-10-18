@@ -29,6 +29,8 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `customers:manage` — delete a shopper's account (an erasure request).
 /// - `mail:manage` — set up the mail server the shop's mails go out through.
 /// - `shipping:manage` — set up the ways the shop ships and what they cost.
+/// - `support:read` — see the messages shoppers sent through the contact form.
+/// - `support:manage` — mark messages handled, and reopen them.
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
@@ -48,6 +50,8 @@ pub const PERMISSIONS: &[&str] = &[
     PERMISSION_CUSTOMERS_MANAGE,
     PERMISSION_MAIL_MANAGE,
     PERMISSION_SHIPPING_MANAGE,
+    PERMISSION_SUPPORT_READ,
+    PERMISSION_SUPPORT_MANAGE,
 ];
 pub const PERMISSION_TENANT_MANAGE: &str = "tenant:manage";
 pub const PERMISSION_MEMBERS_READ: &str = "members:read";
@@ -67,6 +71,8 @@ pub const PERMISSION_CUSTOMERS_READ: &str = "customers:read";
 pub const PERMISSION_CUSTOMERS_MANAGE: &str = "customers:manage";
 pub const PERMISSION_MAIL_MANAGE: &str = "mail:manage";
 pub const PERMISSION_SHIPPING_MANAGE: &str = "shipping:manage";
+pub const PERMISSION_SUPPORT_READ: &str = "support:read";
+pub const PERMISSION_SUPPORT_MANAGE: &str = "support:manage";
 
 /// Every scope a store API key can hold, as `resource:action`. The list only
 /// grows: a stored key may name any of them. `write` on a resource implies
