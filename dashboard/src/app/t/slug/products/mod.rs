@@ -125,7 +125,7 @@ pub fn status_label(status: timada_catalog::ProductStatus) -> &'static str {
 /// The colour of a product's state.
 pub fn status_tone(status: timada_catalog::ProductStatus) -> Tone {
     match status {
-        timada_catalog::ProductStatus::Draft => Tone::Warning,
+        timada_catalog::ProductStatus::Draft => Tone::Info,
         timada_catalog::ProductStatus::Published => Tone::Success,
         timada_catalog::ProductStatus::Archived => Tone::Neutral,
     }

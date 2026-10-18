@@ -36,7 +36,7 @@ use topcoat::{
     view::{View, attributes, class, view},
 };
 
-use super::{catalog, error_code, status_label};
+use super::{catalog, error_code, status_label, status_tone};
 use crate::app::auth::Flash;
 use crate::app::t::slug::categories::{Choice, rows_of};
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
@@ -54,8 +54,8 @@ use crate::components::textarea::textarea;
 use crate::db::ReadPool;
 use crate::media::Media;
 use crate::ui::{
-    LINK, Shell, Tone, document, empty_row, fact, facts, format_time, notice, page_header,
-    section_card, status_badge,
+    LINK, Shell, document, empty_row, fact, facts, format_time, notice, page_header, section_card,
+    status_badge,
 };
 use timada_invoicing::format_rate_fr;
 use timada_invoicing::tax::rate_bps;
@@ -328,7 +328,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
-            shell: Shell::tenant(&tenant, &nav, ""),
+            shell: Shell::tenant(&tenant, &nav, "products"),
             page_header(
                 title: &product.name,
                 h1_attrs: attributes! { data-product-id=(&product.id) },
@@ -803,15 +803,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
         )
     })
-}
-
-/// The colour of a product's status.
-fn status_tone(status: timada_catalog::ProductStatus) -> Tone {
-    match status {
-        timada_catalog::ProductStatus::Draft => Tone::Info,
-        timada_catalog::ProductStatus::Published => Tone::Success,
-        timada_catalog::ProductStatus::Archived => Tone::Neutral,
-    }
 }
 
 #[derive(serde::Deserialize)]

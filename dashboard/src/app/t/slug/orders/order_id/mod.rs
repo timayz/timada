@@ -192,7 +192,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
-            shell: Shell::tenant(&tenant, &nav, ""),
+            shell: Shell::tenant(&tenant, &nav, "orders"),
             page_header(
                 title: &heading,
                 subtitle: Some(&placed),
