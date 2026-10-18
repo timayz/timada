@@ -37,9 +37,9 @@ use crate::authz::Authorizer;
 use crate::cluster::Executor;
 use crate::config::Config;
 use crate::db::{ReadPool, WritePool};
+use crate::key_vault::{self, KeyVault};
 use crate::media::{MEDIA_ROUTE, Media, MediaCache, PEER_ROUTE};
 use crate::rate_limit::RateLimiter;
-use crate::shopper_keys::{self, ShopperKeyVault};
 use crate::store_api::StoreConnections;
 use crate::tenants::Tenants;
 use crate::ui::{document, notice};
@@ -56,8 +56,8 @@ pub struct Services {
     pub authorizer: Arc<Authorizer>,
     /// Where the product pictures are kept and served from.
     pub media: Arc<Media>,
-    /// Where the keys of the shoppers' personal data are kept.
-    pub shopper_keys: Arc<ShopperKeyVault>,
+    /// Where the keys personal data is sealed under are kept.
+    pub keys: Arc<KeyVault>,
     /// The tenants' Stripe accounts and the provider they are reached through.
     pub payments: Arc<crate::payments::Payments>,
     /// The shops' own mail servers.
@@ -78,7 +78,7 @@ pub fn router(services: Services) -> Router {
         tenants,
         authorizer,
         media,
-        shopper_keys,
+        keys,
         payments,
         shop_mail,
         store,
@@ -106,8 +106,8 @@ pub fn router(services: Services) -> Router {
         .layer(BodyLimit::max(UPLOAD_LIMIT).at("/t"))
         // A picture another node copies here: the file alone.
         .layer(BodyLimit::max(UPLOAD_LIMIT).at(PEER_ROUTE))
-        // A shopper key another node copies here.
-        .layer(BodyLimit::max(shopper_keys::MAX_SEALED_LEN).at(shopper_keys::PEER_ROUTE))
+        // A key another node copies here.
+        .layer(BodyLimit::max(key_vault::MAX_SEALED_LEN).at(key_vault::PEER_ROUTE))
         .layer(BodyLimit::max(REVIEW_LIMIT).at("/store/reviews"))
         // Absolute URLs (the OIDC redirect URI) follow the public address.
         .base_url(config.server.url.as_str())
@@ -129,7 +129,7 @@ pub fn router(services: Services) -> Router {
         .app_context(tenants)
         .app_context(authorizer)
         .app_context(media)
-        .app_context(shopper_keys)
+        .app_context(keys)
         .app_context(payments)
         .app_context(store)
         // How often each storefront and shopper has had a sign-in code mailed

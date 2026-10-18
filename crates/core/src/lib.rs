@@ -1,7 +1,12 @@
 //! What every bounded context shares: the refusal code of a write the
-//! store is not taking right now, and the reading of a shopper's language.
+//! store is not taking right now, the reading of a shopper's language, and
+//! the keys personal data is sealed under ([`keys`]).
+
+pub mod keys;
 
 use evento::WriteError;
+
+pub use keys::{Key, Keys};
 
 /// The refusal code pages and the store API carry when a tenant is not
 /// taking writes for the moment: a node of the cluster is away and the

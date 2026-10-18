@@ -88,8 +88,9 @@ pub async fn contact(cx: &Cx, Form(form): Form<ContactForm>) -> Result<Answer> {
         return answer_error(err);
     }
     let hold = super::hold(cx, &access).await?;
+    let keys = super::shoppers::keys(cx, &access.tenant.id);
     match timada_support::Command(hold.executor().clone())
-        .receive_message(STOREFRONT_ACTOR, draft)
+        .receive_message(&*keys, STOREFRONT_ACTOR, draft)
         .await
     {
         Ok(message) => answer(StatusCode::CREATED, json!({ "id": message.id })),
