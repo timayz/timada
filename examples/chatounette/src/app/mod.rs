@@ -15,6 +15,7 @@ pub mod orders;
 pub mod p;
 pub mod pages;
 pub mod reviews;
+pub mod search;
 
 use timada_storefront::{
     CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, menu,
@@ -34,6 +35,7 @@ use topcoat::{
 use crate::shopper::accounts_enabled;
 use cart::drawer::{CART_SCRIPT, DRAWER_CSS, cart_drawer};
 use menu::{MENU_CSS, MENU_SCRIPT, site_menu};
+use search::{SEARCH_CSS, SEARCH_SCRIPT};
 
 /// A review carries up to three photos of up to 8 MiB each.
 const REVIEW_LIMIT: usize = 26 * 1024 * 1024;
@@ -138,6 +140,7 @@ pub async fn document(
                 <style>(Unescaped::new_unchecked(THEME_CSS))</style>
                 <style>(Unescaped::new_unchecked(DRAWER_CSS))</style>
                 <style>(Unescaped::new_unchecked(MENU_CSS))</style>
+                <style>(Unescaped::new_unchecked(SEARCH_CSS))</style>
             </head>
             <body>
                 <div class="topbar">
@@ -153,9 +156,12 @@ pub async fn document(
                             <a class="menu-toggle" href="#menu" aria-controls="menu">"Menu"</a>
                         }
                         <a class="brand" href=(href!(index))>"Chat" <span>"ounette"</span></a>
-                        <form class="search" method="get" action=(href!(boutique::index)) role="search">
-                            <input name="q" type="search" placeholder="Rechercher un produit…" aria-label="Rechercher un produit">
+                        <form class="search" method="get" action=(href!(boutique::index)) role="search"
+                            data-search=(href!(search::index)) data-search-min=(search::MIN_CHARS)>
+                            <input name="q" type="search" placeholder="Rechercher un produit…" aria-label="Rechercher un produit"
+                                autocomplete="off" aria-autocomplete="list" aria-controls="search-drop" aria-expanded="false">
                             <button>"Rechercher"</button>
+                            <div id="search-drop" class="search-drop" data-search-drop="" hidden=""></div>
                         </form>
                         <nav class="quick" aria-label="Compte et panier">
                             <a class="quick-support" href=(href!(pages::slug::index, pages::slug::Slug("support-client")))>"Support client"</a>
@@ -176,6 +182,7 @@ pub async fn document(
                     site_menu(nav: nav)
                     <script>(Unescaped::new_unchecked(MENU_SCRIPT))</script>
                 }
+                <script>(Unescaped::new_unchecked(SEARCH_SCRIPT))</script>
                 <main>(child)</main>
                 site_footer()
                 if !no_drawer {

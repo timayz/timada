@@ -127,6 +127,41 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({ 
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Résultats pour « douillet »");
   await expect(page.locator("[data-results]")).toContainText("1 résultat affiché");
   await expect(page.locator("ul.catalog [data-product]")).toHaveCount(1);
+
+  // The live search: the fragment the masthead fetches, then the dropdown
+  // itself as the shopper types.
+  const fragment = await page.request.get(`${app.url}/search?q=douillet`);
+  expect(fragment.status()).toBe(200);
+  const body = await fragment.text();
+  expect(body).toContain('data-search-product="panier-douillet"');
+  expect(body).not.toContain("<html");
+  await page.goto(`${app.url}/`);
+  const box = page.getByRole("searchbox", { name: "Rechercher un produit" });
+  const drop = page.locator("[data-search-drop]");
+  await expect(drop).toBeHidden();
+  await box.fill("douil");
+  await expect(drop.locator("[data-search-product=panier-douillet]")).toContainText("Panier douillet");
+  await expect(drop.locator("[data-search-product=panier-douillet] [data-price]")).toHaveText("34,90€");
+  await expect(drop.locator("[data-search-all]")).toHaveText("Voir tous les résultats (1)");
+  await expect(drop.locator("[data-search-all]")).toHaveAttribute("href", "/boutique?q=douil");
+  await expect(box).toHaveAttribute("aria-expanded", "true");
+  await box.press("ArrowDown");
+  await expect(drop.locator("[data-search-product=panier-douillet]")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(drop).toBeHidden();
+  await expect(box).toBeFocused();
+  await box.fill("fraicheur");
+  await expect(drop.locator("[data-search-product=tapis-fraicheur] img")).toHaveAttribute("alt", "Un tapis bleu");
+  await box.fill("couch");
+  await expect(drop.locator("[data-search-category=couchage]")).toContainText("Couchage");
+  await box.fill("livrais");
+  await expect(drop).toContainText("Autres résultats");
+  await expect(drop.locator("[data-search-page=politique-de-livraison]")).toContainText("Politique de livraison");
+  await box.fill("zzzz");
+  await expect(drop.locator("[data-search-empty]")).toContainText("Aucun résultat pour « zzzz »");
+  await box.fill("z");
+  await expect(drop).toBeHidden();
+
   await page.goto(`${app.url}/pages/politique-de-livraison`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Politique de livraison");
   await expect(page.locator("[data-page=politique-de-livraison]")).toContainText("65 €");

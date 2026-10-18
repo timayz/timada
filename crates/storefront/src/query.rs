@@ -704,6 +704,53 @@ pub fn menu_of(nodes: &[CategoryNode]) -> Vec<CategoryNode> {
         .collect()
 }
 
+/// What a search compares: `text` without accents or case, its whitespace
+/// collapsed, so "LITIERE" finds "Litière chat".
+pub fn search_key(text: &str) -> String {
+    deunicode::deunicode(text)
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The categories among `nodes` (and everything under them) whose name
+/// contains `q`, accents and case aside: the ones whose name starts with it
+/// first, then the rest, each group in tree order; at most `limit`. Nothing
+/// for a blank `q`.
+pub fn search_categories<'a>(
+    nodes: &'a [CategoryNode],
+    q: &str,
+    limit: usize,
+) -> Vec<&'a CategoryNode> {
+    let q = search_key(q);
+    if q.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let mut starting = Vec::new();
+    let mut containing = Vec::new();
+    fn walk<'a>(
+        nodes: &'a [CategoryNode],
+        q: &str,
+        starting: &mut Vec<&'a CategoryNode>,
+        containing: &mut Vec<&'a CategoryNode>,
+    ) {
+        for node in nodes {
+            let name = search_key(&node.category.name);
+            if name.starts_with(q) {
+                starting.push(node);
+            } else if name.contains(q) {
+                containing.push(node);
+            }
+            walk(&node.children, q, starting, containing);
+        }
+    }
+    walk(nodes, &q, &mut starting, &mut containing);
+    starting.extend(containing);
+    starting.truncate(limit);
+    starting
+}
+
 /// A category row with the count its page lists, as the subscription stored
 /// it.
 #[derive(FromRow)]
@@ -807,4 +854,73 @@ pub async fn published_related_products(
         .in_categories(categories.into_iter().map(|(id,)| id))
         .exclude(product.id.clone());
     Ok(published_products(pool, &query).await?.items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(name: &str, children: Vec<CategoryNode>) -> CategoryNode {
+        CategoryNode {
+            category: Category {
+                id: name.to_owned(),
+                slug: name.to_lowercase(),
+                name: name.to_owned(),
+                description: String::new(),
+                parent_id: None,
+                position: 0,
+                in_menu: true,
+            },
+            children,
+            product_count: 0,
+        }
+    }
+
+    fn tree() -> Vec<CategoryNode> {
+        vec![
+            node("Couchage", vec![node("Petit lit", vec![])]),
+            node("Litière chat", vec![node("Litière de voyage", vec![])]),
+            node("Jouets", vec![]),
+        ]
+    }
+
+    fn names<'a>(found: &[&'a CategoryNode]) -> Vec<&'a str> {
+        found.iter().map(|n| n.category.name.as_str()).collect()
+    }
+
+    #[test]
+    fn search_key_drops_accents_case_and_extra_spaces() {
+        assert_eq!(search_key("  Litière   DE voyage "), "litiere de voyage");
+        assert_eq!(search_key("Été"), "ete");
+    }
+
+    #[test]
+    fn categories_matching_a_prefix_come_first_then_the_rest_in_tree_order() {
+        let tree = tree();
+        assert_eq!(
+            names(&search_categories(&tree, "lit", 10)),
+            ["Litière chat", "Litière de voyage", "Petit lit"]
+        );
+    }
+
+    #[test]
+    fn categories_match_without_accents_or_case() {
+        let tree = tree();
+        assert_eq!(
+            names(&search_categories(&tree, "LITIERE DE", 10)),
+            ["Litière de voyage"]
+        );
+    }
+
+    #[test]
+    fn category_search_honours_the_limit_and_ignores_a_blank_query() {
+        let tree = tree();
+        assert_eq!(
+            names(&search_categories(&tree, "lit", 2)),
+            ["Litière chat", "Litière de voyage"]
+        );
+        assert!(search_categories(&tree, "   ", 10).is_empty());
+        assert!(search_categories(&tree, "lit", 0).is_empty());
+        assert!(search_categories(&tree, "chien", 10).is_empty());
+    }
 }

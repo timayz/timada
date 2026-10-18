@@ -96,13 +96,14 @@ last either way.
 
 ```rust
 use timada_storefront::{categories, category_path, find_category, product_categories,
-    related_products, require_category, require_category_in};
+    related_products, require_category, require_category_in, search_categories};
 
 let menu = categories(cx).await?;                     // live categories as trees
 let node = require_category_in(&menu, slug)?;         // 404 when archived or unknown, no query
 let category = require_category(cx, slug).await?;     // the same without a menu at hand
 let crumbs = category_path(&menu, &category);         // its ancestors, read off the menu
 let node = find_category(&menu, &category.slug);      // its node, with children and count
+let hits = search_categories(&menu, "lit", 3);     // names containing it, accents aside
 let also = related_products(cx, &product, 4).await?;  // same category, never itself
 let filed_under = product_categories(cx, &product).await?;
 ```
