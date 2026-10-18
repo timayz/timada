@@ -290,6 +290,9 @@ fn tenant_subscriptions(
         Arc::new(|_, _, executor: &Executor| {
             timada_orders::discount_usage_subscription(executor.clone())
         }),
+        Arc::new(|_, _, executor: &Executor| {
+            timada_orders::stock_usage_subscription(executor.clone())
+        }),
         Arc::new({
             let platform = platform.clone();
             let background_mail = background_mail.clone();

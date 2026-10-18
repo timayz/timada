@@ -216,6 +216,8 @@ pub fn describe_error(code: &str) -> &'static str {
             "A French VAT number is FR, a two-digit key and the SIREN (the SIRET's first nine digits)."
         }
         "invalid_tax_category" => "Choose one of the tax categories.",
+        "invalid_stock" => "A stock is a whole number from 0 to 1,000,000.",
+        "out_of_stock" => "There is not enough of it left.",
         "oss_without_vat_number" => "The One-Stop Shop needs a VAT number.",
         "company_not_found" => "This company does not exist.",
         "siren_taken" => {

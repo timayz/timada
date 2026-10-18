@@ -83,6 +83,9 @@ pub struct Quote {
     pub offers: Vec<QuotedOffer>,
     /// The lines whose product is off sale, gone, or whose variant is.
     pub unavailable: Vec<CartLine>,
+    /// The lines of [`Self::unavailable`] that are on sale, with less left
+    /// than the cart wants.
+    pub out_of_stock: Vec<CartLine>,
     /// `None` while no line is priced.
     pub currency: Option<String>,
     /// What the lines add up to.
@@ -181,6 +184,23 @@ impl<E: Executor> super::Command<E> {
                 }
                 Err(err) => return Err(err),
             };
+            match self
+                .require_in_stock(
+                    &cart.id,
+                    &line.product_id,
+                    line.variant_id.as_deref(),
+                    line.quantity,
+                )
+                .await
+            {
+                Ok(()) => {}
+                Err(OrdersError::OutOfStock { .. }) => {
+                    quote.unavailable.push(line.clone());
+                    quote.out_of_stock.push(line.clone());
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
             let variant = line
                 .variant_id
                 .as_deref()
@@ -414,6 +434,12 @@ impl<E: Executor> super::Command<E> {
             return Err(OrdersError::EmptyCart);
         }
         let quote = self.quote(&cart).await?;
+        if let Some(line) = quote.out_of_stock.first() {
+            return Err(OrdersError::OutOfStock {
+                product_id: line.product_id.clone(),
+                available: 0,
+            });
+        }
         if let Some(line) = quote.unavailable.first() {
             return Err(OrdersError::Unavailable {
                 product_id: line.product_id.clone(),

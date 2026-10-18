@@ -11,7 +11,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         ProductImages0003,
         ProductVariants0004,
         ProductSearch0005,
-        CategoryMenu0006
+        CategoryMenu0006,
+        Stock0007
     ]
 }
 
@@ -182,4 +183,33 @@ sqlx_migrator::sqlite_migration!(
         "ALTER TABLE catalog_categories ADD COLUMN in_menu INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE catalog_categories DROP COLUMN in_menu"
     )]
+);
+
+pub struct Stock0007;
+sqlx_migrator::sqlite_migration!(
+    Stock0007,
+    "catalog",
+    "0007_stock",
+    vec_box![("catalog", "0006_category_menu")],
+    vec_box![
+        (
+            // One row per thing the shop counts: a product without variants
+            // (`variant_id` '') or one variant. What checkouts hold is left
+            // out: it lapses on its own, and the pages read the stream.
+            "CREATE TABLE catalog_stock (
+                tenant_id TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                variant_id TEXT NOT NULL DEFAULT '',
+                tracked INTEGER NOT NULL,
+                on_hand INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, product_id, variant_id)
+            )",
+            "DROP TABLE catalog_stock"
+        ),
+        (
+            "ALTER TABLE catalog_products ADD COLUMN stock_state TEXT NOT NULL DEFAULT 'untracked'",
+            "ALTER TABLE catalog_products DROP COLUMN stock_state"
+        ),
+    ]
 );

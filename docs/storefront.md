@@ -137,6 +137,11 @@ when it does. `options` is empty for a product that does not vary, and then `var
 is too. `Variant::value_of` and `Variant::matches` are what a page needs to light up
 the right row as a shopper changes the menus.
 
+`product.left(variant_id)` says how many are left of the product (`None`) or of one
+variant, and is `None` itself when the shop does not count it. `product.in_stock` is
+false once everything counted is gone, and `is_sold_out(variant_id)` marks one sold-out
+row; a page disables its add button then.
+
 `ProductSort::PriceAsc` orders by the cheapest a product can be and `PriceDesc` by the
 dearest, so a sorted list reads the way a shopper expects.
 
@@ -216,8 +221,9 @@ into the tenant's store whenever the merchant changes the Stripe settings.
 - `add_to_cart` starts a new cart when it is given none, or one already ordered.
   `set_cart_quantity` (0 removes the line) and `remove_from_cart` change a line.
 - A product that sells variants needs one (`variant_required`); one cart is one
-  currency. A line whose product went off sale shows in `CartView::unavailable`, and
-  checkout waits until it is removed.
+  currency. A line whose product went off sale, or that wants more than is left
+  (`out_of_stock`), shows in `CartView::unavailable`, and checkout waits until it is
+  changed.
 - `start_payment` waits up to fifteen seconds for the dashboard's answer. A refusal is
   `OrdersError::PaymentRefused`: `price_changed` when the total moved since the page
   showed it, `product_unavailable`, or `payments_unavailable` when the merchant has set

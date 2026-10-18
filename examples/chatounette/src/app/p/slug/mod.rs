@@ -61,6 +61,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         None => Vec::new(),
     };
     let varies = product.price_range().is_some_and(|range| range.varies());
+    let sold_out = !product.in_stock;
+    // A product without variants says how many are left once few are.
+    let few_left = product
+        .left(None)
+        .filter(|left| product.variants.is_empty() && (1..=5).contains(left));
     let currency = product.currency.clone().unwrap_or_else(|| "EUR".to_owned());
     // The first paragraph introduces the product beside its price; the
     // rest, when there is more, folds under "Description".
@@ -114,6 +119,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         if let Some(code) = query.error.as_deref() {
                             <p class="notice" role="alert">(say(code))</p>
                         }
+                        if sold_out {
+                            <p class="stock" data-stock="sold-out">"Épuisé"</p>
+                        } else if let Some(left) = few_left {
+                            <p class="stock" data-stock=(left)>"Plus que " (left) " en stock"</p>
+                        }
                         // Plain HTML: the menus pick the variant on the server, so a
                         // shopper with no JavaScript buys the same way; the table
                         // below prices every combination.
@@ -133,7 +143,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <label for="quantity">"Quantité"</label>
                                 <input id="quantity" name="quantity" type="number" min="1" max="99" value="1" aria-label=(format!("quantité de {}", product.name))>
                             </p>
-                            <button class="btn">"Ajouter au panier"</button>
+                            <button class="btn" disabled=(sold_out)>"Ajouter au panier"</button>
                         </form>
                         <ul class="reassure-list" data-reassure="">
                             <strong>"Livraison gratuite dès 65€ d'achats"</strong>
@@ -151,15 +161,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                 <th scope="col">(&option.name)</th>
                                             }
                                             <th scope="col">"Prix"</th>
+                                            <th scope="col">"Stock"</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         for variant in &product.variants {
-                                            <tr data-variant=(&variant.id) data-price=(variant.amount_cents)>
+                                            <tr data-variant=(&variant.id) data-price=(variant.amount_cents) data-sold-out=(product.is_sold_out(Some(&variant.id)))>
                                                 for option in &product.options {
                                                     <td>(variant.value_of(&option.id).unwrap_or("—"))</td>
                                                 }
                                                 <td class="price">(money(variant.amount_cents, &currency))</td>
+                                                <td>
+                                                    match product.left(Some(&variant.id)) {
+                                                        Some(0) => "Épuisé",
+                                                        Some(left) if left <= 5 => (format!("Plus que {left}")),
+                                                        _ => "En stock",
+                                                    }
+                                                </td>
                                             </tr>
                                         }
                                     </tbody>
