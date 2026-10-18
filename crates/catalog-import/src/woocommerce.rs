@@ -588,7 +588,7 @@ fn takeable(src: &str) -> bool {
 }
 
 /// The Store API's amounts are minor units as strings (`"1990"`).
-fn parse_minor(amount: &str) -> Option<u64> {
+pub fn parse_minor(amount: &str) -> Option<u64> {
     amount.trim().parse().ok()
 }
 
@@ -618,7 +618,7 @@ pub fn fit_slug(slug: &str, name: &str) -> String {
 
 /// A shop's code made to fit the catalog's: letters, digits, dot, dash and
 /// underscore, at most 64; `None` when nothing is left.
-fn fit_sku(sku: &str) -> Option<String> {
+pub fn fit_sku(sku: &str) -> Option<String> {
     let kept: String = sku
         .trim()
         .chars()

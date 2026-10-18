@@ -58,6 +58,12 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         crate::seal::mail_sealer(&config),
         config.mail.allow_private_hosts,
     );
+    let aliexpress = crate::aliexpress::Aliexpress::new(
+        crate::seal::aliexpress_sealer(&config),
+        &config.aliexpress,
+        config.mail.allow_private_hosts,
+        executor.clone(),
+    )?;
     // The order confirmations and the notices of contact messages are
     // mailed from the tenants' subscriptions, outside any request: they get
     // their own transport.
@@ -81,6 +87,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             media.clone(),
             keys.clone(),
             payments.clone(),
+            aliexpress.clone(),
             executor.clone(),
             Arc::new(crate::vies::ViesClient::new(
                 config.invoicing.vies_url.clone(),
@@ -184,6 +191,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         keys,
         payments,
         shop_mail,
+        aliexpress,
         store: connections,
         config,
     });
@@ -231,6 +239,7 @@ fn tenant_subscriptions(
     media: Arc<crate::media::Media>,
     keys: Arc<crate::key_vault::KeyVault>,
     payments: Arc<crate::payments::Payments>,
+    aliexpress: Arc<crate::aliexpress::Aliexpress>,
     platform: Executor,
     vies: Arc<dyn crate::vies::Vies>,
     background_mail: Arc<topcoat::context::AppContext>,
@@ -268,6 +277,20 @@ fn tenant_subscriptions(
         }),
         Arc::new(|pool, tenant_id, _: &Executor| {
             timada_invoicing::read_model_subscription(pool, tenant_id)
+        }),
+        Arc::new(|pool, tenant_id, _: &Executor| {
+            timada_aliexpress::read_model_subscription(pool, tenant_id)
+        }),
+        Arc::new({
+            let media = media.clone();
+            move |_, tenant_id, executor: &Executor| {
+                crate::aliexpress::subscription::subscription(
+                    aliexpress.clone(),
+                    media.clone(),
+                    tenant_id,
+                    executor.clone(),
+                )
+            }
         }),
         Arc::new(move |_, tenant_id, _: &Executor| {
             crate::media::subscription(media.clone(), tenant_id)

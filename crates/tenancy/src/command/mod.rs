@@ -4,6 +4,7 @@
 //! version it observes, and `write()` sends as `original_version`, never goes
 //! stale. None of them is snapshotted: a tenant stream is a handful of events.
 
+mod aliexpress;
 mod api_key;
 mod company;
 mod create;
@@ -20,6 +21,7 @@ mod suspend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 
+pub use aliexpress::*;
 pub use api_key::*;
 pub use company::*;
 pub use create::*;
@@ -98,6 +100,39 @@ pub struct TenantState {
     pub mail_template_history: Vec<MailTemplateChange>,
     /// The look all the shop's mails share, once set.
     pub mail_branding: Option<MailBranding>,
+    /// The shop's AliExpress app, once set up.
+    pub aliexpress: Option<AliexpressSettings>,
+}
+
+/// The merchant's AliExpress app. The secret and the tokens are sealed bytes
+/// only the host can open.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AliexpressSettings {
+    pub app_key: String,
+    pub app_secret_sealed: Vec<u8>,
+    pub ship_to_country: String,
+    pub currency: String,
+    pub language: String,
+    pub pricing: Option<crate::value_object::PricingRule>,
+    pub configured_by: String,
+    /// Unix seconds.
+    pub configured_at: u64,
+    /// The account the app acts for, once it said yes.
+    pub authorization: Option<AliexpressAuthorization>,
+}
+
+/// The tokens an AliExpress account gave the app.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AliexpressAuthorization {
+    pub access_token_sealed: Vec<u8>,
+    pub refresh_token_sealed: Vec<u8>,
+    /// Unix seconds.
+    pub expires_at: u64,
+    pub refresh_expires_at: u64,
+    pub account: String,
+    pub authorized_by: String,
+    /// Unix seconds.
+    pub authorized_at: u64,
 }
 
 /// The look all of a shop's mails share.
@@ -261,6 +296,9 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_company_unlinked())
         .handler(on_mail_server_configured())
         .handler(on_mail_server_removed())
+        .handler(on_aliexpress_configured())
+        .handler(on_aliexpress_authorized())
+        .handler(on_aliexpress_removed())
         .handler(on_mail_template_saved())
         .handler(on_mail_template_text_saved())
         .handler(on_mail_template_reset())
@@ -410,6 +448,61 @@ async fn on_mail_server_configured(
         configured_by: data.configured_by.to_owned(),
         configured_at: event.timestamp,
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_aliexpress_configured(
+    event: Event<crate::aggregator::AliexpressConfigured>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    // Another app is another set of accounts: its tokens are not this one's.
+    let authorization = tenant
+        .aliexpress
+        .take()
+        .filter(|was| was.app_key == data.app_key)
+        .and_then(|was| was.authorization);
+    tenant.aliexpress = Some(AliexpressSettings {
+        app_key: data.app_key.to_owned(),
+        app_secret_sealed: data.app_secret_sealed.to_owned(),
+        ship_to_country: data.ship_to_country.to_owned(),
+        currency: data.currency.to_owned(),
+        language: data.language.to_owned(),
+        pricing: data.pricing,
+        configured_by: data.configured_by.to_owned(),
+        configured_at: event.timestamp,
+        authorization,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_aliexpress_authorized(
+    event: Event<crate::aggregator::AliexpressAuthorized>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    if let Some(settings) = tenant.aliexpress.as_mut() {
+        settings.authorization = Some(AliexpressAuthorization {
+            access_token_sealed: data.access_token_sealed.to_owned(),
+            refresh_token_sealed: data.refresh_token_sealed.to_owned(),
+            expires_at: data.expires_at,
+            refresh_expires_at: data.refresh_expires_at,
+            account: data.account.to_owned(),
+            authorized_by: data.authorized_by.to_owned(),
+            authorized_at: event.timestamp,
+        });
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_aliexpress_removed(
+    _event: Event<crate::aggregator::AliexpressRemoved>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.aliexpress = None;
     Ok(())
 }
 

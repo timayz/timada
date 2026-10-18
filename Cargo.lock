@@ -6075,6 +6075,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-aliexpress"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "hmac 0.12.1",
+ "reqwest",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror 2.0.21",
+ "timada-catalog",
+ "timada-catalog-import",
+ "timada-tenancy",
+ "tokio",
+]
+
+[[package]]
 name = "timada-catalog"
 version = "0.1.0"
 dependencies = [
@@ -6159,6 +6179,7 @@ dependencies = [
  "sha2 0.10.9",
  "sqlx",
  "sqlx_migrator",
+ "timada-aliexpress",
  "timada-catalog",
  "timada-catalog-import",
  "timada-core",

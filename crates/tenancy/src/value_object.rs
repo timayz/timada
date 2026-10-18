@@ -31,6 +31,8 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `shipping:manage` — set up the ways the shop ships and what they cost.
 /// - `support:read` — see the messages shoppers sent through the contact form.
 /// - `support:manage` — mark messages handled, and reopen them.
+/// - `aliexpress:manage` — connect the shop's AliExpress app, import products
+///   from it and keep them in step.
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
@@ -52,6 +54,7 @@ pub const PERMISSIONS: &[&str] = &[
     PERMISSION_SHIPPING_MANAGE,
     PERMISSION_SUPPORT_READ,
     PERMISSION_SUPPORT_MANAGE,
+    PERMISSION_ALIEXPRESS_MANAGE,
 ];
 pub const PERMISSION_TENANT_MANAGE: &str = "tenant:manage";
 pub const PERMISSION_MEMBERS_READ: &str = "members:read";
@@ -73,6 +76,7 @@ pub const PERMISSION_MAIL_MANAGE: &str = "mail:manage";
 pub const PERMISSION_SHIPPING_MANAGE: &str = "shipping:manage";
 pub const PERMISSION_SUPPORT_READ: &str = "support:read";
 pub const PERMISSION_SUPPORT_MANAGE: &str = "support:manage";
+pub const PERMISSION_ALIEXPRESS_MANAGE: &str = "aliexpress:manage";
 
 /// Every scope a store API key can hold, as `resource:action`. The list only
 /// grows: a stored key may name any of them. `write` on a resource implies
@@ -696,3 +700,102 @@ pub const MAIL_SECURITIES: &[&str] = &[
 pub const MAIL_SECURITY_TLS: &str = "tls";
 pub const MAIL_SECURITY_STARTTLS: &str = "starttls";
 pub const MAIL_SECURITY_NONE: &str = "none";
+
+/// How a price is rounded once marked up.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub enum Rounding {
+    /// To the cent.
+    #[default]
+    Cent,
+    /// Up to the next price ending in .99 (`12.31` → `12.99`, `13.00` →
+    /// `13.99`).
+    Ninety9,
+    /// Up to the next whole unit (`12.31` → `13.00`).
+    Whole,
+}
+
+impl Rounding {
+    pub const ALL: [Rounding; 3] = [Rounding::Cent, Rounding::Ninety9, Rounding::Whole];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cent => "cent",
+            Self::Ninety9 => "99",
+            Self::Whole => "whole",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|rounding| rounding.as_str() == value)
+    }
+}
+
+/// Turns what a supplier charges into the shop's price: the cost times
+/// `multiplier_bps` / 10 000 (`25000` is ×2.5), plus `plus_cents`, rounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct PricingRule {
+    pub multiplier_bps: u32,
+    pub plus_cents: u64,
+    pub rounding: Rounding,
+}
+
+/// The most a rule multiplies a cost by (×100).
+pub const MAX_MULTIPLIER_BPS: u32 = 1_000_000;
+/// The most a rule adds to a cost (10 000.00).
+pub const MAX_PLUS_CENTS: u64 = 1_000_000;
+
+impl PricingRule {
+    /// Whether the rule is one a shop may keep: it never sells below cost
+    /// and stays within sensible bounds.
+    pub fn is_valid(&self) -> bool {
+        (10_000..=MAX_MULTIPLIER_BPS).contains(&self.multiplier_bps)
+            && self.plus_cents <= MAX_PLUS_CENTS
+    }
+
+    /// The shop's price for something that costs `cost_cents`.
+    pub fn price(&self, cost_cents: u64) -> u64 {
+        let marked = (u128::from(cost_cents) * u128::from(self.multiplier_bps)).div_ceil(10_000);
+        let cents = u64::try_from(marked)
+            .unwrap_or(u64::MAX)
+            .saturating_add(self.plus_cents);
+        match self.rounding {
+            Rounding::Cent => cents,
+            // The first price ending in .99 at or above the mark-up.
+            Rounding::Ninety9 => cents / 100 * 100 + 99,
+            Rounding::Whole => cents.div_ceil(100) * 100,
+        }
+    }
+}
+
+#[cfg(test)]
+mod pricing_tests {
+    use super::*;
+
+    fn rule(multiplier_bps: u32, plus_cents: u64, rounding: Rounding) -> PricingRule {
+        PricingRule {
+            multiplier_bps,
+            plus_cents,
+            rounding,
+        }
+    }
+
+    #[test]
+    fn a_rule_marks_up_then_rounds() {
+        assert_eq!(rule(25_000, 0, Rounding::Cent).price(431), 1078);
+        assert_eq!(rule(20_000, 100, Rounding::Cent).price(500), 1100);
+        assert_eq!(rule(20_000, 0, Rounding::Ninety9).price(616), 1299);
+        assert_eq!(rule(20_000, 0, Rounding::Ninety9).price(650), 1399);
+        assert_eq!(rule(10_000, 0, Rounding::Ninety9).price(1299), 1299);
+        assert_eq!(rule(10_000, 0, Rounding::Whole).price(1201), 1300);
+        assert_eq!(rule(10_000, 0, Rounding::Whole).price(1200), 1200);
+    }
+
+    #[test]
+    fn a_rule_never_sells_below_cost() {
+        assert!(!rule(9_999, 0, Rounding::Cent).is_valid());
+        assert!(rule(10_000, 0, Rounding::Cent).is_valid());
+        assert!(!rule(20_000, MAX_PLUS_CENTS + 1, Rounding::Cent).is_valid());
+    }
+}
