@@ -1,9 +1,6 @@
 //! The icons the pages draw, from the Lucide set `build.rs` stages (ISC
 //! licence). One constant per use keeps the names in one place; an unknown
 //! name fails the build with the Lucide name in the error.
-//!
-//! Some wait for the pages still being moved onto this look.
-#![allow(dead_code)]
 
 use topcoat::icon::{IconData, iconify::iconify_icon};
 

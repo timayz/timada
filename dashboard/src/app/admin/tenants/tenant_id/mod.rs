@@ -9,20 +9,31 @@ use timada_tenancy::count_open_invitations_of_tenant;
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{error::not_found, href, module_param, page, path_param, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
-use super::status_label;
+use super::{status_label, status_tone};
 use crate::app::admin::require_admin;
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, index as tenant_page};
 use crate::app::tenants::tenancy;
 use crate::auth::{now, unix_seconds, user_labels};
 use crate::cluster::PeerState;
+use crate::components::badge::{BadgeVariant, badge};
+use crate::components::button::{ButtonVariant, button};
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
 use crate::tenants::{TenantStatus, Tenants};
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, document, empty_row, fact, facts, format_time, icons, notice, page_header,
+    section_card, status_badge,
+};
 
 module_param!(pub tenant_id);
 
@@ -97,86 +108,112 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             .cloned()
             .unwrap_or_else(|| user_id.to_owned())
     };
+    let suspended = tenant.is_suspended();
     let title = format!("{} · Tenants", tenant.name);
+    let pending_label = format!(
+        "{pending} pending invitation{}",
+        if pending == 1 { "" } else { "s" }
+    );
 
     Ok(view! {
         document(
             title: &title,
             shell: Shell::page("admin_tenants"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">(&tenant.name)</h1>
-            </header>
+            page_header(
+                title: &tenant.name,
+                subtitle: Some("A tenant of the platform, as its administrators see it."),
+                status_badge(tone: status_tone(suspended, status), (status_label(suspended, status)))
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Overview"</h2>
-                <dl class="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
-                    <dt class="text-neutral-500">"Slug"</dt>
-                    <dd><a class="underline" href=(href!(tenant_page, Slug(tenant.slug.clone())))><code>"/t/" (&tenant.slug)</code></a></dd>
-                    <dt class="text-neutral-500">"Id"</dt><dd><code>(&tenant.id)</code></dd>
-                    <dt class="text-neutral-500">"Created"</dt><dd><time datetime=(tenant.created_at)>(format_time(tenant.created_at))</time> " by " (label_of(&tenant.created_by))</dd>
-                    <dt class="text-neutral-500">"Status"</dt>
-                    <dd data-tenant-status="">
-                        (status_label(tenant.is_suspended(), status))
+            section_card(
+                title: Some("Overview"),
+                facts(
+                    fact(term: "Address", <a class=(LINK) href=(href!(tenant_page, Slug(tenant.slug.clone())))><code>"/t/" (&tenant.slug)</code></a>)
+                    fact(term: "Id", <code class="text-xs">(&tenant.id)</code>)
+                    fact(term: "Created", <time datetime=(tenant.created_at)>(format_time(tenant.created_at))</time> " by " (label_of(&tenant.created_by)))
+                    fact(
+                        term: "Status",
+                        attrs: attributes! { data-tenant-status="" },
+                        (status_label(suspended, status))
                         if let TenantStatus::Running { since, leases } = status {
                             " since " <time datetime=(unix_seconds(since))>(format_time(unix_seconds(since)))</time>
                             if leases > 0 { " · " (leases) " store connection(s)" }
                         }
                         if let Some(reason) = &tenant.suspended { ": " (reason) }
-                    </dd>
+                    )
                     if let Some((kept, limit)) = backlog {
-                        <dt class="text-neutral-500">"Writes kept"</dt>
-                        <dd data-tenant-backlog=(kept)>
+                        fact(
+                            term: "Writes kept",
+                            attrs: attributes! { data-tenant-backlog=(kept) },
                             (kept) " of " (limit) " for nodes that are away"
-                        </dd>
+                        )
                     }
                     if !peers.is_empty() {
-                        <dt class="text-neutral-500">"Other nodes"</dt>
-                        <dd>
-                            <ul data-tenant-peers="">
+                        fact(
+                            term: "Other nodes",
+                            <ul data-tenant-peers="" class="flex flex-col gap-1">
                                 for peer in &peers {
                                     <li data-node=(peer.id) data-given-up=(if peer.given_up { "true" } else { "false" })>
                                         "Node " (peer.id) " · " (peer_label(peer))
                                     </li>
                                 }
                             </ul>
-                        </dd>
+                        )
                     }
-                </dl>
-            </section>
+                )
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Members"</h2>
-                <p class="mb-2 text-sm text-neutral-500" data-pending-invitations="">
-                    (pending) if pending == 1 { " pending invitation" } else { " pending invitations" }
-                </p>
-                <ul class="divide-y divide-neutral-100 text-sm">
-                    for (user_id, role) in &tenant.members {
-                        <li class="flex justify-between py-2">
-                            <a class="underline" href=(href!(crate::app::admin::users::user_id::user, crate::app::admin::users::user_id::UserId(user_id.clone())))>(label_of(user_id))</a>
-                            <span class="text-neutral-500">(role)</span>
-                        </li>
-                    }
-                </ul>
-            </section>
+            section_card(
+                title: Some("Members"),
+                description: Some(&pending_label),
+                attrs: attributes! { data-tenant-members="" },
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Member")
+                            table_head("Role")
+                        )
+                    )
+                    table_body(
+                        if tenant.members.is_empty() {
+                            empty_row(colspan: 2, text: "No member.")
+                        }
+                        for (user_id, role) in &tenant.members {
+                            table_row(
+                                table_cell(
+                                    <a class=(LINK) href=(href!(crate::app::admin::users::user_id::user, crate::app::admin::users::user_id::UserId(user_id.clone())))>(label_of(user_id))</a>
+                                )
+                                table_cell(badge(variant: BadgeVariant::Secondary, (role)))
+                            )
+                        }
+                    )
+                )
+            )
 
-            <section class="rounded border border-red-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Administration"</h2>
-                if tenant.is_suspended() {
+            section_card(
+                title: Some("Administration"),
+                description: Some(if suspended {
+                    "Resuming reopens the tenant's database and brings its pages back."
+                } else {
+                    "Suspending closes the tenant's database and takes its pages offline until it is resumed."
+                }),
+                attrs: attributes! { class="border-destructive/30" },
+                if suspended {
                     <form method="post" action=(href!(resume::resume, TenantId(tenant.id.clone())))>
-                        <button class="rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100">"Resume tenant"</button>
+                        button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, icon(data: icons::CHECK) "Resume tenant")
                     </form>
                 } else {
-                    <form method="post" action=(href!(suspend::suspend, TenantId(tenant.id.clone()))) class="flex flex-wrap items-end gap-2">
-                        <div class="grow">
-                            <label class="block text-sm" for="suspend-reason">"Reason"</label>
-                            <input id="suspend-reason" name="reason" class="mt-1 w-full rounded border border-neutral-300 px-3 py-1" type="text" maxlength="200" required="">
-                        </div>
-                        <button class="rounded border border-red-700 px-3 py-1 text-sm text-red-700 hover:bg-red-50">"Suspend tenant"</button>
+                    <form method="post" action=(href!(suspend::suspend, TenantId(tenant.id.clone()))) class="flex flex-wrap items-end gap-3">
+                        field(
+                            attrs: attributes! { class="grow sm:max-w-md" },
+                            field_label(attrs: attributes! { for="suspend-reason" }, "Reason")
+                            input(attrs: attributes! { id="suspend-reason" name="reason" type="text" maxlength="200" required="" })
+                        )
+                        button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" }, icon(data: icons::WARNING) "Suspend tenant")
                     </form>
-                    <p class="mt-2 text-sm text-neutral-500">"Suspending closes the tenant's database and takes its pages offline until it is resumed."</p>
                 }
-            </section>
+            )
         )
     })
 }
