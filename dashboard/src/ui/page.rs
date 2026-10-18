@@ -1,10 +1,6 @@
 //! The furniture a page is built from, over the vendored components: the
 //! title row, section cards, stat tiles, status badges, empty states, the
-//! pager, filter bars and fact lists.
-//!
-//! The pages move onto these one section at a time; until the last of them
-//! has, some helpers wait unused.
-#![allow(dead_code)]
+//! pager, filter bars, fact lists and the two-column settings layout.
 
 use topcoat::{
     Result,
@@ -280,5 +276,34 @@ pub async fn fact(
     Ok(view! {
         <dt class="text-muted-foreground">(term)</dt>
         <dd class=(class!("min-w-0 break-words", attrs.remove("class"))) (attrs)>(child)</dd>
+    })
+}
+
+/// The settings layout: a sticky card of in-page links on the left, the
+/// sections on the right. `sections` pairs each section's `id` with its
+/// title; the cards in `child` carry the ids. A `<nav>` in a plain `<div>`,
+/// so a test that reads a `<section>` by its text never sees the links.
+#[component]
+pub async fn settings_layout(
+    label: &str,
+    sections: &[(&str, &str)],
+    #[default] child: Child<'_>,
+) -> Result<impl View> {
+    Ok(view! {
+        <div class="grid items-start gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
+            <nav aria-label=(label) class=(class!(CARD, "gap-0 px-3 py-3 lg:sticky lg:top-20"))>
+                <ul class="flex flex-wrap gap-1 lg:flex-col">
+                    for (id, title) in sections {
+                        <li>
+                            <a
+                                class="flex rounded-md px-3 py-2 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                                href=(format!("#{id}"))
+                            >(*title)</a>
+                        </li>
+                    }
+                </ul>
+            </nav>
+            <div class="min-w-0">(child)</div>
+        </div>
     })
 }

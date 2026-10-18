@@ -11,13 +11,16 @@ use topcoat::{
         error::{SeeOther, see_other},
         href, page, query_params, route,
     },
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{error_code, tenancy};
 use crate::app::t::slug::tenant_url;
 use crate::auth::require_user;
-use crate::ui::{Shell, document, notice};
+use crate::components::button::button;
+use crate::components::field::{field, field_description, field_label};
+use crate::components::input::input;
+use crate::ui::{Shell, document, notice, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct NewQuery {
@@ -47,18 +50,29 @@ pub async fn new(cx: &Cx) -> Result<impl View> {
         document(
             title: "Create a tenant",
             shell: Shell::page(""),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Create a tenant"</h1>
-            </header>
+            page_header(title: "Create a tenant", subtitle: Some("A shop of your own on the platform; you become its owner."))
             notice(error: query.error.as_deref())
 
-            <form method="post" action=(href!(submit)) class="space-y-3 rounded border border-neutral-200 bg-white p-4">
-                <label class="block text-sm" for="name">"Name"</label>
-                <input id="name" name="name" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                    type="text" maxlength=(MAX_NAME_LEN) required="" value=(query.name.as_deref().unwrap_or_default())>
-                <p class="text-xs text-neutral-500">"The tenant's pages live at /t/" <em>"name-as-a-slug"</em> ", derived from the name (a short suffix is added when that address is taken). The address cannot be changed later."</p>
-                <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Create tenant"</button>
-            </form>
+            section_card(
+                title: Some("Name"),
+                description: Some("What members and the platform see the tenant under. It can be renamed later."),
+                attrs: attributes! { class="max-w-xl" },
+                <form method="post" action=(href!(submit)) class="flex flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="name" }, "Name")
+                        input(attrs: attributes! {
+                            id="name" name="name" type="text" maxlength=(MAX_NAME_LEN) required=""
+                            value=(query.name.as_deref().unwrap_or_default())
+                        })
+                        field_description(
+                            "The tenant's pages live at /t/" <em>"name-as-a-slug"</em> ", derived from the name (a short suffix is added when that address is taken). The address cannot be changed later."
+                        )
+                    )
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Create tenant")
+                    </div>
+                </form>
+            )
         )
     })
 }

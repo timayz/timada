@@ -8,13 +8,17 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use crate::app::admin::require_admin;
 use crate::app::auth::Flash;
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{Shell, document, empty_row, format_time, notice, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct CompaniesQuery {
@@ -35,40 +39,41 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Companies · Administration",
             shell: Shell::page("admin_companies"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Companies"</h1>
-            </header>
+            page_header(title: "Companies", subtitle: Some("Every company registered on the platform."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-3 text-sm text-neutral-600">
-                    "A SIREN belongs to one company. When someone registered a SIREN that is not theirs, release it: its rightful company can then register it."
-                </p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Company"</th>
-                            <th class="py-2 font-medium">"SIREN"</th>
-                            <th class="py-2 font-medium">"Registered"</th>
-                            <th class="py-2"></th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+            section_card(
+                description: Some("A SIREN belongs to one company. When someone registered a SIREN that is not theirs, release it: its rightful company can then register it."),
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Company")
+                            table_head("SIREN")
+                            table_head("Registered")
+                            table_head(<span class="sr-only">"Actions"</span>)
+                        )
+                    )
+                    table_body(
+                        if rows.is_empty() {
+                            empty_row(colspan: 4, text: "No company yet.")
+                        }
                         for row in &rows {
-                            <tr data-admin-company=(&row.siren)>
-                                <td class="py-2">(&row.legal_name)</td>
-                                <td class="py-2 font-mono">(&row.siren)</td>
-                                <td class="py-2"><time datetime=(row.created_at)>(format_time(row.created_at as u64))</time></td>
-                                <td class="py-2 text-right">
+                            table_row(
+                                attrs: attributes! { data-admin-company=(&row.siren) },
+                                table_cell(<span class="font-medium">(&row.legal_name)</span>)
+                                table_cell(<code class="text-xs">(&row.siren)</code>)
+                                table_cell(<time datetime=(row.created_at)>(format_time(row.created_at as u64))</time>)
+                                table_cell(
+                                    attrs: attributes! { class="text-right" },
                                     <form method="post" action=(href!(release::release))>
                                         <input type="hidden" name="siren" value=(&row.siren)>
-                                        <button class="text-red-800 underline">"Release the SIREN"</button>
+                                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="text-destructive-text" }, "Release the SIREN")
                                     </form>
-                                </td>
-                            </tr>
+                                )
+                            )
                         }
-                    </tbody>
-                </table>
-            </section>
+                    )
+                )
+            )
         )
     })
 }
