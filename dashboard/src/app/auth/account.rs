@@ -1,21 +1,42 @@
+//! `/auth/account`: the signed-in user's own account, on the settings
+//! layout: profile, e-mail and password, providers, passkeys, sessions and
+//! the recent sign-ins.
+
 use timada_identity::{SignInKind, active_sessions, session_id};
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{href, page, query_params},
     session,
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use crate::auth::{now, oidc::Providers, require_user, webauthn::authenticator_name};
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::field::{field, field_description, field_label};
+use crate::components::input::input;
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice, session_row};
+use crate::ui::{
+    Shell, document, fact, facts, format_time, icons, notice, page_header, section_card,
+    session_row, settings_layout, sign_in_row,
+};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct AccountQuery {
     error: Option<String>,
     message: Option<String>,
 }
+
+/// The sections of the page, for the links on the left.
+const SECTIONS: &[(&str, &str)] = &[
+    ("profile", "Profile"),
+    ("email", "E-mail and password"),
+    ("providers", "Sign-in providers"),
+    ("passkeys", "Passkeys"),
+    ("sessions", "Sessions"),
+    ("sign-ins", "Recent sign-ins"),
+];
 
 #[page]
 pub async fn account(cx: &Cx) -> Result<impl View> {
@@ -30,174 +51,209 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
         document(
             title: "Your account",
             shell: Shell::page("account"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Your account"</h1>
-            </header>
+            page_header(title: "Your account", subtitle: Some("How you sign in, and where you are signed in."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Profile"</h2>
-                <dl class="grid grid-cols-[8rem_1fr] gap-y-1 text-sm">
-                    <dt class="text-neutral-500">"Account"</dt><dd>(&user.account)</dd>
-                    <dt class="text-neutral-500">"Name"</dt><dd>(&user.label)</dd>
-                    <dt class="text-neutral-500">"Role"</dt><dd>(if user.is_admin { "Administrator" } else { "Member" })</dd>
-                </dl>
-            </section>
+            settings_layout(
+                label: "Account sections",
+                sections: SECTIONS,
+                section_card(
+                    title: Some("Profile"),
+                    attrs: attributes! { id="profile" class="scroll-mt-20" },
+                    facts(
+                        fact(term: "Account", (&user.account))
+                        fact(term: "Name", (&user.label))
+                        fact(term: "Role", (if user.is_admin { "Administrator" } else { "Member" }))
+                    )
+                )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"E-mail and password"</h2>
-                if let Some(password) = &user.password {
-                    <p class="text-sm">
-                        <strong>(&password.email)</strong>
-                        " · password changed " <time datetime=(password.changed_at)>(format_time(password.changed_at))</time>
-                    </p>
-                    <p class="mt-1 text-xs text-neutral-500">"The address is set once and cannot be changed."</p>
-                    <form method="post" action=(href!(super::password::change)) class="mt-4 space-y-3">
-                        <input type="hidden" name="user_id" value=(user_id)>
-                        <h3 class="text-sm font-medium">"Change the password"</h3>
-                        <label class="block text-sm" for="current-password">"Current password"</label>
-                        <input id="current-password" name="current_password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="password" autocomplete="current-password" required="">
-                        <label class="block text-sm" for="new-password">"New password"</label>
-                        <input id="new-password" name="password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
-                        <label class="block text-sm" for="new-password-confirm">"Confirm the new password"</label>
-                        <input id="new-password-confirm" name="password_confirm" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
-                        <p class="text-xs text-neutral-500">"8 characters or more. Your other browsers will be signed out."</p>
-                        <button class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700">"Change password"</button>
-                    </form>
-                } else {
-                    <p class="text-sm text-neutral-500">"Not set up: this account signs in with a provider or a passkey."</p>
-                    <form method="post" action=(href!(super::email::add::add)) class="mt-4 space-y-3">
-                        <input type="hidden" name="user_id" value=(user_id)>
-                        <h3 class="text-sm font-medium">"Add an e-mail address and a password"</h3>
-                        <label class="block text-sm" for="new-email">"E-mail address"</label>
-                        <input id="new-email" name="email" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="email" autocomplete="email" maxlength="254" required="">
-                        <label class="block text-sm" for="new-email-password">"Password"</label>
-                        <input id="new-email-password" name="password" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="password" autocomplete="new-password" minlength="8" maxlength="128" required="">
-                        <p class="text-xs text-neutral-500">"8 characters or more. We will e-mail you a code to confirm the address; it cannot be changed afterwards."</p>
-                        <button class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700">"Add e-mail address"</button>
-                    </form>
-                }
-            </section>
-
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Sign-in providers"</h2>
-                if user.oauth2_accounts.is_empty() {
-                    <p class="text-sm text-neutral-500">"No provider linked."</p>
-                }
-                <ul class="divide-y divide-neutral-100">
-                    for account in &user.oauth2_accounts {
-                        <li class="flex items-center justify-between py-2 text-sm">
-                            <span>
-                                <strong>(provider_label(providers, &account.provider))</strong>
-                                " · " (account.email.as_deref().unwrap_or(&account.provider_user_id))
-                            </span>
-                            <form method="post" action=(href!(super::oauth2::unlink::unlink))>
-                                <input type="hidden" name="provider" value=(&account.provider)>
-                                <input type="hidden" name="provider_user_id" value=(&account.provider_user_id)>
-                                <input type="hidden" name="user_id" value=(user_id)>
-                                <button class="text-red-700 underline">"Unlink"</button>
-                            </form>
-                        </li>
-                    }
-                </ul>
-                <div class="mt-3 flex flex-wrap gap-2">
-                    for provider in providers.iter() {
-                        <form method="post" action=(href!(super::oauth2::provider::start, super::oauth2::provider::Provider(provider.name.clone())))>
-                            <input type="hidden" name="mode" value="add_to_user">
+                section_card(
+                    title: Some("E-mail and password"),
+                    attrs: attributes! { id="email" class="scroll-mt-20" },
+                    if let Some(password) = &user.password {
+                        <p class="text-sm">
+                            <strong>(&password.email)</strong>
+                            " · password changed " <time datetime=(password.changed_at)>(format_time(password.changed_at))</time>
+                        </p>
+                        <p class="mt-1 text-xs text-muted-foreground">"The address is set once and cannot be changed."</p>
+                        <form method="post" action=(href!(super::password::change)) class="mt-5 flex max-w-md flex-col gap-4">
                             <input type="hidden" name="user_id" value=(user_id)>
-                            <button class="rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100">
-                                "Link " (&provider.label)
-                            </button>
+                            <h3 class="text-sm font-semibold">"Change the password"</h3>
+                            field(
+                                field_label(attrs: attributes! { for="current-password" }, "Current password")
+                                input(attrs: attributes! {
+                                    id="current-password" name="current_password" type="password"
+                                    autocomplete="current-password" required=""
+                                })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="new-password" }, "New password")
+                                input(attrs: attributes! {
+                                    id="new-password" name="password" type="password"
+                                    autocomplete="new-password" minlength="8" maxlength="128" required=""
+                                })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="new-password-confirm" }, "Confirm the new password")
+                                input(attrs: attributes! {
+                                    id="new-password-confirm" name="password_confirm" type="password"
+                                    autocomplete="new-password" minlength="8" maxlength="128" required=""
+                                })
+                                field_description("8 characters or more. Your other browsers will be signed out.")
+                            )
+                            <div>
+                                button(attrs: attributes! { type="submit" }, "Change password")
+                            </div>
+                        </form>
+                    } else {
+                        <p class="text-sm text-muted-foreground">"Not set up: this account signs in with a provider or a passkey."</p>
+                        <form method="post" action=(href!(super::email::add::add)) class="mt-5 flex max-w-md flex-col gap-4">
+                            <input type="hidden" name="user_id" value=(user_id)>
+                            <h3 class="text-sm font-semibold">"Add an e-mail address and a password"</h3>
+                            field(
+                                field_label(attrs: attributes! { for="new-email" }, "E-mail address")
+                                input(attrs: attributes! {
+                                    id="new-email" name="email" type="email" autocomplete="email" maxlength="254" required=""
+                                })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="new-email-password" }, "Password")
+                                input(attrs: attributes! {
+                                    id="new-email-password" name="password" type="password"
+                                    autocomplete="new-password" minlength="8" maxlength="128" required=""
+                                })
+                                field_description("8 characters or more. We will e-mail you a code to confirm the address; it cannot be changed afterwards.")
+                            )
+                            <div>
+                                button(attrs: attributes! { type="submit" }, "Add e-mail address")
+                            </div>
                         </form>
                     }
-                </div>
-            </section>
+                )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Passkeys"</h2>
-                if user.passkeys.is_empty() {
-                    <p class="text-sm text-neutral-500">"No passkey yet."</p>
-                }
-                <ul class="divide-y divide-neutral-100">
-                    for passkey in &user.passkeys {
-                        <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-                            <form method="post" action=(href!(super::passkey::rename::rename)) class="flex items-center gap-2">
-                                <input type="hidden" name="credential_id" value=(&passkey.credential_id)>
-                                <input type="hidden" name="user_id" value=(user_id)>
-                                <label class="sr-only" for=(format!("passkey-{}", passkey.credential_id))>"Passkey name"</label>
-                                <input id=(format!("passkey-{}", passkey.credential_id)) class="rounded border border-neutral-300 px-2 py-1" type="text" name="name" value=(&passkey.name) maxlength="64" required="">
-                                <button class="underline">"Rename"</button>
-                                if let Some(authenticator) = authenticator_name(&passkey.aaguid) {
-                                    <span class="text-neutral-500">(authenticator)</span>
-                                }
-                            </form>
-                            <form method="post" action=(href!(super::passkey::remove::remove))>
-                                <input type="hidden" name="credential_id" value=(&passkey.credential_id)>
-                                <input type="hidden" name="user_id" value=(user_id)>
-                                <button class="text-red-700 underline">"Remove"</button>
-                            </form>
-                        </li>
+                section_card(
+                    title: Some("Sign-in providers"),
+                    attrs: attributes! { id="providers" class="scroll-mt-20" },
+                    if user.oauth2_accounts.is_empty() {
+                        <p class="text-sm text-muted-foreground">"No provider linked."</p>
                     }
-                </ul>
-                <div class="mt-3">
-                    <label class="block text-sm" for="new-passkey-name">"Name for the new passkey"</label>
-                    <div class="mt-1 flex gap-2">
-                        <input id="new-passkey-name" class="rounded border border-neutral-300 px-3 py-1" type="text" value="My passkey" maxlength="64">
-                        <button type="button" disabled=""
-                            class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700"
-                            data-passkey-register=""
-                            data-user-id=(user_id)
-                            data-name-input="#new-passkey-name"
-                            data-start=(href!(super::passkey::register::start::start))
-                            data-finish=(href!(super::passkey::register::finish::finish))>
-                            "Add a passkey"
-                        </button>
+                    <ul class="divide-y divide-border">
+                        for account in &user.oauth2_accounts {
+                            <li class="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm">
+                                <span>
+                                    <strong>(provider_label(providers, &account.provider))</strong>
+                                    " · " (account.email.as_deref().unwrap_or(&account.provider_user_id))
+                                </span>
+                                <form method="post" action=(href!(super::oauth2::unlink::unlink))>
+                                    <input type="hidden" name="provider" value=(&account.provider)>
+                                    <input type="hidden" name="provider_user_id" value=(&account.provider_user_id)>
+                                    <input type="hidden" name="user_id" value=(user_id)>
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="text-destructive-text" }, "Unlink")
+                                </form>
+                            </li>
+                        }
+                    </ul>
+                    if providers.iter().next().is_some() {
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            for provider in providers.iter() {
+                                <form method="post" action=(href!(super::oauth2::provider::start, super::oauth2::provider::Provider(provider.name.clone())))>
+                                    <input type="hidden" name="mode" value="add_to_user">
+                                    <input type="hidden" name="user_id" value=(user_id)>
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" },
+                                        icon(data: icons::LOG_IN)
+                                        "Link " (&provider.label)
+                                    )
+                                </form>
+                            }
+                        </div>
+                    }
+                )
+
+                section_card(
+                    title: Some("Passkeys"),
+                    attrs: attributes! { id="passkeys" class="scroll-mt-20" },
+                    if user.passkeys.is_empty() {
+                        <p class="text-sm text-muted-foreground">"No passkey yet."</p>
+                    }
+                    <ul class="divide-y divide-border">
+                        for passkey in &user.passkeys {
+                            <li class="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm">
+                                <form method="post" action=(href!(super::passkey::rename::rename)) class="flex flex-wrap items-center gap-2">
+                                    <input type="hidden" name="credential_id" value=(&passkey.credential_id)>
+                                    <input type="hidden" name="user_id" value=(user_id)>
+                                    <label class="sr-only" for=(format!("passkey-{}", passkey.credential_id))>"Passkey name"</label>
+                                    input(attrs: attributes! {
+                                        id=(format!("passkey-{}", passkey.credential_id)) name="name" type="text"
+                                        value=(&passkey.name) maxlength="64" required="" class="w-48"
+                                    })
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Rename")
+                                    if let Some(authenticator) = authenticator_name(&passkey.aaguid) {
+                                        <span class="text-muted-foreground">(authenticator)</span>
+                                    }
+                                </form>
+                                <form method="post" action=(href!(super::passkey::remove::remove))>
+                                    <input type="hidden" name="credential_id" value=(&passkey.credential_id)>
+                                    <input type="hidden" name="user_id" value=(user_id)>
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="text-destructive-text" }, "Remove")
+                                </form>
+                            </li>
+                        }
+                    </ul>
+                    <div class="mt-4 flex max-w-md flex-col gap-2">
+                        field_label(attrs: attributes! { for="new-passkey-name" }, "Name for the new passkey")
+                        <div class="flex flex-wrap gap-2">
+                            input(attrs: attributes! { id="new-passkey-name" type="text" value="My passkey" maxlength="64" class="w-48" })
+                            button(attrs: attributes! {
+                                type="button" disabled=""
+                                data-passkey-register=""
+                                data-user-id=(user_id)
+                                data-name-input="#new-passkey-name"
+                                data-start=(href!(super::passkey::register::start::start))
+                                data-finish=(href!(super::passkey::register::finish::finish))
+                            }, icon(data: icons::API_KEYS) "Add a passkey")
+                        </div>
                     </div>
-                </div>
-            </section>
+                )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Sessions"</h2>
-                <ul class="mb-3 divide-y divide-neutral-100">
-                    for s in &sessions {
-                        session_row(
-                            started_at: s.started_at as u64,
-                            ip: s.ip.as_deref(),
-                            user_agent: s.user_agent.as_deref(),
-                            current: current_session.as_deref() == Some(s.id.as_str()),
-                        )
-                    }
-                </ul>
-                <p class="mb-3 text-sm text-neutral-600">"Lost a device, or signed in on a shared computer? Every other browser is signed out; this one stays."</p>
-                <form method="post" action=(href!(super::sessions::revoke::revoke))>
-                    <input type="hidden" name="user_id" value=(user_id)>
-                    <button class="rounded border border-red-700 px-3 py-1 text-sm text-red-700 hover:bg-red-50">"Sign out everywhere else"</button>
-                </form>
-            </section>
+                section_card(
+                    title: Some("Sessions"),
+                    description: Some("Lost a device, or signed in on a shared computer? Every other browser is signed out; this one stays."),
+                    attrs: attributes! { id="sessions" class="scroll-mt-20" },
+                    <ul class="divide-y divide-border">
+                        for s in &sessions {
+                            session_row(
+                                started_at: s.started_at as u64,
+                                ip: s.ip.as_deref(),
+                                user_agent: s.user_agent.as_deref(),
+                                current: current_session.as_deref() == Some(s.id.as_str()),
+                            )
+                        }
+                    </ul>
+                    <form method="post" action=(href!(super::sessions::revoke::revoke)) class="mt-4">
+                        <input type="hidden" name="user_id" value=(user_id)>
+                        button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" class="text-destructive-text" }, icon(data: icons::LOG_OUT) "Sign out everywhere else")
+                    </form>
+                )
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Recent sign-ins"</h2>
-                <ul class="divide-y divide-neutral-100 text-sm">
-                    for entry in user.sign_ins.iter().rev().take(20) {
-                        <li class="py-2">
-                            <time datetime=(entry.at)>(format_time(entry.at))</time>
-                            " · "
-                            (match entry.method {
-                                SignInKind::OAuth2 => entry.provider.clone().unwrap_or_else(|| "provider".to_owned()),
-                                SignInKind::Passkey => "passkey".to_owned(),
-                                SignInKind::Password => "password".to_owned(),
-                            })
-                            if let Some(ip) = &entry.ip { " · " (ip) }
-                            if let Some(ua) = &entry.user_agent { <span class="block truncate text-neutral-500">(ua)</span> }
-                        </li>
-                    }
-                </ul>
-            </section>
+                section_card(
+                    title: Some("Recent sign-ins"),
+                    attrs: attributes! { id="sign-ins" class="scroll-mt-20" },
+                    <ul class="divide-y divide-border">
+                        for entry in user.sign_ins.iter().rev().take(20) {
+                            sign_in_row(
+                                at: entry.at,
+                                method: match entry.method {
+                                    SignInKind::OAuth2 => entry.provider.clone().unwrap_or_else(|| "provider".to_owned()),
+                                    SignInKind::Passkey => "passkey".to_owned(),
+                                    SignInKind::Password => "password".to_owned(),
+                                },
+                                ip: entry.ip.as_deref(),
+                                user_agent: entry.user_agent.as_deref(),
+                            )
+                        }
+                    </ul>
+                )
+            )
         )
     })
 }
