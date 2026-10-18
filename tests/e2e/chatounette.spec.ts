@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
-import { ExampleApp, PNG, mintKey, publishProduct } from "./storefront";
+import { ExampleApp, PNG, mintKey, publishProduct, publishVariedProduct } from "./storefront";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // The Chatounette clone: the second example app, in French and in the
@@ -56,9 +56,21 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({ 
   const mat = await publishProduct(page, slug, "Tapis fraîcheur", "19.90", "Tapis");
   await addPicture(page, mat, "Un tapis bleu");
   await publishProduct(page, slug, "Panier douillet", "34.90", "Couchage");
+  // A collar in two colours, priced apart: what the filters are tried on.
+  await publishVariedProduct(
+    page,
+    slug,
+    "Collier étoilé",
+    "Couleur",
+    [
+      ["Rose", "9.90"],
+      ["Bleu", "59.90"],
+    ],
+    "Tapis",
+  );
 
   const key = await mintKey(page, slug, true);
-  await app.start(request, key, 2);
+  await app.start(request, key, 3);
 
   // The home: French, the shop's own sections, the newest products, the
   // category tiles with their counts, the category bar.
@@ -77,7 +89,7 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({ 
   ).toBeVisible();
   const tile = page.locator("[data-tile=couchage]");
   await expect(tile).toContainText("Couchage");
-  await expect(tile).toContainText("2 articles");
+  await expect(tile).toContainText("3 articles");
   await expect(tile.locator("img")).toHaveAttribute("alt", "Un tapis bleu");
   await expect(page.locator("[data-reassure]")).toContainText("Retours sous 14 jours");
   await expect(page.locator("nav.sections [data-menu=couchage] summary")).toHaveText("Couchage");
@@ -89,8 +101,8 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({ 
   await page.goto(`${app.url}/c/couchage`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Couchage");
   await expect(page.locator("[data-crumbs]")).toContainText("Accueil / Couchage");
-  await expect(page.locator("[data-subcategory=tapis]")).toContainText("Tapis (1)");
-  await expect(page.locator("[data-results]")).toContainText("2 résultats affichés");
+  await expect(page.locator("[data-subcategory=tapis]")).toContainText("Tapis (2)");
+  await expect(page.locator("[data-results]")).toContainText("3 résultats affichés");
   await expect(page.locator("[data-sort] option")).toHaveText([
     "Tri du plus récent au plus ancien",
     "Tri par notes moyennes",
@@ -100,7 +112,52 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({ 
   await page.locator("[data-sort]").selectOption("price_desc");
   await page.getByRole("button", { name: "Trier" }).click();
   await expect(page).toHaveURL(/sort=price_desc/);
-  await expect(page.locator("ul.catalog [data-product]").first()).toHaveAttribute("data-product", "panier-douillet");
+  await expect(page.locator("ul.catalog [data-product]").first()).toHaveAttribute("data-product", "collier-etoile");
+
+  // The filters: the colours of the listing with their counts, a colour on
+  // and off again, the price bands (a range reaches into every band it
+  // overlaps), the sort keeping them, and nothing left.
+  await page.goto(`${app.url}/c/tapis`);
+  const filters = page.locator("[data-filters]");
+  await expect(filters.locator("summary")).toHaveText("Afficher les filtres");
+  await expect(filters).toHaveJSProperty("open", false);
+  await expect(filters.locator("[data-price-band]")).toHaveCount(7);
+  await expect(filters.locator("[data-price-band='0-50']")).toHaveText("De 0,00€ à 50,00€");
+  await expect(filters.locator("[data-colour]")).toHaveText(["Bleu (1)", "Rose (1)"]);
+  await filters.locator("summary").click();
+  await filters.locator("[data-colour=rose]").click();
+  await expect(page).toHaveURL(/couleur=rose/);
+  await expect(page.locator("[data-results]")).toContainText("1 résultat affiché");
+  await expect(page.locator("ul.catalog [data-product]")).toHaveText(/Collier étoilé/);
+  await expect(filters).toHaveJSProperty("open", true);
+  await expect(filters.locator("[data-colour=rose]")).toHaveAttribute("aria-current", "true");
+  await expect(filters.locator("[data-colour=bleu]")).toHaveText("Bleu (1)");
+  await page.locator("[data-sort]").selectOption("price_asc");
+  await page.getByRole("button", { name: "Trier" }).click();
+  await expect(page).toHaveURL(/sort=price_asc/);
+  await expect(page).toHaveURL(/couleur=rose/);
+  await filters.locator("[data-colour=rose]").click();
+  await expect(page).not.toHaveURL(/couleur=/);
+  await expect(page.locator("[data-results]")).toContainText("2 résultats affichés");
+  await expect(filters).toHaveJSProperty("open", false);
+  await filters.locator("summary").click();
+  await filters.locator("[data-price-band='50-70']").click();
+  await expect(page).toHaveURL(/min_price=50&max_price=70/);
+  await expect(page.locator("ul.catalog [data-product]")).toHaveCount(1);
+  await expect(page.locator("ul.catalog [data-product]")).toHaveAttribute("data-product", "collier-etoile");
+  await expect(filters.locator("[data-price-band='50-70']")).toHaveAttribute("aria-current", "true");
+  await expect(filters.locator("[data-colour]")).toHaveText(["Bleu (1)", "Rose (1)"]);
+  await filters.locator("[data-price-band='70-100']").click();
+  await expect(page.locator("[data-filters-empty]")).toContainText("Aucun produit ne correspond à ces filtres.");
+  await expect(filters.locator("[data-colour]")).toHaveCount(0);
+  await page.locator("[data-filters-clear]").click();
+  await expect(page).not.toHaveURL(/min_price=/);
+  await expect(page.locator("[data-results]")).toContainText("2 résultats affichés");
+  await page.goto(`${app.url}/boutique?q=collier&couleur=bleu`);
+  await expect(page.locator("[data-results]")).toContainText("1 résultat affiché");
+  await expect(page.locator("[data-filters] [data-colour=bleu]")).toHaveAttribute("aria-current", "true");
+  await page.goto(`${app.url}/boutique?q=collier&couleur=gris`);
+  await expect(page.locator("[data-filters-empty]")).toBeVisible();
 
   // A product: the French page, then into the cart from it, and from a card.
   await page.goto(`${app.url}/p/tapis-fraicheur`);

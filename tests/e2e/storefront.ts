@@ -44,29 +44,71 @@ export async function mintKey(
   return { token, mediaUrl, apiUrl };
 }
 
-/// Creates a published product priced at `amount`, filed under the category
-/// whose menu text contains `category` when one is given.
-export async function publishProduct(page: Page, slug: string, name: string, amount: string, category?: string) {
+/// Creates a product and returns its page's address.
+async function createProduct(page: Page, slug: string, name: string) {
   await page.goto(`/t/${slug}/products`);
   await page.getByLabel("Name").fill(name);
   await page.getByRole("button", { name: "Create product" }).click();
   await expect(page.getByRole("status")).toContainText("Product created.");
-  const url = page.url().split("?")[0];
-  await page.getByLabel("Price").fill(amount);
-  await page.getByRole("button", { name: "Set price" }).click();
-  if (category) {
-    await expect(async () => {
-      await page.goto(url);
-      await expect(page.getByLabel("Category")).toContainText(category, { timeout: 1000 });
-    }).toPass({ timeout: 15_000 });
-    const select = page.getByLabel("Category");
-    const value = await select.locator("option", { hasText: category }).first().getAttribute("value");
-    await select.selectOption(value ?? "");
-    await page.getByRole("button", { name: "Add to category" }).click();
-    await expect(page.getByRole("status")).toContainText("Added to the category.");
-  }
+  return page.url().split("?")[0];
+}
+
+/// Files the product at `url` under the category whose menu text contains
+/// `category`, once the category list shows it.
+async function fileUnder(page: Page, url: string, category: string) {
+  await expect(async () => {
+    await page.goto(url);
+    await expect(page.getByLabel("Category")).toContainText(category, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  const select = page.getByLabel("Category");
+  const value = await select.locator("option", { hasText: category }).first().getAttribute("value");
+  await select.selectOption(value ?? "");
+  await page.getByRole("button", { name: "Add to category" }).click();
+  await expect(page.getByRole("status")).toContainText("Added to the category.");
+}
+
+async function publish(page: Page) {
   await page.getByRole("button", { name: "Publish" }).click();
   await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
+}
+
+/// Creates a published product priced at `amount`, filed under the category
+/// whose menu text contains `category` when one is given.
+export async function publishProduct(page: Page, slug: string, name: string, amount: string, category?: string) {
+  const url = await createProduct(page, slug, name);
+  await page.getByLabel("Price").fill(amount);
+  await page.getByRole("button", { name: "Set price" }).click();
+  if (category) await fileUnder(page, url, category);
+  await publish(page);
+  return url;
+}
+
+/// Creates a published product that varies by one `option`, one variant per
+/// `[value, price]` given, filed under `category` when one is given. It has
+/// no price of its own: the listing shows the range.
+export async function publishVariedProduct(
+  page: Page,
+  slug: string,
+  name: string,
+  option: string,
+  variants: [string, string][],
+  category?: string,
+) {
+  const url = await createProduct(page, slug, name);
+  await page.getByLabel("Add an option").fill(option);
+  await page.getByLabel("Values, one a line").fill(variants.map(([value]) => value).join("\n"));
+  await page.getByRole("button", { name: "Add option" }).click();
+  await expect(page.getByRole("status")).toContainText("Option added.");
+  for (const [value, amount] of variants) {
+    await page.goto(url);
+    await page.getByLabel(option, { exact: true }).selectOption(value);
+    await page.getByLabel("Variant price").fill(amount);
+    await page.getByRole("button", { name: "Add variant" }).click();
+    await expect(page.getByRole("status")).toContainText("Variant added.");
+  }
+  if (category) await fileUnder(page, url, category);
+  await page.goto(url);
+  await publish(page);
   return url;
 }
 

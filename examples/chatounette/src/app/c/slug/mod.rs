@@ -1,7 +1,9 @@
-//! A category and the products in it, sub-categories included.
+//! A category and the products in it, sub-categories included, narrowed by
+//! the price and colour filters.
 
 use timada_storefront::{
-    ProductQuery, ProductSort, categories, category_path, menu_of, products, require_category_in,
+    ProductQuery, ProductSort, categories, category_path, menu_of, option_values, products,
+    require_category_in,
 };
 use topcoat::{
     Result,
@@ -10,7 +12,11 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::{boutique::PER_PAGE, catalog_grid, document};
+use crate::app::{
+    boutique::PER_PAGE,
+    catalog_grid, document,
+    filters::{COLOUR, Filters, Panel, filter_fields, filter_panel},
+};
 
 module_param!(pub slug);
 
@@ -18,12 +24,21 @@ module_param!(pub slug);
 struct CategoryQuery {
     sort: Option<String>,
     page: Option<u32>,
+    min_price: Option<u32>,
+    max_price: Option<u32>,
+    couleur: Option<String>,
 }
 
 #[derive(serde::Serialize)]
 struct CategoryLink<'a> {
     sort: &'a str,
     page: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_price: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_price: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    couleur: Option<&'a str>,
 }
 
 /// The sort menu, as the shop words it.
@@ -50,26 +65,34 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_deref()
         .map(ProductSort::parse)
         .unwrap_or_default();
+    let filters = Filters::new(query.min_price, query.max_price, query.couleur.clone());
     // The products of this category and of everything below it, which is
     // what a shopper expects from a top-level entry.
-    let page = products(
-        cx,
-        &ProductQuery::default()
+    let wanted = filters.apply(
+        ProductQuery::default()
             .in_category(category.id.clone())
             .sort(sort)
             .per_page(PER_PAGE)
             .page(query.page.unwrap_or(1)),
-    )
-    .await?;
+    );
+    let page = products(cx, &wanted).await?;
+    let colours = option_values(cx, &wanted, COLOUR).await?;
     let link = {
         let sort = sort.as_str();
         let slug = category.slug.clone();
-        move |number: u32| {
+        move |filters: &Filters, number: u32| {
             href!(index, Slug(slug.clone()))
-                .query(CategoryLink { sort, page: number })
+                .query(CategoryLink {
+                    sort,
+                    page: number,
+                    min_price: filters.min_price,
+                    max_price: filters.max_price,
+                    couleur: filters.couleur.as_deref(),
+                })
                 .resolve(cx)
         }
     };
+    let panel = Panel::build(&filters, &colours, |filters| link(filters, 1));
     let sort_label = SORTS
         .iter()
         .find(|(candidate, _)| *candidate == sort)
@@ -107,12 +130,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </ul>
                     </nav>
                 }
+                filter_panel(panel: &panel)
                 <div class="listing-head">
                     <p data-results=(page.total)>
                         (page.total) (if page.total == 1 { " résultat affiché" } else { " résultats affichés" })
                         " · " (sort_label)
                     </p>
                     <form class="sort" method="get">
+                        filter_fields(filters: &filters)
                         <label for="sort">"Trier"</label>
                         <select id="sort" name="sort" data-sort="">
                             for (candidate, label) in SORTS {
@@ -123,14 +148,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </form>
                 </div>
                 if page.items.is_empty() {
-                    <p>"Rien dans cette catégorie pour le moment."</p>
+                    if panel.active {
+                        <p data-filters-empty="">
+                            "Aucun produit ne correspond à ces filtres. "
+                            <a href=(&panel.clear)>"Effacer les filtres"</a>
+                        </p>
+                    } else {
+                        <p>"Rien dans cette catégorie pour le moment."</p>
+                    }
                 }
                 catalog_grid(products: &page.items)
                 if page.pages() > 1 {
                     <nav class="pages" aria-label="Pages">
-                        if page.has_prev() { <a href=(link(page.page - 1))>"← Précédent"</a> }
+                        if page.has_prev() { <a href=(link(&filters, page.page - 1))>"← Précédent"</a> }
                         <span>"Page " (page.page) " sur " (page.pages())</span>
-                        if page.has_next() { <a href=(link(page.page + 1))>"Suivant →"</a> }
+                        if page.has_next() { <a href=(link(&filters, page.page + 1))>"Suivant →"</a> }
                     </nav>
                 }
             </div>

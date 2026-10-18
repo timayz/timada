@@ -211,6 +211,21 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
         .bind(&product.id)
         .execute(&mut *tx)
         .await?;
+    sqlx::query("DELETE FROM storefront_product_options WHERE product_id = ?1")
+        .bind(&product.id)
+        .execute(&mut *tx)
+        .await?;
+    let options: Vec<crate::ProductOption> = serde_json::from_str(&options_json(product)?)?;
+    for row in option_rows(&options) {
+        sqlx::query(INSERT_OPTION)
+            .bind(&product.id)
+            .bind(&row.name_key)
+            .bind(&row.value_key)
+            .bind(&row.name)
+            .bind(&row.value)
+            .execute(&mut *tx)
+            .await?;
+    }
     for category_id in &product.categories {
         sqlx::query(
             "INSERT INTO storefront_product_categories (product_id, category_id)
@@ -261,6 +276,39 @@ async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Re
     }
     tx.commit().await?;
     Ok(())
+}
+
+/// One row of `storefront_product_options`: a value an option of the product
+/// takes, with the keys a filter compares.
+pub(crate) struct OptionRow {
+    pub name_key: String,
+    pub value_key: String,
+    pub name: String,
+    pub value: String,
+}
+
+/// Inserts an [`OptionRow`] for a product: binds `product_id`, then the four
+/// fields in order. Two values folding to one key keep the first.
+pub(crate) const INSERT_OPTION: &str =
+    "INSERT OR IGNORE INTO storefront_product_options (product_id, name_key, value_key, name, value)
+     VALUES (?1, ?2, ?3, ?4, ?5)";
+
+/// The option rows of a product, one per declared value; a value folding to
+/// nothing (blank) is left out.
+pub(crate) fn option_rows(options: &[crate::ProductOption]) -> Vec<OptionRow> {
+    options
+        .iter()
+        .flat_map(|option| {
+            let name_key = crate::facet_key(&option.name);
+            option.values.iter().map(move |value| OptionRow {
+                name_key: name_key.clone(),
+                value_key: crate::facet_key(value),
+                name: option.name.clone(),
+                value: value.clone(),
+            })
+        })
+        .filter(|row| !row.name_key.is_empty() && !row.value_key.is_empty())
+        .collect()
 }
 
 /// The gallery as the local rows carry it.

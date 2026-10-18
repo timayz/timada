@@ -1,7 +1,7 @@
 use anyhow::Context as _;
 use evento::migrator::Migrate as _;
 use sqlx::SqlitePool;
-use sqlx_migrator::{Info as _, Migration, vec_box};
+use sqlx_migrator::{Info as _, Migration, operation::Operation, vec_box};
 
 /// The app name under which these migrations are recorded (the macro needs
 /// the literal, so it is repeated there).
@@ -19,7 +19,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         ProductSearch0005,
         Reviews0006,
         CategoryMenu0007,
-        ReviewReplies0008
+        ReviewReplies0008,
+        ProductOptions0009
     ]
 }
 
@@ -27,13 +28,21 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
 /// [`Store::connect`](crate::Store::connect) runs it; a host can also run it
 /// ahead of time, without reaching the store.
 pub async fn migrate(pool: &SqlitePool) -> anyhow::Result<()> {
+    migrate_plan(pool, &evento::migrator::Plan::apply_all()).await
+}
+
+/// [`migrate`] up to where `plan` says: what a test of one migration needs.
+pub(crate) async fn migrate_plan(
+    pool: &SqlitePool,
+    plan: &evento::migrator::Plan,
+) -> anyhow::Result<()> {
     let mut conn = pool.acquire().await?;
     let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().map_err(anyhow::Error::from)?;
     migrator
         .add_migrations(migrations())
         .map_err(anyhow::Error::from)?;
     migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
+        .run(&mut *conn, plan)
         .await
         .context("cannot prepare the local database")?;
     Ok(())
@@ -315,3 +324,74 @@ sqlx_migrator::sqlite_migration!(
         ),
     ]
 );
+
+pub struct ProductOptions0009;
+sqlx_migrator::sqlite_migration!(
+    ProductOptions0009,
+    "storefront",
+    "0009_product_options",
+    vec_box![("storefront", "0008_review_replies")],
+    vec_box![
+        // One row per declared value of a product's options, keyed the way a
+        // filter compares (see `facet_key`): what "Colour: Rose" narrows a
+        // listing by, and what the colours of a listing are counted from.
+        (
+            "CREATE TABLE storefront_product_options (
+                product_id TEXT NOT NULL,
+                name_key TEXT NOT NULL,
+                value_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (product_id, name_key, value_key)
+            )",
+            "DROP TABLE storefront_product_options"
+        ),
+        (
+            "CREATE INDEX storefront_product_options_value ON storefront_product_options
+                (name_key, value_key, product_id)",
+            "DROP INDEX storefront_product_options_value"
+        ),
+        BackfillProductOptions,
+    ]
+);
+
+/// Fills the option rows for the products already copied, whose options so
+/// far lived only in `options_json`. The keys need the same folding the
+/// subscription applies, which SQL has no function for, hence Rust.
+struct BackfillProductOptions;
+
+#[async_trait::async_trait]
+impl Operation<sqlx::Sqlite> for BackfillProductOptions {
+    async fn up(
+        &self,
+        conn: &mut sqlx::SqliteConnection,
+    ) -> Result<(), sqlx_migrator::error::Error> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT id, options_json FROM storefront_products")
+                .fetch_all(&mut *conn)
+                .await?;
+        for (product_id, options_json) in rows {
+            let options: Vec<crate::ProductOption> =
+                serde_json::from_str(&options_json).unwrap_or_default();
+            for row in crate::read_model::option_rows(&options) {
+                sqlx::query(crate::read_model::INSERT_OPTION)
+                    .bind(&product_id)
+                    .bind(&row.name_key)
+                    .bind(&row.value_key)
+                    .bind(&row.name)
+                    .bind(&row.value)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Nothing to undo: the table goes with the operation before this one.
+    async fn down(
+        &self,
+        _conn: &mut sqlx::SqliteConnection,
+    ) -> Result<(), sqlx_migrator::error::Error> {
+        Ok(())
+    }
+}

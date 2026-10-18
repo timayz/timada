@@ -6,9 +6,9 @@ use topcoat_core::error::{Error, Result};
 use topcoat_router::error::not_found;
 
 use crate::query::{
-    Category, CategoryNode, Product, ProductPage, ProductQuery, category_ancestors, menu_of,
-    published_categories, published_category_by_slug, published_product_by_slug,
-    published_products,
+    Category, CategoryNode, FacetValue, Product, ProductPage, ProductQuery, category_ancestors,
+    menu_of, published_categories, published_category_by_slug, published_option_values,
+    published_product_by_slug, published_products,
 };
 use crate::store::Store;
 
@@ -38,6 +38,15 @@ pub async fn products(cx: &Cx, query: &ProductQuery) -> Result<ProductPage> {
         product.fill_urls(store.media_url());
     }
     Ok(page)
+}
+
+/// The values `option` takes across the products `query` lists, each with
+/// its count, for a filter's links: see
+/// [`published_option_values`](crate::published_option_values).
+pub async fn option_values(cx: &Cx, query: &ProductQuery, option: &str) -> Result<Vec<FacetValue>> {
+    published_option_values(store(cx).pool(), query, option)
+        .await
+        .map_err(|err| Error::from_anyhow(err.into()))
 }
 
 /// A published product by slug, if any.
