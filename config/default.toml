@@ -167,9 +167,16 @@ dir = "data/shopper-keys"
 # AliExpress app (registered on AliExpress's open platform, with
 # dropshipping access). The app's secret and the tokens of the account it
 # acts for are kept encrypted under `secrets.key`; without it no shop can
-# connect. Only the addresses of AliExpress's own services can be changed
-# (tests point them at a stand-in).
+# connect. Every node reads the imported products again on its own; a
+# product another node read in the meantime is skipped, and one node per
+# token renews an account's access before it lapses.
 # [aliexpress]
+# # How often, in seconds, this node looks for products due to be read again.
+# sync_check_secs = 3600
+# # How long, in seconds, a product goes before its price and stock are read
+# # again.
+# sync_every_secs = 21600
+# # AliExpress's own addresses, changed only for tests.
 # api_url = "https://api-sg.aliexpress.com"
 # authorize_url = "https://api-sg.aliexpress.com/oauth/authorize"
 
