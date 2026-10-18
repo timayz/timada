@@ -404,6 +404,23 @@ impl<E: Executor> Command<E> {
 }
 
 impl<E: Executor> Command<E> {
+    /// Takes the renewal of the token lapsing at `expires_at` on; `false`
+    /// when another node did.
+    pub async fn claim_token_refresh(&self, actor: &str, expires_at: u64) -> anyhow::Result<bool> {
+        let claimed = evento::append(crate::value_object::token_refresh_id(expires_at))
+            .original_version(0)
+            .event(&crate::aggregator::refresh::Claimed {
+                claimed_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await;
+        match claimed {
+            Ok(_) => Ok(true),
+            Err(WriteError::InvalidOriginalVersion) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     /// The link of an AliExpress item, if the shop ever asked for it.
     pub async fn load_link(&self, ae_product_id: &str) -> anyhow::Result<Option<LinkState>> {
         self.load_link_by_id(&aliexpress_product_id(ae_product_id))

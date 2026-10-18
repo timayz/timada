@@ -3,6 +3,7 @@
 //! draft from an item (see [`subscription`]).
 
 pub mod subscription;
+pub mod sync;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,6 +33,8 @@ pub struct Aliexpress {
     /// (`mail.allow_private_hosts`, for tests and local setups).
     allow_private_hosts: bool,
     platform: Executor,
+    /// How long a product goes before it is read again, in seconds.
+    sync_every_secs: u64,
 }
 
 impl Aliexpress {
@@ -65,7 +68,13 @@ impl Aliexpress {
                 .build()?,
             allow_private_hosts,
             platform,
+            sync_every_secs: config.sync_every_secs.max(1),
         }))
+    }
+
+    /// How long a product goes before it is read again, in seconds.
+    pub fn sync_every_secs(&self) -> u64 {
+        self.sync_every_secs
     }
 
     /// Whether this node can keep an app's secret (`secrets.key` is set).
@@ -105,6 +114,75 @@ impl Aliexpress {
         };
         let token = self.sealer()?.open(&authorization.access_token_sealed)?;
         Ok(Some(self.app_client(settings)?.with_session(token)))
+    }
+
+    /// Renews the tenant's tokens when the access token lapses within a day,
+    /// on one node per token (the one that claims the renewal in `store`,
+    /// the tenant's executor); the tenant as it then is. A renewal AliExpress
+    /// refuses is logged: the merchant connects again.
+    pub async fn refresh_if_due<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        tenant: TenantState,
+        now: u64,
+    ) -> anyhow::Result<TenantState> {
+        let Some(settings) = &tenant.aliexpress else {
+            return Ok(tenant);
+        };
+        let Some(authorization) = &settings.authorization else {
+            return Ok(tenant);
+        };
+        if authorization.expires_at > now + timada_aliexpress::REFRESH_MARGIN_SECS {
+            return Ok(tenant);
+        }
+        if authorization.refresh_expires_at != 0 && authorization.refresh_expires_at <= now {
+            tracing::warn!(tenant = %tenant.id, "AliExpress access lapsed: the merchant has to connect again");
+            return Ok(tenant);
+        }
+        let links = timada_aliexpress::Command(store.clone());
+        if !links
+            .claim_token_refresh(ALIEXPRESS_ACTOR, authorization.expires_at)
+            .await?
+        {
+            return Ok(tenant);
+        }
+        let refresh_token = self.sealer()?.open(&authorization.refresh_token_sealed)?;
+        let tokens = match self
+            .app_client(settings)?
+            .refresh_token(&refresh_token)
+            .await
+        {
+            Ok(tokens) => tokens,
+            Err(err) => {
+                tracing::warn!(tenant = %tenant.id, %err, "AliExpress refused to renew the access");
+                return Ok(tenant);
+            }
+        };
+        let account = if tokens.account.is_empty() {
+            authorization.account.clone()
+        } else {
+            tokens.account.chars().take(120).collect()
+        };
+        let tenancy = timada_tenancy::Command(self.platform.clone());
+        tenancy
+            .refresh_aliexpress(
+                ALIEXPRESS_ACTOR,
+                &tenant.id,
+                timada_tenancy::AuthorizeAliexpress {
+                    access_token_sealed: self.seal(&tokens.access_token)?,
+                    refresh_token_sealed: self.seal(&tokens.refresh_token)?,
+                    expires_at: now + tokens.expires_in,
+                    refresh_expires_at: if tokens.refresh_expires_in == 0 {
+                        0
+                    } else {
+                        now + tokens.refresh_expires_in
+                    },
+                    account,
+                },
+            )
+            .await?;
+        tracing::info!(tenant = %tenant.id, "AliExpress access renewed");
+        Ok(tenancy.load_tenant(&tenant.id).await?.unwrap_or(tenant))
     }
 
     /// Where the merchant goes to connect their account.

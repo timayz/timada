@@ -178,6 +178,17 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.reviews.request_check_secs.max(1),
     ));
 
+    // The products imported from AliExpress are read again on a timer.
+    let aliexpress_sync = crate::aliexpress::sync::AliexpressSync::new(
+        read_pool.clone(),
+        executor.clone(),
+        tenants.clone(),
+        aliexpress.clone(),
+    )
+    .start(std::time::Duration::from_secs(
+        config.aliexpress.sync_check_secs.max(1),
+    ));
+
     let router = app::router(Services {
         executor,
         read_pool: ReadPool(read_pool.clone()),
@@ -215,6 +226,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     backlog_watch.abort();
     review_requests.abort();
+    aliexpress_sync.abort();
     tenants.shutdown().await;
     for subscription in &read_models {
         subscription.stop();

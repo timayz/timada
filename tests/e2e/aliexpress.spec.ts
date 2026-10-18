@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { APP_KEY, APP_SECRET, FakeAliexpress, PRODUCT_ID } from "./aliexpress";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { createTenant, uniqueTenant } from "./tenants";
@@ -106,6 +106,61 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     expect(aliexpress.badSignatures).toBe(0);
     expect(aliexpress.calls).toContain("/auth/token/create");
     expect(aliexpress.calls.filter((call) => call === "aliexpress.ds.product.get").length).toBeGreaterThanOrEqual(4);
+  } finally {
+    await aliexpress.stop();
+  }
+});
+
+/// A shop with its app set up and its account connected, and one product
+/// imported from the stand-in; the product page's address.
+async function importedShop(page: Page, aliexpress: FakeAliexpress): Promise<string> {
+  await registerWithEmail(page, uniqueEmail("merchant"));
+  const { name, slug } = uniqueTenant("Ali Sync Shop");
+  await createTenant(page, name);
+  await page.goto(`/t/${slug}/aliexpress`);
+  await page.getByLabel("App key").fill(APP_KEY);
+  await page.getByLabel("App secret").fill(APP_SECRET);
+  await page.getByLabel("Multiply the cost by").fill("2");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toContainText("AliExpress app saved.");
+  await page.getByRole("button", { name: "Connect the AliExpress account" }).click();
+  await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "connected");
+  expect(aliexpress.calls).toContain("/auth/token/create");
+  await page.getByLabel("AliExpress product").fill(PRODUCT_ID);
+  await page.getByRole("button", { name: "Import" }).click();
+  const row = page.locator(`[data-aliexpress-link="${PRODUCT_ID}"]`);
+  await expect(async () => {
+    await page.reload();
+    await expect(row).toHaveAttribute("data-link-status", "linked", { timeout: 1000 });
+  }).toPass({ timeout: 20_000 });
+  await row.getByRole("link", { name: "Open" }).click();
+  return page.url().split("?")[0];
+}
+
+test("the dashboard reads imported products again on its own, and renews the account's access", async ({
+  page,
+}) => {
+  const aliexpress = new FakeAliexpress();
+  // A token that lapses within the day is renewed by the next sweep.
+  aliexpress.tokenLifetime = 60;
+  await aliexpress.start();
+  try {
+    const productUrl = await importedShop(page, aliexpress);
+    const rose = page.locator("[data-variant]", { hasText: "Colour: Rose" });
+    await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "120");
+
+    // Nobody presses anything: the sweep follows AliExpress.
+    aliexpress.sku("12000037001").stock = 3;
+    aliexpress.sku("12000037001").price = "5.00";
+    await expect(async () => {
+      await page.goto(productUrl);
+      await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "3", { timeout: 1000 });
+    }).toPass({ timeout: 30_000 });
+    await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("10.00");
+    await expect(async () => {
+      expect(aliexpress.calls).toContain("/auth/token/refresh");
+    }).toPass({ timeout: 15_000 });
+    expect(aliexpress.badSignatures).toBe(0);
   } finally {
     await aliexpress.stop();
   }

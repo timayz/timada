@@ -159,3 +159,28 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
         .unwrap();
     assert_eq!(stock.on_hand, 0);
 }
+
+#[tokio::test]
+async fn one_node_renews_a_token() {
+    let executor = executor().await;
+    let links = timada_aliexpress::Command(executor);
+    assert!(
+        links
+            .claim_token_refresh("node-a", 1_700_000_000)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !links
+            .claim_token_refresh("node-b", 1_700_000_000)
+            .await
+            .unwrap()
+    );
+    // The next token is a renewal of its own.
+    assert!(
+        links
+            .claim_token_refresh("node-b", 1_700_086_400)
+            .await
+            .unwrap()
+    );
+}

@@ -25,6 +25,8 @@ export class FakeAliexpress {
   /// Calls whose signature did not match.
   badSignatures = 0;
   offline = false;
+  /// How long the tokens handed out last, in seconds.
+  tokenLifetime = 86_400;
   readonly skus: Sku[] = [
     { id: "12000037001", colour: "Rose", price: "4.31", stock: 120 },
     { id: "12000037002", colour: "Blue", price: "5.50", stock: 0 },
@@ -80,7 +82,7 @@ export class FakeAliexpress {
         code: "0",
         access_token: "e2e-access",
         refresh_token: "e2e-refresh",
-        expires_in: 86_400,
+        expires_in: this.tokenLifetime,
         refresh_expires_in: 172_800,
         account: "shop@example.org",
         request_id: "e2e",

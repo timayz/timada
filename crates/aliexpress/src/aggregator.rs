@@ -49,3 +49,13 @@ pub enum AliexpressProduct {
     /// No longer kept in step; the catalog product stays as it is.
     Unlinked { unlinked_by: String },
 }
+
+/// One renewal of an account's tokens: one stream per token, with the
+/// deterministic id [`token_refresh_id`](crate::token_refresh_id), so a
+/// single node renews it (AliExpress may retire a refresh token once used).
+pub mod refresh {
+    #[evento::aggregate(name = "timada-aliexpress/TokenRefresh")]
+    pub enum TokenRefresh {
+        Claimed { claimed_by: String },
+    }
+}
