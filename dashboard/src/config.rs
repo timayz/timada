@@ -390,7 +390,7 @@ impl InvitationsConfig {
 /// Products a shop imports from AliExpress through its own app. The app's
 /// secret and tokens are kept encrypted under `secrets.key`: without it, no
 /// shop can connect.
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct AliexpressConfig {
     /// Where AliExpress's open platform is reached; its own address when
     /// unset. Tests point it at a stand-in.
@@ -400,6 +400,33 @@ pub struct AliexpressConfig {
     /// AliExpress's own page when unset.
     #[serde(default)]
     pub authorize_url: Option<String>,
+    /// How often, in seconds, a node looks for imported products due to be
+    /// read again.
+    #[serde(default = "default_aliexpress_check_secs")]
+    pub sync_check_secs: u64,
+    /// How long, in seconds, an imported product goes before its price and
+    /// stock are read again.
+    #[serde(default = "default_aliexpress_every_secs")]
+    pub sync_every_secs: u64,
+}
+
+fn default_aliexpress_check_secs() -> u64 {
+    60 * 60
+}
+
+fn default_aliexpress_every_secs() -> u64 {
+    6 * 60 * 60
+}
+
+impl Default for AliexpressConfig {
+    fn default() -> Self {
+        Self {
+            api_url: None,
+            authorize_url: None,
+            sync_check_secs: default_aliexpress_check_secs(),
+            sync_every_secs: default_aliexpress_every_secs(),
+        }
+    }
 }
 
 /// Invoices.

@@ -3,6 +3,15 @@ pub fn aliexpress_product_id(ae_product_id: &str) -> String {
     evento::hash_ids(vec!["aliexpress-product", ae_product_id])
 }
 
+/// The stream that says which node renews the token lapsing at
+/// `expires_at` (unix seconds).
+pub fn token_refresh_id(expires_at: u64) -> String {
+    evento::hash_ids(vec!["aliexpress-token-refresh", &expires_at.to_string()])
+}
+
+/// How long before an access token lapses it is renewed.
+pub const REFRESH_MARGIN_SECS: u64 = 24 * 60 * 60;
+
 /// Who writes what the dashboard does on its own (imports, syncs).
 pub const ALIEXPRESS_ACTOR: &str = "timada-aliexpress";
 

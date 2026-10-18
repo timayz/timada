@@ -53,10 +53,13 @@ shopper_codes_per_key = 10000
 contact_messages_per_ip = 1000
 contact_messages_per_key = 10000
 
-# AliExpress is the stand-in the spec starts (tests/e2e/aliexpress.ts).
+# AliExpress is the stand-in the spec starts (tests/e2e/aliexpress.ts); the
+# imported products are read again every few seconds.
 [aliexpress]
 api_url = "http://127.0.0.1:12114"
 authorize_url = "http://127.0.0.1:12114/oauth/authorize"
+sync_check_secs = 2
+sync_every_secs = 3
 
 # Every spec invites from a handful of accounts, so the limits on invitations
 # are far above what the suite sends.
