@@ -22,7 +22,7 @@ use crate::auth::{now, unix_seconds, user_labels};
 use crate::cluster::PeerState;
 use crate::db::ReadPool;
 use crate::tenants::{TenantStatus, Tenants};
-use crate::ui::{document, format_time, notice};
+use crate::ui::{Shell, document, format_time, notice};
 
 module_param!(pub tenant_id);
 
@@ -102,12 +102,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::page("admin_tenants"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">(&tenant.name)</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(super::tenants))>"Tenants"</a>
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                </nav>
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

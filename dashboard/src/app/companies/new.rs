@@ -18,7 +18,7 @@ use super::{IdentityForm, company_id, identity_fields};
 use crate::app::t::slug::invoicing::invoicing_url;
 use crate::app::tenants::{error_code, tenancy};
 use crate::auth::require_user;
-use crate::ui::{document, notice};
+use crate::ui::{Shell, document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct NewQuery {
@@ -51,11 +51,9 @@ pub async fn new(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: "Register a company",
+            shell: Shell::page("companies"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Register a company"</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(super::index))>"Companies"</a>
-                </nav>
             </header>
             notice(error: query.error.as_deref())
             <form method="post" action=(href!(create)) class="space-y-6">

@@ -12,7 +12,7 @@ use topcoat::{
 
 use crate::app::admin::require_admin;
 use crate::db::ReadPool;
-use crate::ui::{document, format_time, notice};
+use crate::ui::{Shell, document, format_time, notice};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -69,13 +69,9 @@ pub async fn users(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: "Users",
+            shell: Shell::page("admin_users"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Users"</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                    <a class="underline" href=(href!(crate::app::admin::tenants::tenants))>"Tenants"</a>
-                    <a class="underline" href=(href!(crate::app::auth::account::account))>"Account"</a>
-                </nav>
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

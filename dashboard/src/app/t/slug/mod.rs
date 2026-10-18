@@ -37,7 +37,7 @@ use topcoat::{
         error::{forbidden, not_found},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, component, view},
+    view::{View, view},
 };
 
 use crate::app::auth::Flash;
@@ -46,7 +46,7 @@ use crate::auth::{require_user, unix_seconds};
 use crate::authz::Authorizer;
 use crate::cluster::Executor;
 use crate::tenants::{RequestHold, TenantStatus, Tenants};
-use crate::ui::{document, format_time, notice};
+use crate::ui::{Shell, document, format_time, notice};
 
 module_param!(pub slug);
 
@@ -150,7 +150,7 @@ pub fn tenant_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str
         .resolve(cx)
 }
 
-/// The navigation every tenant page shares: the sections the member may see.
+/// The sections of the tenant the member may see; the rail lists them.
 pub struct TenantNav {
     pub products: bool,
     pub categories: bool,
@@ -204,77 +204,6 @@ impl TenantNav {
     }
 }
 
-/// The header links of a tenant page: the tenant's home, each section the
-/// member may see, the dashboard and the account. `current` names the
-/// section being shown (`"home"`, `"products"`, `"categories"`, `"orders"`,
-/// `"carts"`, `"customers"`, `"discounts"`, `"offers"`, `"reviews"`, `"messages"`, `"invoices"`, `"payments"`, `"shipping"`, `"mail"`, `"invoicing"`, `"members"`, `"roles"`, `"api_keys"`, or `""` for a page below a
-/// section), which gets
-/// no link.
-#[component]
-pub async fn tenant_nav(tenant: &TenantState, nav: &TenantNav, current: &str) -> Result<impl View> {
-    let slug = tenant.slug.clone();
-    Ok(view! {
-        <nav class="flex items-center gap-4 text-sm">
-            if current != "home" {
-                <a class="underline" href=(href!(index, Slug(slug.clone())))>(&tenant.name)</a>
-            }
-            if nav.products && current != "products" {
-                <a class="underline" href=(href!(products::index, Slug(slug.clone())))>"Products"</a>
-            }
-            if nav.categories && current != "categories" {
-                <a class="underline" href=(href!(categories::index, Slug(slug.clone())))>"Categories"</a>
-            }
-            if nav.orders && current != "orders" {
-                <a class="underline" href=(href!(orders::index, Slug(slug.clone())))>"Orders"</a>
-            }
-            if nav.carts && current != "carts" {
-                <a class="underline" href=(href!(carts::index, Slug(slug.clone())))>"Carts"</a>
-            }
-            if nav.customers && current != "customers" {
-                <a class="underline" href=(href!(customers::index, Slug(slug.clone())))>"Customers"</a>
-            }
-            if nav.discounts && current != "discounts" {
-                <a class="underline" href=(href!(discounts::index, Slug(slug.clone())))>"Discounts"</a>
-            }
-            if nav.offers && current != "offers" {
-                <a class="underline" href=(href!(offers::index, Slug(slug.clone())))>"Offers"</a>
-            }
-            if nav.reviews && current != "reviews" {
-                <a class="underline" href=(href!(reviews::index, Slug(slug.clone())))>"Reviews"</a>
-            }
-            if nav.messages && current != "messages" {
-                <a class="underline" href=(href!(messages::index, Slug(slug.clone())))>"Messages"</a>
-            }
-            if nav.invoices && current != "invoices" {
-                <a class="underline" href=(href!(invoices::index, Slug(slug.clone())))>"Invoices"</a>
-            }
-            if nav.payments && current != "payments" {
-                <a class="underline" href=(href!(payments::index, Slug(slug.clone())))>"Payments"</a>
-            }
-            if nav.shipping && current != "shipping" {
-                <a class="underline" href=(href!(shipping::index, Slug(slug.clone())))>"Shipping"</a>
-            }
-            if nav.mail && current != "mail" {
-                <a class="underline" href=(href!(mail::index, Slug(slug.clone())))>"Mail"</a>
-            }
-            if nav.invoicing && current != "invoicing" {
-                <a class="underline" href=(href!(invoicing::index, Slug(slug.clone())))>"Invoicing"</a>
-            }
-            if nav.members && current != "members" {
-                <a class="underline" href=(href!(members::index, Slug(slug.clone())))>"Members"</a>
-            }
-            if nav.roles && current != "roles" {
-                <a class="underline" href=(href!(roles::index, Slug(slug.clone())))>"Roles"</a>
-            }
-            if nav.api_keys && current != "api_keys" {
-                <a class="underline" href=(href!(api_keys::index, Slug(slug.clone())))>"API keys"</a>
-            }
-            <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-            <a class="underline" href=(href!(crate::app::auth::account::account))>"Account"</a>
-        </nav>
-    })
-}
-
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
@@ -288,12 +217,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &tenant.name,
+            shell: Shell::tenant(&tenant, &nav, "home"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">
                     (&tenant.name)
                     if tenant.is_suspended() { " " <span class="rounded bg-amber-100 px-2 text-sm font-normal text-amber-800">"suspended"</span> }
                 </h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "home")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

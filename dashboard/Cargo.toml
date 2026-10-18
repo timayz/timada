@@ -6,7 +6,9 @@ authors.workspace = true
 
 [dependencies]
 tokio.workspace = true
-topcoat.workspace = true
+# `ui` makes the component registry available to `topcoat ui`; the vendored
+# components draw their icons from the Lucide set `build.rs` stages.
+topcoat = { workspace = true, features = ["ui", "icon-iconify"] }
 imagesize.workspace = true
 bytes.workspace = true
 sqlx.workspace = true
@@ -57,7 +59,7 @@ reqwest.workspace = true
 libc.workspace = true
 
 [build-dependencies]
-topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind"] }
+topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind", "icon-iconify"] }
 
 [dev-dependencies]
 evento-lock.workspace = true

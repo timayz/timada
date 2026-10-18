@@ -9,7 +9,7 @@ use topcoat::{
 
 use crate::auth::{now, oidc::Providers, require_user, webauthn::authenticator_name};
 use crate::db::ReadPool;
-use crate::ui::{document, format_time, notice, session_row};
+use crate::ui::{Shell, document, format_time, notice, session_row};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct AccountQuery {
@@ -29,14 +29,9 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: "Your account",
+            shell: Shell::page("account"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Your account"</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                    <form method="post" action=(href!(super::logout::logout))>
-                        <button class="underline">"Sign out"</button>
-                    </form>
-                </nav>
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

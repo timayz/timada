@@ -23,14 +23,14 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::auth::cookies::{ApiKeyReveal, api_key_reveal, is_fresh};
 use crate::auth::{now, user_labels};
 use crate::config::Config;
 use crate::db::ReadPool;
 use crate::media::Media;
-use crate::ui::{describe_api_key_scope, document, format_time, notice};
+use crate::ui::{Shell, describe_api_key_scope, document, format_time, notice};
 
 /// The form field of a scope checkbox: `scope:<scope>`.
 const SCOPE_FIELD_PREFIX: &str = "scope:";
@@ -96,9 +96,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, "api_keys"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"API keys"</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "api_keys")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 

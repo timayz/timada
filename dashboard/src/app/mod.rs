@@ -10,6 +10,7 @@ pub mod store;
 pub mod stripe;
 pub mod t;
 pub mod tenants;
+pub mod ui;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +21,7 @@ use topcoat::{
     asset::{AssetBundle, RouterBuilderAssetExt},
     context::{Cx, app_context},
     cookie::{Key, RouterBuilderCookieExt},
+    icon::icon,
     mail::RouterBuilderMailExt,
     router::{
         BodyLimit, Router, RouterBuilderDirectoryExt, RouterBuilderDiscoverExt, TrustedProxies,
@@ -27,7 +29,7 @@ use topcoat::{
     },
     runtime::RouterBuilderRuntimeExt,
     session::{RouterBuilderSessionExt, SessionConfig},
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 use webauthn_rs::prelude::Webauthn;
 
@@ -35,6 +37,10 @@ use crate::auth::mail::Mailer;
 use crate::auth::oidc::Providers;
 use crate::authz::Authorizer;
 use crate::cluster::Executor;
+use crate::components::avatar::{AvatarSize, avatar, avatar_fallback};
+use crate::components::badge::{BadgeVariant, badge};
+use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
+use crate::components::card::CARD;
 use crate::config::Config;
 use crate::db::{ReadPool, WritePool};
 use crate::key_vault::{self, KeyVault};
@@ -42,7 +48,8 @@ use crate::media::{MEDIA_ROUTE, Media, MediaCache, PEER_ROUTE};
 use crate::rate_limit::RateLimiter;
 use crate::store_api::StoreConnections;
 use crate::tenants::Tenants;
-use crate::ui::{document, notice};
+use crate::ui::chrome::initials;
+use crate::ui::{Shell, Tone, document, empty_state, icons, notice, status_badge};
 
 /// Everything the pages reach through the app context.
 pub struct Services {
@@ -158,48 +165,66 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
     let user = crate::auth::require_user(cx).await?;
     let query = query_params::<HomeQuery>(cx)?;
     let mine = tenants_of_user(app_context::<ReadPool>(cx), &user.id).await?;
+    let tenants_line = match mine.len() {
+        0 => "You do not belong to any tenant yet.".to_owned(),
+        1 => "You belong to one tenant.".to_owned(),
+        n => format!("You belong to {n} tenants."),
+    };
     Ok(view! {
         document(
             title: "Timada dashboard",
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Timada dashboard"</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <span>"Signed in as " <strong>(&user.label)</strong></span>
-                    if user.is_admin {
-                        <a class="underline" href=(href!(admin::tenants::tenants))>"Tenants"</a>
-                        <a class="underline" href=(href!(admin::users::users))>"Users"</a>
-                        <a class="underline" href=(href!(admin::companies::index))>"All companies"</a>
-                    }
-                    <a class="underline" href=(href!(companies::index))>"Companies"</a>
-                    <a class="underline" href=(href!(auth::account::account))>"Account"</a>
-                    <form method="post" action=(href!(auth::logout::logout))>
-                        <button class="underline">"Sign out"</button>
-                    </form>
-                </nav>
-            </header>
+            shell: Shell::page("dashboard"),
             notice(message: query.message.as_deref())
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <div class="mb-2 flex items-center justify-between">
-                    <h2 class="text-lg font-medium">"Your tenants"</h2>
-                    <a class="rounded bg-neutral-900 px-3 py-1 text-sm font-medium text-white hover:bg-neutral-700" href=(href!(tenants::new::new))>"Create a tenant"</a>
+            <section class=(class!(CARD, "mb-6 flex-row flex-wrap items-center gap-4 border-primary/20 bg-primary/5 px-6 py-5"))>
+                avatar(
+                    size: AvatarSize::Lg,
+                    avatar_fallback(attrs: attributes! { class="bg-primary/10 text-base text-primary" }, (initials(&user.label)))
+                )
+                <div class="min-w-0 flex-1">
+                    <h1 class="text-2xl font-bold tracking-tight">"Welcome back, " (&user.label) "!"</h1>
+                    <p class="mt-0.5 text-sm text-muted-foreground">(tenants_line)</p>
                 </div>
-                if mine.is_empty() {
-                    <p class="text-sm text-neutral-500">"You do not belong to any tenant yet. Create one, or ask an owner to invite you."</p>
-                } else {
-                    <ul class="divide-y divide-neutral-100 text-sm">
-                        for row in &mine {
-                            <li class="flex items-center justify-between py-2">
-                                <a class="underline" href=(href!(t::slug::index, t::slug::Slug(row.slug.clone())))>(&row.name)</a>
-                                <span class="text-neutral-500">
-                                    (&row.role)
-                                    if row.suspended { " · suspended" }
-                                </span>
-                            </li>
-                        }
-                    </ul>
-                }
+                <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(href!(tenants::new::new))>
+                    icon(data: icons::PLUS)
+                    "Create a tenant"
+                </a>
             </section>
+
+            <h2 class="mb-3 text-base font-semibold">"Your tenants"</h2>
+            if mine.is_empty() {
+                <section class=(CARD)>
+                    empty_state(
+                        title: "No tenant yet",
+                        hint: Some("Create one, or ask an owner to invite you."),
+                        symbol: Some(icons::TENANTS),
+                    )
+                </section>
+            } else {
+                <ul class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    for row in &mine {
+                        <li>
+                            <a
+                                class=(class!(CARD, "h-full gap-3 px-5 py-5 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg motion-reduce:transition-none"))
+                                href=(href!(t::slug::index, t::slug::Slug(row.slug.clone())))
+                            >
+                                <span class="flex items-center gap-3">
+                                    <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary [&>svg]:size-4">
+                                        icon(data: icons::TENANTS)
+                                    </span>
+                                    <span class="min-w-0 truncate font-semibold">(&row.name)</span>
+                                </span>
+                                <span class="flex flex-wrap items-center gap-2">
+                                    badge(variant: BadgeVariant::Secondary, (&row.role))
+                                    if row.suspended {
+                                        status_badge(tone: Tone::Warning, "suspended")
+                                    }
+                                </span>
+                            </a>
+                        </li>
+                    }
+                </ul>
+            }
         )
     })
 }

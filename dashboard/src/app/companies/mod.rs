@@ -17,7 +17,7 @@ use topcoat::{
 use crate::app::auth::Flash;
 use crate::auth::require_user;
 use crate::db::ReadPool;
-use crate::ui::{document, notice};
+use crate::ui::{Shell, document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct CompaniesQuery {
@@ -37,11 +37,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: "Companies",
+            shell: Shell::page("companies"),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Companies"</h1>
-                <nav class="flex items-center gap-4 text-sm">
-                    <a class="underline" href=(href!(crate::app::home))>"Dashboard"</a>
-                </nav>
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
             <section class="rounded border border-neutral-200 bg-white p-4">

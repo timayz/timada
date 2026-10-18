@@ -20,7 +20,7 @@ use crate::auth::{
     cookies::{InviteFlow, invite_flow},
     current_user, now,
 };
-use crate::ui::{document, notice};
+use crate::ui::{Shell, document, notice};
 
 module_param!(pub token);
 
@@ -118,6 +118,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: "Invitation",
+            shell: Shell::page(""),
             <h1 class="mb-6 text-2xl font-semibold">"Invitation"</h1>
             notice(error: query.error.as_deref())
 

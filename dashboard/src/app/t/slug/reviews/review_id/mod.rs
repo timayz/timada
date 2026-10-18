@@ -25,9 +25,9 @@ use topcoat::{
 use super::{reviews, reviews_url, status_label};
 use crate::app::auth::Flash;
 use crate::app::t::slug::orders::order_id::{self, OrderId};
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant, tenant_nav};
+use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::media::Media;
-use crate::ui::{document, format_time, notice};
+use crate::ui::{Shell, document, format_time, notice};
 
 module_param!(pub review_id);
 
@@ -163,9 +163,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         document(
             title: &title,
+            shell: Shell::tenant(&tenant, &nav, ""),
             <header class="mb-8 flex items-center justify-between">
                 <h1 class="text-2xl font-semibold">"Review of " (&product_name)</h1>
-                tenant_nav(tenant: &tenant, nav: &nav, current: "")
             </header>
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
