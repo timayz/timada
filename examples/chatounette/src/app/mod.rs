@@ -1,8 +1,8 @@
 //! The pages: the home at `/`, the whole catalogue at `/boutique`, a category
 //! at `/c/{slug}`, a product at `/p/{slug}`, the cart at `/cart`, the checkout
 //! at `/checkout`, a placed order at `/orders/{order_id}`, the shopper's
-//! account at `/account`, the shop's own pages at `/pages/{slug}`, and the
-//! library's `/store/status`. The look is chatounette.com's: one stylesheet
+//! account at `/account`, the support page at `/support-client`, the shop's
+//! own pages at `/pages/{slug}`, and the library's `/store/status`. The look is chatounette.com's: one stylesheet
 //! (`theme.css`) inlined in every page, no asset bundle.
 
 pub mod account;
@@ -17,6 +17,7 @@ pub mod p;
 pub mod pages;
 pub mod reviews;
 pub mod search;
+pub mod support_client;
 
 use timada_storefront::{
     CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, menu,
@@ -165,7 +166,7 @@ pub async fn document(
                             <div id="search-drop" class="search-drop" data-search-drop="" hidden=""></div>
                         </form>
                         <nav class="quick" aria-label="Compte et panier">
-                            <a class="quick-support" href=(href!(pages::slug::index, pages::slug::Slug("support-client")))>"Support client"</a>
+                            <a class="quick-support" href=(href!(support_client::index))>"Support client"</a>
                             if accounts {
                                 <a class="account-link" href=(href!(account::index)) data-account-link="">
                                     if signed_in { "Mon compte" } else { "Se connecter" }
@@ -222,14 +223,14 @@ pub async fn site_footer() -> Result<impl View> {
                     <ul>
                         <li><a href=(href!(account::index))>"Suivre ma commande"</a></li>
                         <li><a href=(href!(boutique::index))>"Nos produits"</a></li>
-                        <li><a href=(page("support-client"))>"Support client"</a></li>
+                        <li><a href=(href!(support_client::index))>"Support client"</a></li>
                         <li><a href=(page("qui-sommes-nous"))>"Qui sommes-nous ?"</a></li>
                     </ul>
                 </div>
                 <div>
                     <h2>"Contact"</h2>
                     <p>"Service client du lundi au samedi, de 9h à 18h."</p>
-                    <p><a href="mailto:contact@chatounette.localhost">"contact@chatounette.localhost"</a></p>
+                    <p><a href=(format!("mailto:{}", support_client::CONTACT_EMAIL))>(support_client::CONTACT_EMAIL)</a></p>
                 </div>
             </div>
             <p class="legal">"© 2019 – 2026 Chatounette™ · Boutique de démonstration sur timada"</p>
