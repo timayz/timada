@@ -49,6 +49,12 @@ pub fn new_message_id() -> String {
     ulid::Ulid::generate().to_string()
 }
 
+/// The id of the notice of one message's arrival
+/// ([`MessageNotification`](crate::aggregator::MessageNotification)).
+pub fn message_notification_id(message_id: &str) -> String {
+    evento::hash_ids(vec!["message-notification", message_id])
+}
+
 /// The canonical form of an address: trimmed, lower-cased, one `@` with
 /// something on both sides, nothing that is not printable. (The orders,
 /// identity and tenancy contexts have the same rule; the crates do not
