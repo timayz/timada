@@ -1,8 +1,11 @@
-//! The file a catalogue is seeded from: what the catalog needs, nothing of
-//! where it came from (not WooCommerce's shape, not the dashboard's).
+//! The files a catalogue is seeded from: what the catalog needs, nothing of
+//! where it came from (not WooCommerce's shape, not the dashboard's). A
+//! snapshot is a directory holding `catalog.json.gz` and, under `pictures/`,
+//! the pictures the catalogue names; a picture the directory lacks is
+//! fetched from its address when the catalogue is loaded.
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -21,7 +24,16 @@ pub struct Snapshot {
     pub categories: Vec<CategorySeed>,
     #[serde(default)]
     pub products: Vec<ProductSeed>,
+    /// The directory the pictures' [`ImageSeed::file`]s are relative to:
+    /// where the snapshot was read from. Not part of the file.
+    #[serde(skip)]
+    pub dir: PathBuf,
 }
+
+/// The catalogue file inside a snapshot directory.
+pub const CATALOG_FILE: &str = "catalog.json.gz";
+/// The pictures' directory inside a snapshot directory.
+pub const PICTURES_DIR: &str = "pictures";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CategorySeed {
@@ -92,9 +104,14 @@ pub struct ProductSeed {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageSeed {
+    /// Where the shop serves it.
     pub url: String,
     #[serde(default)]
     pub alt: String,
+    /// Its bytes in the snapshot, as a path relative to the snapshot's
+    /// directory (`pictures/<hash>.jpg`); fetched from `url` when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,11 +146,18 @@ pub struct AttributeSeed {
 }
 
 impl Snapshot {
-    /// Reads a snapshot, gunzipping it when the file name ends in `.gz`.
+    /// Reads a snapshot: a directory holding [`CATALOG_FILE`], or a
+    /// catalogue file itself (gunzipped when its name ends in `.gz`), whose
+    /// pictures then resolve from its directory.
     pub fn read(path: &Path) -> anyhow::Result<Self> {
+        let path = if path.is_dir() {
+            path.join(CATALOG_FILE)
+        } else {
+            path.to_path_buf()
+        };
         let bytes =
-            std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-        let json = if is_gz(path) {
+            std::fs::read(&path).with_context(|| format!("cannot read {}", path.display()))?;
+        let json = if is_gz(&path) {
             let mut out = Vec::new();
             flate2::read::GzDecoder::new(bytes.as_slice())
                 .read_to_end(&mut out)
@@ -142,11 +166,14 @@ impl Snapshot {
         } else {
             bytes
         };
-        serde_json::from_slice(&json)
-            .with_context(|| format!("{} is not a snapshot", path.display()))
+        let mut snapshot: Self = serde_json::from_slice(&json)
+            .with_context(|| format!("{} is not a snapshot", path.display()))?;
+        snapshot.dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        Ok(snapshot)
     }
 
-    /// Writes a snapshot, gzipped when the file name ends in `.gz`.
+    /// Writes the catalogue file, gzipped when the file name ends in `.gz`.
+    /// The pictures are files of their own, see [`Snapshot::fetch_pictures`].
     pub fn write(&self, path: &Path) -> anyhow::Result<()> {
         let json = serde_json::to_vec(self)?;
         if let Some(dir) = path.parent() {
@@ -178,6 +205,7 @@ mod tests {
         let snapshot = Snapshot {
             source: "test".into(),
             fetched_at: 1,
+            dir: PathBuf::new(),
             categories: vec![CategorySeed {
                 slug: "toys".into(),
                 name: "Toys".into(),
@@ -194,11 +222,17 @@ mod tests {
         };
         let dir = std::env::temp_dir().join(format!("timada-snapshot-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        let expected = Snapshot {
+            dir: dir.clone(),
+            ..snapshot.clone()
+        };
         for name in ["catalog.json", "catalog.json.gz"] {
             let path = dir.join(name);
             snapshot.write(&path).unwrap();
-            assert_eq!(Snapshot::read(&path).unwrap(), snapshot, "{name}");
+            assert_eq!(Snapshot::read(&path).unwrap(), expected, "{name}");
         }
+        // The directory itself names the snapshot.
+        assert_eq!(Snapshot::read(&dir).unwrap(), expected, "directory");
         assert!(
             std::fs::read(dir.join("catalog.json.gz"))
                 .unwrap()
@@ -206,6 +240,15 @@ mod tests {
             "gzip magic"
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_picture_without_a_file_is_fetched_from_its_address() {
+        let seed: ImageSeed =
+            serde_json::from_str(r#"{"url":"https://x/a.jpg","alt":"A"}"#).unwrap();
+        assert_eq!(seed.file, None);
+        let json = serde_json::to_string(&seed).unwrap();
+        assert!(!json.contains("file"), "{json}");
     }
 
     #[test]

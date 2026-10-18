@@ -39,10 +39,11 @@ async fn catalog() -> Command<evento::Sqlite> {
 }
 
 /// Hands out a picture for every URL but the one that says "missing",
-/// and counts what it is asked to drop.
+/// keeps whatever bytes it is given, and counts what it is asked to drop.
 #[derive(Default)]
 struct FakeImages {
     fetched: AtomicUsize,
+    stored: AtomicUsize,
     discarded: AtomicUsize,
 }
 
@@ -66,6 +67,19 @@ impl Images for FakeImages {
         })
     }
 
+    fn store<'a>(&'a self, bytes: Vec<u8>) -> BoxFuture<'a, anyhow::Result<Option<StoredImage>>> {
+        Box::pin(async move {
+            self.stored.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(StoredImage {
+                image_id: format!("img-{}", String::from_utf8_lossy(&bytes)),
+                ext: "png".into(),
+                size: bytes.len() as u64,
+                width: Some(10),
+                height: Some(10),
+            }))
+        })
+    }
+
     fn discard<'a>(&'a self, _image: &'a StoredImage) -> BoxFuture<'a, ()> {
         self.discarded.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {})
@@ -76,6 +90,7 @@ fn snapshot() -> Snapshot {
     Snapshot {
         source: "test".into(),
         fetched_at: 1,
+        dir: Default::default(),
         categories: vec![
             // A child listed before its parent: the import orders them.
             CategorySeed {
@@ -120,18 +135,22 @@ fn snapshot() -> Snapshot {
                     ImageSeed {
                         url: "https://pics.example/a.jpg".into(),
                         alt: "Le tapis".into(),
+                        file: None,
                     },
                     ImageSeed {
                         url: "https://pics.example/missing.jpg".into(),
                         alt: String::new(),
+                        file: None,
                     },
                     ImageSeed {
                         url: "https://pics.example/b.jpg".into(),
                         alt: "De côté".into(),
+                        file: None,
                     },
                     ImageSeed {
                         url: "https://pics.example/broken.jpg".into(),
                         alt: String::new(),
+                        file: None,
                     },
                 ],
                 options: vec![
@@ -250,6 +269,11 @@ async fn loads_the_tree_and_the_products_then_skips_them_next_time() {
         report.warnings
     );
     assert_eq!(images.fetched.load(Ordering::SeqCst), 4);
+    assert_eq!(
+        images.stored.load(Ordering::SeqCst),
+        0,
+        "no files in this snapshot"
+    );
     assert_eq!(images.discarded.load(Ordering::SeqCst), 0);
 
     // The tree.
@@ -410,4 +434,62 @@ async fn a_limit_takes_the_first_products_only_and_no_images_means_none() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn pictures_in_the_snapshot_are_stored_from_their_files_not_fetched() {
+    let dir = std::env::temp_dir().join(format!("timada-import-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("pictures")).unwrap();
+    std::fs::write(dir.join("pictures/front.png"), b"front").unwrap();
+    let catalog = catalog().await;
+    let images = Arc::new(FakeImages::default());
+    let snapshot = Snapshot {
+        source: "test".into(),
+        fetched_at: 1,
+        dir: dir.clone(),
+        categories: vec![],
+        products: vec![ProductSeed {
+            slug: "bol".into(),
+            name: "Bol".into(),
+            currency: "EUR".into(),
+            amount_cents: Some(1290),
+            images: vec![
+                ImageSeed {
+                    url: "https://pics.example/front.jpg".into(),
+                    alt: "Devant".into(),
+                    file: Some("pictures/front.png".into()),
+                },
+                // Named but gone: fetched from the shop instead.
+                ImageSeed {
+                    url: "https://pics.example/side.jpg".into(),
+                    alt: "Côté".into(),
+                    file: Some("pictures/side.png".into()),
+                },
+                ImageSeed {
+                    url: "https://pics.example/back.jpg".into(),
+                    alt: String::new(),
+                    file: None,
+                },
+            ],
+            ..Default::default()
+        }],
+    };
+    let report = import(
+        &catalog,
+        ALICE,
+        &snapshot,
+        images.clone(),
+        &ImportOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.images, 3);
+    assert_eq!(images.stored.load(Ordering::SeqCst), 1);
+    assert_eq!(images.fetched.load(Ordering::SeqCst), 2);
+    let product = catalog.load_product_by_slug("bol").await.unwrap().unwrap();
+    let ids: Vec<&str> = product.images.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids, ["img-front", "img-side.jpg", "img-back.jpg"]);
+    assert_eq!(product.images[0].ext, "png");
+    assert_eq!(product.images[0].size, 5);
+    std::fs::remove_dir_all(dir).unwrap();
 }
