@@ -52,6 +52,28 @@ export async function latestCode(request: APIRequestContext, email: string, prev
   return code;
 }
 
+/// The newest message to `email` whose subject starts with `subject`, once
+/// more than `previous` such messages have arrived.
+export async function mailTo(
+  request: APIRequestContext,
+  email: string,
+  subject: string,
+  previous = 0,
+): Promise<MailDevMessage> {
+  let found: MailDevMessage | undefined;
+  await expect(async () => {
+    const messages = (await messagesTo(request, email)).filter((m) => m.subject.startsWith(subject));
+    expect(messages.length, `no "${subject}" mail to ${email} yet`).toBeGreaterThan(previous);
+    found = messages[messages.length - 1];
+  }).toPass({ timeout: 15_000 });
+  return found!;
+}
+
+/// How many messages to `email` whose subject starts with `subject` arrived.
+export async function mailCountOf(request: APIRequestContext, email: string, subject: string): Promise<number> {
+  return (await messagesTo(request, email)).filter((m) => m.subject.startsWith(subject)).length;
+}
+
 /// Submits `code` on the verification page.
 export async function enterCode(page: Page, code: string) {
   await page.getByLabel("Code").fill(code);

@@ -1,6 +1,7 @@
 //! The e-mails this application sends: a code that proves an address, an
-//! invitation to join a tenant, and, speaking for a shop, its shoppers'
-//! sign-in codes, order confirmations and requests for a review.
+//! invitation to join a tenant, a notice to a shop's members that a contact
+//! message arrived, and, speaking for a shop, its shoppers' sign-in codes,
+//! order confirmations and requests for a review.
 
 use std::sync::Arc;
 
@@ -79,6 +80,33 @@ pub async fn send_invitation(
             <p><a href=(link)>"Accept the invitation"</a></p>
             <p>"Or open this address: " (link)</p>
             <p>"The link is valid for 7 days. If you do not know this tenant, you can ignore this message."</p>
+        },
+    }?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
+/// Tells a member of `tenant_name` that `first_name` wrote through the
+/// contact form, with a link to the inbox. Nothing else the visitor wrote
+/// travels: the shop may erase the message later, mailboxes keep theirs.
+pub async fn send_message_notification(
+    cx: &Cx,
+    to: &str,
+    tenant_name: &str,
+    first_name: &str,
+    link: &str,
+) -> Result<()> {
+    let from = app_context::<MailSender>(cx).0.clone();
+    let subject = format!("A message is waiting for {tenant_name}");
+    let mail = mail! {
+        from: from,
+        to: Mailbox::new(to)?,
+        subject: &subject,
+        html: {
+            cx =>
+            <p><strong>(first_name)</strong> " wrote to " <strong>(tenant_name)</strong> " through its contact form."</p>
+            <p><a href=(link)>"Read the messages"</a></p>
+            <p>"Or open this address: " (link)</p>
         },
     }?;
     send(cx, mail).await?;

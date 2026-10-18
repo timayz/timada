@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { registerWithEmail, uniqueEmail } from "./email";
+import { mailCountOf, mailTo, registerWithEmail, uniqueEmail } from "./email";
 import {
   ExampleApp,
   PNG,
@@ -72,7 +72,8 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   request,
   browser,
 }) => {
-  await registerWithEmail(page, uniqueEmail("chatounette"));
+  const owner = uniqueEmail("chatounette");
+  await registerWithEmail(page, owner);
   const { name, slug } = uniqueTenant("Chat Clone");
   await createTenant(page, name);
 
@@ -436,6 +437,16 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   await expect(visitor.getByRole("alert")).toHaveCount(0);
   await visitorContext.close();
 
+  // The owner is told, by name and with a link only: nothing the visitor
+  // wrote travels by mail.
+  const notice = await mailTo(request, owner, "A message is waiting for");
+  expect(notice.subject).toBe(`A message is waiting for ${name}`);
+  const noticeText = notice.text ?? notice.html ?? "";
+  expect(noticeText).toContain("Ada");
+  expect(noticeText).toContain(`/t/${slug}/messages`);
+  expect(noticeText).not.toContain("ada@example.com");
+  expect(noticeText).not.toContain("arrive quand");
+
   // The shop reads it in the back office and marks it handled.
   await expect(async () => {
     await page.goto(`/t/${slug}/messages`);
@@ -455,6 +466,8 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   await expect(page.getByRole("status")).toContainText(
     "Message marked handled",
   );
+  // One notice per message, however it is handled afterwards.
+  expect(await mailCountOf(request, owner, "A message is waiting for")).toBe(1);
   await expect(async () => {
     await page.goto(`/t/${slug}/messages?status=handled`);
     await expect(page.locator("[data-message]")).toHaveAttribute(

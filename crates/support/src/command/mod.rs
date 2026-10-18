@@ -9,6 +9,7 @@
 
 mod forget;
 mod message;
+mod notification;
 
 use std::ops::Deref;
 
@@ -17,8 +18,8 @@ pub use message::*;
 use evento::{Executor, Projection, metadata::Event};
 use timada_core::keys::{self, Key, Keys};
 
-use crate::aggregator::{Forgotten, Handled, Received, Reopened};
-use crate::value_object::MessageStatus;
+use crate::aggregator::{Forgotten, Handled, Notified, Received, Reopened};
+use crate::value_object::{MessageStatus, message_notification_id};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor>(pub E);
@@ -185,7 +186,48 @@ async fn on_forgotten(event: Event<Forgotten>, message: &mut MessageState) -> an
     Ok(())
 }
 
+/// Whether, and when, the merchant was told of a message.
+#[evento::projection(id = id, name = "timada-support/MessageNotificationState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct MessageNotificationState {
+    pub id: String,
+    pub message_id: String,
+    pub mailed_by: String,
+    /// Unix seconds.
+    pub mailed_at: u64,
+}
+
+pub fn message_notification_projection<E: Executor>() -> Projection<E, MessageNotificationState> {
+    Projection::new::<crate::aggregator::MessageNotification>()
+        .handler(on_notified())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_notified(
+    event: Event<Notified>,
+    state: &mut MessageNotificationState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.message_id = event.data.message_id.clone();
+    state.mailed_by = event.data.mailed_by.clone();
+    state.mailed_at = event.timestamp;
+    Ok(())
+}
+
 impl<E: Executor> Command<E> {
+    /// The notice of a message's arrival, once a node claimed it.
+    pub async fn load_message_notification(
+        &self,
+        message_id: &str,
+    ) -> anyhow::Result<Option<MessageNotificationState>> {
+        message_notification_projection()
+            .load(message_notification_id(message_id))
+            .execute(&self.0)
+            .await
+    }
+
     /// The sealed write model of a message that is not erased.
     pub async fn load_message(&self, message_id: &str) -> anyhow::Result<Option<MessageState>> {
         Ok(self

@@ -381,9 +381,18 @@ A shop's contact form writes a `Message` stream in the tenant's store
 and in which language the browser browsed (the primary `Accept-Language` subtag), so
 the merchant answers in it. The id is a fresh ULID. The merchant reads the messages
 on `/t/{slug}/messages` (`support:read`, from the `support_messages` read model),
-answers from their own mailbox (the row links `mailto:` the address; the platform
-sends no mail here) and marks the message handled (`support:manage`); a message
-marked too soon is reopened.
+answers from their own mailbox (the row links `mailto:` the address) and marks the
+message handled (`support:manage`); a message marked too soon is reopened.
+
+The members who may read the messages (the owners, and the roles granting
+`support:read`) are told of each arrival by a platform mail with the visitor's first
+name and a link to the inbox, nothing else the visitor wrote. A per-tenant
+subscription (`timada-dashboard/message-notifications`) follows `Received`, claims the
+notice first (`MessageNotification`, one stream per message, as the order
+confirmations do) so a cluster mails once, then mails every recipient that identity
+holds an address for (a member who signed up with a provider or a passkey alone has
+none). A message older than an hour at the time it is seen is history being replayed
+and gets no notice.
 
 The name, address and text are personal data, and events cannot be erased: like a
 shopper account, each message draws a random key and `Received` holds the four fields

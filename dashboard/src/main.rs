@@ -11,6 +11,7 @@ mod key_vault;
 mod limits;
 mod media;
 mod message_keys;
+mod message_notifications;
 mod payments;
 mod peers;
 mod rate_limit;
