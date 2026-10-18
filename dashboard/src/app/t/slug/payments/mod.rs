@@ -13,15 +13,23 @@ use timada_tenancy::PERMISSION_PAYMENTS_MANAGE;
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
+use crate::components::alert::{AlertVariant, alert, alert_description};
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
 use crate::config::Config;
 use crate::payments::Payments;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    Shell, Tone, document, fact, facts, format_time, icons, notice, page_header, section_card,
+    status_badge,
+};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct PaymentsQuery {
@@ -79,61 +87,72 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "payments"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Payments"</h1>
-            </header>
+            page_header(title: "Payments", subtitle: Some("How shoppers pay this tenant: its own Stripe account."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             if !enabled {
-                <p role="alert" class="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                    "Payments are not enabled on this platform: the operator has to set them up first."
-                </p>
+                alert(
+                    variant: AlertVariant::Warning,
+                    attrs: attributes! { role="alert" class="mb-6" },
+                    icon(data: icons::WARNING)
+                    alert_description("Payments are not enabled on this platform: the operator has to set them up first.")
+                )
             }
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Stripe"</h2>
+            section_card(
+                title: Some("Stripe"),
                 if let Some(settings) = &settings {
-                    <dl class="mb-4 grid grid-cols-[12rem_1fr] gap-y-1 text-sm" data-payments="stripe">
-                        <dt class="text-neutral-500">"Publishable key"</dt>
-                        <dd><code data-publishable-key="">(&settings.publishable_key)</code></dd>
-                        <dt class="text-neutral-500">"Secret key"</dt><dd>"Saved, never shown again"</dd>
-                        <dt class="text-neutral-500">"Webhook signing secret"</dt><dd>"Saved, never shown again"</dd>
-                        <dt class="text-neutral-500">"Since"</dt>
-                        <dd><time datetime=(settings.configured_at)>(format_time(settings.configured_at))</time></dd>
-                    </dl>
+                    <div class="mb-4" data-payments="stripe">
+                        facts(
+                            fact(term: "Status", status_badge(tone: Tone::Success, "Connected"))
+                            fact(term: "Publishable key", <code data-publishable-key="">(&settings.publishable_key)</code>)
+                            fact(term: "Secret key", "Saved, never shown again")
+                            fact(term: "Webhook signing secret", "Saved, never shown again")
+                            fact(term: "Since", <time datetime=(settings.configured_at)>(format_time(settings.configured_at))</time>)
+                        )
+                    </div>
                     <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
-                        <button class="rounded border border-red-300 px-3 py-1 text-sm text-red-800 hover:bg-red-50">"Stop taking payments"</button>
+                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop taking payments")
                     </form>
                 } else {
-                    <p class="mb-2 text-sm" data-payments="none">"Not set up: shoppers cannot pay yet."</p>
+                    <p class="text-sm text-muted-foreground" data-payments="none">"Not set up: shoppers cannot pay yet."</p>
                 }
-            </section>
+            )
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">
-                    if settings.is_some() { "Replace the keys" } else { "Connect a Stripe account" }
-                </h2>
-                <ol class="mb-4 list-decimal space-y-1 pl-5 text-sm text-neutral-600">
+            section_card(
+                title: Some(if settings.is_some() { "Replace the keys" } else { "Connect a Stripe account" }),
+                <ol class="mb-4 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
                     <li>"In the Stripe dashboard, under Developers › API keys, copy the publishable and the secret key."</li>
                     <li>
                         "Under Developers › Webhooks, add an endpoint at "
-                        <code data-webhook-url="">(&webhook)</code>
-                        " for the event "<code>"payment_intent.succeeded"</code>", and copy its signing secret."
+                        <code class="text-foreground" data-webhook-url="">(&webhook)</code>
+                        " for the event "<code class="text-foreground">"payment_intent.succeeded"</code>", and copy its signing secret."
                     </li>
                 </ol>
-                <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="space-y-3">
-                    <label class="block text-sm" for="payments-publishable">"Publishable key"</label>
-                    <input id="payments-publishable" name="publishable_key" required="" placeholder="pk_live_…"
-                        class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                    <label class="block text-sm" for="payments-secret">"Secret key"</label>
-                    <input id="payments-secret" name="secret_key" type="password" required="" placeholder="sk_live_…" autocomplete="off"
-                        class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                    <label class="block text-sm" for="payments-webhook">"Webhook signing secret"</label>
-                    <input id="payments-webhook" name="webhook_secret" type="password" required="" placeholder="whsec_…" autocomplete="off"
-                        class="w-full rounded border border-neutral-300 px-3 py-2 font-mono">
-                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Save"</button>
+                <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="payments-publishable" }, "Publishable key")
+                        input(attrs: attributes! {
+                            id="payments-publishable" name="publishable_key" required="" placeholder="pk_live_…" class="font-mono"
+                        })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="payments-secret" }, "Secret key")
+                        input(attrs: attributes! {
+                            id="payments-secret" name="secret_key" type="password" required="" placeholder="sk_live_…" autocomplete="off" class="font-mono"
+                        })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="payments-webhook" }, "Webhook signing secret")
+                        input(attrs: attributes! {
+                            id="payments-webhook" name="webhook_secret" type="password" required="" placeholder="whsec_…" autocomplete="off" class="font-mono"
+                        })
+                    )
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Save")
+                    </div>
                 </form>
-            </section>
+            )
         )
     })
 }

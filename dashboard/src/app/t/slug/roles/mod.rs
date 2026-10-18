@@ -12,12 +12,16 @@ use topcoat::{
     Result,
     context::Cx,
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
-use crate::ui::{Shell, describe_permission, document, notice};
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::checkbox::checkbox;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::ui::{Shell, describe_permission, document, notice, page_header, section_card};
 
 /// The form field of a permission checkbox: `perm:<permission>`.
 const PERMISSION_FIELD_PREFIX: &str = "perm:";
@@ -58,70 +62,89 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "roles"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Roles"</h1>
-            </header>
+            page_header(title: "Roles", subtitle: Some("What each kind of member may do."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-role=(ROLE_OWNER)>
-                <h2 class="text-lg font-medium">"Owner" <code class="ml-2 text-sm font-normal text-neutral-500">(ROLE_OWNER)</code></h2>
-                <p class="mt-1 text-sm text-neutral-500">
+            section_card(
+                attrs: attributes! { data-role=(ROLE_OWNER) },
+                <h2 class="text-base font-semibold">"Owner" <code class="ml-2 text-sm font-normal text-muted-foreground">(ROLE_OWNER)</code></h2>
+                <p class="mt-1 text-sm text-muted-foreground">
                     "Built in: holds every permission, and alone hands out or takes back owner seats. "
                     (tenant.owners()) " member(s)."
                 </p>
-            </section>
+            )
 
             for (name, def) in &tenant.roles {
-                <section class="mb-8 rounded border border-neutral-200 bg-white p-4" data-role=(name)>
-                    <form method="post" action=(href!(update::update, Slug(slug.clone()))) class="space-y-3">
+                section_card(
+                    attrs: attributes! { data-role=(name) },
+                    <form method="post" action=(href!(update::update, Slug(slug.clone()))) class="flex flex-col gap-4">
                         <input type="hidden" name="role" value=(name)>
-                        <div class="flex items-center justify-between">
-                            <h2 class="text-lg font-medium">(&def.label) <code class="ml-2 text-sm font-normal text-neutral-500">(name)</code></h2>
-                            <span class="text-sm text-neutral-500">(tenant.members_with_role(name)) " member(s)"</span>
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <h2 class="text-base font-semibold">(&def.label) <code class="ml-2 text-sm font-normal text-muted-foreground">(name)</code></h2>
+                            <span class="text-sm text-muted-foreground">(tenant.members_with_role(name)) " member(s)"</span>
                         </div>
-                        <label class="block text-sm" for=(format!("label-{name}"))>"Label"</label>
-                        <input id=(format!("label-{name}")) name="label" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" maxlength=(MAX_ROLE_LABEL_LEN) required="" value=(&def.label)>
-                        <fieldset class="space-y-1 text-sm">
-                            <legend class="mb-1 text-sm">"Permissions"</legend>
+                        field(
+                            attrs: attributes! { class="max-w-xl" },
+                            field_label(attrs: attributes! { for=(format!("label-{name}")) }, "Label")
+                            input(attrs: attributes! {
+                                id=(format!("label-{name}")) name="label" type="text"
+                                maxlength=(MAX_ROLE_LABEL_LEN) required="" value=(&def.label)
+                            })
+                        )
+                        <fieldset class="flex flex-col gap-1.5 text-sm">
+                            <legend class="mb-2 text-sm font-medium">"Permissions"</legend>
                             for permission in PERMISSIONS {
                                 <label class="flex items-center gap-2">
-                                    <input type="checkbox" name=(format!("{PERMISSION_FIELD_PREFIX}{permission}")) value="on" checked=(def.permissions.contains(*permission))>
-                                    <span>(describe_permission(permission)) " " <code class="text-neutral-500">(permission)</code></span>
+                                    checkbox(attrs: attributes! { name=(format!("{PERMISSION_FIELD_PREFIX}{permission}")) value="on" checked=(def.permissions.contains(*permission)) })
+                                    <span>(describe_permission(permission)) " " <code class="text-muted-foreground">(permission)</code></span>
                                 </label>
                             }
                         </fieldset>
-                        <button class="rounded border border-neutral-300 px-3 py-1 text-sm hover:bg-neutral-100">"Save role"</button>
+                        <div>
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save role")
+                        </div>
                     </form>
-                    <form method="post" action=(href!(remove::remove, Slug(slug.clone()))) class="mt-3">
+                    <form method="post" action=(href!(remove::remove, Slug(slug.clone()))) class="mt-4">
                         <input type="hidden" name="role" value=(name)>
-                        <button class="rounded border border-red-700 px-3 py-1 text-sm text-red-700 hover:bg-red-50">"Remove role"</button>
+                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Remove role")
                     </form>
-                </section>
+                )
             }
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Define a role"</h2>
-                <form method="post" action=(href!(define::define, Slug(slug.clone()))) class="space-y-3">
-                    <label class="block text-sm" for="new-role">"Role name"</label>
-                    <input id="new-role" name="role" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="text" maxlength=(timada_tenancy::MAX_SLUG_LEN) required="" placeholder="support">
-                    <p class="text-xs text-neutral-500">"Lowercase letters, digits and dashes; it cannot be changed later."</p>
-                    <label class="block text-sm" for="new-label">"Label"</label>
-                    <input id="new-label" name="label" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                        type="text" maxlength=(MAX_ROLE_LABEL_LEN) required="" placeholder="Support team">
-                    <fieldset class="space-y-1 text-sm">
-                        <legend class="mb-1 text-sm">"Permissions"</legend>
+            section_card(
+                title: Some("Define a role"),
+                <form method="post" action=(href!(define::define, Slug(slug.clone()))) class="flex flex-col gap-4">
+                    <div class="grid gap-4 md:grid-cols-2">
+                        field(
+                            field_label(attrs: attributes! { for="new-role" }, "Role name")
+                            input(attrs: attributes! {
+                                id="new-role" name="role" type="text"
+                                maxlength=(timada_tenancy::MAX_SLUG_LEN) required="" placeholder="support"
+                            })
+                            <p class="text-xs text-muted-foreground">"Lowercase letters, digits and dashes; it cannot be changed later."</p>
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="new-label" }, "Label")
+                            input(attrs: attributes! {
+                                id="new-label" name="label" type="text"
+                                maxlength=(MAX_ROLE_LABEL_LEN) required="" placeholder="Support team"
+                            })
+                        )
+                    </div>
+                    <fieldset class="flex flex-col gap-1.5 text-sm">
+                        <legend class="mb-2 text-sm font-medium">"Permissions"</legend>
                         for permission in PERMISSIONS {
                             <label class="flex items-center gap-2">
-                                <input type="checkbox" name=(format!("{PERMISSION_FIELD_PREFIX}{permission}")) value="on">
-                                <span>(describe_permission(permission)) " " <code class="text-neutral-500">(permission)</code></span>
+                                checkbox(attrs: attributes! { name=(format!("{PERMISSION_FIELD_PREFIX}{permission}")) value="on" })
+                                <span>(describe_permission(permission)) " " <code class="text-muted-foreground">(permission)</code></span>
                             </label>
                         }
                     </fieldset>
-                    <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Define role"</button>
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Define role")
+                    </div>
                 </form>
-            </section>
+            )
         )
     })
 }
