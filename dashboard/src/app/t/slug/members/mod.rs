@@ -16,15 +16,25 @@ use timada_tenancy::{
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant, role_label};
 use crate::app::auth::Flash;
 use crate::auth::{now, user_labels};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    Shell, document, empty_state, format_time, icons, notice, page_header, section_card,
+};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct MembersQuery {
@@ -76,98 +86,109 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "members"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Members"</h1>
-            </header>
+            page_header(
+                title: "Members",
+                subtitle: Some("Who belongs to the tenant, and the invitations still waiting."),
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(history::history, Slug(slug.clone())))>
+                    icon(data: icons::CLOCK)
+                    "History"
+                </a>
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
-            <p class="mb-4 text-sm"><a class="underline" href=(href!(history::history, Slug(slug.clone())))>"History"</a></p>
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Member"</th>
-                            <th class="py-2 font-medium">"Role"</th>
-                            <th class="py-2 font-medium"><span class="sr-only">"Actions"</span></th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+            section_card(
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Member")
+                            table_head("Role")
+                            table_head(<span class="sr-only">"Actions"</span>)
+                        )
+                    )
+                    table_body(
                         for (user_id, role) in &tenant.members {
-                            <tr data-member=(user_id)>
-                                <td class="py-2">
-                                    (&labels[user_id])
-                                    if user_id == &me { " " <span class="text-neutral-500">"(you)"</span> }
-                                </td>
-                                <td class="py-2">
+                            table_row(
+                                attrs: attributes! { data-member=(user_id) },
+                                table_cell(
+                                    <span class="font-medium">(&labels[user_id])</span>
+                                    if user_id == &me { " " <span class="text-muted-foreground">"(you)"</span> }
+                                )
+                                table_cell(
                                     // Only owners touch owner seats; a manager sees them read-only.
                                     if can_manage && (is_owner || role != ROLE_OWNER) {
                                         <form method="post" action=(href!(change::change, Slug(slug.clone()))) class="flex items-center gap-2">
                                             <input type="hidden" name="user_id" value=(user_id)>
-                                            <select name="role" class="rounded border border-neutral-300 px-2 py-1" aria-label=(format!("Role of {}", labels[user_id]))>
+                                            select(
+                                                attrs: attributes! { name="role" class="w-44" aria-label=(format!("Role of {}", labels[user_id])) },
                                                 for (name, label) in &choices {
                                                     <option value=(name) selected=(name == role)>(label)</option>
                                                 }
-                                            </select>
-                                            <button class="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100">"Change role"</button>
+                                            )
+                                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Change role")
                                         </form>
                                     } else {
                                         (role_label(&tenant, role))
                                     }
-                                </td>
-                                <td class="py-2 text-right">
+                                )
+                                table_cell(
+                                    attrs: attributes! { class="text-right" },
                                     if user_id == &me {
                                         <form method="post" action=(href!(revoke::revoke, Slug(slug.clone())))>
                                             <input type="hidden" name="user_id" value=(user_id)>
-                                            <button class="rounded border border-red-700 px-2 py-1 text-xs text-red-700 hover:bg-red-50">"Leave tenant"</button>
+                                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Leave tenant")
                                         </form>
                                     } else if can_manage && (is_owner || role != ROLE_OWNER) {
                                         <form method="post" action=(href!(revoke::revoke, Slug(slug.clone())))>
                                             <input type="hidden" name="user_id" value=(user_id)>
-                                            <button class="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100">"Remove"</button>
+                                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Remove")
                                         </form>
                                     }
-                                </td>
-                            </tr>
+                                )
+                            )
                         }
-                    </tbody>
-                </table>
-            </section>
+                    )
+                )
+            )
 
             if can_manage {
-                <section class="mt-8 rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">"Invite a member"</h2>
-                    <form method="post" action=(href!(invite::invite, Slug(slug.clone()))) class="flex flex-wrap items-end gap-2">
-                        <div class="grow">
-                            <label class="block text-sm" for="invite-email">"E-mail address"</label>
-                            <input id="invite-email" name="email" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                                type="email" maxlength=(MAX_EMAIL_LEN) required="">
-                        </div>
-                        <div>
-                            <label class="block text-sm" for="invite-role">"Invite as"</label>
-                            <select id="invite-role" name="role" class="mt-1 rounded border border-neutral-300 px-2 py-2">
+                section_card(
+                    title: Some("Invite a member"),
+                    description: Some("The link in the e-mail is valid for 7 days. Whoever opens it signed in joins with that role."),
+                    <form method="post" action=(href!(invite::invite, Slug(slug.clone()))) class="flex flex-wrap items-end gap-3">
+                        field(
+                            attrs: attributes! { class="grow" },
+                            field_label(attrs: attributes! { for="invite-email" }, "E-mail address")
+                            input(attrs: attributes! {
+                                id="invite-email" name="email" type="email" maxlength=(MAX_EMAIL_LEN) required=""
+                            })
+                        )
+                        field(
+                            attrs: attributes! { class="w-48" },
+                            field_label(attrs: attributes! { for="invite-role" }, "Invite as")
+                            select(
+                                attrs: attributes! { id="invite-role" name="role" },
                                 for (name, label) in &choices {
                                     <option value=(name)>(label)</option>
                                 }
-                            </select>
-                        </div>
-                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Send invitation"</button>
+                            )
+                        )
+                        button(attrs: attributes! { type="submit" }, "Send invitation")
                     </form>
-                    <p class="mt-2 text-xs text-neutral-500">"The link in the e-mail is valid for 7 days. Whoever opens it signed in joins with that role."</p>
-                </section>
+                )
             }
 
-            <section class="mt-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Pending invitations"</h2>
+            section_card(
+                title: Some("Pending invitations"),
                 if invitations.is_empty() {
-                    <p class="text-sm text-neutral-500">"None."</p>
+                    empty_state(title: "None.", symbol: Some(icons::INVITATIONS))
                 } else {
-                    <ul class="divide-y divide-neutral-100 text-sm">
+                    <ul class="divide-y divide-border text-sm">
                         for invitation in &invitations {
-                            <li class="flex items-center justify-between py-2" data-invitation-email=(&invitation.email)>
-                                <span>
-                                    (&invitation.email)
-                                    <span class="text-neutral-500">
-                                        " · " (role_label(&tenant, &invitation.role))
+                            <li class="flex flex-wrap items-center justify-between gap-2 py-3" data-invitation-email=(&invitation.email)>
+                                <span class="min-w-0">
+                                    <span class="font-medium">(&invitation.email)</span>
+                                    <span class="block text-xs text-muted-foreground">
+                                        (role_label(&tenant, &invitation.role))
                                         " · invited by " (&labels[&invitation.invited_by])
                                         " · expires " <time datetime=(invitation.expires_at)>(format_time(invitation.expires_at as u64))</time>
                                     </span>
@@ -175,14 +196,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 if can_manage {
                                     <form method="post" action=(href!(revoke_invitation::revoke_invitation, Slug(slug.clone())))>
                                         <input type="hidden" name="invitation_id" value=(&invitation.id)>
-                                        <button class="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-100">"Withdraw"</button>
+                                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Withdraw")
                                     </form>
                                 }
                             </li>
                         }
                     </ul>
                 }
-            </section>
+            )
         )
     })
 }

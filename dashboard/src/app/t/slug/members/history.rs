@@ -10,13 +10,17 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::super::{Slug, TenantNav, require_tenant, role_label};
 use crate::auth::user_labels;
+use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time};
+use crate::ui::{Shell, document, empty_state, format_time, page_header, section_card};
 
 const PAGE_SIZE: i64 = 50;
 
@@ -81,43 +85,50 @@ pub async fn history(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "members"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Members history"</h1>
-            </header>
-            <p class="mb-4 text-sm"><a class="underline" href=(members_link)>"Back to members"</a></p>
+            page_header(
+                title: "Members history",
+                subtitle: Some("Who invited, added, moved or removed whom, newest first."),
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(members_link)>"All members"</a>
+            )
 
-            <section class="rounded border border-neutral-200 bg-white p-4">
+            section_card(
                 if entries.is_empty() {
-                    <p class="text-sm text-neutral-500">"Nothing yet."</p>
+                    empty_state(title: "Nothing yet.")
                 } else {
-                    <table class="w-full text-left text-sm">
-                        <thead>
-                            <tr class="border-b border-neutral-200 text-neutral-500">
-                                <th class="py-2 font-medium">"When"</th>
-                                <th class="py-2 font-medium">"Who"</th>
-                                <th class="py-2 font-medium">"What"</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-neutral-100">
+                    table(
+                        table_header(
+                            table_row(
+                                table_head("When")
+                                table_head("Who")
+                                table_head("What")
+                            )
+                        )
+                        table_body(
                             for (at, actor, what) in &entries {
-                                <tr data-audit-row="">
-                                    <td class="py-2 whitespace-nowrap text-neutral-500">
+                                table_row(
+                                    attrs: attributes! { data-audit-row="" },
+                                    table_cell(
+                                        attrs: attributes! { class="text-muted-foreground" },
                                         <time datetime=(at)>(format_time(*at as u64))</time>
-                                    </td>
-                                    <td class="py-2">(actor)</td>
-                                    <td class="py-2">(what)</td>
-                                </tr>
+                                    )
+                                    table_cell(attrs: attributes! { class="font-medium" }, (actor))
+                                    table_cell(attrs: attributes! { class="whitespace-normal" }, (what))
+                                )
                             }
-                        </tbody>
-                    </table>
+                        )
+                    )
                 }
                 if paged || older.is_some() {
-                    <p class="mt-4 flex items-center gap-4 text-sm">
-                        if paged { <a class="underline" href=(&newest_link)>"Newest"</a> }
-                        if let Some(older) = &older { <a class="underline" href=(older)>"Older"</a> }
+                    <p class="mt-4 flex items-center gap-2 text-sm">
+                        if paged {
+                            <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(&newest_link)>"Newest"</a>
+                        }
+                        if let Some(older) = &older {
+                            <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(older)>"Older"</a>
+                        }
                     </p>
                 }
-            </section>
+            )
         )
     })
 }

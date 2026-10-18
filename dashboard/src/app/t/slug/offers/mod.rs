@@ -16,14 +16,23 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::discounts::{describe_window, discounts};
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::field::{field, field_description, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, notice};
+use crate::ui::{
+    Shell, Tone, document, empty_row, notice, page_header, section_card, status_badge,
+};
 
 /// How many products the pickers list, most recently changed first.
 const PICKER_PRODUCTS: i64 = 200;
@@ -186,114 +195,144 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "offers"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Offers"</h1>
-            </header>
+            page_header(title: "Offers", subtitle: Some("One unit of a product below its price while the cart meets the conditions."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm text-neutral-500">
-                    "The checkout shows an offer as an \"Exclusive offer\" card while the cart meets its conditions: one unit of the item at the offer's price, the others at full price. The order and its invoice bill that unit at the offer's price; a discount code then comes off the whole."
-                </p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Item"</th>
-                            <th class="py-2 font-medium">"Offer price"</th>
-                            <th class="py-2 font-medium">"Conditions"</th>
-                            <th class="py-2 font-medium">"When"</th>
-                            <th class="py-2 font-medium">"Status"</th>
+            section_card(
+                description: Some("The checkout shows an offer as an \"Exclusive offer\" card while the cart meets its conditions: one unit of the item at the offer's price, the others at full price. The order and its invoice bill that unit at the offer's price; a discount code then comes off the whole."),
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Item")
+                            table_head("Offer price")
+                            table_head("Conditions")
+                            table_head("When")
+                            table_head("Status")
                             if can_manage {
-                                <th class="py-2 font-medium"><span class="sr-only">"Actions"</span></th>
+                                table_head(<span class="sr-only">"Actions"</span>)
                             }
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="6">"No offer yet."</td></tr>
+                            empty_row(colspan: 6, text: "No offer yet.")
                         }
                         for (offer, item, conditions, window, status) in &rows {
-                            <tr data-offer=(item)>
-                                <td class="py-2">
-                                    (item)
+                            table_row(
+                                attrs: attributes! { data-offer=(item) },
+                                table_cell(
+                                    attrs: attributes! { class="whitespace-normal" },
+                                    <span class="font-medium">(item)</span>
                                     if let Some(heading) = &offer.title {
-                                        <div class="text-neutral-500">"“" (heading) "”"</div>
+                                        <div class="text-xs text-muted-foreground">"“" (heading) "”"</div>
                                     }
-                                </td>
-                                <td class="py-2" data-offer-price="">(format_money(offer.price_cents, &offer.currency))</td>
-                                <td class="py-2" data-offer-conditions="">(conditions)</td>
-                                <td class="py-2">(window)</td>
-                                <td class="py-2" data-offer-status=(if offer.active { "active" } else { "inactive" })>(*status)</td>
+                                )
+                                table_cell(attrs: attributes! { class="tabular-nums" data-offer-price="" }, (format_money(offer.price_cents, &offer.currency)))
+                                table_cell(attrs: attributes! { class="whitespace-normal" data-offer-conditions="" }, (conditions))
+                                table_cell((window))
+                                table_cell(
+                                    attrs: attributes! { data-offer-status=(if offer.active { "active" } else { "inactive" }) },
+                                    status_badge(tone: offer_tone(offer.active, status), (*status))
+                                )
                                 if can_manage {
-                                    <td class="py-2">
+                                    table_cell(
                                         <div class="flex justify-end gap-2">
                                             if offer.active {
                                                 <form method="post" action=(href!(offer_id::deactivate::deactivate, Slug(slug.clone()), offer_id::OfferId(offer.id.clone())))>
-                                                    <button class="rounded border border-neutral-300 px-3 py-1" aria-label=(format!("Deactivate the offer on {item}"))>"Deactivate"</button>
+                                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Deactivate the offer on {item}")) }, "Deactivate")
                                                 </form>
                                             } else {
                                                 <form method="post" action=(href!(offer_id::reactivate::reactivate, Slug(slug.clone()), offer_id::OfferId(offer.id.clone())))>
-                                                    <button class="rounded border border-neutral-300 px-3 py-1" aria-label=(format!("Reactivate the offer on {item}"))>"Reactivate"</button>
+                                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Reactivate the offer on {item}")) }, "Reactivate")
                                                 </form>
                                             }
                                             <form method="post" action=(href!(offer_id::archive::archive, Slug(slug.clone()), offer_id::OfferId(offer.id.clone())))>
-                                                <button class="rounded border border-red-300 px-3 py-1 text-red-700" aria-label=(format!("Archive the offer on {item}"))>"Archive"</button>
+                                                button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Archive the offer on {item}")) }, "Archive")
                                             </form>
                                         </div>
-                                    </td>
+                                    )
                                 }
-                            </tr>
+                            )
                         }
-                    </tbody>
-                </table>
-            </section>
+                    )
+                )
+            )
 
             if can_manage {
-                <section class="rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">"Create an offer"</h2>
+                section_card(
+                    title: Some("Create an offer"),
                     if items.is_empty() {
-                        <p class="text-sm text-neutral-500">"Add a product first: an offer is for one of them."</p>
+                        <p class="text-sm text-muted-foreground">"Add a product first: an offer is for one of them."</p>
                     } else {
-                        <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="space-y-3">
-                            <label class="block text-sm" for="new-offer-item">"Item"</label>
-                            <select id="new-offer-item" name="item" required="" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">
-                                for item in &items {
-                                    <option value=(&item.value)>(&item.label)</option>
-                                }
-                            </select>
-                            <label class="block text-sm" for="new-offer-price">"Offer price"</label>
-                            <input id="new-offer-price" name="price" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                                type="text" inputmode="decimal" required="" placeholder="12.00">
-                            <p class="text-sm text-neutral-500">"In the product's currency, below its price."</p>
-                            <label class="block text-sm" for="new-offer-title">"Title (optional)"</label>
-                            <input id="new-offer-title" name="title" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                                type="text" maxlength=(MAX_OFFER_TITLE_LEN) placeholder="Add a smart GPS tracker at 60% off">
-                            <label class="block text-sm" for="new-offer-requires">"Only when the cart holds (optional)"</label>
-                            <select id="new-offer-requires" name="requires_product_id" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">
-                                <option value="">"Any product"</option>
-                                for (id, name) in &products {
-                                    <option value=(id)>(name)</option>
-                                }
-                            </select>
-                            <label class="block text-sm" for="new-offer-min">"Only when the rest of the cart is worth at least (optional)"</label>
-                            <input id="new-offer-min" name="min_subtotal" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                                type="text" inputmode="decimal" placeholder="50.00">
-                            <div class="flex gap-4">
-                                <div class="flex-1">
-                                    <label class="block text-sm" for="new-offer-starts">"First day (optional)"</label>
-                                    <input id="new-offer-starts" name="starts_on" type="date" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">
-                                </div>
-                                <div class="flex-1">
-                                    <label class="block text-sm" for="new-offer-ends">"Last day (optional)"</label>
-                                    <input id="new-offer-ends" name="ends_on" type="date" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">
-                                </div>
+                        <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                            field(
+                                field_label(attrs: attributes! { for="new-offer-item" }, "Item")
+                                select(
+                                    attrs: attributes! { id="new-offer-item" name="item" required="" },
+                                    for item in &items {
+                                        <option value=(&item.value)>(&item.label)</option>
+                                    }
+                                )
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="new-offer-price" }, "Offer price")
+                                input(attrs: attributes! {
+                                    id="new-offer-price" name="price"
+                                    type="text" inputmode="decimal" required="" placeholder="12.00"
+                                })
+                                field_description("In the product's currency, below its price.")
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="new-offer-title" }, "Title (optional)")
+                                input(attrs: attributes! {
+                                    id="new-offer-title" name="title"
+                                    type="text" maxlength=(MAX_OFFER_TITLE_LEN) placeholder="Add a smart GPS tracker at 60% off"
+                                })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="new-offer-requires" }, "Only when the cart holds (optional)")
+                                select(
+                                    attrs: attributes! { id="new-offer-requires" name="requires_product_id" },
+                                    <option value="">"Any product"</option>
+                                    for (id, name) in &products {
+                                        <option value=(id)>(name)</option>
+                                    }
+                                )
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="new-offer-min" }, "Only when the rest of the cart is worth at least (optional)")
+                                input(attrs: attributes! {
+                                    id="new-offer-min" name="min_subtotal"
+                                    type="text" inputmode="decimal" placeholder="50.00"
+                                })
+                            )
+                            <div class="grid gap-4 sm:grid-cols-2">
+                                field(
+                                    field_label(attrs: attributes! { for="new-offer-starts" }, "First day (optional)")
+                                    input(attrs: attributes! { id="new-offer-starts" name="starts_on" type="date" })
+                                )
+                                field(
+                                    field_label(attrs: attributes! { for="new-offer-ends" }, "Last day (optional)")
+                                    input(attrs: attributes! { id="new-offer-ends" name="ends_on" type="date" })
+                                )
                             </div>
-                            <p class="text-sm text-neutral-500">"Days are counted in UTC. The rest of the cart is what it holds besides the one unit the offer prices."</p>
-                            <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Create offer"</button>
+                            <p class="text-sm text-muted-foreground">"Days are counted in UTC. The rest of the cart is what it holds besides the one unit the offer prices."</p>
+                            <div>
+                                button(attrs: attributes! { type="submit" }, "Create offer")
+                            </div>
                         </form>
                     }
-                </section>
+                )
             }
         )
     })
+}
+
+/// The colour of where an offer stands.
+fn offer_tone(active: bool, status: &str) -> Tone {
+    match (active, status) {
+        (false, _) => Tone::Warning,
+        (true, "Active") => Tone::Success,
+        (true, _) => Tone::Info,
+    }
 }

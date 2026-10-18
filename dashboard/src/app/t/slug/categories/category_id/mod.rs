@@ -20,7 +20,7 @@ use topcoat::{
         error::{SeeOther, not_found, see_other},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use super::{Choice, error_code, rows_of};
@@ -28,8 +28,23 @@ use crate::app::auth::Flash;
 use crate::app::t::slug::products::catalog;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::auth::user_labels;
+use crate::components::badge::{BadgeVariant, badge};
+use crate::components::breadcrumb::{
+    breadcrumb, breadcrumb_item, breadcrumb_link, breadcrumb_list, breadcrumb_page,
+    breadcrumb_separator,
+};
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::card::CARD;
+use crate::components::checkbox::checkbox;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::label::label;
+use crate::components::select::select;
+use crate::components::textarea::textarea;
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, document, fact, facts, format_time, notice, page_header, section_card,
+};
 
 module_param!(pub category_id);
 
@@ -177,121 +192,141 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "categories"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold" data-category-id=(&category.id)>
-                    (&category.name)
-                    if category.archived {
-                        " " <span class="rounded bg-neutral-100 px-2 text-sm font-normal text-neutral-700" data-category-archived="">"Archived"</span>
+            breadcrumb(
+                attrs: attributes! { class="mb-4" data-breadcrumb="" },
+                breadcrumb_list(
+                    breadcrumb_item(breadcrumb_link(attrs: attributes! { href=(href!(super::index, Slug(slug.clone()))) }, "All categories"))
+                    for ancestor in &ancestors {
+                        breadcrumb_separator()
+                        breadcrumb_item(breadcrumb_link(attrs: attributes! { href=(href!(index, Slug(slug.clone()), CategoryId(ancestor.id.clone()))) }, (&ancestor.name)))
                     }
-                </h1>
-            </header>
+                    breadcrumb_separator()
+                    breadcrumb_item(breadcrumb_page((&category.name)))
+                )
+            )
+            page_header(
+                title: &category.name,
+                h1_attrs: attributes! { data-category-id=(&category.id) },
+                if category.archived {
+                    badge(variant: BadgeVariant::Secondary, attrs: attributes! { data-category-archived="" }, "Archived")
+                }
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <nav class="mb-4 text-sm text-neutral-500" aria-label="Breadcrumb" data-breadcrumb="">
-                <a class="underline" href=(href!(super::index, Slug(slug.clone())))>"Categories"</a>
-                for ancestor in &ancestors {
-                    " / "
-                    <a class="underline" href=(href!(index, Slug(slug.clone()), CategoryId(ancestor.id.clone())))>(&ancestor.name)</a>
-                }
-                " / " (&category.name)
-            </nav>
-
             if children > 0 {
-                <p class="mb-4 text-sm text-neutral-500">
+                <p class="mb-4 text-sm text-muted-foreground">
                     "Its page in the shop also lists what is filed under its sub-categories, so taking a product out of this category does not hide it there while it stays in one of them."
                 </p>
             }
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <h2 class="mb-2 text-lg font-medium">"Overview"</h2>
-                <dl class="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
-                    <dt class="text-neutral-500">"Slug"</dt><dd><code>(&category.slug)</code></dd>
-                    <dt class="text-neutral-500">"Description"</dt>
-                    <dd data-category-description="" class="whitespace-pre-line">(if category.description.is_empty() { "—" } else { category.description.as_str() })</dd>
-                    <dt class="text-neutral-500">"On its page"</dt>
-                    <dd data-category-products=(on_its_page)>
+            section_card(
+                title: Some("Overview"),
+                facts(
+                    fact(term: "Slug", <code class="text-xs">(&category.slug)</code>)
+                    fact(
+                        term: "Description",
+                        attrs: attributes! { data-category-description="" class="whitespace-pre-line" },
+                        (if category.description.is_empty() { "—" } else { category.description.as_str() })
+                    )
+                    fact(
+                        term: "On its page",
+                        attrs: attributes! { data-category-products=(on_its_page) },
                         (on_its_page) " product" (if on_its_page == 1 { "" } else { "s" })
                         if on_its_page != filed_here {
-                            <span class="text-neutral-500">", counting its sub-categories"</span>
+                            <span class="text-muted-foreground">", counting its sub-categories"</span>
                         }
-                    </dd>
-                    <dt class="text-neutral-500">"Filed here"</dt>
-                    <dd>
-                        <a class="underline" data-category-direct=(filed_here) href=(href!(crate::app::t::slug::products::index, Slug(slug.clone())).query(ProductsOfCategory { category: &category.id }).resolve(cx))>
+                    )
+                    fact(
+                        term: "Filed here",
+                        <a class=(LINK) data-category-direct=(filed_here) href=(href!(crate::app::t::slug::products::index, Slug(slug.clone())).query(ProductsOfCategory { category: &category.id }).resolve(cx))>
                             (filed_here) " product" (if filed_here == 1 { "" } else { "s" })
                         </a>
-                    </dd>
-                    <dt class="text-neutral-500">"Sub-categories"</dt><dd data-category-children=(children)>(children)</dd>
-                    <dt class="text-neutral-500">"Position"</dt><dd>(category.position)</dd>
-                    <dt class="text-neutral-500">"Shop menu"</dt>
-                    <dd data-category-menu=(if category.hidden_from_menu { "hidden" } else { "shown" })>
+                    )
+                    fact(term: "Sub-categories", attrs: attributes! { data-category-children=(children) }, (children))
+                    fact(term: "Position", (category.position))
+                    fact(
+                        term: "Shop menu",
+                        attrs: attributes! { data-category-menu=(if category.hidden_from_menu { "hidden" } else { "shown" }) },
                         if category.hidden_from_menu {
                             "Hidden, with its sub-categories; its page stays open"
                         } else {
                             "Shown"
                         }
-                    </dd>
-                    <dt class="text-neutral-500">"Created"</dt>
-                    <dd>(&created_by) ", " <time datetime=(category.created_at)>(format_time(category.created_at))</time></dd>
-                    <dt class="text-neutral-500">"Changed"</dt>
-                    <dd><time datetime=(category.updated_at)>(format_time(category.updated_at))</time></dd>
-                </dl>
-            </section>
+                    )
+                    fact(term: "Created", (&created_by) ", " <time datetime=(category.created_at)>(format_time(category.created_at))</time>)
+                    fact(term: "Changed", <time datetime=(category.updated_at)>(format_time(category.updated_at))</time>)
+                )
+            )
 
             if category.archived {
-                <p class="mb-8 text-sm text-neutral-500">
+                <p class="mb-6 text-sm text-muted-foreground">
                     "An archived category cannot change any more. The products that were in it keep the membership until they leave it."
                 </p>
             }
 
             if editable {
-                <section class="mb-8 grid gap-4 md:grid-cols-2">
-                    <form method="post" action=(href!(rename::rename, Slug(slug.clone()), CategoryId(category.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
-                        <label class="block text-sm font-medium" for="category-name">"Name"</label>
-                        <input id="category-name" name="name" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="text" maxlength=(MAX_CATEGORY_NAME_LEN) required="" value=(&category.name)>
-                        <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Rename"</button>
+                <section class="mb-6 grid gap-4 md:grid-cols-2">
+                    <form method="post" action=(href!(rename::rename, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                        field(
+                            field_label(attrs: attributes! { for="category-name" }, "Name")
+                            input(attrs: attributes! {
+                                id="category-name" name="name" type="text"
+                                maxlength=(MAX_CATEGORY_NAME_LEN) required="" value=(&category.name)
+                            })
+                        )
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Rename")</div>
                     </form>
-                    <form method="post" action=(href!(move_to::move_to, Slug(slug.clone()), CategoryId(category.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
-                        <label class="block text-sm font-medium" for="category-parent">"Parent"</label>
-                        <select id="category-parent" name="parent_id" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">
-                            <option value="" selected=(category.parent_id.is_none())>"Top level"</option>
-                            for parent in &parents {
-                                <option value=(&parent.id) selected=(category.parent_id.as_deref() == Some(parent.id.as_str()))>
-                                    (&parent.label)
-                                </option>
-                            }
-                        </select>
-                        <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Move"</button>
+                    <form method="post" action=(href!(move_to::move_to, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                        field(
+                            field_label(attrs: attributes! { for="category-parent" }, "Parent")
+                            select(
+                                attrs: attributes! { id="category-parent" name="parent_id" },
+                                <option value="" selected=(category.parent_id.is_none())>"Top level"</option>
+                                for parent in &parents {
+                                    <option value=(&parent.id) selected=(category.parent_id.as_deref() == Some(parent.id.as_str()))>
+                                        (&parent.label)
+                                    </option>
+                                }
+                            )
+                        )
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Move")</div>
                     </form>
-                    <form method="post" action=(href!(position::position, Slug(slug.clone()), CategoryId(category.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
-                        <label class="block text-sm font-medium" for="category-position">"Position among its siblings"</label>
-                        <input id="category-position" name="position" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2"
-                            type="number" min="0" max="10000" required="" value=(category.position)>
-                        <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Set position"</button>
+                    <form method="post" action=(href!(position::position, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                        field(
+                            field_label(attrs: attributes! { for="category-position" }, "Position among its siblings")
+                            input(attrs: attributes! {
+                                id="category-position" name="position" type="number"
+                                min="0" max="10000" required="" value=(category.position)
+                            })
+                        )
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Set position")</div>
                     </form>
-                    <form method="post" action=(href!(describe::describe, Slug(slug.clone()), CategoryId(category.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
-                        <label class="block text-sm font-medium" for="category-description">"Description"</label>
-                        <textarea id="category-description" name="description" rows="4" maxlength=(MAX_CATEGORY_DESCRIPTION_LEN)
-                            class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">(&category.description)</textarea>
-                        <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Save description"</button>
+                    <form method="post" action=(href!(describe::describe, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                        field(
+                            field_label(attrs: attributes! { for="category-description" }, "Description")
+                            textarea(
+                                attrs: attributes! { id="category-description" name="description" rows="4" maxlength=(MAX_CATEGORY_DESCRIPTION_LEN) },
+                                (&category.description)
+                            )
+                        )
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save description")</div>
                     </form>
-                    <form method="post" action=(href!(menu::menu, Slug(slug.clone()), CategoryId(category.id.clone()))) class="rounded border border-neutral-200 bg-white p-4">
-                        <label class="flex items-center gap-2 text-sm font-medium">
-                            <input name="in_menu" type="checkbox" value="on" checked=(!category.hidden_from_menu)>
+                    <form method="post" action=(href!(menu::menu, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                        label(
+                            checkbox(attrs: attributes! { name="in_menu" value="on" checked=(!category.hidden_from_menu) })
                             "Show in the shop menu"
-                        </label>
-                        <p class="mt-1 text-sm text-neutral-500">"A hidden category takes its sub-categories out of the menu too. Its page and products stay reachable."</p>
-                        <button class="mt-3 rounded border border-neutral-300 px-3 py-1 text-sm">"Save menu visibility"</button>
+                        )
+                        <p class="text-sm text-muted-foreground">"A hidden category takes its sub-categories out of the menu too. Its page and products stay reachable."</p>
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save menu visibility")</div>
                     </form>
                 </section>
 
                 <section class="flex flex-wrap items-center gap-3">
                     if children > 0 {
-                        <p class="text-sm text-neutral-500">"Archive or move its sub-categories before archiving it."</p>
+                        <p class="text-sm text-muted-foreground">"Archive or move its sub-categories before archiving it."</p>
                     } else {
                         <form method="post" action=(href!(archive::archive, Slug(slug.clone()), CategoryId(category.id.clone())))>
-                            <button class="rounded border border-red-700 px-3 py-1 text-sm text-red-700 hover:bg-red-50">"Archive"</button>
+                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Archive")
                         </form>
                     }
                 </section>

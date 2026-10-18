@@ -19,15 +19,22 @@ use topcoat::{
         error::{SeeOther, not_found, see_other},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use super::{reviews, reviews_url, status_label};
 use crate::app::auth::Flash;
 use crate::app::t::slug::orders::order_id::{self, OrderId};
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::textarea::textarea;
 use crate::media::Media;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, fact, facts, format_time, notice, page_header, section_card,
+    status_badge,
+};
 
 module_param!(pub review_id);
 
@@ -159,114 +166,142 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         OrderId(review.order_id.clone())
     );
     let open = can_manage && !review.is_rejected();
+    let heading = format!("Review of {product_name}");
 
     Ok(view! {
         document(
             title: &title,
-            shell: Shell::tenant(&tenant, &nav, ""),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Review of " (&product_name)</h1>
-            </header>
+            shell: Shell::tenant(&tenant, &nav, "reviews"),
+            page_header(
+                title: &heading,
+                subtitle: Some("One review, read from its own record."),
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(back)>"All reviews"</a>
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm"><a class="underline" href=(back)>"All reviews"</a></p>
-                <dl class="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
-                    <dt class="text-neutral-500">"Status"</dt>
-                    <dd data-review-status=(review.status.as_str())>(status_label(review.status))</dd>
+            section_card(
+                facts(
+                    fact(
+                        term: "Status",
+                        attrs: attributes! { data-review-status=(review.status.as_str()) },
+                        status_badge(tone: review_tone(review.status), (status_label(review.status)))
+                    )
                     if let Some(reason) = review.rejection_reason.as_deref().filter(|reason| !reason.is_empty()) {
-                        <dt class="text-neutral-500">"Why"</dt>
-                        <dd data-review-reason="">(reason)</dd>
+                        fact(term: "Why", attrs: attributes! { data-review-reason="" }, (reason))
                     }
-                    <dt class="text-neutral-500">"Stars"</dt>
-                    <dd data-review-rating=(review.rating) aria-label=(format!("{} out of 5", review.rating))>(stars(review.rating))</dd>
-                    <dt class="text-neutral-500">"Product"</dt>
-                    <dd>
+                    fact(
+                        term: "Stars",
+                        attrs: attributes! { data-review-rating=(review.rating) aria-label=(format!("{} out of 5", review.rating)) },
+                        (stars(review.rating))
+                    )
+                    fact(
+                        term: "Product",
                         (&product_name)
                         if let Some(label) = &review.variant_label {
-                            <span class="text-neutral-500">" · " (label)</span>
+                            <span class="text-muted-foreground">" · " (label)</span>
                         }
-                    </dd>
-                    <dt class="text-neutral-500">"Order"</dt>
-                    <dd><a class="underline" href=(order_link)><code>(&reference)</code></a></dd>
-                    <dt class="text-neutral-500">"Signed"</dt>
-                    <dd>(&review.author_name)</dd>
-                    <dt class="text-neutral-500">"Written"</dt>
-                    <dd>(format_time(review.submitted_at))</dd>
+                    )
+                    fact(term: "Order", <a class=(class!(LINK, "font-mono")) href=(order_link)><code>(&reference)</code></a>)
+                    fact(term: "Signed", (&review.author_name))
+                    fact(term: "Written", (format_time(review.submitted_at)))
                     if let Some(at) = review.published_at {
-                        <dt class="text-neutral-500">"Published"</dt>
-                        <dd>(format_time(at))</dd>
+                        fact(term: "Published", (format_time(at)))
                     }
-                </dl>
-            </section>
+                )
+            )
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
+            section_card(
                 if let Some(heading) = &review.title {
-                    <h2 class="mb-2 text-lg font-medium" data-review-title="">(heading)</h2>
+                    <h2 class="mb-3 text-base font-semibold" data-review-title="">(heading)</h2>
                 }
                 <p class="whitespace-pre-line text-sm" data-review-body="">(&review.body)</p>
                 if !photos.is_empty() {
                     <ul class="mt-4 flex flex-wrap gap-4">
                         for (photo_id, url) in &photos {
-                            <li class="space-y-2" data-review-photo=(photo_id)>
-                                <a href=(url)><img class="h-40 w-40 rounded border border-neutral-200 object-cover" src=(url) alt="A photo the shopper attached"></a>
+                            <li class="flex flex-col gap-2" data-review-photo=(photo_id)>
+                                <a href=(url)><img class="h-40 w-40 rounded-lg border border-border object-cover" src=(url) alt="A photo the shopper attached"></a>
                                 if open {
                                     <form method="post" action=(href!(remove_photo::remove_photo, Slug(slug.clone()), ReviewId(id.clone())))>
                                         <input type="hidden" name="image_id" value=(photo_id)>
-                                        <button class="text-sm text-red-700 underline">"Remove this photo"</button>
+                                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="text-destructive-text" }, "Remove this photo")
                                     </form>
                                 }
                             </li>
                         }
                     </ul>
                 }
-            </section>
+            )
 
             if review.reply.is_some() || open {
-                <section class="mb-8 space-y-4 rounded border border-neutral-200 bg-white p-4" data-review-reply-section="">
-                    <h2 class="text-lg font-medium">"Your public reply"</h2>
-                    if let Some(reply) = &review.reply {
-                        <p class="whitespace-pre-line text-sm" data-review-reply="">(reply)</p>
-                        if let Some(at) = review.replied_at {
-                            <p class="text-sm text-neutral-500">"Written " (format_time(at))</p>
+                section_card(
+                    title: Some("Your public reply"),
+                    description: Some(if review.reply.is_some() { "Shown under the review on the shop while it is published." } else { "Shown under the review on the shop once it is published." }),
+                    attrs: attributes! { data-review-reply-section="" },
+                    <div class="flex flex-col gap-4">
+                        if let Some(reply) = &review.reply {
+                            <p class="whitespace-pre-line text-sm" data-review-reply="">(reply)</p>
+                            if let Some(at) = review.replied_at {
+                                <p class="text-sm text-muted-foreground">"Written " (format_time(at))</p>
+                            }
                         }
-                    } else {
-                        <p class="text-sm text-neutral-500">"Shown under the review on the shop once it is published."</p>
-                    }
-                    if open {
-                        <form method="post" action=(href!(reply::reply, Slug(slug.clone()), ReviewId(id.clone()))) class="space-y-2">
-                            <label class="block text-sm" for="review-reply">"Reply"</label>
-                            <textarea id="review-reply" name="body" rows="4" maxlength=(MAX_REPLY_LEN) required="" class="w-full rounded border border-neutral-300 px-3 py-2">(review.reply.as_deref().unwrap_or_default())</textarea>
-                            <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">
-                                if review.reply.is_some() { "Update the reply" } else { "Post the reply" }
-                            </button>
-                        </form>
-                    }
-                    if can_manage && review.reply.is_some() {
-                        <form method="post" action=(href!(remove_reply::remove_reply, Slug(slug.clone()), ReviewId(id.clone())))>
-                            <button class="text-sm text-red-700 underline">"Delete the reply"</button>
-                        </form>
-                    }
-                </section>
+                        if open {
+                            <form method="post" action=(href!(reply::reply, Slug(slug.clone()), ReviewId(id.clone()))) class="flex max-w-xl flex-col gap-4">
+                                field(
+                                    field_label(attrs: attributes! { for="review-reply" }, "Reply")
+                                    textarea(attrs: attributes! { id="review-reply" name="body" rows="4" maxlength=(MAX_REPLY_LEN) required="" }, (review.reply.as_deref().unwrap_or_default()))
+                                )
+                                <div>
+                                    button(
+                                        attrs: attributes! { type="submit" },
+                                        if review.reply.is_some() { "Update the reply" } else { "Post the reply" }
+                                    )
+                                </div>
+                            </form>
+                        }
+                        if can_manage && review.reply.is_some() {
+                            <form method="post" action=(href!(remove_reply::remove_reply, Slug(slug.clone()), ReviewId(id.clone())))>
+                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="text-destructive-text" }, "Delete the reply")
+                            </form>
+                        }
+                    </div>
+                )
             }
 
             if open {
-                <section class="space-y-4 rounded border border-neutral-200 bg-white p-4">
-                    if review.status == ReviewStatus::Pending {
-                        <form method="post" action=(href!(publish::publish, Slug(slug.clone()), ReviewId(id.clone())))>
-                            <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Publish"</button>
+                section_card(
+                    title: Some("Moderation"),
+                    description: Some("Rejecting is final: the review and its photos are gone from the shop for good."),
+                    <div class="flex flex-col gap-4">
+                        if review.status == ReviewStatus::Pending {
+                            <form method="post" action=(href!(publish::publish, Slug(slug.clone()), ReviewId(id.clone())))>
+                                button(attrs: attributes! { type="submit" }, "Publish")
+                            </form>
+                        }
+                        <form method="post" action=(href!(reject::reject, Slug(slug.clone()), ReviewId(id.clone()))) class="flex max-w-xl flex-col gap-4">
+                            field(
+                                field_label(attrs: attributes! { for="review-reason" }, "Why it is rejected (shown to the shopper, optional)")
+                                input(attrs: attributes! { id="review-reason" name="reason" type="text" maxlength="300" })
+                            )
+                            <div>
+                                button(
+                                    variant: ButtonVariant::Destructive,
+                                    attrs: attributes! { type="submit" },
+                                    if review.is_published() { "Take down" } else { "Reject" }
+                                )
+                            </div>
                         </form>
-                    }
-                    <form method="post" action=(href!(reject::reject, Slug(slug.clone()), ReviewId(id.clone()))) class="space-y-2">
-                        <label class="block text-sm" for="review-reason">"Why it is rejected (shown to the shopper, optional)"</label>
-                        <input id="review-reason" name="reason" type="text" maxlength="300" class="w-full rounded border border-neutral-300 px-3 py-2">
-                        <button class="rounded border border-red-300 px-4 py-2 font-medium text-red-700">
-                            if review.is_published() { "Take down" } else { "Reject" }
-                        </button>
-                    </form>
-                    <p class="text-sm text-neutral-500">"Rejecting is final: the review and its photos are gone from the shop for good."</p>
-                </section>
+                    </div>
+                )
             }
         )
     })
+}
+
+/// The colour of where a review stands.
+fn review_tone(status: ReviewStatus) -> Tone {
+    match status {
+        ReviewStatus::Pending => Tone::Warning,
+        ReviewStatus::Published => Tone::Success,
+        ReviewStatus::Rejected => Tone::Danger,
+    }
 }
