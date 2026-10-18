@@ -20,14 +20,22 @@ use topcoat::{
         error::{SeeOther, see_other},
         href, page, query_params,
     },
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
+use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_time, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
+    section_card, status_badge,
+};
 
 const PAGE_SIZE: u32 = 50;
 /// The `status` of the list showing every message.
@@ -155,94 +163,102 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "messages"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Messages"</h1>
-            </header>
+            page_header(title: "Messages", subtitle: Some("What visitors sent through the shop's contact form."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm text-neutral-500">
-                    "What visitors wrote in the shop's contact form, with the address to answer at. Answer from your own mailbox, then mark the message handled here. Erase a message when its sender asks to be forgotten: what they wrote is gone for good."
-                </p>
-                <form method="get" class="mb-4 flex flex-wrap gap-2">
+            section_card(
+                description: Some("What visitors wrote in the shop's contact form, with the address to answer at. Answer from your own mailbox, then mark the message handled here. Erase a message when its sender asks to be forgotten: what they wrote is gone for good."),
+                filter_bar(
                     <label class="sr-only" for="messages-status">"Status"</label>
-                    <select id="messages-status" name="status" class="rounded border border-neutral-300 px-3 py-2">
+                    select(
+                        attrs: attributes! { id="messages-status" name="status" class="w-44" },
                         for option in MessageStatus::ALL {
                             <option value=(option.as_str()) selected=(status == Some(option))>(status_label(option))</option>
                         }
                         <option value=(ALL) selected=(status.is_none())>"Every status"</option>
-                    </select>
-                    <button class="rounded border border-neutral-300 px-3 py-2">"Filter"</button>
-                </form>
-                <p class="mb-4 text-sm" data-message-count=(total)>(total) " message(s)"</p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"From"</th>
-                            <th class="py-2 font-medium">"Message"</th>
-                            <th class="py-2 font-medium">"Language"</th>
-                            <th class="py-2 font-medium">"Received"</th>
-                            <th class="py-2 font-medium">"Status"</th>
+                    )
+                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Filter")
+                )
+                <p class="mb-4 text-sm text-muted-foreground" data-message-count=(total)>(total) " message(s)"</p>
+                table(
+                    table_header(
+                        table_row(
+                            table_head("From")
+                            table_head("Message")
+                            table_head("Language")
+                            table_head("Received")
+                            table_head("Status")
                             if can_manage {
-                                <th class="py-2 text-right font-medium">"Actions"</th>
+                                table_head(attrs: attributes! { class="text-right" }, "Actions")
                             }
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan=(if can_manage { 6 } else { 5 })>"No message here."</td></tr>
+                            empty_row(colspan: if can_manage { 6 } else { 5 }, text: "No message here.")
                         }
                         for row in &rows {
-                            <tr data-message=(&row.id) data-message-status=(&row.status)>
-                                <td class="py-2 align-top">
-                                    (row.full_name())
-                                    <br>
-                                    <a class="underline" href=(format!("mailto:{}", row.email))>(&row.email)</a>
-                                </td>
-                                <td class="py-2 align-top">
+                            table_row(
+                                attrs: attributes! { data-message=(&row.id) data-message-status=(&row.status) },
+                                table_cell(
+                                    attrs: attributes! { class="align-top" },
+                                    <span class="block font-medium">(row.full_name())</span>
+                                    <a class=(LINK) href=(format!("mailto:{}", row.email))>(&row.email)</a>
+                                )
+                                table_cell(
+                                    attrs: attributes! { class="whitespace-normal align-top" },
                                     <details>
                                         <summary class="cursor-pointer">(excerpt(&row.body))</summary>
                                         <p class="mt-2 whitespace-pre-line" data-message-body="">(&row.body)</p>
                                     </details>
-                                </td>
-                                <td class="py-2 align-top" data-message-language=(row.language.as_deref().unwrap_or_default())>(row.language.as_deref().unwrap_or("—"))</td>
-                                <td class="py-2 align-top"><time datetime=(row.received_at)>(format_time(row.received_at as u64))</time></td>
-                                <td class="py-2 align-top">(status_of(&row.status))</td>
+                                )
+                                table_cell(attrs: attributes! { class="align-top" data-message-language=(row.language.as_deref().unwrap_or_default()) }, (row.language.as_deref().unwrap_or("—")))
+                                table_cell(attrs: attributes! { class="align-top" }, <time datetime=(row.received_at)>(format_time(row.received_at as u64))</time>)
+                                table_cell(attrs: attributes! { class="align-top" }, status_badge(tone: message_tone(&row.status), (status_of(&row.status))))
                                 if can_manage {
-                                    <td class="py-2 align-top">
-                                      <div class="flex justify-end gap-2">
-                                        if row.status == MessageStatus::Handled.as_str() {
-                                            <form method="post" action=(href!(reopen::reopen, Slug(slug.clone())))>
+                                    table_cell(
+                                        attrs: attributes! { class="align-top" },
+                                        <div class="flex justify-end gap-2">
+                                            if row.status == MessageStatus::Handled.as_str() {
+                                                <form method="post" action=(href!(reopen::reopen, Slug(slug.clone())))>
+                                                    <input type="hidden" name="message_id" value=(&row.id)>
+                                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Reopen")
+                                                </form>
+                                            } else {
+                                                <form method="post" action=(href!(handle::handle, Slug(slug.clone())))>
+                                                    <input type="hidden" name="message_id" value=(&row.id)>
+                                                    button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Mark handled")
+                                                </form>
+                                            }
+                                            <form method="post" action=(href!(forget::forget, Slug(slug.clone())))>
                                                 <input type="hidden" name="message_id" value=(&row.id)>
-                                                <button class="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50">"Reopen"</button>
+                                                button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Erase")
                                             </form>
-                                        } else {
-                                            <form method="post" action=(href!(handle::handle, Slug(slug.clone())))>
-                                                <input type="hidden" name="message_id" value=(&row.id)>
-                                                <button class="rounded border border-neutral-900 px-2 py-1 text-xs hover:bg-neutral-50">"Mark handled"</button>
-                                            </form>
-                                        }
-                                        <form method="post" action=(href!(forget::forget, Slug(slug.clone())))>
-                                            <input type="hidden" name="message_id" value=(&row.id)>
-                                            <button class="rounded border border-red-700 px-2 py-1 text-xs text-red-700 hover:bg-red-50">"Erase"</button>
-                                        </form>
-                                      </div>
-                                    </td>
+                                        </div>
+                                    )
                                 }
-                            </tr>
+                            )
                         }
-                    </tbody>
-                </table>
-                if pages > 1 {
-                    <p class="mt-4 flex items-center gap-4 text-sm">
-                        if page_number > 1 { <a class="underline" href=(page_link(page_number - 1))>"Previous"</a> }
-                        <span>"Page " (page_number) " of " (pages)</span>
-                        if page_number < pages { <a class="underline" href=(page_link(page_number + 1))>"Next"</a> }
-                    </p>
-                }
-            </section>
+                    )
+                )
+                pager(
+                    page: i64::from(page_number),
+                    pages: i64::from(pages),
+                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
+                    next: (page_number < pages).then(|| page_link(page_number + 1)),
+                )
+            )
         )
     })
+}
+
+/// The colour of a message's stored status.
+fn message_tone(status: &str) -> Tone {
+    match MessageStatus::parse(status) {
+        Some(MessageStatus::Open) => Tone::Warning,
+        Some(MessageStatus::Handled) => Tone::Success,
+        None => Tone::Neutral,
+    }
 }
 
 /// The start of a message, for its row.

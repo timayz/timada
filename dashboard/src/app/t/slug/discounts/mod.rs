@@ -15,14 +15,25 @@ use topcoat::{
     Result,
     context::{Cx, app_context},
     router::{href, page, query_params},
-    view::{View, view},
+    view::{View, attributes, class, view},
 };
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
+use crate::components::button::button;
+use crate::components::checkbox::checkbox;
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
+use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, format_date, notice};
+use crate::ui::{
+    LINK, Shell, Tone, document, empty_row, format_date, notice, page_header, section_card,
+    status_badge,
+};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct DiscountsQuery {
@@ -109,88 +120,113 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "discounts"),
-            <header class="mb-8 flex items-center justify-between">
-                <h1 class="text-2xl font-semibold">"Discounts"</h1>
-            </header>
+            page_header(title: "Discounts", subtitle: Some("Codes shoppers enter in the cart for something off the whole order."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
-            <section class="mb-8 rounded border border-neutral-200 bg-white p-4">
-                <p class="mb-4 text-sm text-neutral-500">
-                    "A shopper enters a code in the cart: it takes a percentage or an amount off the items of the whole order, one code per order. The invoice shows it as a discount, spread over the VAT rates of what was bought."
-                </p>
-                <table class="w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-neutral-200 text-neutral-500">
-                            <th class="py-2 font-medium">"Code"</th>
-                            <th class="py-2 font-medium">"Off"</th>
-                            <th class="py-2 font-medium">"When"</th>
-                            <th class="py-2 font-medium">"Limits"</th>
-                            <th class="py-2 font-medium">"Orders"</th>
-                            <th class="py-2 font-medium">"Status"</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-neutral-100">
+            section_card(
+                description: Some("A shopper enters a code in the cart: it takes a percentage or an amount off the items of the whole order, one code per order. The invoice shows it as a discount, spread over the VAT rates of what was bought."),
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Code")
+                            table_head("Off")
+                            table_head("When")
+                            table_head("Limits")
+                            table_head(attrs: attributes! { class="text-right" }, "Orders")
+                            table_head("Status")
+                        )
+                    )
+                    table_body(
                         if rows.is_empty() {
-                            <tr><td class="py-2 text-neutral-500" colspan="6">"No discount yet."</td></tr>
+                            empty_row(colspan: 6, text: "No discount yet.")
                         }
                         for row in &rows {
-                            <tr data-discount=(&row.code)>
-                                <td class="py-2">
-                                    <a class="underline" href=(href!(discount_id::index, Slug(slug.clone()), discount_id::DiscountId(row.id.clone())))><code>(&row.code)</code></a>
-                                </td>
-                                <td class="py-2" data-discount-value="">(row.value().to_string())</td>
-                                <td class="py-2">(window_of(row))</td>
-                                <td class="py-2">(limits_of(row))</td>
-                                <td class="py-2" data-discount-orders="">(uses.get(&row.id).copied().unwrap_or(0))</td>
-                                <td class="py-2" data-discount-status=(&row.status)>(&row.status)</td>
-                            </tr>
+                            table_row(
+                                attrs: attributes! { data-discount=(&row.code) },
+                                table_cell(
+                                    <a class=(class!(LINK, "font-mono")) href=(href!(discount_id::index, Slug(slug.clone()), discount_id::DiscountId(row.id.clone())))><code>(&row.code)</code></a>
+                                )
+                                table_cell(attrs: attributes! { data-discount-value="" }, (row.value().to_string()))
+                                table_cell((window_of(row)))
+                                table_cell((limits_of(row)))
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" data-discount-orders="" }, (uses.get(&row.id).copied().unwrap_or(0)))
+                                table_cell(
+                                    attrs: attributes! { data-discount-status=(&row.status) },
+                                    status_badge(tone: discount_tone(&row.status), (&row.status))
+                                )
+                            )
                         }
-                    </tbody>
-                </table>
-            </section>
+                    )
+                )
+            )
 
             if can_manage {
-                <section class="rounded border border-neutral-200 bg-white p-4">
-                    <h2 class="mb-2 text-lg font-medium">"Create a discount"</h2>
-                    <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="space-y-3">
-                        <label class="block text-sm" for="new-discount-code">"Code"</label>
-                        <input id="new-discount-code" name="code" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2 uppercase"
-                            type="text" maxlength=(MAX_CODE_LEN) required="" placeholder="SUMMER10">
-                        <fieldset class="space-y-2">
-                            <legend class="text-sm">"Takes off"</legend>
-                            <label class="mr-4 text-sm"><input type="radio" name="kind" value="percent" checked=""> " a percentage"</label>
-                            <label class="text-sm"><input type="radio" name="kind" value="amount"> " an amount"</label>
+                section_card(
+                    title: Some("Create a discount"),
+                    <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                        field(
+                            field_label(attrs: attributes! { for="new-discount-code" }, "Code")
+                            input(attrs: attributes! {
+                                id="new-discount-code" name="code" class="uppercase"
+                                type="text" maxlength=(MAX_CODE_LEN) required="" placeholder="SUMMER10"
+                            })
+                        )
+                        <fieldset class="flex flex-col gap-2">
+                            <legend class="text-sm font-medium">"Takes off"</legend>
+                            <div class="flex flex-wrap gap-4">
+                                <label class="flex items-center gap-2 text-sm"><input type="radio" name="kind" value="percent" checked="" class="accent-primary"> " a percentage"</label>
+                                <label class="flex items-center gap-2 text-sm"><input type="radio" name="kind" value="amount" class="accent-primary"> " an amount"</label>
+                            </div>
                         </fieldset>
-                        <label class="block text-sm" for="new-discount-value">"Percentage or amount"</label>
-                        <div class="flex gap-2">
-                            <input id="new-discount-value" name="value" class="w-full rounded border border-neutral-300 px-3 py-2"
-                                type="text" inputmode="decimal" required="" placeholder="10">
-                            <select name="currency" aria-label="Currency of an amount" class="rounded border border-neutral-300 px-3 py-2">
-                                for currency in CURRENCIES {
-                                    <option value=(*currency)>(*currency)</option>
-                                }
-                            </select>
-                        </div>
-                        <div class="flex gap-4">
-                            <div class="flex-1">
-                                <label class="block text-sm" for="new-discount-starts">"First day (optional)"</label>
-                                <input id="new-discount-starts" name="starts_on" type="date" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">
+                        field(
+                            field_label(attrs: attributes! { for="new-discount-value" }, "Percentage or amount")
+                            <div class="flex gap-2">
+                                input(attrs: attributes! {
+                                    id="new-discount-value" name="value"
+                                    type="text" inputmode="decimal" required="" placeholder="10"
+                                })
+                                select(
+                                    attrs: attributes! { name="currency" aria-label="Currency of an amount" class="w-28 shrink-0" },
+                                    for currency in CURRENCIES {
+                                        <option value=(*currency)>(*currency)</option>
+                                    }
+                                )
                             </div>
-                            <div class="flex-1">
-                                <label class="block text-sm" for="new-discount-ends">"Last day (optional)"</label>
-                                <input id="new-discount-ends" name="ends_on" type="date" class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">
-                            </div>
+                        )
+                        <div class="grid gap-4 sm:grid-cols-2">
+                            field(
+                                field_label(attrs: attributes! { for="new-discount-starts" }, "First day (optional)")
+                                input(attrs: attributes! { id="new-discount-starts" name="starts_on" type="date" })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="new-discount-ends" }, "Last day (optional)")
+                                input(attrs: attributes! { id="new-discount-ends" name="ends_on" type="date" })
+                            )
                         </div>
-                        <p class="text-sm text-neutral-500">"Days are counted in UTC."</p>
-                        <label class="block text-sm" for="new-discount-max">"Orders it serves at most (optional)"</label>
-                        <input id="new-discount-max" name="max_uses" type="number" min="1" max=(MAX_USES) class="mt-1 w-full rounded border border-neutral-300 px-3 py-2">
-                        <label class="block text-sm">
-                            <input type="checkbox" name="once_per_email" value="on"> " Once per shopper e-mail"
+                        <p class="text-sm text-muted-foreground">"Days are counted in UTC."</p>
+                        field(
+                            field_label(attrs: attributes! { for="new-discount-max" }, "Orders it serves at most (optional)")
+                            input(attrs: attributes! { id="new-discount-max" name="max_uses" type="number" min="1" max=(MAX_USES) })
+                        )
+                        <label class="flex items-center gap-2 text-sm">
+                            checkbox(attrs: attributes! { name="once_per_email" value="on" })
+                            " Once per shopper e-mail"
                         </label>
-                        <button class="rounded bg-neutral-900 px-4 py-2 font-medium text-white hover:bg-neutral-700">"Create discount"</button>
+                        <div>
+                            button(attrs: attributes! { type="submit" }, "Create discount")
+                        </div>
                     </form>
-                </section>
+                )
             }
         )
     })
+}
+
+/// The colour of a discount's stored status.
+fn discount_tone(status: &str) -> Tone {
+    match status {
+        "active" => Tone::Success,
+        "inactive" => Tone::Warning,
+        _ => Tone::Neutral,
+    }
 }
