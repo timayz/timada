@@ -234,6 +234,17 @@ pub struct StoreConfig {
     /// The window both limits count over, in seconds.
     #[serde(default = "default_shopper_codes_window_secs")]
     pub shopper_codes_window_secs: u64,
+    /// Messages one visitor's address may send through the shop's contact
+    /// form, at one shop, within the window.
+    #[serde(default = "default_contact_messages_per_ip")]
+    pub contact_messages_per_ip: u32,
+    /// Messages one API key may hand in within the window, whoever the
+    /// visitors.
+    #[serde(default = "default_contact_messages_per_key")]
+    pub contact_messages_per_key: u32,
+    /// The window both message limits count over, in seconds.
+    #[serde(default = "default_contact_messages_window_secs")]
+    pub contact_messages_window_secs: u64,
 }
 
 impl Default for StoreConfig {
@@ -242,6 +253,9 @@ impl Default for StoreConfig {
             shopper_codes_per_ip: default_shopper_codes_per_ip(),
             shopper_codes_per_key: default_shopper_codes_per_key(),
             shopper_codes_window_secs: default_shopper_codes_window_secs(),
+            contact_messages_per_ip: default_contact_messages_per_ip(),
+            contact_messages_per_key: default_contact_messages_per_key(),
+            contact_messages_window_secs: default_contact_messages_window_secs(),
         }
     }
 }
@@ -258,6 +272,18 @@ fn default_shopper_codes_window_secs() -> u64 {
     10 * 60
 }
 
+fn default_contact_messages_per_ip() -> u32 {
+    5
+}
+
+fn default_contact_messages_per_key() -> u32 {
+    200
+}
+
+fn default_contact_messages_window_secs() -> u64 {
+    60 * 60
+}
+
 impl StoreConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         for (name, value) in [
@@ -272,6 +298,18 @@ impl StoreConfig {
             (
                 "store.shopper_codes_window_secs",
                 self.shopper_codes_window_secs,
+            ),
+            (
+                "store.contact_messages_per_ip",
+                u64::from(self.contact_messages_per_ip),
+            ),
+            (
+                "store.contact_messages_per_key",
+                u64::from(self.contact_messages_per_key),
+            ),
+            (
+                "store.contact_messages_window_secs",
+                self.contact_messages_window_secs,
             ),
         ] {
             if value == 0 {
@@ -785,23 +823,56 @@ mod tests {
         assert_eq!(limits.shopper_codes_per_ip, 10);
         assert_eq!(limits.shopper_codes_per_key, 100);
         assert_eq!(limits.shopper_codes_window_secs, 600);
+        assert_eq!(limits.contact_messages_per_ip, 5);
+        assert_eq!(limits.contact_messages_per_key, 200);
+        assert_eq!(limits.contact_messages_window_secs, 3600);
         assert!(limits.validate().is_ok());
-        for zero in [
-            StoreConfig {
-                shopper_codes_per_ip: 0,
-                ..limits.clone()
-            },
-            StoreConfig {
-                shopper_codes_per_key: 0,
-                ..limits.clone()
-            },
-            StoreConfig {
-                shopper_codes_window_secs: 0,
-                ..limits.clone()
-            },
+        for (zero, prefix) in [
+            (
+                StoreConfig {
+                    shopper_codes_per_ip: 0,
+                    ..limits.clone()
+                },
+                "store.shopper_codes_",
+            ),
+            (
+                StoreConfig {
+                    shopper_codes_per_key: 0,
+                    ..limits.clone()
+                },
+                "store.shopper_codes_",
+            ),
+            (
+                StoreConfig {
+                    shopper_codes_window_secs: 0,
+                    ..limits.clone()
+                },
+                "store.shopper_codes_",
+            ),
+            (
+                StoreConfig {
+                    contact_messages_per_ip: 0,
+                    ..limits.clone()
+                },
+                "store.contact_messages_",
+            ),
+            (
+                StoreConfig {
+                    contact_messages_per_key: 0,
+                    ..limits.clone()
+                },
+                "store.contact_messages_",
+            ),
+            (
+                StoreConfig {
+                    contact_messages_window_secs: 0,
+                    ..limits.clone()
+                },
+                "store.contact_messages_",
+            ),
         ] {
             let err = zero.validate().unwrap_err();
-            assert!(err.to_string().starts_with("store.shopper_codes_"), "{err}");
+            assert!(err.to_string().starts_with(prefix), "{err}");
         }
     }
 
@@ -849,7 +920,7 @@ mod tests {
     fn store_limits_read_from_their_section() {
         let parsed: StoreConfig = config::Config::builder()
             .add_source(File::from_str(
-                "shopper_codes_per_ip = 3\nshopper_codes_window_secs = 60\n",
+                "shopper_codes_per_ip = 3\nshopper_codes_window_secs = 60\ncontact_messages_per_ip = 2\n",
                 config::FileFormat::Toml,
             ))
             .build()
@@ -859,6 +930,11 @@ mod tests {
         assert_eq!(parsed.shopper_codes_per_ip, 3);
         assert_eq!(parsed.shopper_codes_per_key, 100, "unset keeps its default");
         assert_eq!(parsed.shopper_codes_window_secs, 60);
+        assert_eq!(parsed.contact_messages_per_ip, 2);
+        assert_eq!(
+            parsed.contact_messages_per_key, 200,
+            "unset keeps its default"
+        );
     }
 
     #[test]

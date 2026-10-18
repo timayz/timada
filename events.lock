@@ -151,6 +151,9 @@ event timada-shoppers/ShopperChallenge::CodeConsumed unit
 event timada-shoppers/ShopperChallenge::CodeIssued { code_hash: String, issued_at: u64, expires_at: u64 }
 event timada-shoppers/ShopperSession::SessionEnded unit
 event timada-shoppers/ShopperSession::SessionStarted { shopper_id: String, expires_at: u64 }
+event timada-support/Message::Handled { handled_by: String }
+event timada-support/Message::Received { first_name: String, last_name: String, email: String, body: String, language: Option<String>, received_by: String }
+event timada-support/Message::Reopened { reopened_by: String }
 event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, created_by: String, created_at: u64 }
 event timada-tenancy/ApiKey::Revoked { revoked_by: String, revoked_at: u64 }
 event timada-tenancy/ApiKey::Scoped { scopes: Vec<String>, scoped_by: String, scoped_at: u64 }

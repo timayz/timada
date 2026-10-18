@@ -1,7 +1,9 @@
 //! What a storefront calls over HTTP, with its store API key: the writes the
-//! store API does not carry, because they come with files (reviews) or must
-//! not be forged by whoever holds a key (shopper sign-ins).
+//! store API does not carry, because they come with files (reviews), must
+//! not be forged by whoever holds a key (shopper sign-ins), or come from
+//! anyone at all and are counted (the contact form's messages).
 
+pub mod contact;
 pub mod reviews;
 pub mod shoppers;
 
