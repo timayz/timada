@@ -7,6 +7,7 @@
 //! comes from the shared read model (a moment behind) and opens on the
 //! confirmed subscribers.
 
+pub mod campaigns;
 pub mod erase;
 pub mod unsubscribe;
 
@@ -28,7 +29,7 @@ use topcoat::{
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
-use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
@@ -182,7 +183,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "newsletter"),
-            page_header(title: "Newsletter", subtitle: Some(subtitle.as_str()))
+            page_header(
+                title: "Newsletter",
+                subtitle: Some(subtitle.as_str()),
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(campaigns::index, Slug(slug.clone())))>"Campaigns"</a>
+            )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             section_card(

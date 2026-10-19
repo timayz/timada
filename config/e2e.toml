@@ -44,6 +44,10 @@ vies_url = "http://127.0.0.1:12113"
 [reviews]
 request_check_secs = 2
 
+# Campaigns go out within a couple of seconds of being sent.
+[newsletter]
+send_check_secs = 2
+
 # Every spec signs shoppers in, sends messages and signs up to newsletters
 # from this one machine, so the limits are far above what the
 # suite asks for.

@@ -1,8 +1,8 @@
-//! The subscription that keeps `newsletter_subscribers` current for one
-//! tenant.
+//! The subscription that keeps `newsletter_subscribers`,
+//! `newsletter_campaigns` and `newsletter_deliveries` current for one tenant.
 //!
-//! The handler reloads the strict write model of the subscriber, opens it
-//! with their key and rewrites their row, so delivery may repeat (the
+//! Each handler reloads the strict write model of the stream and rewrites
+//! its row (a subscriber's opened with their key), so delivery may repeat (the
 //! subscription is at-least-once) without the row drifting; an erased
 //! subscriber loses their row. A key not readable yet (on its way from
 //! another node) fails the handler, which is retried. It runs on the
@@ -19,8 +19,12 @@ use evento::{
 use sqlx::SqlitePool;
 use timada_core::Keys;
 
-use crate::aggregator::Subscriber as SubscriberStream;
-use crate::command::{Subscriber, subscriber_projection};
+use crate::aggregator::{
+    Campaign as CampaignStream, Delivery as DeliveryStream, Subscriber as SubscriberStream,
+};
+use crate::command::{
+    CampaignState, Subscriber, campaign_projection, delivery_projection, subscriber_projection,
+};
 
 /// The cursor identity of the read-model subscription, in each tenant's store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-newsletter/read-models";
@@ -47,6 +51,8 @@ pub fn read_model_subscription<E: Executor>(
         .data(TenantId(tenant_id.to_owned()))
         .data(TenantKeys(keys))
         .handler(on_subscriber_event())
+        .handler(on_campaign_event())
+        .handler(on_delivery_event())
         .any_routing_key()
         .retry(u8::MAX)
 }
@@ -74,6 +80,81 @@ async fn on_subscriber_event<E: Executor>(
         .await?
         .ok_or_else(|| anyhow::anyhow!("the key of subscriber {} is not readable yet", state.id))?;
     upsert_subscriber(&pool, &tenant.0, &subscriber).await
+}
+
+#[evento::subscription_all]
+async fn on_campaign_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<CampaignStream>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let tenant: TenantId = context.extract();
+    let Some(state) = campaign_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_campaign(&pool, &tenant.0, &state).await
+}
+
+#[evento::subscription_all]
+async fn on_delivery_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<DeliveryStream>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let tenant: TenantId = context.extract();
+    let Some(state) = delivery_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    sqlx::query(
+        "INSERT INTO newsletter_deliveries (tenant_id, campaign_id, subscriber_id, failed)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (tenant_id, campaign_id, subscriber_id) DO UPDATE SET
+            failed = excluded.failed",
+    )
+    .bind(&tenant.0)
+    .bind(&state.campaign_id)
+    .bind(&state.subscriber_id)
+    .bind(state.failed.is_some())
+    .execute(&pool)
+    .await?;
+    Ok(())
+}
+
+/// Writes the row of a campaign as the write model sees it.
+pub async fn upsert_campaign(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    campaign: &CampaignState,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO newsletter_campaigns (tenant_id, id, subject, language, status,
+            created_at, sent_at, finished_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT (tenant_id, id) DO UPDATE SET
+            subject = excluded.subject, language = excluded.language,
+            status = excluded.status, sent_at = excluded.sent_at,
+            finished_at = excluded.finished_at, updated_at = excluded.updated_at",
+    )
+    .bind(tenant_id)
+    .bind(&campaign.id)
+    .bind(&campaign.subject)
+    .bind(&campaign.language)
+    .bind(campaign.status.as_str())
+    .bind(campaign.created_at as i64)
+    .bind(campaign.sent_at.map(|at| at as i64))
+    .bind(campaign.finished_at.map(|at| at as i64))
+    .bind(campaign.updated_at as i64)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Drops the row of an erased subscriber.

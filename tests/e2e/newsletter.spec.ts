@@ -97,6 +97,20 @@ test("the newsletter page needs newsletter:read, its actions newsletter:manage",
     );
     expect(refused.status()).toBe(403);
   }
+  // The campaigns are read, not written.
+  await reader.page.getByRole("link", { name: "Campaigns" }).click();
+  await expect(reader.page).toHaveURL(
+    new RegExp(`/t/${slug}/newsletter/campaigns$`),
+  );
+  await expect(
+    reader.page.getByRole("link", { name: "New campaign" }),
+  ).toHaveCount(0);
+  expect(
+    (await reader.page.goto(`/t/${slug}/newsletter/campaigns/new`))?.status(),
+  ).toBe(403);
+  expect(
+    (await viewer.page.goto(`/t/${slug}/newsletter/campaigns`))?.status(),
+  ).toBe(403);
   // The owner may, and an unknown subscriber is told apart.
   for (const action of ["unsubscribe", "erase"]) {
     const unknown = await owner.request.post(

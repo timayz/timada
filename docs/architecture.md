@@ -491,6 +491,23 @@ destroys it: the read model drops the row and every link mailed to them stops
 working. The merchant reads the list on `/t/{slug}/newsletter` (`newsletter:read`,
 from `newsletter_subscribers`).
 
+A campaign is a `Campaign` stream (a ULID): the subject, HTML and optional plain text
+the merchant writes on `/t/{slug}/newsletter/campaigns` (`newsletter:manage`), as
+templates over the shop's variables and `{{ unsubscribe_url }}`, which every campaign
+must link to; it may go to the subscribers of one language only. It is a draft
+(`Drafted`, `Edited`) until sent (`SendRequested`), and can then no longer be edited.
+Nothing in the event store fires later, so every node sweeps the campaigns going out
+(`[newsletter] send_check_secs`, from `newsletter_campaigns`) and mails up to
+`mails_per_check` of each campaign's confirmed subscribers not mailed yet (from
+`newsletter_deliveries`). Each mail is claimed first: a `Delivery` stream per
+campaign and subscriber, written with `original_version(0)`, so a subscriber gets a
+campaign once however many nodes send it; a mail the server refuses is recorded
+(`Failed`) and not tried again. A sweep that finds fewer owed than a batch writes
+`Finished`. Every mail carries `List-Unsubscribe` and `List-Unsubscribe-Post:
+List-Unsubscribe=One-Click` (RFC 8058) pointing at the storefront's unsubscribe page,
+whose POST takes the subscriber off the list; a shop without a storefront address
+holds its campaign back until it has one.
+
 ## The storefront side
 
 `timada-storefront` runs inside the merchant's app. Its executor is a `Sidecar`:
