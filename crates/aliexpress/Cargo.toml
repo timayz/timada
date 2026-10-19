@@ -12,6 +12,7 @@ timada-tenancy = { path = "../tenancy" }
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 serde_json.workspace = true
 # Calls AliExpress's open platform; signs each call with the app's secret.
 reqwest.workspace = true

@@ -282,13 +282,17 @@ impl Aliexpress {
         for warning in &outcome.warnings {
             tracing::info!(tenant = %tenant.id, ae_product_id = %link.ae_product_id, %warning, "AliExpress read");
         }
+        let found = (outcome.found != link.found).then_some(outcome.found);
         match links
             .record_sync(
                 ALIEXPRESS_ACTOR,
                 link_id,
                 version,
-                outcome.skus,
-                outcome.offline,
+                timada_aliexpress::SyncRead {
+                    skus: outcome.skus,
+                    offline: outcome.offline,
+                    found,
+                },
             )
             .await
         {
@@ -299,6 +303,68 @@ impl Aliexpress {
             Err(timada_aliexpress::AliexpressError::Write(
                 evento::WriteError::InvalidOriginalVersion,
             )) => Ok(SyncResult::Skipped),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
+/// How adding combinations found went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddResult {
+    /// This many are now variants; `warnings` says why the others are not.
+    Added { added: usize, warnings: Vec<String> },
+    /// Another read or add came in between: nothing recorded.
+    Skipped,
+    /// Nothing to add to: not linked, or the shop is not connected.
+    NotLinked,
+}
+
+impl Aliexpress {
+    /// Adds combinations a read found (`sku_ids`; empty: every one offered)
+    /// as variants of the linked product, priced by the item's rule, else
+    /// the shop's. `store` is the tenant's executor.
+    pub async fn add_combinations<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        tenant: &TenantState,
+        media: Arc<Media>,
+        actor: &str,
+        link_id: &str,
+        sku_ids: &[String],
+    ) -> anyhow::Result<AddResult> {
+        let links = timada_aliexpress::Command(store.clone());
+        let Some((link, version)) = links.load_link_versioned(link_id).await? else {
+            return Ok(AddResult::NotLinked);
+        };
+        let Some(settings) = tenant.aliexpress.as_ref().filter(|_| link.is_linked()) else {
+            return Ok(AddResult::NotLinked);
+        };
+        let catalog = timada_catalog::Command(store.clone());
+        let images = self.images(media, &tenant.id);
+        let outcome = timada_aliexpress::add_combinations(
+            &catalog,
+            actor,
+            &link,
+            sku_ids,
+            link.pricing.or(settings.pricing),
+            &images,
+        )
+        .await?;
+        for warning in &outcome.warnings {
+            tracing::info!(tenant = %tenant.id, ae_product_id = %link.ae_product_id, %warning, "AliExpress combinations");
+        }
+        let added = outcome.skus.len();
+        match links
+            .record_combinations_added(actor, link_id, version, outcome.skus)
+            .await
+        {
+            Ok(()) => Ok(AddResult::Added {
+                added,
+                warnings: outcome.warnings,
+            }),
+            Err(timada_aliexpress::AliexpressError::Write(
+                evento::WriteError::InvalidOriginalVersion,
+            )) => Ok(AddResult::Skipped),
             Err(err) => Err(err.into()),
         }
     }

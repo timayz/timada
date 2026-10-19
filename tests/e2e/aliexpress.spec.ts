@@ -111,6 +111,66 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
   }
 });
 
+test("a merchant adds the combinations AliExpress gained as variants, or ignores them", async ({ page }) => {
+  const aliexpress = new FakeAliexpress();
+  await aliexpress.start();
+  try {
+    const productUrl = await importedShop(page, aliexpress);
+    await expect(page.locator("[data-variant]")).toHaveCount(2);
+    await expect(page.locator("[data-aliexpress-found]")).toHaveCount(0);
+
+    // AliExpress now sells green and grey too: the next read offers them.
+    aliexpress.skus.push({ id: "12000037003", colour: "Green", price: "3.00", stock: 9 });
+    aliexpress.skus.push({ id: "12000037004", colour: "Grey", price: "3.50", stock: 4 });
+    await page.getByRole("button", { name: "Sync now" }).click();
+    await expect(page.getByRole("status")).toContainText("Read again from AliExpress.");
+    const green = page.locator('[data-aliexpress-new="12000037003"]');
+    const grey = page.locator('[data-aliexpress-new="12000037004"]');
+    await expect(green).toContainText("Colour: Green");
+    await expect(grey).toContainText("Colour: Grey");
+    await expect(page.getByRole("button", { name: "Add all 2" })).toBeVisible();
+
+    // The shop's list says there is something new.
+    const slug = new URL(productUrl).pathname.split("/")[2];
+    await expect(async () => {
+      await page.goto(`/t/${slug}/aliexpress`);
+      await expect(page.locator(`[data-aliexpress-link="${PRODUCT_ID}"] [data-link-new]`)).toHaveAttribute(
+        "data-link-new",
+        "2",
+        { timeout: 1000 },
+      );
+    }).toPass({ timeout: 10_000 });
+    await page.goto(productUrl);
+
+    // Grey is ignored, then offered again; green is added.
+    await page.getByRole("button", { name: "Ignore Colour: Grey" }).click();
+    await expect(page.getByRole("status")).toContainText("No longer offered.");
+    await expect(grey).toHaveCount(0);
+    await expect(page.locator('[data-aliexpress-ignored-sku="12000037004"]')).toHaveCount(1);
+    await page.locator("[data-aliexpress-ignored] summary").click();
+    await page.getByRole("button", { name: "Offer Colour: Grey again" }).click();
+    await expect(page.getByRole("status")).toContainText("Offered again.");
+    await expect(grey).toHaveCount(1);
+
+    await page.getByRole("button", { name: "Add Colour: Green as a variant" }).click();
+    await expect(page.getByRole("status")).toContainText("1 combination added as a variant.");
+    const variant = page.locator("[data-variant]", { hasText: "Colour: Green" });
+    await expect(variant.locator("[data-stock]")).toHaveAttribute("data-stock", "9");
+    await expect(variant.getByLabel("Price of Colour: Green")).toHaveValue("6.00");
+    await expect(green).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add all 2" })).toHaveCount(0);
+
+    // The next read counts green like the others.
+    aliexpress.sku("12000037003").stock = 3;
+    await page.getByRole("button", { name: "Sync now" }).click();
+    await expect(page.getByRole("status")).toContainText("Read again from AliExpress.");
+    await expect(variant.locator("[data-stock]")).toHaveAttribute("data-stock", "3");
+    await expect(page.locator("[data-variant]")).toHaveCount(3);
+  } finally {
+    await aliexpress.stop();
+  }
+});
+
 /// A shop with its app set up and its account connected to the stand-in; its
 /// slug.
 async function connectedShop(page: Page, tenant: string): Promise<string> {

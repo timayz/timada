@@ -8,8 +8,9 @@ use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Ev
 use timada_tenancy::PricingRule;
 
 use crate::aggregator::{
-    ImportFailed, ImportRequested, ImportStarted, Imported, PricingSet, SkuLink, SyncFailed,
-    Synced, Unlinked,
+    CombinationIgnored, CombinationRestored, CombinationsAdded, CombinationsFound, ImportFailed,
+    ImportRequested, ImportStarted, Imported, NewSku, PricingSet, SkuLink, SyncFailed, Synced,
+    Unlinked,
 };
 use crate::error::AliexpressError;
 use crate::value_object::{IMPORT_STALE_SECS, aliexpress_product_id};
@@ -30,6 +31,17 @@ pub(crate) fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or_default()
+}
+
+/// What a read of a linked item recorded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncRead {
+    /// The combinations as now read.
+    pub skus: Vec<SkuLink>,
+    /// AliExpress no longer sells it.
+    pub offline: bool,
+    /// What the read found that the shop does not sell, when that changed.
+    pub found: Option<Vec<NewSku>>,
 }
 
 /// Where an import stands.
@@ -70,6 +82,10 @@ pub struct LinkState {
     /// The catalog product, once imported.
     pub product_id: Option<String>,
     pub skus: Vec<SkuLink>,
+    /// What the last read found that the shop does not sell.
+    pub found: Vec<NewSku>,
+    /// The combinations the merchant does not want offered, by id.
+    pub ignored: Vec<String>,
     /// The product's own rule; `None` follows the shop's.
     pub pricing: Option<PricingRule>,
     /// AliExpress no longer sells it (as of the last read).
@@ -89,6 +105,20 @@ impl LinkState {
     pub fn is_linked(&self) -> bool {
         self.status == LinkStatus::Linked
     }
+
+    /// What is offered to the merchant: found, and not ignored.
+    pub fn offered(&self) -> impl Iterator<Item = &NewSku> {
+        self.found
+            .iter()
+            .filter(|sku| !self.ignored.contains(&sku.sku_id))
+    }
+
+    /// What was found and ignored.
+    pub fn ignored_found(&self) -> impl Iterator<Item = &NewSku> {
+        self.found
+            .iter()
+            .filter(|sku| self.ignored.contains(&sku.sku_id))
+    }
 }
 
 pub fn link_projection<E: Executor>() -> Projection<E, LinkState> {
@@ -101,6 +131,10 @@ pub fn link_projection<E: Executor>() -> Projection<E, LinkState> {
         .handler(on_sync_failed())
         .handler(on_pricing_set())
         .handler(on_unlinked())
+        .handler(on_combinations_found())
+        .handler(on_combinations_added())
+        .handler(on_combination_ignored())
+        .handler(on_combination_restored())
         .strict()
 }
 
@@ -115,6 +149,8 @@ async fn on_import_requested(
     link.started = false;
     link.product_id = None;
     link.skus.clear();
+    link.found.clear();
+    link.ignored.clear();
     link.offline = false;
     link.last_error = None;
     link.requested_by = event.data.requested_by.to_owned();
@@ -179,6 +215,53 @@ async fn on_pricing_set(event: Event<PricingSet>, link: &mut LinkState) -> anyho
 #[evento::handler]
 async fn on_unlinked(event: Event<Unlinked>, link: &mut LinkState) -> anyhow::Result<()> {
     link.status = LinkStatus::Unlinked;
+    link.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_combinations_found(
+    event: Event<CombinationsFound>,
+    link: &mut LinkState,
+) -> anyhow::Result<()> {
+    link.found = event.data.found.to_owned();
+    link.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_combinations_added(
+    event: Event<CombinationsAdded>,
+    link: &mut LinkState,
+) -> anyhow::Result<()> {
+    for added in event.data.skus.iter() {
+        link.found.retain(|sku| sku.sku_id != added.sku_id);
+        link.ignored.retain(|sku_id| sku_id != &added.sku_id);
+        link.skus.retain(|sku| sku.sku_id != added.sku_id);
+        link.skus.push(added.clone());
+    }
+    link.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_combination_ignored(
+    event: Event<CombinationIgnored>,
+    link: &mut LinkState,
+) -> anyhow::Result<()> {
+    if !link.ignored.contains(&event.data.sku_id) {
+        link.ignored.push(event.data.sku_id.to_owned());
+    }
+    link.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_combination_restored(
+    event: Event<CombinationRestored>,
+    link: &mut LinkState,
+) -> anyhow::Result<()> {
+    link.ignored.retain(|sku_id| sku_id != &event.data.sku_id);
     link.updated_at = event.timestamp;
     Ok(())
 }
@@ -318,17 +401,93 @@ impl<E: Executor> Command<E> {
         actor: &str,
         link_id: &str,
         version: u16,
-        skus: Vec<SkuLink>,
-        offline: bool,
+        read: SyncRead,
         routing_key: Option<String>,
     ) -> Result<(), AliexpressError> {
-        evento::append(link_id)
+        let mut write = evento::append(link_id);
+        write
             .original_version(version)
             .routing_key_opt(routing_key)
             .event(&Synced {
-                skus,
-                offline,
+                skus: read.skus,
+                offline: read.offline,
                 synced_by: actor.to_owned(),
+            });
+        if let Some(found) = read.found {
+            write.event(&CombinationsFound { found });
+        }
+        write.commit(&self.0).await?;
+        Ok(())
+    }
+
+    /// Records combinations found earlier that are now variants, written
+    /// against `version` like a read.
+    pub async fn record_combinations_added(
+        &self,
+        actor: &str,
+        link_id: &str,
+        version: u16,
+        skus: Vec<SkuLink>,
+        routing_key: Option<String>,
+    ) -> Result<(), AliexpressError> {
+        if skus.is_empty() {
+            return Ok(());
+        }
+        evento::append(link_id)
+            .original_version(version)
+            .routing_key_opt(routing_key)
+            .event(&CombinationsAdded {
+                skus,
+                added_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Stops offering a combination found; ignored already is a no-op.
+    pub async fn ignore_combination(
+        &self,
+        actor: &str,
+        link_id: &str,
+        sku_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), AliexpressError> {
+        let link = self.require_link(link_id).await?;
+        if !link.found.iter().any(|sku| sku.sku_id == sku_id) {
+            return Err(AliexpressError::CombinationNotFound);
+        }
+        if link.ignored.iter().any(|ignored| ignored == sku_id) {
+            return Ok(());
+        }
+        link.write()?
+            .routing_key_opt(routing_key)
+            .event(&CombinationIgnored {
+                sku_id: sku_id.to_owned(),
+                ignored_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Offers an ignored combination again; one not ignored is a no-op.
+    pub async fn restore_combination(
+        &self,
+        actor: &str,
+        link_id: &str,
+        sku_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), AliexpressError> {
+        let link = self.require_link(link_id).await?;
+        if !link.ignored.iter().any(|ignored| ignored == sku_id) {
+            return Ok(());
+        }
+        link.write()?
+            .routing_key_opt(routing_key)
+            .event(&CombinationRestored {
+                sku_id: sku_id.to_owned(),
+                restored_by: actor.to_owned(),
             })
             .commit(&self.0)
             .await?;

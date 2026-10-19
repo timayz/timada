@@ -60,9 +60,26 @@ A read does three things:
 - an item AliExpress no longer sells gets stock 0 everywhere and is taken off sale.
   It stays a draft until the merchant publishes it again.
 
-A combination AliExpress dropped goes to 0, and new combinations are not added. A read
-that fails is shown on the link; the product keeps what it had. Unlinking stops the
-reads and leaves the product as it is.
+A combination AliExpress dropped goes to 0. A read that fails is shown on the link;
+the product keeps what it had. Unlinking stops the reads and leaves the product as it
+is.
+
+### New combinations
+
+A read also notes the priced combinations AliExpress sells that the product does not
+(`CombinationsFound`, written with the read's `Synced`). The product page lists them
+under *New on AliExpress*, and the AliExpress page counts them. Nothing changes in the
+catalog until the merchant acts:
+
+- *Add as variant* (or *Add all*) adds the values its options lack, its picture, a
+  price by the rule (the cost without one) and AliExpress's stock, then records the
+  link (`CombinationsAdded`). The next reads keep it in step like the others. If an
+  add is not recorded, for example because a read came in between, adding the
+  combination again links the variant it already made.
+- *Ignore* stops offering it (`CombinationIgnored`); *Offer again* undoes that.
+- A combination that does not fit is listed with the reason. That is one that varies
+  by an option the product lacks, or one of a product that does not vary. The catalog
+  takes no new option once variants exist, so the merchant imports the item again.
 
 ## Where things live
 

@@ -55,13 +55,15 @@ pub async fn upsert_link(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO aliexpress_products (tenant_id, id, ae_product_id, product_id, status,
-            offline, own_pricing, last_synced_at, last_error, requested_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            offline, own_pricing, last_synced_at, last_error, requested_at, updated_at,
+            new_combinations)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             product_id = excluded.product_id, status = excluded.status,
             offline = excluded.offline, own_pricing = excluded.own_pricing,
             last_synced_at = excluded.last_synced_at, last_error = excluded.last_error,
-            requested_at = excluded.requested_at, updated_at = excluded.updated_at",
+            requested_at = excluded.requested_at, updated_at = excluded.updated_at,
+            new_combinations = excluded.new_combinations",
     )
     .bind(tenant_id)
     .bind(&link.id)
@@ -74,6 +76,7 @@ pub async fn upsert_link(
     .bind(&link.last_error)
     .bind(link.requested_at as i64)
     .bind(link.updated_at as i64)
+    .bind(link.offered().count() as i64)
     .execute(pool)
     .await?;
     Ok(())
@@ -96,13 +99,16 @@ pub struct LinkRow {
     pub last_error: Option<String>,
     pub requested_at: i64,
     pub updated_at: i64,
+    /// Combinations a read found that the shop could add (ignored aside).
+    pub new_combinations: i64,
 }
 
 /// The columns of a [`LinkRow`], shared by the queries below.
 macro_rules! columns {
     () => {
         "SELECT tenant_id, id, ae_product_id, product_id, status, offline, own_pricing,
-            last_synced_at, last_error, requested_at, updated_at FROM aliexpress_products "
+            last_synced_at, last_error, requested_at, updated_at, new_combinations
+            FROM aliexpress_products "
     };
 }
 

@@ -5,7 +5,7 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "aliexpress";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Products0001]
+    vec_box![Products0001, Products0002]
 }
 
 pub struct Products0001;
@@ -41,4 +41,16 @@ sqlx_migrator::sqlite_migration!(
             "DROP INDEX aliexpress_products_due"
         ),
     ]
+);
+
+pub struct Products0002;
+sqlx_migrator::sqlite_migration!(
+    Products0002,
+    "aliexpress",
+    "0002_new_combinations",
+    vec_box![("aliexpress", "0001_products")],
+    vec_box![(
+        "ALTER TABLE aliexpress_products ADD COLUMN new_combinations INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE aliexpress_products DROP COLUMN new_combinations"
+    )]
 );
