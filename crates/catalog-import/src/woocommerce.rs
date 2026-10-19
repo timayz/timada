@@ -313,6 +313,18 @@ async fn read_pages(
     out
 }
 
+/// `text` up to the first paragraph that is one of the `headings`.
+fn cut_at_heading(text: &str, headings: &[String]) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    for paragraph in text.split("\n\n") {
+        if headings.iter().any(|heading| paragraph.trim() == heading) {
+            break;
+        }
+        kept.push(paragraph);
+    }
+    kept.join("\n\n").trim().to_owned()
+}
+
 /// Every page of a listing, one request at a time, each tried twice.
 async fn fetch_all<T: serde::de::DeserializeOwned>(
     client: &reqwest::Client,
@@ -379,7 +391,7 @@ pub fn map_catalog(
         .iter()
         .filter_map(|product| {
             let variations = by_parent.get(&product.id).map(Vec::as_slice).unwrap_or(&[]);
-            let mut seed = map_product(product, variations, &known)?;
+            let mut seed = map_product(product, variations, &known, &options.tab_stop_at)?;
             if !used_slugs.insert(seed.slug.clone()) {
                 tracing::warn!(slug = %seed.slug, id = product.id, "duplicate slug, product skipped");
                 return None;
@@ -483,6 +495,7 @@ fn map_product(
     product: &WooProduct,
     variations: &[&WooProduct],
     known: &HashSet<&str>,
+    stop_at: &[String],
 ) -> Option<ProductSeed> {
     let name = plain(&product.name, MAX_NAME_LEN);
     if name.is_empty() {
@@ -497,9 +510,11 @@ fn map_product(
         "EUR".to_owned()
     };
     let short = html_to_text(&product.short_description);
+    // An older product carries the page builder's layout in its API
+    // description, the shop's own blocks included: cut there as on a page.
     let long = match html_to_text(&product.description) {
         long if long.is_empty() => product.tab.trim().to_owned(),
-        long => long,
+        long => cut_at_heading(&long, stop_at),
     };
     let description = if long.is_empty() || long == short {
         short
@@ -795,5 +810,22 @@ mod tests {
         assert_eq!(fit_sku("  "), None);
         assert_eq!(parse_minor("1990"), Some(1990));
         assert_eq!(parse_minor(""), None);
+    }
+
+    #[test]
+    fn a_description_stops_at_the_shop_blocks() {
+        let stops = ["À propos".to_owned()];
+        assert_eq!(
+            cut_at_heading("Doux.\n\nLavable.\n\nÀ propos\n\nNous sommes 2.", &stops),
+            "Doux.\n\nLavable."
+        );
+        assert_eq!(
+            cut_at_heading("Doux. À propos du tapis.", &stops),
+            "Doux. À propos du tapis."
+        );
+        assert_eq!(
+            cut_at_heading("Doux.\n\nÀ propos", &[]),
+            "Doux.\n\nÀ propos"
+        );
     }
 }
