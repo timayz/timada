@@ -236,6 +236,10 @@ pub fn describe_error(code: &str) -> &'static str {
         "aliexpress_already_linked" => "This product is already imported.",
         "aliexpress_importing" => "This product is being imported.",
         "aliexpress_not_found" => "This product was not imported from AliExpress.",
+        "aliexpress_combination_not_found" => {
+            "AliExpress no longer offers this combination: read the product again."
+        }
+        "aliexpress_combinations_raced" => "The product was read again meanwhile. Try once more.",
         "aliexpress_sync_failed" => "AliExpress did not answer. The product is read again later.",
         "secrets_disabled" => {
             "No secret can be kept on this platform: the operator has to set secrets.key first."

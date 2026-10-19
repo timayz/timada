@@ -1,4 +1,4 @@
-use timada_aliexpress::{AeProduct, MapError, map_product};
+use timada_aliexpress::{AeProduct, MapError, map_product, selections_of};
 use timada_tenancy::{PricingRule, Rounding};
 
 fn fixture() -> AeProduct {
@@ -81,4 +81,19 @@ fn a_refusal_in_the_answer_is_told() {
     let err = AeProduct::from_response("1", &body).unwrap_err();
     assert!(err.gone);
     assert!(!err.retryable);
+}
+
+#[test]
+fn a_combination_names_the_options_and_values_an_import_makes() {
+    let product = fixture();
+    let mapped = map_product(&product, "EUR", None).unwrap();
+    for (variant, sku) in mapped.seed.variants.iter().zip(&mapped.skus) {
+        let read = product.sku(&sku.sku_id).unwrap();
+        let named: Vec<(String, String)> = variant
+            .selections
+            .iter()
+            .map(|selection| (selection.option.clone(), selection.value.clone()))
+            .collect();
+        assert_eq!(selections_of(read), named);
+    }
 }

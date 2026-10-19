@@ -359,6 +359,31 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 .collect()
         })
         .unwrap_or_default();
+    // What a read found that the shop does not sell: (sku id, label, cost,
+    // available, why it cannot be added).
+    let found_row = |sku: &timada_aliexpress::aggregator::NewSku| {
+        let label = sku
+            .selections
+            .iter()
+            .map(|(option, value)| format!("{option}: {value}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let cost = format_money(sku.cost_cents, product.currency().unwrap_or(CURRENCIES[0]));
+        let reason = timada_aliexpress::fit(&product, sku).reason();
+        (sku.sku_id.clone(), label, cost, sku.available, reason)
+    };
+    let link_found: Vec<(String, String, String, u32, Option<String>)> = link
+        .as_ref()
+        .map(|link| link.offered().map(found_row).collect())
+        .unwrap_or_default();
+    let link_ignored: Vec<(String, String, String, u32, Option<String>)> = link
+        .as_ref()
+        .map(|link| link.ignored_found().map(found_row).collect())
+        .unwrap_or_default();
+    let found_fitting = link_found
+        .iter()
+        .filter(|(.., reason)| reason.is_none())
+        .count();
     let link_rule = link.as_ref().and_then(|link| link.pricing);
     let link_rule_fields = crate::app::t::slug::aliexpress::RuleFields::of(link_rule);
     let link_rule_label = link_rule
@@ -893,6 +918,64 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                         </ul>
                     </div>
+                    if !link_found.is_empty() || !link_ignored.is_empty() {
+                        <div class="mt-4" data-aliexpress-found="">
+                            <h3 class="text-sm font-medium">"New on AliExpress"</h3>
+                            <p class="text-xs text-muted-foreground">"Combinations AliExpress sells that this product does not. Added, each is a variant priced by the rule and counted from AliExpress."</p>
+                            if link_found.is_empty() {
+                                <p class="mt-2 text-sm text-muted-foreground">"Nothing new to add."</p>
+                            }
+                            <ul class="mt-2 space-y-2 text-sm">
+                                for (sku_id, label, cost, available, reason) in &link_found {
+                                    <li class="flex flex-wrap items-center gap-2" data-aliexpress-new=(sku_id)>
+                                        <span>(label) " · costs " (cost) " · " (available) " on AliExpress"</span>
+                                        if let Some(reason) = reason {
+                                            status_badge(tone: crate::ui::Tone::Warning, "Can't be added")
+                                            <span class="text-xs text-muted-foreground" data-aliexpress-new-reason="">(reason)</span>
+                                        } else if can_aliexpress {
+                                            <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::combinations::combinations, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                                <input type="hidden" name="back" value=(&product.id)>
+                                                <input type="hidden" name="sku_id" value=(sku_id)>
+                                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Add {label} as a variant")) }, "Add as variant")
+                                            </form>
+                                        }
+                                        if can_aliexpress {
+                                            <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::ignore::ignore, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                                <input type="hidden" name="back" value=(&product.id)>
+                                                <input type="hidden" name="sku_id" value=(sku_id)>
+                                                button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Ignore {label}")) }, "Ignore")
+                                            </form>
+                                        }
+                                    </li>
+                                }
+                            </ul>
+                            if can_aliexpress && found_fitting > 1 {
+                                <form class="mt-2" method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::combinations::combinations, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                    <input type="hidden" name="back" value=(&product.id)>
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, (format!("Add all {found_fitting}")))
+                                </form>
+                            }
+                            if !link_ignored.is_empty() {
+                                <details class="mt-3" data-aliexpress-ignored="">
+                                    <summary class="cursor-pointer text-xs text-muted-foreground">(format!("Ignored ({})", link_ignored.len()))</summary>
+                                    <ul class="mt-2 space-y-2 text-sm">
+                                        for (sku_id, label, cost, available, _) in &link_ignored {
+                                            <li class="flex flex-wrap items-center gap-2" data-aliexpress-ignored-sku=(sku_id)>
+                                                <span>(label) " · costs " (cost) " · " (available) " on AliExpress"</span>
+                                                if can_aliexpress {
+                                                    <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::restore::restore, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                                        <input type="hidden" name="back" value=(&product.id)>
+                                                        <input type="hidden" name="sku_id" value=(sku_id)>
+                                                        button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Offer {label} again")) }, "Offer again")
+                                                    </form>
+                                                }
+                                            </li>
+                                        }
+                                    </ul>
+                                </details>
+                            }
+                        </div>
+                    }
                     if can_aliexpress {
                         <div class="mt-4 flex flex-wrap gap-2">
                             <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::sync::sync, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>

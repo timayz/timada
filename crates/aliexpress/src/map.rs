@@ -16,7 +16,7 @@ use timada_catalog_import::{
 };
 use timada_tenancy::PricingRule;
 
-use crate::model::AeProduct;
+use crate::model::{AeProduct, AeSku, AeSkuProperty};
 
 /// The longest value an option takes.
 const MAX_OPTION_VALUE_LEN: usize = 40;
@@ -49,6 +49,30 @@ pub enum MapError {
     Unpriced,
     #[error("AliExpress no longer sells it")]
     Offline,
+}
+
+/// The option and value a combination's property makes, as an import names
+/// them.
+fn option_of(property: &AeSkuProperty) -> (String, String) {
+    (
+        truncate_chars(&property.name, MAX_OPTION_NAME_LEN),
+        truncate_chars(&property.value, MAX_OPTION_VALUE_LEN),
+    )
+}
+
+/// The `(option, value)` pairs of a combination, as an import names them,
+/// in AliExpress's order.
+pub fn selections_of(sku: &AeSku) -> Vec<(String, String)> {
+    sku.properties.iter().map(option_of).collect()
+}
+
+/// A picture's address as fetched: AliExpress leaves some without a scheme.
+pub fn picture_url(url: &str) -> String {
+    if url.starts_with("//") {
+        format!("https:{url}")
+    } else {
+        url.to_owned()
+    }
 }
 
 /// The shop's price of something that costs `cost_cents`: `rule`'s, or the
@@ -88,11 +112,7 @@ pub fn map_product(
     // The product's own pictures, then each combination's.
     let mut images: Vec<ImageSeed> = Vec::new();
     let picture = |url: &str, images: &mut Vec<ImageSeed>| -> Option<usize> {
-        let url = if url.starts_with("//") {
-            format!("https:{url}")
-        } else {
-            url.to_owned()
-        };
+        let url = picture_url(url);
         if let Some(index) = images.iter().position(|image| image.url == url) {
             return Some(index);
         }
@@ -149,8 +169,7 @@ pub fn map_product(
         let mut options: Vec<OptionSeed> = Vec::new();
         for (sku, _) in &priced {
             for property in &sku.properties {
-                let option_name = truncate_chars(&property.name, MAX_OPTION_NAME_LEN);
-                let value = truncate_chars(&property.value, MAX_OPTION_VALUE_LEN);
+                let (option_name, value) = option_of(property);
                 let option = match options.iter_mut().position(|o| o.name == option_name) {
                     Some(index) => &mut options[index],
                     None if options.len() < MAX_OPTIONS => {
@@ -178,14 +197,12 @@ pub fn map_product(
             let mut selections: Vec<SelectionSeed> = Vec::new();
             let mut image = None;
             for option in &options {
-                let Some(property) = sku
-                    .properties
-                    .iter()
-                    .find(|p| truncate_chars(&p.name, MAX_OPTION_NAME_LEN) == option.name)
-                else {
+                let Some((property, value)) = sku.properties.iter().find_map(|p| {
+                    let (name, value) = option_of(p);
+                    (name == option.name).then_some((p, value))
+                }) else {
                     break;
                 };
-                let value = truncate_chars(&property.value, MAX_OPTION_VALUE_LEN);
                 if !option.values.contains(&value) {
                     break;
                 }

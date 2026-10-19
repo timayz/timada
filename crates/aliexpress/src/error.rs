@@ -12,6 +12,8 @@ pub enum AliexpressError {
     NotFound,
     #[error("a price rule multiplies by 1 to 100 and adds at most 10,000")]
     InvalidPricingRule,
+    #[error("AliExpress no longer offers this combination")]
+    CombinationNotFound,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -33,6 +35,7 @@ impl AliexpressError {
             Self::Importing => "aliexpress_importing",
             Self::NotFound => "aliexpress_not_found",
             Self::InvalidPricingRule => "invalid_pricing_rule",
+            Self::CombinationNotFound => "aliexpress_combination_not_found",
             Self::Write(_) | Self::Other(_) => return None,
         })
     }
