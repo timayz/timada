@@ -136,6 +136,12 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             &executor,
         )
         .await?,
+        start_read_model(
+            "AliExpress access",
+            timada_tenancy::aliexpress_access_subscription(write_pool.clone()),
+            &executor,
+        )
+        .await?,
         // Not a read model, but the same lifecycle: every node opens a tenant
         // as soon as its creation arrives.
         start_read_model(
