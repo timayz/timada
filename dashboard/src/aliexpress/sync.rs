@@ -2,8 +2,9 @@
 //! price by rule and availability follow AliExpress. Nothing in the event
 //! store fires later, so every node sweeps the links due in the shared read
 //! model; a read another node recorded in between wins (`record_sync` writes
-//! against the version it started from). The same sweep renews an account's
-//! access a day before it lapses.
+//! against the version it started from). The same sweep first renews every
+//! connected account's access a day before it lapses, whether or not the shop
+//! has anything imported.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,13 +60,15 @@ impl AliexpressSync {
         })
     }
 
-    /// Reads again every link last read longer ago than the configured
-    /// period, shop by shop. A shop that fails is logged and the others
-    /// still go. Returns how many were brought in step.
+    /// Renews the access that lapses within a day, then reads again every
+    /// link last read longer ago than the configured period, shop by shop. A
+    /// shop that fails is logged and the others still go. Returns how many
+    /// links were brought in step.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<usize> {
         if !self.aliexpress.enabled() {
             return Ok(0);
         }
+        self.renew_due(now).await?;
         let every = self.aliexpress.sync_every_secs();
         let before = now.saturating_sub(every) as i64;
         let due = links_due(&self.read_pool, before, SWEEP_LIMIT).await?;
@@ -80,6 +83,36 @@ impl AliexpressSync {
             }
         }
         Ok(synced)
+    }
+
+    /// Renews the access of every connected shop due within the margin,
+    /// the soonest first. The tenant's own state decides (the read model may
+    /// lag), and one node per token renews it.
+    async fn renew_due(&self, now: u64) -> anyhow::Result<()> {
+        let before = now.saturating_add(timada_aliexpress::REFRESH_MARGIN_SECS) as i64;
+        let due =
+            timada_tenancy::aliexpress_access_due(&self.read_pool, before, now as i64, SWEEP_LIMIT)
+                .await?;
+        for tenant_id in &due {
+            if let Err(err) = self.renew_tenant(tenant_id, now).await {
+                tracing::error!(tenant = %tenant_id, error = %err, "AliExpress access not renewed");
+            }
+        }
+        Ok(())
+    }
+
+    async fn renew_tenant(&self, tenant_id: &str, now: u64) -> anyhow::Result<()> {
+        let Some(tenant) = self.aliexpress.active_tenant(tenant_id).await? else {
+            return Ok(());
+        };
+        if tenant.aliexpress.is_none() {
+            return Ok(());
+        }
+        let lease = self.tenants.lease(&tenant).await?;
+        self.aliexpress
+            .refresh_if_due(lease.executor(), tenant, now)
+            .await?;
+        Ok(())
     }
 
     async fn sweep_tenant(

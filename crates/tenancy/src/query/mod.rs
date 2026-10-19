@@ -4,8 +4,11 @@
 //! each) needs an index a relational store is good at:
 //! [`read_model_subscription`] keeps the SQLite tables current from the event
 //! stream, and [`tenants`] / [`invitations`] / [`api_keys`] query them.
-//! [`member_audit_subscription`] keeps the members history of each tenant.
+//! [`member_audit_subscription`] keeps the members history of each tenant;
+//! [`aliexpress_access_subscription`] which shops have an AliExpress account
+//! connected, until when.
 
+mod aliexpress_access;
 mod api_keys;
 mod companies;
 mod invitations;
@@ -14,6 +17,7 @@ mod migrations;
 mod read_model;
 mod tenants;
 
+pub use aliexpress_access::*;
 pub use api_keys::*;
 pub use companies::*;
 pub use invitations::*;
