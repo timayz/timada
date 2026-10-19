@@ -194,6 +194,16 @@ pub enum Tenant {
     AliexpressRemoved {
         removed_by: String,
     },
+    /// What happens to the shop's paid orders with AliExpress items:
+    /// `auto_forward` places them on AliExpress as they come (else the
+    /// merchant does, one by one), and `try_to_pay` asks AliExpress to
+    /// charge the account's saved payment method (else the merchant pays
+    /// in AliExpress).
+    AliexpressForwardingSet {
+        auto_forward: bool,
+        try_to_pay: bool,
+        set_by: String,
+    },
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).

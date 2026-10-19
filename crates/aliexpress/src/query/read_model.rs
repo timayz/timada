@@ -1,5 +1,5 @@
-//! The subscription that keeps `aliexpress_products` current for one tenant,
-//! and the queries over it.
+//! The subscription that keeps `aliexpress_products` and
+//! `aliexpress_forwards` current for one tenant, and the queries over them.
 
 use evento::{
     Executor,
@@ -9,7 +9,8 @@ use evento::{
 use sqlx::{FromRow, SqlitePool};
 
 use crate::aggregator::AliexpressProduct;
-use crate::command::{LinkState, link_projection};
+use crate::aggregator::forward::Forward;
+use crate::command::{ForwardState, LinkState, forward_projection, link_projection};
 
 /// The cursor identity of the read-model subscription, in each tenant's store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-aliexpress/read-models";
@@ -27,6 +28,7 @@ pub fn read_model_subscription<E: Executor>(
         .data(pool)
         .data(TenantId(tenant_id.to_owned()))
         .handler(on_link_event())
+        .handler(on_forward_event())
         .any_routing_key()
 }
 
@@ -45,6 +47,90 @@ async fn on_link_event<E: Executor>(
         return Ok(());
     };
     upsert_link(&pool, &tenant.0, &link).await
+}
+
+#[evento::subscription_all]
+async fn on_forward_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<Forward>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let tenant: TenantId = context.extract();
+    let Some(forward) = forward_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_forward(&pool, &tenant.0, &forward).await
+}
+
+/// Writes the row of a forward as the write model sees it.
+pub async fn upsert_forward(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    forward: &ForwardState,
+) -> anyhow::Result<()> {
+    let ae_order_ids = forward
+        .ae_orders
+        .iter()
+        .map(|order| order.id.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    sqlx::query(
+        "INSERT INTO aliexpress_forwards (tenant_id, id, order_id, status, ae_order_ids,
+            tracking, last_error, placed_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT (tenant_id, id) DO UPDATE SET
+            status = excluded.status, ae_order_ids = excluded.ae_order_ids,
+            tracking = excluded.tracking, last_error = excluded.last_error,
+            placed_at = excluded.placed_at, updated_at = excluded.updated_at",
+    )
+    .bind(tenant_id)
+    .bind(&forward.id)
+    .bind(&forward.order_id)
+    .bind(forward.status.as_str())
+    .bind(ae_order_ids)
+    .bind(forward.tracking().join(" "))
+    .bind(&forward.last_error)
+    .bind(forward.placed_at.map(|at| at as i64))
+    .bind(forward.updated_at as i64)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// One row of `aliexpress_forwards`.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct ForwardRow {
+    pub tenant_id: String,
+    pub id: String,
+    pub order_id: String,
+    /// `requested`, `started`, `placed`, `failed` or `done`.
+    pub status: String,
+    /// Space-separated.
+    pub ae_order_ids: String,
+    /// Space-separated parcel numbers.
+    pub tracking: String,
+    pub last_error: Option<String>,
+    pub placed_at: Option<i64>,
+    pub updated_at: i64,
+}
+
+/// The orders of every shop placed on AliExpress and not settled yet, the
+/// longest unchanged first, grouped by tenant: what a sweep reads again.
+pub async fn forwards_due(pool: &SqlitePool, limit: i64) -> sqlx::Result<Vec<ForwardRow>> {
+    sqlx::query_as(
+        "SELECT tenant_id, id, order_id, status, ae_order_ids, tracking, last_error,
+            placed_at, updated_at
+         FROM aliexpress_forwards
+         WHERE status = 'placed'
+         ORDER BY tenant_id, updated_at LIMIT ?1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await
 }
 
 /// Writes the row of a link as the write model sees it.

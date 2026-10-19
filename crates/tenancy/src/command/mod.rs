@@ -119,6 +119,10 @@ pub struct AliexpressSettings {
     pub configured_at: u64,
     /// The account the app acts for, once it said yes.
     pub authorization: Option<AliexpressAuthorization>,
+    /// Paid orders with AliExpress items are placed there as they come.
+    pub auto_forward: bool,
+    /// AliExpress is asked to charge the account when an order is placed.
+    pub try_to_pay: bool,
 }
 
 /// The tokens an AliExpress account gave the app.
@@ -299,6 +303,7 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_aliexpress_configured())
         .handler(on_aliexpress_authorized())
         .handler(on_aliexpress_removed())
+        .handler(on_aliexpress_forwarding_set())
         .handler(on_mail_template_saved())
         .handler(on_mail_template_text_saved())
         .handler(on_mail_template_reset())
@@ -458,11 +463,15 @@ async fn on_aliexpress_configured(
 ) -> anyhow::Result<()> {
     let data = &event.data;
     // Another app is another set of accounts: its tokens are not this one's.
-    let authorization = tenant
+    let kept = tenant
         .aliexpress
         .take()
-        .filter(|was| was.app_key == data.app_key)
-        .and_then(|was| was.authorization);
+        .filter(|was| was.app_key == data.app_key);
+    let (auto_forward, try_to_pay) = kept
+        .as_ref()
+        .map(|was| (was.auto_forward, was.try_to_pay))
+        .unwrap_or_default();
+    let authorization = kept.and_then(|was| was.authorization);
     tenant.aliexpress = Some(AliexpressSettings {
         app_key: data.app_key.to_owned(),
         app_secret_sealed: data.app_secret_sealed.to_owned(),
@@ -473,6 +482,8 @@ async fn on_aliexpress_configured(
         configured_by: data.configured_by.to_owned(),
         configured_at: event.timestamp,
         authorization,
+        auto_forward,
+        try_to_pay,
     });
     Ok(())
 }
@@ -503,6 +514,18 @@ async fn on_aliexpress_removed(
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     tenant.aliexpress = None;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_aliexpress_forwarding_set(
+    event: Event<crate::aggregator::AliexpressForwardingSet>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    if let Some(settings) = tenant.aliexpress.as_mut() {
+        settings.auto_forward = event.data.auto_forward;
+        settings.try_to_pay = event.data.try_to_pay;
+    }
     Ok(())
 }
 

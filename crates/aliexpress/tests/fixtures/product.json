@@ -17,6 +17,7 @@
         "ae_item_sku_info_d_t_o": [
           {
             "sku_id": "12000037001",
+            "sku_attr": "14:29#Rose;5:100014064",
             "offer_sale_price": "4.31",
             "sku_price": "6.00",
             "sku_available_stock": 120,

@@ -247,6 +247,7 @@ fn sku(id: &str, cost: u64, available: u32, properties: &[(&str, &str)]) -> AeSk
                 image: None,
             })
             .collect(),
+        attr: None,
     }
 }
 

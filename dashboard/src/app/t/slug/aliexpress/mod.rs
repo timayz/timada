@@ -7,6 +7,7 @@
 pub mod callback;
 pub mod configure;
 pub mod connect;
+pub mod forwarding;
 pub mod import;
 pub mod products;
 pub mod remove;
@@ -29,6 +30,7 @@ use crate::aliexpress::Aliexpress;
 use crate::app::auth::Flash;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::checkbox::checkbox;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
@@ -284,6 +286,27 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             })
                         )
                         button(attrs: attributes! { type="submit" }, "Import")
+                    </form>
+                )
+            }
+
+            if let Some(settings) = settings.as_ref().filter(|_| state == "connected") {
+                section_card(
+                    title: Some("Orders"),
+                    description: Some("A paid order's AliExpress items are bought there for the shopper, delivered free by AliExpress itself; its tracking fulfils the order once every item ships."),
+                    <form method="post" action=(href!(forwarding::forwarding, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-3" data-aliexpress-forwarding=(if settings.auto_forward { "auto" } else { "manual" })>
+                        <label class="flex items-center gap-2 text-sm">
+                            checkbox(attrs: attributes! { id="aliexpress-auto-forward" name="auto_forward" value="on" checked=(settings.auto_forward) })
+                            " Place paid orders on AliExpress automatically"
+                        </label>
+                        <label class="flex items-center gap-2 text-sm">
+                            checkbox(attrs: attributes! { id="aliexpress-try-to-pay" name="try_to_pay" value="on" checked=(settings.try_to_pay) })
+                            " Ask AliExpress to pay them with the account's saved payment method"
+                        </label>
+                        <p class="text-sm text-muted-foreground">"Otherwise each order waits on the order page for the merchant to place it, and is paid in AliExpress."</p>
+                        <div>
+                            button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save orders settings")
+                        </div>
                     </form>
                 )
             }

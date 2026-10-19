@@ -2,6 +2,7 @@
 //! client that calls AliExpress for a shop, and the import that fills a
 //! draft from an item (see [`subscription`]).
 
+pub mod forward;
 pub mod subscription;
 pub mod sync;
 

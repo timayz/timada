@@ -4,15 +4,17 @@
 //! model; a read another node recorded in between wins (`record_sync` writes
 //! against the version it started from). The same sweep first renews every
 //! connected account's access a day before it lapses, whether or not the shop
-//! has anything imported.
+//! has anything imported, and then reads the orders placed on AliExpress
+//! again until they ship (see [`super::forward`]).
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
-use timada_aliexpress::{LinkRow, links_due};
+use timada_aliexpress::{ForwardRow, LinkRow, forwards_due, links_due};
 use tokio::task::JoinHandle;
 
+use super::forward::CheckResult;
 use super::{Aliexpress, SyncResult};
 use crate::cluster::Executor;
 use crate::tenants::Tenants;
@@ -82,7 +84,60 @@ impl AliexpressSync {
                 }
             }
         }
+        self.check_forwards(now).await?;
         Ok(synced)
+    }
+
+    /// Reads the orders placed on AliExpress again, shop by shop; returns
+    /// how many shop orders were fulfilled from them.
+    pub async fn check_forwards(&self, now: u64) -> anyhow::Result<usize> {
+        let due = forwards_due(&self.read_pool, SWEEP_LIMIT).await?;
+        let mut fulfilled = 0;
+        for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
+            let tenant_id = &shop[0].tenant_id;
+            match self.check_tenant(tenant_id, shop, now).await {
+                Ok(count) => fulfilled += count,
+                Err(err) => {
+                    tracing::error!(tenant = %tenant_id, error = %err, "AliExpress orders not read")
+                }
+            }
+        }
+        Ok(fulfilled)
+    }
+
+    async fn check_tenant(
+        &self,
+        tenant_id: &str,
+        forwards: &[ForwardRow],
+        now: u64,
+    ) -> anyhow::Result<usize> {
+        let Some(tenant) = self.aliexpress.active_tenant(tenant_id).await? else {
+            return Ok(0);
+        };
+        if tenant.aliexpress.is_none() {
+            return Ok(0);
+        }
+        let lease = self.tenants.lease(&tenant).await?;
+        let store = lease.executor().clone();
+        let tenant = self.aliexpress.refresh_if_due(&store, tenant, now).await?;
+        let mut fulfilled = 0;
+        for (index, forward) in forwards.iter().enumerate() {
+            if index > 0 {
+                tokio::time::sleep(PACE).await;
+            }
+            match self
+                .aliexpress
+                .check_forward(&store, &tenant, &forward.id, now)
+                .await
+            {
+                Ok(CheckResult::Checked { fulfilled: true }) => fulfilled += 1,
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(tenant = %tenant_id, forward = %forward.id, error = %err, "AliExpress order not read")
+                }
+            }
+        }
+        Ok(fulfilled)
     }
 
     /// Renews the access of every connected shop due within the margin,

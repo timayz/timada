@@ -1,17 +1,21 @@
 //! `/t/{slug}/orders/{order_id}`: one paid order, read from its own stream
 //! (so a change shows at once), with what the merchant does next: mark it
-//! fulfilled, or cancel it.
+//! fulfilled, or cancel it, and how its AliExpress items were placed there.
 
+pub mod aliexpress;
 pub mod cancel;
 pub mod fulfil;
 
+use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
 use timada_invoicing::{DocumentKind, format_amount_fr};
 use timada_orders::{MAX_REASON_LEN, MAX_TRACKING_LEN, OrderState, OrderStatus, OrdersError};
-use timada_tenancy::{PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ};
+use timada_tenancy::{
+    PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ,
+};
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, app_context},
     router::{
         error::{SeeOther, not_found, see_other},
         href, module_param, page, path_param, query_params,
@@ -29,6 +33,7 @@ use crate::components::input::input;
 use crate::components::table::{
     table, table_body, table_cell, table_footer, table_head, table_header, table_row,
 };
+use crate::db::ReadPool;
 use crate::ui::{
     LINK, Shell, document, fact, facts, format_time, notice, page_header, section_card,
     status_badge,
@@ -140,6 +145,36 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .load_review_request(&order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    let store = access.executor()?.clone();
+    let forward = timada_aliexpress::Command(store.clone())
+        .load_forward(&order.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let connected = access
+        .tenant
+        .aliexpress
+        .as_ref()
+        .is_some_and(|settings| settings.authorization.is_some());
+    // Whether any line is an AliExpress item, for a shop connected to it.
+    let from_aliexpress = connected
+        && !timada_aliexpress::forward_items(
+            &order.lines,
+            &crate::aliexpress::forward::order_links(
+                &store,
+                app_context::<ReadPool>(cx),
+                &access.tenant.id,
+                &order,
+            )
+            .await
+            .map_err(topcoat::Error::from_anyhow)?,
+        )
+        .items
+        .is_empty();
+    let can_forward = connected
+        && order.status == OrderStatus::Paid
+        && access.can(cx, PERMISSION_ALIEXPRESS_MANAGE).await?;
+    let ae = (from_aliexpress || forward.is_some())
+        .then(|| AliexpressCard::of(forward.as_ref(), can_forward, crate::auth::now()));
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let lines: Vec<LineRow> = order
@@ -364,6 +399,43 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
             </section>
 
+            if let Some(ae) = &ae {
+                section_card(
+                    title: Some("AliExpress"),
+                    attrs: attributes! { data-order-aliexpress=(ae.status) },
+                    <p class="mb-3 text-sm" data-order-aliexpress-summary="">(ae.summary)</p>
+                    if let Some(error) = &ae.error {
+                        <p class="mb-3 text-sm text-destructive" data-order-aliexpress-error="">(error)</p>
+                    }
+                    if !ae.orders.is_empty() {
+                        <ul class="mb-3 space-y-1 text-sm">
+                            for (id, status, tracking) in &ae.orders {
+                                <li data-order-aliexpress-order=(id)>
+                                    <code>(id)</code>
+                                    " · "
+                                    <span data-order-aliexpress-order-status="">(status)</span>
+                                    if let Some(tracking) = tracking {
+                                        " · tracking "
+                                        <span class="font-mono" data-order-aliexpress-tracking="">(tracking)</span>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                    for note in &ae.notes {
+                        <p class="mb-3 text-sm text-muted-foreground">(note)</p>
+                    }
+                    if let Some((label, again)) = ae.action {
+                        <form method="post" action=(href!(aliexpress::forward, Slug(slug.clone()), OrderId(order_id.clone())))>
+                            if again {
+                                <input type="hidden" name="again" value="on">
+                            }
+                            button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, (label))
+                        </form>
+                    }
+                )
+            }
+
             if can_fulfil || can_cancel {
                 section_card(
                     title: Some("Next step"),
@@ -395,6 +467,111 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
         )
     })
+}
+
+/// How long placing an order may take before the merchant may place it
+/// again (having looked on AliExpress).
+const FORWARD_STALE_SECS: u64 = 10 * 60;
+
+/// The AliExpress side of an order, ready to render.
+struct AliexpressCard {
+    /// `none`, or the forward's status.
+    status: &'static str,
+    summary: &'static str,
+    error: Option<String>,
+    /// `(AliExpress order, its status, its tracking)`.
+    orders: Vec<(String, String, Option<String>)>,
+    notes: Vec<&'static str>,
+    /// The button: its label, and whether it places again an order whose
+    /// last attempt never said how it went.
+    action: Option<(&'static str, bool)>,
+}
+
+impl AliexpressCard {
+    fn of(forward: Option<&ForwardState>, can_forward: bool, now: u64) -> Self {
+        let Some(forward) = forward else {
+            return Self {
+                status: "none",
+                summary: "Not placed on AliExpress.",
+                error: None,
+                orders: Vec::new(),
+                notes: Vec::new(),
+                action: can_forward.then_some(("Place on AliExpress", false)),
+            };
+        };
+        let mut shown = Self {
+            status: forward.status.as_str(),
+            summary: "",
+            error: None,
+            orders: Vec::new(),
+            notes: Vec::new(),
+            action: None,
+        };
+        match forward.status {
+            ForwardStatus::Requested | ForwardStatus::Started => {
+                shown.summary = "Being placed on AliExpress…";
+                if can_forward && now.saturating_sub(forward.updated_at) > FORWARD_STALE_SECS {
+                    shown.notes.push("This is taking long: look at the account's orders on AliExpress before placing it again.");
+                    shown.action = Some(("Place again", true));
+                }
+            }
+            ForwardStatus::Failed => {
+                shown.summary = "Not placed on AliExpress.";
+                shown.error = forward.last_error.clone();
+                shown.action = can_forward.then_some(("Place again", false));
+            }
+            ForwardStatus::Placed | ForwardStatus::Done => {
+                shown.summary = if forward.fulfilled_tracking.is_some() {
+                    "Placed on AliExpress, shipped, and the order fulfilled with its tracking."
+                } else {
+                    "Placed on AliExpress."
+                };
+                shown.orders = forward
+                    .ae_orders
+                    .iter()
+                    .map(|order| {
+                        let tracking =
+                            (!order.tracking.is_empty()).then(|| order.tracking.join(", "));
+                        (
+                            order.id.clone(),
+                            ae_status_label(&order.status).to_owned(),
+                            tracking,
+                        )
+                    })
+                    .collect();
+                let unpaid = forward
+                    .ae_orders
+                    .iter()
+                    .any(|order| order.status.is_empty() || order.status == "PLACE_ORDER_SUCCESS");
+                if forward.status == ForwardStatus::Placed && unpaid {
+                    shown.notes.push(if forward.pay_requested {
+                        "AliExpress was asked to pay it with the account's saved payment method; if it could not, pay it in AliExpress."
+                    } else {
+                        "Pay it in AliExpress."
+                    });
+                }
+                if !forward.complete {
+                    shown.notes.push("Some items of this order are not from AliExpress: ship them, then mark the order as fulfilled.");
+                }
+            }
+        }
+        shown
+    }
+}
+
+/// What an AliExpress order status means, for the merchant.
+fn ae_status_label(status: &str) -> &str {
+    match status {
+        "" => "placed",
+        "PLACE_ORDER_SUCCESS" => "awaiting payment",
+        "PAYMENT_PROCESSING" | "FUND_PROCESSING" => "payment processing",
+        "WAIT_SELLER_SEND_GOODS" => "paid, awaiting shipment",
+        "SELLER_PART_SEND_GOODS" => "partly shipped",
+        "WAIT_BUYER_ACCEPT_GOODS" => "shipped",
+        "FINISH" => "delivered",
+        "IN_CANCEL" => "being cancelled",
+        other => other,
+    }
 }
 
 #[derive(serde::Deserialize)]

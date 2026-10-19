@@ -14,6 +14,12 @@ pub enum AliexpressError {
     InvalidPricingRule,
     #[error("AliExpress no longer offers this combination")]
     CombinationNotFound,
+    #[error("this order is already placed on AliExpress")]
+    AlreadyForwarded,
+    #[error("this order is being placed on AliExpress")]
+    Forwarding,
+    #[error("this order has no AliExpress item")]
+    NothingToForward,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -36,6 +42,9 @@ impl AliexpressError {
             Self::NotFound => "aliexpress_not_found",
             Self::InvalidPricingRule => "invalid_pricing_rule",
             Self::CombinationNotFound => "aliexpress_combination_not_found",
+            Self::AlreadyForwarded => "aliexpress_already_forwarded",
+            Self::Forwarding => "aliexpress_forwarding",
+            Self::NothingToForward => "aliexpress_nothing_to_forward",
             Self::Write(_) | Self::Other(_) => return None,
         })
     }
