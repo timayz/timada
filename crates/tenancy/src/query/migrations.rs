@@ -14,7 +14,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         ApiKeyScopes0006,
         Companies0007,
         InvitationsSent0008,
-        MemberAudit0009
+        MemberAudit0009,
+        AliexpressAccess0010
     ]
 }
 
@@ -282,6 +283,31 @@ sqlx_migrator::sqlite_migration!(
             "CREATE INDEX tenancy_member_audit_tenant_seq
                 ON tenancy_member_audit (tenant_id, seq)",
             "DROP INDEX tenancy_member_audit_tenant_seq"
+        ),
+    ]
+);
+
+/// The shops with an AliExpress account connected, and until when its
+/// access lasts.
+pub struct AliexpressAccess0010;
+sqlx_migrator::sqlite_migration!(
+    AliexpressAccess0010,
+    "tenancy",
+    "0010_aliexpress_access",
+    vec_box![("tenancy", "0009_member_audit")],
+    vec_box![
+        (
+            "CREATE TABLE tenancy_aliexpress_access (
+                tenant_id TEXT PRIMARY KEY,
+                expires_at INTEGER NOT NULL,
+                refresh_expires_at INTEGER NOT NULL
+            )",
+            "DROP TABLE tenancy_aliexpress_access"
+        ),
+        (
+            "CREATE INDEX tenancy_aliexpress_access_expires
+                ON tenancy_aliexpress_access (expires_at)",
+            "DROP INDEX tenancy_aliexpress_access_expires"
         ),
     ]
 );

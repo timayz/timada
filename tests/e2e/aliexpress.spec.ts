@@ -111,11 +111,11 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
   }
 });
 
-/// A shop with its app set up and its account connected, and one product
-/// imported from the stand-in; the product page's address.
-async function importedShop(page: Page, aliexpress: FakeAliexpress): Promise<string> {
+/// A shop with its app set up and its account connected to the stand-in; its
+/// slug.
+async function connectedShop(page: Page, tenant: string): Promise<string> {
   await registerWithEmail(page, uniqueEmail("merchant"));
-  const { name, slug } = uniqueTenant("Ali Sync Shop");
+  const { name, slug } = uniqueTenant(tenant);
   await createTenant(page, name);
   await page.goto(`/t/${slug}/aliexpress`);
   await page.getByLabel("App key").fill(APP_KEY);
@@ -125,6 +125,13 @@ async function importedShop(page: Page, aliexpress: FakeAliexpress): Promise<str
   await expect(page.getByRole("status")).toContainText("AliExpress app saved.");
   await page.getByRole("button", { name: "Connect the AliExpress account" }).click();
   await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "connected");
+  return slug;
+}
+
+/// A shop connected to the stand-in with one product imported from it; the
+/// product page's address.
+async function importedShop(page: Page, aliexpress: FakeAliexpress): Promise<string> {
+  await connectedShop(page, "Ali Sync Shop");
   expect(aliexpress.calls).toContain("/auth/token/create");
   await page.getByLabel("AliExpress product").fill(PRODUCT_ID);
   await page.getByRole("button", { name: "Import" }).click();
@@ -159,6 +166,24 @@ test("the dashboard reads imported products again on its own, and renews the acc
     await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("10.00");
     await expect(async () => {
       expect(aliexpress.calls).toContain("/auth/token/refresh");
+    }).toPass({ timeout: 15_000 });
+    expect(aliexpress.badSignatures).toBe(0);
+  } finally {
+    await aliexpress.stop();
+  }
+});
+
+test("a connected shop with nothing imported still has its access renewed", async ({ page }) => {
+  const aliexpress = new FakeAliexpress();
+  aliexpress.tokenLifetime = 60;
+  await aliexpress.start();
+  try {
+    await connectedShop(page, "Ali Idle Shop");
+    // Shops of the other specs are swept too: this one's renewal is the one
+    // asked with the token its connection got.
+    const issued = aliexpress.refreshTokens.at(-1);
+    await expect(async () => {
+      expect(aliexpress.renewedWith).toContain(issued);
     }).toPass({ timeout: 15_000 });
     expect(aliexpress.badSignatures).toBe(0);
   } finally {

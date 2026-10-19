@@ -45,9 +45,12 @@ shop; one whose import failed, or that was unlinked, can be imported again.
 Every node sweeps the imported products on a timer (`[aliexpress] sync_check_secs`,
 an hour by default) and reads again each one last read longer ago than
 `sync_every_secs` (six hours). Reads are paced and go one shop after another; a read
-another node recorded in the meantime wins. The same sweep renews an account's access
-a day before it lapses, on one node per token (a `timada-aliexpress/TokenRefresh`
-claim). An access AliExpress no longer renews means the merchant connects again.
+another node recorded in the meantime wins. Before reading, the same sweep renews
+every connected account's access a day before it lapses, whether or not the shop has
+anything imported: the platform keeps which shops are connected and until when
+(`tenancy_aliexpress_access`), and one node per token renews it (a
+`timada-aliexpress/TokenRefresh` claim). An access AliExpress no longer renews means
+the merchant connects again.
 
 *Sync now*, on the AliExpress page or on the product page, reads the item at once.
 A read does three things:

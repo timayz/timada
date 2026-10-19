@@ -27,6 +27,11 @@ export class FakeAliexpress {
   offline = false;
   /// How long the tokens handed out last, in seconds.
   tokenLifetime = 86_400;
+  /// The refresh tokens handed out, in order (each one unique, so a spec can
+  /// tell its shop's renewal from another's).
+  readonly refreshTokens: string[] = [];
+  /// The refresh tokens renewals were asked with, in order.
+  readonly renewedWith: string[] = [];
   readonly skus: Sku[] = [
     { id: "12000037001", colour: "Rose", price: "4.31", stock: 120 },
     { id: "12000037002", colour: "Blue", price: "5.50", stock: 0 },
@@ -78,10 +83,15 @@ export class FakeAliexpress {
       return;
     }
     if (method === "/auth/token/create" || method === "/auth/token/refresh") {
+      if (method === "/auth/token/refresh") {
+        this.renewedWith.push(url.searchParams.get("refresh_token") ?? "");
+      }
+      const refreshToken = `e2e-refresh-${crypto.randomUUID()}`;
+      this.refreshTokens.push(refreshToken);
       json({
         code: "0",
         access_token: "e2e-access",
-        refresh_token: "e2e-refresh",
+        refresh_token: refreshToken,
         expires_in: this.tokenLifetime,
         refresh_expires_in: 172_800,
         account: "shop@example.org",
