@@ -27,6 +27,10 @@ async fn messages_are_listed_newest_first_by_status() {
     let keys = Arc::new(MemoryKeys::default());
     let one = receive(&support, &keys, "First question, about shipping.").await;
     let two = receive(&support, &keys, "Second question, about returns.").await;
+    // Newest first; messages received in the same second fall back to their
+    // ids, and two messages written back to back usually share one.
+    let mut newest_first = [&one, &two];
+    newest_first.sort_by(|a, b| (b.received_at, &b.id).cmp(&(a.received_at, &a.id)));
 
     catch_up(&executor, &pool, &keys).await.unwrap();
     let any = MessageFilter::default();
@@ -36,14 +40,15 @@ async fn messages_are_listed_newest_first_by_status() {
         .unwrap();
     assert_eq!(
         rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
-        vec![two.id.as_str(), one.id.as_str()]
+        newest_first.map(|message| message.id.as_str())
     );
-    assert_eq!(rows[1].full_name(), "Ada Lovelace");
-    assert_eq!(rows[1].email, "ada@example.com");
-    assert_eq!(rows[1].body, "First question, about shipping.");
-    assert_eq!(rows[1].language.as_deref(), Some("fr"));
-    assert_eq!(rows[1].status, "open");
-    assert_eq!(rows[1].handled_at, None);
+    let first = rows.iter().find(|row| row.id == one.id).unwrap();
+    assert_eq!(first.full_name(), "Ada Lovelace");
+    assert_eq!(first.email, "ada@example.com");
+    assert_eq!(first.body, "First question, about shipping.");
+    assert_eq!(first.language.as_deref(), Some("fr"));
+    assert_eq!(first.status, "open");
+    assert_eq!(first.handled_at, None);
 
     support.handle_message(ALICE, &one.id).await.unwrap();
     catch_up(&executor, &pool, &keys).await.unwrap();
@@ -71,7 +76,7 @@ async fn messages_are_listed_newest_first_by_status() {
     // Paging.
     let page = messages_of_tenant(&pool, TENANT, &any, 1, 1).await.unwrap();
     assert_eq!(page.len(), 1);
-    assert_eq!(page[0].id, one.id);
+    assert_eq!(page[0].id, newest_first[1].id);
 }
 
 #[tokio::test]
