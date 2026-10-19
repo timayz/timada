@@ -4,7 +4,10 @@ use std::sync::Arc;
 use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
-use timada_aliexpress::{AeProduct, LinkStatus, apply_sync, map_product, track_imported};
+use timada_aliexpress::{
+    AeProduct, AeSku, AeSkuProperty, Fit, LinkStatus, SyncRead, add_combinations, apply_sync, fit,
+    map_product, track_imported,
+};
 use timada_catalog_import::{ImportOptions, NoImages, import_one};
 use timada_tenancy::{PricingRule, Rounding};
 
@@ -121,13 +124,21 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
     assert!(!outcome.offline);
     assert_eq!(outcome.repriced, 1);
     links
-        .record_sync("sync", &link_id, version, outcome.skus, false)
+        .record_sync(
+            "sync",
+            &link_id,
+            version,
+            SyncRead {
+                skus: outcome.skus,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     // A read that started from the same version lost the race.
     assert!(
         links
-            .record_sync("sync", &link_id, version, Vec::new(), false)
+            .record_sync("sync", &link_id, version, SyncRead::default())
             .await
             .is_err()
     );
@@ -183,4 +194,199 @@ async fn one_node_renews_a_token() {
             .await
             .unwrap()
     );
+}
+
+/// Imports the fixture as a draft; the link's id and the product's.
+async fn imported(executor: &evento::Sqlite) -> (String, String) {
+    let catalog = timada_catalog::Command(executor.clone());
+    let links = timada_aliexpress::Command(executor.clone());
+    let link_id = links
+        .request_import(ALICE, "1005006123456789")
+        .await
+        .unwrap();
+    let mapped = map_product(&fixture(), "EUR", Some(RULE)).unwrap();
+    let imported = import_one(
+        &catalog,
+        ALICE,
+        &mapped.seed,
+        Path::new(""),
+        Arc::new(NoImages),
+        &ImportOptions {
+            publish: false,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let skus = track_imported(
+        &catalog,
+        ALICE,
+        &imported.product_id,
+        &imported.variant_ids,
+        &mapped.skus,
+    )
+    .await
+    .unwrap();
+    links
+        .record_import(ALICE, &link_id, &imported.product_id, skus)
+        .await
+        .unwrap();
+    (link_id, imported.product_id)
+}
+
+fn sku(id: &str, cost: u64, available: u32, properties: &[(&str, &str)]) -> AeSku {
+    AeSku {
+        id: id.into(),
+        cost_cents: Some(cost),
+        available,
+        properties: properties
+            .iter()
+            .map(|(name, value)| AeSkuProperty {
+                name: (*name).into(),
+                value: (*value).into(),
+                image: None,
+            })
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command(executor.clone());
+    let links = timada_aliexpress::Command(executor.clone());
+    let (link_id, product_id) = imported(&executor).await;
+
+    // AliExpress now sells green, and a size the product had not.
+    let mut read = fixture();
+    read.skus.push(sku(
+        "12000037004",
+        300,
+        5,
+        &[("Color", "Green"), ("Size", "S")],
+    ));
+    read.skus.push(sku(
+        "12000037005",
+        300,
+        6,
+        &[("Color", "Rose"), ("Size", "M")],
+    ));
+    read.skus.push(sku(
+        "12000037006",
+        300,
+        7,
+        &[("Color", "Rose"), ("Size", "S"), ("Pack", "2")],
+    ));
+    let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(RULE))
+        .await
+        .unwrap();
+    let found: Vec<_> = outcome
+        .found
+        .iter()
+        .map(|sku| sku.sku_id.as_str())
+        .collect();
+    // The unpriced grey one is not offered.
+    assert_eq!(found, ["12000037004", "12000037005", "12000037006"]);
+    links
+        .record_sync(
+            "sync",
+            &link_id,
+            version,
+            SyncRead {
+                skus: outcome.skus,
+                offline: false,
+                found: Some(outcome.found),
+            },
+        )
+        .await
+        .unwrap();
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    assert_eq!(link.found.len(), 3);
+
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    assert!(
+        matches!(fit(&product, &link.found[0]), Fit::Fits { ref new_values, .. } if new_values.len() == 1)
+    );
+    assert!(
+        matches!(fit(&product, &link.found[1]), Fit::Fits { ref new_values, .. } if new_values.len() == 1)
+    );
+    assert_eq!(fit(&product, &link.found[2]), Fit::NewOption("Pack".into()));
+
+    // Ignored, then offered again.
+    links
+        .ignore_combination(ALICE, &link_id, "12000037005")
+        .await
+        .unwrap();
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    let offered: Vec<_> = link.offered().map(|sku| sku.sku_id.as_str()).collect();
+    assert_eq!(offered, ["12000037004", "12000037006"]);
+    assert!(matches!(
+        links.ignore_combination(ALICE, &link_id, "nope").await,
+        Err(timada_aliexpress::AliexpressError::CombinationNotFound)
+    ));
+
+    // Adding all that is offered adds green and leaves the pack.
+    let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
+    let added = add_combinations(&catalog, ALICE, &link, &[], Some(RULE), &NoImages)
+        .await
+        .unwrap();
+    assert_eq!(added.skus.len(), 1);
+    assert_eq!(added.warnings.len(), 1);
+    let green = added.skus[0].variant_id.clone().unwrap();
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(product.variants.len(), 3);
+    assert_eq!(product.variant(&green).unwrap().price.amount_cents, 600);
+    assert!(product.options[0].values.contains(&"Green".to_owned()));
+    let stock = catalog
+        .load_stock(&product_id, Some(&green))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stock.on_hand, 5);
+
+    // An add that was not recorded links the variant it made.
+    let again = add_combinations(
+        &catalog,
+        ALICE,
+        &link,
+        &["12000037004".to_owned()],
+        Some(RULE),
+        &NoImages,
+    )
+    .await
+    .unwrap();
+    assert_eq!(again.skus, added.skus);
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(product.variants.len(), 3);
+
+    links
+        .record_combinations_added(ALICE, &link_id, version, added.skus)
+        .await
+        .unwrap();
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    assert_eq!(link.skus.len(), 3);
+    let found: Vec<_> = link.found.iter().map(|sku| sku.sku_id.as_str()).collect();
+    assert_eq!(found, ["12000037005", "12000037006"]);
+
+    links
+        .restore_combination(ALICE, &link_id, "12000037005")
+        .await
+        .unwrap();
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    assert_eq!(link.offered().count(), 2);
+
+    // The next read counts green, and no longer finds it.
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(RULE))
+        .await
+        .unwrap();
+    assert_eq!(outcome.skus.len(), 3);
+    assert_eq!(outcome.found, link.found);
+
+    // Offline: nothing is offered.
+    read.status = "offline".into();
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(RULE))
+        .await
+        .unwrap();
+    assert!(outcome.found.is_empty());
 }

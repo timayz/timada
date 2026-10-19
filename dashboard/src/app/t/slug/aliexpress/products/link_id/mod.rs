@@ -1,8 +1,12 @@
 //! One imported AliExpress product: read it again, give it its own price
-//! rule, or stop keeping it in step. Each action goes back to where it was
+//! rule, add or ignore the combinations a read found, or stop keeping it in
+//! step. Each action goes back to where it was
 //! sent from: the AliExpress page, or the product's page with `back`.
 
+pub mod combinations;
+pub mod ignore;
 pub mod pricing;
+pub mod restore;
 pub mod sync;
 pub mod unlink;
 
@@ -20,6 +24,16 @@ module_param!(pub link_id);
 pub struct Back {
     #[serde(default)]
     pub back: String,
+}
+
+/// A combination found, as the forms send it.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct CombinationForm {
+    #[serde(default)]
+    pub back: String,
+    /// Blank: every combination offered.
+    #[serde(default)]
+    pub sku_id: String,
 }
 
 pub fn back_to(

@@ -321,6 +321,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     if let Some(error) = &row.last_error {
                                         <p class="mt-1 text-xs text-muted-foreground" data-link-error="">(error)</p>
                                     }
+                                    if row.status == "linked" && row.new_combinations > 0 {
+                                        if let Some(product_id) = &row.product_id {
+                                            <p class="mt-1 text-xs" data-link-new=(row.new_combinations)>
+                                                <a class=(LINK) href=(crate::app::t::slug::products::product_id::product_url(cx, &slug, product_id, None, None))>
+                                                    if row.new_combinations == 1 { "1 new combination" } else { (format!("{} new combinations", row.new_combinations)) }
+                                                </a>
+                                            </p>
+                                        }
+                                    }
                                 )
                                 table_cell(
                                     if let Some(at) = row.last_synced_at {

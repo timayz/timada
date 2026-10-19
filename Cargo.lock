@@ -6092,6 +6092,7 @@ dependencies = [
  "timada-catalog-import",
  "timada-tenancy",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
