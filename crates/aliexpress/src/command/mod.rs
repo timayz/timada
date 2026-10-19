@@ -1,5 +1,10 @@
 //! Write side: the link between an AliExpress item and the catalog product
-//! it filled, and its history of reads.
+//! it filled, and its history of reads; and (in [`forward`]) the shop's
+//! orders placed on AliExpress.
+
+mod forward;
+
+pub use forward::*;
 
 use std::ops::Deref;
 use std::time::{SystemTime, UNIX_EPOCH};

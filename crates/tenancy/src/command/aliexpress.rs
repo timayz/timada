@@ -1,6 +1,8 @@
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{AliexpressAuthorized, AliexpressConfigured, AliexpressRemoved};
+use crate::aggregator::{
+    AliexpressAuthorized, AliexpressConfigured, AliexpressForwardingSet, AliexpressRemoved,
+};
 use crate::error::TenancyError;
 use crate::value_object::{PERMISSION_ALIEXPRESS_MANAGE, PricingRule};
 
@@ -107,6 +109,39 @@ impl<E: Executor> super::Command<E> {
         let tenant = self.require_active(tenant_id).await?;
         self.write_authorization(actor, tenant, cmd, routing_key)
             .await
+    }
+
+    /// What happens to the shop's paid orders with AliExpress items; the
+    /// same settings again are a no-op. Needs `aliexpress:manage`.
+    pub async fn set_aliexpress_forwarding(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        auto_forward: bool,
+        try_to_pay: bool,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_ALIEXPRESS_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        let Some(settings) = &tenant.aliexpress else {
+            return Err(TenancyError::AliexpressNotConfigured);
+        };
+        if settings.auto_forward == auto_forward && settings.try_to_pay == try_to_pay {
+            return Ok(());
+        }
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&AliexpressForwardingSet {
+                auto_forward,
+                try_to_pay,
+                set_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
     }
 
     /// Stops importing from AliExpress; nothing set up is a no-op. Needs

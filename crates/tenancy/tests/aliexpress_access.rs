@@ -136,3 +136,43 @@ async fn started_on_an_existing_log_it_finds_the_shops_connected_before() {
     catch_up(&executor, &pool).await;
     assert_eq!(due(&pool, NOW + DAY).await, vec![tenant.id.clone()]);
 }
+
+#[tokio::test]
+async fn how_orders_go_to_aliexpress_is_set_and_kept_with_the_same_app() {
+    let (executor, _pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let owner = new_id();
+    let tenant = create_tenant(&cmd, "Ali Orders", &owner).await;
+    assert!(matches!(
+        cmd.set_aliexpress_forwarding(&owner, &tenant.id, true, true)
+            .await,
+        Err(timada_tenancy::TenancyError::AliexpressNotConfigured)
+    ));
+    cmd.configure_aliexpress(&owner, &tenant.id, app("12345"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        cmd.set_aliexpress_forwarding(&new_id(), &tenant.id, true, true)
+            .await,
+        Err(timada_tenancy::TenancyError::Forbidden)
+    ));
+    cmd.set_aliexpress_forwarding(&owner, &tenant.id, true, false)
+        .await
+        .unwrap();
+    let settings = |state: timada_tenancy::TenantState| {
+        let settings = state.aliexpress.unwrap();
+        (settings.auto_forward, settings.try_to_pay)
+    };
+    let load = async || cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(settings(load().await), (true, false));
+
+    // The same app set up again keeps them; another starts over.
+    cmd.configure_aliexpress(&owner, &tenant.id, app("12345"))
+        .await
+        .unwrap();
+    assert_eq!(settings(load().await), (true, false));
+    cmd.configure_aliexpress(&owner, &tenant.id, app("67890"))
+        .await
+        .unwrap();
+    assert_eq!(settings(load().await), (false, false));
+}

@@ -9,10 +9,12 @@ evento.workspace = true
 timada-catalog = { path = "../catalog" }
 timada-catalog-import = { path = "../catalog-import" }
 timada-tenancy = { path = "../tenancy" }
+timada-orders = { path = "../orders" }
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 # Calls AliExpress's open platform; signs each call with the app's secret.
 reqwest.workspace = true

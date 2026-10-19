@@ -240,6 +240,11 @@ pub fn describe_error(code: &str) -> &'static str {
             "AliExpress no longer offers this combination: read the product again."
         }
         "aliexpress_combinations_raced" => "The product was read again meanwhile. Try once more.",
+        "aliexpress_already_forwarded" => "This order is already placed on AliExpress.",
+        "aliexpress_forwarding" => {
+            "This order is being placed on AliExpress. If it stays so, look at the account's orders on AliExpress, then place it again."
+        }
+        "aliexpress_nothing_to_forward" => "No item of this order comes from AliExpress.",
         "aliexpress_sync_failed" => "AliExpress did not answer. The product is read again later.",
         "secrets_disabled" => {
             "No secret can be kept on this platform: the operator has to set secrets.key first."

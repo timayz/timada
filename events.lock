@@ -2,6 +2,12 @@
 # `event` and `type` lines are frozen — add a new variant instead of editing
 # one. A `view` line may change when its projection's `.revision(n)` grows.
 
+event timada-aliexpress/Forward::Checked { ae_order_id: String, status: String, logistics_status: String, tracking: Vec<String> }
+event timada-aliexpress/Forward::Done { tracking: Option<String>, fulfilled: bool }
+event timada-aliexpress/Forward::Failed { reason: String, failed_by: String }
+event timada-aliexpress/Forward::Placed { ae_order_ids: Vec<String>, items: Vec<ForwardItem>, pay_requested: bool, complete: bool, placed_by: String }
+event timada-aliexpress/Forward::Requested { order_id: String, requested_by: String }
+event timada-aliexpress/Forward::Started { started_by: String }
 event timada-aliexpress/Product::CombinationIgnored { sku_id: String, ignored_by: String }
 event timada-aliexpress/Product::CombinationRestored { sku_id: String, restored_by: String }
 event timada-aliexpress/Product::CombinationsAdded { skus: Vec<SkuLink>, added_by: String }
@@ -191,6 +197,7 @@ event timada-tenancy/Invitation::Revoked { revoked_by: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }
 event timada-tenancy/Tenant::AliexpressAuthorized { access_token_sealed: Vec<u8>, refresh_token_sealed: Vec<u8>, expires_at: u64, refresh_expires_at: u64, account: String, authorized_by: String }
 event timada-tenancy/Tenant::AliexpressConfigured { app_key: String, app_secret_sealed: Vec<u8>, ship_to_country: String, currency: String, language: String, pricing: Option<PricingRule>, configured_by: String }
+event timada-tenancy/Tenant::AliexpressForwardingSet { auto_forward: bool, try_to_pay: bool, set_by: String }
 event timada-tenancy/Tenant::AliexpressRemoved { removed_by: String }
 event timada-tenancy/Tenant::CompanyLinked { company_id: String, series_code: String, linked_by: String }
 event timada-tenancy/Tenant::CompanyUnlinked { unlinked_by: String }
@@ -222,6 +229,7 @@ event timada-tenancy/TenantSlug::Released unit
 
 type timada_aliexpress::aggregator::NewSku { sku_id: String, selections: Vec<(String, String)>, cost_cents: u64, available: u32, image: Option<String> }
 type timada_aliexpress::aggregator::SkuLink { sku_id: String, variant_id: Option<String>, cost_cents: u64, available: u32 }
+type timada_aliexpress::aggregator::forward::ForwardItem { ae_product_id: String, sku_id: String, quantity: u32, service_name: String }
 type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
 type timada_identity::value_object::ChallengePurpose enum { Register, SignIn, ResetPassword }
 type timada_identity::value_object::SignInMethod enum { OAuth2, Passkey }

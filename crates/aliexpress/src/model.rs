@@ -83,6 +83,8 @@ pub struct AeSku {
     pub available: u32,
     /// The values it takes, in AliExpress's order.
     pub properties: Vec<AeSkuProperty>,
+    /// How an order names it (`14:193#Red;5:100014064`), when given.
+    pub attr: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,12 +204,101 @@ impl AeSku {
                 })
             })
             .collect();
+        let attr = sku
+            .get("sku_attr")
+            .map(text)
+            .filter(|attr| !attr.is_empty());
         Some(Self {
             id,
             cost_cents,
             available,
             properties,
+            attr,
         })
+    }
+}
+
+/// One way AliExpress delivers an item to a country.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreightOption {
+    /// What an order names it by (`CAINIAO_STANDARD`).
+    pub service_name: String,
+    /// What delivery costs, in minor units; 0 when free.
+    pub cents: u64,
+    /// Whether the parcel can be followed.
+    pub tracking: bool,
+}
+
+impl FreightOption {
+    pub(crate) fn list_from_json(result: &Value) -> Vec<Self> {
+        let options = result
+            .get("aeop_freight_calculate_result_for_buyer_d_t_o_list")
+            .or_else(|| result.get("aeop_freight_calculate_result_for_buyer_dtolist"));
+        list(options)
+            .iter()
+            .filter_map(|option| {
+                let service_name = option.get("service_name").map(text)?;
+                if service_name.is_empty() {
+                    return None;
+                }
+                let freight = option.get("freight");
+                let cents = freight
+                    .and_then(|freight| {
+                        freight
+                            .get("cent")
+                            .and_then(number)
+                            .or_else(|| freight.get("amount").and_then(cents))
+                    })
+                    .unwrap_or(0);
+                let tracking = option
+                    .get("tracking_available")
+                    .map(text)
+                    .is_some_and(|flag| flag.eq_ignore_ascii_case("true"));
+                Some(Self {
+                    service_name,
+                    cents,
+                    tracking,
+                })
+            })
+            .collect()
+    }
+}
+
+/// One order placed on AliExpress, as it now stands.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AeOrder {
+    /// `PLACE_ORDER_SUCCESS` (awaiting payment), `WAIT_SELLER_SEND_GOODS`,
+    /// `WAIT_BUYER_ACCEPT_GOODS`, `FINISH`…; kept as AliExpress says it.
+    pub status: String,
+    /// `NO_LOGISTICS`, `WAIT_SELLER_SEND_GOODS`, `SELLER_SEND_GOODS`…
+    pub logistics_status: String,
+    /// The parcel numbers, once shipped.
+    pub tracking: Vec<String>,
+}
+
+impl AeOrder {
+    pub(crate) fn from_json(result: &Value) -> Self {
+        let mut tracking: Vec<String> = list(result.get("logistics_info_list"))
+            .iter()
+            .chain(
+                result
+                    .get("logistics_info_list")
+                    .filter(|value| value.get("logistics_no").is_some()),
+            )
+            .filter_map(|info| info.get("logistics_no").map(text))
+            .filter(|number| !number.is_empty())
+            .collect();
+        let mut seen = Vec::new();
+        tracking.retain(|number| {
+            let first = !seen.contains(number);
+            seen.push(number.clone());
+            first
+        });
+        Self {
+            status: result.get("order_status").map(text).unwrap_or_default(),
+            logistics_status: result.get("logistics_status").map(text).unwrap_or_default(),
+            tracking,
+        }
     }
 }
 
@@ -266,14 +357,20 @@ pub fn parse_amount(text: &str) -> Option<u64> {
     whole.checked_mul(100)?.checked_add(cents)
 }
 
-/// A list, bare or wrapped in an object of one key.
-fn list(value: Option<&Value>) -> Vec<Value> {
+/// A list, bare or wrapped in an object of one key; a list of one may come
+/// as that one item, wrapped or not.
+pub(crate) fn list(value: Option<&Value>) -> Vec<Value> {
     match value {
         Some(Value::Array(items)) => items.clone(),
-        Some(Value::Object(object)) => object
-            .values()
-            .find_map(|inner| inner.as_array().cloned())
-            .unwrap_or_default(),
+        Some(Value::Object(object)) => {
+            if let Some(items) = object.values().find_map(|inner| inner.as_array()) {
+                return items.clone();
+            }
+            match object.values().next() {
+                Some(inner @ Value::Object(_)) if object.len() == 1 => vec![inner.clone()],
+                _ => Vec::new(),
+            }
+        }
         _ => Vec::new(),
     }
 }

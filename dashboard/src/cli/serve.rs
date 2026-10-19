@@ -300,6 +300,17 @@ fn tenant_subscriptions(
             timada_aliexpress::read_model_subscription(pool, tenant_id)
         }),
         Arc::new({
+            let aliexpress = aliexpress.clone();
+            move |pool, tenant_id, executor: &Executor| {
+                crate::aliexpress::forward::subscription(
+                    aliexpress.clone(),
+                    pool,
+                    tenant_id,
+                    executor.clone(),
+                )
+            }
+        }),
+        Arc::new({
             let media = media.clone();
             move |_, tenant_id, executor: &Executor| {
                 crate::aliexpress::subscription::subscription(

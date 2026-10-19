@@ -81,6 +81,46 @@ catalog until the merchant acts:
   by an option the product lacks, or one of a product that does not vary. The catalog
   takes no new option once variants exist, so the merchant imports the item again.
 
+## Orders
+
+A paid order whose items were imported from AliExpress can be bought there for the
+shopper: its AliExpress items go into one `aliexpress.ds.order.create` call, shipped
+to the order's address. AliExpress answers with one order per seller. The order page
+has an *AliExpress* card that shows where this stands. Two settings on the AliExpress
+page (`AliexpressForwardingSet`) decide how it works:
+
+- **Place paid orders on AliExpress automatically.** Without it, the merchant presses
+  *Place on AliExpress* on the order page.
+- **Ask AliExpress to pay them** (`try_to_pay`). AliExpress charges the account's saved
+  payment method. Without it, or when AliExpress could not charge it, the merchant
+  pays in AliExpress.
+
+What is bought:
+
+- Each order line is the combination its variant (or the product that does not vary)
+  was linked to. Lines of one combination are merged.
+- A line of the shop's own, or a variant added by hand, stays with the merchant, and
+  the card says so.
+- How AliExpress orders the combination (`sku_attr`) is read again from the product
+  when the order is placed, and so is its stock.
+- Each item ships with **free delivery by AliExpress itself** (a Cainiao service),
+  tracked first. When AliExpress offers none to that country, nothing is placed and the
+  card says why. The address goes as given, with the phone split into its calling
+  code and national number. There is no province field.
+
+A failure is shown on the card with *Place again*. One node takes each order on
+(`Started`, like an import). If AliExpress did not answer, or a node stopped before
+recording the outcome, the order may be on AliExpress anyway. It is then never placed
+again on its own: the merchant checks the account's orders on AliExpress first.
+
+Until each AliExpress order has a parcel number, the sweep reads it again on every
+pass (`aliexpress.trade.ds.order.get`). Once each does, and every line of the shop's
+order was bought there, the order is fulfilled with those numbers as its tracking. A
+mixed order only shows them, for the merchant to fulfil. An order fulfilled by hand,
+cancelled, or placed more than 60 days ago is no longer read. The request and
+response shapes follow ae_sdk, like the rest: the real-app smoke test (#253) covers
+these calls too.
+
 ## Where things live
 
 - **Platform store (`timada-tenancy`).** The app key, the sealed secret, the market,
@@ -90,6 +130,10 @@ catalog until the merchant acts:
 - **Tenant store (`timada-aliexpress/Product`).** One stream per item: the import's
   steps, the catalog product, each sku's variant, cost and last stock, the reads and
   the product's own rule. The `aliexpress_products` read model lists them.
+- **Tenant store (`timada-aliexpress/Forward`).** One stream per order placed on
+  AliExpress: the request, the claim, what was bought and the AliExpress orders, each
+  read that changed something, and the end. The `aliexpress_forwards` read model
+  lists the ones the sweep still reads.
 - **Calls.** These are signed like moh3a/ae_sdk: HMAC-SHA256 over the API path (for
   path calls), then every parameter sorted by name as `name` + `value`, in upper-case
   hex. Dotted methods go to `/sync` and path methods to `/rest<path>`. The response
