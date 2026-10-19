@@ -1,7 +1,9 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { APP_KEY, APP_SECRET, FakeAliexpress, PRODUCT_ID } from "./aliexpress";
 import { registerWithEmail, uniqueEmail } from "./email";
-import { createTenant, uniqueTenant } from "./tenants";
+import { ExampleApp, mintKey } from "./storefront";
+import { FakeStripe, fakeStripeJs, stripeSignature } from "./stripe";
+import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 
 // AliExpress end to end against a stand-in (aliexpress.ts): a merchant sets up
 // the shop's own app, connects the AliExpress account it acts for, imports a
@@ -247,6 +249,154 @@ test("a connected shop with nothing imported still has its access renewed", asyn
     }).toPass({ timeout: 15_000 });
     expect(aliexpress.badSignatures).toBe(0);
   } finally {
+    await aliexpress.stop();
+  }
+});
+
+// Order forwarding: the shop's paid orders are bought on AliExpress for the
+// shopper, delivered free by AliExpress itself, and fulfilled with the parcel
+// number once it ships. The example storefront runs on a port of its own.
+const app = new ExampleApp("storefront", Number(process.env.E2E_ALIEXPRESS_STOREFRONT_PORT ?? 3458));
+
+test.afterEach(() => app.stop());
+
+/// A shopper buys `quantity` roses on the example storefront and pays: the
+/// order's id.
+async function buyRoses(page: Page, request: APIRequestContext, stripe: FakeStripe, webhookUrl: string, quantity: number) {
+  await page.goto(`${app.url}/p/cat-tunnel-deluxe`);
+  await page.getByLabel("Colour").selectOption("Rose");
+  await page.getByLabel("Quantity").fill(String(quantity));
+  await page.getByRole("button", { name: "Add to cart" }).click();
+  await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toBeVisible();
+  await page.goto(`${app.url}/cart`);
+  await page.getByRole("link", { name: "Check out" }).click();
+  await page.getByLabel("E-mail").fill("ada@example.org");
+  await page.getByLabel("Full name").fill("Ada Lovelace");
+  await page.getByLabel("Street address", { exact: true }).fill("1 rue de la Paix");
+  await page.getByLabel("Postal code", { exact: true }).fill("75002");
+  await page.getByLabel("City", { exact: true }).fill("Paris");
+  await page.getByLabel("Country", { exact: true }).selectOption("FR");
+  await page.getByLabel("Phone (optional)").fill("06 12 34 56 78");
+  await page.getByRole("button", { name: "Place order" }).click();
+  await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
+  const intent = stripe.lastIntent()!;
+  stripe.pay(intent.id);
+  const body = JSON.stringify({
+    id: `evt_${intent.id}`,
+    type: "payment_intent.succeeded",
+    data: { object: { id: intent.id, object: "payment_intent" } },
+  });
+  const paid = await request.post(webhookUrl, {
+    data: body,
+    headers: { "content-type": "application/json", "stripe-signature": stripeSignature(body, "whsec_e2e") },
+  });
+  expect(paid.status()).toBe(204);
+  await page.goto(`${app.url}/checkout/complete?redirect_status=succeeded`);
+  await expect(page).toHaveURL(new RegExp(`${app.url}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
+  return page.url().split("/").at(-1)!;
+}
+
+/// Reloads the order's page until its AliExpress card says `status`.
+async function forwardIs(page: Page, url: string, status: string) {
+  await expect(async () => {
+    await page.goto(url);
+    await expect(page.locator("[data-order-aliexpress]")).toHaveAttribute("data-order-aliexpress", status, {
+      timeout: 1000,
+    });
+  }).toPass({ timeout: 20_000 });
+}
+
+test("a shop places its paid orders on AliExpress and fulfils them with the tracking", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  await fakeStripeJs(page);
+  const aliexpress = new FakeAliexpress();
+  const stripe = new FakeStripe();
+  await aliexpress.start();
+  await stripe.start();
+  try {
+    const productUrl = await importedShop(page, aliexpress);
+    const slug = new URL(productUrl).pathname.split("/")[2];
+    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
+    await setLegalIdentity(page, slug);
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    // By hand first: AliExpress delivers no further for free, so the order
+    // is not placed and says why.
+    await page.goto(`/t/${slug}/aliexpress`);
+    await expect(page.locator("[data-aliexpress-forwarding]")).toHaveAttribute("data-aliexpress-forwarding", "manual");
+    aliexpress.freight = [{ service_name: "CAINIAO_PREMIUM", cents: 990, tracking: true }];
+    const first = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 1)}`;
+    await page.goto(first);
+    await expect(page.locator("[data-order-aliexpress]")).toHaveAttribute("data-order-aliexpress", "none");
+    await page.getByRole("button", { name: "Place on AliExpress" }).click();
+    await expect(page.getByRole("status")).toContainText("The order is being placed on AliExpress.");
+    await forwardIs(page, first, "failed");
+    await expect(page.locator("[data-order-aliexpress-error]")).toContainText("no free delivery of its own to FR");
+    expect(aliexpress.orders).toHaveLength(0);
+
+    // Free delivery again: placed, for the merchant to pay in AliExpress.
+    aliexpress.freight = [
+      { service_name: "CAINIAO_PREMIUM", cents: 990, tracking: true },
+      { service_name: "CAINIAO_STANDARD", cents: 0, tracking: true },
+    ];
+    await page.getByRole("button", { name: "Place again" }).click();
+    await forwardIs(page, first, "placed");
+    expect(aliexpress.orders).toHaveLength(1);
+    const manual = aliexpress.orders[0];
+    expect(manual.tryToPay).toBe(false);
+    expect(manual.items).toEqual([
+      {
+        product_id: Number(PRODUCT_ID),
+        sku_attr: aliexpress.skuAttr(aliexpress.sku("12000037001")),
+        product_count: 1,
+        logistics_service_name: "CAINIAO_STANDARD",
+        order_memo: expect.any(String),
+      },
+    ]);
+    expect(manual.address).toMatchObject({
+      full_name: "Ada Lovelace",
+      address: "1 rue de la Paix",
+      zip: "75002",
+      city: "Paris",
+      country: "FR",
+      phone_country: "+33",
+      mobile_no: "612345678",
+    });
+    await expect(page.locator(`[data-order-aliexpress-order="${manual.id}"]`)).toBeVisible();
+    await expect(page.locator("[data-order-aliexpress]")).toContainText("Pay it in AliExpress.");
+    await expect(page.getByRole("button", { name: "Place again" })).toHaveCount(0);
+
+    // Then as they come, paid by AliExpress: the order is placed on its
+    // own, and once its parcel ships the order is fulfilled with it.
+    await page.goto(`/t/${slug}/aliexpress`);
+    await page.getByLabel("Place paid orders on AliExpress automatically").check();
+    await page.getByLabel("Ask AliExpress to pay them with the account's saved payment method").check();
+    await page.getByRole("button", { name: "Save orders settings" }).click();
+    await expect(page.getByRole("status")).toContainText("Orders settings saved.");
+    await expect(page.locator("[data-aliexpress-forwarding]")).toHaveAttribute("data-aliexpress-forwarding", "auto");
+    const second = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 2)}`;
+    await forwardIs(page, second, "placed");
+    const auto = aliexpress.orders[1];
+    expect(auto.tryToPay).toBe(true);
+    expect(auto.items[0].product_count).toBe(2);
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid");
+
+    aliexpress.ship(auto.id, "LP00123456FR");
+    await forwardIs(page, second, "done");
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "fulfilled");
+    await expect(page.locator("[data-order-tracking]")).toHaveText("LP00123456FR");
+    await expect(page.locator("[data-order-aliexpress-tracking]")).toHaveText("LP00123456FR");
+    expect(aliexpress.badSignatures).toBe(0);
+  } finally {
+    await stripe.stop();
     await aliexpress.stop();
   }
 });

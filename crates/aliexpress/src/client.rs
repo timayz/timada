@@ -12,7 +12,7 @@ use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
 
-use crate::model::{AeProduct, Market, Tokens};
+use crate::model::{AeOrder, AeProduct, FreightOption, Market, Tokens};
 
 /// AliExpress's own gateway.
 pub const DEFAULT_API_URL: &str = "https://api-sg.aliexpress.com";
@@ -53,6 +53,12 @@ impl AeError {
             retryable,
             gone,
         }
+    }
+
+    /// Whether placing an order again could buy the goods twice: anything
+    /// but a plain refusal leaves that open.
+    pub fn may_have_placed(&self) -> bool {
+        self.retryable || self.code == "response"
     }
 
     fn transient(code: impl Into<String>, message: impl Into<String>) -> Self {
@@ -145,6 +151,170 @@ impl AeProduct {
     }
 }
 
+/// Where an order goes, as AliExpress names its parts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct LogisticsAddress {
+    pub full_name: String,
+    pub contact_person: String,
+    pub address: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub address2: String,
+    pub city: String,
+    pub zip: String,
+    /// ISO 3166 alpha-2.
+    pub country: String,
+    /// `+33`; empty when the shopper gave no phone.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub phone_country: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub mobile_no: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub locale: String,
+}
+
+/// One combination an order buys.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PlaceItem {
+    pub product_id: String,
+    pub sku_attr: String,
+    pub product_count: u32,
+    pub logistics_service_name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub order_memo: String,
+}
+
+/// An order to place on AliExpress for the account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaceOrder {
+    pub address: LogisticsAddress,
+    pub items: Vec<PlaceItem>,
+    /// Ask AliExpress to charge the account's saved payment method.
+    pub try_to_pay: bool,
+    /// ISO 4217; the account pays in it.
+    pub pay_currency: String,
+}
+
+impl PlaceOrder {
+    /// The two parameters `aliexpress.ds.order.create` takes, each a JSON
+    /// text.
+    pub fn params(&self) -> (String, String) {
+        let items: Vec<Value> = self
+            .items
+            .iter()
+            .map(|item| {
+                let mut value = serde_json::to_value(item).unwrap_or_default();
+                // AliExpress wants the product number as a number.
+                if let (Some(object), Ok(id)) =
+                    (value.as_object_mut(), item.product_id.parse::<u64>())
+                {
+                    object.insert("product_id".into(), Value::from(id));
+                }
+                value
+            })
+            .collect();
+        let order = serde_json::json!({
+            "logistics_address": self.address,
+            "product_items": items,
+        });
+        let extend = serde_json::json!({
+            "payment": {
+                "pay_currency": self.pay_currency,
+                "try_to_pay": if self.try_to_pay { "true" } else { "false" },
+            },
+            "trade_extra_param": { "business_model": "retail" },
+        });
+        (order.to_string(), extend.to_string())
+    }
+}
+
+/// The AliExpress order numbers in the answer to `aliexpress.ds.order.create`
+/// (one per seller), or why there are none.
+pub fn placed_orders_from_response(body: &Value) -> Result<Vec<String>, AeError> {
+    let response = body
+        .get("aliexpress_trade_buy_placeorder_response")
+        .or_else(|| body.get("aliexpress_ds_order_create_response"))
+        .unwrap_or(body);
+    let result = response
+        .get("result")
+        .ok_or_else(|| AeError::new("response", "no result in the answer"))?;
+    let success = result
+        .get("is_success")
+        .map(crate::model::text)
+        .is_some_and(|flag| flag.eq_ignore_ascii_case("true"));
+    if !success {
+        let code = result
+            .get("error_code")
+            .map(crate::model::text)
+            .filter(|code| !code.is_empty())
+            .unwrap_or_else(|| "refused".to_owned());
+        let message = result
+            .get("error_msg")
+            .map(crate::model::text)
+            .unwrap_or_default();
+        let mut err = AeError::new(code, message);
+        // A refusal placed nothing; asking again is the merchant's call.
+        err.retryable = false;
+        err.gone = false;
+        return Err(err);
+    }
+    let orders: Vec<String> = crate::model::list(result.get("order_list"))
+        .iter()
+        .map(crate::model::text)
+        .filter(|id| !id.is_empty())
+        .collect();
+    if orders.is_empty() {
+        return Err(AeError::new("response", "no order number in the answer"));
+    }
+    Ok(orders)
+}
+
+/// The ways AliExpress delivers in the answer to
+/// `aliexpress.logistics.buyer.freight.calculate`, or why there are none.
+pub fn freight_from_response(body: &Value) -> Result<Vec<FreightOption>, AeError> {
+    let response = body
+        .get("aliexpress_logistics_buyer_freight_calculate_response")
+        .unwrap_or(body);
+    let result = response.get("result").unwrap_or(response);
+    let success = result
+        .get("success")
+        .map(crate::model::text)
+        .is_none_or(|flag| flag.eq_ignore_ascii_case("true"));
+    if !success {
+        let message = result
+            .get("error_desc")
+            .map(crate::model::text)
+            .unwrap_or_default();
+        return Err(AeError::new("freight", message));
+    }
+    Ok(FreightOption::list_from_json(result))
+}
+
+impl AeOrder {
+    /// The order in the answer to `aliexpress.trade.ds.order.get`, or why
+    /// there is none.
+    pub fn from_response(body: &Value) -> Result<Self, AeError> {
+        let response = body
+            .get("aliexpress_trade_ds_order_get_response")
+            .or_else(|| body.get("aliexpress_ds_trade_order_get_response"))
+            .unwrap_or(body);
+        let code = response
+            .get("rsp_code")
+            .map(crate::model::text)
+            .unwrap_or_default();
+        if !code.is_empty() && code != "200" {
+            let message = response
+                .get("rsp_msg")
+                .map(crate::model::text)
+                .unwrap_or_default();
+            return Err(AeError::new(code, message));
+        }
+        let result = response
+            .get("result")
+            .ok_or_else(|| AeError::new("response", "no order in the answer"))?;
+        Ok(AeOrder::from_json(result))
+    }
+}
+
 impl Client {
     pub fn new(
         http: reqwest::Client,
@@ -206,6 +376,69 @@ impl Client {
             )
             .await?;
         AeProduct::from_response(product_id, &body)
+    }
+
+    /// How AliExpress can deliver `quantity` of one combination to
+    /// `country`.
+    pub async fn freight(
+        &self,
+        product_id: &str,
+        sku_id: &str,
+        quantity: u32,
+        country: &str,
+        market: &Market,
+    ) -> Result<Vec<FreightOption>, AeError> {
+        let query = serde_json::json!({
+            "product_id": product_id.parse::<u64>().map(Value::from).unwrap_or_else(|_| Value::from(product_id)),
+            "sku_id": sku_id,
+            "product_num": quantity,
+            "country_code": country,
+            "send_goods_country_code": "CN",
+            "price_currency": market.currency,
+        });
+        let body = self
+            .call(
+                "aliexpress.logistics.buyer.freight.calculate",
+                vec![(
+                    "param_aeop_freight_calculate_for_buyer_d_t_o",
+                    query.to_string(),
+                )],
+            )
+            .await?;
+        freight_from_response(&body)
+    }
+
+    /// Places an order for the account: the AliExpress order numbers, one
+    /// per seller.
+    pub async fn place_order(&self, order: &PlaceOrder) -> Result<Vec<String>, AeError> {
+        let (request, extend) = order.params();
+        let body = self
+            .call(
+                "aliexpress.ds.order.create",
+                vec![
+                    ("param_place_order_request4_open_api_d_t_o", request),
+                    ("ds_extend_request", extend),
+                ],
+            )
+            .await?;
+        placed_orders_from_response(&body)
+    }
+
+    /// One order the account placed, as it now stands.
+    pub async fn order(&self, ae_order_id: &str) -> Result<AeOrder, AeError> {
+        let body = self
+            .call(
+                "aliexpress.trade.ds.order.get",
+                vec![
+                    ("order_id", ae_order_id.to_owned()),
+                    (
+                        "single_order_query",
+                        serde_json::json!({ "order_id": ae_order_id }).to_string(),
+                    ),
+                ],
+            )
+            .await?;
+        AeOrder::from_response(&body)
     }
 
     /// Signs and sends one call; the answer's body, or why there is none.

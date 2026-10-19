@@ -85,3 +85,56 @@ pub mod refresh {
         Claimed { claimed_by: String },
     }
 }
+
+/// A shop's paid order placed on AliExpress: one stream per order, with the
+/// deterministic id [`forward_id`](crate::forward_id), so an order is placed
+/// there once. It lives in the tenant's store, next to the order.
+pub mod forward {
+    /// One combination an order bought on AliExpress.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+    pub struct ForwardItem {
+        pub ae_product_id: String,
+        pub sku_id: String,
+        pub quantity: u32,
+        /// The delivery service asked for (`CAINIAO_STANDARD`).
+        pub service_name: String,
+    }
+
+    #[evento::aggregate(name = "timada-aliexpress/Forward")]
+    pub enum Forward {
+        /// The order is to be placed on AliExpress (the shop places its
+        /// orders as they come, or the merchant asked).
+        Requested {
+            order_id: String,
+            requested_by: String,
+        },
+        /// One node took it on, so no other places it a second time.
+        Started { started_by: String },
+        /// AliExpress took it: its order numbers (one per seller), what was
+        /// bought, whether it was asked to charge the account, and whether
+        /// every line of the shop's order was bought there.
+        Placed {
+            ae_order_ids: Vec<String>,
+            items: Vec<ForwardItem>,
+            pay_requested: bool,
+            complete: bool,
+            placed_by: String,
+        },
+        /// Nothing was placed; `reason` says why, for the merchant.
+        Failed { reason: String, failed_by: String },
+        /// One AliExpress order as read again, when that changed.
+        Checked {
+            ae_order_id: String,
+            status: String,
+            logistics_status: String,
+            tracking: Vec<String>,
+        },
+        /// No longer read again: `fulfilled` when the shop's order was
+        /// fulfilled with AliExpress's `tracking`, else the order was settled
+        /// otherwise (fulfilled by hand, cancelled, or too old).
+        Done {
+            tracking: Option<String>,
+            fulfilled: bool,
+        },
+    }
+}

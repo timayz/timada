@@ -9,6 +9,14 @@ pub fn token_refresh_id(expires_at: u64) -> String {
     evento::hash_ids(vec!["aliexpress-token-refresh", &expires_at.to_string()])
 }
 
+/// The stream that places a shop's order on AliExpress.
+pub fn forward_id(order_id: &str) -> String {
+    evento::hash_ids(vec!["aliexpress-forward", order_id])
+}
+
+/// How long an order placed on AliExpress is read again for tracking.
+pub const FORWARD_WATCH_SECS: u64 = 60 * 24 * 60 * 60;
+
 /// How long before an access token lapses it is renewed.
 pub const REFRESH_MARGIN_SECS: u64 = 24 * 60 * 60;
 
