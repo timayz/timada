@@ -585,6 +585,8 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
                 shipping_method: Some("tracked".into()),
                 // The shopper's language: a shopper's event too.
                 language: Some("fr-FR,fr;q=0.9".into()),
+                // Asking for the shop's news: a shopper's event too.
+                newsletter: true,
             },
         )
         .await

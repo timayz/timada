@@ -668,6 +668,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                             <label for="checkout-note">"Remarque pour la boutique (facultatif)"</label>
                             <textarea id="checkout-note" name="note" rows="2">(&draft.note)</textarea>
+                            <label class="check">
+                                <input type="checkbox" name="newsletter" value="1" data-checkout-newsletter="">
+                                " Je souhaite recevoir les nouveautés et offres de Chatounette par e-mail (un lien de confirmation vous est envoyé)"
+                            </label>
                         </section>
                         if !offers.is_empty() {
                             <section class="card offers" aria-labelledby="checkout-offers-title" data-checkout-offers="">
@@ -739,6 +743,9 @@ pub struct CheckoutForm {
     /// Signed in: keep the billing address on the account too.
     #[serde(default)]
     save_billing_address: String,
+    /// Ticked: the shopper asks for the shop's news (confirmed from a mail).
+    #[serde(default)]
+    newsletter: String,
     #[serde(flatten)]
     draft: CheckoutDraft,
 }
@@ -802,6 +809,7 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         shipping_method: Some(draft.shipping_method.clone()),
         // The shop mails about the order in the shopper's language.
         language: request_language(cx),
+        newsletter: !form.newsletter.is_empty(),
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {
         Ok(session) => {

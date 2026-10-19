@@ -14,6 +14,7 @@ pub mod addresses;
 pub mod code;
 pub mod delete;
 pub mod me;
+pub mod newsletter;
 pub mod orders;
 pub mod session;
 pub mod sign_out;

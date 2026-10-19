@@ -457,6 +457,36 @@ async fn an_order_remembers_the_shoppers_language() {
 }
 
 #[tokio::test]
+async fn an_order_remembers_the_shopper_asked_for_news() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(
+        &orders,
+        &cart,
+        Checkout {
+            newsletter: true,
+            ..checkout()
+        },
+    )
+    .await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert!(order.newsletter);
+
+    // Left unticked, nothing is asked.
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(&orders, &cart, checkout()).await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert!(!order.newsletter);
+    // A checkout key may write it.
+    assert!(timada_orders::is_shopper_event(
+        "timada-orders/Cart",
+        "NewsletterOptedIn"
+    ));
+}
+
+#[tokio::test]
 async fn a_shop_sells_to_businesses_only_once_its_merchant_says_so() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;

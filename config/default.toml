@@ -132,11 +132,11 @@ dir = "data/shopper-keys"
 # request_check_secs = 3600
 
 # What storefronts may ask for their shoppers. A storefront has the shop mail
-# sign-in codes and hands in the messages of its contact form; past these
-# limits it is refused for a while and nothing is mailed or recorded. A
-# shopper is the address the storefront reports for them, and is counted per
-# shop. Each node counts on its own, so behind a balancer over N nodes a
-# client may get up to N times these.
+# sign-in codes, hands in the messages of its contact form and the sign-ups
+# to its news; past these limits it is refused for a while and nothing is
+# mailed or recorded. A shopper is the address the storefront reports for
+# them, and is counted per shop. Each node counts on its own, so behind a
+# balancer over N nodes a client may get up to N times these.
 # [store]
 # # Codes one shopper's address may have mailed within the window.
 # shopper_codes_per_ip = 10
@@ -151,6 +151,13 @@ dir = "data/shopper-keys"
 # contact_messages_per_key = 200
 # # The window both message limits count over, in seconds.
 # contact_messages_window_secs = 3600
+# # Sign-ups to a shop's news one visitor's address may hand in within the
+# # window; each mails a link to confirm the address.
+# newsletter_signups_per_ip = 5
+# # Sign-ups one API key may hand in within the window, whoever the visitors.
+# newsletter_signups_per_key = 500
+# # The window both sign-up limits count over, in seconds.
+# newsletter_signups_window_secs = 3600
 
 # How many invitations members may mail. Past either limit, the members page
 # refuses to send another one until older ones leave the window. Withdrawn

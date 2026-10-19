@@ -1,15 +1,16 @@
 //! `/account`: the signed-in shopper's orders (every order placed with
-//! their address, on any device) and saved addresses, a way to sign out
-//! every other browser, and the way to delete the account. Signed out, it
+//! their address, on any device) and saved addresses, the newsletter switch,
+//! a way to sign out every other browser, and the way to delete the account. Signed out, it
 //! sends to the sign-in page.
 
 pub mod addresses;
 pub mod delete;
+pub mod newsletter;
 pub mod sign_in;
 pub mod sign_out;
 pub mod sign_out_everywhere;
 
-use timada_storefront::{OrderStatus, menu, shopper_orders};
+use timada_storefront::{OrderStatus, menu, shopper_newsletter, shopper_orders};
 use topcoat::{
     Result,
     context::Cx,
@@ -51,6 +52,8 @@ pub fn account_done_url(cx: &Cx, done: &str) -> String {
 fn say_done(code: &str) -> Option<&'static str> {
     match code {
         sign_out_everywhere::DONE => Some("Vous êtes déconnecté de tous les autres navigateurs."),
+        newsletter::SUBSCRIBED => Some("C'est noté : vous recevrez notre newsletter."),
+        newsletter::UNSUBSCRIBED => Some("C'est fait : vous ne recevrez plus notre newsletter."),
         _ => None,
     }
 }
@@ -80,6 +83,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         }
         Err(_) => Vec::new(),
     };
+    // Unknown (the dashboard refused to say) reads as not subscribed.
+    let subscribed = shopper_newsletter(cx, &token).await?.unwrap_or(false);
     let query = query_params::<AccountQuery>(cx)?;
     let nav = menu(cx).await?;
     Ok(view! {
@@ -138,6 +143,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </li>
                         }
                     </ul>
+                }
+            </section>
+            <section data-account-newsletter=(if subscribed { "on" } else { "off" })>
+                <h2>"Newsletter"</h2>
+                if subscribed {
+                    <p>"Vous recevez nos nouveautés et nos offres par e-mail."</p>
+                    <form method="post" action=(href!(newsletter::newsletter))>
+                        <input type="hidden" name="subscribed" value="false">
+                        <button>"Ne plus recevoir la newsletter"</button>
+                    </form>
+                } else {
+                    <p>"Nouveautés, conseils et offres réservées aux abonnés, une à deux fois par mois."</p>
+                    <form method="post" action=(href!(newsletter::newsletter))>
+                        <input type="hidden" name="subscribed" value="true">
+                        <button>"Recevoir la newsletter"</button>
+                    </form>
                 }
             </section>
             <section data-account-sessions="">

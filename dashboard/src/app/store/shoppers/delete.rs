@@ -2,7 +2,7 @@
 //! shopper's account. Their key is destroyed, which leaves their personal
 //! data unreadable, and every session ends,
 //! this one included; the orders placed with the address stay with the shop.
-//! 204.
+//! The address is erased from the shop's newsletter too. 204.
 
 use topcoat::{
     Result,
@@ -10,7 +10,8 @@ use topcoat::{
     router::{StatusCode, route},
 };
 
-use super::{Answer, SIGNED_OUT, answer_error, refused, signed_in, status};
+use super::{Answer, SIGNED_OUT, answer_error, opened, refused, signed_in, status};
+use timada_orders::STOREFRONT_ACTOR;
 
 #[route(POST)]
 pub async fn delete(cx: &Cx) -> Result<Answer> {
@@ -22,11 +23,29 @@ pub async fn delete(cx: &Cx) -> Result<Answer> {
     let Some(shopper) = signed_in(cx, hold.executor()).await? else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
-    match timada_shoppers::Command(hold.executor().clone())
-        .forget(&*super::keys(cx, &access.tenant.id), &shopper.id)
+    let keys = super::keys(cx, &access.tenant.id);
+    // Read before the key goes: the newsletter knows them by their address.
+    let email = opened(cx, &access.tenant.id, &shopper)
+        .await?
+        .map(|shopper| shopper.email);
+    if let Err(err) = timada_shoppers::Command(hold.executor().clone())
+        .forget(&*keys, &shopper.id)
         .await
     {
-        Ok(()) => status(StatusCode::NO_CONTENT),
-        Err(err) => answer_error(err),
+        return answer_error(err);
     }
+    if let Some(email) = email {
+        let newsletter = timada_newsletter::Command(hold.executor().clone());
+        if let Some(subscriber) = newsletter
+            .subscriber_of(&email)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+        {
+            newsletter
+                .forget_subscriber(&*keys, STOREFRONT_ACTOR, &subscriber.id)
+                .await
+                .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
+        }
+    }
+    status(StatusCode::NO_CONTENT)
 }
