@@ -259,6 +259,11 @@ async fn import_categories<E: Executor>(
                 .describe_category(actor, &created.id, &seed.description)
                 .await?;
         }
+        if !seed.body.is_empty() {
+            catalog
+                .write_category_body(actor, &created.id, &seed.body)
+                .await?;
+        }
         if seed.position != 0 {
             catalog
                 .position_category(actor, &created.id, seed.position)

@@ -199,6 +199,11 @@ pub mod category {
             description: String,
             described_by: String,
         },
+        /// The longer text the category's page shows below its products.
+        BodyWritten {
+            body: String,
+            written_by: String,
+        },
         /// Re-parented; `None` makes it top-level.
         Moved {
             parent_id: Option<String>,

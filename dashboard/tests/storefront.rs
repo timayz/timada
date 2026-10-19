@@ -40,8 +40,8 @@ use timada_catalog::{
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
     SubscriptionState, category_ancestors, find_category, menu_of, published_categories,
-    published_category_by_slug, published_product_by_slug, published_product_categories,
-    published_products, published_related_products,
+    published_category_body, published_category_by_slug, published_product_by_slug,
+    published_product_categories, published_products, published_related_products,
 };
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
@@ -678,6 +678,18 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
             .collect::<Vec<_>>(),
         ["Bedding"]
     );
+
+    // The text below a category's products reaches the store, apart from
+    // the trees every page loads.
+    catalog
+        .write_category_body("alice", &mats.id, "How to pick a mat.")
+        .await
+        .unwrap();
+    eventually("the body reaches the store", async || {
+        published_category_body(&pool, &mats.id).await.unwrap() == "How to pick a mat."
+    })
+    .await;
+    assert_eq!(published_category_body(&pool, &toys.id).await.unwrap(), "");
 
     // A collection page asks for a subtree, in the order a shopper picked.
     let cheapest_first = published_products(

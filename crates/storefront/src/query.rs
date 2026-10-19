@@ -966,6 +966,18 @@ pub async fn published_category_by_slug(
     .await
 }
 
+/// The text a live category's page shows below its products, empty when
+/// it has none. Apart from [`Category`], so the trees every page loads do
+/// not carry it.
+pub async fn published_category_body(pool: &SqlitePool, category_id: &str) -> sqlx::Result<String> {
+    let body: Option<(String,)> =
+        sqlx::query_as("SELECT body FROM storefront_categories WHERE id = ?1 AND archived = 0")
+            .bind(category_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(body.map(|(body,)| body).unwrap_or_default())
+}
+
 /// The live categories above `category`, top-level first: a breadcrumb,
 /// read off the menu a page has already loaded. Stops where a parent is
 /// archived, since the tree does.

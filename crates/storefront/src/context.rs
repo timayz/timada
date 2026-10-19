@@ -7,8 +7,8 @@ use topcoat_router::error::not_found;
 
 use crate::query::{
     Category, CategoryNode, FacetValue, Product, ProductPage, ProductQuery, category_ancestors,
-    menu_of, published_categories, published_category_by_slug, published_option_values,
-    published_product_by_slug, published_products,
+    menu_of, published_categories, published_category_body, published_category_by_slug,
+    published_option_values, published_product_by_slug, published_products,
 };
 use crate::store::Store;
 
@@ -96,6 +96,14 @@ pub async fn menu(cx: &Cx) -> Result<Vec<CategoryNode>> {
 /// A live category by slug, if any.
 pub async fn category_by_slug(cx: &Cx, slug: &str) -> Result<Option<Category>> {
     published_category_by_slug(store(cx).pool(), slug)
+        .await
+        .map_err(|err| Error::from_anyhow(err.into()))
+}
+
+/// The text a live category's page shows below its products, empty when it
+/// has none.
+pub async fn category_body(cx: &Cx, category_id: &str) -> Result<String> {
+    published_category_body(store(cx).pool(), category_id)
         .await
         .map_err(|err| Error::from_anyhow(err.into()))
 }

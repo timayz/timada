@@ -31,10 +31,11 @@ pub use variant::*;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::category::{
-    Archived as CategoryArchived, Claimed as CategorySlugClaimed, Created as CategoryCreated,
-    Described as CategoryDescribed, HiddenFromMenu as CategoryHiddenFromMenu,
-    Moved as CategoryMoved, Positioned as CategoryPositioned, Released as CategorySlugReleased,
-    Renamed as CategoryRenamed, ShownInMenu as CategoryShownInMenu,
+    Archived as CategoryArchived, BodyWritten as CategoryBodyWritten,
+    Claimed as CategorySlugClaimed, Created as CategoryCreated, Described as CategoryDescribed,
+    HiddenFromMenu as CategoryHiddenFromMenu, Moved as CategoryMoved,
+    Positioned as CategoryPositioned, Released as CategorySlugReleased, Renamed as CategoryRenamed,
+    ShownInMenu as CategoryShownInMenu,
 };
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
@@ -724,6 +725,8 @@ pub struct CategoryState {
     pub slug: String,
     pub name: String,
     pub description: String,
+    /// The text below its products.
+    pub body: String,
     /// `None` for a top-level category.
     pub parent_id: Option<String>,
     /// Where it sorts among its siblings, lowest first.
@@ -743,6 +746,7 @@ pub fn category_projection<E: Executor>() -> Projection<E, CategoryState> {
         .handler(on_category_created())
         .handler(on_category_renamed())
         .handler(on_category_described())
+        .handler(on_category_body_written())
         .handler(on_category_moved())
         .handler(on_category_positioned())
         .handler(on_category_archived())
@@ -782,6 +786,16 @@ async fn on_category_described(
     category: &mut CategoryState,
 ) -> anyhow::Result<()> {
     category.description = event.data.description.to_owned();
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_body_written(
+    event: Event<CategoryBodyWritten>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.body = event.data.body.to_owned();
     category.updated_at = event.timestamp;
     Ok(())
 }

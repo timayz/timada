@@ -9,8 +9,8 @@ pub mod position;
 pub mod rename;
 
 use timada_catalog::{
-    CategoryRow, CategoryState, MAX_CATEGORY_DESCRIPTION_LEN, MAX_CATEGORY_NAME_LEN,
-    category_by_id, live_child_count,
+    CategoryRow, CategoryState, MAX_CATEGORY_BODY_LEN, MAX_CATEGORY_DESCRIPTION_LEN,
+    MAX_CATEGORY_NAME_LEN, category_by_id, live_child_count,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -229,6 +229,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         (if category.description.is_empty() { "—" } else { category.description.as_str() })
                     )
                     fact(
+                        term: "Below the products",
+                        attrs: attributes! { data-category-body=(category.body.chars().count()) },
+                        (if category.body.is_empty() { "—".to_owned() } else { format!("{} characters", category.body.chars().count()) })
+                    )
+                    fact(
                         term: "On its page",
                         attrs: attributes! { data-category-products=(on_its_page) },
                         (on_its_page) " product" (if on_its_page == 1 { "" } else { "s" })
@@ -309,6 +314,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 (&category.description)
                             )
                         )
+                        field(
+                            field_label(attrs: attributes! { for="category-body" }, "Text below the products")
+                            textarea(
+                                attrs: attributes! { id="category-body" name="body" rows="10" maxlength=(MAX_CATEGORY_BODY_LEN) },
+                                (&category.body)
+                            )
+                        )
                         <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save description")</div>
                     </form>
                     <form method="post" action=(href!(menu::menu, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
@@ -350,6 +362,9 @@ pub struct RenameForm {
 pub struct DescribeForm {
     #[serde(default)]
     pub description: String,
+    /// Left alone when the form has no such field.
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

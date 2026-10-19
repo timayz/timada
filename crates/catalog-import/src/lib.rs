@@ -14,6 +14,7 @@
 //! HTTP server.
 
 mod import;
+mod page;
 mod pictures;
 mod snapshot;
 mod text;

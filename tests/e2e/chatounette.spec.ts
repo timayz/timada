@@ -78,6 +78,12 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   await createTenant(page, name);
 
   await createCategory(page, slug, "Couchage");
+  // The longer text the shop shows below a category's products.
+  await page
+    .getByLabel("Text below the products")
+    .fill("Comment choisir un couchage pour chat ?");
+  await page.getByRole("button", { name: "Save description" }).click();
+  await expect(page.getByRole("status")).toContainText("Description saved.");
   await createCategory(page, slug, "Tapis", "Couchage");
   const mat = await publishProduct(
     page,
@@ -157,6 +163,9 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   );
   await expect(page.locator("[data-subcategory=tapis]")).toContainText(
     "Tapis (2)",
+  );
+  await expect(page.locator("[data-category-body]")).toContainText(
+    "Comment choisir un couchage pour chat ?",
   );
   await expect(page.locator("[data-results]")).toContainText(
     "3 résultats affichés",
