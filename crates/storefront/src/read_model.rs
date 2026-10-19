@@ -485,11 +485,11 @@ async fn upsert_category(pool: &SqlitePool, category: &CategoryState) -> anyhow:
             .await?;
     sqlx::query(
         "INSERT INTO storefront_categories (id, slug, name, description, parent_id, position,
-            archived, in_menu, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            archived, in_menu, updated_at, body)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT (id) DO UPDATE SET
             slug = excluded.slug, name = excluded.name, description = excluded.description,
-            parent_id = excluded.parent_id, position = excluded.position,
+            body = excluded.body, parent_id = excluded.parent_id, position = excluded.position,
             archived = excluded.archived, in_menu = excluded.in_menu,
             updated_at = excluded.updated_at",
     )
@@ -502,6 +502,7 @@ async fn upsert_category(pool: &SqlitePool, category: &CategoryState) -> anyhow:
     .bind(category.archived)
     .bind(!category.hidden_from_menu)
     .bind(category.updated_at as i64)
+    .bind(&category.body)
     .execute(&mut *tx)
     .await?;
     if was != Some((category.parent_id.clone(), category.archived)) {

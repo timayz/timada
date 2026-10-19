@@ -45,7 +45,8 @@ seed.chatounette:
 snapshot.chatounette:
 	cargo run -p timada-catalog-import --bin woo-snapshot -- --site https://www.chatounette.com \
 		--out seeds/chatounette --hide ventes-privees \
-		--menu-order accessoires-pour-chat,couchage-chat,goodies-chat,jeux-pour-chat,transport-chat,toilette-chat,vetement-pour-chat
+		--menu-order accessoires-pour-chat,couchage-chat,goodies-chat,jeux-pour-chat,transport-chat,toilette-chat,vetement-pour-chat \
+		--tab-stop-at "À propos"
 
 # The example storefront at https://storefront.localhost, listening on every
 # interface so the compose Traefik reaches it. STORE_TOKEN and STORE_MEDIA_URL

@@ -12,10 +12,10 @@ use anyhow::Context;
 use serde::Deserialize;
 use timada_catalog::{
     CURRENCIES, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN, MAX_ATTRIBUTES,
-    MAX_CATEGORIES_PER_PRODUCT, MAX_CATEGORY_DEPTH, MAX_CATEGORY_DESCRIPTION_LEN,
-    MAX_CATEGORY_NAME_LEN, MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN,
-    MAX_OPTION_NAME_LEN, MAX_OPTION_VALUES, MAX_OPTIONS, MAX_SKU_LEN, MAX_SLUG_LEN, MAX_VARIANTS,
-    slugify,
+    MAX_CATEGORIES_PER_PRODUCT, MAX_CATEGORY_BODY_LEN, MAX_CATEGORY_DEPTH,
+    MAX_CATEGORY_DESCRIPTION_LEN, MAX_CATEGORY_NAME_LEN, MAX_DESCRIPTION_LEN,
+    MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN, MAX_OPTION_NAME_LEN, MAX_OPTION_VALUES, MAX_OPTIONS,
+    MAX_SKU_LEN, MAX_SLUG_LEN, MAX_VARIANTS, slugify,
 };
 
 use crate::snapshot::{
@@ -32,6 +32,10 @@ pub struct SiteOptions {
     pub menu_order: Vec<String>,
     /// Category slugs taken out of the menu (kept, with their products).
     pub hidden: Vec<String>,
+    /// Headings of a product's "Description" tab where the shop's own
+    /// blocks begin (the same on every product): the tab is read up to the
+    /// first of them.
+    pub tab_stop_at: Vec<String>,
 }
 
 /// A page of the Store API at a time; the API caps it at 100.
@@ -54,6 +58,12 @@ pub struct WooCategory {
     pub description: String,
     #[serde(default)]
     pub image: Option<WooImage>,
+    /// The category's page on the shop.
+    #[serde(default, deserialize_with = "text")]
+    pub permalink: String,
+    /// The text its page shows below the products, read off that page.
+    #[serde(skip)]
+    pub below: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -90,6 +100,13 @@ pub struct WooProduct {
     pub attributes: Vec<WooAttribute>,
     #[serde(default)]
     pub variations: Vec<WooVariationRef>,
+    /// The product's page on the shop.
+    #[serde(default, deserialize_with = "text")]
+    pub permalink: String,
+    /// The text of its page's "Description" tab, read off that page when
+    /// the API gives no long description.
+    #[serde(skip)]
+    pub tab: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -146,10 +163,15 @@ pub struct WooVariationAttribute {
 }
 
 /// Fetches a whole shop. `site` is its base address (`https://shop.example`).
+/// What the API leaves out (the text below a category's products, a
+/// product's "Description" tab) is read off the shop's pages,
+/// `page_concurrency` at a time; a page that cannot be read leaves its text
+/// empty.
 pub async fn snapshot_site(
     client: &reqwest::Client,
     site: &str,
     options: &SiteOptions,
+    page_concurrency: usize,
 ) -> anyhow::Result<Snapshot> {
     let base = format!("{}/wp-json/wc/store/v1", site.trim_end_matches('/'));
     let categories: Vec<WooCategory> = fetch_all(
@@ -167,6 +189,30 @@ pub async fn snapshot_site(
     )
     .await?;
     tracing::info!(count = variations.len(), "variations fetched");
+    let mut categories = categories;
+    let mut products = products;
+    let urls: Vec<String> = categories
+        .iter()
+        .map(|c| c.permalink.clone())
+        .chain(
+            products
+                .iter()
+                .filter(|p| html_to_text(&p.description).is_empty())
+                .map(|p| p.permalink.clone()),
+        )
+        .filter(|url| !url.is_empty())
+        .collect();
+    let mut texts = read_pages(client, urls, page_concurrency, &options.tab_stop_at).await;
+    for category in &mut categories {
+        if let Some((below, _)) = texts.remove(&category.permalink) {
+            category.below = below;
+        }
+    }
+    for product in &mut products {
+        if let Some((_, tab)) = texts.remove(&product.permalink) {
+            product.tab = tab;
+        }
+    }
     let mut snapshot = map_catalog(categories, products, variations, options);
     snapshot.source = site.to_owned();
     snapshot.fetched_at = std::time::SystemTime::now()
@@ -174,6 +220,109 @@ pub async fn snapshot_site(
         .map(|d| d.as_secs())
         .unwrap_or_default();
     Ok(snapshot)
+}
+
+/// How many times a page is asked for before it is given up.
+const PAGE_ATTEMPTS: u32 = 5;
+
+/// One page's HTML, or `None` once it could not be read. A shop that says
+/// it is too busy (429, 503) is waited for as long as it asks (its
+/// `Retry-After` in seconds), or longer each time when it does not say.
+async fn read_page(client: &reqwest::Client, url: &str) -> Option<String> {
+    for attempt in 1..=PAGE_ATTEMPTS {
+        let wait = match client.get(url).send().await {
+            Ok(response) if response.status().is_success() => match response.text().await {
+                Ok(html) => return Some(html),
+                Err(err) => {
+                    tracing::warn!(%url, %err, "page body not read");
+                    None
+                }
+            },
+            Ok(response)
+                if matches!(
+                    response.status(),
+                    reqwest::StatusCode::TOO_MANY_REQUESTS
+                        | reqwest::StatusCode::SERVICE_UNAVAILABLE
+                ) =>
+            {
+                response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+            }
+            Ok(response) => {
+                tracing::warn!(%url, status = %response.status(), "page not read, its text left empty");
+                return None;
+            }
+            Err(err) => {
+                tracing::warn!(%url, %err, "page not reached");
+                None
+            }
+        };
+        if attempt < PAGE_ATTEMPTS {
+            let secs = wait.unwrap_or(5 * u64::from(attempt)).min(120);
+            tracing::debug!(%url, attempt, secs, "page retried later");
+            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+        }
+    }
+    tracing::warn!(%url, "page not read after {PAGE_ATTEMPTS} tries, its text left empty");
+    None
+}
+
+/// Reads every page at `urls`, `concurrency` at a time (see [`read_page`]),
+/// into its text below a category's products and its "Description" tab
+/// (both, since only the address says which it is). A page that cannot be
+/// read is left out.
+async fn read_pages(
+    client: &reqwest::Client,
+    urls: Vec<String>,
+    concurrency: usize,
+    stop_at: &[String],
+) -> HashMap<String, (String, String)> {
+    let total = urls.len();
+    let mut out = HashMap::with_capacity(total);
+    let mut done = 0;
+    for chunk in urls.chunks(concurrency.max(1)) {
+        let mut set = tokio::task::JoinSet::new();
+        for url in chunk {
+            let client = client.clone();
+            let url = url.clone();
+            let stop_at = stop_at.to_vec();
+            set.spawn(async move {
+                let html = read_page(&client, &url).await;
+                let texts = html.map(|html| {
+                    (
+                        crate::page::below_category(&html),
+                        crate::page::product_tab(&html, &stop_at),
+                    )
+                });
+                (url, texts)
+            });
+        }
+        while let Some(joined) = set.join_next().await {
+            if let Ok((url, Some(texts))) = joined {
+                out.insert(url, texts);
+            }
+        }
+        done += chunk.len();
+        if done % 200 < chunk.len() || done == total {
+            tracing::info!(done, total, "pages read");
+        }
+    }
+    out
+}
+
+/// `text` up to the first paragraph that is one of the `headings`.
+fn cut_at_heading(text: &str, headings: &[String]) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    for paragraph in text.split("\n\n") {
+        if headings.iter().any(|heading| paragraph.trim() == heading) {
+            break;
+        }
+        kept.push(paragraph);
+    }
+    kept.join("\n\n").trim().to_owned()
 }
 
 /// Every page of a listing, one request at a time, each tried twice.
@@ -242,7 +391,7 @@ pub fn map_catalog(
         .iter()
         .filter_map(|product| {
             let variations = by_parent.get(&product.id).map(Vec::as_slice).unwrap_or(&[]);
-            let mut seed = map_product(product, variations, &known)?;
+            let mut seed = map_product(product, variations, &known, &options.tab_stop_at)?;
             if !used_slugs.insert(seed.slug.clone()) {
                 tracing::warn!(slug = %seed.slug, id = product.id, "duplicate slug, product skipped");
                 return None;
@@ -325,6 +474,7 @@ fn map_categories(categories: Vec<WooCategory>, options: &SiteOptions) -> Vec<Ca
                     &html_to_text(&category.description),
                     MAX_CATEGORY_DESCRIPTION_LEN,
                 ),
+                body: truncate_chars(&category.below, MAX_CATEGORY_BODY_LEN),
                 parent: (*parent != 0)
                     .then(|| by_id.get(parent).map(|p| fit_slug(&p.slug, &p.name)))
                     .flatten(),
@@ -345,6 +495,7 @@ fn map_product(
     product: &WooProduct,
     variations: &[&WooProduct],
     known: &HashSet<&str>,
+    stop_at: &[String],
 ) -> Option<ProductSeed> {
     let name = plain(&product.name, MAX_NAME_LEN);
     if name.is_empty() {
@@ -359,7 +510,12 @@ fn map_product(
         "EUR".to_owned()
     };
     let short = html_to_text(&product.short_description);
-    let long = html_to_text(&product.description);
+    // An older product carries the page builder's layout in its API
+    // description, the shop's own blocks included: cut there as on a page.
+    let long = match html_to_text(&product.description) {
+        long if long.is_empty() => product.tab.trim().to_owned(),
+        long => cut_at_heading(&long, stop_at),
+    };
     let description = if long.is_empty() || long == short {
         short
     } else if short.is_empty() {
@@ -654,5 +810,22 @@ mod tests {
         assert_eq!(fit_sku("  "), None);
         assert_eq!(parse_minor("1990"), Some(1990));
         assert_eq!(parse_minor(""), None);
+    }
+
+    #[test]
+    fn a_description_stops_at_the_shop_blocks() {
+        let stops = ["À propos".to_owned()];
+        assert_eq!(
+            cut_at_heading("Doux.\n\nLavable.\n\nÀ propos\n\nNous sommes 2.", &stops),
+            "Doux.\n\nLavable."
+        );
+        assert_eq!(
+            cut_at_heading("Doux. À propos du tapis.", &stops),
+            "Doux. À propos du tapis."
+        );
+        assert_eq!(
+            cut_at_heading("Doux.\n\nÀ propos", &[]),
+            "Doux.\n\nÀ propos"
+        );
     }
 }

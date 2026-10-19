@@ -21,7 +21,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         CategoryMenu0007,
         ReviewReplies0008,
         ProductOptions0009,
-        Stock0010
+        Stock0010,
+        CategoryBody0011
     ]
 }
 
@@ -385,6 +386,18 @@ sqlx_migrator::sqlite_migration!(
             "ALTER TABLE storefront_products DROP COLUMN in_stock"
         ),
     ]
+);
+
+pub struct CategoryBody0011;
+sqlx_migrator::sqlite_migration!(
+    CategoryBody0011,
+    "storefront",
+    "0011_category_body",
+    vec_box![("storefront", "0010_stock")],
+    vec_box![(
+        "ALTER TABLE storefront_categories ADD COLUMN body TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE storefront_categories DROP COLUMN body"
+    )]
 );
 
 /// Fills the option rows for the products already copied, whose options so

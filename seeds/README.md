@@ -16,8 +16,11 @@ shop they were taken from. Take one locally:
 | `make snapshot.chatounette` → `seeds/chatounette/` | https://www.chatounette.com (WooCommerce, French cat shop) | ~60 categories, ~1,300 products, ~5,000 variants, ~8,000 pictures (~650 MB) |
 
 It runs the `woo-snapshot` binary of `crates/catalog-import` over the shop's public
-Store API with the shop's menu order and the categories its menu leaves out, then
-fetches the pictures. Run again into the same directory, it refreshes the catalogue
+Store API with the shop's menu order and the categories its menu leaves out. What the
+API leaves out is read off the shop's pages, two at a time and waiting when the shop
+asks: the text below each category's products, and each product's "Description" tab
+up to the shop's own "À propos" block (`--tab-stop-at`). Then it fetches the
+pictures. Run again into the same directory, it refreshes the catalogue
 and fetches only the pictures not there yet. A picture the fetch could not get is
 left to the seed, which fetches it from the shop (`--no-pictures` leaves them all).
 

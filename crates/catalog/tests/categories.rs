@@ -1,7 +1,9 @@
 mod common;
 
 use common::*;
-use timada_catalog::{CatalogError, CreateCategory, MAX_CATEGORY_DEPTH, SLUG_SUFFIX_LEN};
+use timada_catalog::{
+    CatalogError, CreateCategory, MAX_CATEGORY_BODY_LEN, MAX_CATEGORY_DEPTH, SLUG_SUFFIX_LEN,
+};
 
 #[tokio::test]
 async fn creating_a_category_derives_its_slug_and_starts_at_the_top() {
@@ -168,6 +170,48 @@ async fn editing_a_category_is_idempotent() {
 }
 
 #[tokio::test]
+async fn a_category_body_is_written_apart_from_its_description() {
+    let cmd = command().await;
+    let category = create_category(&cmd, "Toys").await;
+    assert_eq!(category.body, "", "a new category has no body");
+
+    cmd.describe_category(ALICE, &category.id, "Games for cats.")
+        .await
+        .unwrap();
+    cmd.write_category_body(
+        ALICE,
+        &category.id,
+        "  Why a cat plays.\n\nHow to pick a toy.  ",
+    )
+    .await
+    .unwrap();
+    let written = cmd.load_category(&category.id).await.unwrap().unwrap();
+    assert_eq!(written.description, "Games for cats.");
+    assert_eq!(written.body, "Why a cat plays.\n\nHow to pick a toy.");
+
+    let version = written.aggregate_version;
+    cmd.write_category_body(
+        ALICE,
+        &category.id,
+        "Why a cat plays.\n\nHow to pick a toy.",
+    )
+    .await
+    .unwrap();
+    let again = cmd.load_category(&category.id).await.unwrap().unwrap();
+    assert_eq!(again.aggregate_version, version, "no event for no change");
+
+    let long = "b".repeat(MAX_CATEGORY_BODY_LEN + 1);
+    let err = cmd
+        .write_category_body(ALICE, &category.id, &long)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CatalogError::InvalidDescription), "{err}");
+    cmd.write_category_body(ALICE, &category.id, &"b".repeat(MAX_CATEGORY_BODY_LEN))
+        .await
+        .expect("the longest body is taken");
+}
+
+#[tokio::test]
 async fn moving_a_category_refuses_loops_and_depth() {
     let cmd = command().await;
     let bedding = create_category(&cmd, "Bedding").await;
@@ -249,6 +293,7 @@ async fn an_archived_category_leaves_its_slug_and_takes_no_edits() {
     for err in [
         cmd.rename_category(ALICE, &first.id, "Nope").await,
         cmd.describe_category(ALICE, &first.id, "Nope").await,
+        cmd.write_category_body(ALICE, &first.id, "Nope").await,
         cmd.move_category(ALICE, &first.id, None).await,
         cmd.position_category(ALICE, &first.id, 1).await,
         cmd.set_category_in_menu(ALICE, &first.id, false).await,

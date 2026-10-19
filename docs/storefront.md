@@ -95,13 +95,15 @@ last either way.
 ## Browsing the categories
 
 ```rust
-use timada_storefront::{categories, category_path, find_category, product_categories,
-    related_products, require_category, require_category_in, search_categories};
+use timada_storefront::{categories, category_body, category_path, find_category,
+    product_categories, related_products, require_category, require_category_in,
+    search_categories};
 
 let menu = categories(cx).await?;                     // live categories as trees
 let node = require_category_in(&menu, slug)?;         // 404 when archived or unknown, no query
 let category = require_category(cx, slug).await?;     // the same without a menu at hand
 let crumbs = category_path(&menu, &category);         // its ancestors, read off the menu
+let body = category_body(cx, &category.id).await?;    // the text below its products, or ""
 let node = find_category(&menu, &category.slug);      // its node, with children and count
 let hits = search_categories(&menu, "lit", 3);     // names containing it, accents aside
 let also = related_products(cx, &product, 4).await?;  // same category, never itself
@@ -473,7 +475,8 @@ a returning shopper in on a second browser.
 French and in the layout and colours of chatounette.com: a top bar with the promo code,
 a masthead with the search, the category bar, a home with the newest products, the
 category tiles, the latest reviews and the four promises, listings with the shop's
-sort labels, a product page with its gallery, option menus, reassurance block and
+sort labels and, on a category's first page, its longer text below the products, a
+product page with its gallery, option menus, reassurance block and
 folding description and facts, the shop's own pages under `/pages/{slug}`, and the
 cart, checkout, orders and account pages of the first example translated. It is meant
 to run against a tenant filled by `make seed.chatounette` (see "Seeding a catalogue"),

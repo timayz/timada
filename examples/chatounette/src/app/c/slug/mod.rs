@@ -2,8 +2,8 @@
 //! the price and colour filters.
 
 use timada_storefront::{
-    ProductQuery, ProductSort, categories, category_path, menu_of, option_values, products,
-    require_category_in,
+    ProductQuery, ProductSort, categories, category_body, category_path, menu_of, option_values,
+    products, require_category_in,
 };
 use topcoat::{
     Result,
@@ -60,6 +60,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let children = node.children.clone();
     let crumbs = category_path(&tree, &category);
     let query = query_params::<CategoryQuery>(cx)?;
+    // The longer text about the category, on its first page only.
+    let body = if query.page.unwrap_or(1) <= 1 {
+        category_body(cx, &category.id).await?
+    } else {
+        String::new()
+    };
     let sort = query
         .sort
         .as_deref()
@@ -164,6 +170,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <span>"Page " (page.page) " sur " (page.pages())</span>
                         if page.has_next() { <a href=(link(&filters, page.page + 1))>"Suivant →"</a> }
                     </nav>
+                }
+                if page.page == 1 && !body.is_empty() {
+                    <section class="category-body" data-category-body="">
+                        <p class="description">(&body)</p>
+                    </section>
                 }
             </div>
         )

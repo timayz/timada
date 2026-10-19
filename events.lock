@@ -22,6 +22,7 @@ event timada-aliexpress/Product::Synced { skus: Vec<SkuLink>, offline: bool, syn
 event timada-aliexpress/Product::Unlinked { unlinked_by: String }
 event timada-aliexpress/TokenRefresh::Claimed { claimed_by: String }
 event timada-catalog/Category::Archived { archived_by: String }
+event timada-catalog/Category::BodyWritten { body: String, written_by: String }
 event timada-catalog/Category::Created { slug: String, name: String, parent_id: Option<String>, created_by: String }
 event timada-catalog/Category::Described { description: String, described_by: String }
 event timada-catalog/Category::HiddenFromMenu { hidden_by: String }

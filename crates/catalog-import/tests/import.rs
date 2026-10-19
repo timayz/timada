@@ -104,6 +104,7 @@ fn snapshot() -> Snapshot {
                 slug: "couchage-chat".into(),
                 name: "Couchages pour chats".into(),
                 description: "Où il dort.".into(),
+                body: "Comment choisir un panier.".into(),
                 position: 1,
                 ..Default::default()
             },
@@ -283,6 +284,7 @@ async fn loads_the_tree_and_the_products_then_skips_them_next_time() {
         .unwrap()
         .unwrap();
     assert_eq!(couchage.description, "Où il dort.");
+    assert_eq!(couchage.body, "Comment choisir un panier.");
     assert_eq!(couchage.position, 1);
     assert!(!couchage.hidden_from_menu);
     let tapis = catalog

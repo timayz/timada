@@ -4,12 +4,14 @@ use evento::{Executor, ProjectionAggregate};
 use ulid::Ulid;
 
 use crate::aggregator::category::{
-    Archived, Created, Described, HiddenFromMenu, Moved, Positioned, Renamed, ShownInMenu,
+    Archived, BodyWritten, Created, Described, HiddenFromMenu, Moved, Positioned, Renamed,
+    ShownInMenu,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
-    FALLBACK_CATEGORY_SLUG, MAX_CATEGORY_DEPTH, normalize_category_description,
-    normalize_category_name, normalize_slug, slugify_or, suffixed_slug,
+    FALLBACK_CATEGORY_SLUG, MAX_CATEGORY_DEPTH, normalize_category_body,
+    normalize_category_description, normalize_category_name, normalize_slug, slugify_or,
+    suffixed_slug,
 };
 
 use super::CategoryState;
@@ -150,6 +152,32 @@ impl<E: Executor> super::Command<E> {
             .event(&Described {
                 description,
                 described_by: actor.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Replaces the text below the category's products; the same text is a
+    /// no-op.
+    pub async fn write_category_body(
+        &self,
+        actor: &str,
+        category_id: &str,
+        body: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let body = normalize_category_body(body)?;
+        let category = self.require_live_category(category_id).await?;
+        if category.body == body {
+            return Ok(());
+        }
+        category
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&BodyWritten {
+                body,
+                written_by: actor.to_owned(),
             })
             .commit(&self.0)
             .await?;

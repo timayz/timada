@@ -38,6 +38,8 @@ pub fn tax_category_label(category: &str) -> &str {
 pub const CURRENCIES: &[&str] = &["EUR", "USD", "GBP", "CHF"];
 pub const MAX_CATEGORY_NAME_LEN: usize = 80;
 pub const MAX_CATEGORY_DESCRIPTION_LEN: usize = 2000;
+/// The longest text below a category's products.
+pub const MAX_CATEGORY_BODY_LEN: usize = 20_000;
 /// How deep the category tree goes: a top-level category is at depth 1, so
 /// `Bedding > Mats > Cooling mats` is the most.
 pub const MAX_CATEGORY_DEPTH: usize = 3;
@@ -218,6 +220,15 @@ pub fn normalize_category_description(description: &str) -> Result<String, Catal
         return Err(CatalogError::InvalidDescription);
     }
     Ok(description.to_owned())
+}
+
+/// Trims the text below a category's products and checks its length.
+pub fn normalize_category_body(body: &str) -> Result<String, CatalogError> {
+    let body = body.trim();
+    if body.chars().count() > MAX_CATEGORY_BODY_LEN {
+        return Err(CatalogError::InvalidDescription);
+    }
+    Ok(body.to_owned())
 }
 
 /// Trims a display name and checks it is 1 to 120 characters.
