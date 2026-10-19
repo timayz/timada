@@ -157,6 +157,8 @@ form.sort { display: flex; align-items: center; gap: .5rem; font-size: .9rem; }
 form.sort select { padding: .45rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: #fff; }
 form.sort button { padding: .45rem .9rem; border: 1px solid var(--line); border-radius: .5rem; background: #fff; cursor: pointer; }
 p.description { color: var(--ink-soft); max-width: 48rem; white-space: pre-line; }
+.category-body { margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line); }
+.category-body p.description { max-width: 56rem; line-height: 1.65; }
 ul.chips { list-style: none; padding: 0; margin: 0 0 1.5rem; display: flex; flex-wrap: wrap; gap: .5rem; }
 ul.chips a { display: inline-block; padding: .4rem .9rem; border-radius: 2rem; border: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: .85rem; }
 ul.chips a:hover { border-color: var(--coral); color: var(--coral-dark); }

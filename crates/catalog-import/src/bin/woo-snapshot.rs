@@ -31,12 +31,20 @@ struct Cli {
     /// Pictures fetched at once
     #[arg(long, default_value_t = 8)]
     concurrency: usize,
+    /// Shop pages read at once (a shop's pages are slower and more guarded
+    /// than its pictures)
+    #[arg(long, default_value_t = 2)]
+    page_concurrency: usize,
     /// Top-level category slugs in the order the menu shows them, comma-separated
     #[arg(long, value_delimiter = ',')]
     menu_order: Vec<String>,
     /// Category slugs left out of the menu, comma-separated
     #[arg(long, value_delimiter = ',')]
     hide: Vec<String>,
+    /// Headings of a product's "Description" tab where the shop's own
+    /// blocks begin, comma-separated; the tab is read up to the first one
+    #[arg(long, value_delimiter = ',')]
+    tab_stop_at: Vec<String>,
 }
 
 #[tokio::main]
@@ -55,8 +63,9 @@ async fn main() -> anyhow::Result<()> {
     let options = SiteOptions {
         menu_order: cli.menu_order,
         hidden: cli.hide,
+        tab_stop_at: cli.tab_stop_at,
     };
-    let mut snapshot = snapshot_site(&client, &cli.site, &options).await?;
+    let mut snapshot = snapshot_site(&client, &cli.site, &options, cli.page_concurrency).await?;
     // The catalogue first, so a fetch of the pictures that stops leaves one.
     let catalog = cli.out.join(CATALOG_FILE);
     snapshot.write(&catalog)?;

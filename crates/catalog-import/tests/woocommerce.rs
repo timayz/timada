@@ -21,6 +21,7 @@ fn categories_keep_their_tree_order_and_menu() {
     let snapshot = mapped(&SiteOptions {
         menu_order: vec!["jeux-pour-chat".into(), "couchage-chat".into()],
         hidden: vec!["ventes-privees".into()],
+        ..Default::default()
     });
     let slugs: Vec<&str> = snapshot
         .categories

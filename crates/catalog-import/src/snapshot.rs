@@ -42,6 +42,9 @@ pub struct CategorySeed {
     /// Plain text.
     #[serde(default)]
     pub description: String,
+    /// Plain text, shown below the category's products.
+    #[serde(default)]
+    pub body: String,
     /// The parent's slug; `None` at the top.
     #[serde(default)]
     pub parent: Option<String>,
@@ -68,6 +71,7 @@ impl Default for CategorySeed {
             slug: String::new(),
             name: String::new(),
             description: String::new(),
+            body: String::new(),
             parent: None,
             position: 0,
             in_menu: true,
