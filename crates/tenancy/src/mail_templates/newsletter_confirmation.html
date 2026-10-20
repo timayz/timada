@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<body>
+{% if shop.logo_url %}
+<p><img src="{{ shop.logo_url }}" alt="{{ shop.name }}" style="max-height: 64px; max-width: 240px;"></p>
+{% endif %}
+<p>Someone, hopefully you, asked to receive the news of <strong>{{ shop.name }}</strong> at this address.</p>
+<p><a href="{{ link }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>Confirm my subscription</a></p>
+<p>The link works for {{ valid_days }} days. If you did not ask for it, ignore this message: nothing will be sent to you.</p>
+{% if shop.footer %}
+<hr style="border: none; border-top: 1px solid #e5e7eb;">
+<p style="color: #6b7280; font-size: 12px; white-space: pre-line;">{{ shop.footer }}</p>
+{% endif %}
+</body>
+</html>

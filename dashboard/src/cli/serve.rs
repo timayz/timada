@@ -293,6 +293,16 @@ fn tenant_subscriptions(
                 timada_support::read_model_subscription(pool, tenant_id, keys.for_tenant(tenant_id))
             }
         }),
+        Arc::new({
+            let keys = keys.clone();
+            move |pool, tenant_id, _: &Executor| {
+                timada_newsletter::read_model_subscription(
+                    pool,
+                    tenant_id,
+                    keys.for_tenant(tenant_id),
+                )
+            }
+        }),
         Arc::new(|pool, tenant_id, _: &Executor| {
             timada_invoicing::read_model_subscription(pool, tenant_id)
         }),
@@ -336,6 +346,12 @@ fn tenant_subscriptions(
                 crate::message_keys::subscription(keys.clone(), tenant_id)
             }
         }),
+        Arc::new({
+            let keys = keys.clone();
+            move |_, tenant_id, _: &Executor| {
+                crate::newsletter_keys::subscription(keys.clone(), tenant_id)
+            }
+        }),
         Arc::new(move |_, tenant_id, executor: &Executor| {
             crate::payments::subscription(payments.clone(), tenant_id, executor.clone())
         }),
@@ -344,6 +360,20 @@ fn tenant_subscriptions(
         }),
         Arc::new(|_, _, executor: &Executor| {
             timada_orders::stock_usage_subscription(executor.clone())
+        }),
+        Arc::new({
+            let platform = platform.clone();
+            let background_mail = background_mail.clone();
+            let keys = keys.clone();
+            move |_, tenant_id, executor: &Executor| {
+                crate::newsletter::subscription(
+                    platform.clone(),
+                    background_mail.clone(),
+                    keys.clone(),
+                    tenant_id,
+                    executor.clone(),
+                )
+            }
         }),
         Arc::new({
             let platform = platform.clone();

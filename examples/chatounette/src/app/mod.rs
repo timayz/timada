@@ -12,6 +12,7 @@ pub mod cart;
 pub mod checkout;
 pub mod filters;
 pub mod menu;
+pub mod newsletter;
 pub mod orders;
 pub mod p;
 pub mod pages;
@@ -231,6 +232,11 @@ pub async fn site_footer() -> Result<impl View> {
                     <h2>"Contact"</h2>
                     <p>"Service client du lundi au samedi, de 9h à 18h."</p>
                     <p><a href=(format!("mailto:{}", support_client::CONTACT_EMAIL))>(support_client::CONTACT_EMAIL)</a></p>
+                </div>
+                <div>
+                    <h2>"Newsletter"</h2>
+                    <p>"Nouveautés et offres réservées aux abonnés."</p>
+                    newsletter::newsletter_form()
                 </div>
             </div>
             <p class="legal">"© 2019 – 2026 Chatounette™ · Boutique de démonstration sur timada"</p>

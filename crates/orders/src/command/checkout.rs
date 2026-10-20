@@ -5,8 +5,9 @@ use ulid::Ulid;
 
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
-    Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet, PaymentRefused,
-    PaymentRequested, Placed, ShippingCharged, ShippingGranted, ShippingMethodChosen,
+    Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet, NewsletterOptInSet,
+    NewsletterOptedIn, PaymentRefused, PaymentRequested, Placed, ShippingCharged, ShippingGranted,
+    ShippingMethodChosen,
 };
 use crate::error::OrdersError;
 use crate::value_object::{
@@ -49,6 +50,8 @@ pub struct Checkout {
     /// tag or a whole `Accept-Language` value); kept as its primary subtag,
     /// dropped when it is not one. The shop mails the shopper in it.
     pub language: Option<String>,
+    /// The shopper ticked the box asking for the shop's news.
+    pub newsletter: bool,
 }
 
 /// The order a payment made.
@@ -587,6 +590,12 @@ impl<E: Executor> super::Command<E> {
                 given_by: actor.to_owned(),
             });
         }
+        if checkout.newsletter {
+            write.event(&NewsletterOptedIn {
+                request_id: request_id.clone(),
+                opted_in_by: actor.to_owned(),
+            });
+        }
         write.commit(&self.0).await?;
         Ok(request_id)
     }
@@ -762,6 +771,11 @@ impl<E: Executor> super::Command<E> {
         if let Some(language) = &request.language {
             write.event(&LanguageSet {
                 language: language.clone(),
+                set_by: actor.to_owned(),
+            });
+        }
+        if request.newsletter {
+            write.event(&NewsletterOptInSet {
                 set_by: actor.to_owned(),
             });
         }

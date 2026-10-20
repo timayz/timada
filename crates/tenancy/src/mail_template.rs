@@ -41,6 +41,7 @@ pub enum ShopMailKind {
     ShopperCode,
     OrderConfirmation,
     ReviewRequest,
+    NewsletterConfirmation,
 }
 
 /// A variable a template may use, as the editor lists it.
@@ -156,11 +157,23 @@ const REVIEW_REQUEST_VARIABLES: [MailVariable; 4] = [
     },
 ];
 
+const NEWSLETTER_CONFIRMATION_VARIABLES: [MailVariable; 2] = [
+    MailVariable {
+        name: "link",
+        description: "The page where the shopper confirms they want the shop's news.",
+    },
+    MailVariable {
+        name: "valid_days",
+        description: "How many days the link works for.",
+    },
+];
+
 impl ShopMailKind {
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 4] = [
         Self::ShopperCode,
         Self::OrderConfirmation,
         Self::ReviewRequest,
+        Self::NewsletterConfirmation,
     ];
 
     /// The stored name, frozen once shipped.
@@ -169,6 +182,7 @@ impl ShopMailKind {
             Self::ShopperCode => "shopper_code",
             Self::OrderConfirmation => "order_confirmation",
             Self::ReviewRequest => "review_request",
+            Self::NewsletterConfirmation => "newsletter_confirmation",
         }
     }
 
@@ -181,6 +195,7 @@ impl ShopMailKind {
             Self::ShopperCode => "Sign-in code",
             Self::OrderConfirmation => "Order confirmation",
             Self::ReviewRequest => "Review request",
+            Self::NewsletterConfirmation => "Newsletter confirmation",
         }
     }
 
@@ -189,6 +204,9 @@ impl ShopMailKind {
             Self::ShopperCode => "Sent when a shopper signs in to their account.",
             Self::OrderConfirmation => "Sent once an order is paid.",
             Self::ReviewRequest => "Sent after an order is fulfilled, asking for a review.",
+            Self::NewsletterConfirmation => {
+                "Sent when a shopper asks for the shop's news, to confirm their address."
+            }
         }
     }
 
@@ -198,6 +216,7 @@ impl ShopMailKind {
             Self::ShopperCode => &SHOPPER_CODE_VARIABLES,
             Self::OrderConfirmation => &ORDER_CONFIRMATION_VARIABLES,
             Self::ReviewRequest => &REVIEW_REQUEST_VARIABLES,
+            Self::NewsletterConfirmation => &NEWSLETTER_CONFIRMATION_VARIABLES,
         };
         SHOP_VARIABLES.iter().chain(own).copied().collect()
     }
@@ -206,7 +225,9 @@ impl ShopMailKind {
     fn url_variables(self) -> &'static [&'static str] {
         match self {
             Self::ShopperCode => &["shop.logo_url"],
-            Self::OrderConfirmation | Self::ReviewRequest => &["link", "shop.logo_url"],
+            Self::OrderConfirmation | Self::ReviewRequest | Self::NewsletterConfirmation => {
+                &["link", "shop.logo_url"]
+            }
         }
     }
 
@@ -238,6 +259,7 @@ impl ShopMailKind {
             Self::ShopperCode => "Your sign-in code for {{ shop.name }}",
             Self::OrderConfirmation => "Your {{ shop.name }} order {{ order.reference }}",
             Self::ReviewRequest => "How was your {{ shop.name }} order {{ order.reference }}?",
+            Self::NewsletterConfirmation => "Confirm your subscription to {{ shop.name }}'s news",
         }
     }
 
@@ -246,6 +268,9 @@ impl ShopMailKind {
             Self::ShopperCode => include_str!("mail_templates/shopper_code.html"),
             Self::OrderConfirmation => include_str!("mail_templates/order_confirmation.html"),
             Self::ReviewRequest => include_str!("mail_templates/review_request.html"),
+            Self::NewsletterConfirmation => {
+                include_str!("mail_templates/newsletter_confirmation.html")
+            }
         }
     }
 
@@ -329,6 +354,13 @@ impl ShopMailKind {
                 link: "https://shop.example.com/reviews/sample".to_owned(),
                 valid_days: 60,
             }),
+            Self::NewsletterConfirmation => {
+                MailVars::NewsletterConfirmation(NewsletterConfirmationVars {
+                    shop,
+                    link: "https://shop.example.com/newsletter/confirm/sample".to_owned(),
+                    valid_days: 7,
+                })
+            }
         }
     }
 }
@@ -344,6 +376,7 @@ pub enum MailVars {
     ShopperCode(ShopperCodeVars),
     OrderConfirmation(Box<OrderConfirmationVars>),
     ReviewRequest(ReviewRequestVars),
+    NewsletterConfirmation(NewsletterConfirmationVars),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -433,6 +466,13 @@ pub struct ReviewRequestVars {
     pub shop: ShopVars,
     pub order: ReviewOrderVars,
     pub products: Vec<String>,
+    pub link: String,
+    pub valid_days: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NewsletterConfirmationVars {
+    pub shop: ShopVars,
     pub link: String,
     pub valid_days: u64,
 }

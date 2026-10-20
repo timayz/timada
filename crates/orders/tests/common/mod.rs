@@ -140,6 +140,7 @@ pub fn checkout() -> Checkout {
         billing: None,
         shipping_method: None,
         language: None,
+        newsletter: false,
     }
 }
 

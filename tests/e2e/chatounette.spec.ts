@@ -1,5 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
-import { mailCountOf, mailTo, registerWithEmail, uniqueEmail } from "./email";
+import {
+  latestCode,
+  mailCount,
+  mailCountOf,
+  mailTo,
+  registerWithEmail,
+  uniqueEmail,
+} from "./email";
 import {
   ExampleApp,
   PNG,
@@ -496,4 +503,147 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
     await page.goto(`/t/${slug}/messages?status=all`);
     await expect(page.getByText("No message here.")).toBeVisible();
   }).toPass();
+});
+
+test("a shopper signs up to the Chatounette newsletter from the footer and confirms from the mail", async ({
+  page,
+  request,
+  browser,
+}) => {
+  const owner = uniqueEmail("chatounette-news");
+  await registerWithEmail(page, owner);
+  const { name, slug } = uniqueTenant("Chat News");
+  await createTenant(page, name);
+  await app.start(request, await mintKey(page, slug, true), 0);
+
+  // No storefront address yet: no link can be mailed, and the shopper is
+  // told the newsletter is unavailable.
+  const shopperContext = await browser.newContext({ locale: "fr-FR" });
+  const shopper = await shopperContext.newPage();
+  const email = uniqueEmail("abonne");
+  await shopper.goto(app.url);
+  const footer = shopper.locator(".sitefooter [data-newsletter-form]");
+  await footer.getByLabel("Votre e-mail").fill(email);
+  await footer.getByRole("button", { name: "S'inscrire" }).click();
+  await expect(shopper).toHaveURL(
+    `${app.url}/newsletter?error=newsletter_unavailable`,
+  );
+  await expect(shopper.getByRole("alert")).toContainText("indisponible");
+
+  await page.goto(`/t/${slug}/api-keys`);
+  await page.getByLabel("Where shoppers find the shop").fill(app.url);
+  await page.getByRole("button", { name: "Save address" }).click();
+  await expect(page.getByRole("status")).toContainText(
+    "Storefront address saved.",
+  );
+
+  // Signed up from the footer: the page says to look in the mailbox, and
+  // the shop mails the link.
+  await shopper.goto(app.url);
+  await footer.getByLabel("Votre e-mail").fill(email.toUpperCase());
+  await footer.getByRole("button", { name: "S'inscrire" }).click();
+  await expect(shopper).toHaveURL(`${app.url}/newsletter?done=sent`);
+  await expect(shopper.locator("[data-newsletter-done]")).toContainText(
+    "cliquez sur le lien",
+  );
+  const mail = await mailTo(request, email, "Confirm your subscription to");
+  expect(mail.subject).toBe(`Confirm your subscription to ${name}'s news`);
+  // The mail's HTML escapes every "/" in an attribute as "&#x2f;".
+  const link = (mail.html ?? "")
+    .replaceAll("&#x2f;", "/")
+    .match(/href="([^"]*\/newsletter\/confirm\/[^"]+)"/)?.[1];
+  expect(link, "a confirmation link").toBeDefined();
+  expect(link!.startsWith(`${app.url}/newsletter/confirm/`)).toBe(true);
+
+  // Asking again at once mails nothing more.
+  await shopper.goto(app.url);
+  await footer.getByLabel("Votre e-mail").fill(email);
+  await footer.getByRole("button", { name: "S'inscrire" }).click();
+  await expect(shopper).toHaveURL(`${app.url}/newsletter?done=sent`);
+
+  // Waiting for confirmation in the back office.
+  const row = page.locator(`[data-subscriber="${email}"]`);
+  await expect(async () => {
+    await page.goto(`/t/${slug}/newsletter?status=pending`);
+    await expect(row).toHaveAttribute("data-subscriber-status", "pending");
+  }).toPass();
+  await expect(row.locator("[data-subscriber-source]")).toHaveAttribute(
+    "data-subscriber-source",
+    "form",
+  );
+  await expect(row).toContainText("fr");
+
+  // Opening the link asks for a click; a tampered one is refused.
+  await shopper.goto(`${link!}x`);
+  await shopper
+    .getByRole("button", { name: "Confirmer mon inscription" })
+    .click();
+  await expect(shopper).toHaveURL(
+    `${app.url}/newsletter?error=newsletter_invalid_link`,
+  );
+  await shopper.goto(link!);
+  await shopper
+    .getByRole("button", { name: "Confirmer mon inscription" })
+    .click();
+  await expect(shopper).toHaveURL(`${app.url}/newsletter?done=confirmed`);
+  await expect(shopper.locator("[data-newsletter-done]")).toContainText(
+    "C'est confirmé",
+  );
+  expect(
+    await mailCountOf(request, email, "Confirm your subscription to"),
+  ).toBe(1);
+
+  await expect(async () => {
+    await page.goto(`/t/${slug}/newsletter`);
+    await expect(row).toHaveAttribute("data-subscriber-status", "confirmed");
+  }).toPass();
+  await expect(
+    page.getByText("1 subscriber(s) get the shop's news."),
+  ).toBeVisible();
+
+  // A link that names nobody unsubscribes nobody.
+  await shopper.goto(`${app.url}/newsletter/unsubscribe/nobody.abc`);
+  await shopper.getByRole("button", { name: "Me désinscrire" }).click();
+  await expect(shopper).toHaveURL(
+    `${app.url}/newsletter?error=newsletter_invalid_link`,
+  );
+
+  // The shopper signs in: the account says they are subscribed, and they
+  // leave the list from there, and come back without any link to follow.
+  await shopper.goto(`${app.url}/account/sign-in`);
+  const before = await mailCount(request, email);
+  await shopper.getByLabel("E-mail", { exact: true }).fill(email);
+  await shopper.getByRole("button", { name: "Recevoir un code" }).click();
+  const code = await latestCode(request, email, before);
+  await shopper.getByLabel("Code", { exact: true }).fill(code);
+  await shopper.getByRole("button", { name: "Valider" }).click();
+  await shopper.goto(`${app.url}/account`);
+  const section = shopper.locator("[data-account-newsletter]");
+  await expect(section).toHaveAttribute("data-account-newsletter", "on");
+  await section
+    .getByRole("button", { name: "Ne plus recevoir la newsletter" })
+    .click();
+  await expect(section).toHaveAttribute("data-account-newsletter", "off");
+  await expect(async () => {
+    await page.goto(`/t/${slug}/newsletter?status=unsubscribed`);
+    await expect(row).toHaveAttribute("data-subscriber-status", "unsubscribed");
+  }).toPass();
+  await section.getByRole("button", { name: "Recevoir la newsletter" }).click();
+  await expect(section).toHaveAttribute("data-account-newsletter", "on");
+  expect(
+    await mailCountOf(request, email, "Confirm your subscription to"),
+  ).toBe(1);
+
+  // The merchant erases them, as they asked: gone from every list.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/newsletter`);
+    await expect(row).toHaveAttribute("data-subscriber-status", "confirmed");
+  }).toPass();
+  await row.getByRole("button", { name: "Erase" }).click();
+  await expect(page.getByRole("status")).toContainText("Subscriber erased");
+  await expect(async () => {
+    await page.goto(`/t/${slug}/newsletter?status=all`);
+    await expect(page.getByText("No subscriber here.")).toBeVisible();
+  }).toPass();
+  await shopperContext.close();
 });

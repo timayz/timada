@@ -131,6 +131,13 @@ pub enum Cart {
         language: String,
         given_by: String,
     },
+    /// The shopper ticked the box asking for the shop's news, written with
+    /// the `CheckoutRequested` of the same request. Their address joins the
+    /// list only once they confirm it, from the mail the order sends.
+    NewsletterOptedIn {
+        request_id: String,
+        opted_in_by: String,
+    },
     /// What shipping the payment of a request is priced with, written with
     /// its `PaymentRequested`: the payment's total is the lines, less any
     /// discount, plus `amount_cents`.
@@ -212,6 +219,9 @@ pub enum Order {
     /// (`fr`), written with `Placed`; the shop's mails about the order go
     /// out in it. Without it they go out in the shop's default language.
     LanguageSet { language: String, set_by: String },
+    /// The shopper asked for the shop's news at checkout, written with
+    /// `Placed`: a confirmation link goes to the order's address.
+    NewsletterOptInSet { set_by: String },
 }
 
 /// The index `reference → order`: one stream per reference, with the

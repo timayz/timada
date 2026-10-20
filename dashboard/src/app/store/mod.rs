@@ -4,6 +4,7 @@
 //! anyone at all and are counted (the contact form's messages).
 
 pub mod contact;
+pub mod newsletter;
 pub mod reviews;
 pub mod shoppers;
 

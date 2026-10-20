@@ -25,6 +25,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/reviews` | `timada-reviews` | What buyers wrote about the products of their orders, and whether the merchant published it |
 | `crates/shoppers` | `timada-shoppers` | A shop's customers who sign in: mailed codes, sessions, saved addresses, in a tenant's store |
 | `crates/support` | `timada-support` | The messages visitors send through a shop's contact form, and whether the merchant handled them |
+| `crates/newsletter` | `timada-newsletter` | The addresses that asked for a shop's news, confirmed through a mailed link (double opt-in) |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
@@ -212,10 +213,11 @@ tenant's products while the events stay isolated by construction.
 8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
-   orders, open carts, discounts, checkout offers, reviews, messages, payments), `/stripe/webhooks/{tenant_id}`,
+   orders, open carts, discounts, checkout offers, reviews, messages, newsletter, payments), `/stripe/webhooks/{tenant_id}`,
    `/store/reviews` (a storefront handing in a review, see *Reviews*), `/store/shoppers/*`
    (a storefront signing its shoppers in, see *Shopper accounts*), `/store/contact` (a
-   storefront handing in a message from its contact form, see *Support messages*), `/invitations/{token}`,
+   storefront handing in a message from its contact form, see *Support messages*),
+   `/store/newsletter/*` (sign-ups and their links, see *Newsletter*), `/invitations/{token}`,
    `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.
 
 Shutdown stops the HTTP server, then the store API (its leases hold tenants open), the
@@ -443,6 +445,51 @@ else the caller's), may hand in only so many messages within `[store]`'s window
 `contact_messages_window_secs`), past which it answers 429 `too_many_requests` and
 records nothing. The limiter is the one the sign-in codes use, in this node's
 memory, counted apart from the codes.
+
+## Newsletter
+
+The addresses that asked for a shop's news are `Subscriber` streams in the tenant's
+store (`timada-newsletter`), one per address: the id is a hash of the normalized
+address, so the stream also keeps an address on the list once. An address joins in two
+steps (double opt-in). `Requested` records where it asked from (`form`, `checkout` or
+`account`) and its language; it counts only once its owner follows the link the shop
+mails (`Confirmed`). A shopper signed in with a mailed code has proved their address
+already: `POST /store/shoppers/newsletter` writes both events at once, no link to
+follow. `Unsubscribed` takes them off the list; asking again later writes a new
+`Requested`.
+
+The links carry no secret of their own. Each is the subscriber id with an HMAC under
+the subscriber's own key: a confirmation link also names the request it confirms by
+the time it was written (`{id}.{requested_at}.{mac}`, valid seven days, stale once
+another request or an unsubscription follows), an unsubscribe link only the
+subscriber (`{id}.{mac}`, valid until they are erased). They open pages of the shop's
+storefront (`{storefront}/newsletter/confirm/{token}`,
+`{storefront}/newsletter/unsubscribe/{token}`, from the address saved on the API keys
+page), which hand the token back through `/store/newsletter/confirm` and
+`/store/newsletter/unsubscribe`; the pages ask for a click rather than act on sight,
+so a mail scanner opening a link changes nothing. A shop without a storefront address
+cannot have a link mailed, and the sign-up answers 503 `newsletter_unavailable`.
+
+A storefront hands a sign-up in with `POST /store/newsletter` (bearer key with
+`store:checkout`, counted like the contact form: `newsletter_signups_per_ip`,
+`newsletter_signups_per_key`, `newsletter_signups_window_secs` in `[store]`). The
+answer is 202 whether the address was mailed, is subscribed already, or was mailed
+less than an hour ago (nothing more is mailed then), so it says nothing of who is on
+the list. At checkout, a ticked box writes the companion event `NewsletterOptedIn` on
+the cart with `CheckoutRequested` (a shopper event a checkout key may append), and
+`NewsletterOptInSet` on the order with `Placed`; a per-tenant subscription
+(`timada-dashboard/newsletter-opt-ins`) then records the request and mails the link.
+Every node with the tenant open runs it, and the node whose `Requested` commits first
+is the one that mails. The mail is the shop's `newsletter_confirmation` template, so
+the merchant may reword it per language like the other shop mails.
+
+The address is sealed under a key of the subscriber's own, kept in the same vault as
+the shoppers' and the messages' keys and followed by
+`timada-dashboard/newsletter-keys`. `Forgotten` (`POST /t/{slug}/newsletter/erase`,
+`newsletter:manage`, and the deletion of a shopper account with the same address)
+destroys it: the read model drops the row and every link mailed to them stops
+working. The merchant reads the list on `/t/{slug}/newsletter` (`newsletter:read`,
+from `newsletter_subscribers`).
 
 ## The storefront side
 

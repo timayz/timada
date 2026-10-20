@@ -28,9 +28,9 @@ use crate::aggregator::{
     BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, ConfirmationMailed,
     Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded,
     ItemRemoved, LanguageGiven, LanguageSet, MethodAdded, MethodChanged, MethodRemoved,
-    PaymentRefused, PaymentRequested, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet,
-    Refunded, ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
-    StorefrontAddressSet,
+    NewsletterOptInSet, NewsletterOptedIn, PaymentRefused, PaymentRequested, PaymentsDisabled,
+    PaymentsEnabled, Placed, QuantitySet, Refunded, ShippingCharged, ShippingGranted,
+    ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -125,6 +125,8 @@ pub struct CheckoutRequest {
     /// The shopper's language, a primary subtag (`fr`), when the browser
     /// said one.
     pub language: Option<String>,
+    /// The shopper asked for the shop's news.
+    pub newsletter: bool,
     pub answer: Option<PaymentAnswer>,
 }
 
@@ -219,6 +221,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_shipping_method_chosen())
         .handler(on_shipping_granted())
         .handler(on_language_given())
+        .handler(on_newsletter_opted_in())
         .strict()
 }
 
@@ -294,6 +297,7 @@ async fn on_checkout_requested(
         billing: None,
         shipping_method: None,
         language: None,
+        newsletter: false,
         answer: None,
     });
     cart.updated_at = event.timestamp;
@@ -445,6 +449,21 @@ async fn on_language_given(
 }
 
 #[evento::handler]
+async fn on_newsletter_opted_in(
+    event: Event<NewsletterOptedIn>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|request| request.request_id == event.data.request_id)
+    {
+        request.newsletter = true;
+    }
+    Ok(())
+}
+
+#[evento::handler]
 async fn on_shipping_granted(
     event: Event<ShippingGranted>,
     cart: &mut CartState,
@@ -538,6 +557,8 @@ pub struct OrderState {
     /// `None` when the browser did not say. The shop's mails about the
     /// order go out in it.
     pub language: Option<String>,
+    /// The shopper asked for the shop's news at checkout.
+    pub newsletter: bool,
     /// What went back to the shopper, in minor units, all refunds together.
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
@@ -580,6 +601,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_billing_address_set())
         .handler(on_shipping_charged())
         .handler(on_language_set())
+        .handler(on_newsletter_opt_in_set())
         .strict()
 }
 
@@ -637,6 +659,15 @@ async fn on_shipping_charged(
 #[evento::handler]
 async fn on_language_set(event: Event<LanguageSet>, order: &mut OrderState) -> anyhow::Result<()> {
     order.language = Some(event.data.language.to_owned());
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_newsletter_opt_in_set(
+    _event: Event<NewsletterOptInSet>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.newsletter = true;
     Ok(())
 }
 

@@ -220,7 +220,7 @@ section.related { margin-top: 3rem; }
 
 /* Footer */
 .sitefooter { background: var(--ink); color: #d9d7ea; margin-top: 2rem; font-size: .9rem; }
-.sitefooter .wrap { display: grid; gap: 2rem; grid-template-columns: 1.3fr 1fr 1fr 1fr; padding: 3rem 0 2rem; }
+.sitefooter .wrap { display: grid; gap: 2rem; grid-template-columns: 1.3fr 1fr 1fr 1fr 1.3fr; padding: 3rem 0 2rem; }
 .sitefooter h2 { color: #fff; font-size: 1rem; text-transform: uppercase; letter-spacing: .1em; margin-bottom: .75rem; }
 .sitefooter ul { list-style: none; padding: 0; margin: 0; }
 .sitefooter li { margin: .35rem 0; }
@@ -229,6 +229,13 @@ section.related { margin-top: 3rem; }
 .sitefooter .brand { color: #fff; }
 .sitefooter .legal { border-top: 1px solid rgba(255,255,255,.12); padding: 1rem 0; text-align: center; font-size: .8rem; color: #a9a6c6; }
 @media (max-width: 734px) { .sitefooter .wrap { grid-template-columns: 1fr 1fr; } }
+
+/* Newsletter: the footer's sign-up, and the same form on its page */
+.newsletter label { display: block; font-size: .85rem; margin-bottom: .35rem; }
+.newsletter-row { display: flex; gap: .5rem; }
+.newsletter-row input { flex: 1; min-width: 0; }
+.sitefooter .newsletter label { color: #d9d7ea; }
+.sitefooter .newsletter .btn { white-space: nowrap; }
 
 /* Static pages */
 article.page { max-width: 46rem; margin: 0 auto; }

@@ -122,6 +122,10 @@ event timada-invoicing/Book::InvoiceShippingCharged { document_id: String, name:
 event timada-invoicing/DistanceLedger::Counted { document_id: String, tenant_id: String, regime: String, tax_country: String, rates: Vec<Option<u32>>, sales_cents: u64, passed: bool }
 event timada-invoicing/Document::Recorded { book_id: String, label: String }
 event timada-invoicing/Document::Reserved { series: String, year: u16 }
+event timada-newsletter/Subscriber::Confirmed { confirmed_by: String }
+event timada-newsletter/Subscriber::Forgotten { key_id: String, forgotten_by: String }
+event timada-newsletter/Subscriber::Requested { key_id: String, email: Vec<u8>, language: Option<String>, source: String, requested_by: String }
+event timada-newsletter/Subscriber::Unsubscribed { unsubscribed_by: String }
 event timada-orders/BusinessBuyers::BusinessBuyersAccepted { accepted_by: String }
 event timada-orders/BusinessBuyers::BusinessBuyersRefused { refused_by: String }
 event timada-orders/Cart::BillingAddressGiven { request_id: String, billing: ShippingAddress, given_by: String }
@@ -135,6 +139,7 @@ event timada-orders/Cart::DiscountRemoved { removed_by: String }
 event timada-orders/Cart::ItemAdded { product_id: String, variant_id: Option<String>, quantity: u32, added_by: String }
 event timada-orders/Cart::ItemRemoved { product_id: String, variant_id: Option<String>, removed_by: String }
 event timada-orders/Cart::LanguageGiven { request_id: String, language: String, given_by: String }
+event timada-orders/Cart::NewsletterOptedIn { request_id: String, opted_in_by: String }
 event timada-orders/Cart::PaymentRefused { request_id: String, code: String, refused_by: String }
 event timada-orders/Cart::PaymentRequested { request_id: String, provider: String, payment_id: String, client_secret: String, publishable_key: String, lines: Vec<OrderLine>, currency: String, total_cents: u64, requested_by: String }
 event timada-orders/Cart::QuantitySet { product_id: String, variant_id: Option<String>, quantity: u32, set_by: String }
@@ -145,6 +150,7 @@ event timada-orders/Order::Cancelled { reason: String, cancelled_by: String }
 event timada-orders/Order::Discounted { discount_id: String, code: String, subtotal_cents: u64, amount_cents: u64, discounted_by: String }
 event timada-orders/Order::Fulfilled { tracking: Option<String>, fulfilled_by: String }
 event timada-orders/Order::LanguageSet { language: String, set_by: String }
+event timada-orders/Order::NewsletterOptInSet { set_by: String }
 event timada-orders/Order::Placed { reference: String, cart_id: String, email: String, shipping: ShippingAddress, note: Option<String>, lines: Vec<OrderLine>, currency: String, total_cents: u64, payment: Payment, placed_by: String }
 event timada-orders/Order::Refunded { payment_id: String, refund_id: String, amount_cents: u64, refunded_by: String }
 event timada-orders/Order::ShippingCharged { method_id: String, name: String, amount_cents: u64, charged_by: String }
