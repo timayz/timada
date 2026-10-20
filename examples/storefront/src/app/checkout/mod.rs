@@ -800,6 +800,8 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         shipping_method: Some(draft.shipping_method.clone()),
         // The shop mails about the order in the shopper's language.
         language: request_language(cx),
+        // This example has no newsletter to sign up to.
+        newsletter: false,
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {
         Ok(session) => {

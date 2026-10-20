@@ -1358,6 +1358,7 @@ async fn a_store_with_a_checkout_key_sells() {
         billing: None,
         shipping_method: None,
         language: None,
+        newsletter: false,
     };
     let merchant = timada_orders::Command(catalog.0.clone());
     let asking = tokio::spawn({

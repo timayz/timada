@@ -6189,6 +6189,7 @@ dependencies = [
  "timada-discounts",
  "timada-identity",
  "timada-invoicing",
+ "timada-newsletter",
  "timada-orders",
  "timada-reviews",
  "timada-shoppers",
@@ -6258,6 +6259,24 @@ dependencies = [
  "typst-assets",
  "typst-pdf",
  "world-tax",
+]
+
+[[package]]
+name = "timada-newsletter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bitcode",
+ "evento",
+ "hmac 0.12.1",
+ "sha2 0.10.9",
+ "sqlx",
+ "sqlx_migrator",
+ "thiserror 2.0.21",
+ "timada-core",
+ "tokio",
 ]
 
 [[package]]
@@ -6331,6 +6350,7 @@ dependencies = [
  "timada-catalog",
  "timada-core",
  "timada-invoicing",
+ "timada-newsletter",
  "timada-orders",
  "timada-reviews",
  "timada-shoppers",

@@ -167,6 +167,34 @@ pub fn allow_contact_message(
     )
 }
 
+/// Whether a storefront may hand in one more sign-up to the shop's news,
+/// the way [`allow_shopper_code`] decides for codes: under both its key's
+/// limit and its visitor's, counted only when let through.
+pub fn allow_newsletter_signup(
+    limiter: &RateLimiter,
+    limits: &StoreConfig,
+    key_id: &str,
+    tenant_id: &str,
+    shopper_ip: Option<&str>,
+    peer: Option<IpAddr>,
+) -> bool {
+    allow_from_storefront(
+        limiter,
+        "newsletter",
+        &StorefrontLimits {
+            per_key: limits.newsletter_signups_per_key,
+            per_ip: limits.newsletter_signups_per_ip,
+            window: Duration::from_secs(limits.newsletter_signups_window_secs),
+        },
+        Caller {
+            key_id,
+            tenant_id,
+            shopper_ip,
+            peer,
+        },
+    )
+}
+
 /// The limits of one storefront policy.
 struct StorefrontLimits {
     per_key: u32,
@@ -257,6 +285,9 @@ mod tests {
             contact_messages_per_ip: per_ip,
             contact_messages_per_key: per_key,
             contact_messages_window_secs: 3600,
+            newsletter_signups_per_ip: per_ip,
+            newsletter_signups_per_key: per_key,
+            newsletter_signups_window_secs: 3600,
         }
     }
 

@@ -33,6 +33,8 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `support:manage` — mark messages handled, and reopen them.
 /// - `aliexpress:manage` — connect the shop's AliExpress app, import products
 ///   from it and keep them in step.
+/// - `newsletter:read` — see who asked for the shop's news.
+/// - `newsletter:manage` — take subscribers off the list, and erase them.
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
@@ -55,6 +57,8 @@ pub const PERMISSIONS: &[&str] = &[
     PERMISSION_SUPPORT_READ,
     PERMISSION_SUPPORT_MANAGE,
     PERMISSION_ALIEXPRESS_MANAGE,
+    PERMISSION_NEWSLETTER_READ,
+    PERMISSION_NEWSLETTER_MANAGE,
 ];
 pub const PERMISSION_TENANT_MANAGE: &str = "tenant:manage";
 pub const PERMISSION_MEMBERS_READ: &str = "members:read";
@@ -77,6 +81,8 @@ pub const PERMISSION_SHIPPING_MANAGE: &str = "shipping:manage";
 pub const PERMISSION_SUPPORT_READ: &str = "support:read";
 pub const PERMISSION_SUPPORT_MANAGE: &str = "support:manage";
 pub const PERMISSION_ALIEXPRESS_MANAGE: &str = "aliexpress:manage";
+pub const PERMISSION_NEWSLETTER_READ: &str = "newsletter:read";
+pub const PERMISSION_NEWSLETTER_MANAGE: &str = "newsletter:manage";
 
 /// Every scope a store API key can hold, as `resource:action`. The list only
 /// grows: a stored key may name any of them. `write` on a resource implies

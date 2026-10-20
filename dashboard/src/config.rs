@@ -250,6 +250,17 @@ pub struct StoreConfig {
     /// The window both message limits count over, in seconds.
     #[serde(default = "default_contact_messages_window_secs")]
     pub contact_messages_window_secs: u64,
+    /// Sign-ups to the shop's news one visitor's address may hand in, at
+    /// one shop, within the window (each mails a confirmation link).
+    #[serde(default = "default_newsletter_signups_per_ip")]
+    pub newsletter_signups_per_ip: u32,
+    /// Sign-ups one API key may hand in within the window, whoever the
+    /// visitors.
+    #[serde(default = "default_newsletter_signups_per_key")]
+    pub newsletter_signups_per_key: u32,
+    /// The window both sign-up limits count over, in seconds.
+    #[serde(default = "default_newsletter_signups_window_secs")]
+    pub newsletter_signups_window_secs: u64,
 }
 
 impl Default for StoreConfig {
@@ -261,6 +272,9 @@ impl Default for StoreConfig {
             contact_messages_per_ip: default_contact_messages_per_ip(),
             contact_messages_per_key: default_contact_messages_per_key(),
             contact_messages_window_secs: default_contact_messages_window_secs(),
+            newsletter_signups_per_ip: default_newsletter_signups_per_ip(),
+            newsletter_signups_per_key: default_newsletter_signups_per_key(),
+            newsletter_signups_window_secs: default_newsletter_signups_window_secs(),
         }
     }
 }
@@ -286,6 +300,18 @@ fn default_contact_messages_per_key() -> u32 {
 }
 
 fn default_contact_messages_window_secs() -> u64 {
+    60 * 60
+}
+
+fn default_newsletter_signups_per_ip() -> u32 {
+    5
+}
+
+fn default_newsletter_signups_per_key() -> u32 {
+    500
+}
+
+fn default_newsletter_signups_window_secs() -> u64 {
     60 * 60
 }
 
@@ -315,6 +341,18 @@ impl StoreConfig {
             (
                 "store.contact_messages_window_secs",
                 self.contact_messages_window_secs,
+            ),
+            (
+                "store.newsletter_signups_per_ip",
+                u64::from(self.newsletter_signups_per_ip),
+            ),
+            (
+                "store.newsletter_signups_per_key",
+                u64::from(self.newsletter_signups_per_key),
+            ),
+            (
+                "store.newsletter_signups_window_secs",
+                self.newsletter_signups_window_secs,
             ),
         ] {
             if value == 0 {

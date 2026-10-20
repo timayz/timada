@@ -16,6 +16,8 @@ mod media_images;
 mod message_keys;
 mod message_notifications;
 mod net;
+mod newsletter;
+mod newsletter_keys;
 mod payments;
 mod peers;
 mod rate_limit;

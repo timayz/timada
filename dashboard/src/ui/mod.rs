@@ -177,6 +177,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_api_key_scopes" => "Choose at least one scope for the key.",
         "api_key_invalid" => "This API key does not exist or is already revoked.",
         "order_not_found" => "This order does not exist.",
+        "newsletter_not_found" => "This subscriber is no longer on the list.",
         "order_cancelled" => "A cancelled order cannot be fulfilled.",
         "invalid_publishable_key" => "A publishable key starts with pk_.",
         "invalid_secret_key" => "A secret key starts with sk_ (or rk_ for a restricted key).",
@@ -315,6 +316,10 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "support:manage" => "Mark messages handled and reopen them (includes seeing them)",
         "aliexpress:manage" => {
             "Connect the AliExpress app, import products from it and keep them in step"
+        }
+        "newsletter:read" => "See who subscribed to the shop's newsletter",
+        "newsletter:manage" => {
+            "Unsubscribe and erase newsletter subscribers (includes seeing them)"
         }
         _ => "Unknown permission",
     }

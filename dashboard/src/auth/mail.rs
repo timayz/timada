@@ -1,7 +1,8 @@
 //! The e-mails this application sends: a code that proves an address, an
 //! invitation to join a tenant, a notice to a shop's members that a contact
 //! message arrived, and, speaking for a shop, its shoppers' sign-in codes,
-//! order confirmations and requests for a review.
+//! order confirmations, requests for a review and the links that confirm a
+//! subscription to its news.
 
 use std::sync::Arc;
 
@@ -14,13 +15,14 @@ use topcoat::{
 };
 
 use timada_catalog::format_money;
+use timada_newsletter::CONFIRM_TTL_SECS;
 use timada_orders::OrderState;
 use timada_reviews::REVIEW_LINK_TTL_SECS;
 use timada_shoppers::CODE_TTL_SECS;
 use timada_tenancy::{
-    AddressVars, DiscountVars, LineVars, MailVars, OrderConfirmationVars, OrderVars, RenderedMail,
-    ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind, ShopVars,
-    ShopperCodeVars, TenantState, render, render_text,
+    AddressVars, DiscountVars, LineVars, MailVars, NewsletterConfirmationVars,
+    OrderConfirmationVars, OrderVars, RenderedMail, ReviewOrderVars, ReviewRequestVars,
+    ShippingMethodVars, ShopMailKind, ShopVars, ShopperCodeVars, TenantState, render, render_text,
 };
 
 use crate::auth::cookies::EmailFlowKind;
@@ -353,6 +355,31 @@ pub async fn send_review_request(
         &order.email,
         &vars,
         order.language.as_deref(),
+    )
+    .await
+}
+
+/// Mails, from the shop, the link that confirms `to` asked for its news.
+/// `language` is the shopper's, as the storefront reported it.
+pub async fn send_newsletter_confirmation(
+    cx: &Cx,
+    shop: &TenantState,
+    to: &str,
+    link: &str,
+    language: Option<&str>,
+) -> Result<()> {
+    let vars = MailVars::NewsletterConfirmation(NewsletterConfirmationVars {
+        shop: shop_vars(cx, shop),
+        link: link.to_owned(),
+        valid_days: CONFIRM_TTL_SECS / (24 * 60 * 60),
+    });
+    send_shop_mail(
+        cx,
+        shop,
+        ShopMailKind::NewsletterConfirmation,
+        to,
+        &vars,
+        language,
     )
     .await
 }
