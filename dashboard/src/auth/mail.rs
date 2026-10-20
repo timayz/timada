@@ -20,7 +20,7 @@ use timada_orders::OrderState;
 use timada_reviews::REVIEW_LINK_TTL_SECS;
 use timada_shoppers::CODE_TTL_SECS;
 use timada_tenancy::{
-    AddressVars, DiscountVars, LineVars, MailVars, NewsletterConfirmationVars,
+    AddressVars, DiscountVars, LineVars, MailVars, NewsletterConfirmationVars, NewsletterVars,
     OrderConfirmationVars, OrderVars, RenderedMail, ReviewOrderVars, ReviewRequestVars,
     ShippingMethodVars, ShopMailKind, ShopVars, ShopperCodeVars, TenantState, render, render_text,
 };
@@ -179,6 +179,17 @@ pub async fn send_rendered(
     to: &str,
     rendered: RenderedMail,
 ) -> Result<()> {
+    send_rendered_with(cx, shop, to, rendered, Vec::new()).await
+}
+
+/// [`send_rendered`] with `headers` of its own.
+async fn send_rendered_with(
+    cx: &Cx,
+    shop: &TenantState,
+    to: &str,
+    rendered: RenderedMail,
+    headers: Vec<(String, String)>,
+) -> Result<()> {
     let sender = shop_sender(cx, shop).await?;
     let from = sender.from.clone();
     // The template's markup was checked when it was saved (no scripts,
@@ -196,6 +207,7 @@ pub async fn send_rendered(
             (html)
         },
         text: text,
+        headers: headers,
     }?;
     sender.send(cx, mail).await?;
     Ok(())
@@ -382,6 +394,60 @@ pub async fn send_newsletter_confirmation(
         language,
     )
     .await
+}
+
+/// A campaign of the shop's newsletter, as the merchant wrote it: its
+/// subject, HTML and optional plain text, checked when saved.
+pub struct CampaignCopy<'a> {
+    pub subject: &'a str,
+    pub html: &'a str,
+    pub text: Option<&'a str>,
+}
+
+/// Renders a campaign for one subscriber, whose unsubscribe page is
+/// `unsubscribe_url`.
+pub fn render_campaign(
+    cx: &Cx,
+    shop: &TenantState,
+    copy: &CampaignCopy<'_>,
+    unsubscribe_url: &str,
+) -> anyhow::Result<RenderedMail> {
+    let vars = MailVars::Newsletter(NewsletterVars {
+        shop: shop_vars(cx, shop),
+        unsubscribe_url: unsubscribe_url.to_owned(),
+    });
+    let mut rendered = render(copy.subject, copy.html, None, &vars)
+        .map_err(|err| anyhow::anyhow!("campaign: {err}"))?;
+    if let Some(text) = copy.text {
+        rendered.text =
+            Some(render_text(text, &vars).map_err(|err| anyhow::anyhow!("campaign text: {err}"))?);
+    }
+    Ok(rendered)
+}
+
+/// Mails a campaign to one subscriber, from the shop, with the headers that
+/// let their mail client offer a one-click unsubscribe (RFC 8058): a POST
+/// to `unsubscribe_url` takes them off the list.
+pub async fn send_campaign(
+    cx: &Cx,
+    shop: &TenantState,
+    to: &str,
+    copy: &CampaignCopy<'_>,
+    unsubscribe_url: &str,
+) -> Result<()> {
+    let rendered =
+        render_campaign(cx, shop, copy, unsubscribe_url).map_err(topcoat::Error::from_anyhow)?;
+    let headers = vec![
+        (
+            "List-Unsubscribe".to_owned(),
+            format!("<{unsubscribe_url}>"),
+        ),
+        (
+            "List-Unsubscribe-Post".to_owned(),
+            "List-Unsubscribe=One-Click".to_owned(),
+        ),
+    ];
+    send_rendered_with(cx, shop, to, rendered, headers).await
 }
 
 fn subject(kind: EmailFlowKind) -> &'static str {

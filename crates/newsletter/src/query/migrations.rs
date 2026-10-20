@@ -5,7 +5,7 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "newsletter";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Newsletter0001]
+    vec_box![Newsletter0001, Newsletter0002]
 }
 
 pub struct Newsletter0001;
@@ -35,6 +35,45 @@ sqlx_migrator::sqlite_migration!(
             "CREATE INDEX newsletter_subscribers_status ON newsletter_subscribers
                 (tenant_id, status, requested_at DESC)",
             "DROP INDEX newsletter_subscribers_status"
+        ),
+    ]
+);
+
+pub struct Newsletter0002;
+sqlx_migrator::sqlite_migration!(
+    Newsletter0002,
+    "newsletter",
+    "0002_campaigns",
+    vec_box![Newsletter0001],
+    vec_box![
+        (
+            "CREATE TABLE newsletter_campaigns (
+                tenant_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                language TEXT,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                sent_at INTEGER,
+                finished_at INTEGER,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, id)
+            )",
+            "DROP TABLE newsletter_campaigns"
+        ),
+        (
+            "CREATE INDEX newsletter_campaigns_status ON newsletter_campaigns (status)",
+            "DROP INDEX newsletter_campaigns_status"
+        ),
+        (
+            "CREATE TABLE newsletter_deliveries (
+                tenant_id TEXT NOT NULL,
+                campaign_id TEXT NOT NULL,
+                subscriber_id TEXT NOT NULL,
+                failed INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, campaign_id, subscriber_id)
+            )",
+            "DROP TABLE newsletter_deliveries"
         ),
     ]
 );

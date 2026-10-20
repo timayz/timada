@@ -1,5 +1,7 @@
 use evento::WriteError;
 
+use crate::value_object::MAX_CAMPAIGN_SUBJECT_LEN;
+
 #[derive(Debug, thiserror::Error)]
 pub enum NewsletterError {
     #[error("the address does not look like one")]
@@ -15,6 +17,15 @@ pub enum NewsletterError {
     /// Unknown, or erased.
     #[error("subscriber not found")]
     NotFound,
+    #[error("a subject is 1 to {MAX_CAMPAIGN_SUBJECT_LEN} characters")]
+    InvalidSubject,
+    #[error("the body is empty or too long")]
+    InvalidBody,
+    #[error("campaign not found")]
+    CampaignNotFound,
+    /// Sent (or going out): it can no longer be edited or sent again.
+    #[error("the campaign was sent already")]
+    CampaignSent,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -42,6 +53,10 @@ impl NewsletterError {
             Self::InvalidLink => NEWSLETTER_INVALID_LINK,
             Self::LinkExpired => NEWSLETTER_LINK_EXPIRED,
             Self::NotFound => NEWSLETTER_NOT_FOUND,
+            Self::InvalidSubject => CAMPAIGN_INVALID_SUBJECT,
+            Self::InvalidBody => CAMPAIGN_INVALID_BODY,
+            Self::CampaignNotFound => CAMPAIGN_NOT_FOUND,
+            Self::CampaignSent => CAMPAIGN_SENT,
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })
@@ -54,6 +69,11 @@ pub const NEWSLETTER_INVALID_SOURCE: &str = "newsletter_invalid_source";
 pub const NEWSLETTER_INVALID_LINK: &str = "newsletter_invalid_link";
 pub const NEWSLETTER_LINK_EXPIRED: &str = "newsletter_link_expired";
 pub const NEWSLETTER_NOT_FOUND: &str = "newsletter_not_found";
+/// The codes a merchant may meet writing a campaign.
+pub const CAMPAIGN_INVALID_SUBJECT: &str = "campaign_invalid_subject";
+pub const CAMPAIGN_INVALID_BODY: &str = "campaign_invalid_body";
+pub const CAMPAIGN_NOT_FOUND: &str = "campaign_not_found";
+pub const CAMPAIGN_SENT: &str = "campaign_sent";
 /// The shop has not said where its storefront lives, so no confirmation link
 /// can be mailed; not a refusal of the newsletter context itself.
 pub const NEWSLETTER_UNAVAILABLE: &str = "newsletter_unavailable";

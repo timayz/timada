@@ -131,6 +131,15 @@ dir = "data/shopper-keys"
 # # How often, in seconds, this node looks for buyers due that mail.
 # request_check_secs = 3600
 
+# A shop's newsletter campaign goes out a batch at a time, from every node
+# that has the shop open; each subscriber is mailed once whichever node
+# sends.
+# [newsletter]
+# # How often, in seconds, this node looks for campaigns still going out.
+# send_check_secs = 60
+# # The most mails one campaign sends per look.
+# mails_per_check = 100
+
 # What storefronts may ask for their shoppers. A storefront has the shop mail
 # sign-in codes, hands in the messages of its contact form and the sign-ups
 # to its news; past these limits it is refused for a while and nothing is

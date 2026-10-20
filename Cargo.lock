@@ -6277,6 +6277,7 @@ dependencies = [
  "thiserror 2.0.21",
  "timada-core",
  "tokio",
+ "ulid",
 ]
 
 [[package]]

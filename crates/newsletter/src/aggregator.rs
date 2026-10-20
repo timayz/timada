@@ -40,3 +40,54 @@ pub enum Subscriber {
         forgotten_by: String,
     },
 }
+
+/// One mail of news the merchant writes, then sends to the confirmed
+/// subscribers. Its id is a fresh [`new_campaign_id`](crate::new_campaign_id).
+/// The copy is the merchant's, not personal data: kept in clear.
+#[evento::aggregate(name = "timada-newsletter/Campaign")]
+pub enum Campaign {
+    /// Written as a draft. `subject`, `html` and `text` are templates over
+    /// the shop's variables and the subscriber's unsubscribe link, checked
+    /// when saved.
+    Drafted {
+        subject: String,
+        html: String,
+        /// The plain-text part; without it, the text is derived from the
+        /// HTML.
+        text: Option<String>,
+        /// Only the subscribers in this language (a primary subtag) get it;
+        /// none is everyone.
+        language: Option<String>,
+        drafted_by: String,
+    },
+    /// The draft rewritten, whole.
+    Edited {
+        subject: String,
+        html: String,
+        text: Option<String>,
+        language: Option<String>,
+        edited_by: String,
+    },
+    /// The merchant sent it: from now on it goes out to every confirmed
+    /// subscriber (in its language), a batch at a time, and can no longer be
+    /// edited.
+    SendRequested { requested_by: String },
+    /// Every subscriber confirmed when it went out was mailed (or tried).
+    Finished { finished_by: String },
+}
+
+/// One campaign's mail to one subscriber. One stream per pair, with the id
+/// [`delivery_id`](crate::delivery_id): the node that writes `Claimed`
+/// first is the one that mails, so a subscriber gets a campaign once
+/// however many nodes send it.
+#[evento::aggregate(name = "timada-newsletter/Delivery")]
+pub enum Delivery {
+    Claimed {
+        campaign_id: String,
+        subscriber_id: String,
+        claimed_by: String,
+    },
+    /// The mail could not be handed to the mail server; it is not tried
+    /// again.
+    Failed { reason: String },
+}

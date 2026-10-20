@@ -178,10 +178,23 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         read_pool.clone(),
         executor.clone(),
         tenants.clone(),
-        background_mail,
+        background_mail.clone(),
     )
     .start(std::time::Duration::from_secs(
         config.reviews.request_check_secs.max(1),
+    ));
+
+    // A campaign a merchant sent goes out a batch at a time.
+    let newsletter_sends = crate::newsletter_sends::NewsletterSends::new(
+        read_pool.clone(),
+        executor.clone(),
+        tenants.clone(),
+        background_mail.clone(),
+        keys.clone(),
+        config.newsletter.mails_per_check,
+    )
+    .start(std::time::Duration::from_secs(
+        config.newsletter.send_check_secs.max(1),
     ));
 
     // The products imported from AliExpress are read again on a timer.
@@ -232,6 +245,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     backlog_watch.abort();
     review_requests.abort();
+    newsletter_sends.abort();
     aliexpress_sync.abort();
     tenants.shutdown().await;
     for subscription in &read_models {

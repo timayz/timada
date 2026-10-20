@@ -41,6 +41,9 @@ pub struct Config {
     /// Reviews; every setting has a default.
     #[serde(default)]
     pub reviews: ReviewsConfig,
+    /// The shops' newsletters; every setting has a default.
+    #[serde(default)]
+    pub newsletter: NewsletterConfig,
     /// What storefronts may ask for their shoppers; every setting has a
     /// default.
     #[serde(default)]
@@ -221,6 +224,35 @@ impl Default for ReviewsConfig {
 
 fn default_request_check_secs() -> u64 {
     60 * 60
+}
+
+/// How the shops' newsletter campaigns go out.
+#[derive(Debug, Deserialize, Clone)]
+pub struct NewsletterConfig {
+    /// How often, in seconds, this node looks for campaigns still going out.
+    #[serde(default = "default_send_check_secs")]
+    pub send_check_secs: u64,
+    /// The most mails one campaign sends per look, so a large list goes out
+    /// over several and one shop does not hold the others up.
+    #[serde(default = "default_mails_per_check")]
+    pub mails_per_check: u32,
+}
+
+impl Default for NewsletterConfig {
+    fn default() -> Self {
+        Self {
+            send_check_secs: default_send_check_secs(),
+            mails_per_check: default_mails_per_check(),
+        }
+    }
+}
+
+fn default_send_check_secs() -> u64 {
+    60
+}
+
+fn default_mails_per_check() -> u32 {
+    100
 }
 
 /// What storefronts may ask of this node for their shoppers. Each node counts

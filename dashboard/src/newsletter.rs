@@ -27,6 +27,12 @@ pub fn confirm_link(storefront: &str, token: &str) -> String {
     format!("{storefront}/newsletter/confirm/{token}")
 }
 
+/// The page of the shop's storefront that takes the subscriber of `token`
+/// off the list.
+pub fn unsubscribe_link(storefront: &str, token: &str) -> String {
+    format!("{storefront}/newsletter/unsubscribe/{token}")
+}
+
 /// Mails the link of a request just recorded, when there is one to mail.
 /// Returns whether a mail went out.
 pub async fn mail_confirmation(

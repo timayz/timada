@@ -1,4 +1,10 @@
-import { expect, test, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Browser,
+  type Page,
+} from "@playwright/test";
 import {
   latestCode,
   mailCount,
@@ -646,4 +652,134 @@ test("a shopper signs up to the Chatounette newsletter from the footer and confi
     await expect(page.getByText("No subscriber here.")).toBeVisible();
   }).toPass();
   await shopperContext.close();
+});
+
+/// Signs `email` up from the Chatounette footer and follows the mailed
+/// link, in a browser of its own.
+async function subscribeFromFooter(
+  browser: Browser,
+  request: APIRequestContext,
+  email: string,
+) {
+  const context = await browser.newContext({ locale: "fr-FR" });
+  const shopper = await context.newPage();
+  await shopper.goto(app.url);
+  const footer = shopper.locator(".sitefooter [data-newsletter-form]");
+  await footer.getByLabel("Votre e-mail").fill(email);
+  await footer.getByRole("button", { name: "S'inscrire" }).click();
+  await expect(shopper).toHaveURL(`${app.url}/newsletter?done=sent`);
+  const mail = await mailTo(request, email, "Confirm your subscription to");
+  const link = (mail.html ?? "")
+    .replaceAll("&#x2f;", "/")
+    .match(/href="([^"]*\/newsletter\/confirm\/[^"]+)"/)![1];
+  await shopper.goto(link);
+  await shopper
+    .getByRole("button", { name: "Confirmer mon inscription" })
+    .click();
+  await expect(shopper).toHaveURL(`${app.url}/newsletter?done=confirmed`);
+  await context.close();
+}
+
+test("a merchant sends a campaign to the confirmed subscribers, who leave in one click", async ({
+  page,
+  request,
+  browser,
+}) => {
+  const owner = uniqueEmail("chatounette-campaign");
+  await registerWithEmail(page, owner);
+  const { name, slug } = uniqueTenant("Chat Campaign");
+  await createTenant(page, name);
+  await app.start(request, await mintKey(page, slug, true), 0);
+  await page.goto(`/t/${slug}/api-keys`);
+  await page.getByLabel("Where shoppers find the shop").fill(app.url);
+  await page.getByRole("button", { name: "Save address" }).click();
+  await expect(page.getByRole("status")).toContainText(
+    "Storefront address saved.",
+  );
+  const ada = uniqueEmail("ada");
+  const grace = uniqueEmail("grace");
+  await subscribeFromFooter(browser, request, ada);
+  await subscribeFromFooter(browser, request, grace);
+  await expect(async () => {
+    await page.goto(`/t/${slug}/newsletter`);
+    await expect(page.locator("[data-subscriber-count]")).toHaveText(
+      "2 subscriber(s)",
+    );
+  }).toPass();
+
+  // Written from the built-in start; one that does not link to the
+  // unsubscribe page is refused.
+  await page.getByRole("link", { name: "Campaigns" }).click();
+  await expect(page.getByText("No campaign yet.")).toBeVisible();
+  await page.getByRole("link", { name: "New campaign" }).click();
+  const form = page.locator("[data-campaign-form]");
+  await form.getByLabel("Subject").fill("Les nouveautés de {{ shop.name }}");
+  await form
+    .getByLabel("Body (HTML)")
+    .fill("<p>Le panier douillet est arrivé.</p>");
+  await form.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.locator("[data-template-error]")).toContainText(
+    "unsubscribe_url",
+  );
+  await form
+    .getByLabel("Body (HTML)")
+    .fill(
+      '<p>Le panier douillet est arrivé.</p><p><a href="{{ unsubscribe_url }}">Se désinscrire</a></p>',
+    );
+  await form.getByRole("button", { name: "Preview" }).click();
+  await expect(page.locator("[data-preview-subject]")).toHaveText(
+    `Les nouveautés de ${name}`,
+  );
+  await form.getByRole("button", { name: "Send me a test" }).click();
+  await expect(page.getByRole("status")).toContainText(
+    `Test mail sent to ${owner}`,
+  );
+  await mailTo(request, owner, "[Test] Les nouveautés de");
+  await form.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+
+  // Sent to the two confirmed addresses, once each.
+  await page.getByRole("link", { name: "Send…" }).click();
+  await expect(page.locator("[data-campaign-audience]")).toHaveAttribute(
+    "data-campaign-audience",
+    "2",
+  );
+  await page.getByRole("button", { name: "Send to 2 subscriber(s)" }).click();
+  await expect(page.getByRole("status")).toContainText("Sending");
+  const received = await mailTo(request, ada, "Les nouveautés de");
+  expect(received.subject).toBe(`Les nouveautés de ${name}`);
+  await mailTo(request, grace, "Les nouveautés de");
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator("dd [data-campaign-status]")).toHaveAttribute(
+      "data-campaign-status",
+      "sent",
+    );
+    await expect(page.locator("[data-campaign-delivered]")).toHaveText("2");
+  }).toPass({ timeout: 20_000 });
+  expect(await mailCountOf(request, ada, "Les nouveautés de")).toBe(1);
+  // Sent: no more editing.
+  await expect(page.locator("[data-campaign-form]")).toHaveCount(0);
+
+  // The mail's own unsubscribe link, followed by a mail client's one-click
+  // POST: Ada is off the list, Grace stays.
+  const unsubscribe = (received.html ?? "")
+    .replaceAll("&#x2f;", "/")
+    .match(/href="([^"]*\/newsletter\/unsubscribe\/[^"]+)"/)?.[1];
+  expect(unsubscribe, "an unsubscribe link").toBeDefined();
+  const oneClick = await request.post(unsubscribe!, {
+    form: { "List-Unsubscribe": "One-Click" },
+    maxRedirects: 0,
+  });
+  expect(oneClick.status()).toBe(303);
+  expect(oneClick.headers()["location"]).toContain("done=unsubscribed");
+  await expect(async () => {
+    await page.goto(`/t/${slug}/newsletter?status=unsubscribed`);
+    await expect(page.locator(`[data-subscriber="${ada}"]`)).toBeVisible();
+  }).toPass();
+  await page.goto(`/t/${slug}/newsletter`);
+  await expect(page.locator(`[data-subscriber="${grace}"]`)).toBeVisible();
+  await expect(page.locator("[data-subscriber-count]")).toHaveText(
+    "1 subscriber(s)",
+  );
 });

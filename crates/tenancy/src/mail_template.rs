@@ -42,6 +42,10 @@ pub enum ShopMailKind {
     OrderConfirmation,
     ReviewRequest,
     NewsletterConfirmation,
+    /// A campaign of the shop's newsletter. Not one of [`ALL`](Self::ALL):
+    /// the merchant writes each campaign, there is no shop-wide template to
+    /// edit; its default is what a new campaign starts from.
+    Newsletter,
 }
 
 /// A variable a template may use, as the editor lists it.
@@ -168,6 +172,11 @@ const NEWSLETTER_CONFIRMATION_VARIABLES: [MailVariable; 2] = [
     },
 ];
 
+const NEWSLETTER_VARIABLES: [MailVariable; 1] = [MailVariable {
+    name: "unsubscribe_url",
+    description: "The page where the subscriber leaves the list. Every campaign links to it.",
+}];
+
 impl ShopMailKind {
     pub const ALL: [Self; 4] = [
         Self::ShopperCode,
@@ -183,6 +192,7 @@ impl ShopMailKind {
             Self::OrderConfirmation => "order_confirmation",
             Self::ReviewRequest => "review_request",
             Self::NewsletterConfirmation => "newsletter_confirmation",
+            Self::Newsletter => "newsletter",
         }
     }
 
@@ -196,6 +206,7 @@ impl ShopMailKind {
             Self::OrderConfirmation => "Order confirmation",
             Self::ReviewRequest => "Review request",
             Self::NewsletterConfirmation => "Newsletter confirmation",
+            Self::Newsletter => "Newsletter",
         }
     }
 
@@ -207,6 +218,7 @@ impl ShopMailKind {
             Self::NewsletterConfirmation => {
                 "Sent when a shopper asks for the shop's news, to confirm their address."
             }
+            Self::Newsletter => "A campaign, sent to the confirmed subscribers.",
         }
     }
 
@@ -217,6 +229,7 @@ impl ShopMailKind {
             Self::OrderConfirmation => &ORDER_CONFIRMATION_VARIABLES,
             Self::ReviewRequest => &REVIEW_REQUEST_VARIABLES,
             Self::NewsletterConfirmation => &NEWSLETTER_CONFIRMATION_VARIABLES,
+            Self::Newsletter => &NEWSLETTER_VARIABLES,
         };
         SHOP_VARIABLES.iter().chain(own).copied().collect()
     }
@@ -228,6 +241,7 @@ impl ShopMailKind {
             Self::OrderConfirmation | Self::ReviewRequest | Self::NewsletterConfirmation => {
                 &["link", "shop.logo_url"]
             }
+            Self::Newsletter => &["unsubscribe_url", "shop.logo_url"],
         }
     }
 
@@ -260,6 +274,7 @@ impl ShopMailKind {
             Self::OrderConfirmation => "Your {{ shop.name }} order {{ order.reference }}",
             Self::ReviewRequest => "How was your {{ shop.name }} order {{ order.reference }}?",
             Self::NewsletterConfirmation => "Confirm your subscription to {{ shop.name }}'s news",
+            Self::Newsletter => "News from {{ shop.name }}",
         }
     }
 
@@ -271,6 +286,7 @@ impl ShopMailKind {
             Self::NewsletterConfirmation => {
                 include_str!("mail_templates/newsletter_confirmation.html")
             }
+            Self::Newsletter => include_str!("mail_templates/newsletter.html"),
         }
     }
 
@@ -361,6 +377,11 @@ impl ShopMailKind {
                     valid_days: 7,
                 })
             }
+            Self::Newsletter => MailVars::Newsletter(NewsletterVars {
+                shop,
+                unsubscribe_url: "https://shop.example.com/newsletter/unsubscribe/sample"
+                    .to_owned(),
+            }),
         }
     }
 }
@@ -377,6 +398,7 @@ pub enum MailVars {
     OrderConfirmation(Box<OrderConfirmationVars>),
     ReviewRequest(ReviewRequestVars),
     NewsletterConfirmation(NewsletterConfirmationVars),
+    Newsletter(NewsletterVars),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -475,6 +497,12 @@ pub struct NewsletterConfirmationVars {
     pub shop: ShopVars,
     pub link: String,
     pub valid_days: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NewsletterVars {
+    pub shop: ShopVars,
+    pub unsubscribe_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -754,6 +782,16 @@ mod tests {
 
     #[test]
     fn every_default_validates_and_renders() {
+        // The newsletter's default is no template of the shop's, but what a
+        // new campaign starts from: it must check out too.
+        let newsletter = ShopMailKind::Newsletter;
+        validate(
+            newsletter,
+            newsletter.default_subject(),
+            newsletter.default_html(),
+        )
+        .unwrap();
+        assert_eq!(ShopMailKind::from_key(newsletter.key()), None);
         for kind in ShopMailKind::ALL {
             validate(kind, kind.default_subject(), kind.default_html())
                 .unwrap_or_else(|err| panic!("{kind:?}: {err}"));
