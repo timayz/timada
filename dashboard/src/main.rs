@@ -18,6 +18,7 @@ mod message_notifications;
 mod net;
 mod newsletter;
 mod newsletter_keys;
+mod newsletter_sends;
 mod payments;
 mod peers;
 mod rate_limit;

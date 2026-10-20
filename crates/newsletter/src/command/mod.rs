@@ -7,11 +7,13 @@
 //! The write model is sealed, as the events are: [`SubscriberState::open_with`]
 //! gives the plaintext [`Subscriber`] while the key exists.
 
+mod campaign;
 mod forget;
 mod subscriber;
 
 use std::ops::Deref;
 
+pub use campaign::*;
 pub use subscriber::*;
 
 use evento::{Executor, Projection, metadata::Event};

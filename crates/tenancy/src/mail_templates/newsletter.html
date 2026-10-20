@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<body>
+{% if shop.logo_url %}
+<p><img src="{{ shop.logo_url }}" alt="{{ shop.name }}" style="max-height: 64px; max-width: 240px;"></p>
+{% endif %}
+<h1 style="font-size: 20px;">What's new at {{ shop.name }}</h1>
+<p>Write your news here.</p>
+<hr style="border: none; border-top: 1px solid #e5e7eb;">
+{% if shop.footer %}
+<p style="color: #6b7280; font-size: 12px; white-space: pre-line;">{{ shop.footer }}</p>
+{% endif %}
+<p style="color: #6b7280; font-size: 12px;">You get this mail because you subscribed to {{ shop.name }}'s news. <a href="{{ unsubscribe_url }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>Unsubscribe</a></p>
+</body>
+</html>

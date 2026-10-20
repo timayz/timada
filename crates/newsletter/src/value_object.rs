@@ -25,6 +25,52 @@ pub const SOURCE_ACCOUNT: &str = "account";
 /// Every place a subscription may be asked from, as stored.
 pub const SOURCES: [&str; 3] = [SOURCE_FORM, SOURCE_CHECKOUT, SOURCE_ACCOUNT];
 
+/// The longest subject of a campaign, in characters.
+pub const MAX_CAMPAIGN_SUBJECT_LEN: usize = 200;
+/// The longest body of a campaign (HTML or plain text), in bytes.
+pub const MAX_CAMPAIGN_BODY_LEN: usize = 200 * 1024;
+
+/// Where a campaign stands.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CampaignStatus {
+    /// Being written: not sent to anyone.
+    #[default]
+    Draft,
+    /// Going out, a batch at a time.
+    Sending,
+    Sent,
+}
+
+impl CampaignStatus {
+    pub const ALL: [Self; 3] = [Self::Draft, Self::Sending, Self::Sent];
+
+    /// The value stored in the read model.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Sending => "sending",
+            Self::Sent => "sent",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|status| status.as_str() == value)
+    }
+}
+
+/// A fresh id for a campaign: a ULID, sortable by when it was made.
+pub fn new_campaign_id() -> String {
+    ulid::Ulid::generate().to_string()
+}
+
+/// The id of one campaign's mail to one subscriber
+/// ([`Delivery`](crate::aggregator::Delivery)).
+pub fn delivery_id(campaign_id: &str, subscriber_id: &str) -> String {
+    evento::hash_ids(vec!["newsletter-delivery", campaign_id, subscriber_id])
+}
+
 /// Where a subscriber stands.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SubscriberStatus {
@@ -193,6 +239,17 @@ mod tests {
             assert_eq!(SubscriberStatus::parse(status.as_str()), Some(status));
         }
         assert_eq!(SubscriberStatus::parse("other"), None);
+        for status in CampaignStatus::ALL {
+            assert_eq!(CampaignStatus::parse(status.as_str()), Some(status));
+        }
+        assert_eq!(CampaignStatus::parse("other"), None);
+    }
+
+    #[test]
+    fn a_delivery_names_one_pair() {
+        assert_eq!(delivery_id("c1", "s1"), delivery_id("c1", "s1"));
+        assert_ne!(delivery_id("c1", "s1"), delivery_id("c1", "s2"));
+        assert_ne!(delivery_id("c1", "s1"), delivery_id("c2", "s1"));
     }
 
     #[test]
