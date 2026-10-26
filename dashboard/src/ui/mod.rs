@@ -206,6 +206,9 @@ pub fn describe_error(code: &str) -> &'static str {
         }
         "invalid_mail_template" => "The mail was not saved: fix the template and try again.",
         "mail_test_failed" => "The test mail did not go out: check the shop's mail server.",
+        "mail_server_required" => {
+            "Newsletters go out through the shop's own mail server only, never the platform's: set one up on the Mail page first."
+        }
         "payments_unavailable" => "This tenant has no payments set up.",
         "refund_failed" => {
             "Stripe could not refund the payment: the order is not cancelled. Try again."

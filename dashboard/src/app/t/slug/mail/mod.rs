@@ -1,7 +1,9 @@
 //! `/t/{slug}/mail`: the mail server the shop's mails to its shoppers go
 //! out through, for members with `mail:manage`. Without one they go out
-//! through the platform's server, under the shop's name. Saving sends a test
-//! mail through the new settings first: what cannot deliver is not kept.
+//! through the platform's server, under the shop's name; the newsletter is
+//! the exception, it only ever goes out through the shop's own server.
+//! Saving sends a test mail through the new settings first: what cannot
+//! deliver is not kept.
 
 pub mod branding;
 pub mod configure;
@@ -197,7 +199,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 } else {
                     <p class="text-sm text-muted-foreground" data-mail-server="platform">
                         "Not set up: your order confirmations, review requests and sign-in codes go out through the platform's server, under the name "
-                        <strong class="text-foreground">(&tenant.name)</strong> "."
+                        <strong class="text-foreground">(&tenant.name)</strong> ". Newsletter campaigns never do: they wait until the shop has a server of its own."
                     </p>
                 }
             )

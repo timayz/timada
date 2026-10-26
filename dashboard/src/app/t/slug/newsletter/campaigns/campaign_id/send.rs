@@ -2,6 +2,9 @@
 //! `newsletter:manage`: asks to confirm, with how many subscribers it goes
 //! to, then sends the draft. From then on every node with the shop open
 //! mails it a batch at a time, and it can no longer be edited.
+//!
+//! A campaign goes out through the shop's own mail server only, never the
+//! platform's: a shop without one is sent to `/t/{slug}/mail` instead.
 
 use timada_newsletter::{CampaignStatus, count_audience};
 use timada_tenancy::PERMISSION_NEWSLETTER_MANAGE;
@@ -20,7 +23,8 @@ use crate::app::t::slug::newsletter::campaigns::audience_label;
 use crate::app::t::slug::{Slug, TenantNav, require_tenant};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, page_header, section_card};
+use crate::shop_mail::ShopMail;
+use crate::ui::{Shell, document, notice, page_header, section_card};
 
 #[page]
 pub async fn send(cx: &Cx) -> Result<impl View> {
@@ -43,6 +47,8 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
     .map_err(topcoat::Error::from_anyhow)?;
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
+    let own_server = app_context::<ShopMail>(cx).has_own_server(&tenant);
+    let mail_settings = href!(crate::app::t::slug::mail::index, Slug(slug.clone())).resolve(cx);
     let title = format!("Send · {} · Newsletter · {}", campaign.subject, tenant.name);
     let to = audience_label(campaign.language.as_deref());
     let label = format!("Send to {audience} subscriber(s)");
@@ -51,15 +57,22 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "newsletter"),
             page_header(title: "Send the campaign", subtitle: Some(campaign.subject.as_str()))
+            if !own_server {
+                notice(error: Some("mail_server_required"), message: None)
+            }
             section_card(
                 <p class="mb-4 text-sm" data-campaign-audience=(audience)>
                     (to) ": " <strong>(audience)</strong> " confirmed address(es) today. "
-                    "It goes out from the shop over the next minutes, and can no longer be edited."
+                    "It goes out from the shop's own mail server over the next minutes, and can no longer be edited."
                 </p>
                 <div class="flex flex-wrap gap-2">
-                    <form method="post" action=(href!(confirm, Slug(slug.clone()), CampaignId(campaign.id.clone())))>
-                        button(attrs: attributes! { type="submit" }, (label))
-                    </form>
+                    if own_server {
+                        <form method="post" action=(href!(confirm, Slug(slug.clone()), CampaignId(campaign.id.clone())))>
+                            button(attrs: attributes! { type="submit" }, (label))
+                        </form>
+                    } else {
+                        <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(mail_settings) data-mail-settings="">"Set up the mail server"</a>
+                    }
                     <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Md)) href=(back)>"Not yet"</a>
                 </div>
             )
@@ -75,6 +88,15 @@ pub async fn confirm(cx: &Cx) -> Result<SeeOther> {
         .await?;
     let campaign = require_campaign(&access, cx).await?;
     let slug = access.tenant.slug.clone();
+    if !app_context::<ShopMail>(cx).has_own_server(&access.tenant) {
+        return Ok(see_other(campaign_url(
+            cx,
+            &slug,
+            &campaign.id,
+            Some("mail_server_required"),
+            None,
+        )));
+    }
     match crate::app::t::slug::newsletter::newsletter(&access)?
         .send_campaign(&access.user_id, &campaign.id)
         .await

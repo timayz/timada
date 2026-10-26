@@ -8,6 +8,11 @@ The dashboard sends two kinds of mail.
   requests and storefront sign-in codes. It goes through the shop's own server when
   the merchant set one up, and through the `[mail]` server otherwise. The sender's
   name is the shop's either way.
+- **Marketing**: the shop's newsletter campaigns, and the test mail a merchant sends
+  themself while writing one. They go through the shop's own server only, never the
+  `[mail]` server: a shop without one cannot send a campaign (the send page and the
+  test refuse with `mail_server_required`), and one sent before the server was
+  removed waits, with nobody claimed, until a server is set up again.
 
 ## A shop's own server
 
