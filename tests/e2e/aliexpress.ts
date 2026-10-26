@@ -9,9 +9,9 @@ import { PNG } from "./storefront";
 // `aliexpress.ds.order.create` are kept, delivered by the services
 // `aliexpress.logistics.buyer.freight.calculate` offers, and read back with
 // `aliexpress.trade.ds.order.get` once a spec ships them. Every call is checked against
-// the app secret the way AliExpress signs (HMAC-SHA256 over the path, then the
-// sorted name+value pairs, upper-case hex). config/e2e.toml points the
-// dashboard at it.
+// the platform app's secret the way AliExpress signs (HMAC-SHA256 over the
+// path, then the sorted name+value pairs, upper-case hex). config/e2e.toml
+// gives the dashboard the same key and secret and points it at the stand-in.
 
 export const ALIEXPRESS_PORT = Number(process.env.E2E_ALIEXPRESS_PORT ?? 12114);
 export const ALIEXPRESS_URL = `http://127.0.0.1:${ALIEXPRESS_PORT}`;

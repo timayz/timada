@@ -3,10 +3,14 @@ pub fn aliexpress_product_id(ae_product_id: &str) -> String {
     evento::hash_ids(vec!["aliexpress-product", ae_product_id])
 }
 
-/// The stream that says which node renews the token lapsing at
-/// `expires_at` (unix seconds).
-pub fn token_refresh_id(expires_at: u64) -> String {
-    evento::hash_ids(vec!["aliexpress-token-refresh", &expires_at.to_string()])
+/// The stream that says which node renews the token of `company_id` lapsing
+/// at `expires_at` (unix seconds).
+pub fn token_refresh_id(company_id: &str, expires_at: u64) -> String {
+    evento::hash_ids(vec![
+        "aliexpress-token-refresh",
+        company_id,
+        &expires_at.to_string(),
+    ])
 }
 
 /// The stream that places a shop's order on AliExpress.

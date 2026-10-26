@@ -8,7 +8,9 @@ use std::collections::BTreeSet;
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 use ulid::Ulid;
 
-use crate::aggregator::company::{Created, IdentitySet, OwnerAdded, OwnerRemoved};
+use crate::aggregator::company::{
+    AliexpressAuthorized, AliexpressDisconnected, Created, IdentitySet, OwnerAdded, OwnerRemoved,
+};
 use crate::aggregator::company_series::Claimed as SeriesClaimed;
 use crate::aggregator::company_siren::{Claimed as SirenClaimed, Released as SirenReleased};
 use crate::aggregator::{CompanyLinked, CompanyUnlinked};
@@ -17,7 +19,7 @@ use crate::value_object::{
     PERMISSION_TENANT_MANAGE, company_series_id, company_siren_id, normalize_series_code,
 };
 
-use super::{Command, LegalIdentity, TenantState, normalize_identity};
+use super::{AliexpressAuthorization, Command, LegalIdentity, TenantState, normalize_identity};
 
 // =============================================================================
 // Company
@@ -35,6 +37,8 @@ pub struct CompanyState {
     /// What its invoices say about it.
     pub identity: Option<LegalIdentity>,
     pub owners: BTreeSet<String>,
+    /// Its AliExpress account, once it said yes to the platform's app.
+    pub aliexpress: Option<AliexpressAuthorization>,
 }
 
 impl CompanyState {
@@ -56,6 +60,8 @@ pub fn company_projection<E: Executor>() -> Projection<E, CompanyState> {
         .handler(on_identity_set())
         .handler(on_owner_added())
         .handler(on_owner_removed())
+        .handler(on_aliexpress_authorized())
+        .handler(on_aliexpress_disconnected())
         .strict()
 }
 
@@ -110,6 +116,33 @@ async fn on_owner_removed(
     company: &mut CompanyState,
 ) -> anyhow::Result<()> {
     company.owners.remove(&event.data.user_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_aliexpress_authorized(
+    event: Event<AliexpressAuthorized>,
+    company: &mut CompanyState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    company.aliexpress = Some(AliexpressAuthorization {
+        access_token_sealed: data.access_token_sealed.to_owned(),
+        refresh_token_sealed: data.refresh_token_sealed.to_owned(),
+        expires_at: data.expires_at,
+        refresh_expires_at: data.refresh_expires_at,
+        account: data.account.to_owned(),
+        authorized_by: data.authorized_by.to_owned(),
+        authorized_at: event.timestamp,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_aliexpress_disconnected(
+    _event: Event<AliexpressDisconnected>,
+    company: &mut CompanyState,
+) -> anyhow::Result<()> {
+    company.aliexpress = None;
     Ok(())
 }
 
@@ -453,7 +486,7 @@ impl<E: Executor> Command<E> {
             .ok_or(TenancyError::CompanyNotFound)
     }
 
-    async fn require_company_owner(
+    pub(crate) async fn require_company_owner(
         &self,
         company_id: &str,
         user_id: &str,

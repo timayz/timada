@@ -1,15 +1,16 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { APP_KEY, APP_SECRET, FakeAliexpress, PRODUCT_ID } from "./aliexpress";
+import { FakeAliexpress, PRODUCT_ID } from "./aliexpress";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { ExampleApp, mintKey } from "./storefront";
 import { FakeStripe, fakeStripeJs, stripeSignature } from "./stripe";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 
-// AliExpress end to end against a stand-in (aliexpress.ts): a merchant sets up
-// the shop's own app, connects the AliExpress account it acts for, imports a
-// product by its address (a draft with its options, pictures, stock and
-// prices by the shop's rule), then reads it again: stock and price follow
-// AliExpress, and a product AliExpress stops selling is taken off sale.
+// AliExpress end to end against a stand-in (aliexpress.ts): the platform's
+// app (config/e2e.toml) acts for the buyer account a company connects on its
+// page; a merchant then chooses what the shop buys in, imports a product by
+// its address (a draft with its options, pictures, stock and prices by the
+// shop's rule), then reads it again: stock and price follow AliExpress, and a
+// product AliExpress stops selling is taken off sale.
 
 test("a merchant imports an AliExpress product and keeps it in step", async ({ page }) => {
   const aliexpress = new FakeAliexpress();
@@ -22,39 +23,41 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await page.getByRole("link", { name: "AliExpress", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/t/${slug}/aliexpress$`));
     await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "none");
-    await expect(page.locator("[data-aliexpress-callback]")).toHaveText(
-      new RegExp(`/t/${slug}/aliexpress/callback$`),
-    );
+    await expect(page.locator("[data-aliexpress-company]")).toContainText("Not linked");
+    await expect(page.getByLabel("AliExpress product")).toHaveCount(0);
 
-    // The app: a rule that is not one is refused; then saved.
-    await page.getByLabel("App key").fill(APP_KEY);
-    await page.getByLabel("App secret").fill(APP_SECRET);
+    // The shop sells as a company; its owner connects the company's buyer
+    // account, which says yes on AliExpress.
+    const company = await setLegalIdentity(page, slug);
+    await page.goto(company.companyUrl);
+    await expect(page.locator("[data-company-aliexpress]")).toHaveAttribute("data-company-aliexpress", "none");
+    await page.getByRole("button", { name: "Connect the AliExpress account" }).click();
+    await expect(page.getByRole("status")).toContainText("AliExpress account connected.");
+    await expect(page.locator("[data-company-aliexpress]")).toHaveAttribute("data-company-aliexpress", "connected");
+    await expect(page.locator("[data-aliexpress-account]")).toHaveText("shop@example.org");
+
+    // The shop's market: a rule that is not one is refused; then saved.
+    await page.goto(`/t/${slug}/aliexpress`);
+    await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "none");
+    await expect(page.locator("[data-aliexpress-account]")).toHaveText("shop@example.org");
     await page.getByLabel("Ships to (country)").fill("FR");
     await page.getByLabel("Worded in (language)").fill("fr");
     await page.getByLabel("Multiply the cost by").fill("0.5");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page).toHaveURL(/error=invalid_pricing_rule/);
-    await page.getByLabel("App key").fill(APP_KEY);
-    await page.getByLabel("App secret").fill(APP_SECRET);
     await page.getByLabel("Multiply the cost by").fill("2");
     await page.getByLabel("Round").selectOption("99");
     await page.getByRole("button", { name: "Save" }).click();
-    await expect(page.getByRole("status")).toContainText("AliExpress app saved.");
-    await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "configured");
-    await expect(page.locator("[data-aliexpress-rule]")).toHaveText("Cost ×2.00, up to .99");
-
-    // The account says yes on AliExpress, and the shop is connected.
-    await page.getByRole("button", { name: "Connect the AliExpress account" }).click();
-    await expect(page.getByRole("status")).toContainText("AliExpress account connected.");
+    await expect(page.getByRole("status")).toContainText("AliExpress settings saved.");
     await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "connected");
-    await expect(page.locator("[data-aliexpress-account]")).toHaveText("shop@example.org");
+    await expect(page.locator("[data-aliexpress-rule]")).toHaveText("Cost ×2.00, up to .99");
 
     // An address that is not an item's is refused; an item's is imported.
     await page.getByLabel("AliExpress product").fill("https://example.com/p/12");
-    await page.getByRole("button", { name: "Import" }).click();
+    await page.getByRole("button", { name: "Import", exact: true }).click();
     await expect(page).toHaveURL(/error=invalid_aliexpress_product/);
     await page.getByLabel("AliExpress product").fill(`https://fr.aliexpress.com/item/${PRODUCT_ID}.html?spm=e2e`);
-    await page.getByRole("button", { name: "Import" }).click();
+    await page.getByRole("button", { name: "Import", exact: true }).click();
     await expect(page.getByRole("status")).toContainText("Import started");
     const row = page.locator(`[data-aliexpress-link="${PRODUCT_ID}"]`);
     await expect(async () => {
@@ -103,7 +106,7 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     // Importing it again is refused; every call was signed with the secret.
     await page.goto(`/t/${slug}/aliexpress`);
     await page.getByLabel("AliExpress product").fill(PRODUCT_ID);
-    await page.getByRole("button", { name: "Import" }).click();
+    await page.getByRole("button", { name: "Import", exact: true }).click();
     await expect(page).toHaveURL(/error=aliexpress_already_linked/);
     expect(aliexpress.badSignatures).toBe(0);
     expect(aliexpress.calls).toContain("/auth/token/create");
@@ -173,22 +176,67 @@ test("a merchant adds the combinations AliExpress gained as variants, or ignores
   }
 });
 
-/// A shop with its app set up and its account connected to the stand-in; its
-/// slug.
+/// A shop selling as a company whose account is connected to the stand-in,
+/// with its market set; its slug.
 async function connectedShop(page: Page, tenant: string): Promise<string> {
   await registerWithEmail(page, uniqueEmail("merchant"));
   const { name, slug } = uniqueTenant(tenant);
   await createTenant(page, name);
+  const company = await setLegalIdentity(page, slug);
+  await page.goto(company.companyUrl);
+  await page.getByRole("button", { name: "Connect the AliExpress account" }).click();
+  await expect(page.locator("[data-company-aliexpress]")).toHaveAttribute("data-company-aliexpress", "connected");
   await page.goto(`/t/${slug}/aliexpress`);
-  await page.getByLabel("App key").fill(APP_KEY);
-  await page.getByLabel("App secret").fill(APP_SECRET);
   await page.getByLabel("Multiply the cost by").fill("2");
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByRole("status")).toContainText("AliExpress app saved.");
-  await page.getByRole("button", { name: "Connect the AliExpress account" }).click();
+  await expect(page.getByRole("status")).toContainText("AliExpress settings saved.");
   await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "connected");
   return slug;
 }
+
+test("two shops of one company buy through the same AliExpress account", async ({ page }) => {
+  const aliexpress = new FakeAliexpress();
+  await aliexpress.start();
+  try {
+    const slug = await connectedShop(page, "Ali Main Shop");
+    const connections = aliexpress.calls.filter((call) => call === "/auth/token/create").length;
+    const pro = uniqueTenant("Ali Pro Shop");
+    await createTenant(page, pro.name);
+
+    // Linked to the same company, the second shop is connected as soon as
+    // its market is set: nobody says yes on AliExpress again.
+    await page.goto(`/t/${slug}/invoicing`);
+    const companyUrl = (await page.locator("[data-linked-company] a").getAttribute("href")) ?? "";
+    await expect(async () => {
+      await page.goto(`/t/${pro.slug}/invoicing`);
+      await expect(page.getByRole("button", { name: "Link" })).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await page.getByLabel("Series code (blank for the company's first tenant)").fill("pro");
+    await page.getByRole("button", { name: "Link" }).click();
+    await expect(page.getByRole("status")).toContainText("Linked to the company.");
+    await page.goto(`/t/${pro.slug}/aliexpress`);
+    await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "none");
+    await expect(page.locator("[data-aliexpress-account]")).toHaveText("shop@example.org");
+    await page.getByLabel("Multiply the cost by").fill("3");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "connected");
+    await expect(page.getByLabel("AliExpress product")).toBeVisible();
+    expect(aliexpress.calls.filter((call) => call === "/auth/token/create").length).toBe(connections);
+
+    // Disconnected on the company's page, both shops lose it.
+    await page.goto(companyUrl);
+    await page.getByRole("button", { name: "Disconnect" }).click();
+    await expect(page.getByRole("status")).toContainText("AliExpress account disconnected.");
+    await expect(page.locator("[data-company-aliexpress]")).toHaveAttribute("data-company-aliexpress", "none");
+    for (const shop of [slug, pro.slug]) {
+      await page.goto(`/t/${shop}/aliexpress`);
+      await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "configured");
+      await expect(page.getByLabel("AliExpress product")).toHaveCount(0);
+    }
+  } finally {
+    await aliexpress.stop();
+  }
+});
 
 /// A shop connected to the stand-in with one product imported from it; the
 /// product page's address.
@@ -196,7 +244,7 @@ async function importedShop(page: Page, aliexpress: FakeAliexpress): Promise<str
   await connectedShop(page, "Ali Sync Shop");
   expect(aliexpress.calls).toContain("/auth/token/create");
   await page.getByLabel("AliExpress product").fill(PRODUCT_ID);
-  await page.getByRole("button", { name: "Import" }).click();
+  await page.getByRole("button", { name: "Import", exact: true }).click();
   const row = page.locator(`[data-aliexpress-link="${PRODUCT_ID}"]`);
   await expect(async () => {
     await page.reload();
@@ -318,7 +366,6 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     const slug = new URL(productUrl).pathname.split("/")[2];
     await page.getByRole("button", { name: "Publish" }).click();
     await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
-    await setLegalIdentity(page, slug);
     await page.goto(`/t/${slug}/payments`);
     const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
     await page.getByLabel("Publishable key").fill("pk_test_e2e");

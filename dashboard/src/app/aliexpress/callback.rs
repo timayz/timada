@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use timada_tenancy::{AuthorizeAliexpress, PERMISSION_ALIEXPRESS_MANAGE};
+use timada_tenancy::AuthorizeAliexpress;
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -10,11 +10,11 @@ use topcoat::{
     },
 };
 
-use super::aliexpress_url;
 use crate::aliexpress::Aliexpress;
-use crate::app::t::slug::require_tenant;
+use crate::app::companies::company_id::company_url;
 use crate::app::tenants::{error_code, tenancy};
 use crate::auth::cookies::{aliexpress_flow, is_fresh};
+use crate::auth::require_user;
 
 #[topcoat::router::query_params(error = bad_request)]
 struct CallbackQuery {
@@ -22,17 +22,13 @@ struct CallbackQuery {
     state: Option<String>,
 }
 
-/// Where AliExpress sends the merchant back: exchanges the code for the
-/// account's tokens and keeps them sealed.
+/// Where AliExpress sends the owner back: exchanges the code for the
+/// account's tokens and keeps them sealed on the company the flow cookie
+/// names.
 #[route(GET)]
 pub async fn callback(cx: &Cx) -> Result<SeeOther> {
-    let access = require_tenant(cx).await?;
-    access
-        .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
-        .await?;
-    let slug = access.tenant.slug.as_str();
+    let user = require_user(cx).await?;
     let query = query_params::<CallbackQuery>(cx)?;
-    let refused = |code: &str| Ok(see_other(aliexpress_url(cx, slug, Some(code), None)));
     // One shot: whatever happens next, the flow cannot be replayed.
     let store = aliexpress_flow(cx);
     let flow = match store.parse() {
@@ -41,10 +37,23 @@ pub async fn callback(cx: &Cx) -> Result<SeeOther> {
             store.remove();
             flow
         }
-        Ok(None) | Err(_) => return refused("aliexpress_connect_expired"),
+        Ok(None) | Err(_) => {
+            return Ok(see_other(crate::app::companies::companies_url(
+                cx,
+                Some("aliexpress_connect_expired"),
+                None,
+            )));
+        }
     };
-    if flow.tenant_id != access.tenant.id
-        || flow.user_id != access.user_id
+    let refused = |code: &str| {
+        Ok(see_other(company_url(
+            cx,
+            &flow.company_id,
+            Some(code),
+            None,
+        )))
+    };
+    if flow.user_id != user.id
         || !is_fresh(flow.issued_at, crate::auth::now())
         || query.state.as_deref() != Some(flow.state.as_str())
     {
@@ -53,17 +62,17 @@ pub async fn callback(cx: &Cx) -> Result<SeeOther> {
     let Some(code) = query.code.clone().filter(|code| !code.is_empty()) else {
         return refused("aliexpress_connect_refused");
     };
-    let Some(settings) = &access.tenant.aliexpress else {
-        return refused("aliexpress_not_configured");
-    };
     let aliexpress = app_context::<Arc<Aliexpress>>(cx);
+    if !aliexpress.enabled() {
+        return refused("aliexpress_disabled");
+    }
     let client = aliexpress
-        .app_client(settings)
+        .app_client()
         .map_err(topcoat::Error::from_anyhow)?;
     let tokens = match client.create_token(&code).await {
         Ok(tokens) => tokens,
         Err(err) => {
-            tracing::warn!(tenant = %access.tenant.slug, %err, "AliExpress refused the code");
+            tracing::warn!(company = %flow.company_id, %err, "AliExpress refused the code");
             return refused("aliexpress_connect_refused");
         }
     };
@@ -71,8 +80,8 @@ pub async fn callback(cx: &Cx) -> Result<SeeOther> {
     let seal = |plain: &str| aliexpress.seal(plain).map_err(topcoat::Error::from_anyhow);
     let authorized = tenancy(cx)
         .authorize_aliexpress(
-            &access.user_id,
-            &access.tenant.id,
+            &user.id,
+            &flow.company_id,
             AuthorizeAliexpress {
                 access_token_sealed: seal(&tokens.access_token)?,
                 refresh_token_sealed: seal(&tokens.refresh_token)?,
@@ -83,9 +92,9 @@ pub async fn callback(cx: &Cx) -> Result<SeeOther> {
         )
         .await;
     match authorized {
-        Ok(()) => Ok(see_other(aliexpress_url(
+        Ok(()) => Ok(see_other(company_url(
             cx,
-            slug,
+            &flow.company_id,
             None,
             Some("AliExpress account connected."),
         ))),

@@ -1,6 +1,6 @@
-//! The shops' own AliExpress apps: their sealed secrets and tokens, the
-//! client that calls AliExpress for a shop, and the import that fills a
-//! draft from an item (see [`subscription`]).
+//! The platform's AliExpress app and the companies' accounts it acts for
+//! (their sealed tokens), the client that calls AliExpress for a shop, and
+//! the import that fills a draft from an item (see [`subscription`]).
 
 pub mod forward;
 pub mod subscription;
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use timada_aliexpress::{Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, Market};
-use timada_tenancy::{AliexpressSettings, TenantState};
+use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
 use crate::cluster::Executor;
 use crate::config::AliexpressConfig;
@@ -23,6 +23,8 @@ pub const ALIEXPRESS_ACTOR: &str = timada_aliexpress::ALIEXPRESS_ACTOR;
 
 pub struct Aliexpress {
     sealer: Option<Sealer>,
+    /// The platform's app: its key and secret, once the operator gave one.
+    app: Option<(String, String)>,
     api_url: String,
     authorize_url: String,
     /// Calls AliExpress.
@@ -47,8 +49,16 @@ impl Aliexpress {
     ) -> anyhow::Result<Arc<Self>> {
         // reqwest's rustls needs the process-wide crypto provider named.
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let app = match (&config.app_key, &config.app_secret) {
+            (Some(key), Some(secret)) if !key.trim().is_empty() && !secret.is_empty() => {
+                Some((key.trim().to_owned(), secret.clone()))
+            }
+            (None, None) => None,
+            _ => anyhow::bail!("aliexpress.app_key and aliexpress.app_secret go together"),
+        };
         Ok(Arc::new(Self {
             sealer,
+            app,
             api_url: config
                 .api_url
                 .clone()
@@ -78,9 +88,10 @@ impl Aliexpress {
         self.sync_every_secs
     }
 
-    /// Whether this node can keep an app's secret (`secrets.key` is set).
+    /// Whether companies can connect here: the platform has an app and can
+    /// keep its tokens (`secrets.key` is set).
     pub fn enabled(&self) -> bool {
-        self.sealer.is_some()
+        self.sealer.is_some() && self.app.is_some()
     }
 
     fn sealer(&self) -> anyhow::Result<&Sealer> {
@@ -93,70 +104,92 @@ impl Aliexpress {
         self.sealer()?.seal(plain)
     }
 
-    /// The app's client, acting for no account yet.
-    pub fn app_client(&self, settings: &AliexpressSettings) -> anyhow::Result<Client> {
-        let secret = self.sealer()?.open(&settings.app_secret_sealed)?;
+    /// The platform's app key, for the address a company says yes on.
+    fn app(&self) -> anyhow::Result<&(String, String)> {
+        self.app
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no AliExpress app here (no [aliexpress] app_key)"))
+    }
+
+    /// The platform's client, acting for no account yet.
+    pub fn app_client(&self) -> anyhow::Result<Client> {
+        let (key, secret) = self.app()?;
         Ok(Client::new(
             self.http.clone(),
             &self.api_url,
-            settings.app_key.clone(),
-            secret,
+            key.clone(),
+            secret.clone(),
         ))
     }
 
-    /// The tenant's client, acting for its account; `None` before the shop
-    /// set up its app and connected an account.
-    pub fn client_of(&self, tenant: &TenantState) -> anyhow::Result<Option<Client>> {
-        let Some(settings) = &tenant.aliexpress else {
-            return Ok(None);
-        };
-        let Some(authorization) = &settings.authorization else {
+    /// The client acting for the company's account; `None` before one said
+    /// yes.
+    pub fn client_of(&self, company: &CompanyState) -> anyhow::Result<Option<Client>> {
+        let Some(authorization) = &company.aliexpress else {
             return Ok(None);
         };
         let token = self.sealer()?.open(&authorization.access_token_sealed)?;
-        Ok(Some(self.app_client(settings)?.with_session(token)))
+        Ok(Some(self.app_client()?.with_session(token)))
     }
 
-    /// Renews the tenant's tokens when the access token lapses within a day,
-    /// on one node per token (the one that claims the renewal in `store`,
-    /// the store); the tenant as it then is. A renewal AliExpress
-    /// refuses is logged: the merchant connects again.
-    pub async fn refresh_if_due<E: evento::Executor + Clone>(
-        &self,
-        store: &E,
-        tenant: TenantState,
-        now: u64,
-    ) -> anyhow::Result<TenantState> {
-        let Some(settings) = &tenant.aliexpress else {
-            return Ok(tenant);
+    /// The company a shop sells as, read from the platform store; `None`
+    /// until the shop is linked to one.
+    pub async fn company_of(&self, tenant: &TenantState) -> anyhow::Result<Option<CompanyState>> {
+        let Some(link) = &tenant.company else {
+            return Ok(None);
         };
-        let Some(authorization) = &settings.authorization else {
-            return Ok(tenant);
+        timada_tenancy::Command(self.platform.clone())
+            .load_company(&link.company_id)
+            .await
+    }
+
+    /// Whether the shop can call AliExpress: it is set up, and the company
+    /// it sells as has an account connected.
+    pub async fn connected(&self, tenant: &TenantState) -> anyhow::Result<bool> {
+        if tenant.aliexpress.is_none() {
+            return Ok(false);
+        }
+        Ok(self
+            .company_of(tenant)
+            .await?
+            .is_some_and(|company| company.aliexpress.is_some()))
+    }
+
+    /// Renews the company's tokens when the access token lapses within a
+    /// day, on one node per token (the one that claims the renewal in the
+    /// platform store); the company as it then is. A renewal AliExpress
+    /// refuses is logged: an owner connects again.
+    pub async fn refresh_if_due(
+        &self,
+        company: CompanyState,
+        now: u64,
+    ) -> anyhow::Result<CompanyState> {
+        let Some(authorization) = &company.aliexpress else {
+            return Ok(company);
         };
         if authorization.expires_at > now + timada_aliexpress::REFRESH_MARGIN_SECS {
-            return Ok(tenant);
+            return Ok(company);
         }
         if authorization.refresh_expires_at != 0 && authorization.refresh_expires_at <= now {
-            tracing::warn!(tenant = %tenant.id, "AliExpress access lapsed: the merchant has to connect again");
-            return Ok(tenant);
+            tracing::warn!(company = %company.id, "AliExpress access lapsed: an owner has to connect again");
+            return Ok(company);
         }
-        let links = timada_aliexpress::Command::new(store.clone(), &tenant.id);
-        if !links
-            .claim_token_refresh(ALIEXPRESS_ACTOR, authorization.expires_at)
-            .await?
+        if !timada_aliexpress::claim_token_refresh(
+            &self.platform,
+            ALIEXPRESS_ACTOR,
+            &company.id,
+            authorization.expires_at,
+        )
+        .await?
         {
-            return Ok(tenant);
+            return Ok(company);
         }
         let refresh_token = self.sealer()?.open(&authorization.refresh_token_sealed)?;
-        let tokens = match self
-            .app_client(settings)?
-            .refresh_token(&refresh_token)
-            .await
-        {
+        let tokens = match self.app_client()?.refresh_token(&refresh_token).await {
             Ok(tokens) => tokens,
             Err(err) => {
-                tracing::warn!(tenant = %tenant.id, %err, "AliExpress refused to renew the access");
-                return Ok(tenant);
+                tracing::warn!(company = %company.id, %err, "AliExpress refused to renew the access");
+                return Ok(company);
             }
         };
         let account = if tokens.account.is_empty() {
@@ -168,7 +201,7 @@ impl Aliexpress {
         tenancy
             .refresh_aliexpress(
                 ALIEXPRESS_ACTOR,
-                &tenant.id,
+                &company.id,
                 timada_tenancy::AuthorizeAliexpress {
                     access_token_sealed: self.seal(&tokens.access_token)?,
                     refresh_token_sealed: self.seal(&tokens.refresh_token)?,
@@ -182,13 +215,19 @@ impl Aliexpress {
                 },
             )
             .await?;
-        tracing::info!(tenant = %tenant.id, "AliExpress access renewed");
-        Ok(tenancy.load_tenant(&tenant.id).await?.unwrap_or(tenant))
+        tracing::info!(company = %company.id, "AliExpress access renewed");
+        Ok(tenancy.load_company(&company.id).await?.unwrap_or(company))
     }
 
-    /// Where the merchant goes to connect their account.
-    pub fn authorize_url(&self, app_key: &str, redirect_uri: &str, state: &str) -> String {
-        timada_aliexpress::authorize_url(&self.authorize_url, app_key, redirect_uri, state)
+    /// Where an owner goes to connect the company's account.
+    pub fn authorize_url(&self, redirect_uri: &str, state: &str) -> anyhow::Result<String> {
+        let (key, _) = self.app()?;
+        Ok(timada_aliexpress::authorize_url(
+            &self.authorize_url,
+            key,
+            redirect_uri,
+            state,
+        ))
     }
 
     /// What the shop buys in.
@@ -234,12 +273,14 @@ pub enum SyncResult {
 
 impl Aliexpress {
     /// Reads one linked item again and brings its product in step: stock,
-    /// price (by the item's rule, else the shop's) and availability. `store`
-    /// is the store. A read another node made in between wins.
+    /// price (by the item's rule, else the shop's) and availability, acting
+    /// for `company`'s account. `store` is the store. A read another node
+    /// made in between wins.
     pub async fn sync_link<E: evento::Executor + Clone>(
         &self,
         store: &E,
         tenant: &TenantState,
+        company: &CompanyState,
         link_id: &str,
     ) -> anyhow::Result<SyncResult> {
         let links = timada_aliexpress::Command::new(store.clone(), &tenant.id);
@@ -249,7 +290,7 @@ impl Aliexpress {
         if !link.is_linked() {
             return Ok(SyncResult::NotLinked);
         }
-        let (Some(settings), Some(client)) = (&tenant.aliexpress, self.client_of(tenant)?) else {
+        let (Some(settings), Some(client)) = (&tenant.aliexpress, self.client_of(company)?) else {
             return Ok(SyncResult::NotLinked);
         };
         let product = match client

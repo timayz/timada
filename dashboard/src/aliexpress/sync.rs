@@ -3,9 +3,9 @@
 //! store fires later, so every node sweeps the links due in the shared read
 //! model; a read another node recorded in between wins (`record_sync` writes
 //! against the version it started from). The same sweep first renews every
-//! connected account's access a day before it lapses, whether or not the shop
-//! has anything imported, and then reads the orders placed on AliExpress
-//! again until they ship (see [`super::forward`]).
+//! connected company's access a day before it lapses, whether or not its
+//! shops have anything imported, and then reads the orders placed on
+//! AliExpress again until they ship (see [`super::forward`]).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +15,8 @@ use timada_aliexpress::{ForwardRow, LinkRow, forwards_due, links_due};
 use tokio::task::JoinHandle;
 
 use super::forward::CheckResult;
+use timada_tenancy::{CompanyState, TenantState};
+
 use super::{Aliexpress, SyncResult};
 use crate::cluster::Executor;
 
@@ -104,14 +106,10 @@ impl AliexpressSync {
         forwards: &[ForwardRow],
         now: u64,
     ) -> anyhow::Result<usize> {
-        let Some(tenant) = self.aliexpress.active_tenant(tenant_id).await? else {
+        let Some((tenant, company)) = self.connected_shop(tenant_id, now).await? else {
             return Ok(0);
         };
-        if tenant.aliexpress.is_none() {
-            return Ok(0);
-        }
         let store = self.store.clone();
-        let tenant = self.aliexpress.refresh_if_due(&store, tenant, now).await?;
         let mut fulfilled = 0;
         for (index, forward) in forwards.iter().enumerate() {
             if index > 0 {
@@ -119,7 +117,7 @@ impl AliexpressSync {
             }
             match self
                 .aliexpress
-                .check_forward(&store, &tenant, &forward.id, now)
+                .check_forward(&store, &tenant, &company, &forward.id, now)
                 .await
             {
                 Ok(CheckResult::Checked { fulfilled: true }) => fulfilled += 1,
@@ -132,33 +130,58 @@ impl AliexpressSync {
         Ok(fulfilled)
     }
 
-    /// Renews the access of every connected shop due within the margin,
-    /// the soonest first. The tenant's own state decides (the read model may
-    /// lag), and one node per token renews it.
+    /// Renews the access of every connected company due within the margin,
+    /// the soonest first. The company's own state decides (the read model
+    /// may lag), and one node per token renews it.
     async fn renew_due(&self, now: u64) -> anyhow::Result<()> {
         let before = now.saturating_add(timada_aliexpress::REFRESH_MARGIN_SECS) as i64;
-        let due =
-            timada_tenancy::aliexpress_access_due(&self.read_pool, before, now as i64, SWEEP_LIMIT)
-                .await?;
-        for tenant_id in &due {
-            if let Err(err) = self.renew_tenant(tenant_id, now).await {
-                tracing::error!(tenant = %tenant_id, error = %err, "AliExpress access not renewed");
+        let due = timada_tenancy::aliexpress_accounts_due(
+            &self.read_pool,
+            before,
+            now as i64,
+            SWEEP_LIMIT,
+        )
+        .await?;
+        for company_id in &due {
+            if let Err(err) = self.renew_company(company_id, now).await {
+                tracing::error!(company = %company_id, error = %err, "AliExpress access not renewed");
             }
         }
         Ok(())
     }
 
-    async fn renew_tenant(&self, tenant_id: &str, now: u64) -> anyhow::Result<()> {
-        let Some(tenant) = self.aliexpress.active_tenant(tenant_id).await? else {
+    async fn renew_company(&self, company_id: &str, now: u64) -> anyhow::Result<()> {
+        let Some(company) = timada_tenancy::Command(self.store.clone())
+            .load_company(company_id)
+            .await?
+        else {
             return Ok(());
         };
-        if tenant.aliexpress.is_none() {
-            return Ok(());
-        }
-        self.aliexpress
-            .refresh_if_due(&self.store, tenant, now)
-            .await?;
+        self.aliexpress.refresh_if_due(company, now).await?;
         Ok(())
+    }
+
+    /// A shop able to call AliExpress: active, set up, and selling as a
+    /// company with an account, its access renewed first if due.
+    async fn connected_shop(
+        &self,
+        tenant_id: &str,
+        now: u64,
+    ) -> anyhow::Result<Option<(TenantState, CompanyState)>> {
+        let Some(tenant) = self.aliexpress.active_tenant(tenant_id).await? else {
+            return Ok(None);
+        };
+        if tenant.aliexpress.is_none() {
+            return Ok(None);
+        }
+        let Some(company) = self.aliexpress.company_of(&tenant).await? else {
+            return Ok(None);
+        };
+        let company = self.aliexpress.refresh_if_due(company, now).await?;
+        if company.aliexpress.is_none() {
+            return Ok(None);
+        }
+        Ok(Some((tenant, company)))
     }
 
     async fn sweep_tenant(
@@ -167,23 +190,20 @@ impl AliexpressSync {
         links: &[LinkRow],
         now: u64,
     ) -> anyhow::Result<usize> {
-        let Some(tenant) = timada_tenancy::Command(self.store.clone())
-            .load_tenant(tenant_id)
-            .await?
-        else {
+        let Some((tenant, company)) = self.connected_shop(tenant_id, now).await? else {
             return Ok(0);
         };
-        if tenant.is_suspended() || tenant.aliexpress.is_none() {
-            return Ok(0);
-        }
         let store = self.store.clone();
-        let tenant = self.aliexpress.refresh_if_due(&store, tenant, now).await?;
         let mut synced = 0;
         for (index, link) in links.iter().enumerate() {
             if index > 0 {
                 tokio::time::sleep(PACE).await;
             }
-            match self.aliexpress.sync_link(&store, &tenant, &link.id).await {
+            match self
+                .aliexpress
+                .sync_link(&store, &tenant, &company, &link.id)
+                .await
+            {
                 Ok(SyncResult::Synced { .. }) => synced += 1,
                 Ok(SyncResult::NotLinked) => break,
                 Ok(SyncResult::Skipped | SyncResult::Failed(_)) => {}

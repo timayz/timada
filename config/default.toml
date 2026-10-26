@@ -175,14 +175,22 @@ dir = "data/shopper-keys"
 # # The window both limits count over, in seconds.
 # window_secs = 86400
 
-# Products a shop imports from AliExpress, through the merchant's own
-# AliExpress app (registered on AliExpress's open platform, with
-# dropshipping access). The app's secret and the tokens of the account it
-# acts for are kept encrypted under `secrets.key`; without it no shop can
-# connect. Every node reads the imported products again on its own; a
-# product another node read in the meantime is skipped, and one node per
-# token renews an account's access before it lapses.
+# Products the shops import from AliExpress, through the platform's own
+# AliExpress app (registered once on AliExpress's open platform, with
+# dropshipping access; register `/aliexpress/callback` under `server.url`
+# as its callback). Each company connects its own AliExpress buyer
+# account to the app from its page, and every shop selling as the company
+# buys through that account. The tokens are kept encrypted under
+# `secrets.key`; without it, or without the app, no company can connect.
+# Every node reads the imported products again on its own; a product
+# another node read in the meantime is skipped, and one node per token
+# renews a company's access before it lapses. AliExpress counts every
+# call against the one app, whichever company it acts for.
 # [aliexpress]
+# # The app's key and secret, from AliExpress's open platform; both or
+# # neither.
+# app_key = ""
+# app_secret = ""
 # # How often, in seconds, this node looks for products due to be read again.
 # sync_check_secs = 3600
 # # How long, in seconds, a product goes before its price and stock are read

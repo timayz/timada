@@ -448,11 +448,18 @@ impl InvitationsConfig {
     }
 }
 
-/// Products a shop imports from AliExpress through its own app. The app's
-/// secret and tokens are kept encrypted under `secrets.key`: without it, no
-/// shop can connect.
+/// Products the shops import from AliExpress through the platform's own
+/// app, each acting for the account of the company it sells as. The tokens
+/// are kept encrypted under `secrets.key`: without it, or without the app,
+/// no company can connect.
 #[derive(Debug, Deserialize, Clone)]
 pub struct AliexpressConfig {
+    /// The platform's app on AliExpress's open platform (with dropshipping
+    /// access); `/aliexpress/callback` under `server.url` is its callback.
+    #[serde(default)]
+    pub app_key: Option<String>,
+    #[serde(default)]
+    pub app_secret: Option<String>,
     /// Where AliExpress's open platform is reached; its own address when
     /// unset. Tests point it at a stand-in.
     #[serde(default)]
@@ -482,6 +489,8 @@ fn default_aliexpress_every_secs() -> u64 {
 impl Default for AliexpressConfig {
     fn default() -> Self {
         Self {
+            app_key: None,
+            app_secret: None,
             api_url: None,
             authorize_url: None,
             sync_check_secs: default_aliexpress_check_secs(),
