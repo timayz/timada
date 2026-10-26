@@ -15,12 +15,11 @@ pub async fn sign_out_everywhere(cx: &Cx) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let hold = super::super::hold(cx, &access).await?;
-    let (Some(shopper), Some(token)) = (signed_in(cx, hold.executor()).await?, shopper_token(cx))
-    else {
+    let store = super::super::store(cx, &access);
+    let (Some(shopper), Some(token)) = (signed_in(cx, &store).await?, shopper_token(cx)) else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
-    match timada_shoppers::Command(hold.executor().clone())
+    match timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
         .revoke_other_sessions(&shopper.id, &token)
         .await
     {

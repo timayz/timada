@@ -1,33 +1,52 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use evento::subscription::Subscription;
+use evento::subscription::{Subscription, SubscriptionBuilder};
 
 use crate::app::{self, Services};
 use crate::auth;
-use crate::cluster::{Cluster, Executor};
+use crate::cluster::{Cluster, Executor, Files, StorePools};
 use crate::config::Config;
 use crate::db::{self, ReadPool, WritePool};
 use crate::store_api::{self, StoreConnections};
-use crate::tenants::{CatchUp, TenantSubscription, Tenants};
 
 pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> Result<()> {
     let host = host.unwrap_or_else(|| config.server.host.clone());
     let port = port.unwrap_or(config.server.port);
     let url = config.server.url.clone();
+    let files = Files {
+        store_url: config.database.store.clone(),
+        read_models_url: config.database.read_models.clone(),
+    };
 
-    // Write pool first: it creates the file a read-only connection cannot.
-    let write_pool = db::create_write_pool(&config.database.url).await?;
-    let read_pool =
-        db::create_read_pool(&config.database.url, config.database.max_connections).await?;
-    let cluster = Arc::new(Cluster::build(config.cluster.as_ref()).await?);
-    let executor = cluster
-        .open_platform(
-            config.server.region.as_deref(),
-            read_pool.clone(),
-            write_pool.clone(),
-        )
-        .await?;
+    // The store first: its node may have to copy it from a peer, which
+    // recreates the read models, so their pools open afterwards. Write pool
+    // before read pool: it creates the file a read-only connection cannot.
+    let store_write =
+        db::create_write_pool(&config.database.store, db::Durability::Durable).await?;
+    let store_cursors =
+        db::create_write_pool(&config.database.store, db::Durability::Relaxed).await?;
+    let store_read =
+        db::create_read_pool(&config.database.store, config.database.max_connections).await?;
+    let (cluster, executor) = Cluster::open(
+        config.cluster.as_ref(),
+        config.server.region.as_deref(),
+        &files,
+        StorePools {
+            read: store_read.clone(),
+            write: store_write.clone(),
+            cursors: store_cursors.clone(),
+        },
+    )
+    .await?;
+    let write_pool =
+        db::create_write_pool(&config.database.read_models, db::Durability::Durable).await?;
+    let read_pool = db::create_read_pool(
+        &config.database.read_models,
+        config.database.max_connections,
+    )
+    .await?;
+
     let peers = crate::peers::Peers::from_cluster(config.cluster.as_ref())?.map(Arc::new);
     let media = Arc::new(crate::media::Media::new(&config.media, peers.clone()));
     let keys_sealer = crate::seal::keys_sealer(&config);
@@ -65,8 +84,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         executor.clone(),
     )?;
     // The order confirmations and the notices of contact messages are
-    // mailed from the tenants' subscriptions, outside any request: they get
-    // their own transport.
+    // mailed from the subscriptions, outside any request: they get their
+    // own transport.
     let background_mail = {
         let mailer = auth::mail::build(&config.mail)?;
         let mut app = topcoat::context::AppContext::new();
@@ -77,31 +96,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         app.insert(media.clone());
         Arc::new(app)
     };
-    let tenants = Tenants::new(
-        cluster.clone(),
-        &config.tenants,
-        config.server.region.clone(),
-        executor.clone(),
-        write_pool.clone(),
-        tenant_subscriptions(
-            media.clone(),
-            keys.clone(),
-            payments.clone(),
-            aliexpress.clone(),
-            executor.clone(),
-            Arc::new(crate::vies::ViesClient::new(
-                config.invoicing.vies_url.clone(),
-            )),
-            background_mail.clone(),
-            read_pool.clone(),
-            url.clone(),
-        ),
-    );
     let connections = StoreConnections::new();
     let store_api = store_api::serve(
         config.store_api.as_ref(),
         executor.clone(),
-        tenants.clone(),
         connections.clone(),
     )
     .await?;
@@ -117,67 +115,31 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // Read models catch up from their saved cursor before the router takes
     // requests, then follow the stream. A failed worker is logged and the
     // pages fall back to stale rows; the node keeps serving.
-    let read_models = vec![
-        start_read_model(
-            "identity",
-            timada_identity::read_model_subscription(write_pool.clone()),
-            &executor,
-        )
-        .await?,
-        start_read_model(
-            "tenancy",
-            timada_tenancy::read_model_subscription(write_pool.clone()),
-            &executor,
-        )
-        .await?,
-        start_read_model(
-            "members history",
-            timada_tenancy::member_audit_subscription(write_pool.clone()),
-            &executor,
-        )
-        .await?,
-        start_read_model(
-            "AliExpress access",
-            timada_tenancy::aliexpress_access_subscription(write_pool.clone()),
-            &executor,
-        )
-        .await?,
-        // Not a read model, but the same lifecycle: every node opens a tenant
-        // as soon as its creation arrives.
-        start_read_model(
-            "new tenants",
-            crate::tenants::creation_subscription(tenants.clone()),
-            &executor,
-        )
-        .await?,
-        // Nor this one: it copies how each tenant's shoppers pay into the
-        // tenant's store, for the storefronts' payment form.
-        start_read_model(
-            "payment setup",
-            crate::payments::setup_subscription(payments.clone(), tenants.clone()),
-            &executor,
-        )
-        .await?,
-        // Nor this: it fetches the shops' mail logos this node lacks.
-        start_read_model(
-            "mail logos",
-            crate::media::logo_subscription(media.clone()),
-            &executor,
-        )
-        .await?,
-    ];
+    let mut read_models = Vec::new();
+    for (name, builder) in subscriptions(
+        write_pool.clone(),
+        read_pool.clone(),
+        executor.clone(),
+        media.clone(),
+        keys.clone(),
+        payments.clone(),
+        aliexpress.clone(),
+        Arc::new(crate::vies::ViesClient::new(
+            config.invoicing.vies_url.clone(),
+        )),
+        background_mail.clone(),
+        url.clone(),
+    ) {
+        read_models.push(start_read_model(name, builder, &executor).await?);
+    }
 
-    // A restarted node brings its tenant copies up to date in the background
-    // instead of waiting for something to open each one.
-    let catch_up = tenants.start_catch_up(CatchUp::default());
-    // The operator's alert for a node that stays away: a tenant nearing the
+    // The operator's alert for a node that stays away: this node nearing the
     // writes it may keep for it, or a node given up on.
-    let backlog_watch = tenants.watch_backlog(std::time::Duration::from_secs(60));
+    let cluster_watch = cluster.watch(std::time::Duration::from_secs(60));
     // A few days after an order left, its buyer is asked for a review.
     let review_requests = crate::review_requests::ReviewRequests::new(
         read_pool.clone(),
         executor.clone(),
-        tenants.clone(),
         background_mail.clone(),
     )
     .start(std::time::Duration::from_secs(
@@ -188,7 +150,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let newsletter_sends = crate::newsletter_sends::NewsletterSends::new(
         read_pool.clone(),
         executor.clone(),
-        tenants.clone(),
         background_mail.clone(),
         keys.clone(),
         config.newsletter.mails_per_check,
@@ -201,7 +162,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let aliexpress_sync = crate::aliexpress::sync::AliexpressSync::new(
         read_pool.clone(),
         executor.clone(),
-        tenants.clone(),
         aliexpress.clone(),
     )
     .start(std::time::Duration::from_secs(
@@ -215,7 +175,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         providers,
         webauthn,
         mailer,
-        tenants: tenants.clone(),
+        cluster: cluster.clone(),
         authorizer,
         media,
         keys,
@@ -236,212 +196,205 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // `RouterService::shutdown_timeout` to finish.
     topcoat::serve(listener, router).await?;
 
-    // Store connections go first: their leases hold tenants open.
     if let Some(store_api) = store_api {
         store_api.shutdown().await;
     }
-    if let Some(catch_up) = catch_up {
-        catch_up.abort();
-    }
-    backlog_watch.abort();
+    cluster_watch.abort();
     review_requests.abort();
     newsletter_sends.abort();
     aliexpress_sync.abort();
-    tenants.shutdown().await;
     for subscription in &read_models {
         subscription.stop();
     }
     for subscription in &read_models {
         subscription.stopped().await;
     }
+    cluster.shutdown().await;
     read_pool.close().await;
     write_pool.close().await;
+    store_read.close().await;
+    store_cursors.close().await;
+    store_write.close().await;
     Ok(())
 }
 
-/// What follows each tenant's own stream while it is open: the read models
-/// fed into the shared database (the catalog's product list, the orders and
-/// carts, the customers, the invoices, the reviews, the support messages), this node's copies of the product
-/// pictures, review photos and personal-data keys, the answers the dashboard writes back
-/// (payments, invoices), the order confirmations it mails and the notices
-/// of contact messages it mails the members. Every tenant-scoped bounded
-/// context registers its subscription here.
+/// Every subscription this node runs on the store, each following every
+/// tenant's streams: the platform's read models (the users, the tenant
+/// catalog, the members' history), the tenants' read models fed into the
+/// read-model database (the catalogs, the orders and carts, the customers,
+/// the invoices, the reviews, the support messages), this node's copies of
+/// the product pictures, review photos and personal-data keys, the answers
+/// the dashboard writes back (payments, invoices), the order confirmations it
+/// mails and the notices of contact messages it mails the members. Every
+/// bounded context registers its subscription here.
 #[allow(clippy::too_many_arguments)]
-fn tenant_subscriptions(
+fn subscriptions(
+    write_pool: sqlx::SqlitePool,
+    read_pool: sqlx::SqlitePool,
+    store: Executor,
     media: Arc<crate::media::Media>,
     keys: Arc<crate::key_vault::KeyVault>,
     payments: Arc<crate::payments::Payments>,
     aliexpress: Arc<crate::aliexpress::Aliexpress>,
-    platform: Executor,
     vies: Arc<dyn crate::vies::Vies>,
     background_mail: Arc<topcoat::context::AppContext>,
-    read_pool: sqlx::SqlitePool,
     base_url: String,
-) -> Vec<TenantSubscription> {
+) -> Vec<(&'static str, SubscriptionBuilder<Executor>)> {
+    let ring = keys.ring();
     vec![
-        Arc::new(|pool, tenant_id, _: &Executor| {
-            timada_catalog::read_model_subscription(pool, tenant_id)
-        }),
-        Arc::new(|pool, tenant_id, _: &Executor| {
-            timada_orders::read_model_subscription(pool, tenant_id)
-        }),
-        Arc::new({
-            let keys = keys.clone();
-            move |pool, tenant_id, _: &Executor| {
-                timada_shoppers::read_model_subscription(
-                    pool,
-                    tenant_id,
-                    keys.for_tenant(tenant_id),
-                )
-            }
-        }),
-        Arc::new(|pool, tenant_id, _: &Executor| {
-            timada_discounts::read_model_subscription(pool, tenant_id)
-        }),
-        Arc::new(|pool, tenant_id, _: &Executor| {
-            timada_reviews::read_model_subscription(pool, tenant_id)
-        }),
-        Arc::new({
-            let keys = keys.clone();
-            move |pool, tenant_id, _: &Executor| {
-                timada_support::read_model_subscription(pool, tenant_id, keys.for_tenant(tenant_id))
-            }
-        }),
-        Arc::new({
-            let keys = keys.clone();
-            move |pool, tenant_id, _: &Executor| {
-                timada_newsletter::read_model_subscription(
-                    pool,
-                    tenant_id,
-                    keys.for_tenant(tenant_id),
-                )
-            }
-        }),
-        Arc::new(|pool, tenant_id, _: &Executor| {
-            timada_invoicing::read_model_subscription(pool, tenant_id)
-        }),
-        Arc::new(|pool, tenant_id, _: &Executor| {
-            timada_aliexpress::read_model_subscription(pool, tenant_id)
-        }),
-        Arc::new({
-            let aliexpress = aliexpress.clone();
-            move |pool, tenant_id, executor: &Executor| {
-                crate::aliexpress::forward::subscription(
-                    aliexpress.clone(),
-                    pool,
-                    tenant_id,
-                    executor.clone(),
-                )
-            }
-        }),
-        Arc::new({
-            let media = media.clone();
-            move |_, tenant_id, executor: &Executor| {
-                crate::aliexpress::subscription::subscription(
-                    aliexpress.clone(),
-                    media.clone(),
-                    tenant_id,
-                    executor.clone(),
-                )
-            }
-        }),
-        Arc::new(move |_, tenant_id, _: &Executor| {
-            crate::media::subscription(media.clone(), tenant_id)
-        }),
-        Arc::new({
-            let keys = keys.clone();
-            move |_, tenant_id, _: &Executor| {
-                crate::shopper_keys::subscription(keys.clone(), tenant_id)
-            }
-        }),
-        Arc::new({
-            let keys = keys.clone();
-            move |_, tenant_id, _: &Executor| {
-                crate::message_keys::subscription(keys.clone(), tenant_id)
-            }
-        }),
-        Arc::new({
-            let keys = keys.clone();
-            move |_, tenant_id, _: &Executor| {
-                crate::newsletter_keys::subscription(keys.clone(), tenant_id)
-            }
-        }),
-        Arc::new(move |_, tenant_id, executor: &Executor| {
-            crate::payments::subscription(payments.clone(), tenant_id, executor.clone())
-        }),
-        Arc::new(|_, _, executor: &Executor| {
-            timada_orders::discount_usage_subscription(executor.clone())
-        }),
-        Arc::new(|_, _, executor: &Executor| {
-            timada_orders::stock_usage_subscription(executor.clone())
-        }),
-        Arc::new({
-            let platform = platform.clone();
-            let background_mail = background_mail.clone();
-            let keys = keys.clone();
-            move |_, tenant_id, executor: &Executor| {
-                crate::newsletter::subscription(
-                    platform.clone(),
-                    background_mail.clone(),
-                    keys.clone(),
-                    tenant_id,
-                    executor.clone(),
-                )
-            }
-        }),
-        Arc::new({
-            let platform = platform.clone();
-            let background_mail = background_mail.clone();
-            move |_, tenant_id, executor: &Executor| {
-                crate::confirmations::subscription(
-                    platform.clone(),
-                    background_mail.clone(),
-                    tenant_id,
-                    executor.clone(),
-                )
-            }
-        }),
-        Arc::new({
-            let platform = platform.clone();
-            move |_, tenant_id, executor: &Executor| {
-                crate::message_notifications::subscription(
-                    platform.clone(),
-                    read_pool.clone(),
-                    background_mail.clone(),
-                    base_url.clone(),
-                    keys.for_tenant(tenant_id),
-                    tenant_id,
-                    executor.clone(),
-                )
-            }
-        }),
-        Arc::new(move |_, tenant_id, executor: &Executor| {
-            crate::invoicing::subscription(
-                platform.clone(),
-                vies.clone(),
-                tenant_id,
-                executor.clone(),
-            )
-        }),
+        (
+            "identity",
+            timada_identity::read_model_subscription(write_pool.clone()),
+        ),
+        (
+            "tenancy",
+            timada_tenancy::read_model_subscription(write_pool.clone()),
+        ),
+        (
+            "members history",
+            timada_tenancy::member_audit_subscription(write_pool.clone()),
+        ),
+        (
+            "AliExpress access",
+            timada_tenancy::aliexpress_access_subscription(write_pool.clone()),
+        ),
+        // Not a read model, but the same lifecycle: it copies how each
+        // tenant's shoppers pay into the tenant's streams, for the
+        // storefronts' payment form.
+        (
+            "payment setup",
+            crate::payments::setup_subscription(payments.clone(), store.clone()),
+        ),
+        // Nor this: it fetches the shops' mail logos this node lacks.
+        ("mail logos", crate::media::logo_subscription(media.clone())),
+        (
+            "catalog",
+            timada_catalog::read_model_subscription(write_pool.clone()),
+        ),
+        (
+            "orders",
+            timada_orders::read_model_subscription(write_pool.clone()),
+        ),
+        (
+            "shoppers",
+            timada_shoppers::read_model_subscription(write_pool.clone(), ring.clone()),
+        ),
+        (
+            "discounts",
+            timada_discounts::read_model_subscription(write_pool.clone()),
+        ),
+        (
+            "reviews",
+            timada_reviews::read_model_subscription(write_pool.clone()),
+        ),
+        (
+            "support",
+            timada_support::read_model_subscription(write_pool.clone(), ring.clone()),
+        ),
+        (
+            "newsletter",
+            timada_newsletter::read_model_subscription(write_pool.clone(), ring.clone()),
+        ),
+        (
+            "invoicing",
+            timada_invoicing::read_model_subscription(write_pool.clone()),
+        ),
+        (
+            "AliExpress",
+            timada_aliexpress::read_model_subscription(write_pool.clone()),
+        ),
+        (
+            "AliExpress orders",
+            crate::aliexpress::forward::subscription(
+                aliexpress.clone(),
+                write_pool.clone(),
+                store.clone(),
+            ),
+        ),
+        (
+            "AliExpress products",
+            crate::aliexpress::subscription::subscription(
+                aliexpress.clone(),
+                media.clone(),
+                store.clone(),
+            ),
+        ),
+        ("pictures", crate::media::subscription(media.clone())),
+        (
+            "shopper keys",
+            crate::shopper_keys::subscription(keys.clone()),
+        ),
+        (
+            "message keys",
+            crate::message_keys::subscription(keys.clone()),
+        ),
+        (
+            "newsletter keys",
+            crate::newsletter_keys::subscription(keys.clone()),
+        ),
+        (
+            "payments",
+            crate::payments::subscription(payments.clone(), store.clone()),
+        ),
+        (
+            "discount usage",
+            timada_orders::discount_usage_subscription(store.clone()),
+        ),
+        (
+            "stock usage",
+            timada_orders::stock_usage_subscription(store.clone()),
+        ),
+        (
+            "newsletter opt-ins",
+            crate::newsletter::subscription(
+                store.clone(),
+                background_mail.clone(),
+                keys.clone(),
+                store.clone(),
+            ),
+        ),
+        (
+            "order confirmations",
+            crate::confirmations::subscription(
+                store.clone(),
+                background_mail.clone(),
+                store.clone(),
+            ),
+        ),
+        (
+            "message notices",
+            crate::message_notifications::subscription(
+                store.clone(),
+                read_pool,
+                background_mail,
+                base_url,
+                ring,
+                store.clone(),
+            ),
+        ),
+        (
+            "invoices",
+            crate::invoicing::subscription(store.clone(), vies, store),
+        ),
     ]
 }
 
 async fn start_read_model(
     name: &'static str,
-    builder: evento::subscription::SubscriptionBuilder<Executor>,
+    builder: SubscriptionBuilder<Executor>,
     executor: &Executor,
 ) -> Result<Arc<Subscription>> {
     let subscription = Arc::new(
         builder
             .start(executor)
             .await
-            .with_context(|| format!("cannot start the {name} read models"))?,
+            .with_context(|| format!("cannot start the {name} subscription"))?,
     );
     let watched = subscription.clone();
     tokio::spawn(async move {
         let reason = watched.stopped().await;
         if reason.is_failure() {
-            tracing::error!(%reason, "{name} read models stopped; their pages are stale");
+            tracing::error!(%reason, "the {name} subscription stopped; what it feeds is stale");
         }
     });
     Ok(subscription)

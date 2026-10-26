@@ -64,17 +64,28 @@ commands, projections and subscriptions work unchanged across the network.
 let listener = tokio::net::TcpListener::bind("0.0.0.0:4321").await?;
 let handle = evento::remote::serve(listener, evento::Fjall::open("./data")?);
 // Client process
-let client = evento::RemoteClient::connect("127.0.0.1:4321".parse()?).await?;
+let client = evento::RemoteClient::connect("127.0.0.1:4321").await?;
 // handle.shutdown().await — dropping the handle does NOT stop the server.
 ```
 
-- **One store per tenant / authentication:** implement `evento::remote::Resolver`.
+- **Addresses:** `connect`/`builder` take `impl Into<RemoteAddress>`: a `SocketAddr`,
+  `"127.0.0.1:4321"` or `"store.example.com:4321"`. A host name is looked up again
+  on every (re)connect, so a client behind a load balancer or DNS failover follows
+  it. The server clamps a bounded `read` to its own `stable_timestamp`, so a
+  client that reconnects to a lagging node never skips events.
+- **Tenants / authentication:** implement `evento::remote::Resolver`.
   Every connection opens with a `Hello { token, peer }` (client side:
   `RemoteClient::builder(addr).token("…").connect().await?`); `resolve` answers
   `Session::new(executor)` — optionally `.keep(guard)` (dropped when the connection
-  ends, e.g. a tenant lease) and `.close_when(watch_rx)` (server-side kick on
-  revocation) — or `Err(Rejection)`, which the client sees as its `connect` error.
+  ends) and `.close_when(watch_rx)` (server-side kick on revocation) — or
+  `Err(Rejection)`, which the client sees as its `connect` error.
   Pass it to `serve_with(listener, resolver)`. It runs again on every reconnect.
+  To confine a client to its tenant over one shared store, serve
+  `Session::new(store.clone()).tenant(tenant)?`: every request on the connection
+  acts in that tenant whatever it names, the events it reads come back in the
+  default tenant (the client sees a store of its own), and `replicate` and the
+  subscriber calls are refused — a tenant's app keeps its subscriptions local
+  (`Sidecar`).
 - **TLS:** `serve_tls(listener, acceptor, exec)` / `serve_tls_with(listener, acceptor, resolver)`
   take a `tokio_rustls::TlsAcceptor`; the client side is
   `.builder(addr).tls(connector, server_name)`. Plain TCP is for trusted networks —
@@ -84,7 +95,7 @@ let client = evento::RemoteClient::connect("127.0.0.1:4321".parse()?).await?;
   each other out of one subscription key:
 
 ```rust
-let client = evento::RemoteClient::connect("127.0.0.1:4321".parse()?).await?;
+let client = evento::RemoteClient::connect("127.0.0.1:4321").await?;
 let local = evento::Fjall::open("./replica-state")?;          // owned by THIS process only
 let executor = evento::Sidecar::from((client, local));        // events: client; cursors/snapshots: local
 ```
@@ -93,10 +104,8 @@ let executor = evento::Sidecar::from((client, local));        // events: client;
 - `evento::Evento::new(exec)` type-erases any executor (`Arc<Box<dyn Executor>>`) —
   use it when a struct must hold "some executor" without a generic parameter.
 - **Accord (consensus-replicated, alpha):** `evento-accord` replicates writes
-  leaderlessly with any local backend serving reads. One process can host many
-  consensus groups (one SQLite DB per tenant) via `MuxTransport` + `SweepScheduler`
-  + `GroupHost`; see `evento-accord/OPERATIONS.md` §10 and
-  `examples/bank-axum-accord-tenants/`.
+  leaderlessly with any local backend serving reads; one process runs one node of
+  one cluster (`examples/bank-axum-accord/`, `evento-accord/OPERATIONS.md`).
 
 ## 1. Define aggregates & events
 
@@ -158,9 +167,9 @@ registers `.handler(..)` or `.skip::<PaymentRefundedV2>()` also accepts
 consumers migrate one at a time. `#[evento::subscription_all]` sees stored
 events un-upcast.
 
-**Locking shapes.** `evento-lock` (dev-dependency) records every event, every
+**Locking shapes.** `evento-lock` (dev-dependency, or `evento` with the `lock` feature as `evento::lock`) records every event, every
 `Encode` type an event reaches, and every executor-snapshotted view in
-`events.lock`; a test (`evento_lock::check(env!("CARGO_MANIFEST_DIR")).unwrap()`)
+`events.lock`; a test (`evento_lock::check(env!("CARGO_MANIFEST_DIR")).unwrap()`, or `evento::lock::check(..)`)
 fails when a frozen line changes. After adding an event run
 `EVENTO_LOCK=update cargo test` and commit `events.lock`. A failing lock means:
 restore the edit and add a variant, or bump the view's `.revision(n)`.
@@ -253,8 +262,8 @@ Projections backed by a custom table (SQL, …) implement `Snapshot` by hand.
 
 The write model is a projection with `id = <field>` (this implements
 `ProjectionAggregate`, whose `write()` returns a `WriteBuilder` pre-filled with
-the aggregate id + the version the load observed — optimistic concurrency for
-free). `#[evento::command]` on an impl block turns each method with a trailing
+the aggregate id, the version the load observed and the tenant it was loaded in
+— optimistic concurrency for free, in the right stream). `#[evento::command]` on an impl block turns each method with a trailing
 `routing_key: Option<String>` parameter into three wrappers: `x(..)`,
 `x_with_routing(.., key)`, `x_opt(.., Option<String>)`.
 
@@ -317,6 +326,7 @@ let sub = SubscriptionBuilder::<evento::Sqlite>::new("notifier") // unique key =
     .routing_key("accounts")   // .any_routing_key() for every key; default = only NULL routing key
     .chunk_size(100)
     .retry(5)                  // exponential backoff; .no_retry() to disable
+    .shutdown_grace(Duration::from_secs(10)) // bound on waiting for the pass in flight (default 30s); .no_shutdown_grace() waits forever
     .start(&executor)          // background task; returns a handle
     .await?;
 // ...later:
@@ -377,7 +387,8 @@ aggregate type as a string; it has no `.decode()`.
   `by_type::<A>()`, `by_id::<A>(id)`, `by_event::<Ev>()`, `exact::<Ev>(id)` — each with
   a `*_raw` string form (`by_id_raw(type, id)`, …) for runtime types.
 - The ext trait `AggregateExt` adds `executor.has_event::<Ev>(id)` and
-  `executor.original_version::<Ev>(id)`.
+  `executor.original_version::<Ev>(id)`; both read the default tenant unless
+  `.tenant(t)` is chained before the `.await`.
 
 ## Gotchas
 
@@ -385,7 +396,14 @@ aggregate type as a string; it has no `.decode()`.
   no `.routing_key()` reads **every** routing key; narrow it with `.no_routing_key()`.
   A subscription with no `.routing_key()`/`.any_routing_key()` only sees events whose
   routing key is NULL. `.any_routing_key()` subscriptions are stored per
-  executor-default-routing-key, so multi-tenant setups stay isolated.
+  executor-default-routing-key.
+- **Tenants are part of stream identity** (`(tenant, type, id)`, default tenant `""`).
+  Writes, loads and reads act in the default tenant unless the builder says
+  `.tenant(t)` (writes, `Projection::load`, `evento::read`); `has_event` /
+  `original_version` read the default tenant. Subscriptions have no tenant option:
+  they read every tenant, handlers see `event.tenant` (write back with
+  `.tenant(&event.tenant)`), and a projection subscription loads each event in its
+  own tenant.
 - **The subscription key is the cursor identity.** Reusing a key across two different
   subscriptions makes them share (and corrupt) one cursor. Keep keys unique — except under
   `.ephemeral()`, where nothing is stored under the key and any number of subscriptions may
@@ -409,20 +427,15 @@ aggregate type as a string; it has no `.decode()`.
 
 ## Reference
 
-Canonical, compiling usage lives in the evento repository
-(<https://github.com/timayz/evento>; the user keeps a checkout at `~/projects/github/timayz/evento`,
-which wins over this file when they disagree; paths below are relative to its root):
+Canonical, compiling usage lives in this repo:
 - `examples/quickstart/` — smallest end-to-end run (aggregate → command → load → subscription).
 - `examples/bank/` — aggregates, `#[evento::command]` commands, queries/projections
   (one per snapshot mode), co-keyed `Owner` aggregate.
 - `examples/bank-axum-sqlite/` and `examples/bank-axum-fjall/` — web wiring,
   migrations, projection subscriptions; `bank-axum-remote/` (client/server split)
-  and `bank-axum-accord/` (consensus cluster); `bank-axum-accord-tenants/` (many
-  consensus groups per process, one SQLite DB per tenant).
+  and `bank-axum-accord/` (consensus cluster).
 - `evento-remote/README.md` — resolver, `Hello` token, TLS; `evento-accord/OPERATIONS.md`.
-- `evento-macro/README.md` — full macro reference (all options); copied here as `macros.md`.
-  `executors.md` and `subscriptions.md` here go deeper on executors (SQL, Fjall, `Rw`, `Sidecar`,
-  remote, accord) and on the subscription runtime.
+- `evento-macro/README.md` — full macro reference (all options).
 - `evento-test/src/lib.rs` — the behavioral contract suite (load, routing isolation,
   snapshots, optimistic locking, multi-aggregate, full command lifecycle).
 
@@ -432,7 +445,12 @@ which wins over this file when they disagree; paths below are relative to its ro
   command/{mod,<verb>}.rs, query/<view>.rs, error.rs, value_object.rs}`; `crates/catalog` and
   `crates/tenancy` are the reference crates. Pin `#[evento::aggregate(name = "timada-<ctx>/<Enum>")]`
   (crate names are permanent) and `#[evento::projection(name = "timada-<ctx>/<View>", …)]` on every
-  snapshotted view. `Command` borrows `&E` so subscription handlers can issue commands.
+  snapshotted view. A tenant-scoped context's gateway is `Command::new(executor, tenant_id)` and
+  names the tenant on every builder (`.tenant(&self.tenant)` before `.execute`/`.commit`); the
+  platform contexts (identity, tenancy) keep `Command(executor)` in the default tenant. One
+  subscription per read model follows every tenant: handlers take `event.tenant` and build the
+  gateway they write back with from it. `Command::unscoped(executor)` is for a store that is one
+  tenant's already (a storefront over the store API).
 - A crate using `#[evento::aggregate]` must depend on `bitcode` directly (the macro expands to
   `bitcode::` paths; cargo-machete is told to ignore it), and a crate using `#[evento::subscription]`
   in its tests must dev-depend on the `evento` facade (the macros emit `::evento::` paths).
@@ -444,6 +462,7 @@ which wins over this file when they disagree; paths below are relative to its ro
   view: `EVENTO_LOCK=update cargo test -p timada-dashboard --test events_lock`, commit the lock.
   Never edit a persisted variant or enum; add a variant (and `#[evento(upcast_to = New)]` when the
   old one must fold like the new one).
-- Executors in play: the platform store is `Rw<Sqlite, Sqlite>` over two pools wrapped in an
-  Accord group; each tenant is its own group and file; a storefront is
-  `Sidecar<RemoteClient, Sqlite>` over the merchant app's pool. See `docs/architecture.md`.
+- Executors in play: the store is `Rw<Sqlite, Sqlite>` over two pools behind one Accord node per
+  process (`dashboard/src/cluster.rs`, shaped like `examples/bank-axum-accord`), holding every
+  tenant's streams; the store API serves each key in its tenant (`Session::tenant`); a storefront
+  is `Sidecar<RemoteClient, Sqlite>` over the merchant app's pool. See `docs/architecture.md`.

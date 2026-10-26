@@ -26,7 +26,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Published {
                 published_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -48,7 +49,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Unpublished {
                 unpublished_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -72,7 +74,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Archived {
                 archived_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         if let Err(release) = self
             .release_slug(&product.slug, product_id, routing_key.clone())

@@ -14,12 +14,11 @@ use clap::Args;
 use timada_catalog_import::{Images, ImportOptions, NoImages, Snapshot};
 use timada_tenancy::{CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ};
 
-use crate::cluster::{Cluster, Executor};
+use crate::cluster::{Cluster, Executor, Files, StorePools};
 use crate::config::Config;
 use crate::db;
 use crate::media::Media;
 use crate::media_images::MediaImages;
-use crate::tenants::Tenants;
 
 #[derive(Args, Debug)]
 pub struct SeedArgs {
@@ -76,17 +75,34 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     );
     super::migrate(config.clone()).await?;
 
-    let write_pool = db::create_write_pool(&config.database.url).await?;
-    let read_pool =
-        db::create_read_pool(&config.database.url, config.database.max_connections).await?;
-    let cluster = Arc::new(Cluster::build(config.cluster.as_ref()).await?);
-    let platform = cluster
-        .open_platform(
-            config.server.region.as_deref(),
-            read_pool.clone(),
-            write_pool.clone(),
-        )
-        .await?;
+    let files = Files {
+        store_url: config.database.store.clone(),
+        read_models_url: config.database.read_models.clone(),
+    };
+    let store_write =
+        db::create_write_pool(&config.database.store, db::Durability::Durable).await?;
+    let store_cursors =
+        db::create_write_pool(&config.database.store, db::Durability::Relaxed).await?;
+    let store_read =
+        db::create_read_pool(&config.database.store, config.database.max_connections).await?;
+    let (cluster, platform) = Cluster::open(
+        config.cluster.as_ref(),
+        config.server.region.as_deref(),
+        &files,
+        StorePools {
+            read: store_read.clone(),
+            write: store_write.clone(),
+            cursors: store_cursors.clone(),
+        },
+    )
+    .await?;
+    let write_pool =
+        db::create_write_pool(&config.database.read_models, db::Durability::Durable).await?;
+    let read_pool = db::create_read_pool(
+        &config.database.read_models,
+        config.database.max_connections,
+    )
+    .await?;
     let peers = crate::peers::Peers::from_cluster(config.cluster.as_ref())?.map(Arc::new);
     let media = Arc::new(Media::new(&config.media, peers));
 
@@ -140,16 +156,7 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         .run_once(&platform)
         .await?;
 
-    let tenants = Tenants::new(
-        cluster.clone(),
-        &config.tenants,
-        config.server.region.clone(),
-        platform.clone(),
-        write_pool.clone(),
-        vec![],
-    );
-    let hold = tenants.hold(&tenant).await?;
-    let executor = hold.executor().clone();
+    let executor = platform.clone();
 
     let images: Arc<dyn Images> = if args.skip_images {
         Arc::new(NoImages)
@@ -167,7 +174,7 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         ))
     };
     let report = timada_catalog_import::import(
-        &timada_catalog::Command(executor.clone()),
+        &timada_catalog::Command::new(executor.clone(), &tenant.id),
         &owner.id,
         &snapshot,
         images,
@@ -192,7 +199,17 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         "catalogue loaded"
     );
 
-    open_shop(&executor, &owner.id, args.storefront_url.as_deref()).await?;
+    open_shop(
+        &executor,
+        &tenant.id,
+        &owner.id,
+        args.storefront_url.as_deref(),
+    )
+    .await?;
+    // So the catalogue pages show the products without waiting for `serve`.
+    timada_catalog::read_model_subscription::<Executor>(write_pool.clone())
+        .run_once(&platform)
+        .await?;
 
     let key = if args.no_key {
         None
@@ -212,10 +229,12 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         )
     };
 
-    drop(hold);
-    tenants.shutdown().await;
+    cluster.shutdown().await;
     read_pool.close().await;
     write_pool.close().await;
+    store_read.close().await;
+    store_cursors.close().await;
+    store_write.close().await;
 
     if let Some(key) = key {
         // The command's answer, for the shell that runs the storefront.
@@ -247,8 +266,13 @@ async fn refuse_if_serving(config: &Config) -> Result<()> {
 /// What a storefront needs to sell what was loaded: a way to deliver, the
 /// address it is reached at and the code the shop advertises. Each is
 /// left alone when the shop already has it.
-async fn open_shop(executor: &Executor, actor: &str, storefront_url: Option<&str>) -> Result<()> {
-    let orders = timada_orders::Command(executor.clone());
+async fn open_shop(
+    executor: &Executor,
+    tenant_id: &str,
+    actor: &str,
+    storefront_url: Option<&str>,
+) -> Result<()> {
+    let orders = timada_orders::Command::new(executor.clone(), tenant_id);
     let has_method = orders
         .load_shipping_methods()
         .await?
@@ -271,7 +295,7 @@ async fn open_shop(executor: &Executor, actor: &str, storefront_url: Option<&str
     if let Some(url) = storefront_url {
         orders.set_storefront_address(actor, Some(url)).await?;
     }
-    let discounts = timada_discounts::Command(executor.clone());
+    let discounts = timada_discounts::Command::new(executor.clone(), tenant_id);
     if discounts.load_discount_by_code(PROMO_CODE).await?.is_none() {
         discounts
             .create_discount(

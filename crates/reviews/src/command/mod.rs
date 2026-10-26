@@ -23,13 +23,48 @@ use crate::value_object::{
 };
 
 /// The command gateway. Cheap to clone when `E` is.
-pub struct Command<E: Executor>(pub E);
+pub struct Command<E: Executor> {
+    executor: E,
+    tenant: String,
+}
+
+impl<E: Executor> Command<E> {
+    /// The gateway of one tenant: every stream it writes, loads or reads is
+    /// that tenant's. `tenant` must not be empty (the default tenant holds
+    /// the platform's own streams).
+    pub fn new(executor: E, tenant: impl Into<String>) -> Self {
+        let tenant = tenant.into();
+        debug_assert!(!tenant.is_empty(), "a tenant gateway needs a tenant");
+        Self { executor, tenant }
+    }
+
+    /// A gateway naming no tenant: for a store that is one tenant's already
+    /// (a storefront's connection, which the store API serves in its key's
+    /// tenant whatever its requests name). Every call then acts in the
+    /// default tenant, which that store maps to its own.
+    pub fn unscoped(executor: E) -> Self {
+        Self {
+            executor,
+            tenant: String::new(),
+        }
+    }
+
+    /// The tenant every call acts in.
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+
+    /// The store the tenant's streams live in.
+    pub fn executor(&self) -> &E {
+        &self.executor
+    }
+}
 
 impl<E: Executor> Deref for Command<E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.executor
     }
 }
 
@@ -287,7 +322,8 @@ impl<E: Executor> Command<E> {
     pub async fn load_review_requests(&self) -> anyhow::Result<Option<ReviewRequestsState>> {
         review_requests_projection()
             .load(review_requests_id())
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await
     }
 
@@ -298,7 +334,8 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<ReviewRequestState>> {
         review_request_projection()
             .load(review_request_id(order_id))
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await
     }
 
@@ -307,12 +344,17 @@ impl<E: Executor> Command<E> {
     pub async fn load_review_link(&self, link_id: &str) -> anyhow::Result<Option<ReviewLinkState>> {
         review_link_projection()
             .load(link_id)
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await
     }
 
     pub async fn load_review(&self, review_id: &str) -> anyhow::Result<Option<ReviewState>> {
-        review_projection().load(review_id).execute(&self.0).await
+        review_projection()
+            .load(review_id)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await
     }
 
     /// The review, or `NotFound`; `Rejected` once it is: every moderation

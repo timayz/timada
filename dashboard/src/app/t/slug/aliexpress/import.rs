@@ -38,7 +38,7 @@ pub async fn import(cx: &Cx, Form(form): Form<ImportForm>) -> Result<SeeOther> {
     let Some(ae_product_id) = timada_aliexpress::parse_product_id(&form.product) else {
         return refused("invalid_aliexpress_product");
     };
-    let links = timada_aliexpress::Command(access.executor()?.clone());
+    let links = timada_aliexpress::Command::new(access.executor()?.clone(), access.tenant_id());
     match links.request_import(&access.user_id, &ae_product_id).await {
         Ok(_) => Ok(see_other(aliexpress_url(
             cx,

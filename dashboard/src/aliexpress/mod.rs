@@ -119,7 +119,7 @@ impl Aliexpress {
 
     /// Renews the tenant's tokens when the access token lapses within a day,
     /// on one node per token (the one that claims the renewal in `store`,
-    /// the tenant's executor); the tenant as it then is. A renewal AliExpress
+    /// the store); the tenant as it then is. A renewal AliExpress
     /// refuses is logged: the merchant connects again.
     pub async fn refresh_if_due<E: evento::Executor + Clone>(
         &self,
@@ -140,7 +140,7 @@ impl Aliexpress {
             tracing::warn!(tenant = %tenant.id, "AliExpress access lapsed: the merchant has to connect again");
             return Ok(tenant);
         }
-        let links = timada_aliexpress::Command(store.clone());
+        let links = timada_aliexpress::Command::new(store.clone(), &tenant.id);
         if !links
             .claim_token_refresh(ALIEXPRESS_ACTOR, authorization.expires_at)
             .await?
@@ -235,14 +235,14 @@ pub enum SyncResult {
 impl Aliexpress {
     /// Reads one linked item again and brings its product in step: stock,
     /// price (by the item's rule, else the shop's) and availability. `store`
-    /// is the tenant's executor. A read another node made in between wins.
+    /// is the store. A read another node made in between wins.
     pub async fn sync_link<E: evento::Executor + Clone>(
         &self,
         store: &E,
         tenant: &TenantState,
         link_id: &str,
     ) -> anyhow::Result<SyncResult> {
-        let links = timada_aliexpress::Command(store.clone());
+        let links = timada_aliexpress::Command::new(store.clone(), &tenant.id);
         let Some((link, version)) = links.load_link_versioned(link_id).await? else {
             return Ok(SyncResult::NotLinked);
         };
@@ -270,7 +270,7 @@ impl Aliexpress {
                 return Ok(SyncResult::Failed(reason));
             }
         };
-        let catalog = timada_catalog::Command(store.clone());
+        let catalog = timada_catalog::Command::new(store.clone(), &tenant.id);
         let rule = link.pricing.or(settings.pricing);
         let outcome = timada_aliexpress::apply_sync(
             &catalog,
@@ -323,7 +323,7 @@ pub enum AddResult {
 impl Aliexpress {
     /// Adds combinations a read found (`sku_ids`; empty: every one offered)
     /// as variants of the linked product, priced by the item's rule, else
-    /// the shop's. `store` is the tenant's executor.
+    /// the shop's. `store` is the store.
     pub async fn add_combinations<E: evento::Executor + Clone>(
         &self,
         store: &E,
@@ -333,14 +333,14 @@ impl Aliexpress {
         link_id: &str,
         sku_ids: &[String],
     ) -> anyhow::Result<AddResult> {
-        let links = timada_aliexpress::Command(store.clone());
+        let links = timada_aliexpress::Command::new(store.clone(), &tenant.id);
         let Some((link, version)) = links.load_link_versioned(link_id).await? else {
             return Ok(AddResult::NotLinked);
         };
         let Some(settings) = tenant.aliexpress.as_ref().filter(|_| link.is_linked()) else {
             return Ok(AddResult::NotLinked);
         };
-        let catalog = timada_catalog::Command(store.clone());
+        let catalog = timada_catalog::Command::new(store.clone(), &tenant.id);
         let images = self.images(media, &tenant.id);
         let outcome = timada_aliexpress::add_combinations(
             &catalog,

@@ -68,9 +68,9 @@ pub fn newsletter_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<
         .resolve(cx)
 }
 
-/// The newsletter gateway over the tenant's own store (403 while suspended).
+/// The newsletter gateway in the tenant's streams (403 while suspended).
 pub fn newsletter(access: &TenantAccess) -> Result<Command<Executor>> {
-    Ok(Command(access.executor()?.clone()))
+    Ok(Command::new(access.executor()?.clone(), access.tenant_id()))
 }
 
 /// The word for where a subscriber stands.

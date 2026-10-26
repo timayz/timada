@@ -19,8 +19,7 @@ use crate::app::admin::require_admin;
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, index as tenant_page};
 use crate::app::tenants::tenancy;
-use crate::auth::{now, unix_seconds, user_labels};
-use crate::cluster::PeerState;
+use crate::auth::{now, user_labels};
 use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::{ButtonVariant, button};
 use crate::components::field::{field, field_label};
@@ -29,7 +28,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::db::ReadPool;
-use crate::tenants::{TenantStatus, Tenants};
+use crate::store_api::StoreConnections;
 use crate::ui::{
     LINK, Shell, document, empty_row, fact, facts, format_time, icons, notice, page_header,
     section_card, status_badge,
@@ -41,33 +40,6 @@ module_param!(pub tenant_id);
 struct TenantQuery {
     error: Option<String>,
     message: Option<String>,
-}
-
-/// How another node stands on this tenant, for the overview.
-fn peer_label(peer: &PeerState) -> String {
-    let silent = peer.silent_for.as_secs();
-    if peer.given_up {
-        format!(
-            "no longer waited for, silent for {}",
-            format_silence(silent)
-        )
-    } else if silent >= 10 {
-        format!("not heard from for {}", format_silence(silent))
-    } else {
-        "in touch".to_owned()
-    }
-}
-
-fn format_silence(secs: u64) -> String {
-    if secs >= 2 * 24 * 3600 {
-        format!("{} days", secs / (24 * 3600))
-    } else if secs >= 2 * 3600 {
-        format!("{} h", secs / 3600)
-    } else if secs >= 120 {
-        format!("{} min", secs / 60)
-    } else {
-        format!("{secs} s")
-    }
 }
 
 pub fn admin_tenant_url(
@@ -93,10 +65,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     else {
         return Err(not_found().into());
     };
-    let runtime = app_context::<Arc<Tenants>>(cx);
-    let status = runtime.status(&tenant.id);
-    let backlog = runtime.backlog(&tenant.id);
-    let peers = runtime.peers(&tenant.id);
+    let connections = app_context::<Arc<StoreConnections>>(cx).count_tenant(&tenant.id);
     let pending =
         count_open_invitations_of_tenant(app_context::<ReadPool>(cx), &tenant.id, now()).await?;
     let mut ids: Vec<String> = tenant.members.keys().cloned().collect();
@@ -122,7 +91,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             page_header(
                 title: &tenant.name,
                 subtitle: Some("A tenant of the platform, as its administrators see it."),
-                status_badge(tone: status_tone(suspended, status), (status_label(suspended, status)))
+                status_badge(tone: status_tone(suspended), (status_label(suspended)))
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
@@ -135,32 +104,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     fact(
                         term: "Status",
                         attrs: attributes! { data-tenant-status="" },
-                        (status_label(suspended, status))
-                        if let TenantStatus::Running { since, leases } = status {
-                            " since " <time datetime=(unix_seconds(since))>(format_time(unix_seconds(since)))</time>
-                            if leases > 0 { " · " (leases) " store connection(s)" }
-                        }
+                        (status_label(suspended))
                         if let Some(reason) = &tenant.suspended { ": " (reason) }
                     )
-                    if let Some((kept, limit)) = backlog {
-                        fact(
-                            term: "Writes kept",
-                            attrs: attributes! { data-tenant-backlog=(kept) },
-                            (kept) " of " (limit) " for nodes that are away"
-                        )
-                    }
-                    if !peers.is_empty() {
-                        fact(
-                            term: "Other nodes",
-                            <ul data-tenant-peers="" class="flex flex-col gap-1">
-                                for peer in &peers {
-                                    <li data-node=(peer.id) data-given-up=(if peer.given_up { "true" } else { "false" })>
-                                        "Node " (peer.id) " · " (peer_label(peer))
-                                    </li>
-                                }
-                            </ul>
-                        )
-                    }
+                    fact(
+                        term: "Storefronts",
+                        attrs: attributes! { data-tenant-connections=(connections) },
+                        (match connections {
+                            0 => "none connected to this node".to_owned(),
+                            1 => "1 connected to this node".to_owned(),
+                            n => format!("{n} connected to this node"),
+                        })
+                    )
                 )
             )
 
@@ -193,9 +148,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("Administration"),
                 description: Some(if suspended {
-                    "Resuming reopens the tenant's database and brings its pages back."
+                    "Resuming brings the tenant's pages and storefronts back."
                 } else {
-                    "Suspending closes the tenant's database and takes its pages offline until it is resumed."
+                    "Suspending takes the tenant's pages offline and disconnects its storefronts until it is resumed."
                 }),
                 attrs: attributes! { class="border-destructive/30" },
                 if suspended {

@@ -17,7 +17,6 @@ use tokio::task::JoinHandle;
 use super::forward::CheckResult;
 use super::{Aliexpress, SyncResult};
 use crate::cluster::Executor;
-use crate::tenants::Tenants;
 
 /// The most links one sweep reads, over every shop.
 const SWEEP_LIMIT: i64 = 500;
@@ -28,22 +27,16 @@ const PACE: Duration = Duration::from_millis(200);
 
 pub struct AliexpressSync {
     read_pool: SqlitePool,
-    platform: Executor,
-    tenants: Arc<Tenants>,
+    /// The store, every tenant's.
+    store: Executor,
     aliexpress: Arc<Aliexpress>,
 }
 
 impl AliexpressSync {
-    pub fn new(
-        read_pool: SqlitePool,
-        platform: Executor,
-        tenants: Arc<Tenants>,
-        aliexpress: Arc<Aliexpress>,
-    ) -> Arc<Self> {
+    pub fn new(read_pool: SqlitePool, store: Executor, aliexpress: Arc<Aliexpress>) -> Arc<Self> {
         Arc::new(Self {
             read_pool,
-            platform,
-            tenants,
+            store,
             aliexpress,
         })
     }
@@ -117,8 +110,7 @@ impl AliexpressSync {
         if tenant.aliexpress.is_none() {
             return Ok(0);
         }
-        let lease = self.tenants.lease(&tenant).await?;
-        let store = lease.executor().clone();
+        let store = self.store.clone();
         let tenant = self.aliexpress.refresh_if_due(&store, tenant, now).await?;
         let mut fulfilled = 0;
         for (index, forward) in forwards.iter().enumerate() {
@@ -163,9 +155,8 @@ impl AliexpressSync {
         if tenant.aliexpress.is_none() {
             return Ok(());
         }
-        let lease = self.tenants.lease(&tenant).await?;
         self.aliexpress
-            .refresh_if_due(lease.executor(), tenant, now)
+            .refresh_if_due(&self.store, tenant, now)
             .await?;
         Ok(())
     }
@@ -176,7 +167,7 @@ impl AliexpressSync {
         links: &[LinkRow],
         now: u64,
     ) -> anyhow::Result<usize> {
-        let Some(tenant) = timada_tenancy::Command(self.platform.clone())
+        let Some(tenant) = timada_tenancy::Command(self.store.clone())
             .load_tenant(tenant_id)
             .await?
         else {
@@ -185,8 +176,7 @@ impl AliexpressSync {
         if tenant.is_suspended() || tenant.aliexpress.is_none() {
             return Ok(0);
         }
-        let lease = self.tenants.lease(&tenant).await?;
-        let store = lease.executor().clone();
+        let store = self.store.clone();
         let tenant = self.aliexpress.refresh_if_due(&store, tenant, now).await?;
         let mut synced = 0;
         for (index, link) in links.iter().enumerate() {

@@ -2,7 +2,7 @@ mod common;
 
 use std::sync::{Arc, LazyLock};
 
-use common::MemoryKeys;
+use common::{MemoryKeys, TENANT, ring};
 use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
@@ -10,7 +10,6 @@ use timada_orders::aggregator::Placed;
 use timada_orders::{Payment, ShippingAddress};
 use timada_shoppers::{Command, count_shoppers, read_model_subscription, shoppers_of_tenant};
 
-const TENANT: &str = "tenant-acme";
 const NOW: u64 = 1_700_000_000;
 
 /// The shoppers' keys, for every test: key ids are random, so they never
@@ -43,12 +42,12 @@ async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
     (pool.clone().into(), pool)
 }
 
-async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool, tenant: &str) {
-    timada_orders::read_model_subscription::<evento::Sqlite>(pool.clone(), tenant)
+async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
+    timada_orders::read_model_subscription::<evento::Sqlite>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
-    read_model_subscription::<evento::Sqlite>(pool.clone(), tenant, KEYS.clone())
+    read_model_subscription::<evento::Sqlite>(pool.clone(), ring(&KEYS))
         .run_once(executor)
         .await
         .unwrap();
@@ -95,6 +94,7 @@ async fn placed(executor: &evento::Sqlite, order_id: &str, email: &str) {
             },
             placed_by: "storefront".to_owned(),
         })
+        .tenant(TENANT)
         .commit(executor)
         .await
         .unwrap();
@@ -103,7 +103,7 @@ async fn placed(executor: &evento::Sqlite, order_id: &str, email: &str) {
 #[tokio::test]
 async fn shoppers_are_listed_with_their_orders_and_addresses() {
     let (executor, pool) = executor_with_pool().await;
-    let shoppers = Command(executor.clone());
+    let shoppers = Command::new(executor.clone(), TENANT);
 
     // Ada ordered as a guest before she had an account.
     placed(&executor, "order-1", "ada@example.com").await;
@@ -123,7 +123,7 @@ async fn shoppers_are_listed_with_their_orders_and_addresses() {
 
     // Twice: delivery may repeat without the rows drifting.
     for _ in 0..2 {
-        catch_up(&executor, &pool, TENANT).await;
+        catch_up(&executor, &pool).await;
     }
     assert_eq!(count_shoppers(&pool, TENANT).await.unwrap(), 2);
     let rows = shoppers_of_tenant(&pool, TENANT, 10, 0).await.unwrap();
@@ -157,24 +157,24 @@ async fn shoppers_are_listed_with_their_orders_and_addresses() {
 #[tokio::test]
 async fn a_forgotten_shopper_leaves_the_list_until_signing_in_again() {
     let (executor, pool) = executor_with_pool().await;
-    let shoppers = Command(executor.clone());
+    let shoppers = Command::new(executor.clone(), TENANT);
     let ada = sign_in(&shoppers, "ada@example.com", NOW).await;
     shoppers
         .save_address(&**KEYS, &ada, address("Paris"))
         .await
         .unwrap();
     sign_in(&shoppers, "bob@example.com", NOW).await;
-    catch_up(&executor, &pool, TENANT).await;
+    catch_up(&executor, &pool).await;
     assert_eq!(count_shoppers(&pool, TENANT).await.unwrap(), 2);
 
     shoppers.forget(&**KEYS, &ada).await.unwrap();
-    catch_up(&executor, &pool, TENANT).await;
+    catch_up(&executor, &pool).await;
     let rows = shoppers_of_tenant(&pool, TENANT, 10, 0).await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].email, "bob@example.com");
 
     sign_in(&shoppers, "ada@example.com", NOW + 60).await;
-    catch_up(&executor, &pool, TENANT).await;
+    catch_up(&executor, &pool).await;
     let rows = shoppers_of_tenant(&pool, TENANT, 10, 0).await.unwrap();
     let row = rows.iter().find(|row| row.id == ada).unwrap();
     assert_eq!(row.email, "ada@example.com");

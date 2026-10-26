@@ -1,9 +1,9 @@
 //! A company's EU distance sales, counted across its tenants. The ledger
-//! lives in the platform store, where the company is: an invoice of any of
-//! its tenants appends one `Counted` there, at the version the ledger was
-//! read at, before taking its number in its tenant's book. Two tenants
-//! selling at once cannot both count against a stale total, and a retry
-//! finds its sale counted and gets the decision it got.
+//! lives in the default tenant of the store, where the company is: an
+//! invoice of any of its tenants appends one `Counted` there, at the version
+//! the ledger was read at, before taking its number in its tenant's book.
+//! Two tenants selling at once cannot both count against a stale total, and
+//! a retry finds its sale counted and gets the decision it got.
 
 use std::collections::BTreeMap;
 
@@ -60,7 +60,7 @@ fn sale_key(tenant_id: &str, document_id: &str) -> String {
     format!("{tenant_id}/{document_id}")
 }
 
-/// The ledgers of the platform store.
+/// The ledgers of the platform: the default tenant of the store.
 pub struct Ledger<E: Executor>(pub E);
 
 /// The chunk a sale goes in, as read for one attempt.

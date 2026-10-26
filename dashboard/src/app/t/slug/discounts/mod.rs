@@ -47,9 +47,9 @@ pub fn discounts_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&
         .resolve(cx)
 }
 
-/// The discounts gateway over the tenant's own store (403 while suspended).
+/// The discounts gateway in the tenant's streams (403 while suspended).
 pub fn discounts(access: &TenantAccess) -> Result<Command<Executor>> {
-    Ok(Command(access.executor()?.clone()))
+    Ok(Command::new(access.executor()?.clone(), access.tenant_id()))
 }
 
 /// The query-string code of a user-facing discount error.

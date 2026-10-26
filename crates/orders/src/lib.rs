@@ -1,6 +1,6 @@
 //! Orders bounded context: the carts shoppers fill and the orders they place.
 //!
-//! Lives in a tenant's own event store next to the catalog. A storefront
+//! Lives in the tenant's streams of the store, next to the catalog. A storefront
 //! writes the shopper's side (a cart, then the order it becomes) through the
 //! store API; the merchant moves the order along from the dashboard (paid,
 //! fulfilled, cancelled). The crate is pure domain code: no permission checks

@@ -129,7 +129,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<ReviewQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let review = require_review(cx, &access).await?;
-    let order = timada_orders::Command(access.executor()?.clone())
+    let order = timada_orders::Command::new(access.executor()?.clone(), access.tenant_id())
         .load_order(&review.order_id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;

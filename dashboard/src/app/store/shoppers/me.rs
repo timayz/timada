@@ -20,8 +20,8 @@ pub async fn me(cx: &Cx) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let hold = super::super::hold(cx, &access).await?;
-    let Some(shopper) = signed_in(cx, hold.executor()).await? else {
+    let store = super::super::store(cx, &access);
+    let Some(shopper) = signed_in(cx, &store).await? else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
     let Some(shopper) = opened(cx, &access.tenant.id, &shopper).await? else {

@@ -16,7 +16,6 @@ use topcoat::context::{AppContext, Cx};
 
 use crate::auth::mail::send_review_request;
 use crate::cluster::Executor;
-use crate::tenants::Tenants;
 
 /// Who the requests say mailed them.
 pub const MAILER: &str = "timada-dashboard";
@@ -38,22 +37,16 @@ pub fn is_due(fulfilled_at: u64, days: u8, now: u64) -> bool {
 /// The sweep, with what it needs outside any request.
 pub struct ReviewRequests {
     read_pool: SqlitePool,
-    platform: Executor,
-    tenants: Arc<Tenants>,
+    /// The store, every tenant's.
+    store: Executor,
     mail: Arc<AppContext>,
 }
 
 impl ReviewRequests {
-    pub fn new(
-        read_pool: SqlitePool,
-        platform: Executor,
-        tenants: Arc<Tenants>,
-        mail: Arc<AppContext>,
-    ) -> Arc<Self> {
+    pub fn new(read_pool: SqlitePool, store: Executor, mail: Arc<AppContext>) -> Arc<Self> {
         Arc::new(Self {
             read_pool,
-            platform,
-            tenants,
+            store,
             mail,
         })
     }
@@ -92,7 +85,7 @@ impl ReviewRequests {
         orders: &[FulfilledOrder],
         now: u64,
     ) -> anyhow::Result<()> {
-        let Some(tenant) = timada_tenancy::Command(self.platform.clone())
+        let Some(tenant) = timada_tenancy::Command(self.store.clone())
             .load_tenant(tenant_id)
             .await?
         else {
@@ -101,9 +94,8 @@ impl ReviewRequests {
         if tenant.is_suspended() {
             return Ok(());
         }
-        let lease = self.tenants.lease(&tenant).await?;
         let cx = Cx::new(self.mail.clone());
-        ask_buyers(lease.executor(), &cx, &tenant, orders, now).await?;
+        ask_buyers(&self.store, &cx, &tenant, orders, now).await?;
         Ok(())
     }
 }
@@ -117,7 +109,7 @@ pub async fn ask_buyers<E: evento::Executor + Clone>(
     orders: &[FulfilledOrder],
     now: u64,
 ) -> anyhow::Result<usize> {
-    let reviews = timada_reviews::Command(store.clone());
+    let reviews = timada_reviews::Command::new(store.clone(), &tenant.id);
     let Some(days) = reviews.review_requests().await?.delay_days() else {
         return Ok(0);
     };
@@ -130,7 +122,7 @@ pub async fn ask_buyers<E: evento::Executor + Clone>(
     }
     // Without the storefront there is no link to send. Nothing is claimed,
     // so an address set within the window still gets its buyers mailed.
-    let shop = timada_orders::Command(store.clone());
+    let shop = timada_orders::Command::new(store.clone(), &tenant.id);
     let Some(address) = shop.storefront_address().await? else {
         return Ok(0);
     };
@@ -232,7 +224,7 @@ mod tests {
 
     fn shop(name: &str) -> timada_tenancy::TenantState {
         timada_tenancy::TenantState {
-            id: "t1".into(),
+            id: "tenant-1".into(),
             name: name.into(),
             ..Default::default()
         }
@@ -258,6 +250,7 @@ mod tests {
             ..Default::default()
         };
         evento::append(order_id)
+            .tenant("tenant-1")
             .original_version(0)
             .event(&Placed {
                 reference: format!("REF-{order_id}"),
@@ -281,7 +274,7 @@ mod tests {
             .commit(store)
             .await
             .unwrap();
-        let order = timada_orders::Command(store.clone())
+        let order = timada_orders::Command::new(store.clone(), "tenant-1")
             .load_order(order_id)
             .await
             .unwrap()
@@ -294,7 +287,7 @@ mod tests {
     }
 
     async fn with_storefront(store: &evento::Sqlite) {
-        timada_orders::Command(store.clone())
+        timada_orders::Command::new(store.clone(), "tenant-1")
             .set_storefront_address("user-alice", Some(SHOP))
             .await
             .unwrap();
@@ -352,7 +345,7 @@ mod tests {
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
             .collect();
-        let reviews = timada_reviews::Command(store.clone());
+        let reviews = timada_reviews::Command::new(store.clone(), "tenant-1");
         assert_eq!(
             reviews
                 .resolve_review_link(&token, week)
@@ -399,7 +392,7 @@ mod tests {
                 .unwrap(),
             0
         );
-        let reviews = timada_reviews::Command(store.clone());
+        let reviews = timada_reviews::Command::new(store.clone(), "tenant-1");
         assert!(
             reviews
                 .load_review_request("order-1")
@@ -425,7 +418,7 @@ mod tests {
         let left = order.fulfilled_at as u64;
         let orders = [order];
         let (cx, _) = mail();
-        let reviews = timada_reviews::Command(store.clone());
+        let reviews = timada_reviews::Command::new(store.clone(), "tenant-1");
 
         reviews
             .set_review_requests("user-alice", None)
@@ -455,7 +448,7 @@ mod tests {
         with_storefront(&store).await;
         let order = fulfilled(&store, "order-1").await;
         let week = order.fulfilled_at as u64 + 7 * DAY_SECS;
-        let reviews = timada_reviews::Command(store.clone());
+        let reviews = timada_reviews::Command::new(store.clone(), "tenant-1");
         let review = |product_id: &str| SubmitReview {
             order_id: "order-1".to_owned(),
             product_id: product_id.to_owned(),
@@ -484,7 +477,7 @@ mod tests {
         let store = self::store().await;
         with_storefront(&store).await;
         let order = fulfilled(&store, "order-1").await;
-        let reviews = timada_reviews::Command(store.clone());
+        let reviews = timada_reviews::Command::new(store.clone(), "tenant-1");
         reviews
             .submit_review("storefront", review("mug"))
             .await

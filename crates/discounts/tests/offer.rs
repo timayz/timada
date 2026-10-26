@@ -38,7 +38,7 @@ fn offer(product_id: &str, price_cents: u64) -> CreateOffer {
 #[tokio::test]
 async fn an_offer_is_created_deactivated_and_archived() {
     let cmd = command().await;
-    let catalog = timada_catalog::Command(cmd.0.clone());
+    let catalog = timada_catalog::Command::new(cmd.executor().clone(), TENANT);
     let tracker = product(&catalog, "Tracker", 3000).await;
     let bowl = product(&catalog, "Bowl", 2000).await;
     assert!(cmd.offers().await.unwrap().is_empty());
@@ -80,7 +80,7 @@ async fn an_offer_is_created_deactivated_and_archived() {
 #[tokio::test]
 async fn what_is_refused_at_creation() {
     let cmd = command().await;
-    let catalog = timada_catalog::Command(cmd.0.clone());
+    let catalog = timada_catalog::Command::new(cmd.executor().clone(), TENANT);
     let tracker = product(&catalog, "Tracker", 3000).await;
     let shirt = catalog
         .create_product(

@@ -35,7 +35,7 @@ async fn catalog() -> Command<evento::Sqlite> {
         .await
         .unwrap();
     drop(conn);
-    Command(pool.into())
+    Command::new(pool.into(), "acme")
 }
 
 /// Hands out a picture for every URL but the one that says "missing",

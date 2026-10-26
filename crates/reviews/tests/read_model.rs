@@ -6,10 +6,8 @@ use timada_reviews::{
     reviews_of_tenant,
 };
 
-const TENANT: &str = "tenant-acme";
-
 async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT)
+    read_model_subscription::<evento::Sqlite>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
@@ -18,7 +16,7 @@ async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
 #[tokio::test]
 async fn reviews_are_listed_and_products_rated_from_published_ones() {
     let (executor, pool) = executor_with_pool().await;
-    let reviews = timada_reviews::Command(executor.clone());
+    let reviews = timada_reviews::Command::new(executor.clone(), TENANT);
     for order in ["order-1", "order-2", "order-3"] {
         paid_order(&executor, order).await;
     }
@@ -92,7 +90,7 @@ async fn reviews_are_listed_and_products_rated_from_published_ones() {
 #[tokio::test]
 async fn a_revised_review_is_listed_as_it_now_reads() {
     let (executor, pool) = executor_with_pool().await;
-    let reviews = timada_reviews::Command(executor.clone());
+    let reviews = timada_reviews::Command::new(executor.clone(), TENANT);
     paid_order(&executor, "order-1").await;
     let id = submit(&reviews, "order-1", MUG, 5).await.id;
     catch_up(&executor, &pool).await;

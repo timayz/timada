@@ -14,19 +14,20 @@ use evento::{
 use crate::aggregator::Discounted;
 use crate::command::order_projection;
 
-/// The cursor identity of the subscription, in each tenant's store.
+/// The cursor identity of the subscription, in the store.
 pub const DISCOUNT_USAGE_SUBSCRIPTION: &str = "timada-orders/discount-usage";
 
 /// Who spends the uses, in the discount streams.
 const ORDERS_ACTOR: &str = "timada-orders";
 
-/// The tenant's own executor, to write with (a handler only borrows the one
-/// it runs on).
+/// The store, to write with (a handler only borrows the executor it runs
+/// on).
 #[derive(Clone)]
 struct Store(Evento);
 
-/// Builds the subscription of one tenant over every routing key; `store` is
-/// the tenant's executor, which it writes the spent uses to.
+/// Builds the subscription over every tenant and routing key; `store` is
+/// the store it follows, which it writes the spent uses to (in the tenant
+/// of the order).
 pub fn discount_usage_subscription<E: Executor>(store: Evento) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(DISCOUNT_USAGE_SUBSCRIPTION)
         .data(Store(store))
@@ -43,12 +44,13 @@ async fn on_discounted<E: Executor>(
     let store: Store = context.extract();
     let Some(order) = order_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
     else {
         return Ok(());
     };
-    let discounts = timada_discounts::Command(store.0);
+    let discounts = timada_discounts::Command::new(store.0, &event.tenant);
     match discounts
         .consume_use(
             ORDERS_ACTOR,

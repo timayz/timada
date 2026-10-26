@@ -44,9 +44,14 @@ pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
 /// The two gateways over one store.
 pub async fn store() -> (Orders, Catalog) {
     let (executor, _) = executor_with_pool().await;
-    (Command(executor.clone()), timada_catalog::Command(executor))
+    (
+        Command::new(executor.clone(), TENANT),
+        timada_catalog::Command::new(executor, TENANT),
+    )
 }
 
+/// The tenant the tests act in.
+pub const TENANT: &str = "acme";
 pub const ALICE: &str = "user-alice";
 pub const SHOPPER: &str = STOREFRONT_ACTOR;
 

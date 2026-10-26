@@ -31,13 +31,48 @@ use crate::value_object::{
 };
 
 /// The command gateway. Cheap to clone when `E` is.
-pub struct Command<E: Executor>(pub E);
+pub struct Command<E: Executor> {
+    executor: E,
+    tenant: String,
+}
+
+impl<E: Executor> Command<E> {
+    /// The gateway of one tenant: every stream it writes, loads or reads is
+    /// that tenant's. `tenant` must not be empty (the default tenant holds
+    /// the platform's own streams).
+    pub fn new(executor: E, tenant: impl Into<String>) -> Self {
+        let tenant = tenant.into();
+        debug_assert!(!tenant.is_empty(), "a tenant gateway needs a tenant");
+        Self { executor, tenant }
+    }
+
+    /// A gateway naming no tenant: for a store that is one tenant's already
+    /// (a storefront's connection, which the store API serves in its key's
+    /// tenant whatever its requests name). Every call then acts in the
+    /// default tenant, which that store maps to its own.
+    pub fn unscoped(executor: E) -> Self {
+        Self {
+            executor,
+            tenant: String::new(),
+        }
+    }
+
+    /// The tenant every call acts in.
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+
+    /// The store the tenant's streams live in.
+    pub fn executor(&self) -> &E {
+        &self.executor
+    }
+}
 
 impl<E: Executor> Deref for Command<E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.executor
     }
 }
 
@@ -389,7 +424,8 @@ impl<E: Executor> Command<E> {
     pub async fn load_discount(&self, discount_id: &str) -> anyhow::Result<Option<DiscountState>> {
         discount_projection()
             .load(discount_id)
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await
     }
 
@@ -423,7 +459,8 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<DiscountCodeState>> {
         discount_code_projection()
             .load(discount_code_id(code))
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await
     }
 
@@ -431,7 +468,8 @@ impl<E: Executor> Command<E> {
     pub async fn load_usage(&self, discount_id: &str) -> anyhow::Result<Option<UsageState>> {
         usage_projection()
             .load(discount_usage_id(discount_id))
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await
     }
 
@@ -443,7 +481,8 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<BuyerState>> {
         buyer_projection()
             .load(discount_buyer_id(discount_id, email))
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await
     }
 

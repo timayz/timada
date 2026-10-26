@@ -30,7 +30,7 @@ pub async fn pricing(cx: &Cx, Form(form): Form<ProductPricingForm>) -> Result<Se
         Ok(rule) => rule,
         Err(code) => return Ok(back_to(cx, &access, &form.back, Some(code), None)),
     };
-    let links = timada_aliexpress::Command(access.executor()?.clone());
+    let links = timada_aliexpress::Command::new(access.executor()?.clone(), access.tenant_id());
     match links.set_pricing(&access.user_id, &link_id, rule).await {
         Ok(()) => Ok(back_to(
             cx,

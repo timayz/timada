@@ -2,13 +2,14 @@
 //! of its tenant's API keys, to read and write that tenant's events.
 //!
 //! Every connection opens with the key's token. The resolver authenticates
-//! it against the platform store, leases the tenant (opening its database
-//! if needed: a store connection is tenant activity) and serves the
-//! connection with that tenant's executor and nothing else, read-only unless
-//! the key holds `store:write` (see [`read_only_store`](crate::read_only_store)). Revoking a key or
-//! changing its scopes ends its live connections through
+//! it against the platform's streams and serves the connection in the key's
+//! tenant and nothing else: every request on it acts in that tenant, whatever
+//! it names, and the subscriber calls are refused (a storefront keeps its
+//! cursors in a store of its own). Read-only unless the key holds
+//! `store:write` (see [`read_only_store`](crate::read_only_store)). Revoking
+//! a key or changing its scopes ends its live connections through
 //! [`StoreConnections`] (a reconnect gets the new scopes); suspending the
-//! tenant closes its database, which breaks them, and their reconnects are
+//! tenant ends every connection of the tenant, and their reconnects are
 //! refused.
 
 use std::collections::HashMap;
@@ -31,13 +32,20 @@ use tokio_rustls::rustls::{self, ServerConfig};
 
 use crate::cluster::Executor;
 use crate::config::StoreApiConfig;
-use crate::tenants::{TenantLease, Tenants};
 
-/// The live store connections by key id, so that revoking a key ends them
-/// now rather than at their next reconnect.
+/// One live connection: its key, its tenant, and how to end it.
+struct Connection {
+    key_id: String,
+    tenant_id: String,
+    close: watch::Sender<bool>,
+}
+
+/// The live store connections, so that revoking a key or suspending a
+/// tenant ends them now rather than at their next reconnect, and the pages
+/// can count them.
 #[derive(Default)]
 pub struct StoreConnections {
-    by_key: Mutex<HashMap<String, Vec<watch::Sender<bool>>>>,
+    live: Mutex<Vec<Connection>>,
 }
 
 impl StoreConnections {
@@ -49,76 +57,99 @@ impl StoreConnections {
     /// After a revocation, or a scope change so the store reconnects under
     /// the new scopes.
     pub fn close_key(&self, key_id: &str) -> usize {
-        let senders = self
-            .by_key
-            .lock()
-            .expect("by_key poisoned")
-            .remove(key_id)
-            .unwrap_or_default();
-        for close in &senders {
-            let _ = close.send(true);
+        self.close_where(|c| c.key_id == key_id)
+    }
+
+    /// Ends every connection of the tenant; how many there were. After a
+    /// suspension: their reconnects are refused.
+    pub fn close_tenant(&self, tenant_id: &str) -> usize {
+        self.close_where(|c| c.tenant_id == tenant_id)
+    }
+
+    fn close_where(&self, pick: impl Fn(&Connection) -> bool) -> usize {
+        let mut live = self.live.lock().expect("live poisoned");
+        let mut closed = 0;
+        for connection in live.iter().filter(|c| pick(c)) {
+            let _ = connection.close.send(true);
+            closed += 1;
         }
-        senders.len()
+        live.retain(|c| !pick(c));
+        closed
     }
 
     /// How many connections `key_id` has open (the integration test's view).
     #[allow(dead_code)]
     pub fn count(&self, key_id: &str) -> usize {
-        self.by_key
+        self.live
             .lock()
-            .expect("by_key poisoned")
-            .get(key_id)
-            .map_or(0, Vec::len)
+            .expect("live poisoned")
+            .iter()
+            .filter(|c| c.key_id == key_id)
+            .count()
+    }
+
+    /// How many storefronts the tenant has connected to this node.
+    pub fn count_tenant(&self, tenant_id: &str) -> usize {
+        self.live
+            .lock()
+            .expect("live poisoned")
+            .iter()
+            .filter(|c| c.tenant_id == tenant_id)
+            .count()
+    }
+
+    /// How many connections this node serves, by tenant.
+    pub fn by_tenant(&self) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for connection in self.live.lock().expect("live poisoned").iter() {
+            *counts.entry(connection.tenant_id.clone()).or_insert(0) += 1;
+        }
+        counts
     }
 
     fn register(
         self: &Arc<Self>,
         key_id: &str,
-        lease: TenantLease,
+        tenant_id: &str,
     ) -> (ConnectionGuard, watch::Receiver<bool>) {
         let (close_tx, close_rx) = watch::channel(false);
-        self.by_key
-            .lock()
-            .expect("by_key poisoned")
-            .entry(key_id.to_owned())
-            .or_default()
-            .push(close_tx.clone());
+        self.live.lock().expect("live poisoned").push(Connection {
+            key_id: key_id.to_owned(),
+            tenant_id: tenant_id.to_owned(),
+            close: close_tx.clone(),
+        });
         let guard = ConnectionGuard {
             connections: Arc::clone(self),
-            key_id: key_id.to_owned(),
-            lease,
+            tenant_id: tenant_id.to_owned(),
             close_tx,
         };
         (guard, close_rx)
     }
 }
 
-/// What a connection keeps for its lifetime: the tenant lease and its entry
-/// in the registry, both released when the connection ends.
+/// What a connection keeps for its lifetime: its entry in the registry,
+/// released when the connection ends.
 struct ConnectionGuard {
     connections: Arc<StoreConnections>,
-    key_id: String,
-    lease: TenantLease,
+    tenant_id: String,
     close_tx: watch::Sender<bool>,
 }
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        let mut by_key = self.connections.by_key.lock().expect("by_key poisoned");
-        if let Some(senders) = by_key.get_mut(&self.key_id) {
-            senders.retain(|s| !s.same_channel(&self.close_tx));
-            if senders.is_empty() {
-                by_key.remove(&self.key_id);
-            }
-        }
-        tracing::info!(tenant = %self.lease.tenant_id(), "store disconnected");
+        self.connections
+            .live
+            .lock()
+            .expect("live poisoned")
+            .retain(|c| !c.close.same_channel(&self.close_tx));
+        tracing::info!(tenant = %self.tenant_id, "store disconnected");
     }
 }
 
-/// Turns a key's token into the tenant's executor, for one connection.
+/// Turns a key's token into a session in the key's tenant, for one
+/// connection.
 struct StoreResolver {
-    platform: Executor,
-    tenants: Arc<Tenants>,
+    store: Executor,
     connections: Arc<StoreConnections>,
 }
 
@@ -131,7 +162,7 @@ impl Resolver for StoreResolver {
             tracing::warn!(peer = %hello.peer, "store connection refused: no key");
             return Err(Rejection::Unauthorized);
         };
-        let access = match Command(self.platform.clone())
+        let access = match Command(self.store.clone())
             .authenticate_api_key(token)
             .await
         {
@@ -155,20 +186,22 @@ impl Resolver for StoreResolver {
             tracing::warn!(peer = %hello.peer, key = %access.key.hint, "store connection refused: the key may not read");
             return Err(Rejection::Unauthorized);
         }
-        let lease = self.tenants.lease(&access.tenant).await.map_err(|err| {
-            tracing::warn!(tenant = %access.tenant.slug, %err, "store connection refused: tenant not opened");
-            Rejection::Unavailable("this tenant's store cannot be opened right now".into())
-        })?;
         let can_write = access.key.allows(SCOPE_STORE_WRITE);
         let can_sell = access.key.allows(SCOPE_STORE_CHECKOUT);
         let executor = if can_write {
-            lease.executor().clone()
+            self.store.clone()
         } else if can_sell {
-            crate::read_only_store::checkout_only(lease.executor().clone(), &access.key.id)
+            crate::read_only_store::checkout_only(self.store.clone())
         } else {
-            crate::read_only_store::read_only(lease.executor().clone(), &access.key.id)
+            crate::read_only_store::read_only(self.store.clone())
         };
-        let (guard, close) = self.connections.register(&access.key.id, lease);
+        let session = Session::new(executor)
+            .tenant(&access.tenant.id)
+            .map_err(|err| {
+                tracing::error!(tenant = %access.tenant.slug, %err, "store connection refused: bad tenant id");
+                Rejection::Unavailable("the store is unavailable, try again later".into())
+            })?;
+        let (guard, close) = self.connections.register(&access.key.id, &access.tenant.id);
         tracing::info!(
             tenant = %access.tenant.slug,
             key = %access.key.hint,
@@ -177,15 +210,14 @@ impl Resolver for StoreResolver {
             peer = %hello.peer,
             "store connected"
         );
-        Ok(Session::new(executor).keep(guard).close_when(close))
+        Ok(session.keep(guard).close_when(close))
     }
 }
 
 /// Binds the store API and serves it; `None` when the section is absent.
 pub async fn serve(
     config: Option<&StoreApiConfig>,
-    platform: Executor,
-    tenants: Arc<Tenants>,
+    store: Executor,
     connections: Arc<StoreConnections>,
 ) -> Result<Option<ServerHandle>> {
     let Some(config) = config else {
@@ -195,11 +227,7 @@ pub async fn serve(
         .await
         .with_context(|| format!("cannot bind the store API on {}", config.listen))?;
     let addr = listener.local_addr()?;
-    let resolver = StoreResolver {
-        platform,
-        tenants,
-        connections,
-    };
+    let resolver = StoreResolver { store, connections };
     let handle = match config.tls() {
         Some((cert, key)) => {
             let acceptor = tls_acceptor(cert, key)?;

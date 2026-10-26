@@ -1,4 +1,4 @@
-//! Answers the requests to pay of one tenant's carts.
+//! Answers the requests to pay of every tenant's carts.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use timada_orders::{
 
 use super::{DASHBOARD_ACTOR, NewPayment, Payments};
 
-/// The cursor identity of the subscription, in each tenant's store.
+/// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/payments";
 
 /// A request older than this is history being replayed (a node catching up)
@@ -29,26 +29,18 @@ const ANSWER_WINDOW_SECS: u64 = 10 * 60;
 /// The refusal of a checkout that wants more than is left.
 const OUT_OF_STOCK: &str = "out_of_stock";
 
-#[derive(Clone)]
-struct Tenant(String);
-
-/// The tenant's own executor, to write the answers with (a handler only
+/// The store, to write the answers with (a handler only
 /// borrows the one it runs on).
 #[derive(Clone)]
 struct Store(Evento);
 
-/// Follows one tenant's carts and answers each request to pay. Every node
+/// Follows every tenant's carts and answers each request to pay. Every node
 /// with the tenant open runs it: Stripe opens one payment per request (the
 /// request id is the idempotency key) and the first answer recorded wins.
-pub fn subscription<E: Executor>(
-    payments: Arc<Payments>,
-    tenant_id: &str,
-    store: Evento,
-) -> SubscriptionBuilder<E> {
+pub fn subscription<E: Executor>(payments: Arc<Payments>, store: Evento) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(payments)
         .data(Store(store))
-        .data(Tenant(tenant_id.to_owned()))
         .handler(on_checkout_requested())
         .any_routing_key()
         .retry(5)
@@ -60,9 +52,8 @@ async fn on_checkout_requested<E: Executor>(
     event: Event<CheckoutRequested>,
 ) -> anyhow::Result<()> {
     let payments: Arc<Payments> = context.extract();
-    let tenant: Tenant = context.extract();
     let store: Store = context.extract();
-    let orders = timada_orders::Command(store.0.clone());
+    let orders = timada_orders::Command::new(store.0.clone(), &event.tenant);
     let cart_id = event.aggregate_id.clone();
     let request_id = event.data.request_id.clone();
     let refuse = async |code: &str| {
@@ -89,7 +80,7 @@ async fn on_checkout_requested<E: Executor>(
         refuse(PAYMENTS_UNAVAILABLE).await?;
         return Ok(());
     }
-    let Some(merchant) = payments.active_tenant(&tenant.0).await? else {
+    let Some(merchant) = payments.active_tenant(&event.tenant).await? else {
         refuse(PAYMENTS_UNAVAILABLE).await?;
         return Ok(());
     };
@@ -105,7 +96,7 @@ async fn on_checkout_requested<E: Executor>(
     // The discount's use is held before the shopper is asked to pay, so a
     // capped code never serves more orders than it says. Every way out below
     // that leaves no payment open gives it back.
-    let discounts = timada_discounts::Command(store.0.clone());
+    let discounts = timada_discounts::Command::new(store.0.clone(), &event.tenant);
     let email = pending.request.email.clone();
     let discount_id = pending.discount.as_ref().map(|d| d.discount_id.clone());
     if let Some(discount_id) = &discount_id {
@@ -148,7 +139,7 @@ async fn on_checkout_requested<E: Executor>(
     };
     // The goods are held the same way, so two shoppers never pay for the
     // last one.
-    let catalog = timada_catalog::Command(store.0.clone());
+    let catalog = timada_catalog::Command::new(store.0.clone(), &event.tenant);
     let stock_lines = timada_orders::stock_lines(&pending.lines);
     match catalog
         .reserve_stock(DASHBOARD_ACTOR, &cart_id, &stock_lines, RESERVATION_SECS)
@@ -183,7 +174,7 @@ async fn on_checkout_requested<E: Executor>(
                 currency: pending.currency.clone(),
                 idempotency_key: format!("timada-{request_id}"),
                 metadata: HashMap::from([
-                    ("tenant_id".to_owned(), tenant.0.clone()),
+                    ("tenant_id".to_owned(), event.tenant.clone()),
                     ("cart_id".to_owned(), cart_id.clone()),
                     ("request_id".to_owned(), request_id.clone()),
                 ]),
@@ -195,7 +186,7 @@ async fn on_checkout_requested<E: Executor>(
     let opened = match opened {
         Ok(opened) => opened,
         Err(err) => {
-            tracing::warn!(tenant = %tenant.0, %cart_id, %err, "Stripe refused to open a payment");
+            tracing::warn!(tenant = %event.tenant, %cart_id, %err, "Stripe refused to open a payment");
             release().await;
             refuse(PAYMENTS_UNAVAILABLE).await?;
             return Ok(());

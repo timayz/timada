@@ -31,7 +31,8 @@ impl<E: Executor> super::Command<E> {
                 category_id: category_id.to_owned(),
                 categorized_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -56,7 +57,8 @@ impl<E: Executor> super::Command<E> {
                 category_id: category_id.to_owned(),
                 uncategorized_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

@@ -3,7 +3,7 @@
 //! the way French law asks (CGI art. 242 nonies A): one continuous series
 //! per year and kind, with no gap and in the order they were issued.
 //!
-//! Lives in a tenant's own event store next to the orders. A document is
+//! Lives in the tenant's streams of the store, next to the orders. A document is
 //! written whole, once, into the stream of its series (a *book*): appending
 //! with the version the book was read at is what makes a number unique and
 //! the series gapless, and the document being the very event that takes the

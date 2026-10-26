@@ -84,9 +84,9 @@ pub fn product_reviews_url(cx: &Cx, slug: &str, product_id: &str) -> String {
         .resolve(cx)
 }
 
-/// The reviews gateway over the tenant's own store (403 while suspended).
+/// The reviews gateway in the tenant's streams (403 while suspended).
 pub fn reviews(access: &TenantAccess) -> Result<Command<Executor>> {
-    Ok(Command(access.executor()?.clone()))
+    Ok(Command::new(access.executor()?.clone(), access.tenant_id()))
 }
 
 /// The word for where a review stands.

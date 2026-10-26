@@ -36,6 +36,7 @@ use webauthn_rs::prelude::Webauthn;
 use crate::auth::mail::Mailer;
 use crate::auth::oidc::Providers;
 use crate::authz::Authorizer;
+use crate::cluster::Cluster;
 use crate::cluster::Executor;
 use crate::components::avatar::{AvatarSize, avatar, avatar_fallback};
 use crate::components::badge::{BadgeVariant, badge};
@@ -47,7 +48,6 @@ use crate::key_vault::{self, KeyVault};
 use crate::media::{MEDIA_ROUTE, Media, MediaCache, PEER_ROUTE};
 use crate::rate_limit::RateLimiter;
 use crate::store_api::StoreConnections;
-use crate::tenants::Tenants;
 use crate::ui::chrome::initials;
 use crate::ui::{Shell, Tone, document, empty_state, icons, notice, status_badge};
 
@@ -59,7 +59,8 @@ pub struct Services {
     pub providers: Providers,
     pub webauthn: Webauthn,
     pub mailer: Mailer,
-    pub tenants: Arc<Tenants>,
+    /// The consensus node, for the cluster page.
+    pub cluster: Arc<Cluster>,
     pub authorizer: Arc<Authorizer>,
     /// Where the product pictures are kept and served from.
     pub media: Arc<Media>,
@@ -84,7 +85,7 @@ pub fn router(services: Services) -> Router {
         providers,
         webauthn,
         mailer,
-        tenants,
+        cluster,
         authorizer,
         media,
         keys,
@@ -136,7 +137,7 @@ pub fn router(services: Services) -> Router {
         .app_context(write_pool)
         .app_context(providers)
         .app_context(webauthn)
-        .app_context(tenants)
+        .app_context(cluster)
         .app_context(authorizer)
         .app_context(media)
         .app_context(keys)

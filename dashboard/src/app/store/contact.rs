@@ -87,9 +87,9 @@ pub async fn contact(cx: &Cx, Form(form): Form<ContactForm>) -> Result<Answer> {
     if let Err(err) = draft.validate() {
         return answer_error(err);
     }
-    let hold = super::hold(cx, &access).await?;
+    let store = super::store(cx, &access);
     let keys = super::shoppers::keys(cx, &access.tenant.id);
-    match timada_support::Command(hold.executor().clone())
+    match timada_support::Command::new(store.executor().clone(), store.tenant_id())
         .receive_message(&*keys, STOREFRONT_ACTOR, draft)
         .await
     {

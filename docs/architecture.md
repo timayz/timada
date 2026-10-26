@@ -17,7 +17,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 |---|---|---|
 | `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions |
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
-| `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own store |
+| `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own streams |
 | `crates/catalog-import` | `timada-catalog-import` | Fills a catalog from a snapshot directory (`seeds/`, catalogue + pictures), and takes one from a WooCommerce shop (`woo-snapshot`) |
 | `crates/aliexpress` | `timada-aliexpress` | The items a shop imports from AliExpress: the signed open-platform client, the mapping to a draft, what a read changes, one link stream per item in a tenant's store (see `docs/aliexpress.md`) |
 | `crates/orders` | `timada-orders` | Carts and the orders placed from them, next to the catalog in a tenant's store |
@@ -49,7 +49,7 @@ nothing depends on the dashboard.
 ## Bounded contexts
 
 A context crate is pure domain code: aggregates, commands, read-model queries. It
-knows nothing about HTTP, cookies, files, consensus groups or who is allowed to do
+knows nothing about HTTP, cookies, files, consensus or who is allowed to do
 what; the host decides permissions and hands the crate verified facts.
 
 Each crate follows the same layout, copied from evento's `examples/bank`:
@@ -83,12 +83,12 @@ Recurring patterns:
 ## Where data lives
 
 ```
-data/timada.db            the platform store: identity + tenancy events, every read-model
-                          table (including the tenants' catalog_products,
-                          catalog_categories, orders_orders, orders_carts and
-                          reviews_reviews), the consensus journal
-data/tenants/<id>.db      one per tenant: its catalog, cart, order and review events and
-                          its consensus journal
+data/store.db             the store: every tenant's events (the platform's own in the
+                          default tenant ""), the snapshots, the subscription cursors
+                          and the consensus journal; what the cluster replicates
+data/read-models.db       every read-model table (tenancy_tenants, catalog_products,
+                          orders_orders, reviews_reviews, ...), each row carrying its
+                          tenant id; derived from the store, rebuilt from it when lost
 data/media/<id>/          one per tenant: the product pictures and the review photos,
                           named <image id>.<ext>
 data/shopper-keys/<id>/   one per tenant: each shopper account's and each contact message's
@@ -97,92 +97,86 @@ data/shopper-keys/<id>/   one per tenant: each shopper account's and each contac
                           category rows
 ```
 
-The platform store is opened once with two pools (`dashboard/src/db.rs`): a read
-pool and a single-connection write pool, so writes serialize up front instead of
-failing with `SQLITE_BUSY`. The write side runs WAL with `synchronous = FULL`.
+Each file is opened with a read pool and single-connection write pools
+(`dashboard/src/db.rs`), so writes serialize up front instead of failing with
+`SQLITE_BUSY`. The store has two write connections with different promises
+(`store_writer.rs`): the events the node applies and the consensus journal share a
+`synchronous = FULL` one, so an apply is on disk before the journal records it; the
+subscription cursors and the snapshots go through a `synchronous = NORMAL` one, since
+a cursor lost to a power cut only makes its subscription redo a few events and a
+snapshot is a cache. Twenty-odd subscriptions acknowledge every event they take: with
+an fsync apiece on the connection the journal flushes on, the node fell behind its
+own timeouts under load and answered writes with spurious version conflicts.
 
-Tenant-scoped contexts write to the tenant's file through the tenant's executor and
-project into the shared database keyed by tenant id, so one dashboard query lists a
-tenant's products while the events stay isolated by construction.
+A stream is identified by its tenant, its aggregate type and its id: the same product
+id in two tenants is two streams. Tenant-scoped contexts carry the tenant in their
+`Command` gateway (`timada_catalog::Command::new(store, tenant_id)`) and name it on
+every write, load and read (`.tenant(..)` on evento's builders); the platform contexts
+(identity, tenancy) live in the default tenant and keep the plain `Command(store)`. One
+subscription per read model follows every tenant's streams and stamps each row with
+`event.tenant`, so one query lists a tenant's products while the events stay apart
+by construction.
 
 ## The runtime (dashboard)
 
 `dashboard/src/cli/serve.rs` wires everything, in this order.
 
-1. **Cluster** (`cluster.rs`). One `MuxTransport`, one `SweepScheduler` and one
-   `GroupHost` per process. Every event database is an Accord consensus group: the
-   platform store is the default group, each tenant a group of its own. Writes are
-   coordinated across the cluster (`[cluster]` peers; a majority must agree), reads,
-   snapshots and subscriptions are served from this node's own files. Without a
-   `[cluster]` section the node talks to itself over a loopback port, so one code
-   path serves both deployments.
-2. **Tenants** (`tenants.rs`). A tenant is *up* while its database is open: its
-   consensus group runs and its read-model subscriptions follow its stream. Every
-   tenant-scoped request goes through `Tenants::open`, which is the activity signal.
-   A tenant stays open until opening another one goes past `tenants.max_open`; then
-   the least recently used is evicted. Left unset, `max_open` is worked out at
-   startup (`limits.rs`) from the open-file limit (raised to its hard maximum first)
-   and the available memory, and logged. Requests are not the only use: a node
-   taking part in writes another node coordinates sees none, so a group whose applied
-   state moved since the last look counts as just used, and one with a transaction
-   in flight is never evicted, nor is one held by a store connection or a request. A
-   new tenant opens on every node as soon as its creation reaches it (a platform
-   subscription, `creation_subscription`; creations older than a minute are history
-   being replayed and are skipped), so its group already runs everywhere when the
-   first write comes, typically a second after the creation. A
-   peer talking about a group this node closed triggers `reopen`, which opens it only
-   if the catalog knows the tenant and it is not suspended: the wire cannot create
-   one. The catalog is a read model, a second behind a tenant created on another
-   node, so the lookup is retried for as long as the transport keeps the frames
-   waiting; nodes also wait three seconds (`recovery_timeout`) before taking over a
-   transaction, so a peer that opens late joins the write instead of recovering it
-   from under its coordinator. Sweep gossip never opens a tenant, so a node that was
-   down would fetch the writes it missed only once something opens the tenant there:
-   at startup in a cluster, `start_catch_up` waits for the platform store to settle,
-   then opens every active tenant (four at a time), holds it until events stop
-   arriving from its peers, and leaves it open for the eviction to manage. A node whose
-   tenant file is gone (a new disk, a deleted file) cannot get back what its peers
-   already tidied up that way: `open` copies the tenant from a peer instead
-   (`needs_join`, a `.joining` marker next to the file while it runs). The copy
-   arrives page by page (4 MiB at a time), so a tenant of any size comes back; a
-   copy that fails halfway is discarded whole, since the marker stays and the next
-   open starts the copy over from an empty file. Every finished
-   write is kept on the other nodes until the node that missed it has it, so a node
-   that stays down makes the others keep everything, up to `cluster.write_backlog`
-   writes per tenant, past which the tenant refuses writes: a page then shows that
-   changes are temporarily not accepted (the `writes_paused` code of
+1. **Cluster** (`cluster.rs`). One Accord node per process over the store, wired
+   like evento's `bank-axum-accord` example: the node, its inbox loop and its
+   recovery sweep, over `TcpTransport` with the `[cluster]` peers (a majority must
+   agree on every write) or an in-memory transport alone. Reads, snapshots and
+   subscriptions are served from this node's own file. With several nodes a
+   single-aggregate read waits for the writes a quorum already committed
+   (`linearizable_reads`), so a page that reads what it just wrote sees it whichever
+   node answers. Every finished write is kept on the other nodes until the node that
+   missed it has it, so a node that stays down makes the others keep everything, up
+   to `cluster.write_backlog` writes, past which this node refuses writes: a page then
+   shows that changes are temporarily not accepted (the `writes_paused` code of
    `timada_core::write_refusal`, which every context's `is_user_facing`/`code`
-   recognise), the store HTTP endpoints answer 503 with that code, and the store
-   API carries it as a refusal a storefront shows the same way. A node not heard from on a
-   tenant for `cluster.absent_after_secs` (an hour by default) is therefore given up:
-   the others tidy up without it, and when its copy of the tenant reopens, they tell it
-   it fell behind; `rejoin_from_peers` then closes that copy, whatever holds it,
-   discards the file and makes the same copy a lost file gets. A node back before
-   anything was tidied up past it is simply waited for again. The admin page of a
-   tenant shows the writes it keeps and how each other node stands; `watch_backlog`
-   warns in the log at four fifths of the limit and whenever a node is given up. The
-   list of per-tenant read models is `tenant_subscriptions()` in `serve.rs`; adding a
-   tenant-scoped context means adding one entry there.
+   recognise), the store HTTP endpoints answer 503 with that code, and the store API
+   carries it as a refusal a storefront shows the same way. A node not heard from for
+   `cluster.absent_after_secs` (an hour by default) is therefore given up: the others
+   tidy up without it, and when it returns they tell it it fell behind. It then
+   refuses writes, logs the procedure and marks the store for a copy
+   (`<store file>.joining`); the next `serve` empties the store (events, snapshots,
+   cursors; the journal stays), recreates the read-model database and opens the node
+   by joining, which installs a peer's store page by page (4 MiB at a time) before
+   anything is served, then the subscriptions rebuild the read models from it. The
+   `rejoin` command sets the same mark by hand, for a lost store file (delete the
+   file first: an empty journal comes back under the node's own id through evento's
+   amnesia fence). A node back before anything was tidied up past it is simply waited
+   for again. `/admin/cluster` shows this node: the writes it keeps, how each other
+   node stands, whether a copy is needed; `Cluster::watch` warns in the log at four
+   fifths of the backlog and whenever a node is given up.
+2. **Subscriptions** (`serve.rs`, `subscriptions()`). Every subscription the node runs
+   is started once on the store and follows every tenant's streams: the platform's
+   read models (users, the tenant catalog, the members' history), the tenants' read
+   models into the read-model database, this node's copies of the pictures and the
+   personal-data keys, the answers the dashboard writes back (payments, invoices),
+   the mails it sends (order confirmations, message notices, newsletter opt-ins).
+   A handler takes the tenant from `event.tenant` and builds the gateway it writes
+   back with from it. Adding a tenant-scoped context means adding one entry there.
 3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens
-   with an API key token; the resolver loads the key by the token's hash, leases the
-   tenant (a leased tenant is never evicted) and serves the connection with that
-   tenant's executor and nothing else. A key without the `store:write` scope gets that
-   executor wrapped by `read_only_store.rs`: appends refused, snapshot saves dropped,
-   subscriber cursors kept under the key's own name. A key holding `store:checkout`
+   with an API key token; the resolver loads the key by the token's hash and serves
+   the connection in the key's tenant (`Session::tenant`): every request acts in that
+   tenant whatever it names, the events it reads come back as from a store of its own,
+   and the subscriber calls are refused (a storefront keeps its cursors locally). A
+   key without the `store:write` scope gets the store wrapped by `read_only_store.rs`:
+   appends refused, snapshot saves dropped. A key holding `store:checkout`
    (what a storefront that sells needs) gets the same wrapper with one opening: it
    may append what a shopper does, filling a cart and asking to pay for it
    (`timada_orders::is_shopper_event`), and nothing that belongs to the merchant:
    the catalog, the answer to a request to pay, an order (one exists only once
    its payment is confirmed to the dashboard). Scopes are strings recorded by the
    `ApiKey::Scoped` event (keys older than it hold read + write). Revoking the key or
-   changing its scopes ends its connections; suspending the tenant closes its
-   database, and reconnects are refused.
+   changing its scopes ends its connections; suspending the tenant ends every
+   connection of the tenant, and reconnects are refused.
 4. **Payments** (`payments/`). Each tenant connects its own Stripe account on
    `/t/{slug}/payments`; the secret key and the webhook signing secret are recorded
    in the tenant's platform events sealed with AES-256-GCM (`seal.rs`) under the
    operator's `[payments] secret_key`, or else `[secrets] key` (no section, no
    payments). A storefront asks to pay
-   (`Cart::CheckoutRequested`); the per-tenant subscription `timada-dashboard/payments`
+   (`Cart::CheckoutRequested`); the subscription `timada-dashboard/payments`
    prices the cart from the store, opens a PaymentIntent with the tenant's key (the
    request id is the idempotency key, so every node answering opens one payment) and
    records it (`Cart::PaymentRequested`) or the refusal. The shopper confirms with
@@ -220,8 +214,8 @@ tenant's products while the events stay isolated by construction.
    `/store/newsletter/*` (sign-ups and their links, see *Newsletter*), `/invitations/{token}`,
    `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.
 
-Shutdown stops the HTTP server, then the store API (its leases hold tenants open), the
-sweeper and the tenants, the read-model subscriptions and finally the pools.
+Shutdown stops the HTTP server, then the store API, the sweeps, the subscriptions,
+the node and finally the pools.
 
 ## One write, end to end
 
@@ -229,15 +223,17 @@ A member renames a product on `/t/{slug}/products/{id}`:
 
 1. The page handler loads the session, the tenant state and the enforcer's answer for
    `products:manage`.
-2. `tenants.open(tenant)` returns the tenant's executor (opening the file and its
-   consensus group if needed).
-3. `timada_catalog::Command::rename_product` loads the product's write-side state, checks the
+2. `timada_catalog::Command::new(store, tenant_id)` is the catalog gateway in the
+   tenant's streams.
+3. `rename_product` loads the product's write-side state in that tenant, checks the
    invariants and commits `Renamed { name, renamed_by }` at the observed version.
-4. The commit goes through the tenant's Accord group and lands in `data/tenants/<id>.db`.
-5. The tenant's `catalog` subscription writes the new name into `catalog_products` in
-   the platform store; the next page load shows it. The same subscription follows the
-   `Category` streams into `catalog_categories`, and rewrites a product's rows in
-   `catalog_product_categories` whenever it is filed under a category or leaves one.
+4. The commit goes through the Accord node and lands in `data/store.db`, in the
+   tenant's stream of that product.
+5. The `catalog` subscription writes the new name into `catalog_products` in the
+   read-model database, under the event's tenant; the next page load shows it. The
+   same subscription follows the `Category` streams into `catalog_categories`, and
+   rewrites a product's rows in `catalog_product_categories` whenever it is filed
+   under a category or leaves one.
 6. Every storefront connected to that tenant through the store API is notified at
    once; its `storefront/catalog` subscription updates the local `storefront_products`
    row.
@@ -538,8 +534,9 @@ fails when a frozen line changes. The rules:
 `config/default.toml` is the full shape with its defaults; a file given with
 `--config` (or `TIMADA_CONFIG`) overrides it, and `TIMADA__<SECTION>__<KEY>`
 environment variables override both. Sections: `server` (URL, bind, region, trusted
-proxies), `database`, `auth` (secret, session lifetime, OIDC providers), `mail`,
-`tenants`, `store_api` (omit to not expose it), `cluster` (omit for a single node),
+proxies), `database` (the store and the read models), `auth` (secret, session
+lifetime, OIDC providers), `mail`, `store_api` (omit to not expose it), `cluster`
+(omit for a single node),
 `monitoring`. `config/dev.local.toml` is the developer's own file and is ignored by
 git; `config/e2e.toml` is what the browser suite runs on. Configuration is written for
 operators: it names what things do, not the libraries behind them.
@@ -548,11 +545,10 @@ operators: it names what things do, not the libraries behind them.
 
 - `cargo test --workspace` (inside `nix develop`): the crates' domain tests over a
   temporary store, and the dashboard's integration tests, which boot the runtime in
-  process: `tenants_runtime` (open, evict, reopen, catch-up), `tenants_cluster`
-  (three nodes in one process: a node that missed writes catches up, a lost tenant
-  file is copied back, also one larger than a copy page, a node away too long is
-  given up and copies the tenant back on return, a tenant at its write backlog
-  refuses writes), `store_api` (TCP, keys, TLS),
+  process: `cluster` (three nodes in one process: a tenant's write lands on every
+  node in that tenant only, a node that missed writes catches up, a node away too
+  long is given up and copies the store back at its next start, a node at its write
+  backlog refuses writes), `store_api` (TCP, keys, TLS),
   `storefront` (the library against a live store), `events_lock`. The review endpoint is
   covered over HTTP by the browser suite.
 - `make e2e`: `scripts/e2e.sh` builds the dashboard and the example storefront, resets

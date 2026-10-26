@@ -201,7 +201,7 @@ async fn shipping_is_free_once_the_discounted_goods_reach_the_threshold() {
     assert_eq!(pending.shipping.unwrap().amount_cents, 0);
 
     // 10 % off brings the goods under 50.00: shipping is charged again.
-    timada_discounts::Command(orders.0.clone())
+    timada_discounts::Command::new(orders.executor().clone(), TENANT)
         .create_discount(
             ALICE,
             timada_discounts::CreateDiscount {

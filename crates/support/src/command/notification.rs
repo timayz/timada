@@ -22,7 +22,8 @@ impl<E: Executor> super::Command<E> {
                 message_id: message_id.to_owned(),
                 mailed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match claimed {
             Ok(_) => Ok(true),

@@ -1,10 +1,11 @@
-//! The subscription that keeps `shoppers_shoppers` current for one tenant.
+//! The subscription that keeps `shoppers_shoppers` current for every tenant.
 //!
 //! The handler reloads the strict write model of the shopper and rewrites its
 //! row, so delivery may repeat (the subscription is at-least-once) without the
-//! numbers drifting; a shopper who deleted their account loses their row. It
-//! runs on the tenant's own executor (its cursor lives there) and writes into
-//! the shared read-model database it is given.
+//! numbers drifting; a shopper who deleted their account loses their row. One
+//! subscription follows every tenant's streams (its cursor lives in the
+//! store): each row carries the tenant of the event that made it, and it
+//! writes into the read-model database it is given.
 //!
 //! The row lists the address the shopper signs in with, so the handler opens
 //! it with their key. A key this node cannot read yet (still on its way from
@@ -20,32 +21,26 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::command::{Shopper, shopper_projection};
-use timada_core::Keys as ShopperKeys;
+use timada_core::keys::KeyRing as ShopperKeyRing;
 
-/// The cursor identity of the read-model subscription, in each tenant's store.
+/// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-shoppers/read-models";
 
-/// The tenant whose stream a subscription follows, handed to its handlers.
-#[derive(Debug, Clone)]
-pub struct TenantId(pub String);
-
-/// The keys of one tenant's shoppers, handed to the handlers.
+/// The shopper keys of every tenant, handed to the handlers.
 #[derive(Clone)]
-struct TenantKeys(Arc<dyn ShopperKeys>);
+struct Ring(Arc<dyn ShopperKeyRing>);
 
-/// Builds the subscription of one tenant over every routing key. `pool` is
-/// the shared read-model database and must be allowed to write; `keys` are
-/// the tenant's shopper keys. Start it with `.start(&tenant_executor)` and
-/// keep the handle for shutdown.
+/// Builds the subscription over every tenant and routing key. `pool` is the
+/// read-model database and must be allowed to write; `keys` holds each
+/// tenant's shopper keys. Start it with `.start(&store)` and keep the handle
+/// for shutdown.
 pub fn read_model_subscription<E: Executor>(
     pool: SqlitePool,
-    tenant_id: &str,
-    keys: Arc<dyn ShopperKeys>,
+    keys: Arc<dyn ShopperKeyRing>,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(pool)
-        .data(TenantId(tenant_id.to_owned()))
-        .data(TenantKeys(keys))
+        .data(Ring(keys))
         .handler(on_shopper_event())
         .any_routing_key()
         .retry(u8::MAX)
@@ -57,24 +52,25 @@ async fn on_shopper_event<E: Executor>(
     event: RawEvent<crate::aggregator::Shopper>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let tenant: TenantId = context.extract();
-    let keys: TenantKeys = context.extract();
+    let keys: Ring = context.extract();
     let Some(state) = shopper_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
     else {
         return Ok(());
     };
     if state.forgotten {
-        return delete_shopper(&pool, &tenant.0, &state.id).await;
+        return delete_shopper(&pool, &event.tenant, &state.id).await;
     }
     // Not forgotten, so the key must exist: until it can be read, retry.
+    let keys = keys.0.for_tenant(&event.tenant);
     let shopper = state
-        .open_with(&*keys.0)
+        .open_with(&*keys)
         .await?
         .ok_or_else(|| anyhow::anyhow!("the key of shopper {} is missing", state.id))?;
-    upsert_shopper(&pool, &tenant.0, &shopper, event.timestamp).await
+    upsert_shopper(&pool, &event.tenant, &shopper, event.timestamp).await
 }
 
 /// Drops the row of a shopper who deleted their account.
