@@ -261,17 +261,16 @@ impl Media {
 }
 
 /// The cursor identity of the subscription that keeps this node's copies in
-/// step with the catalog and the reviews, in each tenant's store.
+/// step with the catalog and the reviews, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/media";
 
-/// Follows one tenant's products: fetches each picture added that this node
+/// Follows every tenant's products: fetches each picture added that this node
 /// lacks and deletes each one removed. A fetch that fails is retried, with a
 /// growing delay; a picture removed since is skipped, so a node catching up
 /// on an old stream does not look for files nobody keeps any more.
-pub fn subscription<E: Executor>(media: Arc<Media>, tenant_id: &str) -> SubscriptionBuilder<E> {
+pub fn subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(media)
-        .data(Tenant(tenant_id.to_owned()))
         .handler(on_image_added())
         .handler(on_image_removed())
         .handler(on_review_submitted())
@@ -284,9 +283,6 @@ pub fn subscription<E: Executor>(media: Arc<Media>, tenant_id: &str) -> Subscrip
         // while most of the cluster is down.
         .retry(u8::MAX)
 }
-
-#[derive(Clone)]
-struct Tenant(String);
 
 /// The cursor identity of [`logo_subscription`], in the platform store.
 pub const LOGO_SUBSCRIPTION: &str = "timada-dashboard/mail-logos";
@@ -313,6 +309,7 @@ async fn on_mail_branding_set<E: Executor>(
     };
     let still_there = tenant_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
         .and_then(|tenant| tenant.mail_branding)
@@ -331,9 +328,9 @@ async fn on_image_added<E: Executor>(
     event: Event<ImageAdded>,
 ) -> anyhow::Result<()> {
     let media: Arc<Media> = context.extract();
-    let tenant: Tenant = context.extract();
     let still_there = product_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
         .is_some_and(|product| {
@@ -347,7 +344,7 @@ async fn on_image_added<E: Executor>(
     }
     media
         .fetch(
-            &tenant.0,
+            &event.tenant,
             &event.data.image_id,
             &event.data.ext,
             event.data.size,
@@ -361,8 +358,9 @@ async fn on_image_removed<E: Executor>(
     event: Event<ImageRemoved>,
 ) -> anyhow::Result<()> {
     let media: Arc<Media> = context.extract();
-    let tenant: Tenant = context.extract();
-    media.remove_image(&tenant.0, &event.data.image_id).await;
+    media
+        .remove_image(&event.tenant, &event.data.image_id)
+        .await;
     Ok(())
 }
 
@@ -372,11 +370,11 @@ async fn on_review_submitted<E: Executor>(
     event: Event<ReviewSubmitted>,
 ) -> anyhow::Result<()> {
     let media: Arc<Media> = context.extract();
-    let tenant: Tenant = context.extract();
     // Only the photos still on a review that is not rejected: the others
     // were deleted since, and nobody keeps them any more.
     let Some(review) = review_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
         .filter(|review| !review.is_rejected())
@@ -385,7 +383,7 @@ async fn on_review_submitted<E: Executor>(
     };
     for photo in &review.photos {
         media
-            .fetch(&tenant.0, &photo.id, &photo.ext, photo.size)
+            .fetch(&event.tenant, &photo.id, &photo.ext, photo.size)
             .await?;
     }
     Ok(())
@@ -397,16 +395,16 @@ async fn on_review_rejected<E: Executor>(
     event: Event<ReviewRejected>,
 ) -> anyhow::Result<()> {
     let media: Arc<Media> = context.extract();
-    let tenant: Tenant = context.extract();
     let Some(review) = review_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
     else {
         return Ok(());
     };
     for photo in &review.photos {
-        media.remove_image(&tenant.0, &photo.id).await;
+        media.remove_image(&event.tenant, &photo.id).await;
     }
     Ok(())
 }
@@ -417,8 +415,9 @@ async fn on_review_photo_removed<E: Executor>(
     event: Event<ReviewPhotoRemoved>,
 ) -> anyhow::Result<()> {
     let media: Arc<Media> = context.extract();
-    let tenant: Tenant = context.extract();
-    media.remove_image(&tenant.0, &event.data.image_id).await;
+    media
+        .remove_image(&event.tenant, &event.data.image_id)
+        .await;
     Ok(())
 }
 
@@ -428,14 +427,14 @@ async fn on_review_revised<E: Executor>(
     event: Event<ReviewRevised>,
 ) -> anyhow::Result<()> {
     let media: Arc<Media> = context.extract();
-    let tenant: Tenant = context.extract();
     for image_id in &event.data.removed {
-        media.remove_image(&tenant.0, image_id).await;
+        media.remove_image(&event.tenant, image_id).await;
     }
     // As on a submission: only the added photos still on a review that is
     // not rejected.
     let Some(review) = review_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
         .filter(|review| !review.is_rejected())
@@ -445,7 +444,7 @@ async fn on_review_revised<E: Executor>(
     for photo in &review.photos {
         if event.data.added.iter().any(|added| added.id == photo.id) {
             media
-                .fetch(&tenant.0, &photo.id, &photo.ext, photo.size)
+                .fetch(&event.tenant, &photo.id, &photo.ext, photo.size)
                 .await?;
         }
     }

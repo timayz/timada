@@ -16,11 +16,10 @@ use serde::Deserialize;
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
-    /// Absent: a single node, talking to itself over a loopback port. Present:
-    /// one node of an Accord cluster over TCP.
+    /// Absent: a single node, talking to itself in memory. Present: one node
+    /// of an Accord cluster over TCP.
     #[serde(default)]
     pub cluster: Option<ClusterConfig>,
-    pub tenants: TenantsConfig,
     pub media: MediaConfig,
     /// `[data_keys]`; `[shopper_keys]`, its first name, still reads.
     #[serde(alias = "shopper_keys")]
@@ -149,24 +148,16 @@ pub struct ServerConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
-    /// sqlx DSN, e.g. `sqlite:data/timada.db`.
-    pub url: String,
-    /// Pool size for `serve`. sqlx-sqlite runs one OS thread per open
-    /// connection, so keep it small.
+    /// The store, as a sqlx DSN, e.g. `sqlite:data/store.db`: every tenant's
+    /// events, the snapshots, the subscription cursors and the consensus
+    /// journal.
+    pub store: String,
+    /// The read models, e.g. `sqlite:data/read-models.db`: the tables the
+    /// pages read, derived from the store by the subscriptions.
+    pub read_models: String,
+    /// Read pool size for `serve`, for each file. sqlx-sqlite runs one OS
+    /// thread per open connection, so keep it small.
     pub max_connections: u32,
-}
-
-/// Where tenant databases live and how many stay open at once.
-#[derive(Debug, Deserialize, Clone)]
-pub struct TenantsConfig {
-    /// Directory holding one SQLite file per tenant (its events and its
-    /// consensus journal).
-    pub dir: PathBuf,
-    /// Most tenant databases open at once; beyond it the least recently used
-    /// is closed. Each open database holds up to three connections, and
-    /// sqlx-sqlite runs one OS thread per connection. Unset: worked out from
-    /// the machine at startup ([`crate::limits::auto_max_open`]).
-    pub max_open: Option<usize>,
 }
 
 /// The keys that open personal data (each shopper account's, each contact
@@ -606,14 +597,14 @@ pub struct ClusterConfig {
     /// than one node.
     #[serde(default)]
     pub secret: Option<String>,
-    /// A node not heard from on a tenant for this long is no longer waited
-    /// for: the others tidy up finished writes without it. When it returns,
-    /// every tenant it fell behind on is copied back from a peer. 0 never
-    /// gives a node up.
+    /// A node not heard from for this long is no longer waited for: the
+    /// others tidy up finished writes without it. When it returns it is told
+    /// so, and comes back by copying the store from a peer (`rejoin`, then
+    /// restart). 0 never gives a node up.
     #[serde(default = "default_absent_after_secs")]
     pub absent_after_secs: u64,
-    /// Finished writes a tenant keeps for a node that is away. Past it the
-    /// tenant refuses new writes until the node returns or is given up.
+    /// Finished writes this node keeps for a node that is away. Past it the
+    /// node refuses new writes until the node returns or is given up.
     #[serde(default = "default_write_backlog")]
     pub write_backlog: usize,
 }
@@ -643,9 +634,9 @@ impl Config {
             // is not the loopback interface.
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", 3000)?
-            .set_default("database.url", "sqlite:data/timada.db")?
+            .set_default("database.store", "sqlite:data/store.db")?
+            .set_default("database.read_models", "sqlite:data/read-models.db")?
             .set_default("database.max_connections", 3)?
-            .set_default("tenants.dir", "data/tenants")?
             .set_default("media.dir", "data/media")?
             .set_default("media.public_url", "https://timada.localhost/media")?
             .set_default("data_keys.dir", "data/shopper-keys")?
@@ -672,7 +663,6 @@ impl Config {
             cluster.validate()?;
         }
         config.server.validate()?;
-        config.tenants.validate()?;
         config.media.validate()?;
         config.store.validate()?;
         config.invitations.validate()?;
@@ -759,25 +749,9 @@ impl MailConfig {
     }
 }
 
-impl TenantsConfig {
-    fn validate(&self) -> Result<(), ConfigError> {
-        if self.max_open == Some(0) {
-            return Err(ConfigError::Message(
-                "tenants.max_open must be at least 1".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// The configured limit, or the one the machine allows.
-    pub fn max_open(&self) -> usize {
-        self.max_open.unwrap_or_else(crate::limits::auto_max_open)
-    }
-}
-
 impl ClusterConfig {
-    /// How long a node may go unheard on a tenant before the others stop
-    /// waiting for it; `None` waits forever.
+    /// How long a node may go unheard before the others stop waiting for
+    /// it; `None` waits forever.
     pub fn absent_after(&self) -> Option<Duration> {
         (self.absent_after_secs > 0).then(|| Duration::from_secs(self.absent_after_secs))
     }

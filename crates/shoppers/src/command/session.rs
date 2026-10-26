@@ -71,7 +71,8 @@ impl<E: Executor> super::Command<E> {
                     key_id: key_id.clone(),
                     email,
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await;
             if registered.is_err() {
                 // Nothing names the key: drop it rather than keep it unused.
@@ -93,7 +94,8 @@ impl<E: Executor> super::Command<E> {
                 shopper_id: shopper_id.clone(),
                 expires_at,
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match started {
             Ok(_) => Ok(SignedIn {
@@ -125,7 +127,8 @@ impl<E: Executor> super::Command<E> {
             .write()?
             .routing_key_opt(routing_key)
             .event(&SessionEnded)
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await
         {
             Ok(_) | Err(WriteError::InvalidOriginalVersion) => Ok(()),
@@ -152,7 +155,8 @@ impl<E: Executor> super::Command<E> {
             .event(&SessionsRevoked {
                 except_session: Some(session_id(token)),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

@@ -426,7 +426,7 @@ fn refusable<T>(outcome: std::result::Result<T, OrdersError>) -> anyhow::Result<
 
 impl Store {
     fn orders(&self) -> Command<evento::Evento> {
-        Command(self.executor().clone())
+        Command::unscoped(self.executor().clone())
     }
 
     /// See [`cart`].

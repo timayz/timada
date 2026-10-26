@@ -48,7 +48,8 @@ impl<E: Executor> super::Command<E> {
                 values,
                 defined_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(option_id)
     }
@@ -85,7 +86,8 @@ impl<E: Executor> super::Command<E> {
                 name,
                 renamed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -124,7 +126,8 @@ impl<E: Executor> super::Command<E> {
                 values,
                 changed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -152,7 +155,8 @@ impl<E: Executor> super::Command<E> {
                 option_id: option_id.to_owned(),
                 removed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

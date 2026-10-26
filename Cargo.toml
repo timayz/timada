@@ -20,13 +20,12 @@ topcoat-router = "=0.11.0"
 topcoat-view = "=0.11.0"
 topcoat-view-macro = "=0.11.0"
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
-sqlx_migrator = { version = "0.19", features = ["sqlite"] }
-# Tracks evento's alpha branch until the release after alpha.35 ships the
-# accord fix for writes another node recovered (timayz/evento#266), the
-# group join a lost tenant file rejoins with (timayz/evento#269), the
-# absent-peer compaction (timayz/evento#270), the paged copy of a tenant
-# (timayz/evento#271) and the paced journal truncation (timayz/evento#273);
-# go back to a pinned version then. Cargo.lock holds the exact commit.
+sqlx_migrator = { version = "0.20", features = ["sqlite"] }
+# Tracks evento's alpha branch until the release after alpha.35 ships one
+# store for every tenant (tenants as part of the stream identity,
+# timayz/evento#344 to #346, with #411 and #415), which replaced the
+# per-tenant consensus groups (#343); go back to a pinned version then.
+# Cargo.lock holds the exact commit.
 evento = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "remote"] }
 evento-sql = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "accord"] }
 evento-sql-migrator = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["sqlite", "accord"] }

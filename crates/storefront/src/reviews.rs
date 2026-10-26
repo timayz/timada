@@ -359,7 +359,7 @@ impl Store {
         order_id: &str,
         product_id: &str,
     ) -> anyhow::Result<Option<ReviewState>> {
-        timada_reviews::Command(self.executor().clone())
+        timada_reviews::Command::unscoped(self.executor().clone())
             .load_review(&review_id(order_id, product_id))
             .await
     }
@@ -371,7 +371,7 @@ impl Store {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
-        timada_reviews::Command(self.executor().clone())
+        timada_reviews::Command::unscoped(self.executor().clone())
             .resolve_review_link(token, now)
             .await
     }

@@ -38,9 +38,12 @@ struct InvoicesLink {
     page: i64,
 }
 
-/// The invoicing gateway over the tenant's own store (403 while suspended).
+/// The invoicing gateway in the tenant's streams (403 while suspended).
 pub fn invoicing(access: &TenantAccess) -> Result<timada_invoicing::Command<Executor>> {
-    Ok(timada_invoicing::Command(access.executor()?.clone()))
+    Ok(timada_invoicing::Command::new(
+        access.executor()?.clone(),
+        access.tenant_id(),
+    ))
 }
 
 /// How a document is taxed, as a page says it.

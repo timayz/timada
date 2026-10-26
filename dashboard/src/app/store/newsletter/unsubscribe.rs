@@ -20,9 +20,9 @@ pub async fn unsubscribe(cx: &Cx, Form(form): Form<TokenForm>) -> Result<Answer>
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let hold = crate::app::store::hold(cx, &access).await?;
+    let store = crate::app::store::store(cx, &access);
     let keys = crate::app::store::shoppers::keys(cx, &access.tenant.id);
-    match timada_newsletter::Command(hold.executor().clone())
+    match timada_newsletter::Command::new(store.executor().clone(), store.tenant_id())
         .unsubscribe_with_link(&*keys, STOREFRONT_ACTOR, &form.token)
         .await
     {

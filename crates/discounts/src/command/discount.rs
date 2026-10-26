@@ -75,7 +75,8 @@ impl<E: Executor> super::Command<E> {
                 once_per_email: cmd.once_per_email,
                 created_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         if let Err(err) = created {
             if let Err(release) = self.release_code(&code, &discount_id, routing_key).await {
@@ -107,7 +108,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Deactivated {
                 deactivated_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -129,7 +131,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Reactivated {
                 reactivated_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -153,7 +156,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Archived {
                 archived_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         self.release_code(&discount.code, discount_id, routing_key)
             .await

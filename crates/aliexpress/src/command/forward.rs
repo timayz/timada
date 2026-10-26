@@ -220,7 +220,8 @@ impl<E: Executor> super::Command<E> {
                     .original_version(0)
                     .routing_key_opt(routing_key)
                     .event(&requested)
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(lost)?;
             }
@@ -238,7 +239,8 @@ impl<E: Executor> super::Command<E> {
                     .write()?
                     .routing_key_opt(routing_key)
                     .event(&requested)
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(lost)?;
             }
@@ -266,7 +268,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Started {
                 started_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match written {
             Ok(_) => Ok(true),
@@ -294,7 +297,8 @@ impl<E: Executor> super::Command<E> {
                 complete: placement.complete,
                 placed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -315,7 +319,8 @@ impl<E: Executor> super::Command<E> {
                 reason: reason.chars().take(500).collect(),
                 failed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -343,7 +348,7 @@ impl<E: Executor> super::Command<E> {
         if let Some(done) = &done {
             write.event(done);
         }
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 }
@@ -358,7 +363,11 @@ impl<E: Executor> super::Command<E> {
         &self,
         forward_id: &str,
     ) -> anyhow::Result<Option<ForwardState>> {
-        forward_projection().load(forward_id).execute(&self.0).await
+        forward_projection()
+            .load(forward_id)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await
     }
 
     /// The forward and the version it was read at.

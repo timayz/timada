@@ -12,14 +12,14 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
-#[path = "../src/limits.rs"]
-mod limits;
+#[path = "../src/db.rs"]
+mod db;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
 #[path = "../src/store_api.rs"]
 mod store_api;
-#[path = "../src/tenants.rs"]
-mod tenants;
+#[path = "../src/store_writer.rs"]
+mod store_writer;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -43,14 +43,13 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 use cluster::Cluster;
-use config::{StoreApiConfig, TenantsConfig};
+use config::StoreApiConfig;
 use store_api::StoreConnections;
-use tenants::{TenantStatus, Tenants};
 
 const NOW: u64 = 1_800_000_000;
 
 struct Harness {
-    tenants: Arc<Tenants>,
+    cluster: Arc<Cluster>,
     platform: Command<cluster::Executor>,
     pool: SqlitePool,
     dir: PathBuf,
@@ -108,22 +107,17 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
             .await
             .unwrap();
     }
-    let cluster = Arc::new(Cluster::build(None).await.unwrap());
-    let platform = cluster
-        .open_platform(None, pool.clone(), pool.clone())
-        .await
-        .unwrap();
-    let tenants = Tenants::new(
-        cluster,
-        &TenantsConfig {
-            dir: dir.join("tenants"),
-            max_open: Some(4),
-        },
-        None,
-        platform.clone(),
-        pool.clone(),
-        vec![],
-    );
+    // One file for the store and the read models: the test's own pool is both.
+    let files = cluster::Files {
+        store_url: format!("sqlite:{}", dir.join("platform.db").display()),
+        read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
+    };
+    let pools = cluster::StorePools {
+        read: pool.clone(),
+        write: pool.clone(),
+        cursors: pool.clone(),
+    };
+    let (cluster, platform) = Cluster::open(None, None, &files, pools).await.unwrap();
     let connections = StoreConnections::new();
     let (tls_cert, tls_key) = match tls {
         Some((cert, key)) => (Some(cert), Some(key)),
@@ -144,17 +138,12 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         listen: addr,
         ..config
     };
-    let server = store_api::serve(
-        Some(&config),
-        platform.clone(),
-        tenants.clone(),
-        connections.clone(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let server = store_api::serve(Some(&config), platform.clone(), connections.clone())
+        .await
+        .unwrap()
+        .unwrap();
     Harness {
-        tenants,
+        cluster,
         platform: Command(platform),
         pool,
         dir,
@@ -229,11 +218,9 @@ impl Harness {
         }
     }
 
-    fn leases(&self, tenant: &TenantState) -> Option<usize> {
-        match self.tenants.status(&tenant.id) {
-            TenantStatus::Running { leases, .. } => Some(leases),
-            TenantStatus::Stopped => None,
-        }
+    /// How many storefronts of the tenant are connected.
+    fn connected(&self, tenant: &TenantState) -> usize {
+        self.connections.count_tenant(&tenant.id)
     }
 
     async fn wait_for(&self, what: &str, mut ok: impl FnMut(&Self) -> bool) {
@@ -246,7 +233,7 @@ impl Harness {
 
     async fn finish(self) {
         self._server.shutdown().await;
-        self.tenants.shutdown().await;
+        self.cluster.shutdown().await;
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
@@ -265,9 +252,29 @@ async fn probe(client: &Client, stream: &str, version: u16) -> usize {
     count(client).await.unwrap()
 }
 
+/// Writes a probe event in `tenant`'s streams through the dashboard's own
+/// store, as a page would.
+async fn probe_as(h: &Harness, tenant: &TenantState, stream: &str, version: u16) {
+    evento::append(stream)
+        .tenant(&tenant.id)
+        .original_version(version)
+        .event(&Renamed {
+            name: "probe".into(),
+        })
+        .commit(&h.platform.0)
+        .await
+        .unwrap();
+}
+
 async fn count(client: &Client) -> anyhow::Result<usize> {
     Ok(client
-        .read(None, None, Args::forward(100, None), None)
+        .read(
+            None,
+            None,
+            evento::TenantFilter::All,
+            Args::forward(100, None),
+            None,
+        )
         .await?
         .edges
         .len())
@@ -280,42 +287,42 @@ async fn a_store_connects_with_its_key_and_leases_its_tenant() {
     let zeta = h.create("zeta").await;
     let (acme_token, _) = h.key(&acme).await;
     let (zeta_token, _) = h.key(&zeta).await;
-    assert_eq!(h.leases(&acme), None, "nothing open before a connection");
+    assert_eq!(
+        h.connected(&acme),
+        0,
+        "nothing connected before a connection"
+    );
 
     let client = h.connect(&acme_token).await.unwrap();
-    assert_eq!(h.leases(&acme), Some(1));
+    assert_eq!(h.connected(&acme), 1);
     assert_eq!(probe(&client, "s1", 0).await, 1);
     assert_eq!(probe(&client, "s1", 1).await, 2);
 
-    // Another tenant's key sees its own, empty, store.
+    // Another tenant's key sees its own, empty, store: the same stream id
+    // there is a stream of its own, starting at version 0.
     let other = h.connect(&zeta_token).await.unwrap();
     assert_eq!(count(&other).await.unwrap(), 0);
-    assert_eq!(h.leases(&zeta), Some(1));
+    assert_eq!(h.connected(&zeta), 1);
+    assert_eq!(probe(&other, "s1", 0).await, 1);
+    assert_eq!(
+        count(&client).await.unwrap(),
+        2,
+        "acme's store is untouched"
+    );
     drop(other);
 
-    // Leased: filling the node with other tenants leaves it open.
-    let mut fillers = Vec::new();
+    // Other tenants' traffic is no concern of the connection.
     for i in 0..4 {
-        fillers.push(h.create(&format!("filler-{i}")).await);
+        let filler = h.create(&format!("filler-{i}")).await;
+        probe_as(&h, &filler, "f", 0).await;
     }
-    for filler in &fillers {
-        h.tenants.open(filler).await.unwrap();
-    }
-    assert_eq!(
-        h.leases(&acme),
-        Some(1),
-        "a connected store keeps its tenant open"
-    );
+    assert_eq!(h.connected(&acme), 1, "the store is still connected");
     assert_eq!(count(&client).await.unwrap(), 2);
 
-    // Disconnected: the lease goes, and the next tenants opened evict it.
+    // Disconnected: the registry forgets it.
     drop(client);
-    h.wait_for("lease released", |h| h.leases(&acme) == Some(0))
+    h.wait_for("connection released", |h| h.connected(&acme) == 0)
         .await;
-    for filler in &fillers {
-        h.tenants.open(filler).await.unwrap();
-    }
-    assert_eq!(h.leases(&acme), None);
 
     // Reconnecting finds the events again.
     let again = h.connect(&acme_token).await.unwrap();
@@ -334,7 +341,11 @@ async fn bad_keys_and_suspended_tenants_are_refused() {
     assert!(err.contains("unauthorized"), "{err}");
     let err = h.refused(None).await;
     assert!(err.contains("unauthorized"), "{err}");
-    assert_eq!(h.leases(&acme), None, "a refused connection opens nothing");
+    assert_eq!(
+        h.connected(&acme),
+        0,
+        "a refused connection registers nothing"
+    );
 
     h.platform.suspend_tenant(&acme.id, "unpaid").await.unwrap();
     let err = h.refused(Some(&token)).await;
@@ -385,7 +396,7 @@ async fn revoking_a_key_ends_its_connections() {
     // The cut-off client keeps trying to reconnect in the background; drop it
     // so the checks below see only the server's state, not its retries.
     drop(client);
-    h.wait_for("lease released", |h| h.leases(&acme) == Some(0))
+    h.wait_for("connection released", |h| h.connected(&acme) == 0)
         .await;
     assert_eq!(
         h.connections.count(&key_id),
@@ -422,6 +433,7 @@ async fn a_read_only_key_cannot_change_the_store() {
     // A snapshot it saves is dropped, not refused.
     client
         .save_snapshot(
+            String::new(),
             "t".into(),
             "p".into(),
             "1".into(),
@@ -433,35 +445,37 @@ async fn a_read_only_key_cannot_change_the_store() {
         .unwrap();
     assert!(
         writer
-            .get_snapshot("t".into(), "p".into(), "1".into(), "s1".into())
+            .get_snapshot(
+                String::new(),
+                "t".into(),
+                "p".into(),
+                "1".into(),
+                "s1".into()
+            )
             .await
             .unwrap()
             .is_none()
     );
 
-    // Its subscriber cursors are its own: the tenant's worker of the same
-    // name is not fenced out.
-    let tenant_worker = ulid::Ulid::generate();
-    writer
-        .upsert_subscriber("read-models".into(), tenant_worker)
-        .await
-        .unwrap();
+    // Subscriber cursors are not served on a connection serving a tenant: a
+    // storefront keeps its cursors in a store of its own, so no key can
+    // fence out or move the dashboard's workers.
     let its_worker = ulid::Ulid::generate();
-    client
+    let refused = client
         .upsert_subscriber("read-models".into(), its_worker)
         .await
-        .unwrap();
+        .unwrap_err();
     assert!(
-        client
-            .is_subscriber_running("read-models".into(), its_worker)
-            .await
-            .unwrap()
+        format!("{refused:#}").contains("subscriptions are not served"),
+        "{refused:#}"
     );
+    let refused = writer
+        .upsert_subscriber("read-models".into(), its_worker)
+        .await
+        .unwrap_err();
     assert!(
-        writer
-            .is_subscriber_running("read-models".into(), tenant_worker)
-            .await
-            .unwrap()
+        format!("{refused:#}").contains("subscriptions are not served"),
+        "{refused:#}"
     );
 
     // Granted write, the key's connections end and the reconnect writes.
@@ -486,7 +500,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
         .key_with_scopes(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
         .await;
     let merchant = evento::Evento::new(h.connect(&writer_token).await.unwrap());
-    let catalog = timada_catalog::Command(merchant.clone());
+    let catalog = timada_catalog::Command::new(merchant.clone(), &acme.id);
     let mug = catalog
         .create_product(
             "alice",
@@ -504,7 +518,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
     catalog.publish_product("alice", &mug.id).await.unwrap();
 
     let shop = evento::Evento::new(h.connect(&token).await.unwrap());
-    let orders = timada_orders::Command(shop.clone());
+    let orders = timada_orders::Command::unscoped(shop.clone());
     let cart_id = orders
         .create_cart(timada_orders::STOREFRONT_ACTOR)
         .await
@@ -523,7 +537,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
         .unwrap();
     // A shopper enters and takes off a discount code; making one is the
     // merchant's.
-    timada_discounts::Command(merchant.clone())
+    timada_discounts::Command::new(merchant.clone(), &acme.id)
         .create_discount(
             "alice",
             timada_discounts::CreateDiscount {
@@ -543,7 +557,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
         .remove_discount(timada_orders::STOREFRONT_ACTOR, &cart_id)
         .await
         .unwrap();
-    let forged = timada_discounts::Command(shop.clone())
+    let forged = timada_discounts::Command::unscoped(shop.clone())
         .create_discount(
             "storefront",
             timada_discounts::CreateDiscount {
@@ -634,7 +648,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
         matches!(placed, timada_orders::OrdersError::PaymentNotFound),
         "no payment was recorded, so none can be claimed: {placed}"
     );
-    let repriced = timada_catalog::Command(shop.clone())
+    let repriced = timada_catalog::Command::unscoped(shop.clone())
         .price_product("storefront", &mug.id, 1, "EUR")
         .await
         .unwrap_err();
@@ -644,7 +658,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
     );
 
     // The merchant sees the request, still unanswered, and the price as set.
-    let cart = timada_orders::Command(merchant.clone())
+    let cart = timada_orders::Command::new(merchant.clone(), &acme.id)
         .load_cart(&cart_id)
         .await
         .unwrap()
@@ -654,7 +668,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
     assert_eq!(product.price.unwrap().amount_cents, 1250);
 
     // A key with write may do it all.
-    timada_orders::Command(merchant.clone())
+    timada_orders::Command::new(merchant.clone(), &acme.id)
         .refuse_payment_request("alice", &cart_id, &request_id, "payments_unavailable")
         .await
         .unwrap();
@@ -678,7 +692,7 @@ async fn the_store_api_serves_over_tls() {
         .await
         .unwrap();
     assert_eq!(probe(&client, "s1", 0).await, 1);
-    assert_eq!(h.leases(&acme), Some(1));
+    assert_eq!(h.connected(&acme), 1);
 
     // Plaintext does not get in.
     assert!(h.connect(&token).await.is_err());

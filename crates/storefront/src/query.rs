@@ -1377,7 +1377,7 @@ mod sql {
         let pool = pool().await;
         migrate_plan(
             &pool,
-            &evento::migrator::Plan::apply_name("storefront", &Some("0008_review_replies".into())),
+            &evento::migrator::Plan::apply_name("storefront", Some("0008_review_replies")),
         )
         .await
         .unwrap();

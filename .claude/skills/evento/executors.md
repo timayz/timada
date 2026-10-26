@@ -134,8 +134,8 @@ Writes are serialized (single-writer lock), so concurrent appends can't both pas
 let any: evento::Evento = sqlite_executor.into();    // also: From<Sqlite> / From<&Sqlite> etc.
 
 // Multi-tenancy: stamp unkeyed writes and scope subscriptions
-let tenant = evento::Evento::new(sqlite_executor)
-    .default_routing_key("tenant-a");
+let regional = evento::Evento::new(sqlite_executor)
+    .default_routing_key("eu-west-1");
 ```
 
 `default_routing_key` fills in missing routing keys on `write` (explicit per-aggregate keys win) and is inherited by `SubscriptionBuilder` / `ProjectionSubscription` when the user hasn't called `.routing_key()` or `.any_routing_key()`.
@@ -205,7 +205,7 @@ let client = evento_remote::Client::builder(addr)
     .connect().await?;                                          // fails at once on a Rejection
 ```
 
-Many stores and credentials (since alpha.34, wire `FORMAT_VERSION` 4): implement
+Many tenants and credentials (wire `FORMAT_VERSION` 5 since the tenant column): implement
 `Resolver` and pass it to `serve_with` / `serve_tls_with`. Every connection opens
 with `Hello { token: Option<Token>, peer }` (the token redacts its `Debug`); the
 resolver answers once per connection (a reconnect is a new connection) with the
@@ -214,18 +214,21 @@ resolver answers once per connection (a reconnect is a new connection) with the
 ```rust
 #[async_trait::async_trait]
 impl evento_remote::Resolver for KeyResolver {
-    type Executor = TenantExecutor;
-    async fn resolve(&self, hello: &Hello) -> Result<Session<TenantExecutor>, Rejection> {
+    type Executor = Store;
+    async fn resolve(&self, hello: &Hello) -> Result<Session<Store>, Rejection> {
         let key = self.authenticate(hello.token.as_ref()).await?;   // load by hash, no secret compare
-        let (executor, lease) = self.tenants.open(key.tenant_id).await?;
-        Ok(Session::new(executor)
-            .keep(lease)                       // anything to hold for the connection's lifetime
+        Ok(Session::new(self.store.clone())
+            .tenant(&key.tenant_id)?           // every request acts in this tenant, whatever it names
+            .keep(guard)                       // anything to hold for the connection's lifetime
             .close_when(key.revoked_rx))       // watch::Receiver<bool>: true ends the connection
     }
 }
 let handle = evento_remote::serve_tls_with(listener, acceptor, resolver); // rustls TlsAcceptor
 ```
 
+A session serving a tenant refuses `replicate` and the subscriber calls (the
+client keeps its cursors in a store of its own, a `Sidecar`), and the events
+it reads come back in the default tenant: the client sees a store of its own.
 `serve` is the trivial resolver (tokens ignored). Plain TCP carries the token
 in clear text: trusted networks only.
 
@@ -235,17 +238,19 @@ in clear text: trusted networks only.
 strictly serializable) over a `DataStore` + `Journal` the caller supplies
 (`evento_sql::Sql` + `evento_sql::SqlJournal` on one SQLite file; the
 `accord` feature of `evento-sql-migrator` adds the journal tables). One
-process can host many groups: `GroupHost::new(mux, scheduler)` over one
-`MuxTransport` (served once per process, `serve`/`serve_tls`/
-`serve_tls_verified`) and one `SweepScheduler` (`start` once); `open(group,
-topology, datastore, journal, config)` registers the inbox, recovers from the
-journal and schedules sweeps (idempotent), `close(group)` unregisters it and
-returns the `Node`. Frames for a closed group reach the transport's
-`UnroutedHandler` (sweep gossip excluded since alpha.33), which is how a node
-reopens a tenant a peer is talking about. A single node talks to itself over a
-loopback port, so the same code serves both deployments. Reference:
-`examples/bank-axum-accord-tenants` upstream; in this workspace
-`dashboard/src/cluster.rs` and `dashboard/src/tenants.rs`.
+`Node` per process: `Node::new(id, topology, clock, sink, datastore, journal)
+.with_config(config)`, `recover_state().await?` over its journal, then
+`start(inbox)` and `start_recovery()`; `AccordExecutor::new(node, local)` is
+the drop-in executor. Inbound frames come from `serve(listener, inbox_tx)`
+(or `serve_tls`), outbound through `TcpTransport::new(id, peers)`; a single
+node uses `InMemoryNetwork` instead. Every tenant's streams live in that one
+store (`Key::of` puts the tenant in front of the routing key, so two tenants
+never conflict). A node told to rejoin (`rejoin_signal`), or back with a lost
+store, is opened by joining over its kept journal and an empty store
+(`recover_state_for_join`, `begin_join`, `start`, `join(contact)`,
+`start_recovery`): see `evento-accord/OPERATIONS.md` §7. Reference:
+`examples/bank-axum-accord` upstream; in this workspace
+`dashboard/src/cluster.rs`.
 
 ## Raw paginated reads with `Reader` (SQL)
 

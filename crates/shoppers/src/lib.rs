@@ -1,7 +1,7 @@
 //! Shoppers bounded context: the customers of one shop who chose to sign in.
 //!
 //! A shopper is the shop's, not the platform's: the same address at two shops
-//! is two accounts, each in its tenant's own event store. There is no sign-up:
+//! is two accounts, each under its shop's tenant in the store. There is no sign-up:
 //! a shopper proves an address with a mailed six-digit code, and the first
 //! proof creates the account. The account remembers the addresses it ships to;
 //! its orders are the shop's orders placed with that address, guest ones
@@ -34,6 +34,7 @@ mod value_object;
 pub use command::*;
 pub use error::*;
 pub use query::*;
+pub use timada_core::keys::KeyRing as ShopperKeyRing;
 pub use timada_core::keys::new_key_id;
 pub use timada_core::{Key as ShopperKey, Keys as ShopperKeys};
 pub use value_object::*;

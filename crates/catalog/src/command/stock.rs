@@ -248,21 +248,24 @@ impl<E: Executor> super::Command<E> {
                         on_hand,
                         set_by: actor.to_owned(),
                     })
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(CatalogError::from),
                 Some(stock) => stock
                     .write()?
                     .routing_key_opt(routing_key.clone())
                     .event(&tracked(actor, product_id, variant_id, on_hand))
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(CatalogError::from),
                 None => evento::append(stock_item_id(product_id, variant_id))
                     .original_version(0)
                     .routing_key_opt(routing_key.clone())
                     .event(&tracked(actor, product_id, variant_id, on_hand))
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(CatalogError::from),
             };
@@ -298,7 +301,8 @@ impl<E: Executor> super::Command<E> {
                 .event(&Untracked {
                     untracked_by: actor.to_owned(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await
                 .map_err(CatalogError::from);
             match written {
@@ -388,7 +392,8 @@ impl<E: Executor> super::Command<E> {
                         quantity: line.quantity,
                         consumed_by: actor.to_owned(),
                     })
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(CatalogError::from);
                 match written {
@@ -434,7 +439,8 @@ impl<E: Executor> super::Command<E> {
                         quantity,
                         restored_by: actor.to_owned(),
                     })
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(CatalogError::from);
                 match written {
@@ -467,7 +473,8 @@ impl<E: Executor> super::Command<E> {
     ) -> anyhow::Result<Option<StockState>> {
         stock_projection()
             .load(stock_item_id(product_id, variant_id))
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await
     }
 
@@ -510,7 +517,8 @@ impl<E: Executor> super::Command<E> {
                     expires_at: now + ttl_secs,
                     reserved_by: actor.to_owned(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await
                 .map_err(CatalogError::from);
             match written {
@@ -549,7 +557,8 @@ impl<E: Executor> super::Command<E> {
                         cart_id: cart_id.to_owned(),
                         released_by: actor.to_owned(),
                     })
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(CatalogError::from);
                 match written {

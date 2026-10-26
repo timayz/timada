@@ -104,7 +104,8 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<(OrderState, OrderLine), ReviewError> {
         let order = order_projection()
             .load(order_id)
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await?
             .ok_or(ReviewError::OrderNotFound)?;
         if order.status == OrderStatus::Cancelled {
@@ -154,7 +155,8 @@ impl<E: Executor> super::Command<E> {
                 photos: cmd.photos,
                 submitted_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match created {
             Ok(_) => {}
@@ -213,7 +215,8 @@ impl<E: Executor> super::Command<E> {
                 removed,
                 revised_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match revised {
             Ok(_) => {}
@@ -240,7 +243,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Published {
                 published_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -269,7 +273,8 @@ impl<E: Executor> super::Command<E> {
                 reason: reason.to_owned(),
                 rejected_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -299,7 +304,8 @@ impl<E: Executor> super::Command<E> {
                 body: body.to_owned(),
                 replied_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -324,7 +330,8 @@ impl<E: Executor> super::Command<E> {
             .event(&ReplyRemoved {
                 removed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -348,7 +355,8 @@ impl<E: Executor> super::Command<E> {
                 image_id: image_id.to_owned(),
                 removed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

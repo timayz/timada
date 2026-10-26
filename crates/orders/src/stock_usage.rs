@@ -17,19 +17,20 @@ use crate::aggregator::{Cancelled, Placed};
 use crate::command::order_projection;
 use crate::value_object::OrderLine;
 
-/// The cursor identity of the subscription, in each tenant's store.
+/// The cursor identity of the subscription, in the store.
 pub const STOCK_USAGE_SUBSCRIPTION: &str = "timada-orders/stock-usage";
 
 /// Who takes the goods off the shelf, in the stock streams.
 const ORDERS_ACTOR: &str = "timada-orders";
 
-/// The tenant's own executor, to write with (a handler only borrows the one
-/// it runs on).
+/// The store, to write with (a handler only borrows the executor it runs
+/// on).
 #[derive(Clone)]
 struct Store(Evento);
 
-/// Builds the subscription of one tenant over every routing key; `store` is
-/// the tenant's executor, which it writes the stock to.
+/// Builds the subscription over every tenant and routing key; `store` is
+/// the store it follows, which it writes the stock to (in the tenant of
+/// the order).
 pub fn stock_usage_subscription<E: Executor>(store: Evento) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(STOCK_USAGE_SUBSCRIPTION)
         .data(Store(store))
@@ -67,7 +68,7 @@ async fn on_placed<E: Executor>(
     let store: Store = context.extract();
     let lines = stock_lines(&event.data.lines);
     settled(
-        timada_catalog::Command(store.0)
+        timada_catalog::Command::new(store.0, &event.tenant)
             .consume_stock(
                 ORDERS_ACTOR,
                 &event.data.cart_id,
@@ -86,13 +87,14 @@ async fn on_cancelled<E: Executor>(
     let store: Store = context.extract();
     let Some(order) = order_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
     else {
         return Ok(());
     };
     settled(
-        timada_catalog::Command(store.0)
+        timada_catalog::Command::new(store.0, &event.tenant)
             .restore_stock(ORDERS_ACTOR, &order.id, &stock_lines(&order.lines))
             .await,
     )

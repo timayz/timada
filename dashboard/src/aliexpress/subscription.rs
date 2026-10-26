@@ -1,7 +1,7 @@
 //! Imports the AliExpress items a shop asked for: fetches each from
 //! AliExpress with the shop's app, fills a draft from it (pictures,
 //! options, variants, their stock) and records which combination each
-//! variant is. Every node with the tenant open runs it; the first to take
+//! variant is. Every node runs it; the first to take
 //! an import on does it, the others leave it.
 
 use std::path::Path;
@@ -19,31 +19,26 @@ use timada_catalog_import::{ImportOptions, import_one};
 use super::{ALIEXPRESS_ACTOR, Aliexpress};
 use crate::media::Media;
 
-/// The cursor identity of the subscription, in each tenant's store.
+/// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/aliexpress-import";
 
 /// A request older than this is history being replayed (a node catching
 /// up): left alone, the merchant may ask again.
 const IMPORT_WINDOW_SECS: u64 = 10 * 60;
 
-#[derive(Clone)]
-struct Tenant(String);
-
-/// The tenant's own executor, to write with.
+/// The store, to write with.
 #[derive(Clone)]
 struct Store(Evento);
 
 pub fn subscription<E: Executor>(
     aliexpress: Arc<Aliexpress>,
     media: Arc<Media>,
-    tenant_id: &str,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(aliexpress)
         .data(media)
         .data(Store(store))
-        .data(Tenant(tenant_id.to_owned()))
         .handler(on_import_requested())
         .any_routing_key()
         .retry(5)
@@ -56,13 +51,12 @@ async fn on_import_requested<E: Executor>(
 ) -> anyhow::Result<()> {
     let aliexpress: Arc<Aliexpress> = context.extract();
     let media: Arc<Media> = context.extract();
-    let tenant: Tenant = context.extract();
     let store: Store = context.extract();
     let now = crate::auth::now();
     if now.saturating_sub(event.timestamp) > IMPORT_WINDOW_SECS {
         return Ok(());
     }
-    let links = timada_aliexpress::Command(store.0.clone());
+    let links = timada_aliexpress::Command::new(store.0.clone(), &event.tenant);
     let link_id = event.aggregate_id.clone();
     let Some(link) = links.load_link_by_id(&link_id).await? else {
         return Ok(());
@@ -73,11 +67,11 @@ async fn on_import_requested<E: Executor>(
     if !links.start_import(ALIEXPRESS_ACTOR, &link_id).await? {
         return Ok(());
     }
-    let catalog = timada_catalog::Command(store.0.clone());
+    let catalog = timada_catalog::Command::new(store.0.clone(), &event.tenant);
     let outcome = import(
         &aliexpress,
         media,
-        &tenant.0,
+        &event.tenant,
         &catalog,
         &link.requested_by,
         &link.ae_product_id,
@@ -88,10 +82,10 @@ async fn on_import_requested<E: Executor>(
             links
                 .record_import(ALIEXPRESS_ACTOR, &link_id, &product_id, skus)
                 .await?;
-            tracing::info!(tenant = %tenant.0, ae_product_id = %link.ae_product_id, %product_id, "AliExpress product imported");
+            tracing::info!(tenant = %event.tenant, ae_product_id = %link.ae_product_id, %product_id, "AliExpress product imported");
         }
         Err(reason) => {
-            tracing::warn!(tenant = %tenant.0, ae_product_id = %link.ae_product_id, %reason, "AliExpress product not imported");
+            tracing::warn!(tenant = %event.tenant, ae_product_id = %link.ae_product_id, %reason, "AliExpress product not imported");
             links
                 .record_import_failure(ALIEXPRESS_ACTOR, &link_id, &reason)
                 .await?;

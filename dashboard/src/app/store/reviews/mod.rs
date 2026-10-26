@@ -196,8 +196,8 @@ pub async fn submit(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
         photos: photos.iter().map(|(photo, _)| photo.clone()).collect(),
     };
 
-    let hold = super::hold(cx, &access).await?;
-    let reviews = timada_reviews::Command(hold.executor().clone());
+    let store = super::store(cx, &access);
+    let reviews = timada_reviews::Command::new(store.executor().clone(), store.tenant_id());
     // Refused before any file is written when it can be.
     let checked = match draft.validate() {
         Ok(()) => reviews

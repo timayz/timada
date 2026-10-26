@@ -76,8 +76,8 @@ async fn what_another_checkout_holds_is_not_for_sale() {
 #[tokio::test]
 async fn a_paid_order_takes_its_share_and_a_cancelled_one_gives_it_back() {
     let (executor, _) = executor_with_pool().await;
-    let orders = timada_orders::Command(executor.clone());
-    let catalog = timada_catalog::Command(executor.clone());
+    let orders = timada_orders::Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     catalog.set_stock(ALICE, &mug, None, 3).await.unwrap();
     let cart_id = cart_with(&orders, &mug, 2).await;

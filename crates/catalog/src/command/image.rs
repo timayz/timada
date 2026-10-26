@@ -58,7 +58,8 @@ impl<E: Executor> super::Command<E> {
                 alt,
                 added_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -90,7 +91,8 @@ impl<E: Executor> super::Command<E> {
                 alt,
                 changed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -131,7 +133,8 @@ impl<E: Executor> super::Command<E> {
                 image_ids,
                 reordered_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -156,7 +159,8 @@ impl<E: Executor> super::Command<E> {
                 image_id: image_id.to_owned(),
                 removed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

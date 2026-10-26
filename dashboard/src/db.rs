@@ -1,11 +1,12 @@
-//! SQLite pools and the schema migrator.
+//! SQLite pools and the schema migrators.
 //!
-//! Two pools for `serve`, as in imkitchen: a read-only pool sized for
-//! concurrent reads and a single-connection write pool, so every write is
-//! serialized up front instead of failing with SQLITE_BUSY mid-transaction.
-//! One file holds the events, the projections and the Accord consensus
-//! journal, so the write side runs WAL with `synchronous = FULL`: an acked
-//! write must survive power loss.
+//! Two files: the store (every tenant's events, the snapshots, the
+//! subscription cursors and the Accord consensus journal) and the read models
+//! (the tables the pages read). Each gets two pools for `serve`, as in
+//! imkitchen: a read-only pool sized for concurrent reads and a
+//! single-connection write pool, so every write is serialized up front
+//! instead of failing with SQLITE_BUSY mid-transaction. The write side runs
+//! WAL with `synchronous = FULL`: an acked write must survive power loss.
 
 use std::ops::Deref;
 use std::path::Path;
@@ -18,10 +19,11 @@ use sqlx::sqlite::{
 };
 use sqlx_migrator::{Info, Migrator};
 
-/// The read-only pool, as registered in topcoat's app context:
+/// The read models' read-only pool, as registered in topcoat's app context:
 /// `let db: &ReadPool = app_context(cx);` then use it as a `SqlitePool`.
 pub struct ReadPool(pub SqlitePool);
-/// The single-connection write pool, as registered in topcoat's app context.
+/// The read models' single-connection write pool, as registered in topcoat's
+/// app context.
 pub struct WritePool(pub SqlitePool);
 
 impl Deref for ReadPool {
@@ -78,14 +80,30 @@ pub async fn create_read_pool(database_url: &str, max_connections: u32) -> Resul
     Ok(pool)
 }
 
-/// Read-write pool for `serve`: one connection, so writes never contend with
-/// each other. The Accord journal shares it with the event store.
-pub async fn create_write_pool(database_url: &str) -> Result<SqlitePool> {
+/// What a write pool promises once a commit returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Durability {
+    /// On disk (`synchronous = FULL`): the events, the consensus journal
+    /// and the read models.
+    Durable,
+    /// In the operating system's hands (`synchronous = NORMAL`): a power
+    /// cut may lose the last commits, never corrupt the file. For the
+    /// subscription cursors and the snapshots, which are redone or rebuilt.
+    Relaxed,
+}
+
+/// Read-write pool for `serve`: one connection, so writes never contend
+/// with each other and queue in order instead of backing off on SQLite's
+/// lock. On the store, the Accord journal shares it with the events.
+pub async fn create_write_pool(database_url: &str, durability: Durability) -> Result<SqlitePool> {
     prepare_database_dir(database_url)?;
     let options = base_options(database_url, SERVE_BUSY_TIMEOUT)?
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Full);
+        .synchronous(match durability {
+            Durability::Durable => SqliteSynchronous::Full,
+            Durability::Relaxed => SqliteSynchronous::Normal,
+        });
 
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -93,7 +111,7 @@ pub async fn create_write_pool(database_url: &str) -> Result<SqlitePool> {
         .await
         .with_context(|| format!("cannot open {database_url}"))?;
 
-    tracing::info!("write pool ready (1 connection)");
+    tracing::info!(?durability, "write pool ready (1 connection)");
     Ok(pool)
 }
 
@@ -134,10 +152,14 @@ pub fn prepare_database_dir(database_url: &str) -> Result<()> {
     Ok(())
 }
 
-/// evento's schema (events, snapshots, subscribers, Accord journal) followed by
-/// the bounded contexts' read models.
-pub fn migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
-    let mut migrator = evento_sql_migrator::new::<sqlx::Sqlite>()?;
+/// The store's schema: events, snapshots, subscribers and the Accord journal.
+pub fn store_migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
+    evento_sql_migrator::new::<sqlx::Sqlite>()
+}
+
+/// The bounded contexts' read models.
+pub fn read_model_migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
+    let mut migrator = Migrator::default();
     migrator.add_migrations(timada_identity::migrations())?;
     migrator.add_migrations(timada_tenancy::migrations())?;
     migrator.add_migrations(timada_catalog::migrations())?;
@@ -150,4 +172,68 @@ pub fn migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
     migrator.add_migrations(timada_invoicing::migrations())?;
     migrator.add_migrations(timada_aliexpress::migrations())?;
     Ok(migrator)
+}
+
+/// Creates the file if needed and applies the pending migrations of
+/// `migrator` to it, on a pool of its own.
+pub async fn migrate(url: &str, migrator: Migrator<sqlx::Sqlite>) -> Result<()> {
+    use sqlx::migrate::MigrateDatabase;
+    use sqlx_migrator::{Migrate, Plan};
+
+    prepare_database_dir(url)?;
+    if !sqlx::Sqlite::database_exists(url).await? {
+        tracing::info!(url, "database does not exist, creating it");
+        sqlx::Sqlite::create_database(url).await?;
+    }
+    let pool = create_pool(url, 1, MAINTENANCE_BUSY_TIMEOUT).await?;
+    let mut conn = pool.acquire().await?;
+    // Collapse any leftover `-wal` from a previous unclean shutdown up front, so
+    // the migration transaction does not hit SQLITE_BUSY while WAL recovery runs
+    // lazily. The long busy_timeout on this pool rides out slow storage.
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&mut *conn)
+        .await?;
+    migrator.run(&mut *conn, &Plan::apply_all()).await?;
+    drop(conn);
+    pool.close().await;
+    Ok(())
+}
+
+/// Drops the file, if there, then creates and migrates it again.
+pub async fn recreate(url: &str, migrator: Migrator<sqlx::Sqlite>) -> Result<()> {
+    use sqlx::migrate::MigrateDatabase;
+
+    if sqlx::Sqlite::database_exists(url).await? {
+        tracing::warn!(url, "dropping existing database");
+        sqlx::Sqlite::drop_database(url).await?;
+    }
+    migrate(url, migrator).await
+}
+
+/// Recreates the read models from nothing: they are derived data, which the
+/// subscriptions fill again from the store.
+pub async fn recreate_read_models(url: &str) -> Result<()> {
+    recreate(url, read_model_migrator()?).await
+}
+
+/// Empties the store of its events, snapshots and subscription cursors and
+/// keeps the consensus journal (the `accord_*` tables): what a node does
+/// before copying a peer's store (see `evento-accord`'s operations guide,
+/// "Opening a node by joining").
+pub async fn empty_store(write_pool: &SqlitePool) -> Result<()> {
+    let mut tx = write_pool.begin().await?;
+    sqlx::query("DELETE FROM event")
+        .execute(&mut *tx)
+        .await
+        .context("cannot empty the events")?;
+    sqlx::query("DELETE FROM snapshot")
+        .execute(&mut *tx)
+        .await
+        .context("cannot empty the snapshots")?;
+    sqlx::query("DELETE FROM subscriber")
+        .execute(&mut *tx)
+        .await
+        .context("cannot empty the subscription cursors")?;
+    tx.commit().await?;
+    Ok(())
 }

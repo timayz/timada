@@ -38,7 +38,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Created {
                 created_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(cart_id)
     }
@@ -91,7 +92,8 @@ impl<E: Executor> super::Command<E> {
                 quantity: item.quantity,
                 added_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         self.require_cart(cart_id).await
     }
@@ -141,7 +143,7 @@ impl<E: Executor> super::Command<E> {
                 set_by: actor.to_owned(),
             });
         }
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         self.require_cart(cart_id).await
     }
 
@@ -195,7 +197,8 @@ impl<E: Executor> super::Command<E> {
                 code,
                 applied_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         self.require_cart(cart_id).await
     }
@@ -216,7 +219,8 @@ impl<E: Executor> super::Command<E> {
             .event(&DiscountRemoved {
                 removed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         self.require_cart(cart_id).await
     }
@@ -231,7 +235,8 @@ impl<E: Executor> super::Command<E> {
     ) -> anyhow::Result<Option<DiscountState>> {
         let Some(index) = discount_code_projection()
             .load(discount_code_id(code))
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await?
             .filter(|index| !index.released)
         else {
@@ -239,7 +244,8 @@ impl<E: Executor> super::Command<E> {
         };
         Ok(discount_projection()
             .load(&index.discount_id)
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await?
             .filter(|discount| !discount.is_archived()))
     }
@@ -248,7 +254,11 @@ impl<E: Executor> super::Command<E> {
         &self,
         product_id: &str,
     ) -> anyhow::Result<Option<ProductState>> {
-        product_projection().load(product_id).execute(&self.0).await
+        product_projection()
+            .load(product_id)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await
     }
 
     /// The cart, refused once it became an order.
@@ -272,7 +282,8 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<(), OrdersError> {
         let Some(stock) = stock_projection()
             .load(stock_item_id(product_id, variant_id))
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await?
         else {
             return Ok(());

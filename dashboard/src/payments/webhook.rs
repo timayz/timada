@@ -77,7 +77,7 @@ pub async fn receive(
     if !status.succeeded {
         return Ok(Outcome::Ignored);
     }
-    let orders = timada_orders::Command(store);
+    let orders = timada_orders::Command::new(store, tenant_id);
     let payment = Payment {
         provider: PROVIDER_STRIPE.to_owned(),
         payment_id: status.payment_id.clone(),

@@ -28,7 +28,7 @@ pub struct NewSku {
 
 /// An AliExpress item the shop imported: one stream per item, with the
 /// deterministic id [`aliexpress_product_id`](crate::aliexpress_product_id),
-/// so a shop imports an item once. It lives in the tenant's store, next to
+/// so a shop imports an item once. It lives under the tenant, next to
 /// the catalog product it filled.
 #[evento::aggregate(name = "timada-aliexpress/Product")]
 pub enum AliexpressProduct {
@@ -88,7 +88,7 @@ pub mod refresh {
 
 /// A shop's paid order placed on AliExpress: one stream per order, with the
 /// deterministic id [`forward_id`](crate::forward_id), so an order is placed
-/// there once. It lives in the tenant's store, next to the order.
+/// there once. It lives under the tenant, next to the order.
 pub mod forward {
     /// One combination an order bought on AliExpress.
     #[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]

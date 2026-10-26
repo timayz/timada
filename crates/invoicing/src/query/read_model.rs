@@ -1,7 +1,8 @@
-//! The subscription that keeps `invoicing_documents` current for one
+//! The subscription that keeps `invoicing_documents` current for every
 //! tenant. A document never changes once issued, so its row is written from
 //! the event alone; delivery may repeat (the subscription is at-least-once)
-//! and rewrites the same row.
+//! and rewrites the same row. One subscription follows every tenant's
+//! streams: each row carries the tenant of the event that made it.
 
 use evento::{
     Executor,
@@ -14,22 +15,14 @@ use crate::aggregator::{CreditNoteIssued, InvoiceIssued};
 use crate::command::DocumentKind;
 use crate::value_object::{VatSubtotal, document_label};
 
-/// The cursor identity of the read-model subscription, in each tenant's store.
+/// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-invoicing/read-models";
 
-/// The tenant whose stream a subscription follows, handed to its handlers.
-#[derive(Debug, Clone)]
-pub struct TenantId(pub String);
-
-/// Builds the subscription of one tenant over every routing key. `pool` is
-/// the shared read-model database and must be allowed to write.
-pub fn read_model_subscription<E: Executor>(
-    pool: SqlitePool,
-    tenant_id: &str,
-) -> SubscriptionBuilder<E> {
+/// Builds the subscription over every tenant and routing key. `pool` is the
+/// read-model database and must be allowed to write.
+pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(pool)
-        .data(TenantId(tenant_id.to_owned()))
         .handler(on_invoice_issued())
         .handler(on_credit_note_issued())
         .any_routing_key()
@@ -41,11 +34,10 @@ async fn on_invoice_issued<E: Executor>(
     event: Event<InvoiceIssued>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let tenant: TenantId = context.extract();
     let data = &event.data;
     upsert(
         &pool,
-        &tenant.0,
+        &event.tenant,
         Row {
             id: &data.document_id,
             kind: DocumentKind::Invoice,
@@ -74,11 +66,10 @@ async fn on_credit_note_issued<E: Executor>(
     event: Event<CreditNoteIssued>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let tenant: TenantId = context.extract();
     let data = &event.data;
     upsert(
         &pool,
-        &tenant.0,
+        &event.tenant,
         Row {
             id: &data.document_id,
             kind: DocumentKind::CreditNote,

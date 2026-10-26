@@ -7,10 +7,8 @@ use timada_catalog::{
     read_model_subscription, tree_of, upsert_product,
 };
 
-const TENANT: &str = "tenant-acme";
-
 async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT)
+    read_model_subscription::<evento::Sqlite>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
@@ -19,7 +17,7 @@ async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
 #[tokio::test]
 async fn products_are_listed_searched_counted_and_stay_idempotent() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), TENANT);
     let mug = create_product(&cmd, "Blue Mug").await;
     let plate = create_product(&cmd, "Plate").await;
     cmd.price_product(ALICE, &mug.id, 1250, "EUR")
@@ -82,7 +80,7 @@ async fn products_are_listed_searched_counted_and_stay_idempotent() {
 #[tokio::test]
 async fn an_archived_product_leaves_its_slug_to_the_next_one() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), TENANT);
     let first = create_product(&cmd, "Blue Mug").await;
     cmd.archive_product(ALICE, &first.id).await.unwrap();
     let second = create_product(&cmd, "Blue Mug").await;
@@ -107,7 +105,7 @@ async fn an_archived_product_leaves_its_slug_to_the_next_one() {
 #[tokio::test]
 async fn the_category_tree_carries_its_product_counts() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), TENANT);
     let bedding = create_category(&cmd, "Bedding").await;
     let mats = create_child(&cmd, "Mats", &bedding.id).await;
     let toys = create_category(&cmd, "Toys").await;
@@ -202,7 +200,7 @@ async fn the_category_tree_carries_its_product_counts() {
 #[tokio::test]
 async fn an_archived_category_leaves_the_tree_but_keeps_its_memberships() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), TENANT);
     let bedding = create_category(&cmd, "Bedding").await;
     let mat = create_product(&cmd, "Cooling mat").await;
     cmd.categorize_product(ALICE, &mat.id, &bedding.id)
@@ -234,7 +232,7 @@ async fn an_archived_category_leaves_the_tree_but_keeps_its_memberships() {
 #[tokio::test]
 async fn an_archived_product_drops_out_of_its_categories_count() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), TENANT);
     let bedding = create_category(&cmd, "Bedding").await;
     let mat = create_product(&cmd, "Cooling mat").await;
     cmd.categorize_product(ALICE, &mat.id, &bedding.id)
@@ -266,7 +264,7 @@ async fn an_archived_product_drops_out_of_its_categories_count() {
 #[tokio::test]
 async fn the_stored_counts_follow_a_move() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), TENANT);
     let bedding = create_category(&cmd, "Bedding").await;
     let mats = create_child(&cmd, "Mats", &bedding.id).await;
     let toys = create_category(&cmd, "Toys").await;
@@ -309,7 +307,7 @@ async fn the_stored_counts_follow_a_move() {
 #[tokio::test]
 async fn a_search_reads_the_index_of_its_own_tenant() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), TENANT);
     let mug = create_product(&cmd, "Café Mug").await;
     create_product(&cmd, "Plate").await;
     catch_up(&executor, &pool).await;

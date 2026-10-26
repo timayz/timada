@@ -4,7 +4,7 @@
 //! A code takes a percentage or a fixed amount off the items of a whole
 //! order. It may be limited in time, in the number of orders it serves and to
 //! one order per shopper e-mail. Like the catalog, it lives in the tenant's
-//! own event store and the crate is pure domain code: no permission checks,
+//! streams of the store and the crate is pure domain code: no permission checks,
 //! no HTTP.
 //!
 //! A code is unique within the tenant through an index aggregate with a

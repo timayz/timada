@@ -31,7 +31,8 @@ impl<E: Executor> super::Command<E> {
                 tracking,
                 fulfilled_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -60,7 +61,8 @@ impl<E: Executor> super::Command<E> {
                 reason,
                 cancelled_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -88,7 +90,8 @@ impl<E: Executor> super::Command<E> {
                 amount_cents,
                 refunded_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

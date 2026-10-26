@@ -25,7 +25,7 @@ use timada_tenancy::TenantState;
 
 use super::{ALIEXPRESS_ACTOR, Aliexpress};
 
-/// The cursor identity of the subscription, in each tenant's store.
+/// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/aliexpress-forward";
 
 /// An order placed longer ago than this is history being replayed: not
@@ -80,7 +80,7 @@ fn describe(err: &AeError) -> String {
 
 impl Aliexpress {
     /// Places the order a forward asks for, on the node that takes it on:
-    /// `store` is the tenant's executor, `read_pool` the shared read models.
+    /// `store` is the store, `read_pool` the read models.
     pub async fn forward_order<E: evento::Executor + Clone>(
         &self,
         store: &E,
@@ -88,7 +88,7 @@ impl Aliexpress {
         tenant_id: &str,
         forward_id: &str,
     ) -> anyhow::Result<ForwardResult> {
-        let forwards = timada_aliexpress::Command(store.clone());
+        let forwards = timada_aliexpress::Command::new(store.clone(), tenant_id);
         if !forwards.start_forward(ALIEXPRESS_ACTOR, forward_id).await? {
             return Ok(ForwardResult::Skipped);
         }
@@ -140,7 +140,7 @@ impl Aliexpress {
                 "Connect the shop's AliExpress account first.".into(),
             ));
         };
-        let orders = timada_orders::Command(store.clone());
+        let orders = timada_orders::Command::new(store.clone(), tenant_id);
         let Some(order) = orders.load_order(order_id).await.map_err(failed)? else {
             return Err(Refusal("The order does not exist.".into()));
         };
@@ -278,7 +278,7 @@ impl Aliexpress {
         forward_id: &str,
         now: u64,
     ) -> anyhow::Result<CheckResult> {
-        let forwards = timada_aliexpress::Command(store.clone());
+        let forwards = timada_aliexpress::Command::new(store.clone(), &tenant.id);
         let Some((forward, version)) = forwards.load_forward_versioned(forward_id).await? else {
             return Ok(CheckResult::Skipped);
         };
@@ -288,7 +288,7 @@ impl Aliexpress {
         let Some(client) = self.client_of(tenant)? else {
             return Ok(CheckResult::Skipped);
         };
-        let orders = timada_orders::Command(store.clone());
+        let orders = timada_orders::Command::new(store.clone(), &tenant.id);
         let order = orders.load_order(&forward.order_id).await?;
         let settled = order
             .as_ref()
@@ -400,7 +400,7 @@ pub async fn order_links<E: evento::Executor + Clone>(
     tenant_id: &str,
     order: &OrderState,
 ) -> anyhow::Result<Vec<LinkState>> {
-    let links = timada_aliexpress::Command(store.clone());
+    let links = timada_aliexpress::Command::new(store.clone(), tenant_id);
     let mut found: Vec<LinkState> = Vec::new();
     for line in &order.lines {
         if found
@@ -421,24 +421,19 @@ pub async fn order_links<E: evento::Executor + Clone>(
     Ok(found)
 }
 
-#[derive(Clone)]
-struct Tenant(String);
-
-/// The tenant's own executor, to write with.
+/// The store, to write with.
 #[derive(Clone)]
 struct Store(Evento);
 
 pub fn subscription<E: Executor>(
     aliexpress: Arc<Aliexpress>,
     read_pool: SqlitePool,
-    tenant_id: &str,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(aliexpress)
         .data(read_pool)
         .data(Store(store))
-        .data(Tenant(tenant_id.to_owned()))
         .handler(on_order_placed())
         .handler(on_forward_requested())
         .any_routing_key()
@@ -457,9 +452,8 @@ async fn on_order_placed<E: Executor>(
     }
     let aliexpress: Arc<Aliexpress> = context.extract();
     let read_pool: SqlitePool = context.extract();
-    let tenant: Tenant = context.extract();
     let store: Store = context.extract();
-    let Some(merchant) = aliexpress.active_tenant(&tenant.0).await? else {
+    let Some(merchant) = aliexpress.active_tenant(&event.tenant).await? else {
         return Ok(());
     };
     let wanted = merchant
@@ -469,15 +463,15 @@ async fn on_order_placed<E: Executor>(
     if !wanted {
         return Ok(());
     }
-    let orders = timada_orders::Command(store.0.clone());
+    let orders = timada_orders::Command::new(store.0.clone(), &event.tenant);
     let Some(order) = orders.load_order(&event.aggregate_id).await? else {
         return Ok(());
     };
-    let links = order_links(&store.0, &read_pool, &tenant.0, &order).await?;
+    let links = order_links(&store.0, &read_pool, &event.tenant, &order).await?;
     if forward_items(&order.lines, &links).items.is_empty() {
         return Ok(());
     }
-    match timada_aliexpress::Command(store.0.clone())
+    match timada_aliexpress::Command::new(store.0.clone(), &event.tenant)
         .request_forward(ALIEXPRESS_ACTOR, &order.id, false)
         .await
     {
@@ -496,10 +490,9 @@ async fn on_forward_requested<E: Executor>(
     }
     let aliexpress: Arc<Aliexpress> = context.extract();
     let read_pool: SqlitePool = context.extract();
-    let tenant: Tenant = context.extract();
     let store: Store = context.extract();
     aliexpress
-        .forward_order(&store.0, &read_pool, &tenant.0, &event.aggregate_id)
+        .forward_order(&store.0, &read_pool, &event.tenant, &event.aggregate_id)
         .await?;
     Ok(())
 }

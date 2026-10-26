@@ -68,7 +68,8 @@ impl<E: Executor> super::Command<E> {
                     .write()?
                     .routing_key_opt(routing_key)
                     .event(&issued)
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await?;
             }
             None => {
@@ -76,7 +77,8 @@ impl<E: Executor> super::Command<E> {
                     .original_version(0)
                     .routing_key_opt(routing_key)
                     .event(&issued)
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await;
                 match created {
                     Ok(_) => {}
@@ -122,14 +124,16 @@ impl<E: Executor> super::Command<E> {
                 .write()?
                 .routing_key_opt(routing_key)
                 .event(&CodeConsumed)
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await
         } else {
             challenge
                 .write()?
                 .routing_key_opt(routing_key)
                 .event(&AttemptFailed)
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await
         };
         match outcome {

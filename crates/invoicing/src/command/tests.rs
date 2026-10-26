@@ -5,7 +5,15 @@ use super::*;
 use crate::tax::{Regime, TaxProfile};
 use crate::value_object::{PAYMENT_METHOD_CARD, book_id};
 
+/// The tenant the tests act in, unless they say otherwise.
+const TENANT: &str = "tenant-1";
+
 async fn command() -> Command<evento::Sqlite> {
+    command_in(TENANT).await
+}
+
+/// A gateway of `tenant` over a fresh store.
+async fn command_in(tenant: &str) -> Command<evento::Sqlite> {
     let options = SqliteConnectOptions::new()
         .filename(":memory:")
         .create_if_missing(true);
@@ -21,13 +29,13 @@ async fn command() -> Command<evento::Sqlite> {
         .await
         .unwrap();
     drop(conn);
-    Command(pool.into())
+    Command::new(pool.into(), tenant)
 }
 
 /// 2026-10-14T21:00:00Z.
 const NOW: u64 = 1_792_011_600;
 
-/// Issues with the tenant's own store as the platform store too: one
+/// Issues with the ledger in the same store (its default tenant): one
 /// tenant, one company.
 trait IssueHere {
     async fn issue_invoice_here(
@@ -43,7 +51,7 @@ impl IssueHere for Command<evento::Sqlite> {
         invoice: NewInvoice,
         now: u64,
     ) -> Result<IssuedDocument, InvoicingError> {
-        self.issue_invoice(invoice, &Ledger(self.0.clone()), now)
+        self.issue_invoice(invoice, &Ledger(self.executor.clone()), now)
             .await
     }
 }
@@ -179,7 +187,8 @@ async fn books_fill_and_the_series_carries_on_in_the_next() {
     // Three books of three, the last with two.
     let third = book_projection()
         .load(book_id("F2026", 2))
-        .execute(&cmd.0)
+        .tenant(&cmd.tenant)
+        .execute(&cmd.executor)
         .await
         .unwrap()
         .unwrap();
@@ -215,12 +224,14 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
             series: "F2026".into(),
             year: 2026,
         })
-        .commit(&cmd.0)
+        .tenant(&cmd.tenant)
+        .commit(&cmd.executor)
         .await
         .unwrap();
     let book = book_projection()
         .load(book_id("F2026", 0))
-        .execute(&cmd.0)
+        .tenant(&cmd.tenant)
+        .execute(&cmd.executor)
         .await
         .unwrap()
         .unwrap();
@@ -256,7 +267,8 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
             eu_distance_sales_cents: 0,
             eu_threshold_passed: false,
         })
-        .commit(&cmd.0)
+        .tenant(&cmd.tenant)
+        .commit(&cmd.executor)
         .await
         .unwrap();
     assert!(cmd.load_invoice_of_order("o2").await.unwrap().is_none());
@@ -276,7 +288,7 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
 async fn writers_racing_never_share_or_skip_a_number() {
     let cmd = command().await;
     let issues = (0..6).map(|i| {
-        let cmd = Command(cmd.0.clone());
+        let cmd = Command::new(cmd.executor.clone(), &cmd.tenant);
         async move {
             // Two writers per order, as when two nodes answer the same event.
             let order = format!("o{}", i / 2);
@@ -477,7 +489,7 @@ async fn eu_distance_sales_pass_the_threshold_in_the_series_order() {
 async fn racing_writers_count_every_distance_sale_once() {
     let cmd = command().await;
     let issues = (0..6).map(|i| {
-        let cmd = Command(cmd.0.clone());
+        let cmd = Command::new(cmd.executor.clone(), &cmd.tenant);
         async move {
             cmd.issue_invoice_here(to_germany(&format!("o{i}"), 240_000), NOW)
                 .await
@@ -550,9 +562,9 @@ fn invoice_for_export() -> NewInvoice {
 
 #[tokio::test]
 async fn tenants_of_one_company_share_its_threshold_in_series_of_their_own() {
-    let shop = command().await;
-    let pro = command().await;
-    let platform = Ledger(command().await.0);
+    let shop = command_in("shop").await;
+    let pro = command_in("pro").await;
+    let platform = Ledger(command().await.executor);
     let of = |tenant: &str, code: &str, order: &str, amount: u64| NewInvoice {
         tenant_id: tenant.into(),
         series_code: code.into(),
@@ -600,12 +612,11 @@ async fn tenants_of_one_company_share_its_threshold_in_series_of_their_own() {
 
 #[tokio::test]
 async fn tenants_racing_for_one_ledger_count_every_sale_once() {
-    let platform = command().await.0;
+    let platform = command().await.executor;
     let issues = (0..6).map(|i| {
-        let tenant = command();
         let platform = platform.clone();
         async move {
-            let tenant = tenant.await;
+            let tenant = command_in(&format!("t{i}")).await;
             let invoice = NewInvoice {
                 tenant_id: format!("t{i}"),
                 series_code: format!("T{i}"),
@@ -637,7 +648,7 @@ async fn tenants_racing_for_one_ledger_count_every_sale_once() {
 #[tokio::test]
 async fn a_crash_after_counting_reuses_the_decision() {
     let cmd = command().await;
-    let platform = Ledger(cmd.0.clone());
+    let platform = Ledger(cmd.executor.clone());
     // Counted in the ledger (with the decision of the time), then nothing.
     platform
         .count("company-1", 2026, &invoice_id("o1"), "tenant-1", |_| {

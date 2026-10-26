@@ -79,7 +79,7 @@ async fn catalog_items(
     )
     .await
     .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
-    let catalog = timada_catalog::Command(access.executor()?.clone());
+    let catalog = timada_catalog::Command::new(access.executor()?.clone(), access.tenant_id());
     let mut items = Vec::new();
     let mut products = Vec::new();
     let mut labels = HashMap::new();

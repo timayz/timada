@@ -43,14 +43,49 @@ const fn chunk_size() -> u16 {
     if cfg!(test) { 3 } else { BOOK_CHUNK }
 }
 
-/// The command gateway over a tenant's store.
-pub struct Command<E: Executor>(pub E);
+/// The command gateway over a tenant's streams.
+pub struct Command<E: Executor> {
+    executor: E,
+    tenant: String,
+}
+
+impl<E: Executor> Command<E> {
+    /// The gateway of one tenant: every stream it writes, loads or reads is
+    /// that tenant's. `tenant` must not be empty (the default tenant holds
+    /// the platform's own streams).
+    pub fn new(executor: E, tenant: impl Into<String>) -> Self {
+        let tenant = tenant.into();
+        debug_assert!(!tenant.is_empty(), "a tenant gateway needs a tenant");
+        Self { executor, tenant }
+    }
+
+    /// A gateway naming no tenant: for a store that is one tenant's already
+    /// (a storefront's connection, which the store API serves in its key's
+    /// tenant whatever its requests name). Every call then acts in the
+    /// default tenant, which that store maps to its own.
+    pub fn unscoped(executor: E) -> Self {
+        Self {
+            executor,
+            tenant: String::new(),
+        }
+    }
+
+    /// The tenant every call acts in.
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+
+    /// The store the tenant's streams live in.
+    pub fn executor(&self) -> &E {
+        &self.executor
+    }
+}
 
 impl<E: Executor> Deref for Command<E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.executor
     }
 }
 
@@ -415,7 +450,7 @@ impl<E: Executor> Command<E> {
     /// Issues the invoice of a paid order at `now` (Unix seconds); an order
     /// already invoiced returns its invoice unchanged. An EU distance sale
     /// is decided against its company's yearly total, kept in `ledger`
-    /// (the platform store).
+    /// (the default tenant of the store).
     pub async fn issue_invoice<P: Executor>(
         &self,
         invoice: NewInvoice,
@@ -639,7 +674,8 @@ impl<E: Executor> Command<E> {
         for _ in 0..ATTEMPTS {
             if let Some(index) = document_projection()
                 .load(document_id)
-                .execute(&self.0)
+                .tenant(&self.tenant)
+                .execute(&self.executor)
                 .await?
             {
                 return Ok(index);
@@ -650,7 +686,8 @@ impl<E: Executor> Command<E> {
                     series: series.clone(),
                     year,
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await;
             match reserved {
                 Ok(_) | Err(WriteError::InvalidOriginalVersion) => continue,
@@ -674,7 +711,8 @@ impl<E: Executor> Command<E> {
         for _ in 0..ATTEMPTS {
             let Some(index) = document_projection()
                 .load(document_id)
-                .execute(&self.0)
+                .tenant(&self.tenant)
+                .execute(&self.executor)
                 .await?
             else {
                 return Err(anyhow::anyhow!("document {document_id} is not reserved").into());
@@ -705,7 +743,8 @@ impl<E: Executor> Command<E> {
                         .as_ref()
                         .map_or(Ok(0), |book| book.aggregate_version())?,
                 )
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await;
             match committed {
                 Ok(_) => {}
@@ -735,7 +774,8 @@ impl<E: Executor> Command<E> {
                 book_id: book_id.to_owned(),
                 label: label.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match recorded {
             Ok(_) | Err(WriteError::InvalidOriginalVersion) => Ok(()),
@@ -753,7 +793,11 @@ impl<E: Executor> Command<E> {
         let mut chunk = 0;
         loop {
             let id = book_id(series, chunk);
-            let state = book_projection().load(&id).execute(&self.0).await?;
+            let state = book_projection()
+                .load(&id)
+                .tenant(&self.tenant)
+                .execute(&self.executor)
+                .await?;
             let full = match &state {
                 Some(book) => book.aggregate_version()? >= chunk_size(),
                 None => false,
@@ -778,7 +822,8 @@ impl<E: Executor> Command<E> {
     ) -> Result<IssuedDocument, InvoicingError> {
         book_projection()
             .load(book_id)
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await?
             .and_then(|mut book| book.documents.remove(document_id))
             .ok_or_else(|| {
@@ -793,7 +838,8 @@ impl<E: Executor> Command<E> {
     ) -> Result<Option<IssuedDocument>, InvoicingError> {
         let Some(book) = document_projection()
             .load(document_id)
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await?
             .and_then(|index| index.book_id)
         else {

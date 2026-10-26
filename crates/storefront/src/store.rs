@@ -153,7 +153,10 @@ impl Store {
 
     /// Asks the store one cheap question and counts the local copy.
     pub async fn status(&self) -> StoreStatus {
-        let probe = self.inner.executor.latest_timestamp(None, None);
+        let probe = self
+            .inner
+            .executor
+            .latest_timestamp(None, None, evento::TenantFilter::All);
         let connected = tokio::time::timeout(self.inner.request_timeout, probe)
             .await
             .map(|answer| answer.is_ok())

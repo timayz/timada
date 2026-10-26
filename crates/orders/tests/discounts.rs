@@ -23,7 +23,7 @@ fn percent(code: &str, bps: u32) -> CreateDiscount {
 #[tokio::test]
 async fn a_code_on_the_cart_takes_its_share_off_the_quote() {
     let (orders, catalog) = store().await;
-    let discounts = timada_discounts::Command(orders.0.clone());
+    let discounts = timada_discounts::Command::new(orders.executor().clone(), TENANT);
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     discount(&discounts, percent("TEN", 1000)).await;
     let cart_id = cart_with(&orders, &mug, 2).await;
@@ -55,9 +55,9 @@ async fn a_code_on_the_cart_takes_its_share_off_the_quote() {
 #[tokio::test]
 async fn a_discounted_payment_makes_a_discounted_order_and_spends_the_use() {
     let (executor, pool) = executor_with_pool().await;
-    let orders = timada_orders::Command(executor.clone());
-    let catalog = timada_catalog::Command(executor.clone());
-    let discounts = timada_discounts::Command(executor.clone());
+    let orders = timada_orders::Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let discounts = timada_discounts::Command::new(executor.clone(), TENANT);
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let id = discount(
         &discounts,
@@ -107,7 +107,7 @@ async fn a_discounted_payment_makes_a_discounted_order_and_spends_the_use() {
         (id.as_str(), 250)
     );
 
-    read_model_subscription::<evento::Sqlite>(pool.clone(), "acme")
+    read_model_subscription::<evento::Sqlite>(pool.clone())
         .run_once(&executor)
         .await
         .unwrap();
@@ -136,7 +136,7 @@ async fn a_discounted_payment_makes_a_discounted_order_and_spends_the_use() {
 #[tokio::test]
 async fn a_code_that_no_longer_works_is_never_dropped_silently() {
     let (orders, catalog) = store().await;
-    let discounts = timada_discounts::Command(orders.0.clone());
+    let discounts = timada_discounts::Command::new(orders.executor().clone(), TENANT);
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let id = discount(&discounts, percent("TEN", 1000)).await;
     let cart_id = cart_with(&orders, &mug, 1).await;
@@ -179,7 +179,7 @@ async fn a_code_that_no_longer_works_is_never_dropped_silently() {
 #[tokio::test]
 async fn an_amount_off_in_another_currency_takes_nothing_off() {
     let (orders, catalog) = store().await;
-    let discounts = timada_discounts::Command(orders.0.clone());
+    let discounts = timada_discounts::Command::new(orders.executor().clone(), TENANT);
     let mug = product(&catalog, "Mug", 1250, "USD").await;
     discount(
         &discounts,

@@ -7,8 +7,8 @@
 //! platform store (`timada-tenancy`). This crate holds the calls to
 //! AliExpress's open platform ([`Client`], signed as moh3a/ae_sdk does),
 //! what a product maps to in the catalog ([`map_product`]), what a read
-//! changes there ([`apply_sync`]), and one stream per imported item in the
-//! tenant's store, so a shop imports an item once and the dashboard knows
+//! changes there ([`apply_sync`]), and one stream per imported item under
+//! the tenant, so a shop imports an item once and the dashboard knows
 //! what each variant is on AliExpress.
 
 pub mod aggregator;

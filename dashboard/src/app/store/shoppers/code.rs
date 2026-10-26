@@ -65,8 +65,8 @@ pub async fn code(cx: &Cx, Form(form): Form<CodeForm>) -> Result<Answer> {
         );
         return refused(StatusCode::TOO_MANY_REQUESTS, SHOPPER_TOO_MANY_REQUESTS);
     }
-    let hold = super::super::hold(cx, &access).await?;
-    let issued = match timada_shoppers::Command(hold.executor().clone())
+    let store = super::super::store(cx, &access);
+    let issued = match timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
         .issue_code(&form.email, now())
         .await
     {

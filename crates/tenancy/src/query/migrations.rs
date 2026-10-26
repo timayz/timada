@@ -15,7 +15,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         Companies0007,
         InvitationsSent0008,
         MemberAudit0009,
-        AliexpressAccess0010
+        AliexpressAccess0010,
+        DropGroup0011
     ]
 }
 
@@ -308,6 +309,27 @@ sqlx_migrator::sqlite_migration!(
             "CREATE INDEX tenancy_aliexpress_access_expires
                 ON tenancy_aliexpress_access (expires_at)",
             "DROP INDEX tenancy_aliexpress_access_expires"
+        ),
+    ]
+);
+
+/// The consensus group a tenant's database ran in: every tenant now shares
+/// one store, so the column and its index go. Reverting puts them back
+/// empty (`0`), which nothing reads any more.
+pub struct DropGroup0011;
+sqlx_migrator::sqlite_migration!(
+    DropGroup0011,
+    "tenancy",
+    "0011_drop_group",
+    vec_box![("tenancy", "0010_aliexpress_access")],
+    vec_box![
+        (
+            "DROP INDEX tenancy_tenants_group",
+            "CREATE INDEX tenancy_tenants_group ON tenancy_tenants (group_id)"
+        ),
+        (
+            "ALTER TABLE tenancy_tenants DROP COLUMN group_id",
+            "ALTER TABLE tenancy_tenants ADD COLUMN group_id INTEGER NOT NULL DEFAULT 0"
         ),
     ]
 );

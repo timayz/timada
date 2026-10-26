@@ -8,8 +8,6 @@ pub mod newsletter;
 pub mod reviews;
 pub mod shoppers;
 
-use std::sync::Arc;
-
 use timada_tenancy::{ApiKeyAccess, SCOPE_STORE_CHECKOUT, TenancyError};
 use topcoat::{
     Result,
@@ -18,7 +16,7 @@ use topcoat::{
 };
 
 use crate::app::tenants::tenancy;
-use crate::tenants::{RequestHold, Tenants};
+use crate::cluster::Executor;
 
 /// The storefront behind a request: its key (`Authorization: Bearer tk_…`)
 /// names the tenant and must allow `store:checkout`. `Err` is the status to
@@ -45,10 +43,27 @@ pub async fn storefront(cx: &Cx) -> Result<std::result::Result<ApiKeyAccess, Sta
     Ok(Ok(access))
 }
 
-/// The tenant's store, open for the length of the request.
-pub async fn hold(cx: &Cx, access: &ApiKeyAccess) -> Result<RequestHold> {
-    app_context::<Arc<Tenants>>(cx)
-        .hold(&access.tenant)
-        .await
-        .map_err(topcoat::Error::from_anyhow)
+/// The store, pinned to the key's tenant: every gateway a route builds
+/// from it acts in that tenant's streams.
+pub struct TenantStore {
+    executor: Executor,
+    tenant_id: String,
+}
+
+impl TenantStore {
+    pub fn executor(&self) -> &Executor {
+        &self.executor
+    }
+
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
+    }
+}
+
+/// The key's tenant's store.
+pub fn store(cx: &Cx, access: &ApiKeyAccess) -> TenantStore {
+    TenantStore {
+        executor: app_context::<Executor>(cx).clone(),
+        tenant_id: access.tenant.id.clone(),
+    }
 }

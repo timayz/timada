@@ -42,7 +42,8 @@ use crate::components::sidebar::{
 
 /// What the rail highlights: the key of the page being shown (one of the
 /// [`SECTIONS`] keys on a tenant page, `"dashboard"`, `"companies"`,
-/// `"account"`, `"admin_tenants"`, `"admin_users"`, `"admin_companies"`, or
+/// `"account"`, `"admin_tenants"`, `"admin_users"`, `"admin_companies"`,
+/// `"admin_cluster"`, or
 /// `""` for a page under none of them), and the tenant whose sections to
 /// list.
 #[derive(Clone, Copy)]
@@ -82,6 +83,7 @@ impl<'a> Shell<'a> {
             "admin_tenants" => "Platform / Tenants",
             "admin_users" => "Platform / Users",
             "admin_companies" => "Platform / Companies",
+            "admin_cluster" => "Platform / This node",
             _ => "",
         }
         .to_owned()
@@ -397,6 +399,7 @@ async fn rail_groups(cx: &Cx, user: Option<&UserState>, shell: Shell<'_>) -> Res
                         nav_item(href: href!(crate::app::admin::tenants::tenants).resolve(cx), label: "Tenants", symbol: icons::TENANTS, active: current == "admin_tenants")
                         nav_item(href: href!(crate::app::admin::users::users).resolve(cx), label: "Users", symbol: icons::USERS, active: current == "admin_users")
                         nav_item(href: href!(crate::app::admin::companies::index).resolve(cx), label: "All companies", symbol: icons::COMPANIES, active: current == "admin_companies")
+                        nav_item(href: href!(crate::app::admin::cluster::index).resolve(cx), label: "This node", symbol: icons::DASHBOARD, active: current == "admin_cluster")
                     )
                 )
             )

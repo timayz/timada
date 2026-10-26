@@ -19,8 +19,8 @@ pub async fn delete(cx: &Cx) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let hold = super::super::hold(cx, &access).await?;
-    let Some(shopper) = signed_in(cx, hold.executor()).await? else {
+    let store = super::super::store(cx, &access);
+    let Some(shopper) = signed_in(cx, &store).await? else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
     let keys = super::keys(cx, &access.tenant.id);
@@ -28,14 +28,15 @@ pub async fn delete(cx: &Cx) -> Result<Answer> {
     let email = opened(cx, &access.tenant.id, &shopper)
         .await?
         .map(|shopper| shopper.email);
-    if let Err(err) = timada_shoppers::Command(hold.executor().clone())
+    if let Err(err) = timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
         .forget(&*keys, &shopper.id)
         .await
     {
         return answer_error(err);
     }
     if let Some(email) = email {
-        let newsletter = timada_newsletter::Command(hold.executor().clone());
+        let newsletter =
+            timada_newsletter::Command::new(store.executor().clone(), store.tenant_id());
         if let Some(subscriber) = newsletter
             .subscriber_of(&email)
             .await

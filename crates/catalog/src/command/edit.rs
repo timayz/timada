@@ -31,7 +31,8 @@ impl<E: Executor> super::Command<E> {
                 name,
                 renamed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -56,7 +57,8 @@ impl<E: Executor> super::Command<E> {
                 description,
                 described_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -99,7 +101,8 @@ impl<E: Executor> super::Command<E> {
                 currency,
                 priced_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -132,7 +135,8 @@ impl<E: Executor> super::Command<E> {
                 category,
                 set_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

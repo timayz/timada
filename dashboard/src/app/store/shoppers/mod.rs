@@ -32,7 +32,6 @@ use topcoat::{
 };
 
 use crate::auth::now;
-use crate::cluster::Executor;
 use crate::key_vault::KeyVault;
 
 /// The header a signed-in shopper's token travels in.
@@ -88,11 +87,11 @@ pub fn shopper_token(cx: &Cx) -> Option<String> {
 }
 
 /// The shopper whose token the request carries, if it still signs them in.
-pub async fn signed_in(cx: &Cx, executor: &Executor) -> Result<Option<ShopperState>> {
+pub async fn signed_in(cx: &Cx, store: &super::TenantStore) -> Result<Option<ShopperState>> {
     let Some(token) = shopper_token(cx) else {
         return Ok(None);
     };
-    let resolved = timada_shoppers::Command(executor.clone())
+    let resolved = timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
         .resolve_session(&token, now())
         .await
         .map_err(topcoat::Error::from_anyhow)?;

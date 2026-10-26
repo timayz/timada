@@ -17,9 +17,9 @@ use topcoat::{
 };
 
 use crate::app::tenants::tenancy;
+use crate::cluster::Executor;
 use crate::payments::Payments;
 use crate::payments::webhook::{Outcome, receive as handle};
-use crate::tenants::Tenants;
 
 module_param!(pub tenant_id);
 
@@ -39,10 +39,6 @@ pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
     else {
         return Ok(StatusCode::NOT_FOUND);
     };
-    let hold = app_context::<Arc<Tenants>>(cx)
-        .hold(&tenant)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?;
     let signature = headers(cx)
         .get("stripe-signature")
         .and_then(|value| value.to_str().ok());
@@ -53,7 +49,7 @@ pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
         payments,
         &account,
         &tenant.id,
-        hold.executor().clone(),
+        app_context::<Executor>(cx).clone(),
         &body,
         signature,
         now,

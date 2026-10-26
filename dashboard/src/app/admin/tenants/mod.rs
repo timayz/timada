@@ -2,8 +2,6 @@
 
 pub mod tenant_id;
 
-use std::sync::Arc;
-
 use timada_tenancy::{count_tenants, list_tenants};
 use topcoat::{
     Result,
@@ -19,7 +17,6 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::db::ReadPool;
-use crate::tenants::{TenantStatus, Tenants};
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
     section_card, status_badge,
@@ -48,20 +45,16 @@ struct TenantsLink<'a> {
 }
 
 /// The word for a tenant's state on the admin pages.
-pub fn status_label(suspended: bool, status: TenantStatus) -> &'static str {
-    match (suspended, status) {
-        (true, _) => "Suspended",
-        (false, TenantStatus::Running { .. }) => "Running",
-        (false, TenantStatus::Stopped) => "Stopped",
-    }
+pub fn status_label(suspended: bool) -> &'static str {
+    if suspended { "Suspended" } else { "Active" }
 }
 
 /// The colour of that word.
-pub fn status_tone(suspended: bool, status: TenantStatus) -> Tone {
-    match (suspended, status) {
-        (true, _) => Tone::Warning,
-        (false, TenantStatus::Running { .. }) => Tone::Success,
-        (false, TenantStatus::Stopped) => Tone::Neutral,
+pub fn status_tone(suspended: bool) -> Tone {
+    if suspended {
+        Tone::Warning
+    } else {
+        Tone::Success
     }
 }
 
@@ -72,7 +65,6 @@ pub async fn tenants(cx: &Cx) -> Result<impl View> {
     let q = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let page_number = query.page.unwrap_or(1).max(1);
     let pool = app_context::<ReadPool>(cx);
-    let runtime = app_context::<Arc<Tenants>>(cx);
     let total = count_tenants(pool, q).await?;
     let rows = list_tenants(pool, q, (page_number - 1) * PAGE_SIZE, PAGE_SIZE).await?;
     let pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -85,11 +77,7 @@ pub async fn tenants(cx: &Cx) -> Result<impl View> {
             })
             .resolve(cx)
     };
-    let summary = format!(
-        "{total} tenant{}, {} running on this node",
-        if total == 1 { "" } else { "s" },
-        runtime.open_count()
-    );
+    let summary = format!("{total} tenant{}", if total == 1 { "" } else { "s" });
 
     Ok(view! {
         document(
@@ -133,9 +121,9 @@ pub async fn tenants(cx: &Cx) -> Result<impl View> {
                                 table_cell(<time datetime=(row.created_at)>(format_time(row.created_at as u64))</time>)
                                 table_cell(
                                     status_badge(
-                                        tone: status_tone(row.suspended, runtime.status(&row.id)),
+                                        tone: status_tone(row.suspended),
                                         attrs: attributes! { data-tenant-status="" },
-                                        (status_label(row.suspended, runtime.status(&row.id)))
+                                        (status_label(row.suspended))
                                     )
                                 )
                             )

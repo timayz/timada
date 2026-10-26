@@ -35,8 +35,8 @@ pub async fn save(cx: &Cx, Form(form): Form<AddressForm>) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let hold = super::super::hold(cx, &access).await?;
-    let Some(shopper) = signed_in(cx, hold.executor()).await? else {
+    let store = super::super::store(cx, &access);
+    let Some(shopper) = signed_in(cx, &store).await? else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
     let address = ShippingAddress {
@@ -48,7 +48,7 @@ pub async fn save(cx: &Cx, Form(form): Form<AddressForm>) -> Result<Answer> {
         country: form.country,
         phone: form.phone,
     };
-    match timada_shoppers::Command(hold.executor().clone())
+    match timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
         .save_address(&*super::keys(cx, &access.tenant.id), &shopper.id, address)
         .await
     {

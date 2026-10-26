@@ -12,6 +12,8 @@ use timada_catalog_import::{ImportOptions, NoImages, import_one};
 use timada_tenancy::{PricingRule, Rounding};
 
 const ALICE: &str = "user-alice";
+/// The tenant the tests act in.
+const TENANT: &str = "acme";
 
 async fn executor() -> evento::Sqlite {
     let options = SqliteConnectOptions::new()
@@ -53,8 +55,8 @@ const RULE: PricingRule = PricingRule {
 #[tokio::test]
 async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
     let executor = executor().await;
-    let catalog = timada_catalog::Command(executor.clone());
-    let links = timada_aliexpress::Command(executor.clone());
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
 
     let link_id = links
         .request_import(ALICE, "1005006123456789")
@@ -174,7 +176,7 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
 #[tokio::test]
 async fn one_node_renews_a_token() {
     let executor = executor().await;
-    let links = timada_aliexpress::Command(executor);
+    let links = timada_aliexpress::Command::new(executor, TENANT);
     assert!(
         links
             .claim_token_refresh("node-a", 1_700_000_000)
@@ -198,8 +200,8 @@ async fn one_node_renews_a_token() {
 
 /// Imports the fixture as a draft; the link's id and the product's.
 async fn imported(executor: &evento::Sqlite) -> (String, String) {
-    let catalog = timada_catalog::Command(executor.clone());
-    let links = timada_aliexpress::Command(executor.clone());
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
     let link_id = links
         .request_import(ALICE, "1005006123456789")
         .await
@@ -254,8 +256,8 @@ fn sku(id: &str, cost: u64, available: u32, properties: &[(&str, &str)]) -> AeSk
 #[tokio::test]
 async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
     let executor = executor().await;
-    let catalog = timada_catalog::Command(executor.clone());
-    let links = timada_aliexpress::Command(executor.clone());
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
     let (link_id, product_id) = imported(&executor).await;
 
     // AliExpress now sells green, and a size the product had not.

@@ -31,7 +31,7 @@ pub async fn delete(cx: &Cx, Form(form): Form<DeleteForm>) -> Result<SeeOther> {
         .require_permission(cx, PERMISSION_CUSTOMERS_MANAGE)
         .await?;
     let slug = access.tenant.slug.as_str();
-    match timada_shoppers::Command(access.executor()?.clone())
+    match timada_shoppers::Command::new(access.executor()?.clone(), access.tenant_id())
         .forget(
             &*crate::app::store::shoppers::keys(cx, &access.tenant.id),
             &form.shopper_id,
