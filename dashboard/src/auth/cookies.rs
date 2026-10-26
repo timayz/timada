@@ -135,11 +135,11 @@ impl std::fmt::Debug for ApiKeyReveal {
     }
 }
 
-/// A merchant on their way to AliExpress to connect the shop's account.
+/// An owner on their way to AliExpress to connect the company's account.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AliexpressFlow {
-    pub tenant_id: String,
-    /// The member who started it; the callback requires the same one.
+    pub company_id: String,
+    /// The owner who started it; the callback requires the same one.
     pub user_id: String,
     /// `state` sent to AliExpress; must come back unchanged.
     pub state: String,

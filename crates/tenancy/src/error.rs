@@ -14,8 +14,6 @@ pub enum TenancyError {
     Forbidden,
     #[error("a publishable key starts with pk_")]
     InvalidPublishableKey,
-    #[error("an AliExpress app key is 1 to 64 letters and digits")]
-    InvalidAliexpressKey,
     #[error("give a two-letter country, a three-letter currency and a two-letter language")]
     InvalidAliexpressMarket,
     #[error("a price rule multiplies by 1 to 100 and adds at most 10,000")]

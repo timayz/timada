@@ -32,8 +32,8 @@ pub fn mail_sealer(config: &Config) -> Option<Sealer> {
     Some(Sealer::new("mail", &secrets.key))
 }
 
-/// What seals the shops' AliExpress app secrets and tokens: `None` without
-/// `secrets.key`.
+/// What seals the tokens of the companies' AliExpress accounts: `None`
+/// without `secrets.key`.
 pub fn aliexpress_sealer(config: &Config) -> Option<Sealer> {
     let secrets = config.secrets.as_ref()?;
     Some(Sealer::new("aliexpress", &secrets.key))

@@ -1,29 +1,51 @@
 # AliExpress
 
-A shop imports products from AliExpress's dropshipping catalogue through the merchant's
-**own** AliExpress app. The dashboard keeps each imported product in step with
+A shop imports products from AliExpress's dropshipping catalogue through the
+**platform's** AliExpress app, which acts for the AliExpress buyer account of the
+company the shop sells as. The dashboard keeps each imported product in step with
 AliExpress: its stock, its price when a rule prices it, and whether AliExpress still
 sells it.
 
-## Setting it up (merchant)
+## Setting it up (operator, once)
 
 1. On AliExpress's open platform, create an app with access to the dropshipping API.
    AliExpress has to approve that access before product calls work.
-2. Register the callback address the dashboard shows on `/t/{slug}/aliexpress` as the
-   app's callback. Each shop has its own address, because each merchant has their own
-   app.
-3. On that page, enter the app key and secret and choose what the shop buys in:
+2. Register `/aliexpress/callback` under `server.url` as the app's callback.
+3. Put the app's key and secret in `[aliexpress]` (`app_key`, `app_secret`), with
+   `secrets.key` set so the tokens can be sealed. Without both, nobody can connect.
+
+AliExpress counts every call against the one app, whichever company it acts for: the
+sweep paces its reads, and the intervals may need to grow with the number of shops.
+
+## Connecting the account (company owner)
+
+On the company's page (`/companies/{id}`), press *Connect the AliExpress account*.
+AliExpress asks the buyer account to say yes to the app, then sends the owner back.
+The tokens are kept sealed on the company (`Company::AliexpressAuthorized`). Every
+tenant selling as the company imports through that account and places its orders
+with it; *Disconnect* forgets it for all of them.
+
+Connecting the same buyer account again, from the same or another company, gives a
+new token: AliExpress may retire the earlier one, so one buyer account belongs to one
+company.
+
+## Setting up a shop (merchant)
+
+On `/t/{slug}/aliexpress`, for members with `aliexpress:manage`:
+
+1. The shop must sell as a company (linked on its Invoicing page) whose account is
+   connected. The page says which of the two is missing.
+2. Choose what the shop buys in:
    - the country goods ship to;
    - the currency, one the shop sells in;
    - the language products are worded in.
-4. Optionally set a **price rule**: multiply the cost, add an amount, and round to the
+3. Optionally set a **price rule**: multiply the cost, add an amount, and round to the
    cent, up to the next .99, or up to a whole amount. A rule never goes below cost.
    Without one, the import uses the cost as the starting price and later reads leave
    prices alone.
-5. Press *Connect the AliExpress account*. AliExpress asks the account to say yes,
-   then sends the merchant back. The tokens are kept sealed.
 
-The member needs the `aliexpress:manage` permission.
+*Stop importing* forgets the shop's settings; the imported products stay as they are,
+and so does the company's account.
 
 ## Importing
 
@@ -46,11 +68,11 @@ Every node sweeps the imported products on a timer (`[aliexpress] sync_check_sec
 an hour by default) and reads again each one last read longer ago than
 `sync_every_secs` (six hours). Reads are paced and go one shop after another; a read
 another node recorded in the meantime wins. Before reading, the same sweep renews
-every connected account's access a day before it lapses, whether or not the shop has
-anything imported: the platform keeps which shops are connected and until when
-(`tenancy_aliexpress_access`), and one node per token renews it (a
-`timada-aliexpress/TokenRefresh` claim). An access AliExpress no longer renews means
-the merchant connects again.
+every connected company's access a day before it lapses, whether or not its shops
+have anything imported: the platform keeps which companies are connected and until
+when (`tenancy_aliexpress_accounts`), and one node per token renews it (a
+`timada-aliexpress/TokenRefresh` claim, keyed by company and token). An access
+AliExpress no longer renews means an owner connects again.
 
 *Sync now*, on the AliExpress page or on the product page, reads the item at once.
 A read does three things:
@@ -123,10 +145,12 @@ these calls too.
 
 ## Where things live
 
-- **Platform store (`timada-tenancy`).** The app key, the sealed secret, the market,
-  the shop's rule and the sealed tokens: `AliexpressConfigured`,
-  `AliexpressAuthorized`, `AliexpressRemoved`. They are sealed under `secrets.key`
-  with the purpose `aliexpress`.
+- **Platform store (`timada-tenancy`).** On the company, the sealed tokens of its
+  buyer account: `Company::AliexpressAuthorized`, `Company::AliexpressDisconnected`.
+  On the tenant, the market, the shop's rule and how orders go:
+  `AliexpressConfigured`, `AliexpressRemoved`, `AliexpressForwardingSet`. The tokens
+  are sealed under `secrets.key` with the purpose `aliexpress`; the app's key and
+  secret are host configuration.
 - **Tenant store (`timada-aliexpress/Product`).** One stream per item: the import's
   steps, the catalog product, each sku's variant, cost and last stock, the reads and
   the product's own rule. The `aliexpress_products` read model lists them.

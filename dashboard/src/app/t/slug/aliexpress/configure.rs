@@ -19,9 +19,6 @@ use crate::app::tenants::{error_code, tenancy};
 
 #[derive(Deserialize)]
 pub struct ConfigureForm {
-    app_key: String,
-    #[serde(default)]
-    app_secret: String,
     ship_to_country: String,
     currency: String,
     language: String,
@@ -29,8 +26,7 @@ pub struct ConfigureForm {
     pricing: PricingForm,
 }
 
-/// Saves the shop's AliExpress app. A blank secret keeps the saved one, as
-/// long as the key is the same.
+/// Saves what the shop buys on AliExpress and how it prices it.
 #[route(POST)]
 pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -39,33 +35,18 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
         .await?;
     let slug = access.tenant.slug.as_str();
     let refused = |code: &str| Ok(see_other(aliexpress_url(cx, slug, Some(code), None)));
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
-    if !aliexpress.enabled() {
-        return refused("secrets_disabled");
+    if !app_context::<Arc<Aliexpress>>(cx).enabled() {
+        return refused("aliexpress_disabled");
     }
     let pricing = match form.pricing.rule() {
         Ok(rule) => rule,
         Err(code) => return refused(code),
-    };
-    let app_key = form.app_key.trim().to_owned();
-    let secret = form.app_secret.trim();
-    let app_secret_sealed = if !secret.is_empty() {
-        aliexpress
-            .seal(secret)
-            .map_err(topcoat::Error::from_anyhow)?
-    } else {
-        match &access.tenant.aliexpress {
-            Some(saved) if saved.app_key == app_key => saved.app_secret_sealed.clone(),
-            _ => return refused("aliexpress_secret_required"),
-        }
     };
     let configured = tenancy(cx)
         .configure_aliexpress(
             &access.user_id,
             &access.tenant.id,
             ConfigureAliexpress {
-                app_key,
-                app_secret_sealed,
                 ship_to_country: form.ship_to_country,
                 currency: form.currency,
                 language: form.language,
@@ -78,7 +59,7 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
             cx,
             slug,
             None,
-            Some("AliExpress app saved."),
+            Some("AliExpress settings saved."),
         ))),
         Err(err) if err.is_user_facing() => refused(error_code(&err)),
         Err(err) => Err(err.into()),

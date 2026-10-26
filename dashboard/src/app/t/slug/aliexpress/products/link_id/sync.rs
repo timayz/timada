@@ -21,10 +21,17 @@ pub async fn sync(cx: &Cx, Form(form): Form<Back>) -> Result<SeeOther> {
     let link_id = path_param::<LinkId>(cx).to_owned();
     let aliexpress = app_context::<Arc<Aliexpress>>(cx);
     let store = access.executor()?.clone();
-    let result = aliexpress
-        .sync_link(&store, &access.tenant, &link_id)
+    let company = aliexpress
+        .company_of(&access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    let result = match company {
+        Some(company) => aliexpress
+            .sync_link(&store, &access.tenant, &company, &link_id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?,
+        None => SyncResult::NotLinked,
+    };
     Ok(match result {
         SyncResult::Synced { offline: true, .. } => back_to(
             cx,

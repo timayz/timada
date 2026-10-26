@@ -6,6 +6,8 @@ pub mod aliexpress;
 pub mod cancel;
 pub mod fulfil;
 
+use std::sync::Arc;
+
 use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
 use timada_invoicing::{DocumentKind, format_amount_fr};
@@ -150,11 +152,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .load_forward(&order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let connected = access
-        .tenant
-        .aliexpress
-        .as_ref()
-        .is_some_and(|settings| settings.authorization.is_some());
+    let connected = app_context::<Arc<crate::aliexpress::Aliexpress>>(cx)
+        .connected(&access.tenant)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     // Whether any line is an AliExpress item, for a shop connected to it.
     let from_aliexpress = connected
         && !timada_aliexpress::forward_items(

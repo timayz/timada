@@ -1,11 +1,15 @@
 //! `/companies/{company_id}`: one company, for its owners: its identity,
-//! its owners, the tenants selling as it with their series codes, and its
-//! EU distance sales of the year (every tenant together).
+//! its owners, the tenants selling as it with their series codes, its EU
+//! distance sales of the year (every tenant together), and the AliExpress
+//! account its tenants buy through.
 
+pub mod aliexpress;
 pub mod oss;
 pub mod owners;
 pub mod remove_owner;
 pub mod save;
+
+use std::sync::Arc;
 
 use timada_invoicing::tax::EU_DISTANCE_THRESHOLD_CENTS;
 use timada_invoicing::{Ledger, civil_date, format_amount_fr};
@@ -19,6 +23,7 @@ use topcoat::{
 };
 
 use super::identity_fields;
+use crate::aliexpress::Aliexpress;
 use crate::app::auth::Flash;
 use crate::app::t::slug::Slug;
 use crate::app::tenants::tenancy;
@@ -27,7 +32,10 @@ use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::input::input;
 use crate::db::ReadPool;
-use crate::ui::{LINK, Shell, document, icons, notice, page_header, section_card};
+use crate::ui::{
+    LINK, Shell, Tone, document, fact, facts, format_time, icons, notice, page_header,
+    section_card, status_badge,
+};
 
 module_param!(pub company_id);
 
@@ -85,6 +93,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let threshold = format_amount_fr(EU_DISTANCE_THRESHOLD_CENTS, "EUR");
     let legal = company.identity.clone().unwrap_or_default();
     let exempt_past_threshold = distance.passed && !legal.is_vat_registered();
+    let aliexpress_enabled = app_context::<Arc<Aliexpress>>(cx).enabled();
+    let aliexpress_state = if company.aliexpress.is_some() {
+        "connected"
+    } else {
+        "none"
+    };
     let id = company.id.clone();
     let title = format!("{} · Companies", company.name());
     let siren = format!("SIREN {}", company.siren);
@@ -140,6 +154,41 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </li>
                         }
                     </ul>
+                }
+            )
+
+            section_card(
+                title: Some("AliExpress"),
+                description: Some("The AliExpress buyer account the company's tenants import products through and place their orders with."),
+                <div class="mb-4" data-company-aliexpress=(aliexpress_state)>
+                    if let Some(authorization) = &company.aliexpress {
+                        facts(
+                            fact(term: "Account", status_badge(tone: Tone::Success, "Connected") " " <span data-aliexpress-account="">(&authorization.account)</span>)
+                            fact(term: "Access until", <time datetime=(authorization.expires_at)>(format_time(authorization.expires_at))</time>)
+                        )
+                    } else {
+                        <p class="text-sm text-muted-foreground">"Not connected. Each tenant then chooses what it buys in, on its AliExpress page."</p>
+                    }
+                </div>
+                if aliexpress_enabled {
+                    <div class="flex flex-wrap gap-2">
+                        <form method="post" action=(href!(aliexpress::connect::connect, CompanyId(id.clone())))>
+                            button(size: ButtonSize::Sm, attrs: attributes! { type="submit" },
+                                (if company.aliexpress.is_some() { "Connect again" } else { "Connect the AliExpress account" }))
+                        </form>
+                        if company.aliexpress.is_some() {
+                            <form method="post" action=(href!(aliexpress::disconnect::disconnect, CompanyId(id.clone())))>
+                                button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Disconnect")
+                            </form>
+                        }
+                    </div>
+                } else {
+                    alert(
+                        variant: AlertVariant::Warning,
+                        attrs: attributes! { role="alert" },
+                        icon(data: icons::WARNING)
+                        alert_description("AliExpress is not set up on this platform: the operator has to give it an app and set secrets.key first.")
+                    )
                 }
             )
 

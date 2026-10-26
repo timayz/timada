@@ -1,6 +1,7 @@
 //! The topcoat router. This module maps to `/`; child modules add paths.
 
 pub mod admin;
+pub mod aliexpress;
 pub mod auth;
 pub mod cluster;
 pub mod companies;
