@@ -23,6 +23,7 @@ pub mod checkbox;
 pub mod dialog;
 pub mod dropdown_menu;
 pub mod field;
+pub mod floating;
 pub mod input;
 pub mod label;
 pub mod pagination;
