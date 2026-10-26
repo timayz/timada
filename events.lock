@@ -198,6 +198,8 @@ event timada-support/MessageNotification::Notified { message_id: String, mailed_
 event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, created_by: String, created_at: u64 }
 event timada-tenancy/ApiKey::Revoked { revoked_by: String, revoked_at: u64 }
 event timada-tenancy/ApiKey::Scoped { scopes: Vec<String>, scoped_by: String, scoped_at: u64 }
+event timada-tenancy/Company::AliexpressAuthorized { access_token_sealed: Vec<u8>, refresh_token_sealed: Vec<u8>, expires_at: u64, refresh_expires_at: u64, account: String, authorized_by: String }
+event timada-tenancy/Company::AliexpressDisconnected { disconnected_by: String }
 event timada-tenancy/Company::Created { siren: String, created_by: String }
 event timada-tenancy/Company::IdentitySet { legal_name: String, legal_form: String, share_capital_cents: Option<u64>, siret: String, rcs_city: Option<String>, line1: String, line2: Option<String>, postal_code: String, city: String, country: String, contact_email: String, vat_number: Option<String>, oss_registered: bool, set_by: String }
 event timada-tenancy/Company::OwnerAdded { user_id: String, added_by: String }
@@ -208,8 +210,7 @@ event timada-tenancy/CompanySiren::Released { released_by: String }
 event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }
-event timada-tenancy/Tenant::AliexpressAuthorized { access_token_sealed: Vec<u8>, refresh_token_sealed: Vec<u8>, expires_at: u64, refresh_expires_at: u64, account: String, authorized_by: String }
-event timada-tenancy/Tenant::AliexpressConfigured { app_key: String, app_secret_sealed: Vec<u8>, ship_to_country: String, currency: String, language: String, pricing: Option<PricingRule>, configured_by: String }
+event timada-tenancy/Tenant::AliexpressConfigured { ship_to_country: String, currency: String, language: String, pricing: Option<PricingRule>, configured_by: String }
 event timada-tenancy/Tenant::AliexpressForwardingSet { auto_forward: bool, try_to_pay: bool, set_by: String }
 event timada-tenancy/Tenant::AliexpressRemoved { removed_by: String }
 event timada-tenancy/Tenant::CompanyLinked { company_id: String, series_code: String, linked_by: String }

@@ -1,5 +1,5 @@
 //! Imports the AliExpress items a shop asked for: fetches each from
-//! AliExpress with the shop's app, fills a draft from it (pictures,
+//! AliExpress with the company's account, fills a draft from it (pictures,
 //! options, variants, their stock) and records which combination each
 //! variant is. Every node runs it; the first to take
 //! an import on does it, the others leave it.
@@ -112,10 +112,13 @@ async fn import<E: Executor>(
         return Err("The shop is suspended.".into());
     };
     let Some(settings) = merchant.aliexpress.as_ref() else {
-        return Err("Set up the shop's AliExpress app first.".into());
+        return Err("Set what the shop buys on AliExpress first.".into());
     };
-    let Some(client) = aliexpress.client_of(&merchant).map_err(failed)? else {
-        return Err("Connect the shop's AliExpress account first.".into());
+    let Some(company) = aliexpress.company_of(&merchant).await.map_err(failed)? else {
+        return Err("Link the shop to its company first.".into());
+    };
+    let Some(client) = aliexpress.client_of(&company).map_err(failed)? else {
+        return Err("Connect the company's AliExpress account first.".into());
     };
     let market = Aliexpress::market_of(settings);
     let product = client

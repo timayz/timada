@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use timada_tenancy::PERMISSION_ALIEXPRESS_MANAGE;
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, app_context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
@@ -10,6 +12,7 @@ use topcoat::{
 };
 
 use super::aliexpress_url;
+use crate::aliexpress::Aliexpress;
 use crate::app::t::slug::require_tenant;
 
 #[derive(serde::Deserialize)]
@@ -27,13 +30,20 @@ pub async fn import(cx: &Cx, Form(form): Form<ImportForm>) -> Result<SeeOther> {
         .await?;
     let slug = access.tenant.slug.as_str();
     let refused = |code: &str| Ok(see_other(aliexpress_url(cx, slug, Some(code), None)));
-    if access
-        .tenant
-        .aliexpress
-        .as_ref()
-        .is_none_or(|settings| settings.authorization.is_none())
-    {
-        return refused("aliexpress_not_connected");
+    if access.tenant.aliexpress.is_none() {
+        return refused("aliexpress_not_configured");
+    }
+    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
+    let company = aliexpress
+        .company_of(&access.tenant)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    match company {
+        None => return refused("aliexpress_no_company"),
+        Some(company) if company.aliexpress.is_none() => {
+            return refused("aliexpress_not_connected");
+        }
+        Some(_) => {}
     }
     let Some(ae_product_id) = timada_aliexpress::parse_product_id(&form.product) else {
         return refused("invalid_aliexpress_product");

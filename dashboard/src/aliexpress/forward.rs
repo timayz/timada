@@ -1,4 +1,4 @@
-//! Places a shop's paid orders on AliExpress with the shop's app: every
+//! Places a shop's paid orders on AliExpress with the company's account: every
 //! item of the order imported from AliExpress is bought there, shipped
 //! straight to the shopper by AliExpress's own free delivery. The
 //! subscription below places the orders the shop wants placed as they come
@@ -21,7 +21,7 @@ use timada_aliexpress::{
     choose_service, forward_items, link_of_product, logistics_address,
 };
 use timada_orders::{OrderState, OrderStatus, OrdersError};
-use timada_tenancy::TenantState;
+use timada_tenancy::{CompanyState, TenantState};
 
 use super::{ALIEXPRESS_ACTOR, Aliexpress};
 
@@ -133,11 +133,16 @@ impl Aliexpress {
             return Err(Refusal("The shop is suspended.".into()));
         };
         let Some(settings) = tenant.aliexpress.as_ref() else {
-            return Err(Refusal("Set up the shop's AliExpress app first.".into()));
-        };
-        let Some(client) = self.client_of(&tenant).map_err(failed)? else {
             return Err(Refusal(
-                "Connect the shop's AliExpress account first.".into(),
+                "Set what the shop buys on AliExpress first.".into(),
+            ));
+        };
+        let Some(company) = self.company_of(&tenant).await.map_err(failed)? else {
+            return Err(Refusal("Link the shop to its company first.".into()));
+        };
+        let Some(client) = self.client_of(&company).map_err(failed)? else {
+            return Err(Refusal(
+                "Connect the company's AliExpress account first.".into(),
             ));
         };
         let orders = timada_orders::Command::new(store.clone(), tenant_id);
@@ -275,6 +280,7 @@ impl Aliexpress {
         &self,
         store: &E,
         tenant: &TenantState,
+        company: &CompanyState,
         forward_id: &str,
         now: u64,
     ) -> anyhow::Result<CheckResult> {
@@ -285,7 +291,7 @@ impl Aliexpress {
         if forward.status != ForwardStatus::Placed {
             return Ok(CheckResult::Skipped);
         }
-        let Some(client) = self.client_of(tenant)? else {
+        let Some(client) = self.client_of(company)? else {
             return Ok(CheckResult::Skipped);
         };
         let orders = timada_orders::Command::new(store.clone(), &tenant.id);
@@ -459,7 +465,8 @@ async fn on_order_placed<E: Executor>(
     let wanted = merchant
         .aliexpress
         .as_ref()
-        .is_some_and(|settings| settings.auto_forward && settings.authorization.is_some());
+        .is_some_and(|settings| settings.auto_forward)
+        && aliexpress.connected(&merchant).await?;
     if !wanted {
         return Ok(());
     }

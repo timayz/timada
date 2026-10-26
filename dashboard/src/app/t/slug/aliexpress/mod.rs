@@ -1,12 +1,11 @@
-//! `/t/{slug}/aliexpress`: the shop's own AliExpress app, for members with
-//! `aliexpress:manage`. The merchant enters the app's key and secret (kept
-//! sealed), connects the AliExpress account the app acts for, then imports
-//! products by their number or address: each becomes a draft whose price,
-//! stock and availability are read again from AliExpress.
+//! `/t/{slug}/aliexpress`: what the shop buys on AliExpress, for members
+//! with `aliexpress:manage`. The platform's app acts for the AliExpress
+//! account of the company the shop sells as (connected on the company's
+//! page); the merchant chooses what the shop buys in, then imports products
+//! by their number or address: each becomes a draft whose price, stock and
+//! availability are read again from AliExpress.
 
-pub mod callback;
 pub mod configure;
-pub mod connect;
 pub mod forwarding;
 pub mod import;
 pub mod products;
@@ -16,7 +15,7 @@ use std::sync::Arc;
 
 use timada_aliexpress::{LinkRow, links_of_tenant};
 use timada_catalog::{CURRENCIES, format_money};
-use timada_tenancy::{PERMISSION_ALIEXPRESS_MANAGE, PricingRule, Rounding};
+use timada_tenancy::{CompanyState, PERMISSION_ALIEXPRESS_MANAGE, PricingRule, Rounding};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -28,6 +27,7 @@ use topcoat::{
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::aliexpress::Aliexpress;
 use crate::app::auth::Flash;
+use crate::app::companies::company_id::company_url;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::checkbox::checkbox;
@@ -37,7 +37,6 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::config::Config;
 use crate::db::ReadPool;
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, fact, facts, format_time, icons, notice, page_header,
@@ -57,16 +56,6 @@ pub fn aliexpress_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<
     href!(index, Slug(slug.to_owned()))
         .query(Flash { error, message })
         .resolve(cx)
-}
-
-/// Where AliExpress sends the merchant back once their account said yes:
-/// the address to register as the app's callback.
-pub fn callback_url(cx: &Cx, slug: &str) -> String {
-    format!(
-        "{}{}",
-        app_context::<Config>(cx).server.url.trim_end_matches('/'),
-        href!(callback::callback, Slug(slug.to_owned())).resolve(cx)
-    )
 }
 
 /// A price rule as the forms send it: a multiplier (`2.5`), an amount added
@@ -181,6 +170,39 @@ pub const ROUNDINGS: [(&str, &str); 3] = [
     ("whole", "Up to a whole amount"),
 ];
 
+/// How the page reads a shop's standing with AliExpress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    /// Nothing set: the market is not chosen.
+    None,
+    /// The market is chosen, but the company's account is not connected
+    /// (or the shop sells as no company yet).
+    Configured,
+    /// Set up and able to call AliExpress.
+    Connected,
+}
+
+impl State {
+    fn of(settings: bool, company: Option<&CompanyState>) -> Self {
+        match (
+            settings,
+            company.is_some_and(|company| company.aliexpress.is_some()),
+        ) {
+            (false, _) => Self::None,
+            (true, false) => Self::Configured,
+            (true, true) => Self::Connected,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Configured => "configured",
+            Self::Connected => "connected",
+        }
+    }
+}
+
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
@@ -193,16 +215,26 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let links = links_of_tenant(pool, &access.tenant.id, LISTED)
         .await
         .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
-    let TenantAccess { tenant, .. } = access;
-    let enabled = app_context::<Arc<Aliexpress>>(cx).enabled();
+    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
+    let company = aliexpress
+        .company_of(&access.tenant)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let TenantAccess {
+        tenant, user_id, ..
+    } = access;
+    let enabled = aliexpress.enabled();
     let slug = tenant.slug.clone();
-    let callback = callback_url(cx, &slug);
     let settings = tenant.aliexpress.clone();
-    let state = match &settings {
-        Some(settings) if settings.authorization.is_some() => "connected",
-        Some(_) => "configured",
-        None => "none",
-    };
+    let state = State::of(settings.is_some(), company.as_ref());
+    let owns_company = company
+        .as_ref()
+        .is_some_and(|company| company.is_owner(&user_id));
+    let company_link = company
+        .as_ref()
+        .filter(|_| owns_company)
+        .map(|company| company_url(cx, &company.id, None, None));
+    let invoicing = href!(crate::app::t::slug::invoicing::index, Slug(slug.clone())).resolve(cx);
     let currency = settings
         .as_ref()
         .map(|settings| settings.currency.clone())
@@ -210,10 +242,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let rule = settings.as_ref().and_then(|settings| settings.pricing);
     let rule_text = rule_label(rule, &currency);
     let fields = RuleFields::of(rule);
-    let app_key = settings
-        .as_ref()
-        .map(|settings| settings.app_key.clone())
-        .unwrap_or_default();
     let country = settings
         .as_ref()
         .map(|settings| settings.ship_to_country.clone())
@@ -228,7 +256,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "aliexpress"),
-            page_header(title: "AliExpress", subtitle: Some("Import products from AliExpress through the shop's own app, and keep their price and stock in step."))
+            page_header(title: "AliExpress", subtitle: Some("Import products from AliExpress with the company's buyer account, and keep their price and stock in step."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             if !enabled {
@@ -236,44 +264,58 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     variant: AlertVariant::Warning,
                     attrs: attributes! { role="alert" class="mb-6" },
                     icon(data: icons::WARNING)
-                    alert_description("No secret can be kept on this platform: the operator has to set secrets.key first.")
+                    alert_description("AliExpress is not set up on this platform: the operator has to give it an app and set secrets.key first.")
                 )
             }
 
             section_card(
                 title: Some("Connection"),
-                <div class="mb-4" data-aliexpress=(state)>
-                    if let Some(settings) = &settings {
-                        facts(
-                            fact(term: "App key", <code data-aliexpress-app-key="">(&settings.app_key)</code>)
-                            fact(term: "App secret", "Saved, never shown again")
-                            fact(term: "Buys for", (&settings.ship_to_country) " · " (&settings.currency) " · " (&settings.language))
-                            fact(term: "Price rule", attrs: attributes! { data-aliexpress-rule="" }, (&rule_text))
-                            if let Some(authorization) = &settings.authorization {
-                                fact(term: "Account", status_badge(tone: Tone::Success, "Connected") " " <span data-aliexpress-account="">(&authorization.account)</span>)
-                                fact(term: "Access until", <time datetime=(authorization.expires_at)>(format_time(authorization.expires_at))</time>)
+                <div class="mb-4" data-aliexpress=(state.as_str())>
+                    facts(
+                        fact(
+                            term: "Company",
+                            attrs: attributes! { data-aliexpress-company="" },
+                            if let Some(company) = &company {
+                                if let Some(link) = &company_link {
+                                    <a class=(LINK) href=(link)>(company.name())</a>
+                                } else {
+                                    (company.name())
+                                }
                             } else {
-                                fact(term: "Account", status_badge(tone: Tone::Warning, "Not connected"))
+                                status_badge(tone: Tone::Warning, "Not linked")
+                                " "
+                                <a class=(LINK) href=(&invoicing)>"Link the shop to its company"</a>
                             }
                         )
-                    } else {
-                        <p class="text-sm text-muted-foreground">"Not set up: enter the app's key and secret below."</p>
-                    }
+                        fact(
+                            term: "Account",
+                            if let Some(authorization) = company.as_ref().and_then(|company| company.aliexpress.as_ref()) {
+                                status_badge(tone: Tone::Success, "Connected") " " <span data-aliexpress-account="">(&authorization.account)</span>
+                            } else {
+                                status_badge(tone: Tone::Warning, "Not connected")
+                                if let Some(link) = &company_link {
+                                    " " <a class=(LINK) href=(link)>"Connect it on the company's page"</a>
+                                } else if company.is_some() {
+                                    " " <span class="text-muted-foreground">"An owner of the company connects it on the company's page."</span>
+                                }
+                            }
+                        )
+                        if let Some(settings) = &settings {
+                            fact(term: "Buys for", (&settings.ship_to_country) " · " (&settings.currency) " · " (&settings.language))
+                            fact(term: "Price rule", attrs: attributes! { data-aliexpress-rule="" }, (&rule_text))
+                        } else {
+                            fact(term: "Buys for", status_badge(tone: Tone::Neutral, "Not set") " " <span class="text-muted-foreground">"Choose below what the shop buys in."</span>)
+                        }
+                    )
                 </div>
                 if settings.is_some() {
-                    <div class="flex flex-wrap gap-2">
-                        <form method="post" action=(href!(connect::connect, Slug(slug.clone())))>
-                            button(size: ButtonSize::Sm, attrs: attributes! { type="submit" },
-                                (if state == "connected" { "Connect again" } else { "Connect the AliExpress account" }))
-                        </form>
-                        <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
-                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Disconnect")
-                        </form>
-                    </div>
+                    <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
+                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop importing")
+                    </form>
                 }
             )
 
-            if state == "connected" {
+            if state == State::Connected {
                 section_card(
                     title: Some("Import a product"),
                     description: Some("It becomes a draft, priced by the rule, with AliExpress's pictures, options and stock. Check it, then publish it."),
@@ -290,7 +332,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
             }
 
-            if let Some(settings) = settings.as_ref().filter(|_| state == "connected") {
+            if let Some(settings) = settings.as_ref().filter(|_| state == State::Connected) {
                 section_card(
                     title: Some("Orders"),
                     description: Some("A paid order's AliExpress items are bought there for the shopper, delivered free by AliExpress itself; its tracking fulfils the order once every item ships."),
@@ -374,27 +416,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             )
 
             section_card(
-                title: Some(if settings.is_some() { "Change the app" } else { "Set up the app" }),
+                title: Some(if settings.is_some() { "Change what the shop buys" } else { "Set up" }),
                 <ol class="mb-4 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-                    <li>"On AliExpress's open platform, create an app with access to the dropshipping API."</li>
-                    <li>
-                        "Register "
-                        <code class="text-foreground" data-aliexpress-callback="">(&callback)</code>
-                        " as its callback address, and copy its app key and secret here."
-                    </li>
+                    <li>"Link the shop to the company it sells as, on its Invoicing page."</li>
+                    <li>"An owner of the company connects its AliExpress buyer account on the company's page. Every shop of the company buys through it."</li>
+                    <li>"Choose here what this shop buys in, and how it prices what it imports."</li>
                 </ol>
                 <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
-                    field(
-                        field_label(attrs: attributes! { for="aliexpress-key" }, "App key")
-                        input(attrs: attributes! { id="aliexpress-key" name="app_key" required="" class="font-mono" value=(&app_key) })
-                    )
-                    field(
-                        field_label(attrs: attributes! { for="aliexpress-secret" }, "App secret")
-                        input(attrs: attributes! {
-                            id="aliexpress-secret" name="app_secret" type="password" autocomplete="off" class="font-mono"
-                            placeholder=(if settings.is_some() { "Leave blank to keep the saved one" } else { "" })
-                        })
-                    )
                     <div class="flex flex-wrap gap-4">
                         field(
                             field_label(attrs: attributes! { for="aliexpress-country" }, "Ships to (country)")

@@ -39,7 +39,6 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::InvalidApiKeyScopes => "invalid_api_key_scopes",
         TenancyError::ApiKeyInvalid => "api_key_invalid",
         TenancyError::InvalidPublishableKey => "invalid_publishable_key",
-        TenancyError::InvalidAliexpressKey => "invalid_aliexpress_key",
         TenancyError::InvalidAliexpressMarket => "invalid_aliexpress_market",
         TenancyError::InvalidPricingRule => "invalid_pricing_rule",
         TenancyError::AliexpressNotConfigured => "aliexpress_not_configured",

@@ -256,7 +256,7 @@ fn subscriptions(
         ),
         (
             "AliExpress access",
-            timada_tenancy::aliexpress_access_subscription(write_pool.clone()),
+            timada_tenancy::aliexpress_accounts_subscription(write_pool.clone()),
         ),
         // Not a read model, but the same lifecycle: it copies how each
         // tenant's shoppers pay into the tenant's streams, for the

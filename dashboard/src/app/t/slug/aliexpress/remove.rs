@@ -12,8 +12,9 @@ use super::aliexpress_url;
 use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
 
-/// Forgets the shop's app and account: nothing is read from AliExpress any
-/// more. The imported products stay as they are.
+/// Forgets what the shop buys on AliExpress: nothing is read from there any
+/// more. The imported products stay as they are, and so does the company's
+/// account.
 #[route(POST)]
 pub async fn remove(cx: &Cx) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -29,7 +30,7 @@ pub async fn remove(cx: &Cx) -> Result<SeeOther> {
             cx,
             slug,
             None,
-            Some("AliExpress disconnected."),
+            Some("AliExpress imports stopped."),
         ))),
         Err(err) if err.is_user_facing() => Ok(see_other(aliexpress_url(
             cx,

@@ -176,26 +176,19 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
 #[tokio::test]
 async fn one_node_renews_a_token() {
     let executor = executor().await;
-    let links = timada_aliexpress::Command::new(executor, TENANT);
-    assert!(
-        links
-            .claim_token_refresh("node-a", 1_700_000_000)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !links
-            .claim_token_refresh("node-b", 1_700_000_000)
-            .await
-            .unwrap()
-    );
-    // The next token is a renewal of its own.
-    assert!(
-        links
-            .claim_token_refresh("node-b", 1_700_086_400)
-            .await
-            .unwrap()
-    );
+    let claim = |actor: &'static str, company: &'static str, expires_at: u64| {
+        let executor = executor.clone();
+        async move {
+            timada_aliexpress::claim_token_refresh(&executor, actor, company, expires_at)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(claim("node-a", "company-1", 1_700_000_000).await);
+    assert!(!claim("node-b", "company-1", 1_700_000_000).await);
+    // The next token is a renewal of its own, and so is another company's.
+    assert!(claim("node-b", "company-1", 1_700_086_400).await);
+    assert!(claim("node-b", "company-2", 1_700_000_000).await);
 }
 
 /// Imports the fixture as a draft; the link's id and the product's.

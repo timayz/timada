@@ -1,16 +1,14 @@
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{
-    AliexpressAuthorized, AliexpressConfigured, AliexpressForwardingSet, AliexpressRemoved,
-};
+use crate::aggregator::company::{AliexpressAuthorized, AliexpressDisconnected};
+use crate::aggregator::{AliexpressConfigured, AliexpressForwardingSet, AliexpressRemoved};
+use crate::command::CompanyState;
 use crate::error::TenancyError;
 use crate::value_object::{PERMISSION_ALIEXPRESS_MANAGE, PricingRule};
 
-/// The merchant's AliExpress app, its secret sealed by the host.
+/// What the shop buys on AliExpress.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigureAliexpress {
-    pub app_key: String,
-    pub app_secret_sealed: Vec<u8>,
     /// ISO 3166 alpha-2 (`FR`).
     pub ship_to_country: String,
     /// ISO 4217 (`EUR`).
@@ -20,7 +18,8 @@ pub struct ConfigureAliexpress {
     pub pricing: Option<PricingRule>,
 }
 
-/// The tokens an AliExpress account gave the app, sealed by the host.
+/// The tokens an AliExpress account gave the platform's app, sealed by the
+/// host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizeAliexpress {
     pub access_token_sealed: Vec<u8>,
@@ -36,8 +35,8 @@ fn is_code(value: &str, len: usize) -> bool {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Sets (or replaces) the shop's AliExpress app. Another app key drops
-    /// the account the old one acted for. Needs `aliexpress:manage`.
+    /// Sets (or replaces) what the shop buys on AliExpress. Needs
+    /// `aliexpress:manage`.
     pub async fn configure_aliexpress(
         &self,
         actor_user_id: &str,
@@ -45,11 +44,6 @@ impl<E: Executor> super::Command<E> {
         cmd: ConfigureAliexpress,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        let app_key = cmd.app_key.trim().to_owned();
-        if !(1..=64).contains(&app_key.len()) || !app_key.bytes().all(|b| b.is_ascii_alphanumeric())
-        {
-            return Err(TenancyError::InvalidAliexpressKey);
-        }
         let country = cmd.ship_to_country.trim().to_ascii_uppercase();
         let currency = cmd.currency.trim().to_ascii_uppercase();
         let language = cmd.language.trim().to_ascii_lowercase();
@@ -67,8 +61,6 @@ impl<E: Executor> super::Command<E> {
             .write()?
             .routing_key_opt(routing_key)
             .event(&AliexpressConfigured {
-                app_key,
-                app_secret_sealed: cmd.app_secret_sealed,
                 ship_to_country: country,
                 currency,
                 language,
@@ -80,35 +72,63 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Records the tokens the account gave the app after the merchant
-    /// connected it. Needs `aliexpress:manage`.
+    /// Records the tokens the company's account gave the app after an
+    /// owner connected it. Owners only.
     pub async fn authorize_aliexpress(
         &self,
         actor_user_id: &str,
-        tenant_id: &str,
+        company_id: &str,
         cmd: AuthorizeAliexpress,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        let tenant = self.require_active(tenant_id).await?;
-        if !tenant.can(actor_user_id, PERMISSION_ALIEXPRESS_MANAGE) {
-            return Err(TenancyError::Forbidden);
-        }
-        self.write_authorization(actor_user_id, tenant, cmd, routing_key)
+        let company = self
+            .require_company_owner(company_id, actor_user_id)
+            .await?;
+        self.write_authorization(actor_user_id, company, cmd, routing_key)
             .await
     }
 
-    /// Records tokens the host refreshed on its own: no member asked, so no
-    /// permission applies; `actor` names the host's job.
+    /// Records tokens the host refreshed on its own: no owner asked, so no
+    /// ownership applies; `actor` names the host's job. A company with no
+    /// account any more is left alone.
     pub async fn refresh_aliexpress(
         &self,
         actor: &str,
-        tenant_id: &str,
+        company_id: &str,
         cmd: AuthorizeAliexpress,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        let tenant = self.require_active(tenant_id).await?;
-        self.write_authorization(actor, tenant, cmd, routing_key)
+        let company = self.require_company(company_id).await?;
+        if company.aliexpress.is_none() {
+            return Ok(());
+        }
+        self.write_authorization(actor, company, cmd, routing_key)
             .await
+    }
+
+    /// Forgets the company's AliExpress account; none is a no-op. Owners
+    /// only.
+    pub async fn disconnect_aliexpress(
+        &self,
+        actor_user_id: &str,
+        company_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let company = self
+            .require_company_owner(company_id, actor_user_id)
+            .await?;
+        if company.aliexpress.is_none() {
+            return Ok(());
+        }
+        company
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&AliexpressDisconnected {
+                disconnected_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
     }
 
     /// What happens to the shop's paid orders with AliExpress items; the
@@ -175,14 +195,11 @@ impl<E: Executor> super::Command<E> {
     async fn write_authorization(
         &self,
         actor: &str,
-        tenant: super::TenantState,
+        company: CompanyState,
         cmd: AuthorizeAliexpress,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        if tenant.aliexpress.is_none() {
-            return Err(TenancyError::AliexpressNotConfigured);
-        }
-        tenant
+        company
             .write()?
             .routing_key_opt(routing_key)
             .event(&AliexpressAuthorized {

@@ -16,7 +16,8 @@ pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
         InvitationsSent0008,
         MemberAudit0009,
         AliexpressAccess0010,
-        DropGroup0011
+        DropGroup0011,
+        AliexpressAccounts0012
     ]
 }
 
@@ -330,6 +331,40 @@ sqlx_migrator::sqlite_migration!(
         (
             "ALTER TABLE tenancy_tenants DROP COLUMN group_id",
             "ALTER TABLE tenancy_tenants ADD COLUMN group_id INTEGER NOT NULL DEFAULT 0"
+        ),
+    ]
+);
+
+/// The AliExpress account now belongs to the company a shop sells as, so
+/// the renewal goes by companies: the table keyed by shop goes, one keyed by
+/// company replaces it. Reverting puts the old one back empty.
+pub struct AliexpressAccounts0012;
+sqlx_migrator::sqlite_migration!(
+    AliexpressAccounts0012,
+    "tenancy",
+    "0012_aliexpress_accounts",
+    vec_box![("tenancy", "0011_drop_group")],
+    vec_box![
+        (
+            "DROP TABLE tenancy_aliexpress_access",
+            "CREATE TABLE tenancy_aliexpress_access (
+                tenant_id TEXT PRIMARY KEY,
+                expires_at INTEGER NOT NULL,
+                refresh_expires_at INTEGER NOT NULL
+            )"
+        ),
+        (
+            "CREATE TABLE tenancy_aliexpress_accounts (
+                company_id TEXT PRIMARY KEY,
+                expires_at INTEGER NOT NULL,
+                refresh_expires_at INTEGER NOT NULL
+            )",
+            "DROP TABLE tenancy_aliexpress_accounts"
+        ),
+        (
+            "CREATE INDEX tenancy_aliexpress_accounts_expires
+                ON tenancy_aliexpress_accounts (expires_at)",
+            "DROP INDEX tenancy_aliexpress_accounts_expires"
         ),
     ]
 );
