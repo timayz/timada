@@ -30,7 +30,7 @@ use topcoat::{
 use crate::app::auth::Flash;
 use crate::app::t::slug::mail::own_address;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
-use crate::auth::mail::{send_rendered, shop_vars};
+use crate::auth::mail::{marketing_sender, send_rendered_via, shop_vars};
 use crate::auth::require_user;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
@@ -240,19 +240,26 @@ pub fn preview(
 }
 
 /// Mails the preview to the signed-in member: their address, or the error
-/// code to show.
+/// code to show. Like the campaign itself, it goes through the shop's own
+/// mail server only.
 pub async fn send_test(
     cx: &Cx,
     tenant: &TenantState,
     rendered: &RenderedMail,
 ) -> Result<std::result::Result<String, &'static str>> {
+    let Some(sender) = marketing_sender(cx, tenant)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+    else {
+        return Ok(Err("mail_server_required"));
+    };
     let user = require_user(cx).await?;
     let to = own_address(user);
     let rendered = RenderedMail {
         subject: format!("[Test] {}", rendered.subject),
         ..rendered.clone()
     };
-    match send_rendered(cx, tenant, &to, rendered).await {
+    match send_rendered_via(cx, &sender, &to, rendered, Vec::new()).await {
         Ok(()) => Ok(Ok(to)),
         Err(err) => {
             tracing::warn!(tenant = %tenant.id, error = %err, "test campaign failed");

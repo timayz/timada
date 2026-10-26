@@ -28,7 +28,7 @@ use timada_tenancy::{
 use crate::auth::cookies::EmailFlowKind;
 use crate::config;
 use crate::media::Media;
-use crate::shop_mail::shop_sender;
+use crate::shop_mail::{ShopSender, own_shop_sender, shop_sender};
 
 /// Who the codes come from (`mail.from`).
 #[derive(Debug, Clone)]
@@ -191,6 +191,17 @@ async fn send_rendered_with(
     headers: Vec<(String, String)>,
 ) -> Result<()> {
     let sender = shop_sender(cx, shop).await?;
+    send_rendered_via(cx, &sender, to, rendered, headers).await
+}
+
+/// Sends a rendered shop mail through `sender`, whoever that is.
+pub async fn send_rendered_via(
+    cx: &Cx,
+    sender: &ShopSender,
+    to: &str,
+    rendered: RenderedMail,
+    headers: Vec<(String, String)>,
+) -> Result<()> {
     let from = sender.from.clone();
     // The template's markup was checked when it was saved (no scripts,
     // frames, forms or handlers) and every variable in it is escaped, so the
@@ -425,11 +436,19 @@ pub fn render_campaign(
     Ok(rendered)
 }
 
-/// Mails a campaign to one subscriber, from the shop, with the headers that
-/// let their mail client offer a one-click unsubscribe (RFC 8058): a POST
-/// to `unsubscribe_url` takes them off the list.
+/// The shop's sender for its marketing: its own server, never the
+/// platform's. `None` when it has none, and nothing may go out.
+pub async fn marketing_sender(cx: &Cx, shop: &TenantState) -> anyhow::Result<Option<ShopSender>> {
+    own_shop_sender(cx, shop).await
+}
+
+/// Mails a campaign to one subscriber through `sender` (the shop's own
+/// server, see [`marketing_sender`]), with the headers that let their mail
+/// client offer a one-click unsubscribe (RFC 8058): a POST to
+/// `unsubscribe_url` takes them off the list.
 pub async fn send_campaign(
     cx: &Cx,
+    sender: &ShopSender,
     shop: &TenantState,
     to: &str,
     copy: &CampaignCopy<'_>,
@@ -447,7 +466,7 @@ pub async fn send_campaign(
             "List-Unsubscribe=One-Click".to_owned(),
         ),
     ];
-    send_rendered_with(cx, shop, to, rendered, headers).await
+    send_rendered_via(cx, sender, to, rendered, headers).await
 }
 
 fn subject(kind: EmailFlowKind) -> &'static str {

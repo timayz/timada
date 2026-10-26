@@ -730,15 +730,42 @@ test("a merchant sends a campaign to the confirmed subscribers, who leave in one
   await expect(page.locator("[data-preview-subject]")).toHaveText(
     `Les nouveautés de ${name}`,
   );
+  // Marketing goes through the shop's own mail server only: without one,
+  // neither the test nor the campaign goes out.
+  await form.getByRole("button", { name: "Send me a test" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "shop's own mail server only",
+  );
+  await form.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  const campaignUrl = page.url().split("?")[0];
+  await page.getByRole("link", { name: "Send…" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "shop's own mail server only",
+  );
+  await expect(
+    page.getByRole("button", { name: "Send to 2 subscriber(s)" }),
+  ).toHaveCount(0);
+  await page.getByRole("link", { name: "Set up the mail server" }).click();
+  await expect(page).toHaveURL(new RegExp(`/t/${slug}/mail$`));
+  const newsFrom = `news-${slug}@example.com`;
+  await page.getByLabel("Server", { exact: true }).fill("localhost");
+  await page.getByLabel("Port", { exact: true }).fill("1025");
+  await page.getByLabel("Security").selectOption("none");
+  await page.getByLabel("Send from address").fill(newsFrom);
+  await page.getByRole("button", { name: "Test and save" }).click();
+  await expect(page.getByRole("status")).toContainText("Test mail sent");
+
+  await page.goto(campaignUrl);
   await form.getByRole("button", { name: "Send me a test" }).click();
   await expect(page.getByRole("status")).toContainText(
     `Test mail sent to ${owner}`,
   );
-  await mailTo(request, owner, "[Test] Les nouveautés de");
-  await form.getByRole("button", { name: "Save draft" }).click();
-  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  const test = await mailTo(request, owner, "[Test] Les nouveautés de");
+  expect(test.from[0].address).toBe(newsFrom);
 
-  // Sent to the two confirmed addresses, once each.
+  // Sent to the two confirmed addresses, once each, from the shop's server.
+  await page.goto(campaignUrl);
   await page.getByRole("link", { name: "Send…" }).click();
   await expect(page.locator("[data-campaign-audience]")).toHaveAttribute(
     "data-campaign-audience",
@@ -748,6 +775,7 @@ test("a merchant sends a campaign to the confirmed subscribers, who leave in one
   await expect(page.getByRole("status")).toContainText("Sending");
   const received = await mailTo(request, ada, "Les nouveautés de");
   expect(received.subject).toBe(`Les nouveautés de ${name}`);
+  expect(received.from[0].address).toBe(newsFrom);
   await mailTo(request, grace, "Les nouveautés de");
   await expect(async () => {
     await page.reload();

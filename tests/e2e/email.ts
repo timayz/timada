@@ -14,6 +14,7 @@ export function uniqueEmail(prefix: string): string {
 type MailDevMessage = {
   id: string;
   to: { address: string }[];
+  from: { name: string; address: string }[];
   subject: string;
   text?: string;
   html?: string;
