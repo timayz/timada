@@ -1,7 +1,9 @@
 //! Where a shop's mails to its shoppers go out: through the merchant's own
 //! mail server, from its own address, once it set one up on
 //! `/t/{slug}/mail`; through the platform's server under the shop's name
-//! otherwise.
+//! otherwise. Marketing is the exception: a newsletter campaign only ever
+//! goes through the shop's own server ([`ShopMail::own_sender_of`]), never
+//! the platform's, so a shop without one cannot send any.
 //!
 //! The server's password is recorded sealed under `secrets.key` (see
 //! [`Sealer`]); without that setting no shop can set a server up, and the
@@ -65,11 +67,24 @@ impl MailServer {
     }
 }
 
+/// A shop asked to mail through its own server and has none set up, or
+/// shop servers are off on this node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoOwnServer;
+
+impl std::fmt::Display for NoOwnServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the shop has no mail server of its own")
+    }
+}
+
+impl std::error::Error for NoOwnServer {}
+
 /// Who a shop's mail comes from and the server it goes through.
 pub struct ShopSender {
     pub from: Mailbox,
     /// `None`: the platform's server.
-    transport: Option<Arc<SmtpTransport>>,
+    transport: Option<Arc<dyn Transport>>,
 }
 
 impl ShopSender {
@@ -96,9 +111,11 @@ pub struct ShopMail(Arc<Inner>);
 struct Inner {
     sealer: Option<Sealer>,
     allow_private_hosts: bool,
-    /// `tenant id → (the settings it was built from, the transport)`.
-    transports: Mutex<HashMap<String, (MailServerSettings, Arc<SmtpTransport>)>>,
+    transports: Mutex<Transports>,
 }
+
+/// `tenant id → (the settings it was built from, the transport)`.
+type Transports = HashMap<String, (MailServerSettings, Arc<dyn Transport>)>;
 
 impl ShopMail {
     /// `sealer`: `None` keeps every shop on the platform's server.
@@ -157,6 +174,11 @@ impl ShopMail {
         Ok(())
     }
 
+    /// Whether `tenant` mails through a server of its own here.
+    pub fn has_own_server(&self, tenant: &TenantState) -> bool {
+        tenant.mail_server.is_some() && self.enabled()
+    }
+
     /// Who `tenant`'s mails come from and through which server.
     /// `platform` is the platform's sender, whose address the shop borrows
     /// when it has no server of its own.
@@ -165,11 +187,21 @@ impl ShopMail {
         tenant: &TenantState,
         platform: &Mailbox,
     ) -> anyhow::Result<ShopSender> {
-        let Some(settings) = tenant.mail_server.as_ref().filter(|_| self.enabled()) else {
-            return Ok(ShopSender {
+        match self.own_sender_of(tenant).await {
+            Ok(sender) => Ok(sender),
+            Err(err) if err.is::<NoOwnServer>() => Ok(ShopSender {
                 from: Mailbox::named(&tenant.name, platform.address())?,
                 transport: None,
-            });
+            }),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// `tenant`'s sender through its own server and nothing else: the one
+    /// its marketing goes through. [`NoOwnServer`] when it has none.
+    pub async fn own_sender_of(&self, tenant: &TenantState) -> anyhow::Result<ShopSender> {
+        let Some(settings) = tenant.mail_server.as_ref().filter(|_| self.enabled()) else {
+            return Err(NoOwnServer.into());
         };
         let name = settings.from_name.as_deref().unwrap_or(&tenant.name);
         let from = Mailbox::named(name, &settings.from_address)?;
@@ -187,7 +219,7 @@ impl ShopMail {
                 let server = self
                     .server_of(tenant)?
                     .context("the shop's mail server is gone")?;
-                let transport = Arc::new(server.transport()?);
+                let transport: Arc<dyn Transport> = Arc::new(server.transport()?);
                 self.0
                     .transports
                     .lock()
@@ -201,6 +233,21 @@ impl ShopMail {
             transport: Some(transport),
         })
     }
+
+    /// Stands `transport` in for `tenant`'s own server, so a test can read
+    /// what the shop sent through it.
+    #[cfg(test)]
+    pub fn stand_in_for_own_server(&self, tenant: &TenantState, transport: Arc<dyn Transport>) {
+        let settings = tenant
+            .mail_server
+            .clone()
+            .expect("a tenant with a mail server");
+        self.0
+            .transports
+            .lock()
+            .expect("transports lock")
+            .insert(tenant.id.clone(), (settings, transport));
+    }
 }
 
 /// `tenant`'s sender, from the context's [`ShopMail`] and [`MailSender`].
@@ -211,6 +258,16 @@ pub async fn shop_sender(cx: &Cx, tenant: &TenantState) -> topcoat::Result<ShopS
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     Ok(sender)
+}
+
+/// `tenant`'s sender through its own server only (see
+/// [`ShopMail::own_sender_of`]); `None` when it has none.
+pub async fn own_shop_sender(cx: &Cx, tenant: &TenantState) -> anyhow::Result<Option<ShopSender>> {
+    match app_context::<ShopMail>(cx).own_sender_of(tenant).await {
+        Ok(sender) => Ok(Some(sender)),
+        Err(err) if err.is::<NoOwnServer>() => Ok(None),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(test)]
@@ -253,6 +310,26 @@ mod tests {
         assert!(!sender.is_own_server());
         assert_eq!(sender.from.name(), Some("Acme Tea"));
         assert_eq!(sender.from.address(), "no-reply@example.com");
+    }
+
+    #[tokio::test]
+    async fn marketing_never_borrows_the_platform_server() {
+        let mail = ShopMail::new(Some(Sealer::new("mail", KEY)), true);
+        assert!(!mail.has_own_server(&shop(None)));
+        let err = mail.own_sender_of(&shop(None)).await.err().unwrap();
+        assert!(err.is::<NoOwnServer>(), "{err}");
+
+        let tenant = shop(Some(settings(&mail)));
+        assert!(mail.has_own_server(&tenant));
+        let sender = mail.own_sender_of(&tenant).await.unwrap();
+        assert!(sender.is_own_server());
+        assert_eq!(sender.from.address(), "orders@acme.test");
+
+        // Shop servers off on this node: no marketing at all.
+        let off = ShopMail::new(None, true);
+        assert!(!off.has_own_server(&tenant));
+        let err = off.own_sender_of(&tenant).await.err().unwrap();
+        assert!(err.is::<NoOwnServer>(), "{err}");
     }
 
     #[tokio::test]

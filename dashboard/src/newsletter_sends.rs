@@ -3,6 +3,10 @@
 //! on a timer, from the shop. Each subscriber's mail is claimed first
 //! (`Delivery`), so a subscriber gets a campaign once however many nodes
 //! send it; a campaign with nobody left to mail is finished.
+//!
+//! A campaign goes through the shop's own mail server and nothing else: a
+//! shop that has none (or removed it mid-campaign) has its campaign held
+//! back, claimed by nobody, until it sets one up again.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +17,7 @@ use timada_newsletter::{CampaignStatus, sending_campaigns, undelivered_subscribe
 use tokio::task::JoinHandle;
 use topcoat::context::{AppContext, Cx};
 
-use crate::auth::mail::{CampaignCopy, send_campaign};
+use crate::auth::mail::{CampaignCopy, marketing_sender, send_campaign};
 use crate::cluster::Executor;
 use crate::key_vault::KeyVault;
 use crate::newsletter::unsubscribe_link;
@@ -125,6 +129,12 @@ pub async fn send_batch<E: evento::Executor + Clone>(
         tracing::warn!(tenant = %tenant.id, campaign = %campaign.id, "newsletter held back: the shop has no storefront address");
         return Ok(0);
     };
+    // Marketing goes through the shop's own server, never the platform's:
+    // without one nothing is claimed, so the mails wait for it.
+    let Some(sender) = marketing_sender(cx, tenant).await? else {
+        tracing::warn!(tenant = %tenant.id, campaign = %campaign.id, "newsletter held back: the shop has no mail server of its own");
+        return Ok(0);
+    };
     let owed = undelivered_subscribers(
         read_pool,
         &tenant.id,
@@ -165,7 +175,7 @@ pub async fn send_batch<E: evento::Executor + Clone>(
         // Claimed, then sent: a failure is recorded, not retried, since a
         // subscriber mailed twice is worse off than one missed.
         let link = unsubscribe_link(&storefront, &token);
-        match send_campaign(cx, tenant, &subscriber.email, &copy, &link).await {
+        match send_campaign(cx, &sender, tenant, &subscriber.email, &copy, &link).await {
             Ok(()) => mailed += 1,
             Err(err) => {
                 tracing::error!(tenant = %tenant.id, campaign = %campaign.id, subscriber = %state.id, error = %err, "newsletter not delivered");
@@ -290,14 +300,38 @@ mod tests {
             .unwrap();
     }
 
-    fn mail() -> (Cx, MemoryTransport) {
-        let transport = MemoryTransport::new();
+    /// The platform's mailbox and, standing in for `shop`'s own server, a
+    /// second one: a campaign must only ever reach the second.
+    fn mail(shop: &timada_tenancy::TenantState) -> (Cx, MemoryTransport, MemoryTransport) {
+        let platform = MemoryTransport::new();
+        let own = MemoryTransport::new();
+        let shop_mail = crate::shop_mail::ShopMail::new(
+            Some(crate::seal::Sealer::new(
+                "mail",
+                "a-secrets-key-of-thirty-two-chars!!",
+            )),
+            true,
+        );
+        shop_mail.stand_in_for_own_server(shop, Arc::new(own.clone()));
         let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailConfig::builder().transport(platform.clone()).build())
             .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(crate::shop_mail::ShopMail::new(None, false))
+            .app_context(shop_mail)
             .build();
-        (cx, transport)
+        (cx, platform, own)
+    }
+
+    fn own_server() -> timada_tenancy::MailServerSettings {
+        timada_tenancy::MailServerSettings {
+            host: "localhost".into(),
+            port: 1025,
+            security: timada_tenancy::MAIL_SECURITY_NONE.into(),
+            username: None,
+            password_sealed: None,
+            from_address: "news@acme.test".into(),
+            from_name: None,
+            ..Default::default()
+        }
     }
 
     #[tokio::test]
@@ -325,12 +359,13 @@ mod tests {
             .await
             .unwrap();
         catch_up(&store, &pool, keys.clone()).await;
-        let shop = timada_tenancy::TenantState {
+        let mut shop = timada_tenancy::TenantState {
             id: TENANT.into(),
             name: "Acme Tea".into(),
+            mail_server: Some(own_server()),
             ..Default::default()
         };
-        let (cx, transport) = mail();
+        let (cx, platform, transport) = mail(&shop);
 
         // No storefront yet: no unsubscribe link, nothing goes out.
         assert_eq!(
@@ -343,6 +378,19 @@ mod tests {
             .set_storefront_address("user-alice", Some(SHOP))
             .await
             .unwrap();
+
+        // No mail server of its own: held back, and nobody is claimed, so
+        // the platform's server never carries marketing.
+        shop.mail_server = None;
+        assert_eq!(
+            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 2)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(platform.sent().is_empty());
+        assert!(transport.sent().is_empty());
+        shop.mail_server = Some(own_server());
 
         assert_eq!(
             send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 2)
@@ -368,8 +416,13 @@ mod tests {
         let state = newsletter.load_campaign(&campaign).await.unwrap().unwrap();
         assert_eq!(state.status, CampaignStatus::Sent);
 
+        assert!(
+            platform.sent().is_empty(),
+            "marketing on the platform's server"
+        );
         let sent = transport.sent();
         assert_eq!(sent.len(), 3);
+        assert_eq!(sent[0].from().unwrap().address(), "news@acme.test");
         let mut to: Vec<String> = sent
             .iter()
             .flat_map(|mail| mail.to().iter().map(|to| to.address().to_owned()))

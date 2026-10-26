@@ -193,7 +193,8 @@ by construction.
    sealed under `[secrets] key`; secrets never enter the tenant store, which
    replicates to storefronts. Hosts on this machine or a private network are refused
    unless `mail.allow_private_hosts` is set. Account codes and invitations always go
-   through the platform's server. Each shop mail may be worded per language: the
+   through the platform's server; newsletter campaigns and their test mails never do,
+   they go through the shop's own server only (`ShopMail::own_sender_of`). Each shop mail may be worded per language: the
    shopper's language comes from the storefront's `Accept-Language` and is kept on
    the order (`LanguageGiven`/`LanguageSet`). Details: `docs/mail.md`.
 6. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
@@ -502,7 +503,10 @@ campaign once however many nodes send it; a mail the server refuses is recorded
 `Finished`. Every mail carries `List-Unsubscribe` and `List-Unsubscribe-Post:
 List-Unsubscribe=One-Click` (RFC 8058) pointing at the storefront's unsubscribe page,
 whose POST takes the subscriber off the list; a shop without a storefront address
-holds its campaign back until it has one.
+holds its campaign back until it has one. Marketing never borrows the platform's
+server: a campaign goes through the shop's own mail server only, the send page and
+the test mail refuse without one (`mail_server_required`), and a sweep that finds
+the server gone holds the campaign back, claiming nobody, until it is set up again.
 
 ## The storefront side
 
