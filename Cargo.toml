@@ -12,13 +12,13 @@ authors = ["timada team"]
 
 [workspace.dependencies]
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal", "fs"] }
-topcoat = { version = "=0.10.0", features = ["tailwind", "anyhow", "mail", "mail-smtp", "fs", "multipart"] }
+topcoat = { version = "=0.11.0", features = ["tailwind", "anyhow", "mail", "mail-smtp", "fs", "multipart"] }
 # The standalone crates, for a library crate (a library names them directly;
 # only an application depends on the facade).
-topcoat-core = { version = "=0.10.0", features = ["anyhow"] }
-topcoat-router = "=0.10.0"
-topcoat-view = "=0.10.0"
-topcoat-view-macro = "=0.10.0"
+topcoat-core = { version = "=0.11.0", features = ["anyhow"] }
+topcoat-router = "=0.11.0"
+topcoat-view = "=0.11.0"
+topcoat-view-macro = "=0.11.0"
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.19", features = ["sqlite"] }
 # Tracks evento's alpha branch until the release after alpha.35 ships the

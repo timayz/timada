@@ -19,7 +19,7 @@ use topcoat::{
     router::{href, request::uri},
     runtime::{Event, signal},
     tailwind,
-    view::{Child, View, attributes, component, view},
+    view::{Child, View, attributes, component, element_id, view},
 };
 
 use super::icons;
@@ -33,6 +33,7 @@ use crate::components::dropdown_menu::{
     dropdown_menu, dropdown_menu_content, dropdown_menu_item, dropdown_menu_label,
     dropdown_menu_separator, dropdown_menu_trigger,
 };
+use crate::components::floating::FloatingAlign;
 use crate::components::sidebar::{
     SidebarCollapsible, sidebar, sidebar_content, sidebar_footer, sidebar_group,
     sidebar_group_content, sidebar_group_label, sidebar_inset, sidebar_menu, sidebar_menu_button,
@@ -448,20 +449,23 @@ pub fn initials(label: &str) -> String {
 /// sign-out button (outside the menu, so it works without scripts and the
 /// browser tests find it).
 #[component]
-async fn user_menu(user: Option<&UserState>) -> Result<impl View> {
+async fn user_menu(cx: &Cx, user: Option<&UserState>) -> Result<impl View> {
     Ok(view! {
         if let Some(user) = user {
+            let menu = element_id(cx);
             <span class="hidden truncate text-sm sm:inline">"Signed in as " <strong>(&user.label)</strong></span>
             dropdown_menu(
                 dropdown_menu_trigger(
+                    target: &menu,
                     attrs: attributes! { aria-label="Account menu" class="rounded-full" },
                     avatar(size: AvatarSize::Sm, avatar_fallback(attrs: attributes! { class="bg-primary/10 text-primary" }, (initials(&user.label))))
                 )
                 dropdown_menu_content(
-                    attrs: attributes! { class="right-0 mt-2" },
+                    id: &menu,
+                    align: FloatingAlign::End,
                     dropdown_menu_label((&user.label))
                     dropdown_menu_separator()
-                    dropdown_menu_item(<a href=(href!(crate::app::auth::account::account))>"Account"</a>)
+                    dropdown_menu_item(close: Some(&menu), <a href=(href!(crate::app::auth::account::account))>"Account"</a>)
                 )
             )
             <form method="post" action=(href!(crate::app::auth::logout::logout))>

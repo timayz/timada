@@ -61,7 +61,7 @@ reqwest.workspace = true
 libc.workspace = true
 
 [build-dependencies]
-topcoat = { version = "=0.10.0", default-features = false, features = ["tailwind", "icon-iconify"] }
+topcoat = { version = "=0.11.0", default-features = false, features = ["tailwind", "icon-iconify"] }
 
 [dev-dependencies]
 evento-lock.workspace = true

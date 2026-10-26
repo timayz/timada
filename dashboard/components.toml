@@ -41,12 +41,16 @@ hash = "sha256:df9073df351770ee0282b9c64b7724caa0422fb51d7823fd3615688f4d02ddf6"
 file = "src/components/dialog.rs"
 
 [registries.topcoat.components.dropdown_menu]
-hash = "sha256:129cb6ba0cac7053435d3481092fe2186cd26e9b52d02405790f6f84ec098431"
+hash = "sha256:f4144823926ae64c0e5f4f89cce141ea2ecca0e423d8640cf8114e84dccb52c9"
 file = "src/components/dropdown_menu.rs"
 
 [registries.topcoat.components.field]
 hash = "sha256:17438c510d30440dfa2ca38f888cd5503e292c9475b5f09de59b45edd35ebac0"
 file = "src/components/field.rs"
+
+[registries.topcoat.components.floating]
+hash = "sha256:66636f7861a3eb370ee736de1a40aff889ec15e491d7aae57b64ad05e25d5cdd"
+file = "src/components/floating.rs"
 
 [registries.topcoat.components.input]
 hash = "sha256:7fe8728a839a821af865711347189a00c29ba28b8b11dcc0d2ee06a053ca127c"
