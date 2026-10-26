@@ -1,6 +1,6 @@
 //! Read side: [`read_model_subscription`] keeps `aliexpress_products`
-//! current from one tenant's stream into the shared database, for the list
-//! of a shop's imports and the sweep that reads them again.
+//! current from every tenant's streams into one database, for the list of
+//! a shop's imports and the sweep that reads them again.
 
 mod migrations;
 mod read_model;

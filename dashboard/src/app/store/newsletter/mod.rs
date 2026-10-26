@@ -90,8 +90,8 @@ pub async fn subscribe(cx: &Cx, Form(form): Form<SignupForm>) -> Result<Answer> 
         );
         return refused(StatusCode::TOO_MANY_REQUESTS, NEWSLETTER_TOO_MANY_REQUESTS);
     }
-    let hold = super::hold(cx, &access).await?;
-    let Some(storefront) = timada_orders::Command(hold.executor().clone())
+    let store = super::store(cx, &access);
+    let Some(storefront) = timada_orders::Command::new(store.executor().clone(), store.tenant_id())
         .storefront_address()
         .await
         .map_err(topcoat::Error::from_anyhow)?
@@ -99,7 +99,7 @@ pub async fn subscribe(cx: &Cx, Form(form): Form<SignupForm>) -> Result<Answer> 
         return refused(StatusCode::SERVICE_UNAVAILABLE, NEWSLETTER_UNAVAILABLE);
     };
     let keys = super::shoppers::keys(cx, &access.tenant.id);
-    let outcome = match timada_newsletter::Command(hold.executor().clone())
+    let outcome = match timada_newsletter::Command::new(store.executor().clone(), store.tenant_id())
         .request_subscription(&*keys, STOREFRONT_ACTOR, draft, now())
         .await
     {

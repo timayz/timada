@@ -21,7 +21,7 @@ pub struct DocumentPdf {
 
 impl Store {
     fn invoicing(&self) -> Invoicing<evento::Evento> {
-        Invoicing(self.executor().clone())
+        Invoicing::unscoped(self.executor().clone())
     }
 
     /// See [`documents`].

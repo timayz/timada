@@ -47,8 +47,8 @@ pub async fn revise(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
         return answer_error(err);
     }
 
-    let hold = crate::app::store::hold(cx, &access).await?;
-    let reviews = timada_reviews::Command(hold.executor().clone());
+    let store = crate::app::store::store(cx, &access);
+    let reviews = timada_reviews::Command::new(store.executor().clone(), store.tenant_id());
     let revised = with_photos(cx, &access, &photos, || async {
         reviews
             .revise_review(STOREFRONT_ACTOR, revision)

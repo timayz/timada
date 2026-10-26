@@ -11,16 +11,16 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/db.rs"]
+mod db;
 #[path = "../src/invoicing.rs"]
 mod invoicing;
-#[path = "../src/limits.rs"]
-mod limits;
 #[path = "../src/payments/mod.rs"]
 mod payments;
 #[path = "../src/seal.rs"]
 mod seal;
-#[path = "../src/tenants.rs"]
-mod tenants;
+#[path = "../src/store_writer.rs"]
+mod store_writer;
 #[path = "../src/vies.rs"]
 mod vies;
 
@@ -40,10 +40,8 @@ use timada_tenancy::{
 };
 
 use cluster::Cluster;
-use config::TenantsConfig;
 use payments::webhook::{Outcome, receive};
 use payments::{NewPayment, OpenPayment, PaymentGateway, PaymentStatus, Payments, signature};
-use tenants::Tenants;
 
 const WEBHOOK_SECRET: &str = "whsec_test";
 const SEAL_KEY: &str = "a-test-secret-of-thirty-two-chars!!";
@@ -156,7 +154,8 @@ impl vies::Vies for FakeVies {
 /// One node with its platform store and tenants, paying through `G`: the
 /// fake Stripe unless said otherwise.
 struct Harness<G = FakeStripe> {
-    tenants: Arc<Tenants>,
+    cluster: Arc<Cluster>,
+    subscriptions: Vec<evento::subscription::Subscription>,
     platform: Command<cluster::Executor>,
     payments: Arc<Payments>,
     stripe: Arc<G>,
@@ -194,11 +193,17 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
             .await
             .unwrap();
     }
-    let cluster = Arc::new(Cluster::build(None).await.unwrap());
-    let platform = cluster
-        .open_platform(None, pool.clone(), pool.clone())
-        .await
-        .unwrap();
+    // One file for the store and the read models: the test's own pool is both.
+    let files = cluster::Files {
+        store_url: format!("sqlite:{}", dir.join("platform.db").display()),
+        read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
+    };
+    let pools = cluster::StorePools {
+        read: pool.clone(),
+        write: pool.clone(),
+        cursors: pool.clone(),
+    };
+    let (cluster, platform) = Cluster::open(None, None, &files, pools).await.unwrap();
     let payments = Arc::new(Payments::new(
         Some(seal::Sealer::new("payments", SEAL_KEY)),
         stripe.clone(),
@@ -206,34 +211,23 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
     ));
     let subscribed = payments.clone();
     let invoicing_platform = platform.clone();
-    let tenants = Tenants::new(
-        cluster,
-        &TenantsConfig {
-            dir: dir.join("tenants"),
-            max_open: Some(8),
-        },
-        None,
-        platform.clone(),
-        pool.clone(),
-        vec![
-            Arc::new(move |_, tenant_id: &str, executor: &cluster::Executor| {
-                payments::subscription(subscribed.clone(), tenant_id, executor.clone())
-            }),
-            Arc::new(|_, _: &str, executor: &cluster::Executor| {
-                timada_orders::discount_usage_subscription(executor.clone())
-            }),
-            Arc::new(move |_, tenant_id: &str, executor: &cluster::Executor| {
-                invoicing::subscription(
-                    invoicing_platform.clone(),
-                    Arc::new(FakeVies),
-                    tenant_id,
-                    executor.clone(),
-                )
-            }),
-        ],
-    );
+    // The subscriptions the dashboard runs on the store, each following
+    // every tenant.
+    let mut subscriptions = Vec::new();
+    for builder in [
+        payments::subscription(subscribed.clone(), platform.clone()),
+        timada_orders::discount_usage_subscription(platform.clone()),
+        invoicing::subscription(
+            invoicing_platform.clone(),
+            Arc::new(FakeVies),
+            platform.clone(),
+        ),
+    ] {
+        subscriptions.push(builder.start(&platform).await.unwrap());
+    }
     Harness {
-        tenants,
+        cluster,
+        subscriptions,
         platform: Command(platform),
         payments,
         stripe,
@@ -350,14 +344,15 @@ impl<G: PaymentGateway + 'static> Harness<G> {
             .unwrap()
     }
 
-    async fn store(&self, tenant: &TenantState) -> cluster::Executor {
-        self.tenants.open(tenant).await.unwrap()
+    /// The store, as the tenant's gateways are built over it.
+    fn store(&self, _tenant: &TenantState) -> cluster::Executor {
+        self.platform.0.clone()
     }
 
     /// A cart holding two mugs at 12.50 EUR; returns the cart and the mug.
     async fn cart(&self, tenant: &TenantState) -> (String, String) {
-        let store = self.store(tenant).await;
-        let catalog = timada_catalog::Command(store.clone());
+        let store = self.store(tenant);
+        let catalog = timada_catalog::Command::new(store.clone(), &tenant.id);
         let mug = catalog
             .create_product(
                 "alice",
@@ -373,7 +368,7 @@ impl<G: PaymentGateway + 'static> Harness<G> {
             .await
             .unwrap();
         catalog.publish_product("alice", &mug.id).await.unwrap();
-        let orders = timada_orders::Command(store);
+        let orders = timada_orders::Command::new(store, &tenant.id);
         let cart_id = orders.create_cart(STOREFRONT_ACTOR).await.unwrap();
         orders
             .add_to_cart(
@@ -406,7 +401,7 @@ impl<G: PaymentGateway + 'static> Harness<G> {
         cart_id: &str,
         checkout: Checkout,
     ) -> PaymentAnswer {
-        let orders = timada_orders::Command(self.store(tenant).await);
+        let orders = timada_orders::Command::new(self.store(tenant), &tenant.id);
         let request_id = orders
             .request_checkout(STOREFRONT_ACTOR, cart_id, checkout)
             .await
@@ -436,7 +431,7 @@ impl<G: PaymentGateway + 'static> Harness<G> {
             &self.payments,
             &account,
             &tenant.id,
-            self.store(&tenant).await,
+            self.store(&tenant),
             body.as_bytes(),
             header.as_deref(),
             now(),
@@ -446,7 +441,13 @@ impl<G: PaymentGateway + 'static> Harness<G> {
     }
 
     async fn finish(self) {
-        self.tenants.shutdown().await;
+        for subscription in &self.subscriptions {
+            subscription.stop();
+        }
+        for subscription in &self.subscriptions {
+            subscription.stopped().await;
+        }
+        self.cluster.shutdown().await;
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
@@ -524,7 +525,7 @@ async fn a_paid_cart_becomes_one_order() {
             order_id: order_id.clone()
         }
     );
-    let orders = timada_orders::Command(h.store(&acme).await);
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
     assert_eq!(order.total_cents, 2500);
     assert_eq!(order.payment.payment_id, payment.payment_id);
@@ -532,7 +533,7 @@ async fn a_paid_cart_becomes_one_order() {
     assert_eq!(order.email, "ada@example.org");
 
     // The order is invoiced, at the merchant's default rate.
-    let invoicing = timada_invoicing::Command(h.store(&acme).await);
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
     let invoice =
         eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
     assert!(invoice.label.ends_with("-000001"), "{}", invoice.label);
@@ -607,7 +608,7 @@ async fn webhooks_that_do_not_check_out_change_nothing() {
         Outcome::Ignored
     );
 
-    let orders = timada_orders::Command(h.store(&acme).await);
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
     assert!(orders.load_order_of_cart(&cart_id).await.unwrap().is_none());
     h.finish().await;
 }
@@ -631,7 +632,7 @@ async fn requests_that_cannot_go_ahead_are_refused() {
     );
     // The price moved since the shopper saw 25.00.
     h.connect_stripe(&acme).await;
-    timada_catalog::Command(h.store(&acme).await)
+    timada_catalog::Command::new(h.store(&acme), &acme.id)
         .price_product("alice", &mug, 1300, "EUR")
         .await
         .unwrap();
@@ -682,9 +683,9 @@ async fn a_discount_code_is_charged_held_and_invoiced() {
     let h = harness().await;
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
-    let store = h.store(&acme).await;
-    let orders = timada_orders::Command(store.clone());
-    let discounts = timada_discounts::Command(store.clone());
+    let store = h.store(&acme);
+    let orders = timada_orders::Command::new(store.clone(), &acme.id);
+    let discounts = timada_discounts::Command::new(store.clone(), &acme.id);
     let ten = discounts
         .create_discount(
             "alice",
@@ -772,7 +773,7 @@ async fn a_discount_code_is_charged_held_and_invoiced() {
     assert!(usage.reserved.is_empty());
 
     // The invoice keeps the lines at full price and says what came off.
-    let invoicing = timada_invoicing::Command(store);
+    let invoicing = timada_invoicing::Command::new(store, &acme.id);
     let invoice =
         eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
     assert_eq!(invoice.lines[0].total_cents(), 2500);
@@ -793,10 +794,10 @@ async fn a_checkout_offer_is_charged_and_invoiced() {
     let h = harness().await;
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
-    let store = h.store(&acme).await;
+    let store = h.store(&acme);
     let (cart_id, mug) = h.cart(&acme).await;
     // The second mug at 5.00 instead of 12.50.
-    timada_discounts::Command(store.clone())
+    timada_discounts::Command::new(store.clone(), &acme.id)
         .create_offer(
             "alice",
             timada_discounts::CreateOffer {
@@ -827,7 +828,7 @@ async fn a_checkout_offer_is_charged_and_invoiced() {
 
     // The invoice bills the unit at the offer's price: its total is the
     // charge.
-    let invoicing = timada_invoicing::Command(store);
+    let invoicing = timada_invoicing::Command::new(store, &acme.id);
     let invoice =
         eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
     let billed: Vec<(u64, u32)> = invoice
@@ -883,12 +884,12 @@ async fn the_tenant_store_learns_how_its_shoppers_pay() {
     let h = harness().await;
     let acme = h.create("acme").await;
     let follow = async || {
-        payments::setup_subscription(h.payments.clone(), h.tenants.clone())
+        payments::setup_subscription(h.payments.clone(), h.store(&acme))
             .run_once(&h.platform.0)
             .await
             .unwrap();
     };
-    let orders = timada_orders::Command(h.store(&acme).await);
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
     follow().await;
     assert_eq!(orders.payment_setup().await.unwrap(), None);
 
@@ -1035,7 +1036,7 @@ async fn a_checkout_goes_through_stripe_test_mode() {
     let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
         panic!("the order is placed");
     };
-    let orders = timada_orders::Command(h.store(&acme).await);
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
     assert_eq!(order.status, timada_orders::OrderStatus::Paid);
     assert_eq!(order.cart_id, cart_id);
@@ -1082,8 +1083,8 @@ async fn invoices_follow_where_the_goods_go() {
     let h = harness().await;
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
-    let invoicing = timada_invoicing::Command(h.store(&acme).await);
-    timada_orders::Command(h.store(&acme).await)
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
+    timada_orders::Command::new(h.store(&acme), &acme.id)
         .set_business_buyers("alice", true)
         .await
         .unwrap();
@@ -1137,7 +1138,7 @@ async fn an_invoice_is_addressed_where_the_order_is_billed() {
     let h = harness().await;
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
-    let invoicing = timada_invoicing::Command(h.store(&acme).await);
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
 
     // Billed in Paris, shipped to New York: addressed to Paris, taxed as
     // an export, since VAT follows the goods.
@@ -1185,7 +1186,7 @@ async fn shipping_is_paid_and_invoiced_at_the_rates_of_the_goods() {
     let h = harness().await;
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
-    let orders = timada_orders::Command(h.store(&acme).await);
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
     let method_id = orders
         .add_shipping_method(
             "alice",
@@ -1221,7 +1222,7 @@ async fn shipping_is_paid_and_invoiced_at_the_rates_of_the_goods() {
     assert_eq!(order.payment.amount_cents, 2990);
     assert_eq!(order.shipping_charge.unwrap().name, "Tracked delivery");
 
-    let invoicing = timada_invoicing::Command(h.store(&acme).await);
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
     let invoice =
         eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
     assert_eq!(invoice.total_cents, 2990);

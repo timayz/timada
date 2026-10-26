@@ -19,7 +19,6 @@ use crate::command::{
     ApiKeyState, CompanyState, InvitationState, TenantState, api_key_projection,
     company_projection, invitation_projection, tenant_projection,
 };
-use crate::value_object::group_of;
 
 /// The cursor identity of the read-model subscription. One per node.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-tenancy/read-models";
@@ -106,8 +105,8 @@ async fn upsert_tenant(pool: &SqlitePool, tenant: &TenantState) -> anyhow::Resul
             .await?;
     sqlx::query(
         "INSERT INTO tenancy_tenants (id, slug, name, created_by, created_at, suspended,
-            suspended_reason, group_id, member_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            suspended_reason, member_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (id) DO UPDATE SET
             slug = excluded.slug, name = excluded.name,
             suspended = excluded.suspended, suspended_reason = excluded.suspended_reason,
@@ -120,7 +119,6 @@ async fn upsert_tenant(pool: &SqlitePool, tenant: &TenantState) -> anyhow::Resul
     .bind(tenant.created_at as i64)
     .bind(tenant.is_suspended())
     .bind(tenant.suspended.as_deref())
-    .bind(group_of(&tenant.id) as i64)
     .bind(tenant.members.len() as i64)
     .execute(&mut *tx)
     .await?;

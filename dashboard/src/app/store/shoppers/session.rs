@@ -26,8 +26,8 @@ pub async fn session(cx: &Cx, Form(form): Form<SessionForm>) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let hold = super::super::hold(cx, &access).await?;
-    match timada_shoppers::Command(hold.executor().clone())
+    let store = super::super::store(cx, &access);
+    match timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
         .sign_in(
             &*super::keys(cx, &access.tenant.id),
             &form.email,

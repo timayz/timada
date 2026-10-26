@@ -1,11 +1,11 @@
 //! The subscription that keeps `orders_orders` and `orders_carts` current
-//! for one tenant.
+//! for every tenant.
 //!
 //! Each handler reloads the strict write model of the stream the event
 //! belongs to and rewrites its row, so delivery may repeat (the subscription
-//! is at-least-once) without the row drifting. The subscription runs on the
-//! tenant's own executor (its cursor lives there) and writes into the shared
-//! read-model database it is given.
+//! is at-least-once) without the row drifting. One subscription follows
+//! every tenant's streams: each row carries the tenant of the event that made
+//! it, and it writes into the read-model database it is given.
 
 use evento::{
     Executor,
@@ -17,23 +17,15 @@ use sqlx::SqlitePool;
 use crate::aggregator::{Cart, Order};
 use crate::command::{CartState, OrderState, cart_projection, order_projection};
 
-/// The cursor identity of the read-model subscription, in each tenant's store.
+/// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-orders/read-models";
 
-/// The tenant whose stream a subscription follows, handed to its handlers.
-#[derive(Debug, Clone)]
-pub struct TenantId(pub String);
-
-/// Builds the subscription of one tenant over every routing key. `pool` is
-/// the shared read-model database and must be allowed to write; start it
-/// with `.start(&tenant_executor)` and keep the handle for shutdown.
-pub fn read_model_subscription<E: Executor>(
-    pool: SqlitePool,
-    tenant_id: &str,
-) -> SubscriptionBuilder<E> {
+/// Builds the subscription over every tenant and routing key. `pool` is the
+/// read-model database and must be allowed to write; start it with
+/// `.start(&store)` and keep the handle for shutdown.
+pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(pool)
-        .data(TenantId(tenant_id.to_owned()))
         .handler(on_cart_event())
         .handler(on_order_event())
         .any_routing_key()
@@ -45,15 +37,15 @@ async fn on_cart_event<E: Executor>(
     event: RawEvent<Cart>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let tenant: TenantId = context.extract();
     let Some(cart) = cart_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
     else {
         return Ok(());
     };
-    upsert_cart(&pool, &tenant.0, &cart).await
+    upsert_cart(&pool, &event.tenant, &cart).await
 }
 
 #[evento::subscription_all]
@@ -62,15 +54,15 @@ async fn on_order_event<E: Executor>(
     event: RawEvent<Order>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let tenant: TenantId = context.extract();
     let Some(order) = order_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
     else {
         return Ok(());
     };
-    upsert_order(&pool, &tenant.0, &order).await
+    upsert_order(&pool, &event.tenant, &order).await
 }
 
 /// Writes the row of a cart as the write model sees it.

@@ -84,7 +84,8 @@ impl<E: Executor> super::Command<E> {
             .original_version(0)
             .routing_key_opt(routing_key)
             .event(&event)
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await
         {
             let _ = keys.delete(&key_id).await;
@@ -117,7 +118,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Handled {
                 handled_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -142,7 +144,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Reopened {
                 reopened_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

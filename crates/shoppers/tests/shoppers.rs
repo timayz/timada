@@ -2,7 +2,7 @@ mod common;
 
 use std::ops::Deref;
 
-use common::MemoryKeys;
+use common::{MemoryKeys, TENANT};
 use evento::migrator::Migrate;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -65,7 +65,7 @@ async fn shoppers_with(keys: MemoryKeys) -> Shoppers {
         .unwrap();
     drop(conn);
     Shoppers {
-        command: Command(pool.clone().into()),
+        command: Command::new(pool.clone().into(), TENANT),
         keys,
         pool,
     }

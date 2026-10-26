@@ -53,7 +53,7 @@ use topcoat::{
 
 use crate::app::auth::Flash;
 use crate::app::tenants::tenancy;
-use crate::auth::{now, require_user, unix_seconds};
+use crate::auth::{now, require_user};
 use crate::authz::Authorizer;
 use crate::cluster::Executor;
 use crate::components::alert::{AlertVariant, alert, alert_description};
@@ -62,7 +62,7 @@ use crate::components::button::button;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::db::ReadPool;
-use crate::tenants::{RequestHold, TenantStatus, Tenants};
+use crate::store_api::StoreConnections;
 use crate::ui::{
     Shell, Tone, chrome::section_url, document, fact, facts, format_time, icons, notice,
     section_card, stat_tile, status_badge,
@@ -77,9 +77,8 @@ pub struct TenantAccess {
     pub user_id: String,
     /// The role the signed-in user holds in it.
     pub role: String,
-    /// The tenant's event store, open while it is not suspended, and held
-    /// open until the request is done with it.
-    hold: Option<RequestHold>,
+    /// The store, while the tenant is not suspended.
+    store: Option<Executor>,
 }
 
 impl TenantAccess {
@@ -104,19 +103,21 @@ impl TenantAccess {
         }
     }
 
-    /// The tenant's executor, or 403 while the tenant is suspended: every
-    /// write to the tenant's own data (its catalog) goes through it.
+    /// The store, or 403 while the tenant is suspended: every write to the
+    /// tenant's own data (its catalog) goes through it, in the tenant's
+    /// streams (`tenant_id`).
     pub fn executor(&self) -> Result<&Executor> {
-        self.hold
-            .as_ref()
-            .map(RequestHold::executor)
-            .ok_or_else(|| forbidden().into())
+        self.store.as_ref().ok_or_else(|| forbidden().into())
+    }
+
+    /// The tenant every gateway built from this access acts in.
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant.id
     }
 }
 
 /// The tenant named in the URL, for a signed-in member: 404 for an unknown
-/// slug, 403 for everyone else. Opening the tenant's database here is what
-/// counts as activity for it.
+/// slug, 403 for everyone else.
 pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
     let user = require_user(cx).await?;
     let slug = path_param::<Slug>(cx);
@@ -131,21 +132,12 @@ pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
         return Err(forbidden().into());
     };
     let role = role.to_owned();
-    let hold = if tenant.is_suspended() {
-        None
-    } else {
-        Some(
-            app_context::<Arc<Tenants>>(cx)
-                .hold(&tenant)
-                .await
-                .map_err(topcoat::Error::from_anyhow)?,
-        )
-    };
+    let store = (!tenant.is_suspended()).then(|| app_context::<Executor>(cx).clone());
     Ok(TenantAccess {
         tenant,
         user_id: user.id.clone(),
         role,
-        hold,
+        store,
     })
 }
 
@@ -362,7 +354,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_manage = access.can(cx, PERMISSION_TENANT_MANAGE).await?;
     let TenantAccess { tenant, role, .. } = access;
     let role = role_label(&tenant, &role);
-    let status = app_context::<Arc<Tenants>>(cx).status(&tenant.id);
+    let connections = app_context::<Arc<StoreConnections>>(cx).count_tenant(&tenant.id);
     let tiles = tiles(cx, &tenant, &nav).await?;
     let members = match tenant.members.len() {
         1 => "1 member".to_owned(),
@@ -405,20 +397,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             fact(term: "Your role", badge(variant: BadgeVariant::Tinted, (&role)))
                             fact(term: "Created", <time datetime=(tenant.created_at)>(format_time(tenant.created_at))</time>)
                             fact(
-                                term: "Database",
+                                term: "Store",
                                 attrs: attributes! {
-                                    data-tenant-status=(if matches!(status, TenantStatus::Running { .. }) { "running" } else { "stopped" })
+                                    data-tenant-status=(if tenant.is_suspended() { "suspended" } else { "active" })
                                 },
-                                (match status {
-                                    TenantStatus::Running { since, leases } => {
-                                        let since = format_time(unix_seconds(since));
-                                        match leases {
-                                            0 => format!("Running since {since}"),
-                                            1 => format!("Running since {since} · 1 store connection"),
-                                            n => format!("Running since {since} · {n} store connections"),
-                                        }
-                                    }
-                                    TenantStatus::Stopped => "Stopped".to_owned(),
+                                (match (tenant.is_suspended(), connections) {
+                                    (true, _) => "Offline while suspended".to_owned(),
+                                    (false, 0) => "No storefront connected".to_owned(),
+                                    (false, 1) => "1 storefront connected".to_owned(),
+                                    (false, n) => format!("{n} storefronts connected"),
                                 })
                             )
                         )

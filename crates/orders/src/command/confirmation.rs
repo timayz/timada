@@ -24,7 +24,8 @@ impl<E: Executor> super::Command<E> {
                 email: email.to_owned(),
                 mailed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match claimed {
             Ok(_) => Ok(true),

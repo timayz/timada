@@ -11,7 +11,7 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use sqlx::SqlitePool;
-use timada_core::Keys;
+use timada_core::keys::KeyRing;
 use timada_identity::UserRow;
 use timada_support::aggregator::Received;
 use timada_tenancy::{PERMISSION_SUPPORT_READ, TenantState};
@@ -20,7 +20,7 @@ use topcoat::context::{AppContext, Cx};
 use crate::auth::mail::send_message_notification;
 use crate::cluster::Executor as Store;
 
-/// The cursor identity of the subscription, in each tenant's store.
+/// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/message-notifications";
 /// Who the notices say mailed them.
 pub const MAILER: &str = "timada-dashboard";
@@ -30,9 +30,6 @@ pub const MAILER: &str = "timada-dashboard";
 /// are not told now.
 const NOTIFICATION_WINDOW_SECS: u64 = 60 * 60;
 
-#[derive(Clone)]
-struct Tenant(String);
-
 /// The platform store, where the shop and its members live.
 #[derive(Clone)]
 struct Platform(Store);
@@ -41,7 +38,7 @@ struct Platform(Store);
 #[derive(Clone)]
 struct ReadModels(SqlitePool);
 
-/// The tenant's own executor, to open the message and claim its notice.
+/// The store, to open the message and claim its notice.
 #[derive(Clone)]
 struct TenantStore(Evento);
 
@@ -55,9 +52,9 @@ struct BaseUrl(String);
 
 /// The tenant's keys, to read the visitor's first name.
 #[derive(Clone)]
-struct TenantKeys(Arc<dyn Keys>);
+struct TenantKeys(Arc<dyn KeyRing>);
 
-/// Follows one tenant's messages. Every node with the tenant open runs it;
+/// Follows every tenant's messages. Every node runs it;
 /// the node that claims a message's notice first is the one that mails.
 #[allow(clippy::too_many_arguments)]
 pub fn subscription<E: Executor>(
@@ -65,8 +62,7 @@ pub fn subscription<E: Executor>(
     read_pool: SqlitePool,
     mail: Arc<AppContext>,
     base_url: String,
-    keys: Arc<dyn Keys>,
-    tenant_id: &str,
+    keys: Arc<dyn KeyRing>,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
@@ -76,7 +72,6 @@ pub fn subscription<E: Executor>(
         .data(BaseUrl(base_url))
         .data(TenantKeys(keys))
         .data(TenantStore(store))
-        .data(Tenant(tenant_id.to_owned()))
         .handler(on_received())
         .any_routing_key()
         .retry(5)
@@ -87,7 +82,6 @@ async fn on_received<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Received>,
 ) -> anyhow::Result<()> {
-    let tenant: Tenant = context.extract();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
@@ -95,19 +89,19 @@ async fn on_received<E: Executor>(
         return Ok(());
     }
     let store: TenantStore = context.extract();
-    let support = timada_support::Command(store.0.clone());
+    let support = timada_support::Command::new(store.0.clone(), &event.tenant);
     // Erased meanwhile: nothing to tell.
     let Some(state) = support.load_message(&event.aggregate_id).await? else {
         return Ok(());
     };
     // A key not here yet fails the handler, which is retried.
     let keys: TenantKeys = context.extract();
-    let Some(message) = state.open_with(&*keys.0).await? else {
+    let Some(message) = state.open_with(&*keys.0.for_tenant(&event.tenant)).await? else {
         return Ok(());
     };
     let platform: Platform = context.extract();
     let Some(shop) = timada_tenancy::Command(platform.0.clone())
-        .load_tenant(&tenant.0)
+        .load_tenant(&event.tenant)
         .await?
     else {
         return Ok(());
@@ -116,7 +110,7 @@ async fn on_received<E: Executor>(
     let recipients =
         mailboxes(timada_identity::users_by_ids(&read_models.0, &recipient_ids(&shop)).await?);
     if recipients.is_empty() {
-        tracing::debug!(tenant = %tenant.0, message = %message.id, "no member to tell of a message");
+        tracing::debug!(tenant = %event.tenant, message = %message.id, "no member to tell of a message");
         return Ok(());
     }
     if !support.claim_notification(&message.id, MAILER).await? {
@@ -135,10 +129,10 @@ async fn on_received<E: Executor>(
     for to in &recipients {
         match send_message_notification(&cx, to, &shop.name, &message.first_name, &link).await {
             Ok(()) => {
-                tracing::info!(tenant = %tenant.0, message = %message.id, "message notice mailed");
+                tracing::info!(tenant = %event.tenant, message = %message.id, "message notice mailed");
             }
             Err(err) => {
-                tracing::error!(tenant = %tenant.0, message = %message.id, error = %err, "message notice not delivered");
+                tracing::error!(tenant = %event.tenant, message = %message.id, error = %err, "message notice not delivered");
             }
         }
     }

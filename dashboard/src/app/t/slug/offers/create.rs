@@ -83,7 +83,7 @@ pub async fn create(cx: &Cx, Form(form): Form<CreateForm>) -> Result<SeeOther> {
         Ok(cmd) => cmd,
         Err(code) => return Ok(see_other(offers_url(cx, slug, Some(code), None))),
     };
-    let product = timada_catalog::Command(access.executor()?.clone())
+    let product = timada_catalog::Command::new(access.executor()?.clone(), access.tenant_id())
         .load_product(&cmd.product_id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;

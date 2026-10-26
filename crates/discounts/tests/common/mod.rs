@@ -29,9 +29,11 @@ pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
 }
 
 pub async fn command() -> Command<evento::Sqlite> {
-    Command(executor_with_pool().await.0)
+    Command::new(executor_with_pool().await.0, TENANT)
 }
 
+/// The tenant the tests act in.
+pub const TENANT: &str = "acme";
 pub const ALICE: &str = "user-alice";
 pub const SHOP: &str = "timada-dashboard";
 

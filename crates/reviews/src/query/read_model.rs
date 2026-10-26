@@ -1,12 +1,12 @@
 //! The subscription that keeps `reviews_reviews` and `reviews_product_ratings`
-//! current for one tenant.
+//! current for every tenant.
 //!
 //! The handler reloads the strict write model of the review and rewrites its
 //! row, then counts the product's published reviews again, in one
 //! transaction, so delivery may repeat (the subscription is at-least-once)
-//! without the numbers drifting. It runs on the tenant's own executor (its
-//! cursor lives there) and writes into the shared read-model database it is
-//! given.
+//! without the numbers drifting. One subscription follows every tenant's streams:
+//! each row carries the tenant of the event that made it, and it writes into
+//! the read-model database it is given.
 
 use evento::{
     Executor,
@@ -19,23 +19,15 @@ use timada_orders::order_projection;
 use crate::aggregator::Review;
 use crate::command::{ReviewState, review_projection};
 
-/// The cursor identity of the read-model subscription, in each tenant's store.
+/// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-reviews/read-models";
 
-/// The tenant whose stream a subscription follows, handed to its handlers.
-#[derive(Debug, Clone)]
-pub struct TenantId(pub String);
-
-/// Builds the subscription of one tenant over every routing key. `pool` is
-/// the shared read-model database and must be allowed to write; start it
-/// with `.start(&tenant_executor)` and keep the handle for shutdown.
-pub fn read_model_subscription<E: Executor>(
-    pool: SqlitePool,
-    tenant_id: &str,
-) -> SubscriptionBuilder<E> {
+/// Builds the subscription over every tenant and routing key. `pool` is the
+/// read-model database and must be allowed to write; start it with
+/// `.start(&store)` and keep the handle for shutdown.
+pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(pool)
-        .data(TenantId(tenant_id.to_owned()))
         .handler(on_review_event())
         .any_routing_key()
 }
@@ -46,9 +38,9 @@ async fn on_review_event<E: Executor>(
     event: RawEvent<Review>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let tenant: TenantId = context.extract();
     let Some(review) = review_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
     else {
@@ -57,6 +49,7 @@ async fn on_review_event<E: Executor>(
     // The order is what the review was written from: it never goes away.
     let order = order_projection()
         .load(&review.order_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?;
     let (reference, product_name) = order
@@ -70,7 +63,7 @@ async fn on_review_event<E: Executor>(
             (order.reference, name)
         })
         .unwrap_or_default();
-    upsert_review(&pool, &tenant.0, &review, &reference, &product_name).await
+    upsert_review(&pool, &event.tenant, &review, &reference, &product_name).await
 }
 
 /// Writes the row of a review as the write model sees it, and the rating of

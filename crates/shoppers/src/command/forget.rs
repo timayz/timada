@@ -26,7 +26,8 @@ impl<E: Executor> super::Command<E> {
                 .event(&Forgotten {
                     key_id: shopper.key_id.clone(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await
             {
                 Ok(_) => {

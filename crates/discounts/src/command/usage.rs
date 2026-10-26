@@ -105,7 +105,8 @@ impl<E: Executor> super::Command<E> {
                         cart_id: cart_id.to_owned(),
                         released_by: actor.to_owned(),
                     })
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(DiscountError::from);
                 match written {
@@ -165,7 +166,8 @@ impl<E: Executor> super::Command<E> {
                             .write()?
                             .routing_key_opt(routing_key.clone())
                             .event(&consumed)
-                            .commit(&self.0)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
                             .await
                     }
                     None => {
@@ -173,7 +175,8 @@ impl<E: Executor> super::Command<E> {
                             .original_version(0)
                             .routing_key_opt(routing_key.clone())
                             .event(&consumed)
-                            .commit(&self.0)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
                             .await
                     }
                 }
@@ -205,7 +208,8 @@ impl<E: Executor> super::Command<E> {
                             .write()?
                             .routing_key_opt(routing_key.clone())
                             .event(&consumed)
-                            .commit(&self.0)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
                             .await
                     }
                     None => {
@@ -213,7 +217,8 @@ impl<E: Executor> super::Command<E> {
                             .original_version(0)
                             .routing_key_opt(routing_key.clone())
                             .event(&consumed)
-                            .commit(&self.0)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
                             .await
                     }
                 }
@@ -265,7 +270,8 @@ impl<E: Executor> super::Command<E> {
                         .write()?
                         .routing_key_opt(routing_key.clone())
                         .event(&reserved)
-                        .commit(&self.0)
+                        .tenant(&self.tenant)
+                        .commit(&self.executor)
                         .await
                 }
                 None => {
@@ -273,7 +279,8 @@ impl<E: Executor> super::Command<E> {
                         .original_version(0)
                         .routing_key_opt(routing_key.clone())
                         .event(&reserved)
-                        .commit(&self.0)
+                        .tenant(&self.tenant)
+                        .commit(&self.executor)
                         .await
                 }
             }
@@ -309,7 +316,8 @@ impl<E: Executor> super::Command<E> {
                     cart_id: cart_id.to_owned(),
                     released_by: actor.to_owned(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await
                 .map_err(DiscountError::from);
             match written {
@@ -356,7 +364,8 @@ impl<E: Executor> super::Command<E> {
                         .write()?
                         .routing_key_opt(routing_key.clone())
                         .event(&reserved)
-                        .commit(&self.0)
+                        .tenant(&self.tenant)
+                        .commit(&self.executor)
                         .await
                 }
                 None => {
@@ -364,7 +373,8 @@ impl<E: Executor> super::Command<E> {
                         .original_version(0)
                         .routing_key_opt(routing_key.clone())
                         .event(&reserved)
-                        .commit(&self.0)
+                        .tenant(&self.tenant)
+                        .commit(&self.executor)
                         .await
                 }
             }

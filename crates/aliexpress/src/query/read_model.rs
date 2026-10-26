@@ -1,5 +1,7 @@
 //! The subscription that keeps `aliexpress_products` and
-//! `aliexpress_forwards` current for one tenant, and the queries over them.
+//! `aliexpress_forwards` current for every tenant, and the queries over
+//! them. One subscription follows every tenant's streams (its cursor lives
+//! in the store); each row carries the tenant of the event that made it.
 
 use evento::{
     Executor,
@@ -12,21 +14,14 @@ use crate::aggregator::AliexpressProduct;
 use crate::aggregator::forward::Forward;
 use crate::command::{ForwardState, LinkState, forward_projection, link_projection};
 
-/// The cursor identity of the read-model subscription, in each tenant's store.
+/// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-aliexpress/read-models";
 
-#[derive(Debug, Clone)]
-struct TenantId(String);
-
-/// Builds the subscription of one tenant over every routing key. `pool` is
-/// the shared read-model database and must be allowed to write.
-pub fn read_model_subscription<E: Executor>(
-    pool: SqlitePool,
-    tenant_id: &str,
-) -> SubscriptionBuilder<E> {
+/// Builds the subscription over every tenant and routing key. `pool` is the
+/// read-model database and must be allowed to write.
+pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(pool)
-        .data(TenantId(tenant_id.to_owned()))
         .handler(on_link_event())
         .handler(on_forward_event())
         .any_routing_key()
@@ -38,15 +33,15 @@ async fn on_link_event<E: Executor>(
     event: RawEvent<AliexpressProduct>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let tenant: TenantId = context.extract();
     let Some(link) = link_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
     else {
         return Ok(());
     };
-    upsert_link(&pool, &tenant.0, &link).await
+    upsert_link(&pool, &event.tenant, &link).await
 }
 
 #[evento::subscription_all]
@@ -55,15 +50,15 @@ async fn on_forward_event<E: Executor>(
     event: RawEvent<Forward>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let tenant: TenantId = context.extract();
     let Some(forward) = forward_projection()
         .load(&event.aggregate_id)
+        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
     else {
         return Ok(());
     };
-    upsert_forward(&pool, &tenant.0, &forward).await
+    upsert_forward(&pool, &event.tenant, &forward).await
 }
 
 /// Writes the row of a forward as the write model sees it.

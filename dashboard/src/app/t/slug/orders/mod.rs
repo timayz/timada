@@ -63,9 +63,9 @@ pub fn orders_of_email_url(cx: &Cx, slug: &str, email: &str) -> String {
         .resolve(cx)
 }
 
-/// The orders gateway over the tenant's own store (403 while suspended).
+/// The orders gateway in the tenant's streams (403 while suspended).
 pub fn orders(access: &TenantAccess) -> Result<Command<Executor>> {
-    Ok(Command(access.executor()?.clone()))
+    Ok(Command::new(access.executor()?.clone(), access.tenant_id()))
 }
 
 #[page]

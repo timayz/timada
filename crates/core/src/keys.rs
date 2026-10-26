@@ -6,6 +6,8 @@
 //! event store: the caller keeps it through [`Keys`], and destroys it when the
 //! data must go, which leaves what the events hold unreadable for good.
 
+use std::sync::Arc;
+
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key as AesKey, Nonce};
 use rand::RngCore;
@@ -65,6 +67,14 @@ pub trait Keys: Send + Sync {
 
     /// Destroys the key for good; one already gone is a no-op.
     async fn delete(&self, key_id: &str) -> anyhow::Result<()>;
+}
+
+/// The keys of every shop, one [`Keys`] per tenant. A subscription that
+/// follows every tenant's streams asks for the keys of the tenant each event
+/// names.
+pub trait KeyRing: Send + Sync {
+    /// The keys of one tenant.
+    fn for_tenant(&self, tenant_id: &str) -> Arc<dyn Keys>;
 }
 
 /// What a sealed value is bound to, so it cannot be moved to another

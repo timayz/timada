@@ -8,14 +8,12 @@ use timada_support::{
     MessageFilter, MessageStatus, count_messages, messages_of_tenant, read_model_subscription,
 };
 
-const TENANT: &str = "tenant-acme";
-
 async fn catch_up(
     executor: &evento::Sqlite,
     pool: &sqlx::SqlitePool,
     keys: &Arc<MemoryKeys>,
 ) -> anyhow::Result<()> {
-    read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT, keys.clone())
+    read_model_subscription::<evento::Sqlite>(pool.clone(), ring(keys))
         .run_once(executor)
         .await
 }
@@ -23,7 +21,7 @@ async fn catch_up(
 #[tokio::test]
 async fn messages_are_listed_newest_first_by_status() {
     let (executor, pool) = executor_with_pool().await;
-    let support = timada_support::Command(executor.clone());
+    let support = timada_support::Command::new(executor.clone(), TENANT);
     let keys = Arc::new(MemoryKeys::default());
     let one = receive(&support, &keys, "First question, about shipping.").await;
     let two = receive(&support, &keys, "Second question, about returns.").await;
@@ -82,7 +80,7 @@ async fn messages_are_listed_newest_first_by_status() {
 #[tokio::test]
 async fn an_erased_message_loses_its_row() {
     let (executor, pool) = executor_with_pool().await;
-    let support = timada_support::Command(executor.clone());
+    let support = timada_support::Command::new(executor.clone(), TENANT);
     let keys = Arc::new(MemoryKeys::default());
     let gone = receive(&support, &keys, "Please forget I ever wrote.").await;
     let kept = receive(&support, &keys, "Do you ship to Belgium?").await;
@@ -108,7 +106,7 @@ async fn an_erased_message_loses_its_row() {
 #[tokio::test]
 async fn a_message_whose_key_is_not_here_yet_is_retried() {
     let (executor, pool) = executor_with_pool().await;
-    let support = timada_support::Command(executor.clone());
+    let support = timada_support::Command::new(executor.clone(), TENANT);
     let keys = Arc::new(MemoryKeys::default());
     let message = receive(&support, &keys, "Where is my order? It is late.").await;
     let state = support.load_message(&message.id).await.unwrap().unwrap();
@@ -117,7 +115,7 @@ async fn a_message_whose_key_is_not_here_yet_is_retried() {
     // The key has not reached this node: the handler fails, the row waits.
     // (The subscription retries that for a long while; one pass shows it.)
     keys.lose_all();
-    let one_pass = read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT, keys.clone())
+    let one_pass = read_model_subscription::<evento::Sqlite>(pool.clone(), ring(&keys))
         .no_retry()
         .run_once(&executor)
         .await;

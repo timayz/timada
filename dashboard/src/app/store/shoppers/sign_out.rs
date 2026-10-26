@@ -16,8 +16,8 @@ pub async fn sign_out(cx: &Cx) -> Result<Answer> {
         Err(code) => return status(code),
     };
     if let Some(token) = shopper_token(cx) {
-        let hold = super::super::hold(cx, &access).await?;
-        timada_shoppers::Command(hold.executor().clone())
+        let store = super::super::store(cx, &access);
+        timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
             .sign_out(&token)
             .await
             .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;

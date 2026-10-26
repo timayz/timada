@@ -12,7 +12,7 @@ async fn shop(
     offer: impl FnOnce(&str, &str) -> CreateOffer,
 ) -> (Orders, Discounts, String, String, String) {
     let (orders, catalog) = store().await;
-    let discounts = timada_discounts::Command(orders.0.clone());
+    let discounts = timada_discounts::Command::new(orders.executor().clone(), TENANT);
     let tracker = product(&catalog, "Tracker", 3000, "EUR").await;
     let bowl = product(&catalog, "Bowl", 2000, "EUR").await;
     let offer_id = discounts

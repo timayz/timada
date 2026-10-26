@@ -187,18 +187,6 @@ pub fn normalize_name(name: &str) -> Result<String, crate::TenancyError> {
     Ok(name.to_owned())
 }
 
-/// The consensus group a tenant's database runs in, derived from its id so
-/// every node agrees without being told: FNV-1a over the id, never `0`
-/// (the platform's own group).
-pub fn group_of(tenant_id: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in tenant_id.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash.max(1)
-}
-
 /// Whether `permission` is one of [`PERMISSIONS`].
 pub fn is_permission(permission: &str) -> bool {
     PERMISSIONS.contains(&permission)
@@ -414,13 +402,6 @@ mod tests {
         assert!(normalize_name("   ").is_err());
         assert!(normalize_name(&"é".repeat(80)).is_ok());
         assert!(normalize_name(&"é".repeat(81)).is_err());
-    }
-
-    #[test]
-    fn groups_are_stable_and_never_zero() {
-        assert_eq!(group_of("01J9"), group_of("01J9"));
-        assert_ne!(group_of("a"), group_of("b"));
-        assert_ne!(group_of(""), 0);
     }
 
     #[test]

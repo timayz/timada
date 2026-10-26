@@ -23,7 +23,8 @@ impl<E: Executor> Command<E> {
             .original_version(0)
             .routing_key_opt(routing_key)
             .event(&claimed)
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match created {
             Ok(_) => Ok(()),
@@ -32,7 +33,12 @@ impl<E: Executor> Command<E> {
                     return Err(DiscountError::CodeTaken);
                 };
                 if existing.released {
-                    existing.write()?.event(&claimed).commit(&self.0).await?;
+                    existing
+                        .write()?
+                        .event(&claimed)
+                        .tenant(&self.tenant)
+                        .commit(&self.executor)
+                        .await?;
                     Ok(())
                 } else if existing.discount_id == discount_id {
                     Ok(())
@@ -60,7 +66,8 @@ impl<E: Executor> Command<E> {
                 .write()?
                 .routing_key_opt(routing_key)
                 .event(&Released)
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await?;
         }
         Ok(())

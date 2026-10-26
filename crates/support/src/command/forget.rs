@@ -31,7 +31,8 @@ impl<E: Executor> super::Command<E> {
                     key_id: message.key_id.clone(),
                     forgotten_by: actor.to_owned(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await
             {
                 Ok(_) => {

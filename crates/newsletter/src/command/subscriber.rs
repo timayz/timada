@@ -117,7 +117,8 @@ impl<E: Executor> super::Command<E> {
         let committed = writer
             .routing_key_opt(routing_key)
             .event(&event)
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         if let Err(err) = committed {
             if fresh {
@@ -175,7 +176,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Confirmed {
                 confirmed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         if let Err(err) = committed {
             if fresh {
@@ -227,7 +229,8 @@ impl<E: Executor> super::Command<E> {
                 .event(&Confirmed {
                     confirmed_by: actor.to_owned(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await
             {
                 Ok(_) => return Ok(ConfirmOutcome::Confirmed),
@@ -298,7 +301,8 @@ impl<E: Executor> super::Command<E> {
                 .event(&Unsubscribed {
                     unsubscribed_by: actor.to_owned(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await
             {
                 Ok(_) => return Ok(()),

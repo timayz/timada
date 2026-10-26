@@ -302,7 +302,11 @@ async fn on_offer_archived(
 impl<E: Executor> super::Command<E> {
     /// The offers stream (`None` before the first offer).
     pub async fn load_offers(&self) -> anyhow::Result<Option<OffersState>> {
-        offers_projection().load(offers_id()).execute(&self.0).await
+        offers_projection()
+            .load(offers_id())
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await
     }
 
     /// The tenant's offers not archived, in the order they were created.
@@ -342,7 +346,8 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<String, DiscountError> {
         let product = product_projection()
             .load(&cmd.product_id)
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await?
             .filter(|product| !product.is_archived())
             .ok_or(DiscountError::OfferProductNotFound)?;
@@ -381,7 +386,8 @@ impl<E: Executor> super::Command<E> {
         if let Some(required) = &requires_product_id
             && product_projection()
                 .load(required)
-                .execute(&self.0)
+                .tenant(&self.tenant)
+                .execute(&self.executor)
                 .await?
                 .filter(|product| !product.is_archived())
                 .is_none()
@@ -429,7 +435,7 @@ impl<E: Executor> super::Command<E> {
             ends_at: cmd.ends_at,
             created_by: actor.to_owned(),
         });
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(offer_id)
     }
 
@@ -452,7 +458,8 @@ impl<E: Executor> super::Command<E> {
                 offer_id: offer_id.to_owned(),
                 deactivated_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -475,7 +482,8 @@ impl<E: Executor> super::Command<E> {
                 offer_id: offer_id.to_owned(),
                 reactivated_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -495,7 +503,8 @@ impl<E: Executor> super::Command<E> {
                 offer_id: offer_id.to_owned(),
                 archived_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

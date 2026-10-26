@@ -91,7 +91,8 @@ impl<E: Executor> super::Command<E> {
                 parent_id,
                 created_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         if let Err(err) = created {
             if let Err(release) = self
@@ -128,7 +129,8 @@ impl<E: Executor> super::Command<E> {
                 name,
                 renamed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -153,7 +155,8 @@ impl<E: Executor> super::Command<E> {
                 description,
                 described_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -179,7 +182,8 @@ impl<E: Executor> super::Command<E> {
                 body,
                 written_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -221,7 +225,8 @@ impl<E: Executor> super::Command<E> {
                 parent_id: parent_id.map(str::to_owned),
                 moved_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -246,7 +251,8 @@ impl<E: Executor> super::Command<E> {
                 position,
                 positioned_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -275,7 +281,7 @@ impl<E: Executor> super::Command<E> {
                 hidden_by: actor.to_owned(),
             });
         }
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 
@@ -298,7 +304,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Archived {
                 archived_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         if let Err(release) = self
             .release_category_slug(&category.slug, category_id, routing_key)

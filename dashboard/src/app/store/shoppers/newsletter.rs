@@ -25,14 +25,14 @@ pub async fn newsletter(cx: &Cx) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let hold = super::super::hold(cx, &access).await?;
-    let Some(shopper) = signed_in(cx, hold.executor()).await? else {
+    let store = super::super::store(cx, &access);
+    let Some(shopper) = signed_in(cx, &store).await? else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
     let Some(shopper) = opened(cx, &access.tenant.id, &shopper).await? else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
-    let subscribed = timada_newsletter::Command(hold.executor().clone())
+    let subscribed = timada_newsletter::Command::new(store.executor().clone(), store.tenant_id())
         .subscriber_of(&shopper.email)
         .await
         .map_err(topcoat::Error::from_anyhow)?
@@ -53,14 +53,14 @@ pub async fn switch(cx: &Cx, Form(form): Form<SwitchForm>) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let hold = super::super::hold(cx, &access).await?;
-    let Some(shopper) = signed_in(cx, hold.executor()).await? else {
+    let store = super::super::store(cx, &access);
+    let Some(shopper) = signed_in(cx, &store).await? else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
     let Some(shopper) = opened(cx, &access.tenant.id, &shopper).await? else {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
-    let list = timada_newsletter::Command(hold.executor().clone());
+    let list = timada_newsletter::Command::new(store.executor().clone(), store.tenant_id());
     let done = if form.subscribed {
         list.subscribe_verified(
             &*super::keys(cx, &access.tenant.id),

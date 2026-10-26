@@ -33,15 +33,18 @@ pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
 }
 
 pub async fn command() -> Reviews {
-    Command(executor_with_pool().await.0)
+    Command::new(executor_with_pool().await.0, TENANT)
 }
 
+/// The tenant the tests act in.
+pub const TENANT: &str = "acme";
 pub const ALICE: &str = "user-alice";
 pub const SHOPPER: &str = "storefront";
 pub const MUG: &str = "product-mug";
 pub const TEA: &str = "product-tea";
 
-/// A paid order shipped to Ada Lovelace: a beige mug and some tea.
+/// A paid order shipped to Ada Lovelace, in the tenant: a beige mug and
+/// some tea.
 pub async fn paid_order(executor: &evento::Sqlite, order_id: &str) {
     let line = |product_id: &str, name: &str, variant_label: Option<&str>| OrderLine {
         product_id: product_id.to_owned(),
@@ -77,6 +80,7 @@ pub async fn paid_order(executor: &evento::Sqlite, order_id: &str) {
             },
             placed_by: SHOPPER.to_owned(),
         })
+        .tenant(TENANT)
         .commit(executor)
         .await
         .unwrap();
@@ -90,6 +94,7 @@ pub async fn cancel(executor: &evento::Sqlite, order_id: &str) {
             reason: "changed my mind".to_owned(),
             cancelled_by: ALICE.to_owned(),
         })
+        .tenant(TENANT)
         .commit(executor)
         .await
         .unwrap();

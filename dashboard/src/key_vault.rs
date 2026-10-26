@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use openidconnect::reqwest;
+use timada_core::keys::KeyRing;
 use timada_core::{Key, Keys};
 
 use crate::config::DataKeysConfig;
@@ -57,6 +58,11 @@ impl KeyVault {
             sealer,
             peers,
         }
+    }
+
+    /// The keys of every tenant, as the subscriptions ask for them.
+    pub fn ring(self: &Arc<Self>) -> Arc<dyn KeyRing> {
+        Arc::new(VaultRing(self.clone()))
     }
 
     /// The keys of one tenant, as the contexts ask for them.
@@ -259,6 +265,16 @@ impl Keys for TenantKeys {
 
     async fn delete(&self, key_id: &str) -> anyhow::Result<()> {
         self.vault.destroy(&self.tenant_id, key_id).await
+    }
+}
+
+/// The vault as the subscriptions following every tenant see it: the keys
+/// of whichever tenant an event names.
+struct VaultRing(Arc<KeyVault>);
+
+impl KeyRing for VaultRing {
+    fn for_tenant(&self, tenant_id: &str) -> Arc<dyn Keys> {
+        self.0.for_tenant(tenant_id)
     }
 }
 

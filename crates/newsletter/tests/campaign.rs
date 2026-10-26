@@ -9,8 +9,6 @@ use timada_newsletter::{
     undelivered_subscribers,
 };
 
-const TENANT: &str = "tenant-acme";
-
 fn draft(subject: &str) -> CampaignDraft {
     CampaignDraft {
         subject: format!("  {subject} "),
@@ -21,7 +19,7 @@ fn draft(subject: &str) -> CampaignDraft {
 }
 
 async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool, keys: &Arc<MemoryKeys>) {
-    read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT, keys.clone())
+    read_model_subscription::<evento::Sqlite>(pool.clone(), ring(keys))
         .run_once(executor)
         .await
         .unwrap();
@@ -162,7 +160,7 @@ async fn a_subscriber_is_mailed_a_campaign_once() {
 #[tokio::test]
 async fn sending_walks_the_confirmed_subscribers_in_the_campaigns_language() {
     let (executor, pool) = executor_with_pool().await;
-    let newsletter = timada_newsletter::Command(executor.clone());
+    let newsletter = timada_newsletter::Command::new(executor.clone(), TENANT);
     let keys = Arc::new(MemoryKeys::default());
     subscribe(&newsletter, &keys, "ada@example.com", "fr").await;
     subscribe(&newsletter, &keys, "grace@example.com", "fr").await;

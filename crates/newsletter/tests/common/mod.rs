@@ -1,11 +1,12 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
+use timada_core::keys::KeyRing;
 use timada_core::{Key, Keys};
 use timada_newsletter::{Command, RequestOutcome, RequestSubscription, SOURCE_FORM};
 
@@ -35,8 +36,11 @@ pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
 }
 
 pub async fn command() -> Newsletter {
-    Command(executor_with_pool().await.0)
+    Command::new(executor_with_pool().await.0, TENANT)
 }
+
+/// The tenant the tests act in.
+pub const TENANT: &str = "acme";
 
 pub const ALICE: &str = "user-alice";
 pub const VISITOR: &str = "storefront";
@@ -123,4 +127,18 @@ impl Keys for MemoryKeys {
         self.keys.lock().unwrap().remove(key_id);
         Ok(())
     }
+}
+
+/// The ring the subscriptions ask: every tenant shares one [`MemoryKeys`].
+pub struct MemoryRing(pub Arc<MemoryKeys>);
+
+impl KeyRing for MemoryRing {
+    fn for_tenant(&self, _tenant_id: &str) -> Arc<dyn Keys> {
+        self.0.clone()
+    }
+}
+
+/// `keys` as the ring every tenant resolves to.
+pub fn ring(keys: &Arc<MemoryKeys>) -> Arc<dyn KeyRing> {
+    Arc::new(MemoryRing(keys.clone()))
 }

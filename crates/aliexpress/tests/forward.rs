@@ -12,6 +12,8 @@ use timada_aliexpress::{
 use timada_orders::{OrderLine, ShippingAddress};
 
 const ALICE: &str = "user-alice";
+/// The tenant the tests act in.
+const TENANT: &str = "acme";
 
 async fn executor() -> evento::Sqlite {
     let options = SqliteConnectOptions::new()
@@ -287,7 +289,7 @@ fn an_order_is_sent_with_its_items_and_how_it_is_paid() {
 /// A linked item: two variants of `product-1`, and `product-2` that does
 /// not vary.
 async fn links(executor: &evento::Sqlite) -> Vec<LinkState> {
-    let gateway = timada_aliexpress::Command(executor.clone());
+    let gateway = timada_aliexpress::Command::new(executor.clone(), TENANT);
     let sku = |sku_id: &str, variant_id: Option<&str>| SkuLink {
         sku_id: sku_id.into(),
         variant_id: variant_id.map(Into::into),
@@ -379,7 +381,7 @@ async fn an_order_buys_the_combinations_its_lines_were_imported_from() {
 #[tokio::test]
 async fn an_order_is_placed_once_and_read_until_it_ships() {
     let executor = executor().await;
-    let forwards = timada_aliexpress::Command(executor.clone());
+    let forwards = timada_aliexpress::Command::new(executor.clone(), TENANT);
 
     let id = forwards
         .request_forward(ALICE, "order-1", false)

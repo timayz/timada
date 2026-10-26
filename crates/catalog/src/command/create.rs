@@ -67,7 +67,8 @@ impl<E: Executor> super::Command<E> {
                 name,
                 created_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         if let Err(err) = created {
             if let Err(release) = self.release_slug(&slug, &product_id, routing_key).await {

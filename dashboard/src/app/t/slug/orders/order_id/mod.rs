@@ -146,7 +146,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let store = access.executor()?.clone();
-    let forward = timada_aliexpress::Command(store.clone())
+    let forward = timada_aliexpress::Command::new(store.clone(), access.tenant_id())
         .load_forward(&order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;

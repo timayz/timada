@@ -16,7 +16,7 @@ pub async fn ignore(cx: &Cx, Form(form): Form<CombinationForm>) -> Result<SeeOth
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
     let link_id = path_param::<LinkId>(cx).to_owned();
-    let links = timada_aliexpress::Command(access.executor()?.clone());
+    let links = timada_aliexpress::Command::new(access.executor()?.clone(), access.tenant_id());
     match links
         .ignore_combination(&access.user_id, &link_id, form.sku_id.trim())
         .await

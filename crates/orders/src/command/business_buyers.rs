@@ -45,7 +45,7 @@ impl<E: Executor> super::Command<E> {
                 refused_by: actor.to_owned(),
             });
         }
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 }

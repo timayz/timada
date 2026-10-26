@@ -52,7 +52,7 @@ impl<E: Executor> super::Command<E> {
             free_above_cents: method.free_above_cents,
             added_by: actor.to_owned(),
         });
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(method_id)
     }
 
@@ -90,7 +90,7 @@ impl<E: Executor> super::Command<E> {
             free_above_cents: method.free_above_cents,
             changed_by: actor.to_owned(),
         });
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 
@@ -114,7 +114,7 @@ impl<E: Executor> super::Command<E> {
             method_id: method_id.to_owned(),
             removed_by: actor.to_owned(),
         });
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 }

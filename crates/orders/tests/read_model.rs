@@ -6,13 +6,11 @@ use timada_orders::{
     orders_of_email, orders_of_tenant, read_model_subscription,
 };
 
-const TENANT: &str = "tenant-1";
-
 #[tokio::test]
 async fn orders_and_carts_are_listed() {
     let (executor, pool) = executor_with_pool().await;
-    let orders = Command(executor.clone());
-    let catalog = timada_catalog::Command(executor.clone());
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
 
     let left = cart_with(&orders, &mug, 3).await;
@@ -28,7 +26,7 @@ async fn orders_and_carts_are_listed() {
 
     // Twice: delivery may repeat without the rows drifting.
     for _ in 0..2 {
-        read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT)
+        read_model_subscription::<evento::Sqlite>(pool.clone())
             .run_once(&executor)
             .await
             .unwrap();
@@ -86,8 +84,8 @@ async fn orders_and_carts_are_listed() {
 #[tokio::test]
 async fn fulfilled_orders_are_found_by_when_they_left() {
     let (executor, pool) = executor_with_pool().await;
-    let orders = Command(executor.clone());
-    let catalog = timada_catalog::Command(executor.clone());
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let paid = pay(&orders, &cart_with(&orders, &mug, 1).await, checkout()).await;
     let left = pay(&orders, &cart_with(&orders, &mug, 1).await, checkout()).await;
@@ -95,7 +93,7 @@ async fn fulfilled_orders_are_found_by_when_they_left() {
         .fulfil_order(ALICE, &left.order_id, None)
         .await
         .unwrap();
-    read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT)
+    read_model_subscription::<evento::Sqlite>(pool.clone())
         .run_once(&executor)
         .await
         .unwrap();

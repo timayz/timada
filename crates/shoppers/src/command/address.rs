@@ -54,7 +54,8 @@ impl<E: Executor> super::Command<E> {
                 )?,
                 address_id: id.clone(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(id)
     }
@@ -79,7 +80,8 @@ impl<E: Executor> super::Command<E> {
             .event(&AddressRemoved {
                 address_id: address_id.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

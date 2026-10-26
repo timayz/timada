@@ -3,9 +3,12 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use timada_shoppers::{ShopperKey, ShopperKeys};
+use timada_shoppers::{ShopperKey, ShopperKeyRing, ShopperKeys};
+
+/// The tenant the tests act in.
+pub const TENANT: &str = "acme";
 
 #[derive(Default)]
 pub struct MemoryKeys {
@@ -50,4 +53,18 @@ impl ShopperKeys for MemoryKeys {
         self.keys.lock().unwrap().remove(key_id);
         Ok(())
     }
+}
+
+/// The ring the subscriptions ask: every tenant shares one [`MemoryKeys`].
+pub struct MemoryRing(pub Arc<MemoryKeys>);
+
+impl ShopperKeyRing for MemoryRing {
+    fn for_tenant(&self, _tenant_id: &str) -> Arc<dyn ShopperKeys> {
+        self.0.clone()
+    }
+}
+
+/// `keys` as the ring every tenant resolves to.
+pub fn ring(keys: &Arc<MemoryKeys>) -> Arc<dyn ShopperKeyRing> {
+    Arc::new(MemoryRing(keys.clone()))
 }

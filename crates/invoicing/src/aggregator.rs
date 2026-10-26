@@ -125,8 +125,9 @@ pub enum Document {
 
 /// A company's EU distance sales of one year (sales to consumers in other EU
 /// countries), one stream per company, year and chunk, id =
-/// [`ledger_id`](crate::ledger_id). It lives in the platform store, next to
-/// the company, so every tenant of the company counts against one total.
+/// [`ledger_id`](crate::ledger_id). It lives in the default tenant of the
+/// store, next to the company, so every tenant of the company counts against
+/// one total.
 #[evento::aggregate(name = "timada-invoicing/DistanceLedger")]
 pub enum DistanceLedger {
     /// One sale counted, with the decision it got, so a retry gets the same.

@@ -27,7 +27,7 @@ pub async fn business_buyers(cx: &Cx, Form(form): Form<BusinessBuyersForm>) -> R
         .require_permission(cx, PERMISSION_TENANT_MANAGE)
         .await?;
     let accept = form.accept == "on";
-    timada_orders::Command(access.executor()?.clone())
+    timada_orders::Command::new(access.executor()?.clone(), access.tenant_id())
         .set_business_buyers(&access.user_id, accept)
         .await
         .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;

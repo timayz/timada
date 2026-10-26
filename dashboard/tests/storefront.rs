@@ -13,16 +13,16 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
-#[path = "../src/limits.rs"]
-mod limits;
+#[path = "../src/db.rs"]
+mod db;
 #[path = "../src/rate_limit.rs"]
 mod rate_limit;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
 #[path = "../src/store_api.rs"]
 mod store_api;
-#[path = "../src/tenants.rs"]
-mod tenants;
+#[path = "../src/store_writer.rs"]
+mod store_writer;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -51,14 +51,13 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 use cluster::Cluster;
-use config::{StoreApiConfig, TenantsConfig};
+use config::StoreApiConfig;
 use store_api::StoreConnections;
-use tenants::{TenantStatus, Tenants};
 
 const NOW: u64 = 1_800_000_000;
 
 struct Harness {
-    tenants: Arc<Tenants>,
+    cluster: Arc<Cluster>,
     platform: Command<cluster::Executor>,
     pool: SqlitePool,
     dir: PathBuf,
@@ -115,22 +114,17 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
             .await
             .unwrap();
     }
-    let cluster = Arc::new(Cluster::build(None).await.unwrap());
-    let platform = cluster
-        .open_platform(None, pool.clone(), pool.clone())
-        .await
-        .unwrap();
-    let tenants = Tenants::new(
-        cluster,
-        &TenantsConfig {
-            dir: dir.join("tenants"),
-            max_open: Some(4),
-        },
-        None,
-        platform.clone(),
-        pool.clone(),
-        vec![],
-    );
+    // One file for the store and the read models: the test's own pool is both.
+    let files = cluster::Files {
+        store_url: format!("sqlite:{}", dir.join("platform.db").display()),
+        read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
+    };
+    let pools = cluster::StorePools {
+        read: pool.clone(),
+        write: pool.clone(),
+        cursors: pool.clone(),
+    };
+    let (cluster, platform) = Cluster::open(None, None, &files, pools).await.unwrap();
     let connections = StoreConnections::new();
     let (tls_cert, tls_key) = match tls {
         Some((cert, key)) => (Some(cert), Some(key)),
@@ -151,17 +145,12 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         listen: addr,
         ..config
     };
-    let server = store_api::serve(
-        Some(&config),
-        platform.clone(),
-        tenants.clone(),
-        connections.clone(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    let server = store_api::serve(Some(&config), platform.clone(), connections.clone())
+        .await
+        .unwrap()
+        .unwrap();
     Harness {
-        tenants,
+        cluster,
         platform: Command(platform),
         pool,
         dir,
@@ -227,35 +216,23 @@ impl Harness {
         StoreConfig::new(self.addr, token).request_timeout(Duration::from_secs(2))
     }
 
-    /// The catalog gateway over the tenant's own store, as the dashboard
-    /// pages use it.
-    async fn catalog(&self, tenant: &TenantState) -> timada_catalog::Command<cluster::Executor> {
-        timada_catalog::Command(self.tenants.open(tenant).await.unwrap())
+    /// The catalog gateway in the tenant's streams, as the dashboard pages
+    /// use it.
+    fn catalog(&self, tenant: &TenantState) -> timada_catalog::Command<cluster::Executor> {
+        timada_catalog::Command::new(self.platform.clone(), &tenant.id)
     }
 
-    /// The subscription cursors recorded in a tenant's own file.
-    async fn tenant_cursors(&self, tenant: &TenantState) -> Vec<String> {
-        let options = SqliteConnectOptions::new()
-            .filename(self.tenants.path_of(&tenant.id))
-            .read_only(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
+    /// The subscription cursors recorded in the store.
+    async fn store_cursors(&self) -> Vec<String> {
+        sqlx::query_scalar("SELECT key FROM subscriber ORDER BY key")
+            .fetch_all(&self.pool)
             .await
-            .unwrap();
-        let keys = sqlx::query_scalar("SELECT key FROM subscriber ORDER BY key")
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
-        keys
+            .unwrap()
     }
 
-    fn leases(&self, tenant: &TenantState) -> Option<usize> {
-        match self.tenants.status(&tenant.id) {
-            TenantStatus::Running { leases, .. } => Some(leases),
-            TenantStatus::Stopped => None,
-        }
+    /// How many storefronts of the tenant are connected.
+    fn connected(&self, tenant: &TenantState) -> usize {
+        self.connections.count_tenant(&tenant.id)
     }
 
     async fn wait_for(&self, what: &str, mut ok: impl FnMut(&Self) -> bool) {
@@ -268,7 +245,7 @@ impl Harness {
 
     async fn finish(self) {
         self._server.shutdown().await;
-        self.tenants.shutdown().await;
+        self.cluster.shutdown().await;
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
@@ -310,7 +287,7 @@ async fn a_store_follows_its_tenant_catalog_locally() {
     let (token, _) = h.key(&acme).await;
 
     // Acme has one published product and one draft; zeta has its own.
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
     let mug = catalog
         .create_product(
             "alice",
@@ -337,7 +314,6 @@ async fn a_store_follows_its_tenant_catalog_locally() {
         .await
         .unwrap();
     h.catalog(&zeta)
-        .await
         .create_product(
             "bob",
             CreateProduct {
@@ -393,25 +369,28 @@ async fn a_store_follows_its_tenant_catalog_locally() {
         started.elapsed()
     );
 
-    // The cursor is local; the tenant's own file has no cursor of ours.
+    // The cursor is local; the store has no cursor of ours.
     assert_eq!(
         local_cursors(&pool).await,
         vec![CATALOG_SUBSCRIPTION.to_owned()]
     );
     assert!(
-        h.tenant_cursors(&acme).await.is_empty(),
+        !h.store_cursors()
+            .await
+            .iter()
+            .any(|key| key.contains(CATALOG_SUBSCRIPTION)),
         "{:?}",
-        h.tenant_cursors(&acme).await
+        h.store_cursors().await
     );
     let status = store.status().await;
     assert!(status.connected);
     assert_eq!(status.subscription, SubscriptionState::Running);
     assert_eq!(status.products, 1);
     assert!(status.last_event_at.is_some());
-    assert_eq!(h.leases(&acme), Some(1), "the connection leases the tenant");
+    assert_eq!(h.connected(&acme), 1, "the connection is registered");
 
     store.shutdown().await;
-    h.wait_for("the lease is released", |h| h.leases(&acme) == Some(0))
+    h.wait_for("the connection is released", |h| h.connected(&acme) == 0)
         .await;
     h.finish().await;
 }
@@ -421,7 +400,7 @@ async fn a_restarted_store_resumes_from_its_local_cursor() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (token, _) = h.key(&acme).await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
     let first = catalog
         .create_product(
             "alice",
@@ -519,7 +498,7 @@ async fn the_store_connects_over_tls() {
     let h = harness(Some((cert.clone(), key))).await;
     let acme = h.create("acme").await;
     let (token, _) = h.key(&acme).await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
     let mug = catalog
         .create_product(
             "alice",
@@ -594,7 +573,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (token, _) = h.key(&acme).await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
 
     // Bedding > Mats, and Toys beside it.
     let bedding = catalog
@@ -842,7 +821,7 @@ async fn a_store_carries_the_gallery_with_the_address_it_is_loaded_from() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (token, _) = h.key(&acme).await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
     let mat = stock(&catalog, "Cooling Mat", 2990, &[]).await;
     for (id, alt) in [
         ("img-front", "Seen from the front"),
@@ -937,7 +916,7 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (token, _) = h.key(&acme).await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
 
     // A harness in two colours and two sizes, priced per combination, and a
     // plain product beside it.
@@ -1157,9 +1136,9 @@ async fn answer_as_dashboard(
 async fn dashboard_counts(h: &Harness, tenant: &TenantState) -> Vec<(String, i64)> {
     // The dashboard's read model is fed by the tenant's own subscription; in
     // this test nothing runs it, so catch it up by hand.
-    let catalog = h.catalog(tenant).await;
-    timada_catalog::read_model_subscription::<cluster::Executor>(h.pool.clone(), &tenant.id)
-        .run_once(&catalog.0)
+    let catalog = h.catalog(tenant);
+    timada_catalog::read_model_subscription::<cluster::Executor>(h.pool.clone())
+        .run_once(catalog.executor())
         .await
         .unwrap();
     let mut out: Vec<(String, i64)> = categories_of_tenant(&h.pool, &tenant.id)
@@ -1191,7 +1170,7 @@ async fn the_back_office_and_the_shop_count_a_category_the_same_way() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (token, _) = h.key(&acme).await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
 
     let bedding = catalog
         .create_category(
@@ -1279,7 +1258,7 @@ async fn a_store_with_a_checkout_key_sells() {
         .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
         .await;
     let (read_token, _) = h.key(&acme).await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
     let mug = catalog
         .create_product(
             "alice",
@@ -1360,7 +1339,7 @@ async fn a_store_with_a_checkout_key_sells() {
         language: None,
         newsletter: false,
     };
-    let merchant = timada_orders::Command(catalog.0.clone());
+    let merchant = timada_orders::Command::new(catalog.executor().clone(), catalog.tenant());
     let asking = tokio::spawn({
         let store = store.clone();
         let cart_id = cart_id.clone();
@@ -1413,8 +1392,8 @@ async fn a_store_with_a_checkout_key_sells() {
     assert_ne!(next, cart_id);
 
     // The back office lists it.
-    timada_orders::read_model_subscription::<cluster::Executor>(h.pool.clone(), &acme.id)
-        .run_once(&catalog.0)
+    timada_orders::read_model_subscription::<cluster::Executor>(h.pool.clone())
+        .run_once(catalog.executor())
         .await
         .unwrap();
     let rows = timada_orders::orders_of_tenant(
@@ -1453,7 +1432,7 @@ async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
     let (token, _) = h
         .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
         .await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
     let sell = async |name: &str, cents: u64, tax_category: Option<&str>| {
         let product = catalog
             .create_product(
@@ -1490,7 +1469,7 @@ async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
         provider: "stripe".into(),
         publishable_key: "pk_test_123".into(),
     };
-    timada_orders::Command(catalog.0.clone())
+    timada_orders::Command::new(catalog.executor().clone(), catalog.tenant())
         .set_payment_method("timada-dashboard", Some(setup.clone()))
         .await
         .unwrap();
@@ -1535,7 +1514,7 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
     let (token, _) = h
         .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
         .await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
     let sell = async |name: &str, cents: u64| {
         let product = catalog
             .create_product(
@@ -1556,7 +1535,7 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
     };
     let mug = sell("Blue Mug", 1250).await;
     let tracker = sell("GPS Tracker", 3000).await;
-    let offer_id = timada_discounts::Command(catalog.0.clone())
+    let offer_id = timada_discounts::Command::new(catalog.executor().clone(), catalog.tenant())
         .create_offer(
             "alice",
             timada_discounts::CreateOffer {
@@ -1626,7 +1605,12 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
 
 /// A paid order of one of each product, written as the payments webhook
 /// would: what a review is written from.
-async fn paid_order(executor: &cluster::Executor, order_id: &str, products: &[(&str, &str)]) {
+async fn paid_order(
+    executor: &cluster::Executor,
+    tenant_id: &str,
+    order_id: &str,
+    products: &[(&str, &str)],
+) {
     let lines = products
         .iter()
         .map(|(id, name)| timada_orders::OrderLine {
@@ -1638,6 +1622,7 @@ async fn paid_order(executor: &cluster::Executor, order_id: &str, products: &[(&
         })
         .collect();
     evento::append(order_id)
+        .tenant(tenant_id)
         .original_version(0)
         .event(&timada_orders::aggregator::Placed {
             reference: "ABCD-EFGH".into(),
@@ -1670,7 +1655,7 @@ async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (token, _) = h.key(&acme).await;
-    let catalog = h.catalog(&acme).await;
+    let catalog = h.catalog(&acme);
     let kitchen = catalog
         .create_category(
             "alice",
@@ -1684,8 +1669,8 @@ async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
     let mug = stock(&catalog, "Mug", 1000, &[&kitchen.id]).await;
     let plate = stock(&catalog, "Plate", 1000, &[&kitchen.id]).await;
     let bowl = stock(&catalog, "Bowl", 1000, &[&kitchen.id]).await;
-    let executor = catalog.0.clone();
-    let reviews = timada_reviews::Command(executor.clone());
+    let executor = catalog.executor().clone();
+    let reviews = timada_reviews::Command::new(executor.clone(), catalog.tenant());
     let write = |order: &str, product: &str, rating: u8| timada_reviews::SubmitReview {
         order_id: order.to_owned(),
         product_id: product.to_owned(),
@@ -1701,8 +1686,20 @@ async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
             height: Some(1),
         }],
     };
-    paid_order(&executor, "order-1", &[(&mug, "Mug"), (&plate, "Plate")]).await;
-    paid_order(&executor, "order-2", &[(&mug, "Mug"), (&bowl, "Bowl")]).await;
+    paid_order(
+        &executor,
+        catalog.tenant(),
+        "order-1",
+        &[(&mug, "Mug"), (&plate, "Plate")],
+    )
+    .await;
+    paid_order(
+        &executor,
+        catalog.tenant(),
+        "order-2",
+        &[(&mug, "Mug"), (&bowl, "Bowl")],
+    )
+    .await;
     let mug_5 = reviews
         .submit_review("storefront", write("order-1", &mug, 5))
         .await
@@ -1941,5 +1938,41 @@ async fn sign_in_codes_are_held_to_a_limit_per_shopper_and_per_key() {
     assert_eq!(ask(Some("198.51.100.9")).await, Err("too_many_requests"));
 
     store.shutdown().await;
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_product_leaves_a_category_it_was_filed_under() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let catalog = h.catalog(&acme);
+    let bedding = catalog
+        .create_category(
+            "alice",
+            timada_catalog::CreateCategory {
+                name: "Bedding".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mug = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .categorize_product("alice", &mug.id, &bedding.id)
+        .await
+        .unwrap();
+    catalog
+        .uncategorize_product("alice", &mug.id, &bedding.id)
+        .await
+        .unwrap();
     h.finish().await;
 }

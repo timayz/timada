@@ -188,7 +188,8 @@ impl<E: Executor> super::Command<E> {
                 language: draft.language,
                 drafted_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(id)
     }
@@ -217,7 +218,8 @@ impl<E: Executor> super::Command<E> {
                 language: draft.language,
                 edited_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -240,7 +242,8 @@ impl<E: Executor> super::Command<E> {
             .event(&SendRequested {
                 requested_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await
         {
             Ok(_) => Ok(()),
@@ -267,7 +270,8 @@ impl<E: Executor> super::Command<E> {
             .event(&Finished {
                 finished_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await
         {
             // Finished by another node at the same moment.
@@ -294,7 +298,8 @@ impl<E: Executor> super::Command<E> {
                 subscriber_id: subscriber_id.to_owned(),
                 claimed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match claimed {
             Ok(_) => Ok(true),
@@ -313,7 +318,8 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<(), NewsletterError> {
         let Some(state) = delivery_projection()
             .load(delivery_id(campaign_id, subscriber_id))
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await?
         else {
             return Err(NewsletterError::NotFound);
@@ -327,7 +333,8 @@ impl<E: Executor> super::Command<E> {
             .write()?
             .routing_key_opt(routing_key)
             .event(&Failed { reason })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -337,7 +344,8 @@ impl<E: Executor> super::Command<E> {
     pub async fn load_campaign(&self, campaign_id: &str) -> anyhow::Result<Option<CampaignState>> {
         campaign_projection()
             .load(campaign_id)
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await
     }
 

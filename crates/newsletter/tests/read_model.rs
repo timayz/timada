@@ -8,14 +8,12 @@ use timada_newsletter::{
     subscribers_of_tenant,
 };
 
-const TENANT: &str = "tenant-acme";
-
 async fn catch_up(
     executor: &evento::Sqlite,
     pool: &sqlx::SqlitePool,
     keys: &Arc<MemoryKeys>,
 ) -> anyhow::Result<()> {
-    read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT, keys.clone())
+    read_model_subscription::<evento::Sqlite>(pool.clone(), ring(keys))
         .run_once(executor)
         .await
 }
@@ -29,7 +27,7 @@ fn only(status: SubscriberStatus) -> SubscriberFilter {
 #[tokio::test]
 async fn subscribers_are_listed_by_status() {
     let (executor, pool) = executor_with_pool().await;
-    let newsletter = timada_newsletter::Command(executor.clone());
+    let newsletter = timada_newsletter::Command::new(executor.clone(), TENANT);
     let keys = Arc::new(MemoryKeys::default());
     let (ada, token) = request(&newsletter, &keys, EMAIL).await;
     let (grace, _) = request(&newsletter, &keys, "grace@example.com").await;
@@ -92,7 +90,7 @@ async fn subscribers_are_listed_by_status() {
 #[tokio::test]
 async fn an_erased_subscriber_loses_their_row() {
     let (executor, pool) = executor_with_pool().await;
-    let newsletter = timada_newsletter::Command(executor.clone());
+    let newsletter = timada_newsletter::Command::new(executor.clone(), TENANT);
     let keys = Arc::new(MemoryKeys::default());
     let (ada, _) = request(&newsletter, &keys, EMAIL).await;
     catch_up(&executor, &pool, &keys).await.unwrap();

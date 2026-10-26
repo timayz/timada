@@ -3,8 +3,8 @@
 //!
 //! A message is what a visitor wrote, signed with their name and the address
 //! to answer at; the merchant reads it in the back office and marks it
-//! handled once answered (by mail, outside the platform). Messages live in
-//! the tenant's own event store and the crate is pure domain code: no
+//! handled once answered (by mail, outside the platform). Messages live
+//! under the shop's tenant in the store and the crate is pure domain code: no
 //! permission checks, no HTTP, no rate limiting (whoever takes the form
 //! decides how often one visitor may send).
 //!

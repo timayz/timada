@@ -14,15 +14,7 @@ pub struct TenantRow {
     pub created_at: i64,
     pub suspended: bool,
     pub suspended_reason: Option<String>,
-    /// [`group_of`](crate::group_of) of `id`, stored as a signed 64-bit.
-    pub group_id: i64,
     pub member_count: i64,
-}
-
-impl TenantRow {
-    pub fn group(&self) -> u64 {
-        self.group_id as u64
-    }
 }
 
 /// A tenant a user belongs to, with the role they hold there.
@@ -83,7 +75,7 @@ macro_rules! tenants_page {
     ($from:ident) => {
         concat!(
             "SELECT t.id, t.slug, t.name, t.created_by, t.created_at, t.suspended,
-                t.suspended_reason, t.group_id, t.member_count ",
+                t.suspended_reason, t.member_count ",
             tenants_from!($from),
             "ORDER BY t.name COLLATE NOCASE, t.id LIMIT ?2 OFFSET ?3"
         )
@@ -145,19 +137,6 @@ pub async fn active_tenant_ids(pool: &SqlitePool) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar("SELECT id FROM tenancy_tenants WHERE suspended = 0 ORDER BY created_at, id")
         .fetch_all(pool)
         .await
-}
-
-/// The tenant whose database runs in consensus group `group`, if the catalog
-/// knows one.
-pub async fn tenant_by_group(pool: &SqlitePool, group: u64) -> sqlx::Result<Option<TenantRow>> {
-    sqlx::query_as(
-        "SELECT id, slug, name, created_by, created_at, suspended, suspended_reason, group_id,
-            member_count
-         FROM tenancy_tenants WHERE group_id = ?1",
-    )
-    .bind(group as i64)
-    .fetch_optional(pool)
-    .await
 }
 
 #[cfg(test)]

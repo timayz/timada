@@ -1,10 +1,11 @@
 //! Tenancy bounded context: the tenants (merchants) of the platform and who
 //! belongs to them.
 //!
-//! A tenant is a catalog entry in the platform's event store; its own data
-//! lives in a database of its own that the host opens on demand (the host's
-//! concern, not this crate's). The crate is pure domain code: it knows
-//! nothing about files, consensus groups or HTTP.
+//! A tenant is a catalog entry in the platform's own streams (the default
+//! tenant of the store); its own data lives in the same store under its
+//! tenant id, which the host names on every call (the host's concern, not
+//! this crate's). The crate is pure domain code: it knows nothing about
+//! files or HTTP.
 //!
 //! The URL handle of a tenant (`slug`) is unique through an index aggregate
 //! with a deterministic id, as the identity context does for e-mail

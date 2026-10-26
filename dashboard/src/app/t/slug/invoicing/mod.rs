@@ -53,7 +53,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<InvoicingQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let user_id = access.user_id.clone();
-    let business = timada_orders::Command(access.executor()?.clone())
+    let business = timada_orders::Command::new(access.executor()?.clone(), access.tenant_id())
         .accepts_business_buyers()
         .await
         .map_err(topcoat::Error::from_anyhow)?;

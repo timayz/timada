@@ -17,9 +17,15 @@ port = 3000
 trusted_proxies = []
 
 [database]
-# sqlx DSN. The file holds events, projections and the consensus journal.
-url = "sqlite:data/timada.db"
-# Pool size for `serve`; sqlx-sqlite runs one OS thread per open connection.
+# Two SQLite files, as sqlx DSNs. The store holds every tenant's events, the
+# snapshots, the subscription cursors and the consensus journal: it is what
+# the cluster replicates. The read models are what the pages read, derived
+# from the store by the subscriptions; a lost read-model file is rebuilt from
+# the store.
+store = "sqlite:data/store.db"
+read_models = "sqlite:data/read-models.db"
+# Read pool size for `serve`, for each file; sqlx-sqlite runs one OS thread
+# per open connection.
 max_connections = 3
 
 [auth]
@@ -76,16 +82,6 @@ smtp_url = "smtp://localhost:1025"
 # Set TIMADA__SECRETS__KEY in production.
 # [secrets]
 # key = "at least 32 characters, the same on every node"
-
-[tenants]
-# Directory holding one database per tenant (its events and its consensus
-# journal). Created on demand.
-dir = "data/tenants"
-# Most tenant databases open at once; beyond it the least recently used is
-# closed, and the next request opens it again. Each open database may hold
-# three connections (one OS thread each). Unset, it is worked out at startup
-# from the open-file limit and the available memory, and written to the log.
-# max_open = 64
 
 [media]
 # Directory holding the pictures merchants upload for their products, one
@@ -198,7 +194,7 @@ dir = "data/shopper-keys"
 
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
-# tenant's events. A connected storefront keeps its tenant's database open.
+# tenant's events; a connection sees that tenant's streams and nothing else.
 # Omit the whole section to not expose it on this node.
 # [store_api]
 # listen = "0.0.0.0:4321"
@@ -211,9 +207,9 @@ dir = "data/shopper-keys"
 # tls_key = "/etc/timada/store-api.key"
 
 # Multi-node cluster. Omit the whole section to run a single node: it then
-# talks to itself over a loopback port chosen by the system. Writes need a
-# majority of nodes, so a 3-node cluster keeps working with one node down.
-# `node_id` is this node's index into `peers`. Every node hosts every tenant.
+# talks to itself in memory. Writes need a majority of nodes, so a 3-node
+# cluster keeps working with one node down. `node_id` is this node's index
+# into `peers`. Every node holds a copy of the whole store.
 # With several nodes, a page that reads what it just wrote waits for the other
 # nodes' latest writes first (one extra round trip per read), so what a user
 # sees after an action is always current whichever node answers.
@@ -233,13 +229,15 @@ dir = "data/shopper-keys"
 # # than in this file. Required with more than one node.
 # secret = ""
 # # Every finished write is kept on the other nodes until the node that missed
-# # it has it too. A node not heard from on a tenant for this long is no longer
-# # waited for: the others tidy up without it, and when it returns every tenant
-# # it fell behind on is copied back from a peer. 0 never gives a node up.
+# # it has it too. A node not heard from for this long is no longer waited
+# # for: the others tidy up without it, and when it returns it is told so and
+# # refuses writes until it copies the store back from a peer (restart it:
+# # the copy happens at startup; `timada-dashboard rejoin` asks for one by
+# # hand, for a lost store file). 0 never gives a node up.
 # absent_after_secs = 3600
-# # Finished writes a tenant keeps for a node that is away. Past it the tenant
-# # refuses new writes until the node returns or is given up. The admin page of
-# # a tenant shows what it keeps, and the log warns at four fifths.
+# # Finished writes this node keeps for a node that is away. Past it the node
+# # refuses new writes until the node returns or is given up. The node's page
+# # under Platform shows what it keeps, and the log warns at four fifths.
 # write_backlog = 100000
 
 [monitoring]

@@ -23,7 +23,7 @@ test("a user creates a tenant, owns it and renames it", async ({ page }) => {
   await expect(page.getByRole("heading", { name: name.toUpperCase() })).toBeVisible();
   await expect(page.getByText("/t/" + slug)).toBeVisible();
   await expect(page.locator("dd", { hasText: "owner" })).toBeVisible();
-  await expect(page.locator("[data-tenant-status]")).toHaveAttribute("data-tenant-status", "running");
+  await expect(page.locator("[data-tenant-status]")).toHaveAttribute("data-tenant-status", "active");
 
   // Owners rename.
   await page.getByLabel("Name").fill("Acme Corporation");
@@ -70,7 +70,7 @@ test("only members see a tenant", async ({ browser }) => {
   await strangerContext.close();
 });
 
-test("the administrator sees a tenant running, suspends and resumes it", async ({ browser }) => {
+test("the administrator sees a tenant active, suspends and resumes it", async ({ browser }) => {
   const ownerContext = await browser.newContext();
   const owner = await ownerContext.newPage();
   await registerWithEmail(owner, uniqueEmail("owner"));
@@ -91,14 +91,9 @@ test("the administrator sees a tenant running, suspends and resumes it", async (
     await admin.getByRole("button", { name: "Search" }).click();
     await expect(row).toBeVisible({ timeout: 1000 });
   }).toPass({ timeout: 15_000 });
-  await expect(row.locator("[data-tenant-status]")).toHaveText("Running");
+  await expect(row.locator("[data-tenant-status]")).toHaveText("Active");
 
-  // Nobody touches it: it stays open, as nothing needs the room.
-  await admin.waitForTimeout(3000);
-  await admin.reload();
-  await expect(row.locator("[data-tenant-status]")).toHaveText("Running");
-
-  // Suspend: offline for the owner, closed on the node.
+  // Suspend: offline for the owner, its storefronts disconnected.
   await row.getByRole("link", { name }).click();
   await expect(admin.getByRole("heading", { name })).toBeVisible();
   // The invitation the owner sent is still waiting (read model, so it may lag).
@@ -112,14 +107,20 @@ test("the administrator sees a tenant running, suspends and resumes it", async (
   await expect(admin.locator("[data-tenant-status]")).toContainText("Suspended: unpaid invoices");
   await owner.goto(`/t/${slug}`);
   await expect(owner.getByRole("alert").filter({ hasText: "suspended by the platform" })).toContainText("unpaid invoices");
-  await expect(owner.locator("[data-tenant-status]")).toHaveAttribute("data-tenant-status", "stopped");
+  await expect(owner.locator("[data-tenant-status]")).toHaveAttribute("data-tenant-status", "suspended");
 
   // Resume: back online on the next visit.
   await admin.getByRole("button", { name: "Resume tenant" }).click();
   await expect(admin.getByRole("status")).toContainText("Tenant resumed.");
-  await expect(admin.locator("[data-tenant-status]")).toContainText("Stopped");
+  await expect(admin.locator("[data-tenant-status]")).toContainText("Active");
   await owner.goto(`/t/${slug}`);
-  await expect(owner.locator("[data-tenant-status]")).toHaveAttribute("data-tenant-status", "running");
+  await expect(owner.locator("[data-tenant-status]")).toHaveAttribute("data-tenant-status", "active");
+
+  // The node's own page: a single node, serving.
+  await admin.getByRole("link", { name: "This node" }).click();
+  await expect(admin).toHaveURL(/\/admin\/cluster$/);
+  await expect(admin.locator("[data-node]")).toHaveText("single node");
+  await expect(admin.locator("[data-node-state]")).toHaveText("Serving");
 
   await ownerContext.close();
   await adminContext.close();

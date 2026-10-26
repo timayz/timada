@@ -64,9 +64,9 @@ pub fn products_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&s
         .resolve(cx)
 }
 
-/// The catalog gateway over the tenant's own store (403 while suspended).
+/// The catalog gateway in the tenant's streams (403 while suspended).
 pub fn catalog(access: &TenantAccess) -> Result<Command<Executor>> {
-    Ok(Command(access.executor()?.clone()))
+    Ok(Command::new(access.executor()?.clone(), access.tenant_id()))
 }
 
 /// How a listing words a product's stock.

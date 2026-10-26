@@ -1,4 +1,4 @@
-//! Tells each tenant's store how its shoppers pay, so a storefront can show
+//! Tells each tenant's streams how its shoppers pay, so a storefront can show
 //! the payment form before it asks to pay.
 
 use std::sync::Arc;
@@ -13,23 +13,27 @@ use timada_tenancy::aggregator::{PaymentsConfigured, PaymentsRemoved, Resumed};
 
 use super::{DASHBOARD_ACTOR, Payments};
 use crate::cluster::Executor;
-use crate::tenants::Tenants;
 
 /// The cursor identity of [`setup_subscription`], in the platform store.
 pub const SETUP_SUBSCRIPTION: &str = "timada-dashboard/payment-setup";
 
-/// Follows the tenants' payment settings in the platform store and copies
+/// The store, to write each tenant's setup with (a handler only borrows the
+/// executor it runs on).
+#[derive(Clone)]
+struct Store(Executor);
+
+/// Follows the tenants' payment settings (the platform's streams) and copies
 /// the public part (the provider and the publishable key) into each tenant's
-/// own store. Every node runs it; writing what is there already is a no-op.
-/// A fresh node, or this subscription's first run, replays every tenant's
-/// history, which brings the tenants set up before it in step.
+/// own streams. Every node runs it; writing what is there already is a
+/// no-op. A fresh node, or this subscription's first run, replays every
+/// tenant's history, which brings the tenants set up before it in step.
 pub fn setup_subscription(
     payments: Arc<Payments>,
-    tenants: Arc<Tenants>,
+    store: Executor,
 ) -> SubscriptionBuilder<Executor> {
     SubscriptionBuilder::new(SETUP_SUBSCRIPTION)
         .data(payments)
-        .data(tenants)
+        .data(Store(store))
         .handler(on_payments_configured())
         .handler(on_payments_removed())
         .handler(on_tenant_resumed())
@@ -69,22 +73,15 @@ async fn sync<E: evento::Executor>(
     tenant_id: &str,
 ) -> anyhow::Result<()> {
     let payments: Arc<Payments> = context.extract();
-    let tenants: Arc<Tenants> = context.extract();
+    let store: Store = context.extract();
     let Some(tenant) = payments.active_tenant(tenant_id).await? else {
         return Ok(());
     };
-    let executor = match tenants.open(&tenant).await {
-        Ok(executor) => executor,
-        Err(err) => {
-            tracing::warn!(tenant = %tenant.slug, %err, "cannot open a tenant to set its payments");
-            return Ok(());
-        }
-    };
-    publish_setup(&payments, &tenant, executor).await
+    publish_setup(&payments, &tenant, store.0).await
 }
 
-/// Writes the tenant's payment setup, as its settings say now, to its store
-/// (`executor`). The settings pages call it too, so the merchant's change
+/// Writes the tenant's payment setup, as its settings say now, to its
+/// streams in `executor`. The settings pages call it too, so the merchant's change
 /// shows at once on the storefront instead of when this node's subscription
 /// gets to it.
 pub async fn publish_setup(
@@ -100,7 +97,7 @@ pub async fn publish_setup(
             provider: settings.provider.clone(),
             publishable_key: settings.publishable_key.clone(),
         });
-    timada_orders::Command(executor)
+    timada_orders::Command::new(executor, &tenant.id)
         .set_payment_method(DASHBOARD_ACTOR, setup)
         .await?;
     Ok(())

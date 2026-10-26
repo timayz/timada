@@ -61,7 +61,7 @@ pub async fn mail_confirmation(
     Ok(true)
 }
 
-/// The cursor identity of the subscription, in each tenant's store.
+/// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/newsletter-opt-ins";
 /// Who the checkout's requests say asked.
 pub const ACTOR: &str = "timada-dashboard";
@@ -71,14 +71,11 @@ pub const ACTOR: &str = "timada-dashboard";
 /// mailed now.
 const OPT_IN_WINDOW_SECS: u64 = 60 * 60;
 
-#[derive(Clone)]
-struct Tenant(String);
-
 /// The platform store, where the shop lives.
 #[derive(Clone)]
 struct Platform(Store);
 
-/// The tenant's own executor, where the subscribers are.
+/// The store, where the subscribers are.
 #[derive(Clone)]
 struct TenantStore(Evento);
 
@@ -89,15 +86,14 @@ struct Mail(Arc<AppContext>);
 #[derive(Clone)]
 struct Keys(Arc<KeyVault>);
 
-/// Follows one tenant's orders: the shopper of a paid order who asked for
+/// Follows every tenant's orders: the shopper of a paid order who asked for
 /// the shop's news at checkout is recorded as asking, and mailed the link
-/// that confirms it. Every node with the tenant open runs it; the node whose
+/// that confirms it. Every node runs it; the node whose
 /// request is recorded first is the one that mails.
 pub fn subscription<E: Executor>(
     platform: Store,
     mail: Arc<AppContext>,
     keys: Arc<KeyVault>,
-    tenant_id: &str,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
@@ -105,7 +101,6 @@ pub fn subscription<E: Executor>(
         .data(Mail(mail))
         .data(Keys(keys))
         .data(TenantStore(store))
-        .data(Tenant(tenant_id.to_owned()))
         .handler(on_placed())
         .any_routing_key()
         .retry(5)
@@ -120,9 +115,8 @@ async fn on_placed<E: Executor>(
     if now.saturating_sub(event.timestamp) > OPT_IN_WINDOW_SECS {
         return Ok(());
     }
-    let tenant: Tenant = context.extract();
     let store: TenantStore = context.extract();
-    let orders = timada_orders::Command(store.0.clone());
+    let orders = timada_orders::Command::new(store.0.clone(), &event.tenant);
     // Read whole: the opt-in is written with `Placed`, in the same commit.
     let Some(order) = orders.load_order(&event.aggregate_id).await? else {
         return Ok(());
@@ -131,20 +125,20 @@ async fn on_placed<E: Executor>(
         return Ok(());
     }
     let Some(storefront) = orders.storefront_address().await? else {
-        tracing::warn!(tenant = %tenant.0, order = %order.id, "newsletter opt-in dropped: the shop has no storefront address");
+        tracing::warn!(tenant = %event.tenant, order = %order.id, "newsletter opt-in dropped: the shop has no storefront address");
         return Ok(());
     };
     let platform: Platform = context.extract();
     let Some(shop) = timada_tenancy::Command(platform.0.clone())
-        .load_tenant(&tenant.0)
+        .load_tenant(&event.tenant)
         .await?
     else {
         return Ok(());
     };
     let keys: Keys = context.extract();
-    let outcome = timada_newsletter::Command(store.0.clone())
+    let outcome = timada_newsletter::Command::new(store.0.clone(), &event.tenant)
         .request_subscription(
-            &*keys.0.for_tenant(&tenant.0),
+            &*keys.0.for_tenant(&event.tenant),
             ACTOR,
             RequestSubscription {
                 email: order.email.clone(),
@@ -160,11 +154,11 @@ async fn on_placed<E: Executor>(
     let cx = Cx::new(mail.0);
     match mail_confirmation(&cx, &shop, &storefront, &outcome).await {
         Ok(true) => {
-            tracing::info!(tenant = %tenant.0, order = %order.id, "newsletter confirmation mailed");
+            tracing::info!(tenant = %event.tenant, order = %order.id, "newsletter confirmation mailed");
         }
         Ok(false) => {}
         Err(err) => {
-            tracing::error!(tenant = %tenant.0, order = %order.id, error = %err, "newsletter confirmation not delivered");
+            tracing::error!(tenant = %event.tenant, order = %order.id, error = %err, "newsletter confirmation not delivered");
         }
     }
     Ok(())

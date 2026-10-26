@@ -1,5 +1,5 @@
 //! Issues the invoice of every paid order and the credit note of every
-//! refund, in each tenant's store. What a document says comes from places
+//! refund, in the store. What a document says comes from places
 //! only the dashboard sees together: the order and the cart it was paid
 //! from (the tenant's store), the kind of goods of each product (the
 //! catalog, same store), the merchant's legal identity (the platform store)
@@ -24,35 +24,30 @@ use timada_tenancy::LegalIdentity;
 use crate::cluster::Executor as Store;
 use crate::vies::{Vies, ViesAnswer, check_patiently};
 
-/// The cursor identity of the subscription, in each tenant's store.
+/// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/invoicing";
 /// Who the documents say issued them.
 pub const ISSUER: &str = "timada-dashboard";
-
-#[derive(Clone)]
-struct Tenant(String);
 
 /// The platform store, where the merchant's legal identity lives.
 #[derive(Clone)]
 struct Platform(Store);
 
-/// The tenant's own executor, to write the documents with.
+/// The store, to write the documents with.
 #[derive(Clone)]
 struct TenantStore(Evento);
 
-/// Follows one tenant's orders. Every node with the tenant open runs it:
+/// Follows every tenant's orders. Every node runs it:
 /// issuing is safe to repeat and to race (see `timada_invoicing`).
 pub fn subscription<E: Executor>(
     platform: Store,
     vies: Arc<dyn Vies>,
-    tenant_id: &str,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(Platform(platform))
         .data(vies)
         .data(TenantStore(store))
-        .data(Tenant(tenant_id.to_owned()))
         .handler(on_placed())
         .handler(on_refunded())
         .any_routing_key()
@@ -92,8 +87,7 @@ async fn on_placed<E: Executor>(
 ) -> anyhow::Result<()> {
     let platform: Platform = context.extract();
     let store: TenantStore = context.extract();
-    let tenant: Tenant = context.extract();
-    let invoicing = timada_invoicing::Command(store.0.clone());
+    let invoicing = timada_invoicing::Command::new(store.0.clone(), &event.tenant);
     if invoicing
         .load_invoice_of_order(&event.aggregate_id)
         .await?
@@ -103,7 +97,7 @@ async fn on_placed<E: Executor>(
     }
     let tenancy = timada_tenancy::Command(platform.0.clone());
     let link = tenancy
-        .load_tenant(&tenant.0)
+        .load_tenant(&event.tenant)
         .await?
         .and_then(|state| state.company);
     let company = match &link {
@@ -114,15 +108,15 @@ async fn on_placed<E: Executor>(
         // Only an order paid before invoicing existed, or a tenant unlinked
         // between payment and now: checkout refuses to take a payment
         // without a company.
-        tracing::warn!(tenant = %tenant.0, order = %event.aggregate_id, "no company: order not invoiced");
+        tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, "no company: order not invoiced");
         return Ok(());
     };
     let Some(legal) = company.identity.clone() else {
-        tracing::warn!(tenant = %tenant.0, order = %event.aggregate_id, "the company has no identity: order not invoiced");
+        tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, "the company has no identity: order not invoiced");
         return Ok(());
     };
     let vies: Arc<dyn Vies> = context.extract();
-    let catalog = timada_catalog::Command(store.0.clone());
+    let catalog = timada_catalog::Command::new(store.0.clone(), &event.tenant);
     let mut lines = Vec::with_capacity(event.data.lines.len());
     for line in &event.data.lines {
         let tax_category = catalog
@@ -142,7 +136,7 @@ async fn on_placed<E: Executor>(
     // A business buyer's number, from the request this payment answered,
     // counts once VIES says it is valid; otherwise the sale is to a consumer
     // (VAT charged: the safe side).
-    let vat_number = timada_orders::Command(store.0.clone())
+    let vat_number = timada_orders::Command::new(store.0.clone(), &event.tenant)
         .load_cart(&event.data.cart_id)
         .await?
         .and_then(|cart| {
@@ -154,11 +148,11 @@ async fn on_placed<E: Executor>(
             match check_patiently(vies.as_ref(), &number, legal.vat_number.as_deref()).await {
                 ViesAnswer::Valid { reference } => (Some(number), reference),
                 ViesAnswer::Invalid => {
-                    tracing::info!(tenant = %tenant.0, order = %event.aggregate_id, %number, "VIES: not a valid VAT number");
+                    tracing::info!(tenant = %event.tenant, order = %event.aggregate_id, %number, "VIES: not a valid VAT number");
                     (None, None)
                 }
                 ViesAnswer::Unavailable(reason) => {
-                    tracing::warn!(tenant = %tenant.0, order = %event.aggregate_id, %number, %reason, "VIES did not answer: invoiced with VAT");
+                    tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, %number, %reason, "VIES did not answer: invoiced with VAT");
                     (None, None)
                 }
             }
@@ -167,7 +161,7 @@ async fn on_placed<E: Executor>(
     };
     // A discount code, shipping and a billing address are written with `Placed`, in
     // the same commit.
-    let order = timada_orders::Command(store.0.clone())
+    let order = timada_orders::Command::new(store.0.clone(), &event.tenant)
         .load_order(&event.aggregate_id)
         .await?;
     let discount = order
@@ -201,7 +195,7 @@ async fn on_placed<E: Executor>(
         .issue_invoice(
             NewInvoice {
                 company_id: company.id.clone(),
-                tenant_id: tenant.0.clone(),
+                tenant_id: event.tenant.clone(),
                 series_code: link.series_code.clone(),
                 order_id: event.aggregate_id.clone(),
                 order_reference: event.data.reference.clone(),
@@ -228,7 +222,7 @@ async fn on_placed<E: Executor>(
             now(),
         )
         .await?;
-    tracing::info!(tenant = %tenant.0, order = %event.aggregate_id, invoice = %invoice.label, "invoice issued");
+    tracing::info!(tenant = %event.tenant, order = %event.aggregate_id, invoice = %invoice.label, "invoice issued");
     Ok(())
 }
 
@@ -238,8 +232,7 @@ async fn on_refunded<E: Executor>(
     event: Event<Refunded>,
 ) -> anyhow::Result<()> {
     let store: TenantStore = context.extract();
-    let tenant: Tenant = context.extract();
-    let invoicing = timada_invoicing::Command(store.0);
+    let invoicing = timada_invoicing::Command::new(store.0, &event.tenant);
     let credit = NewCreditNote {
         order_id: event.aggregate_id.clone(),
         refund_id: event.data.refund_id.clone(),
@@ -248,12 +241,12 @@ async fn on_refunded<E: Executor>(
     };
     match invoicing.issue_credit_note(credit, now()).await {
         Ok(note) => {
-            tracing::info!(tenant = %tenant.0, order = %event.aggregate_id, credit_note = %note.label, "credit note issued");
+            tracing::info!(tenant = %event.tenant, order = %event.aggregate_id, credit_note = %note.label, "credit note issued");
             Ok(())
         }
         // An order paid before invoicing existed has nothing to correct.
         Err(timada_invoicing::InvoicingError::InvoiceNotFound) => {
-            tracing::warn!(tenant = %tenant.0, order = %event.aggregate_id, "refund of an order without invoice");
+            tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, "refund of an order without invoice");
             Ok(())
         }
         Err(err) => Err(err.into()),

@@ -14,22 +14,22 @@ use topcoat::{
 use super::{TenantId, admin_tenant_url};
 use crate::app::admin::require_admin;
 use crate::app::tenants::{error_code, tenancy};
-use crate::tenants::Tenants;
+use crate::store_api::StoreConnections;
 
 #[derive(Deserialize)]
 struct SuspendForm {
     reason: String,
 }
 
-/// Takes the tenant offline: the catalog records it, then its database is
-/// closed on this node (other nodes close theirs when they next look).
+/// Takes the tenant offline: the catalog records it, then its storefronts'
+/// connections to this node are ended (their reconnects are refused).
 #[route(POST)]
 pub async fn suspend(cx: &Cx, Form(form): Form<SuspendForm>) -> Result<SeeOther> {
     require_admin(cx).await?;
     let id = path_param::<TenantId>(cx);
     match tenancy(cx).suspend_tenant(id, &form.reason).await {
         Ok(()) => {
-            app_context::<Arc<Tenants>>(cx).close(id).await;
+            app_context::<Arc<StoreConnections>>(cx).close_tenant(id);
             Ok(see_other(admin_tenant_url(
                 cx,
                 id,

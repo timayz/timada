@@ -39,7 +39,8 @@ impl<E: Executor> super::Command<E> {
                 value,
                 set_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -68,7 +69,8 @@ impl<E: Executor> super::Command<E> {
                 name: name.to_owned(),
                 removed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }

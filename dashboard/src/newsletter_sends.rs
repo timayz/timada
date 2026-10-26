@@ -17,7 +17,6 @@ use crate::auth::mail::{CampaignCopy, send_campaign};
 use crate::cluster::Executor;
 use crate::key_vault::KeyVault;
 use crate::newsletter::unsubscribe_link;
-use crate::tenants::Tenants;
 
 /// Who the deliveries say mailed them.
 pub const MAILER: &str = "timada-dashboard";
@@ -25,8 +24,8 @@ pub const MAILER: &str = "timada-dashboard";
 /// The sweep, with what it needs outside any request.
 pub struct NewsletterSends {
     read_pool: SqlitePool,
-    platform: Executor,
-    tenants: Arc<Tenants>,
+    /// The store, every tenant's.
+    store: Executor,
     mail: Arc<AppContext>,
     keys: Arc<KeyVault>,
     batch: u32,
@@ -35,16 +34,14 @@ pub struct NewsletterSends {
 impl NewsletterSends {
     pub fn new(
         read_pool: SqlitePool,
-        platform: Executor,
-        tenants: Arc<Tenants>,
+        store: Executor,
         mail: Arc<AppContext>,
         keys: Arc<KeyVault>,
         batch: u32,
     ) -> Arc<Self> {
         Arc::new(Self {
             read_pool,
-            platform,
-            tenants,
+            store,
             mail,
             keys,
             batch: batch.max(1),
@@ -77,7 +74,7 @@ impl NewsletterSends {
     }
 
     async fn sweep_campaign(&self, tenant_id: &str, campaign_id: &str) -> anyhow::Result<()> {
-        let Some(tenant) = timada_tenancy::Command(self.platform.clone())
+        let Some(tenant) = timada_tenancy::Command(self.store.clone())
             .load_tenant(tenant_id)
             .await?
         else {
@@ -86,10 +83,9 @@ impl NewsletterSends {
         if tenant.is_suspended() {
             return Ok(());
         }
-        let lease = self.tenants.lease(&tenant).await?;
         let cx = Cx::new(self.mail.clone());
         send_batch(
-            lease.executor(),
+            &self.store,
             &self.read_pool,
             &cx,
             &tenant,
@@ -113,7 +109,7 @@ pub async fn send_batch<E: evento::Executor + Clone>(
     campaign_id: &str,
     batch: u32,
 ) -> anyhow::Result<usize> {
-    let newsletter = timada_newsletter::Command(store.clone());
+    let newsletter = timada_newsletter::Command::new(store.clone(), &tenant.id);
     let Some(campaign) = newsletter.load_campaign(campaign_id).await? else {
         return Ok(0);
     };
@@ -122,7 +118,7 @@ pub async fn send_batch<E: evento::Executor + Clone>(
     }
     // Without the storefront there is no unsubscribe link to put in the
     // mails: nothing goes out until the merchant says where it lives.
-    let Some(storefront) = timada_orders::Command(store.clone())
+    let Some(storefront) = timada_orders::Command::new(store.clone(), &tenant.id)
         .storefront_address()
         .await?
     else {
@@ -208,6 +204,15 @@ mod tests {
     #[derive(Default)]
     struct MemoryKeys(Mutex<HashMap<String, Key>>);
 
+    /// The same keys for every tenant.
+    struct MemoryRing(Arc<MemoryKeys>);
+
+    impl timada_core::keys::KeyRing for MemoryRing {
+        fn for_tenant(&self, _tenant_id: &str) -> Arc<dyn Keys> {
+            self.0.clone()
+        }
+    }
+
     #[async_trait::async_trait]
     impl Keys for MemoryKeys {
         async fn put(&self, key_id: &str, key: &Key) -> anyhow::Result<()> {
@@ -252,14 +257,17 @@ mod tests {
     }
 
     async fn catch_up(store: &evento::Sqlite, pool: &SqlitePool, keys: Arc<MemoryKeys>) {
-        timada_newsletter::read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT, keys)
-            .run_once(store)
-            .await
-            .unwrap();
+        timada_newsletter::read_model_subscription::<evento::Sqlite>(
+            pool.clone(),
+            Arc::new(MemoryRing(keys)),
+        )
+        .run_once(store)
+        .await
+        .unwrap();
     }
 
     async fn subscribe(store: &evento::Sqlite, keys: &MemoryKeys, email: &str) {
-        let newsletter = timada_newsletter::Command(store.clone());
+        let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);
         let RequestOutcome::ToConfirm { token, .. } = newsletter
             .request_subscription(
                 keys,
@@ -299,7 +307,7 @@ mod tests {
         for email in ["ada@example.com", "grace@example.com", "alan@example.com"] {
             subscribe(&store, &keys, email).await;
         }
-        let newsletter = timada_newsletter::Command(store.clone());
+        let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);
         let campaign = newsletter
             .draft_campaign(
                 "user-alice",
@@ -331,7 +339,7 @@ mod tests {
                 .unwrap(),
             0
         );
-        timada_orders::Command(store.clone())
+        timada_orders::Command::new(store.clone(), TENANT)
             .set_storefront_address("user-alice", Some(SHOP))
             .await
             .unwrap();

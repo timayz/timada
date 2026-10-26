@@ -331,11 +331,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await
         .map_err(|err| topcoat::Error::from_anyhow(err.into()))?
     {
-        Some(row) => timada_aliexpress::Command(access.executor()?.clone())
-            .load_link_by_id(&row.id)
-            .await
-            .map_err(topcoat::Error::from_anyhow)?
-            .filter(|link| link.is_linked()),
+        Some(row) => {
+            timada_aliexpress::Command::new(access.executor()?.clone(), access.tenant_id())
+                .load_link_by_id(&row.id)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?
+                .filter(|link| link.is_linked())
+        }
         None => None,
     };
     let link_costs: Vec<(String, String, u32)> = link

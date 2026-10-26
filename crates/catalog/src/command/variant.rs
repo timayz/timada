@@ -74,7 +74,8 @@ impl<E: Executor> super::Command<E> {
                 image_id: cmd.image_id,
                 defined_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         if let Err(err) = defined {
             if let Some(sku) = &sku
@@ -118,7 +119,8 @@ impl<E: Executor> super::Command<E> {
                 currency,
                 priced_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -155,7 +157,8 @@ impl<E: Executor> super::Command<E> {
                 sku: sku.clone(),
                 changed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         if let Some(previous) = previous
             && let Err(release) = self.release_sku(&previous, variant_id, routing_key).await
@@ -195,7 +198,8 @@ impl<E: Executor> super::Command<E> {
                 image_id: image_id.map(str::to_owned),
                 imaged_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -221,7 +225,8 @@ impl<E: Executor> super::Command<E> {
                 variant_id: variant_id.to_owned(),
                 removed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         if let Some(sku) = sku
             && let Err(release) = self.release_sku(&sku, variant_id, routing_key).await

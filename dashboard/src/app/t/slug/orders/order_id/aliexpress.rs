@@ -30,7 +30,7 @@ pub async fn forward(cx: &Cx, Form(form): Form<ForwardForm>) -> Result<SeeOther>
         .await?;
     let order_id = path_param::<OrderId>(cx).to_owned();
     let slug = access.tenant.slug.clone();
-    let forwards = timada_aliexpress::Command(access.executor()?.clone());
+    let forwards = timada_aliexpress::Command::new(access.executor()?.clone(), access.tenant_id());
     match forwards
         .request_forward(&access.user_id, &order_id, form.again.is_some())
         .await

@@ -21,13 +21,48 @@ use crate::error::AliexpressError;
 use crate::value_object::{IMPORT_STALE_SECS, aliexpress_product_id};
 
 /// The command gateway. Cheap to clone when `E` is.
-pub struct Command<E: Executor>(pub E);
+pub struct Command<E: Executor> {
+    executor: E,
+    tenant: String,
+}
+
+impl<E: Executor> Command<E> {
+    /// The gateway of one tenant: every stream it writes, loads or reads is
+    /// that tenant's. `tenant` must not be empty (the default tenant holds
+    /// the platform's own streams).
+    pub fn new(executor: E, tenant: impl Into<String>) -> Self {
+        let tenant = tenant.into();
+        debug_assert!(!tenant.is_empty(), "a tenant gateway needs a tenant");
+        Self { executor, tenant }
+    }
+
+    /// A gateway naming no tenant: for a store that is one tenant's already
+    /// (a storefront's connection, which the store API serves in its key's
+    /// tenant whatever its requests name). Every call then acts in the
+    /// default tenant, which that store maps to its own.
+    pub fn unscoped(executor: E) -> Self {
+        Self {
+            executor,
+            tenant: String::new(),
+        }
+    }
+
+    /// The tenant every call acts in.
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+
+    /// The store the tenant's streams live in.
+    pub fn executor(&self) -> &E {
+        &self.executor
+    }
+}
 
 impl<E: Executor> Deref for Command<E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.executor
     }
 }
 
@@ -302,7 +337,8 @@ impl<E: Executor> Command<E> {
                     .original_version(0)
                     .routing_key_opt(routing_key)
                     .event(&requested)
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(|err| lost(err.into()))?;
             }
@@ -319,7 +355,8 @@ impl<E: Executor> Command<E> {
                 link.write()?
                     .routing_key_opt(routing_key)
                     .event(&requested)
-                    .commit(&self.0)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
                     .await
                     .map_err(|err| lost(err.into()))?;
             }
@@ -347,7 +384,8 @@ impl<E: Executor> Command<E> {
             .event(&ImportStarted {
                 started_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match written {
             Ok(_) => Ok(true),
@@ -373,7 +411,8 @@ impl<E: Executor> Command<E> {
                 skus,
                 imported_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -393,7 +432,8 @@ impl<E: Executor> Command<E> {
                 reason: reason.chars().take(500).collect(),
                 failed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -421,7 +461,7 @@ impl<E: Executor> Command<E> {
         if let Some(found) = read.found {
             write.event(&CombinationsFound { found });
         }
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 
@@ -445,7 +485,8 @@ impl<E: Executor> Command<E> {
                 skus,
                 added_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -471,7 +512,8 @@ impl<E: Executor> Command<E> {
                 sku_id: sku_id.to_owned(),
                 ignored_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -494,7 +536,8 @@ impl<E: Executor> Command<E> {
                 sku_id: sku_id.to_owned(),
                 restored_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -514,7 +557,8 @@ impl<E: Executor> Command<E> {
                 reason: reason.chars().take(500).collect(),
                 failed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -540,7 +584,8 @@ impl<E: Executor> Command<E> {
                 pricing,
                 set_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -561,7 +606,8 @@ impl<E: Executor> Command<E> {
             .event(&Unlinked {
                 unlinked_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(())
     }
@@ -576,7 +622,8 @@ impl<E: Executor> Command<E> {
             .event(&crate::aggregator::refresh::Claimed {
                 claimed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match claimed {
             Ok(_) => Ok(true),
@@ -592,7 +639,11 @@ impl<E: Executor> Command<E> {
     }
 
     pub async fn load_link_by_id(&self, link_id: &str) -> anyhow::Result<Option<LinkState>> {
-        link_projection().load(link_id).execute(&self.0).await
+        link_projection()
+            .load(link_id)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await
     }
 
     /// The link and the version it was read at.

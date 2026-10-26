@@ -5,10 +5,8 @@ use timada_discounts::{
     Command, CreateDiscount, DiscountValue, discounts_of_tenant, read_model_subscription,
 };
 
-const TENANT: &str = "tenant-acme";
-
 async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    read_model_subscription::<evento::Sqlite>(pool.clone(), TENANT)
+    read_model_subscription::<evento::Sqlite>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
@@ -17,7 +15,7 @@ async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
 #[tokio::test]
 async fn discounts_are_listed_and_stay_idempotent() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), TENANT);
     let ten = create(&cmd, percent("TEN", 1000)).await;
     let five = create(
         &cmd,

@@ -202,7 +202,7 @@ async fn an_order_takes_its_share_once_and_gives_it_back_once() {
 #[tokio::test]
 async fn the_read_model_sums_a_product_up() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = timada_catalog::Command(executor.clone());
+    let cmd = timada_catalog::Command::new(executor.clone(), TENANT);
     let (product_id, small, large) = sized(&cmd).await;
     cmd.set_stock(ALICE, &product_id, Some(&small), 0)
         .await

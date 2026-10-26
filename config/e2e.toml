@@ -11,10 +11,8 @@
 trusted_proxies = ["172.16.0.0/12"]
 
 [database]
-url = "sqlite:data/e2e.db"
-
-[tenants]
-dir = "data/e2e-tenants"
+store = "sqlite:data/e2e-store.db"
+read_models = "sqlite:data/e2e-read-models.db"
 
 [media]
 dir = "data/e2e-media"

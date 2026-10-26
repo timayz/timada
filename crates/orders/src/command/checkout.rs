@@ -287,7 +287,8 @@ impl<E: Executor> super::Command<E> {
         let offers = match &quote.currency {
             Some(_) => offers_projection()
                 .load(offers_id())
-                .execute(&self.0)
+                .tenant(&self.tenant)
+                .execute(&self.executor)
                 .await?
                 .unwrap_or_default(),
             None => OffersState::default(),
@@ -509,7 +510,8 @@ impl<E: Executor> super::Command<E> {
     ) -> anyhow::Result<Option<OrderState>> {
         let Some(index) = super::order_reference_projection()
             .load(order_reference_id(reference))
-            .execute(&self.0)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
             .await?
         else {
             return Ok(None);
@@ -596,7 +598,7 @@ impl<E: Executor> super::Command<E> {
                 opted_in_by: actor.to_owned(),
             });
         }
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(request_id)
     }
 
@@ -649,7 +651,7 @@ impl<E: Executor> super::Command<E> {
                     granted_by: actor.to_owned(),
                 });
             }
-            let written = write.commit(&self.0).await;
+            let written = write.tenant(&self.tenant).commit(&self.executor).await;
             match written {
                 Ok(_) => return Ok(()),
                 Err(WriteError::InvalidOriginalVersion) if attempt < CART_WRITE_ATTEMPTS => {}
@@ -682,7 +684,8 @@ impl<E: Executor> super::Command<E> {
                     code: code.to_owned(),
                     refused_by: actor.to_owned(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await;
             match written {
                 Ok(_) => return Ok(()),
@@ -779,7 +782,7 @@ impl<E: Executor> super::Command<E> {
                 set_by: actor.to_owned(),
             });
         }
-        let placed = write.commit(&self.0).await;
+        let placed = write.tenant(&self.tenant).commit(&self.executor).await;
         match placed {
             Ok(_) => {}
             // Told at the same moment on another node: that one stands, and
@@ -832,7 +835,8 @@ impl<E: Executor> super::Command<E> {
                 .event(&Claimed {
                     order_id: order_id.to_owned(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await;
             match claimed {
                 Ok(_) => return Ok(reference),
@@ -864,7 +868,8 @@ impl<E: Executor> super::Command<E> {
                     order_id: order.id.clone(),
                     checked_out_by: actor.to_owned(),
                 })
-                .commit(&self.0)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
                 .await;
             match marked {
                 Ok(_) => return Ok(()),

@@ -10,7 +10,6 @@ mod confirmations;
 mod db;
 mod invoicing;
 mod key_vault;
-mod limits;
 mod media;
 mod media_images;
 mod message_keys;
@@ -28,7 +27,7 @@ mod seal;
 mod shop_mail;
 mod shopper_keys;
 mod store_api;
-mod tenants;
+mod store_writer;
 mod ui;
 mod vies;
 
@@ -63,12 +62,15 @@ enum Commands {
         #[arg(long)]
         port: Option<u16>,
     },
-    /// Create the database if needed and apply pending migrations
+    /// Create the databases if needed and apply pending migrations
     Migrate,
+    /// Mark the store for a copy from another node at the next start (server
+    /// stopped): after the other nodes gave this one up, or a lost store file
+    Rejoin,
     /// Load a catalogue snapshot into a tenant (server stopped), then print
     /// the settings of a storefront for it
     Seed(cli::SeedArgs),
-    /// Drop the database and recreate it from scratch (debug builds only)
+    /// Drop the databases and recreate them from scratch (debug builds only)
     #[cfg(debug_assertions)]
     Reset,
 }
@@ -86,6 +88,7 @@ async fn main() -> Result<()> {
     }) {
         Commands::Serve { host, port } => cli::serve(config, host, port).await,
         Commands::Migrate => cli::migrate(config).await,
+        Commands::Rejoin => cli::rejoin(config).await,
         Commands::Seed(args) => cli::seed(config, args).await,
         #[cfg(debug_assertions)]
         Commands::Reset => cli::reset(config).await,

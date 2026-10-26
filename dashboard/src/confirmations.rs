@@ -15,7 +15,7 @@ use topcoat::context::{AppContext, Cx};
 use crate::auth::mail::send_order_confirmation;
 use crate::cluster::Executor as Store;
 
-/// The cursor identity of the subscription, in each tenant's store.
+/// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/order-confirmations";
 /// Who the confirmations say mailed them.
 pub const MAILER: &str = "timada-dashboard";
@@ -25,14 +25,11 @@ pub const MAILER: &str = "timada-dashboard";
 /// mailed now.
 const CONFIRMATION_WINDOW_SECS: u64 = 60 * 60;
 
-#[derive(Clone)]
-struct Tenant(String);
-
 /// The platform store, where the shop's name lives.
 #[derive(Clone)]
 struct Platform(Store);
 
-/// The tenant's own executor, to claim each confirmation with.
+/// The store, to claim each confirmation with.
 #[derive(Clone)]
 struct TenantStore(Evento);
 
@@ -41,19 +38,17 @@ struct TenantStore(Evento);
 #[derive(Clone)]
 struct Mail(Arc<AppContext>);
 
-/// Follows one tenant's orders. Every node with the tenant open runs it; the
+/// Follows every tenant's orders. Every node runs it; the
 /// node that claims an order's confirmation first is the one that sends it.
 pub fn subscription<E: Executor>(
     platform: Store,
     mail: Arc<AppContext>,
-    tenant_id: &str,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(Platform(platform))
         .data(Mail(mail))
         .data(TenantStore(store))
-        .data(Tenant(tenant_id.to_owned()))
         .handler(on_placed())
         .any_routing_key()
         .retry(5)
@@ -64,7 +59,6 @@ async fn on_placed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Placed>,
 ) -> anyhow::Result<()> {
-    let tenant: Tenant = context.extract();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
@@ -73,13 +67,13 @@ async fn on_placed<E: Executor>(
     }
     let platform: Platform = context.extract();
     let store: TenantStore = context.extract();
-    let orders = timada_orders::Command(store.0.clone());
+    let orders = timada_orders::Command::new(store.0.clone(), &event.tenant);
     // Read whole: a discount is written with `Placed`, in the same commit.
     let Some(order) = orders.load_order(&event.aggregate_id).await? else {
         return Ok(());
     };
     let Some(shop) = timada_tenancy::Command(platform.0.clone())
-        .load_tenant(&tenant.0)
+        .load_tenant(&event.tenant)
         .await?
     else {
         return Ok(());
@@ -100,10 +94,10 @@ async fn on_placed<E: Executor>(
     let cx = Cx::new(mail.0);
     match send_order_confirmation(&cx, &shop, &order, link.as_deref()).await {
         Ok(()) => {
-            tracing::info!(tenant = %tenant.0, order = %order.id, "order confirmation mailed");
+            tracing::info!(tenant = %event.tenant, order = %order.id, "order confirmation mailed");
         }
         Err(err) => {
-            tracing::error!(tenant = %tenant.0, order = %order.id, error = %err, "order confirmation not delivered");
+            tracing::error!(tenant = %event.tenant, order = %order.id, error = %err, "order confirmation not delivered");
         }
     }
     Ok(())

@@ -3,8 +3,8 @@ mod common;
 use common::*;
 use timada_tenancy::{
     AcceptInvitation, Command, InviteMember, SentCounts, count_open_invitations_of_tenant,
-    count_tenants, group_of, invitation_by_id, invitations_sent_since, list_tenants,
-    open_invitations_of_tenant, read_model_subscription, tenant_by_group, tenants_of_user,
+    count_tenants, invitation_by_id, invitations_sent_since, list_tenants,
+    open_invitations_of_tenant, read_model_subscription, tenants_of_user,
 };
 
 async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
@@ -34,7 +34,6 @@ async fn tenants_and_members_are_listed_and_stay_idempotent() {
     assert_eq!(rows[0].id, zeta.id);
     assert!(rows[0].suspended);
     assert_eq!(rows[0].suspended_reason.as_deref(), Some("unpaid"));
-    assert_eq!(rows[0].group(), group_of(&zeta.id));
     assert_eq!(rows[1].slug, "acme");
     assert_eq!(rows[1].name, "Acme");
     assert_eq!(rows[1].created_by, alice);
@@ -65,13 +64,6 @@ async fn tenants_and_members_are_listed_and_stay_idempotent() {
     assert!(!mine[0].suspended);
     assert!(tenants_of_user(&pool, &bob).await.unwrap()[0].suspended);
     assert!(tenants_of_user(&pool, "nobody").await.unwrap().is_empty());
-
-    let found = tenant_by_group(&pool, group_of(&acme.id))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(found.id, acme.id);
-    assert!(tenant_by_group(&pool, 0xdead_beef).await.unwrap().is_none());
 
     // Delivering everything again changes nothing.
     read_model_subscription::<evento::Sqlite>(pool.clone())

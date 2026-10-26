@@ -49,7 +49,7 @@ impl<E: Executor> super::Command<E> {
                 disabled_by: actor.to_owned(),
             }),
         };
-        write.commit(&self.0).await?;
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 
@@ -71,7 +71,8 @@ impl<E: Executor> super::Command<E> {
                 email: email.to_owned(),
                 mailed_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await;
         match claimed {
             Ok(_) => Ok(true),
@@ -99,7 +100,8 @@ impl<E: Executor> super::Command<E> {
                 expires_at: now + REVIEW_LINK_TTL_SECS,
                 issued_by: actor.to_owned(),
             })
-            .commit(&self.0)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
             .await?;
         Ok(token)
     }
