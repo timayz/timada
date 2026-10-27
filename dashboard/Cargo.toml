@@ -65,6 +65,6 @@ libc.workspace = true
 topcoat = { version = "=0.11.0", default-features = false, features = ["tailwind", "icon-iconify"] }
 
 [dev-dependencies]
-evento-lock.workspace = true
+evento = { workspace = true, features = ["lock"] }
 timada-storefront = { path = "../crates/storefront" }
 rcgen.workspace = true

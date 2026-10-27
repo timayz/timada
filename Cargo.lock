@@ -1861,6 +1861,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a2cd3b3484f3f2ef451e108e769fea72d9fe10e2acbbf1742fb9f2fd5b17eb6"
 dependencies = [
  "evento-core",
+ "evento-lock",
  "evento-remote",
  "evento-sql",
  "evento-sql-migrator",
@@ -6194,7 +6195,6 @@ dependencies = [
  "config",
  "evento",
  "evento-accord",
- "evento-lock",
  "evento-sql",
  "evento-sql-migrator",
  "hmac 0.12.1",
