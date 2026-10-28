@@ -210,3 +210,20 @@ These mails are marketing, so:
   contact form or a checkout, whose addresses nobody checked, is no relay. A
   skipped mail lets the run go on, and the run's log says why.
 - Claimed before it goes out, a mail is never sent twice, as for the notices.
+
+## Discount codes
+
+**Create a discount code** makes a single-use code (`max_uses` 1, for anyone)
+that ends after the step's number of days: a percent or an amount in a currency,
+starting with the step's prefix (`THANKS` gives `THANKS-7KQ2M9PX`). The discount's
+id is a hash of the run and the step, and `timada_discounts`'
+`create_discount_with_id` returns the discount already made under it, so a retry
+or another node makes the same code, never a second one. Its output (the code,
+what it takes off, its last day) is what a later **E-mail the customer** quotes:
+the default automated mails print it inside `{% if discount %} … {% endif %}`
+(`{{ discount.code }}`, `{{ discount.value }}`, `{{ discount.ends }}`).
+
+Unlike a mail, making a code is safe to ask for again: when it fails for a
+reason of the store's, the step is tried again after 1 minute, 5 minutes, 30
+minutes and 2 hours (`StepFailed` with `retry_at`) before the run fails. A
+scenario that makes codes is published by members holding `discounts:manage`.

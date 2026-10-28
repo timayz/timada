@@ -2,9 +2,9 @@
 //! problem is called. The crate names kinds by key; here they read.
 
 use timada_automations::catalog::{
-    self, CONDITION, EMAIL, FieldType, ISSUE_INVALID, ISSUE_MISSING, ISSUE_NO_RULES,
-    ISSUE_NO_SUBJECT, ISSUE_TOO_MANY_RULES, ISSUE_UNKNOWN_FIELD, NOTIFY, Op, RuleValue, Subject,
-    Unit, WAIT,
+    self, CONDITION, CodeValue, DISCOUNT, EMAIL, FieldType, ISSUE_INVALID, ISSUE_MISSING,
+    ISSUE_NO_RULES, ISSUE_NO_SUBJECT, ISSUE_TOO_MANY_RULES, ISSUE_UNKNOWN_FIELD, NOTIFY, Op,
+    RuleValue, Subject, Unit, WAIT,
 };
 use timada_automations::{
     EditError, Outcome, PROBLEM_AFTER_BRANCH, PROBLEM_BRANCHES, PROBLEM_INVALID_ID,
@@ -164,6 +164,7 @@ pub fn step_label(kind: &str) -> &'static str {
         CONDITION => "If / else",
         NOTIFY => "Notify the team",
         EMAIL => "E-mail the customer",
+        DISCOUNT => "Create a discount code",
         _ => "Unknown block",
     }
 }
@@ -186,6 +187,7 @@ pub fn step_icon(kind: &str) -> IconData {
         CONDITION => icons::CONDITION,
         NOTIFY => icons::NOTIFY,
         EMAIL => icons::MAIL,
+        DISCOUNT => icons::DISCOUNTS,
         _ => icons::BLOCK,
     }
 }
@@ -318,6 +320,20 @@ pub fn step_summary(step: &Step, subject: Option<Subject>) -> String {
         EMAIL => match catalog::parse_email(&step.settings) {
             Ok(mail) => format!("“{}”", mail.subject),
             Err(_) => "Write the mail".to_owned(),
+        },
+        DISCOUNT => match catalog::parse_discount(&step.settings) {
+            Ok(code) => {
+                let value = match &code.value {
+                    CodeValue::Percent(bps) => {
+                        format!("{}.{:02} %", bps / 100, bps % 100).replace(".00 %", " %")
+                    }
+                    CodeValue::Amount { cents, currency } => {
+                        timada_catalog::format_money(*cents, currency)
+                    }
+                };
+                format!("{value} off, {} days", code.days)
+            }
+            Err(_) => "Set what the code takes off".to_owned(),
         },
         _ => "Kept as it is".to_owned(),
     }

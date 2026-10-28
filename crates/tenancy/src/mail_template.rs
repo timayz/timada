@@ -191,7 +191,15 @@ const AUTOMATION_UNSUBSCRIBE: MailVariable = MailVariable {
                   automated mail links to it.",
 };
 
-const AUTOMATION_CUSTOMER_VARIABLES: [MailVariable; 1] = [AUTOMATION_UNSUBSCRIBE];
+const AUTOMATION_DISCOUNT: MailVariable = MailVariable {
+    name: "discount",
+    description: "The code a \"Create a discount code\" step made earlier in the run, when \
+                  one did: {% if discount %} … {{ discount.code }}, {{ discount.value }} off \
+                  until {{ discount.ends }} … {% endif %}.",
+};
+
+const AUTOMATION_CUSTOMER_VARIABLES: [MailVariable; 2] =
+    [AUTOMATION_UNSUBSCRIBE, AUTOMATION_DISCOUNT];
 
 impl ShopMailKind {
     pub const ALL: [Self; 4] = [
@@ -256,7 +264,7 @@ impl ShopMailKind {
                 return SHOP_VARIABLES
                     .iter()
                     .chain(&ORDER_CONFIRMATION_VARIABLES)
-                    .chain([&AUTOMATION_UNSUBSCRIBE])
+                    .chain([&AUTOMATION_UNSUBSCRIBE, &AUTOMATION_DISCOUNT])
                     .copied()
                     .collect();
             }
@@ -284,6 +292,11 @@ impl ShopMailKind {
             .iter()
             .map(|variable| variable.name.to_owned())
             .collect();
+        if matches!(self, Self::AutomationOrder | Self::AutomationCustomer) {
+            for field in ["code", "value", "ends"] {
+                paths.insert(format!("discount.{field}"));
+            }
+        }
         if matches!(self, Self::OrderConfirmation | Self::AutomationOrder) {
             for field in ["code", "amount"] {
                 paths.insert(format!("order.discount.{field}"));
@@ -384,12 +397,23 @@ impl ShopMailKind {
                 order: sample_order(full),
                 link: full.then(|| "https://shop.example.com/orders/A1B2C3".to_owned()),
                 unsubscribe_url: "https://shop.example.com/emails/opt-out/sample".to_owned(),
+                discount: full.then(sample_code),
             })),
             Self::AutomationCustomer => MailVars::AutomationCustomer(AutomationCustomerVars {
                 shop,
                 unsubscribe_url: "https://shop.example.com/emails/opt-out/sample".to_owned(),
+                discount: full.then(sample_code),
             }),
         }
+    }
+}
+
+/// A made-up code a scenario made.
+fn sample_code() -> AutomationDiscountVars {
+    AutomationDiscountVars {
+        code: "THANKS-7KQ2M9PX".to_owned(),
+        value: "10 %".to_owned(),
+        ends: "2026-12-31".to_owned(),
     }
 }
 
@@ -568,6 +592,7 @@ pub struct AutomationOrderVars {
     pub order: OrderVars,
     pub link: Option<String>,
     pub unsubscribe_url: String,
+    pub discount: Option<AutomationDiscountVars>,
 }
 
 /// An automated mail to a customer, with nothing of an order.
@@ -575,6 +600,17 @@ pub struct AutomationOrderVars {
 pub struct AutomationCustomerVars {
     pub shop: ShopVars,
     pub unsubscribe_url: String,
+    pub discount: Option<AutomationDiscountVars>,
+}
+
+/// A code a scenario made earlier in the run, worded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AutomationDiscountVars {
+    pub code: String,
+    /// What it takes off (`10 %`, `5.00 EUR`).
+    pub value: String,
+    /// The last day it is valid.
+    pub ends: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

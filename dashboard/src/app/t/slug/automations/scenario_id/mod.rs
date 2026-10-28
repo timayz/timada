@@ -135,15 +135,13 @@ pub async fn edit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> {
     // A scenario that mails customers is published only by members who may
     // manage the newsletter, and only once the shop can send its mails.
     let commit = match commit {
-        Some(Commit::Publish) if mail::sends_mail(&editor.definition) => {
-            match publish_blocked(cx, &access, &editor.definition).await? {
-                Some(code) => {
-                    error = Some(code);
-                    None
-                }
-                None => commit,
+        Some(Commit::Publish) => match publish_blocked(cx, &access, &editor.definition).await? {
+            Some(code) => {
+                error = Some(code);
+                None
             }
-        }
+            None => commit,
+        },
         commit => commit,
     };
     if let Some(commit) = commit {
@@ -202,13 +200,28 @@ pub async fn edit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> {
     })
 }
 
-/// What keeps a scenario that mails customers from being published, if
-/// anything.
+/// What keeps a scenario from being published, if anything: a step that
+/// acts with a permission the member lacks, or a mail to customers the
+/// shop cannot send.
 async fn publish_blocked(
     cx: &Cx,
     access: &TenantAccess,
     definition: &timada_automations::Definition,
 ) -> Result<Option<&'static str>> {
+    let makes_codes = definition
+        .walk()
+        .iter()
+        .any(|step| step.kind == timada_automations::catalog::DISCOUNT);
+    if makes_codes
+        && !access
+            .can(cx, timada_tenancy::PERMISSION_DISCOUNTS_MANAGE)
+            .await?
+    {
+        return Ok(Some("automation_discount_permission"));
+    }
+    if !mail::sends_mail(definition) {
+        return Ok(None);
+    }
     if !access
         .can(cx, timada_tenancy::PERMISSION_NEWSLETTER_MANAGE)
         .await?
