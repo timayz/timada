@@ -6,6 +6,9 @@
 {% endif %}
 <h1 style="font-size: 20px;">Hello from {{ shop.name }}</h1>
 <p>Write your message here.</p>
+{% if discount %}
+<p>Your code: <strong>{{ discount.code }}</strong>, {{ discount.value }} off until {{ discount.ends }}.</p>
+{% endif %}
 <hr style="border: none; border-top: 1px solid #e5e7eb;">
 {% if shop.footer %}
 <p style="color: #6b7280; font-size: 12px; white-space: pre-line;">{{ shop.footer }}</p>

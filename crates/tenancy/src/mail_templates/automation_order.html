@@ -6,6 +6,9 @@
 {% endif %}
 <h1 style="font-size: 20px;">Thank you for your order {{ order.reference }}</h1>
 <p>Write your message here.</p>
+{% if discount %}
+<p>Your code: <strong>{{ discount.code }}</strong>, {{ discount.value }} off until {{ discount.ends }}.</p>
+{% endif %}
 <ul>
 {% for line in order.lines %}
 <li>{{ line.quantity }} × {{ line.name }}{% if line.variant %} ({{ line.variant }}){% endif %}</li>

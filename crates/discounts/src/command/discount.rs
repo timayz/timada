@@ -1,4 +1,4 @@
-use evento::{Executor, ProjectionAggregate};
+use evento::{Executor, ProjectionAggregate, WriteError};
 use timada_catalog::MAX_AMOUNT_CENTS;
 use ulid::Ulid;
 
@@ -36,58 +36,25 @@ impl<E: Executor> super::Command<E> {
         cmd: CreateDiscount,
         routing_key: Option<String>,
     ) -> Result<DiscountState, DiscountError> {
-        let code = normalize_code(&cmd.code)?;
-        let (percent_bps, amount_cents, currency) = match cmd.value {
-            DiscountValue::Percent(bps) if (1..=MAX_PERCENT_BPS).contains(&bps) => {
-                (Some(bps), None, None)
-            }
-            DiscountValue::Percent(_) => return Err(DiscountError::InvalidPercent),
-            DiscountValue::Amount { cents, currency } => {
-                if cents == 0 || cents > MAX_AMOUNT_CENTS {
-                    return Err(DiscountError::InvalidAmount);
-                }
-                (None, Some(cents), Some(normalize_currency(&currency)?))
-            }
-        };
-        if let (Some(start), Some(end)) = (cmd.starts_at, cmd.ends_at)
-            && end <= start
-        {
-            return Err(DiscountError::InvalidWindow);
-        }
-        if cmd.max_uses.is_some_and(|max| max == 0 || max > MAX_USES) {
-            return Err(DiscountError::InvalidMaxUses);
-        }
+        self.create_discount_as(actor, &Ulid::generate().to_string(), cmd, routing_key)
+            .await
+    }
 
-        let discount_id = Ulid::generate().to_string();
-        self.claim_code(&code, &discount_id, routing_key.clone())
-            .await?;
-        let created = evento::append(&discount_id)
-            .original_version(0)
-            .routing_key_opt(routing_key.clone())
-            .event(&Created {
-                code: code.clone(),
-                percent_bps,
-                amount_cents,
-                currency,
-                starts_at: cmd.starts_at,
-                ends_at: cmd.ends_at,
-                max_uses: cmd.max_uses,
-                once_per_email: cmd.once_per_email,
-                created_by: actor.to_owned(),
-            })
-            .tenant(&self.tenant)
-            .commit(&self.executor)
-            .await;
-        if let Err(err) = created {
-            if let Err(release) = self.release_code(&code, &discount_id, routing_key).await {
-                tracing::warn!(%code, %release, "cannot give the code back after a failed creation");
-            }
-            return Err(err.into());
+    /// Creates a discount under an id of the caller's (one derived from
+    /// what it is for), so asking again gives the same discount: created
+    /// already, it is returned as it is.
+    pub async fn create_discount_with_id(
+        &self,
+        actor: &str,
+        discount_id: &str,
+        cmd: CreateDiscount,
+        routing_key: Option<String>,
+    ) -> Result<DiscountState, DiscountError> {
+        if let Some(existing) = self.load_discount(discount_id).await? {
+            return Ok(existing);
         }
-
-        self.load_discount(&discount_id)
-            .await?
-            .ok_or(DiscountError::NotFound)
+        self.create_discount_as(actor, discount_id, cmd, routing_key)
+            .await
     }
 
     /// Stops shoppers from using it; already inactive is a no-op. A checkout
@@ -161,5 +128,74 @@ impl<E: Executor> super::Command<E> {
             .await?;
         self.release_code(&discount.code, discount_id, routing_key)
             .await
+    }
+}
+
+impl<E: Executor> super::Command<E> {
+    /// Claims the code for `discount_id`, then appends `Created`; a
+    /// discount created at the same moment under the same id is returned.
+    async fn create_discount_as(
+        &self,
+        actor: &str,
+        discount_id: &str,
+        cmd: CreateDiscount,
+        routing_key: Option<String>,
+    ) -> Result<DiscountState, DiscountError> {
+        let code = normalize_code(&cmd.code)?;
+        let (percent_bps, amount_cents, currency) = match cmd.value {
+            DiscountValue::Percent(bps) if (1..=MAX_PERCENT_BPS).contains(&bps) => {
+                (Some(bps), None, None)
+            }
+            DiscountValue::Percent(_) => return Err(DiscountError::InvalidPercent),
+            DiscountValue::Amount { cents, currency } => {
+                if cents == 0 || cents > MAX_AMOUNT_CENTS {
+                    return Err(DiscountError::InvalidAmount);
+                }
+                (None, Some(cents), Some(normalize_currency(&currency)?))
+            }
+        };
+        if let (Some(start), Some(end)) = (cmd.starts_at, cmd.ends_at)
+            && end <= start
+        {
+            return Err(DiscountError::InvalidWindow);
+        }
+        if cmd.max_uses.is_some_and(|max| max == 0 || max > MAX_USES) {
+            return Err(DiscountError::InvalidMaxUses);
+        }
+
+        self.claim_code(&code, discount_id, routing_key.clone())
+            .await?;
+        let created = evento::append(discount_id)
+            .original_version(0)
+            .routing_key_opt(routing_key.clone())
+            .event(&Created {
+                code: code.clone(),
+                percent_bps,
+                amount_cents,
+                currency,
+                starts_at: cmd.starts_at,
+                ends_at: cmd.ends_at,
+                max_uses: cmd.max_uses,
+                once_per_email: cmd.once_per_email,
+                created_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        if let Err(WriteError::InvalidOriginalVersion) = created
+            && let Some(existing) = self.load_discount(discount_id).await?
+        {
+            return Ok(existing);
+        }
+        if let Err(err) = created {
+            if let Err(release) = self.release_code(&code, discount_id, routing_key).await {
+                tracing::warn!(%code, %release, "cannot give the code back after a failed creation");
+            }
+            return Err(err.into());
+        }
+
+        self.load_discount(discount_id)
+            .await?
+            .ok_or(DiscountError::NotFound)
     }
 }
