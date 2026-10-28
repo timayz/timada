@@ -229,3 +229,9 @@ pub fn opt_out_id_of_token(key: &[u8; 32], tenant_id: &str, token: &str) -> Opti
     opt_out_mac(key, tenant_id, id).verify_slice(&tag).ok()?;
     Some(id.to_owned())
 }
+
+/// The id of a checkout found left
+/// ([`AbandonedCheckout`](crate::aggregator::abandoned::AbandonedCheckout)).
+pub fn abandoned_checkout_id(cart_id: &str, request_id: &str) -> String {
+    evento::hash_ids(vec!["abandoned-checkout", cart_id, request_id])
+}

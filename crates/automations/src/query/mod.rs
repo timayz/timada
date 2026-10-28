@@ -5,12 +5,14 @@
 //! `automations_listeners`, kept by the subscription that starts them
 //! ([`listener_subscription`]).
 
+mod checkouts;
 mod listeners;
 mod migrations;
 mod read_model;
 mod runs;
 mod scenarios;
 
+pub use checkouts::*;
 pub use listeners::*;
 pub use migrations::*;
 pub use read_model::*;

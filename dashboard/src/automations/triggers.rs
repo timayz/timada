@@ -14,7 +14,8 @@ use evento::{
 };
 use sqlx::SqlitePool;
 use timada_automations::{
-    AUTOMATION_ACTOR, StartRun, catalog, listener_subscription, listeners_for,
+    AUTOMATION_ACTOR, StartRun, catalog, listener_subscription, listeners_for, record_checked_out,
+    record_checkout, record_detected,
 };
 
 /// The cursor identity of the subscription, in the store.
@@ -42,6 +43,9 @@ pub fn subscription<E: Executor>(read_models: SqlitePool, store: Evento) -> Subs
         .handler(on_review_submitted())
         .handler(on_review_published())
         .handler(on_message_received())
+        .handler(on_checkout_requested())
+        .handler(on_cart_checked_out())
+        .handler(on_checkout_abandoned())
         .any_routing_key()
         .retry(u8::MAX)
 }
@@ -229,6 +233,57 @@ async fn on_message_received<E: Executor>(
         catalog::MESSAGE_RECEIVED,
         event.id.to_string(),
         &event.aggregate_id,
+        event.timestamp,
+    )
+    .await
+}
+
+/// A cart asked to be paid for: the runner finds it left once no order
+/// followed within the delay.
+#[evento::subscription]
+async fn on_checkout_requested<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<timada_orders::aggregator::CheckoutRequested>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    record_checkout(
+        &pool,
+        &event.tenant,
+        &event.aggregate_id,
+        &event.data.request_id,
+        event.timestamp,
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn on_cart_checked_out<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<timada_orders::aggregator::CheckedOut>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    record_checked_out(&pool, &event.tenant, &event.aggregate_id).await
+}
+
+#[evento::subscription]
+async fn on_checkout_abandoned<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<timada_automations::aggregator::abandoned::Detected>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    record_detected(
+        &pool,
+        &event.tenant,
+        &event.data.cart_id,
+        &event.data.request_id,
+    )
+    .await?;
+    start(
+        context,
+        &event.tenant,
+        catalog::CHECKOUT_ABANDONED,
+        event.id.to_string(),
+        &event.data.cart_id,
         event.timestamp,
     )
     .await

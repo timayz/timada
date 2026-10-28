@@ -249,3 +249,30 @@ no redirect; a host that is not public is refused (unless
 or a 5xx is tried again (as for the codes); another answer fails the step.
 Publishing a scenario that calls webhooks needs `api-keys:manage`: like a key, it
 hands the shop's events to another system.
+
+## Abandoned checkouts
+
+**When a checkout is left unpaid** starts when a shopper gave their address to
+pay for a cart (`Cart::CheckoutRequested`) and no order followed within
+`[automations] abandoned_after_secs` (an hour unless set otherwise). Nothing in
+the store says "nothing happened", so:
+
+1. The subscription that starts runs also follows the carts: each request is
+   recorded in `automations_checkouts` (the latest one per cart), and a cart that
+   becomes an order (`Cart::CheckedOut`) is marked ordered there.
+2. Every look of the runner finds the requests older than the delay that no order
+   followed, in shops with a published scenario on this trigger, and checks each
+   against the cart itself (ordered since, or asked again: not left). It writes a
+   `timada-automations/AbandonedCheckout` stream (`Detected`, id hashed from the
+   cart and the request, at version 0), so a checkout is found left once whichever
+   node finds it. Requests older than three days past the delay start nothing.
+3. `Detected` is the trigger event: it starts the runs like the others, about the
+   cart.
+
+The run's subject is the cart: a condition sees its total (what the shopper was
+about to pay), its items and whether it was **ordered since**, read when the run
+reaches it, so "Wait 23 hours, then if not ordered since, e-mail a reminder" is a
+reminder a day later. A run whose cart becomes an order is cancelled before its
+next step. **E-mail the customer** goes to the address of the cart's latest
+request, as a mail with nothing of an order (`AutomationCustomer`); linking back
+to the cart itself is not offered yet.

@@ -25,6 +25,7 @@ pub const TRIGGER_GROUPS: [(&str, &[&str]); 3] = [
             catalog::ORDER_FULFILLED,
             catalog::ORDER_CANCELLED,
             catalog::ORDER_REFUNDED,
+            catalog::CHECKOUT_ABANDONED,
         ],
     ),
     (
@@ -70,6 +71,7 @@ pub fn trigger_label(kind: &str) -> &'static str {
         catalog::REVIEW_SUBMITTED => "When a review is submitted",
         catalog::REVIEW_PUBLISHED => "When a review is published",
         catalog::MESSAGE_RECEIVED => "When a contact message arrives",
+        catalog::CHECKOUT_ABANDONED => "When a checkout is left unpaid",
         _ => "An unknown trigger",
     }
 }
@@ -89,6 +91,9 @@ pub fn trigger_description(kind: &str) -> &'static str {
         catalog::REVIEW_SUBMITTED => "A buyer wrote a review; it waits for moderation.",
         catalog::REVIEW_PUBLISHED => "A review went public.",
         catalog::MESSAGE_RECEIVED => "A visitor wrote through the contact form.",
+        catalog::CHECKOUT_ABANDONED => {
+            "A shopper gave their address to pay, and no order followed within the hour. Add a Wait for a later reminder; a run stops once the cart is ordered."
+        }
         _ => "This build does not know this trigger.",
     }
 }
@@ -144,6 +149,7 @@ pub fn subject_kind(subject: Subject) -> &'static str {
         Subject::Subscriber => "Subscriber",
         Subject::Review => "Review",
         Subject::Message => "Message",
+        Subject::Cart => "Cart",
     }
 }
 
@@ -155,6 +161,7 @@ pub fn subject_label(subject: Subject) -> &'static str {
         Subject::Subscriber => "the subscriber",
         Subject::Review => "the review",
         Subject::Message => "the message",
+        Subject::Cart => "the cart",
     }
 }
 
@@ -235,6 +242,9 @@ pub fn field_label(key: &str) -> &'static str {
         "review.published" => "Published",
         "message.language" => "Language",
         "message.handled" => "Handled",
+        "cart.total" => "Cart total",
+        "cart.items" => "Number of items",
+        "cart.ordered" => "Ordered since",
         _ => "Unknown",
     }
 }
@@ -462,6 +472,7 @@ mod tests {
             Subject::Subscriber,
             Subject::Review,
             Subject::Message,
+            Subject::Cart,
         ] {
             for field in subject.fields() {
                 assert_ne!(field_label(field.key), "Unknown", "{}", field.key);

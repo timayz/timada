@@ -5,7 +5,7 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "automations";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Automations0001, Automations0002]
+    vec_box![Automations0001, Automations0002, Automations0003]
 }
 
 pub struct Automations0001;
@@ -95,6 +95,33 @@ sqlx_migrator::sqlite_migration!(
             "CREATE INDEX automations_listeners_trigger ON automations_listeners
                 (tenant_id, trigger, state)",
             "DROP INDEX automations_listeners_trigger"
+        ),
+    ]
+);
+
+pub struct Automations0003;
+sqlx_migrator::sqlite_migration!(
+    Automations0003,
+    "automations",
+    "0003_checkouts",
+    vec_box![Automations0002],
+    vec_box![
+        (
+            "CREATE TABLE automations_checkouts (
+                tenant_id TEXT NOT NULL,
+                cart_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                requested_at INTEGER NOT NULL,
+                ordered INTEGER NOT NULL,
+                detected INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, cart_id)
+            )",
+            "DROP TABLE automations_checkouts"
+        ),
+        (
+            "CREATE INDEX automations_checkouts_open ON automations_checkouts (requested_at)
+                WHERE ordered = 0 AND detected = 0",
+            "DROP INDEX automations_checkouts_open"
         ),
     ]
 );

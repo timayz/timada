@@ -145,6 +145,9 @@ dir = "data/shopper-keys"
 # runs_per_check = 200
 # # How long, in seconds, a scenario's webhook call may take.
 # webhook_timeout_secs = 10
+# # How long, in seconds, a checkout waits for its order before scenarios on
+# # "a checkout left unpaid" start (at least 60).
+# abandoned_after_secs = 3600
 
 # What storefronts may ask for their shoppers. A storefront has the shop mail
 # sign-in codes, hands in the messages of its contact form and the sign-ups

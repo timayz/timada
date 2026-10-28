@@ -21,6 +21,7 @@ event timada-aliexpress/Product::SyncFailed { reason: String, failed_by: String 
 event timada-aliexpress/Product::Synced { skus: Vec<SkuLink>, offline: bool, synced_by: String }
 event timada-aliexpress/Product::Unlinked { unlinked_by: String }
 event timada-aliexpress/TokenRefresh::Claimed { claimed_by: String }
+event timada-automations/AbandonedCheckout::Detected { cart_id: String, request_id: String, detected_by: String }
 event timada-automations/MailClaim::Claimed { scenario_id: String, claimed_by: String }
 event timada-automations/OptOut::OptedOut { opted_out_by: String }
 event timada-automations/OptOut::Withdrawn { withdrawn_by: String }
