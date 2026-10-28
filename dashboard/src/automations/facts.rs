@@ -94,6 +94,24 @@ pub async fn facts_of<E: evento::Executor + Clone>(
                 Fact::Bool(review.status == ReviewStatus::Published),
             );
         }
+        Subject::Cart => {
+            let orders = timada_orders::Command::new(store.clone(), tenant_id);
+            let Some(cart) = orders.load_cart(subject_id).await? else {
+                return Ok(facts);
+            };
+            if let Some(total) = cart
+                .requests
+                .last()
+                .and_then(|request| request.expected_total_cents)
+            {
+                facts.insert("cart.total", Fact::Cents(total));
+            }
+            facts.insert(
+                "cart.items",
+                Fact::Number(cart.lines.iter().map(|line| u64::from(line.quantity)).sum()),
+            );
+            facts.insert("cart.ordered", Fact::Bool(cart.order_id.is_some()));
+        }
         Subject::Message => {
             let support = timada_support::Command::new(store.clone(), tenant_id);
             let Some(message) = support.load_message(subject_id).await? else {

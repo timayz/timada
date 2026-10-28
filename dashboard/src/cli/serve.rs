@@ -170,6 +170,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         crate::seal::webhook_keys(&config),
         std::time::Duration::from_secs(config.automations.webhook_timeout_secs.max(1)),
         config.mail.allow_private_hosts,
+        std::time::Duration::from_secs(config.automations.abandoned_after_secs.max(60)),
         config.automations.runs_per_check,
     )
     .start(std::time::Duration::from_secs(

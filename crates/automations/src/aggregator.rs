@@ -153,3 +153,20 @@ pub mod mail_claim {
         },
     }
 }
+
+/// A checkout left unpaid, as the runner finds it.
+pub mod abandoned {
+    /// One checkout request of a cart that no order followed within the
+    /// operator's delay. Its id is
+    /// [`abandoned_checkout_id`](crate::abandoned_checkout_id) of the cart
+    /// and the request, so a checkout is found left once however many nodes
+    /// look; it is what starts the scenarios on that trigger.
+    #[evento::aggregate(name = "timada-automations/AbandonedCheckout")]
+    pub enum AbandonedCheckout {
+        Detected {
+            cart_id: String,
+            request_id: String,
+            detected_by: String,
+        },
+    }
+}
