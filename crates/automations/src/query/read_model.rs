@@ -1,5 +1,5 @@
-//! The subscription that keeps `automations_scenarios` current for every
-//! tenant.
+//! The subscription that keeps `automations_scenarios` and
+//! `automations_runs` current for every tenant.
 //!
 //! Each handler reloads the strict write model of the stream and rewrites
 //! its row, so delivery may repeat (the subscription is at-least-once)
@@ -14,8 +14,9 @@ use evento::{
 };
 use sqlx::SqlitePool;
 
+use crate::aggregator::run::Run as RunStream;
 use crate::aggregator::scenario::Scenario as ScenarioStream;
-use crate::command::{ScenarioState, scenario_projection};
+use crate::command::{RunState, ScenarioState, run_projection, scenario_projection};
 use crate::definition::Definition;
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -28,6 +29,7 @@ pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBui
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(pool)
         .handler(on_scenario_event())
+        .handler(on_run_event())
         .any_routing_key()
         .retry(u8::MAX)
 }
@@ -47,6 +49,51 @@ async fn on_scenario_event<E: Executor>(
         return Ok(());
     };
     upsert_scenario(&pool, &event.tenant, &state).await
+}
+
+#[evento::subscription_all]
+async fn on_run_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<RunStream>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let Some(state) = run_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_run(&pool, &event.tenant, &state).await
+}
+
+/// Writes the row of a run as the write model sees it: `next_at` is when
+/// the runner looks at it again, none once it ended.
+pub async fn upsert_run(pool: &SqlitePool, tenant_id: &str, run: &RunState) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO automations_runs (tenant_id, id, scenario_id, scenario_version, trigger,
+            subject_id, status, step, reason, next_at, started_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         ON CONFLICT (tenant_id, id) DO UPDATE SET
+            status = excluded.status, step = excluded.step, reason = excluded.reason,
+            next_at = excluded.next_at, updated_at = excluded.updated_at",
+    )
+    .bind(tenant_id)
+    .bind(&run.id)
+    .bind(&run.scenario_id)
+    .bind(i64::from(run.scenario_version))
+    .bind(&run.trigger)
+    .bind(&run.subject_id)
+    .bind(run.status.as_str())
+    .bind(run.log.last().map(|record| record.step.as_str()))
+    .bind(&run.reason)
+    .bind(run.next_at().map(|at| at as i64))
+    .bind(run.started_at as i64)
+    .bind(run.updated_at as i64)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Writes the row of a scenario as the write model sees it. The trigger and

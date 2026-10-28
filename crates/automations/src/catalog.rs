@@ -582,6 +582,78 @@ pub fn parse_condition(
     }
 }
 
+/// What a condition compares with, read from the subject when the run gets
+/// to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fact {
+    Cents(u64),
+    Number(u64),
+    Text(String),
+    Country(String),
+    Bool(bool),
+}
+
+/// The facts of a run's subject, by field key.
+pub type Facts = BTreeMap<&'static str, Fact>;
+
+impl Rule {
+    /// Whether the rule holds for `fact`; a fact the subject does not have
+    /// holds nothing.
+    pub fn holds(&self, fact: Option<&Fact>) -> bool {
+        let Some(fact) = fact else {
+            return false;
+        };
+        let compare = |left: u64, right: u64| match self.op {
+            Op::Eq => left == right,
+            Op::Ne => left != right,
+            Op::Gt => left > right,
+            Op::Ge => left >= right,
+            Op::Lt => left < right,
+            Op::Le => left <= right,
+            _ => false,
+        };
+        match (fact, &self.value) {
+            (Fact::Cents(left), RuleValue::Cents(right))
+            | (Fact::Number(left), RuleValue::Number(right)) => compare(*left, *right),
+            (Fact::Text(left), RuleValue::Text(right)) => {
+                let left = left.to_lowercase();
+                match self.op {
+                    Op::Eq => left == *right,
+                    Op::Ne => left != *right,
+                    Op::Contains => left.contains(right.as_str()),
+                    _ => false,
+                }
+            }
+            (Fact::Country(left), RuleValue::Country(right)) => match self.op {
+                Op::Eq => left.eq_ignore_ascii_case(right),
+                Op::Ne => !left.eq_ignore_ascii_case(right),
+                _ => false,
+            },
+            (Fact::Bool(value), RuleValue::None) => match self.op {
+                Op::IsTrue => *value,
+                Op::IsFalse => !*value,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+}
+
+impl ConditionSettings {
+    /// Whether the run goes down the Yes lane.
+    pub fn holds(&self, facts: &Facts) -> bool {
+        let mut results = self
+            .rules
+            .iter()
+            .map(|rule| rule.holds(facts.get(rule.field.key)));
+        if self.all {
+            results.all(|holds| holds)
+        } else {
+            results.any(|holds| holds)
+        }
+    }
+}
+
 /// A notice to the team, read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotifySettings {
@@ -738,6 +810,52 @@ mod tests {
             }]
         );
         assert!(step_issues(WAIT, None, &default_settings(WAIT, None)).is_empty());
+    }
+
+    #[test]
+    fn a_condition_holds_on_the_subjects_facts() {
+        let settings = map(&[
+            ("rules.0.field", "order.total"),
+            ("rules.0.op", "ge"),
+            ("rules.0.value", "50"),
+            ("rules.1.field", "order.country"),
+            ("rules.1.op", "eq"),
+            ("rules.1.value", "fr"),
+        ]);
+        let all = parse_condition(Some(Subject::Order), &settings).unwrap();
+        let mut facts = Facts::new();
+        facts.insert("order.total", Fact::Cents(6000));
+        facts.insert("order.country", Fact::Country("FR".into()));
+        assert!(all.holds(&facts));
+        facts.insert("order.total", Fact::Cents(4999));
+        assert!(!all.holds(&facts));
+        let mut settings = settings;
+        settings.insert("match".into(), "any".into());
+        let any = parse_condition(Some(Subject::Order), &settings).unwrap();
+        assert!(any.holds(&facts));
+        // A fact the subject lacks holds nothing.
+        facts.remove("order.country");
+        assert!(!any.holds(&facts));
+
+        let first = parse_condition(
+            Some(Subject::Order),
+            &map(&[("rules.0.field", "order.first"), ("rules.0.op", "false")]),
+        )
+        .unwrap();
+        facts.insert("order.first", Fact::Bool(false));
+        assert!(first.holds(&facts));
+        let language = parse_condition(
+            Some(Subject::Message),
+            &map(&[
+                ("rules.0.field", "message.language"),
+                ("rules.0.op", "eq"),
+                ("rules.0.value", "FR"),
+            ]),
+        )
+        .unwrap();
+        let mut facts = Facts::new();
+        facts.insert("message.language", Fact::Text("fr".into()));
+        assert!(language.holds(&facts));
     }
 
     #[test]

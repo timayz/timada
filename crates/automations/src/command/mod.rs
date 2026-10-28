@@ -4,10 +4,12 @@
 //! version it observes, and `write()` sends as `original_version`, never
 //! goes stale. None is snapshotted: a scenario is saved a handful of times.
 
+mod run;
 mod scenario;
 
 use std::ops::Deref;
 
+pub use run::*;
 pub use scenario::*;
 
 use evento::Executor;

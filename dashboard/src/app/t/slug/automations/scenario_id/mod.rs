@@ -9,6 +9,9 @@ pub mod archive;
 mod canvas;
 mod editor;
 mod inspector;
+pub mod pause;
+pub mod resume;
+pub mod runs;
 
 use timada_automations::{ScenarioState, ScenarioStatus};
 use timada_tenancy::{PERMISSION_AUTOMATIONS_MANAGE, PERMISSION_AUTOMATIONS_READ};
@@ -25,7 +28,7 @@ use topcoat::{
 };
 
 use self::canvas::{Canvas, editor_view};
-use self::editor::{Editor, EditorForm};
+use self::editor::{Commit, Editor, EditorForm};
 use super::labels::status_label;
 use super::{automations, automations_url};
 use crate::app::auth::Flash;
@@ -62,7 +65,7 @@ pub fn scenario_url(
 }
 
 /// The scenario the URL names, or 404.
-async fn require_scenario(access: &TenantAccess, cx: &Cx) -> Result<ScenarioState> {
+pub(crate) async fn require_scenario(access: &TenantAccess, cx: &Cx) -> Result<ScenarioState> {
     let id = path_param::<ScenarioId>(cx);
     automations(access)?
         .load_scenario(id)
@@ -123,25 +126,45 @@ pub async fn edit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> {
         .into_editor(&scenario)
         .map_err(topcoat::Error::from_anyhow)?;
     let mut error = None;
-    if editor.refusal.is_none() && editor.run(op) {
-        match automations(&access)?
-            .save_scenario(
-                &access.user_id,
-                &scenario.id,
-                editor.base,
-                &editor.name,
-                &editor.definition,
-            )
-            .await
-        {
-            Ok(changed) => {
-                let message = if changed {
-                    "Draft saved."
-                } else {
-                    "Nothing changed since the last save."
-                };
+    let commit = if editor.refusal.is_none() {
+        editor.run(op)
+    } else {
+        None
+    };
+    if let Some(commit) = commit {
+        let automations = automations(&access)?;
+        let written = match commit {
+            Commit::Save => automations
+                .save_scenario(
+                    &access.user_id,
+                    &scenario.id,
+                    editor.base,
+                    &editor.name,
+                    &editor.definition,
+                )
+                .await
+                .map(|changed| {
+                    if changed {
+                        "Draft saved.".to_owned()
+                    } else {
+                        "Nothing changed since the last save.".to_owned()
+                    }
+                }),
+            Commit::Publish => automations
+                .publish_scenario(
+                    &access.user_id,
+                    &scenario.id,
+                    editor.base,
+                    &editor.name,
+                    &editor.definition,
+                )
+                .await
+                .map(|version| format!("Published as version {version}: it runs from now on.")),
+        };
+        match written {
+            Ok(message) => {
                 return Err(
-                    see_other(scenario_url(cx, &slug, &scenario.id, None, Some(message))).into(),
+                    see_other(scenario_url(cx, &slug, &scenario.id, None, Some(&message))).into(),
                 );
             }
             Err(err) if err.is_user_facing() => error = err.code(),
@@ -168,6 +191,9 @@ pub async fn edit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> {
 struct Pages {
     edit: String,
     archive: String,
+    pause: String,
+    resume: String,
+    runs: String,
     back: String,
 }
 
@@ -178,6 +204,9 @@ impl Pages {
         Self {
             edit: href!(edit, Slug(slug.clone()), id()).resolve(cx),
             archive: href!(archive::archive, Slug(slug.clone()), id()).resolve(cx),
+            pause: href!(pause::pause, Slug(slug.clone()), id()).resolve(cx),
+            resume: href!(resume::resume, Slug(slug.clone()), id()).resolve(cx),
+            runs: href!(runs::index, Slug(slug.clone()), id()).resolve(cx),
             back: automations_url(cx, slug, None, None),
         }
     }
@@ -219,6 +248,19 @@ async fn scenario_page(
                 title: &scenario.name,
                 subtitle: Some(subtitle.as_str()),
                 <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(&pages.back)>"Back to Automations"</a>
+                if scenario.version > 0 {
+                    <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(&pages.runs)>"Runs"</a>
+                }
+                if manage && scenario.status == ScenarioStatus::Active {
+                    <form method="post" action=(&pages.pause)>
+                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Pause")
+                    </form>
+                }
+                if manage && scenario.status == ScenarioStatus::Paused {
+                    <form method="post" action=(&pages.resume)>
+                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Resume")
+                    </form>
+                }
                 if manage {
                     dropdown_menu(
                         dropdown_menu_trigger(
