@@ -40,7 +40,7 @@ use crate::components::textarea::textarea;
 use crate::media::Media;
 use crate::shop_mail::ShopMail;
 use crate::ui::{
-    LINK, Shell, Tone, document, fact, facts, format_time, icons, notice, page_header,
+    LINK, Shell, Tone, document, empty_row, fact, facts, format_time, icons, notice, page_header,
     section_card, status_badge,
 };
 
@@ -105,6 +105,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         "Add a server"
     };
     let full = servers.len() >= MAX_MAIL_SERVERS;
+    // The form below, while one more server can be added.
+    let add_link = (enabled && !full).then(|| ("Add a server", "#mail-add-server".to_owned()));
     let add_action = href!(servers::add::add, Slug(slug.clone())).resolve(cx);
     let blank = MailServerSettings {
         port: 587,
@@ -163,7 +165,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "mail"),
-            page_header(title: "Mail", subtitle: Some("The mails your shop sends its shoppers, and the server they go out through."))
+            page_header(title: "Mail", subtitle: Some("The servers your shop's mails go out through, and what those mails say."))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             if !enabled {
@@ -180,6 +182,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("Mail servers"),
                 description: Some("The servers your shop sends through, and which one sends what. Without one picked, the mails to your shoppers go out through the platform's server; marketing never does."),
+                action: add_link,
                 attrs: attributes! { data-mail-servers="" },
                 facts(
                     fact(
@@ -203,42 +206,43 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
-                if !servers.is_empty() {
-                    <div class="mt-4">
-                        table(
-                            table_header(
-                                table_row(
-                                    table_head("Name")
-                                    table_head("Sends from")
-                                    table_head("Host")
-                                    table_head("Picked for")
-                                )
-                            )
-                            table_body(
-                                for (server, shop_mails, marketing) in &servers {
-                                    table_row(
-                                        attrs: attributes! { data-mail-server-row=(&server.id) },
-                                        table_cell(
-                                            <a class=(LINK) href=(href!(servers::server_id::index, Slug(slug.clone()), servers::server_id::ServerId(server.id.clone())))>(server.label())</a>
-                                        )
-                                        table_cell((&server.from_address))
-                                        table_cell(<code>(&server.host) ":" (server.port)</code>)
-                                        table_cell(
-                                            <div class="flex flex-wrap gap-1">
-                                                if *shop_mails {
-                                                    status_badge(tone: Tone::Success, attrs: attributes! { data-sends="shop-mails" }, "Shop mails")
-                                                }
-                                                if *marketing {
-                                                    status_badge(tone: Tone::Info, attrs: attributes! { data-sends="marketing" }, "Marketing")
-                                                }
-                                            </div>
-                                        )
-                                    )
-                                }
+                <div class="mt-4">
+                    table(
+                        table_header(
+                            table_row(
+                                table_head("Name")
+                                table_head("Sends from")
+                                table_head("Host")
+                                table_head("Picked for")
                             )
                         )
-                    </div>
-                }
+                        table_body(
+                            if servers.is_empty() {
+                                empty_row(colspan: 4, text: "No server yet.")
+                            }
+                            for (server, shop_mails, marketing) in &servers {
+                                table_row(
+                                    attrs: attributes! { data-mail-server-row=(&server.id) },
+                                    table_cell(
+                                        <a class=(LINK) href=(href!(servers::server_id::index, Slug(slug.clone()), servers::server_id::ServerId(server.id.clone())))>(server.label())</a>
+                                    )
+                                    table_cell((&server.from_address))
+                                    table_cell(<code>(&server.host) ":" (server.port)</code>)
+                                    table_cell(
+                                        <div class="flex flex-wrap gap-1">
+                                            if *shop_mails {
+                                                status_badge(tone: Tone::Success, attrs: attributes! { data-sends="shop-mails" }, "Shop mails")
+                                            }
+                                            if *marketing {
+                                                status_badge(tone: Tone::Info, attrs: attributes! { data-sends="marketing" }, "Marketing")
+                                            }
+                                        </div>
+                                    )
+                                )
+                            }
+                        )
+                    )
+                </div>
             )
 
             if !servers.is_empty() {
@@ -277,6 +281,20 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             button(attrs: attributes! { type="submit" }, "Save choices")
                         </div>
                     </form>
+                )
+            }
+
+            if enabled && !full {
+                section_card(
+                    title: Some(add_title),
+                    description: Some("Your mail provider gives these settings for sending (SMTP). Saving sends a test mail through them first: they are kept only if it goes out."),
+                    attrs: attributes! { id="mail-add-server" class="scroll-mt-20" },
+                    servers::server_form(action: add_action, current: &blank, shop_name: &tenant.name, test_to: &test_to)
+                )
+            } else if enabled {
+                section_card(
+                    title: Some("Add a server"),
+                    <p class="text-sm text-muted-foreground">"Your shop keeps at most ten mail servers: delete one to add another."</p>
                 )
             }
 
@@ -399,18 +417,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
             )
 
-            if enabled && !full {
-                section_card(
-                    title: Some(add_title),
-                    description: Some("Your mail provider gives these settings for sending (SMTP). Saving sends a test mail through them first: they are kept only if it goes out."),
-                    servers::server_form(action: add_action, current: &blank, shop_name: &tenant.name, test_to: &test_to)
-                )
-            } else if enabled {
-                section_card(
-                    title: Some("Add a server"),
-                    <p class="text-sm text-muted-foreground">"Your shop keeps at most ten mail servers: delete one to add another."</p>
-                )
-            }
         )
     })
 }
