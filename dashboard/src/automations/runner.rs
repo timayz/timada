@@ -20,7 +20,8 @@ use timada_automations::{
     catalog::{self, CodeValue, DISCOUNT, EMAIL, NOTIFY, Subject, WEBHOOK},
     due_runs,
     interpreter::{self, Next, STUCK_SETTINGS, STUCK_UNKNOWN},
-    listener_of, normalize_email, opt_out_token, prune_runs, scenario_name,
+    left_checkouts, listener_of, normalize_email, opt_out_token, prune_checkouts, prune_runs,
+    scenario_name,
 };
 use timada_core::keys::KeyRing;
 use timada_identity::UserRow;
@@ -54,6 +55,10 @@ const MOVES_PER_LOOK: usize = 60;
 /// what it needs (its own mail server, its storefront's address) before
 /// the step fails, in seconds.
 const MAIL_HOLD_SECS: u64 = 3 * 24 * 60 * 60;
+/// How long after its delay a checkout left unpaid may still be found:
+/// older ones (a node away, the first look of a new scenario) start
+/// nothing.
+const LEFT_WINDOW_SECS: u64 = 3 * 24 * 60 * 60;
 
 /// What a step that acts did.
 enum Acted {
@@ -99,6 +104,9 @@ pub struct Runner<E = Executor> {
     /// Whether a webhook may call a host on this machine or network
     /// (development and tests only).
     allow_private_hosts: bool,
+    /// How long, in seconds, a checkout waits for its order before it is
+    /// found left.
+    abandoned_after: u64,
     runs_per_look: u32,
     definitions: Definitions,
 }
@@ -116,6 +124,7 @@ impl<E: Store> Runner<E> {
         webhooks: Option<WebhookKeys>,
         webhook_timeout: Duration,
         allow_private_hosts: bool,
+        abandoned_after: Duration,
         runs_per_look: u32,
     ) -> Arc<Self> {
         // rustls needs a process-wide crypto provider; installing twice is fine.
@@ -137,6 +146,7 @@ impl<E: Store> Runner<E> {
             webhooks,
             http,
             allow_private_hosts,
+            abandoned_after: abandoned_after.as_secs(),
             runs_per_look: runs_per_look.max(1),
             definitions: Definitions::default(),
         })
@@ -160,6 +170,9 @@ impl<E: Store> Runner<E> {
     /// the others still go.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
         prune_runs(&self.write_pool, now.saturating_sub(RUN_HISTORY_SECS)).await?;
+        if let Err(err) = self.find_left_checkouts(now).await {
+            tracing::error!(error = %err, "checkouts left unpaid not looked for");
+        }
         let mut tenants: HashMap<String, Option<TenantState>> = HashMap::new();
         for (tenant_id, run_id) in due_runs(&self.read_pool, now, self.runs_per_look).await? {
             if !tenants.contains_key(&tenant_id) {
@@ -511,6 +524,14 @@ impl<E: Store> Runner<E> {
                     None => None,
                 }
             }
+            Subject::Cart => {
+                let orders = timada_orders::Command::new(self.store.clone(), &tenant.id);
+                orders.load_cart(subject_id).await?.and_then(|cart| {
+                    cart.requests
+                        .last()
+                        .map(|request| (request.email.clone(), None))
+                })
+            }
             Subject::Message => {
                 let support = timada_support::Command::new(self.store.clone(), &tenant.id);
                 match support.load_message(subject_id).await? {
@@ -765,6 +786,36 @@ impl<E: Store> Runner<E> {
     }
 }
 
+impl<E: Store> Runner<E> {
+    /// Records the checkouts no order followed within the delay: each one
+    /// starts the scenarios on that trigger, once whichever node finds it.
+    async fn find_left_checkouts(&self, now: u64) -> anyhow::Result<()> {
+        let to = now.saturating_sub(self.abandoned_after);
+        let from = to.saturating_sub(LEFT_WINDOW_SECS);
+        prune_checkouts(&self.write_pool, from).await?;
+        for (tenant_id, cart_id, request_id) in
+            left_checkouts(&self.read_pool, from, to, self.runs_per_look).await?
+        {
+            let orders = timada_orders::Command::new(self.store.clone(), &tenant_id);
+            let Some(cart) = orders.load_cart(&cart_id).await? else {
+                continue;
+            };
+            // Ordered meanwhile, or asked again since: not left, or not yet.
+            let latest = cart
+                .requests
+                .last()
+                .map(|request| request.request_id.as_str());
+            if cart.order_id.is_some() || latest != Some(request_id.as_str()) {
+                continue;
+            }
+            timada_automations::Command::new(self.store.clone(), &tenant_id)
+                .detect_abandoned_checkout(AUTOMATION_ACTOR, &cart_id, &request_id)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
 /// `1000` basis points as `10`, `1250` as `12.5`.
 fn timada_core_percent(bps: u32) -> String {
     let whole = bps / 100;
@@ -801,6 +852,7 @@ fn read_permission(subject: Subject) -> &'static str {
         Subject::Subscriber => PERMISSION_NEWSLETTER_READ,
         Subject::Review => PERMISSION_REVIEWS_READ,
         Subject::Message => PERMISSION_SUPPORT_READ,
+        Subject::Cart => PERMISSION_ORDERS_READ,
     }
 }
 
@@ -813,6 +865,7 @@ pub fn subject_link(base_url: &str, slug: &str, subject: Subject, subject_id: &s
         Subject::Subscriber => format!("{base}/t/{slug}/newsletter"),
         Subject::Review => format!("{base}/t/{slug}/reviews"),
         Subject::Message => format!("{base}/t/{slug}/messages"),
+        Subject::Cart => format!("{base}/t/{slug}/carts"),
     }
 }
 
@@ -967,6 +1020,7 @@ mod tests {
             None,
             Duration::from_secs(5),
             true,
+            Duration::from_secs(3600),
             10,
         )
     }
@@ -1167,6 +1221,106 @@ mod tests {
         runner.advance(&shop(), &run.id, now + 3600).await.unwrap();
         let done = automations.load_run(&run.id).await.unwrap().unwrap();
         assert_eq!(done.status, RunStatus::Finished);
+    }
+
+    /// A cart of one published product whose shopper asked to pay.
+    async fn checkout_left(store: &Evento) -> String {
+        let catalog = timada_catalog::Command::new(store.clone(), TENANT);
+        let product = catalog
+            .create_product(
+                MEMBER,
+                timada_catalog::CreateProduct {
+                    name: "Cat bed".into(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap();
+        catalog
+            .price_product(MEMBER, &product.id, 2500, "EUR")
+            .await
+            .unwrap();
+        catalog.publish_product(MEMBER, &product.id).await.unwrap();
+        let orders = timada_orders::Command::new(store.clone(), TENANT);
+        let cart = orders.create_cart("storefront").await.unwrap();
+        orders
+            .add_to_cart(
+                "storefront",
+                &cart,
+                timada_orders::CartItem {
+                    product_id: product.id.clone(),
+                    variant_id: None,
+                    quantity: 2,
+                },
+            )
+            .await
+            .unwrap();
+        orders
+            .request_checkout(
+                "storefront",
+                &cart,
+                timada_orders::Checkout {
+                    email: "ada@example.org".into(),
+                    shipping: timada_orders::ShippingAddress {
+                        name: "Ada Lovelace".into(),
+                        line1: "1 rue de la Paix".into(),
+                        line2: None,
+                        postal_code: "75002".into(),
+                        city: "Paris".into(),
+                        country: "FR".into(),
+                        phone: None,
+                    },
+                    note: None,
+                    expected_total_cents: None,
+                    vat_number: None,
+                    billing: None,
+                    shipping_method: None,
+                    language: None,
+                    newsletter: false,
+                },
+            )
+            .await
+            .unwrap();
+        cart
+    }
+
+    #[tokio::test]
+    async fn a_checkout_left_unpaid_starts_a_run_once_its_delay_is_over() {
+        let (store, pool) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        let mut definition = Definition::default();
+        definition
+            .set_trigger(timada_automations::catalog::CHECKOUT_ABANDONED)
+            .unwrap();
+        let notify = definition
+            .insert(&Slot::new(Lane::Root, 0), NOTIFY)
+            .unwrap();
+        definition
+            .configure(&notify, settings(&[("subject", "A cart was left")]))
+            .unwrap();
+        publish(&store, &definition).await;
+        follow(&store, &pool).await;
+        let cart = checkout_left(&store).await;
+        follow(&store, &pool).await;
+
+        let runner = runner(&store, &pool, &keys);
+        let now = crate::auth::now();
+        // Within the hour: not left yet.
+        runner.sweep(now).await.unwrap();
+        follow(&store, &pool).await;
+        assert!(the_run(&store, &pool).await.is_none());
+        // The hour is over: found left once, whatever the looks.
+        runner.sweep(now + 3601).await.unwrap();
+        runner.sweep(now + 3602).await.unwrap();
+        follow(&store, &pool).await;
+        let run = the_run(&store, &pool).await.unwrap();
+        assert_eq!(run.trigger, timada_automations::catalog::CHECKOUT_ABANDONED);
+        assert_eq!(run.subject_id, cart);
+        catch_up(&store, &pool).await;
+        assert_eq!(
+            due_runs(&pool, now + 10_000_000, 10).await.unwrap().len(),
+            1
+        );
     }
 
     #[test]

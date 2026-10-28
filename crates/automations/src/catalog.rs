@@ -22,6 +22,8 @@ pub enum Subject {
     Review,
     /// A message sent through the shop's contact form.
     Message,
+    /// A cart whose checkout was left unpaid.
+    Cart,
 }
 
 impl Subject {
@@ -32,6 +34,7 @@ impl Subject {
             Self::Subscriber => "subscriber",
             Self::Review => "review",
             Self::Message => "message",
+            Self::Cart => "cart",
         }
     }
 
@@ -43,6 +46,7 @@ impl Subject {
             Self::Subscriber => SUBSCRIBER_FIELDS,
             Self::Review => REVIEW_FIELDS,
             Self::Message => MESSAGE_FIELDS,
+            Self::Cart => CART_FIELDS,
         }
     }
 
@@ -69,6 +73,9 @@ pub const REVIEW_SUBMITTED: &str = "review.submitted";
 pub const REVIEW_PUBLISHED: &str = "review.published";
 /// A visitor sent a message through the contact form.
 pub const MESSAGE_RECEIVED: &str = "message.received";
+/// A shopper asked to pay for a cart and no order followed within the
+/// operator's delay (an hour unless set otherwise).
+pub const CHECKOUT_ABANDONED: &str = "checkout.abandoned";
 
 /// A kind of trigger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +121,10 @@ pub const TRIGGERS: &[TriggerKind] = &[
     TriggerKind {
         key: MESSAGE_RECEIVED,
         subject: Subject::Message,
+    },
+    TriggerKind {
+        key: CHECKOUT_ABANDONED,
+        subject: Subject::Cart,
     },
 ];
 
@@ -277,6 +288,23 @@ const REVIEW_FIELDS: &[Field] = &[
     },
     Field {
         key: "review.published",
+        ty: FieldType::Bool,
+    },
+];
+
+const CART_FIELDS: &[Field] = &[
+    // What the shopper was about to pay.
+    Field {
+        key: "cart.total",
+        ty: FieldType::Money,
+    },
+    Field {
+        key: "cart.items",
+        ty: FieldType::Number,
+    },
+    // Ordered since (a reminder after a wait checks it).
+    Field {
+        key: "cart.ordered",
         ty: FieldType::Bool,
     },
 ];

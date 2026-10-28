@@ -1,9 +1,12 @@
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
+use crate::aggregator::abandoned::Detected;
 use crate::aggregator::mail_claim::Claimed;
 use crate::aggregator::opt_out::{OptedOut, Withdrawn};
 use crate::error::AutomationError;
-use crate::value_object::{mail_claim_id, normalize_email, opt_out_id, opt_out_id_of_token};
+use crate::value_object::{
+    abandoned_checkout_id, mail_claim_id, normalize_email, opt_out_id, opt_out_id_of_token,
+};
 
 /// The write model of an address on the opt-out list.
 #[evento::projection(id = id, name = "timada-automations/OptOutState")]
@@ -97,6 +100,33 @@ impl<E: Executor> super::Command<E> {
         {
             Ok(_) => Ok(true),
             // Moved at the same moment: as it stands now.
+            Err(WriteError::InvalidOriginalVersion) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Records that a cart's checkout request was left unpaid; whether this
+    /// caller recorded it (`false`: found already, by another node say).
+    pub async fn detect_abandoned_checkout(
+        &self,
+        actor: &str,
+        cart_id: &str,
+        request_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<bool, AutomationError> {
+        let detected = evento::append(abandoned_checkout_id(cart_id, request_id))
+            .original_version(0)
+            .routing_key_opt(routing_key)
+            .event(&Detected {
+                cart_id: cart_id.to_owned(),
+                request_id: request_id.to_owned(),
+                detected_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        match detected {
+            Ok(_) => Ok(true),
             Err(WriteError::InvalidOriginalVersion) => Ok(false),
             Err(err) => Err(err.into()),
         }
