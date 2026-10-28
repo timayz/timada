@@ -239,8 +239,12 @@ event timada-tenancy/Tenant::Created { slug: String, name: String, created_by: S
 event timada-tenancy/Tenant::MailBrandingCleared { cleared_by: String }
 event timada-tenancy/Tenant::MailBrandingSet { logo_file: Option<String>, logo_size: u64, accent: Option<String>, footer: Option<String>, set_by: String }
 event timada-tenancy/Tenant::MailLanguagesSet { default: String, others: Vec<String>, set_by: String }
+event timada-tenancy/Tenant::MailServerAdded { server_id: String, name: Option<String>, host: String, port: u16, security: String, username: Option<String>, password_sealed: Option<Vec<u8>>, from_address: String, from_name: Option<String>, added_by: String }
+event timada-tenancy/Tenant::MailServerChanged { server_id: String, name: Option<String>, host: String, port: u16, security: String, username: Option<String>, password_sealed: Option<Vec<u8>>, from_address: String, from_name: Option<String>, changed_by: String }
 event timada-tenancy/Tenant::MailServerConfigured { host: String, port: u16, security: String, username: Option<String>, password_sealed: Option<Vec<u8>>, from_address: String, from_name: Option<String>, configured_by: String }
+event timada-tenancy/Tenant::MailServerDeleted { server_id: String, deleted_by: String }
 event timada-tenancy/Tenant::MailServerRemoved { removed_by: String }
+event timada-tenancy/Tenant::MailServersPicked { shop_mails: Option<String>, marketing: Option<String>, picked_by: String }
 event timada-tenancy/Tenant::MailTemplateReset { mail: String, reset_by: String }
 event timada-tenancy/Tenant::MailTemplateResetIn { mail: String, language: String, reset_by: String }
 event timada-tenancy/Tenant::MailTemplateSaved { mail: String, subject: String, html: String, saved_by: String }

@@ -97,6 +97,52 @@ pub enum Tenant {
     MailServerRemoved {
         removed_by: String,
     },
+    /// One more of the merchant's own mail servers, `server_id` among the
+    /// shop's (a ULID). The two events above are the one server a shop had
+    /// before it could have several. The password is sealed by the host.
+    MailServerAdded {
+        server_id: String,
+        /// The merchant's name for it; `None` shows it by its address.
+        name: Option<String>,
+        host: String,
+        port: u16,
+        /// `tls` (implicit TLS), `starttls` or `none`.
+        security: String,
+        username: Option<String>,
+        password_sealed: Option<Vec<u8>>,
+        from_address: String,
+        /// The display name; `None` is the tenant's name.
+        from_name: Option<String>,
+        added_by: String,
+    },
+    /// Replaces everything one of the shop's servers was.
+    MailServerChanged {
+        server_id: String,
+        name: Option<String>,
+        host: String,
+        port: u16,
+        security: String,
+        username: Option<String>,
+        password_sealed: Option<Vec<u8>>,
+        from_address: String,
+        from_name: Option<String>,
+        changed_by: String,
+    },
+    /// One of the shop's servers is gone; what it was picked for goes back
+    /// to no server picked.
+    MailServerDeleted {
+        server_id: String,
+        deleted_by: String,
+    },
+    /// Which of the shop's servers sends what. `shop_mails`: its mails to
+    /// its shoppers (`None`: the platform's server, under the shop's name).
+    /// `marketing`: its newsletter campaigns and automated mails (`None`:
+    /// none go out, they never go through the platform's server).
+    MailServersPicked {
+        shop_mails: Option<String>,
+        marketing: Option<String>,
+        picked_by: String,
+    },
     /// The merchant's own wording of one of the shop's mails to its
     /// shoppers. `mail` is a [`ShopMailKind`](crate::ShopMailKind) key;
     /// `subject` and `html` are templates over that mail's variables.

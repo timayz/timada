@@ -224,8 +224,10 @@ pub fn describe_error(code: &str) -> &'static str {
         "payments_disabled" => "Payments are not enabled on this platform.",
         "mail_servers_disabled" => "Shop mail servers are not enabled on this platform.",
         "invalid_mail_server" => {
-            "Give the server's name, a port from 1 to 65535 and how the connection is secured."
+            "Give the server's host name, a port from 1 to 65535 and how the connection is secured, and a name of at most 80 characters."
         }
+        "too_many_mail_servers" => "A shop keeps at most ten mail servers: delete one first.",
+        "mail_server_not_found" => "This mail server is no longer set up.",
         "mail_server_not_public" => {
             "This server is not reachable from the internet: give your provider's public server name."
         }
@@ -241,7 +243,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_mail_template" => "The mail was not saved: fix the template and try again.",
         "mail_test_failed" => "The test mail did not go out: check the shop's mail server.",
         "mail_server_required" => {
-            "Newsletters go out through the shop's own mail server only, never the platform's: set one up on the Mail page first."
+            "Marketing goes out through the shop's own mail server only, never the platform's: add one on the Mail page and pick it for marketing."
         }
         "payments_unavailable" => "This tenant has no payments set up.",
         "refund_failed" => {
@@ -353,7 +355,7 @@ pub fn describe_permission(permission: &str) -> &'static str {
         }
         "customers:read" => "See the shop's customer accounts",
         "customers:manage" => "Delete shopper accounts (includes seeing them)",
-        "mail:manage" => "Set up the mail server the shop's mails go out through",
+        "mail:manage" => "Set up the mail servers the shop's mails go out through",
         "shipping:manage" => "Set up the ways the shop ships and what they cost",
         "support:read" => "See the messages shoppers sent through the contact form",
         "support:manage" => "Mark messages handled and reopen them (includes seeing them)",

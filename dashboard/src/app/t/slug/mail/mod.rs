@@ -1,21 +1,19 @@
-//! `/t/{slug}/mail`: the mail server the shop's mails to its shoppers go
-//! out through, for members with `mail:manage`. Without one they go out
-//! through the platform's server, under the shop's name; the newsletter is
-//! the exception, it only ever goes out through the shop's own server.
-//! Saving sends a test mail through the new settings first: what cannot
-//! deliver is not kept.
+//! `/t/{slug}/mail`, for members with `mail:manage`: the shop's own mail
+//! servers and which one sends what, then the wording and look of its
+//! mails. The mails to its shoppers go out through the server picked for
+//! them, else through the platform's server under the shop's name; its
+//! marketing only ever goes out through the server picked for it.
 
 pub mod branding;
-pub mod configure;
 pub mod languages;
-pub mod remove;
+pub mod servers;
 pub mod templates;
 
 use std::sync::Arc;
 
 use timada_identity::UserState;
 use timada_tenancy::{
-    LANGUAGES, MAIL_SECURITY_NONE, MAIL_SECURITY_STARTTLS, MAIL_SECURITY_TLS, MAX_MAIL_FOOTER_LEN,
+    LANGUAGES, MAIL_SECURITY_STARTTLS, MAX_MAIL_FOOTER_LEN, MAX_MAIL_SERVERS, MailServerSettings,
     PERMISSION_MAIL_MANAGE, ShopMailKind, language_name,
 };
 use topcoat::{
@@ -35,11 +33,15 @@ use crate::components::checkbox::checkbox;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::components::textarea::textarea;
 use crate::media::Media;
 use crate::shop_mail::ShopMail;
 use crate::ui::{
-    LINK, Shell, document, fact, facts, format_time, icons, notice, page_header, section_card,
+    LINK, Shell, Tone, document, fact, facts, format_time, icons, notice, page_header,
+    section_card, status_badge,
 };
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -68,16 +70,6 @@ pub fn own_address(user: &UserState) -> String {
         .unwrap_or_default()
 }
 
-/// How a connection is secured, as the form names it.
-fn security_label(security: &str) -> &'static str {
-    match security {
-        MAIL_SECURITY_TLS => "TLS",
-        MAIL_SECURITY_STARTTLS => "STARTTLS",
-        MAIL_SECURITY_NONE => "None",
-        _ => "Unknown",
-    }
-}
-
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let access = require_tenant(cx).await?;
@@ -91,18 +83,34 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let TenantAccess { tenant, .. } = access;
     let enabled = app_context::<ShopMail>(cx).enabled();
     let slug = tenant.slug.clone();
-    let settings = tenant.mail_server.clone();
     let title = format!("Mail · {}", tenant.name);
-    let current = settings.clone().unwrap_or_default();
-    let port = settings
-        .as_ref()
-        .map_or_else(|| "587".to_owned(), |settings| settings.port.to_string());
-    let security = if settings.is_some() {
-        current.security.clone()
+    // What goes out through which server here: with shop servers off, the
+    // shop's mails through the platform's and no marketing.
+    let shop_mails = tenant.shop_mails_server().filter(|_| enabled).cloned();
+    let marketing = tenant.marketing_server().filter(|_| enabled).cloned();
+    // What the merchant picked, for the form.
+    let picked_shop_mails = tenant.shop_mails_server().map(|server| server.id.clone());
+    let picked_marketing = tenant.marketing_server().map(|server| server.id.clone());
+    let servers: Vec<(MailServerSettings, bool, bool)> = tenant
+        .mail_servers
+        .iter()
+        .map(|server| {
+            let (shop_mails, marketing) = servers::picked_for(&tenant, &server.id);
+            (server.clone(), shop_mails, marketing)
+        })
+        .collect();
+    let add_title = if servers.is_empty() {
+        "Send from your own server"
     } else {
-        MAIL_SECURITY_STARTTLS.to_owned()
+        "Add a server"
     };
-    let has_password = current.password_sealed.is_some();
+    let full = servers.len() >= MAX_MAIL_SERVERS;
+    let add_action = href!(servers::add::add, Slug(slug.clone())).resolve(cx);
+    let blank = MailServerSettings {
+        port: 587,
+        security: MAIL_SECURITY_STARTTLS.to_owned(),
+        ..Default::default()
+    };
     let shop_languages: Vec<String> = tenant
         .mail_languages()
         .into_iter()
@@ -151,12 +159,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         })
         .collect();
 
-    let server_title = if settings.is_some() {
-        "Change the server"
-    } else {
-        "Send from your own server"
-    };
-
     Ok(view! {
         document(
             title: &title,
@@ -176,33 +178,107 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
 
             section_card(
-                title: Some("Mail server"),
-                if let Some(settings) = &settings {
-                    <div class="mb-4" data-mail-server="own">
-                        facts(
-                            fact(term: "Server", <code data-mail-host="">(&settings.host) ":" (settings.port)</code>)
-                            fact(term: "Security", (security_label(&settings.security)))
-                            fact(term: "User name", (settings.username.as_deref().unwrap_or("None")))
-                            fact(term: "Password", (if settings.password_sealed.is_some() { "Saved, never shown again" } else { "None" }))
-                            fact(
-                                term: "Sent from",
-                                attrs: attributes! { data-mail-from="" },
-                                (settings.from_name.as_deref().unwrap_or(&tenant.name))
-                                " <" (&settings.from_address) ">"
+                title: Some("Mail servers"),
+                description: Some("The servers your shop sends through, and which one sends what. Without one picked, the mails to your shoppers go out through the platform's server; marketing never does."),
+                attrs: attributes! { data-mail-servers="" },
+                facts(
+                    fact(
+                        term: "Shop mails go out through",
+                        attrs: attributes! { data-mail-server=(if shop_mails.is_some() { "own" } else { "platform" }) },
+                        if let Some(server) = &shop_mails {
+                            <span data-mail-from="">(server.from_name.as_deref().unwrap_or(&tenant.name)) " <" (&server.from_address) ">"</span>
+                            " · " <code data-mail-host="">(&server.host) ":" (server.port)</code>
+                        } else {
+                            "The platform's server, under the name " <strong>(&tenant.name)</strong>
+                        }
+                    )
+                    fact(
+                        term: "Marketing goes out through",
+                        attrs: attributes! { data-mail-marketing=(if marketing.is_some() { "own" } else { "none" }) },
+                        if let Some(server) = &marketing {
+                            (server.from_name.as_deref().unwrap_or(&tenant.name)) " <" (&server.from_address) ">"
+                            " · " <code>(&server.host) ":" (server.port)</code>
+                        } else {
+                            "No server: newsletter campaigns and automated mails wait until you pick one."
+                        }
+                    )
+                )
+                if !servers.is_empty() {
+                    <div class="mt-4">
+                        table(
+                            table_header(
+                                table_row(
+                                    table_head("Name")
+                                    table_head("Sends from")
+                                    table_head("Host")
+                                    table_head("Picked for")
+                                )
                             )
-                            fact(term: "Since", <time datetime=(settings.configured_at)>(format_time(settings.configured_at))</time>)
+                            table_body(
+                                for (server, shop_mails, marketing) in &servers {
+                                    table_row(
+                                        attrs: attributes! { data-mail-server-row=(&server.id) },
+                                        table_cell(
+                                            <a class=(LINK) href=(href!(servers::server_id::index, Slug(slug.clone()), servers::server_id::ServerId(server.id.clone())))>(server.label())</a>
+                                        )
+                                        table_cell((&server.from_address))
+                                        table_cell(<code>(&server.host) ":" (server.port)</code>)
+                                        table_cell(
+                                            <div class="flex flex-wrap gap-1">
+                                                if *shop_mails {
+                                                    status_badge(tone: Tone::Success, attrs: attributes! { data-sends="shop-mails" }, "Shop mails")
+                                                }
+                                                if *marketing {
+                                                    status_badge(tone: Tone::Info, attrs: attributes! { data-sends="marketing" }, "Marketing")
+                                                }
+                                            </div>
+                                        )
+                                    )
+                                }
+                            )
                         )
                     </div>
-                    <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
-                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Use the platform's server")
-                    </form>
-                } else {
-                    <p class="text-sm text-muted-foreground" data-mail-server="platform">
-                        "Not set up: your order confirmations, review requests and sign-in codes go out through the platform's server, under the name "
-                        <strong class="text-foreground">(&tenant.name)</strong> ". Newsletter campaigns never do: they wait until the shop has a server of its own."
-                    </p>
                 }
             )
+
+            if !servers.is_empty() {
+                section_card(
+                    title: Some("Which server sends what"),
+                    description: Some("The mails to your shoppers can go through any of your servers, or the platform's. Marketing only ever goes through one of yours."),
+                    attrs: attributes! { data-mail-picks="" },
+                    <form method="post" action=(href!(servers::pick::pick, Slug(slug.clone()))) class="grid max-w-3xl gap-4 md:grid-cols-2">
+                        field(
+                            field_label(attrs: attributes! { for="mail-shop-mails" }, "Shop mails go through")
+                            select(
+                                attrs: attributes! { id="mail-shop-mails" name="shop_mails" },
+                                <option value=(servers::pick::PLATFORM) selected=(picked_shop_mails.is_none())>"The platform's server, under the shop's name"</option>
+                                for (server, _, _) in &servers {
+                                    <option value=(&server.id) selected=(picked_shop_mails.as_deref() == Some(server.id.as_str()))>
+                                        (server.label()) " · " (&server.host)
+                                    </option>
+                                }
+                            )
+                            <p class="text-sm text-muted-foreground">"Order confirmations, review requests, sign-in codes and newsletter confirmations."</p>
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="mail-marketing" }, "Marketing goes through")
+                            select(
+                                attrs: attributes! { id="mail-marketing" name="marketing" },
+                                <option value=(servers::pick::NONE) selected=(picked_marketing.is_none())>"None: campaigns and automated mails wait"</option>
+                                for (server, _, _) in &servers {
+                                    <option value=(&server.id) selected=(picked_marketing.as_deref() == Some(server.id.as_str()))>
+                                        (server.label()) " · " (&server.host)
+                                    </option>
+                                }
+                            )
+                            <p class="text-sm text-muted-foreground">"Newsletter campaigns and the automated mails of your scenarios."</p>
+                        )
+                        <div class="md:col-span-2">
+                            button(attrs: attributes! { type="submit" }, "Save choices")
+                        </div>
+                    </form>
+                )
+            }
 
             section_card(
                 title: Some("Languages"),
@@ -323,74 +399,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
             )
 
-            if enabled {
+            if enabled && !full {
                 section_card(
-                    title: Some(server_title),
+                    title: Some(add_title),
                     description: Some("Your mail provider gives these settings for sending (SMTP). Saving sends a test mail through them first: they are kept only if it goes out."),
-                    <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="grid max-w-3xl gap-4 md:grid-cols-2">
-                        field(
-                            field_label(attrs: attributes! { for="mail-host" }, "Server")
-                            input(attrs: attributes! {
-                                id="mail-host" name="host" required="" maxlength="253" placeholder="smtp.example.com" value=(&current.host) class="font-mono"
-                            })
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="mail-port" }, "Port")
-                            input(attrs: attributes! {
-                                id="mail-port" name="port" type="number" min="1" max="65535" required="" value=(&port) class="font-mono"
-                            })
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="mail-security" }, "Security")
-                            select(
-                                attrs: attributes! { id="mail-security" name="security" },
-                                for (value, label) in [
-                                    (MAIL_SECURITY_STARTTLS, "STARTTLS (usually port 587)"),
-                                    (MAIL_SECURITY_TLS, "TLS (usually port 465)"),
-                                    (MAIL_SECURITY_NONE, "None (not encrypted)"),
-                                ] {
-                                    <option value=(value) selected=(security == value)>(label)</option>
-                                }
-                            )
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="mail-username" }, "User name")
-                            input(attrs: attributes! {
-                                id="mail-username" name="username" maxlength="254" autocomplete="off"
-                                value=(current.username.as_deref().unwrap_or_default()) class="font-mono"
-                            })
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="mail-password" }, "Password")
-                            input(attrs: attributes! {
-                                id="mail-password" name="password" type="password" autocomplete="off"
-                                placeholder=(if has_password { "Leave blank to keep the saved one" } else { "" }) class="font-mono"
-                            })
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="mail-from-address" }, "Send from address")
-                            input(attrs: attributes! {
-                                id="mail-from-address" name="from_address" type="email" required="" maxlength="254"
-                                placeholder="orders@example.com" value=(&current.from_address)
-                            })
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="mail-from-name" }, "Send from name")
-                            input(attrs: attributes! {
-                                id="mail-from-name" name="from_name" maxlength="80" placeholder=(&tenant.name)
-                                value=(current.from_name.as_deref().unwrap_or_default())
-                            })
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="mail-test-to" }, "Send the test mail to")
-                            input(attrs: attributes! {
-                                id="mail-test-to" name="test_to" type="email" required="" maxlength="254" value=(&test_to)
-                            })
-                        )
-                        <div class="md:col-span-2">
-                            button(attrs: attributes! { type="submit" }, "Test and save")
-                        </div>
-                    </form>
+                    servers::server_form(action: add_action, current: &blank, shop_name: &tenant.name, test_to: &test_to)
+                )
+            } else if enabled {
+                section_card(
+                    title: Some("Add a server"),
+                    <p class="text-sm text-muted-foreground">"Your shop keeps at most ten mail servers: delete one to add another."</p>
                 )
             }
         )

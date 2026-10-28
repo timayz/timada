@@ -29,7 +29,7 @@ use timada_tenancy::{
 use crate::auth::cookies::EmailFlowKind;
 use crate::config;
 use crate::media::Media;
-use crate::shop_mail::{ShopSender, own_shop_sender, shop_sender};
+use crate::shop_mail::{NoMarketingServer, ShopMail, ShopSender, shop_sender};
 
 /// Who the codes come from (`mail.from`).
 #[derive(Debug, Clone)]
@@ -157,9 +157,9 @@ pub async fn send_automation_notice(
 /// shop has one and in the built-in one otherwise. The wording is the
 /// shopper's `language`'s when the shop mails in it and worded the mail,
 /// else the default language's ([`TenantState::mail_template_for`]). The
-/// mail speaks for the shop, not for the platform: it comes from the
-/// shop's own server and address when it has one, under the shop's name in
-/// any case.
+/// mail speaks for the shop, not for the platform: it comes through the
+/// server the shop picked for its mails to shoppers, from that server's
+/// address, when it picked one, under the shop's name in any case.
 ///
 /// A merchant's template that fails to render (it was checked when saved,
 /// but an order may hold what the sample did not) is logged and the
@@ -474,16 +474,20 @@ pub fn render_campaign(
     Ok(rendered)
 }
 
-/// The shop's sender for its marketing: its own server, never the
-/// platform's. `None` when it has none, and nothing may go out.
+/// The shop's sender for its marketing: the server it picked for it, never
+/// the platform's. `None` when it picked none, and nothing may go out.
 pub async fn marketing_sender(cx: &Cx, shop: &TenantState) -> anyhow::Result<Option<ShopSender>> {
-    own_shop_sender(cx, shop).await
+    match app_context::<ShopMail>(cx).marketing_sender_of(shop).await {
+        Ok(sender) => Ok(Some(sender)),
+        Err(err) if err.is::<NoMarketingServer>() => Ok(None),
+        Err(err) => Err(err),
+    }
 }
 
-/// Mails a campaign to one subscriber through `sender` (the shop's own
-/// server, see [`marketing_sender`]), with the headers that let their mail
-/// client offer a one-click unsubscribe (RFC 8058): a POST to
-/// `unsubscribe_url` takes them off the list.
+/// Mails a campaign to one subscriber through `sender` (the server the
+/// shop picked for its marketing, see [`marketing_sender`]), with the
+/// headers that let their mail client offer a one-click unsubscribe
+/// (RFC 8058): a POST to `unsubscribe_url` takes them off the list.
 pub async fn send_campaign(
     cx: &Cx,
     sender: &ShopSender,
@@ -589,10 +593,10 @@ pub fn render_automated(copy: &CampaignCopy<'_>, vars: &MailVars) -> anyhow::Res
     Ok(rendered)
 }
 
-/// Mails an automated mail through `sender` (the shop's own server, see
-/// [`marketing_sender`]), with the headers that let a mail client offer a
-/// one-click stop (RFC 8058): a POST to `unsubscribe_url` puts the address
-/// on the shop's opt-out list.
+/// Mails an automated mail through `sender` (the server the shop picked for
+/// its marketing, see [`marketing_sender`]), with the headers that let a
+/// mail client offer a one-click stop (RFC 8058): a POST to
+/// `unsubscribe_url` puts the address on the shop's opt-out list.
 pub async fn send_automated(
     cx: &Cx,
     sender: &ShopSender,

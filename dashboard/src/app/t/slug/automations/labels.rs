@@ -183,7 +183,7 @@ pub fn step_description(kind: &str) -> &'static str {
         CONDITION => "Check rules, then go down the Yes or the No lane, each to its own end.",
         NOTIFY => "Mail the members who may see what started the run.",
         EMAIL => {
-            "Mail the buyer, customer or visitor the run is about, from the shop's own server."
+            "Mail the buyer, customer or visitor the run is about, through the server the shop picked for marketing."
         }
         DISCOUNT => "Make a single-use code that a mail after it can quote.",
         WEBHOOK => "Post what started the run to your own app or another service, signed.",

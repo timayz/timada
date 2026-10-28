@@ -5,23 +5,28 @@ The dashboard sends two kinds of mail.
 - **Platform mail**: sign-up, sign-in and password-reset codes, and invitations to
   join a tenant. It always goes through the `[mail]` server, from `mail.from`.
 - **Shop mail**: what a shop sends its shoppers, meaning order confirmations, review
-  requests and storefront sign-in codes. It goes through the shop's own server when
-  the merchant set one up, and through the `[mail]` server otherwise. The sender's
-  name is the shop's either way.
+  requests, storefront sign-in codes and newsletter confirmations. It goes through the
+  server the merchant picked for shop mails, and through the `[mail]` server when none
+  is picked. The sender's name is the shop's either way.
 - **Marketing**: the shop's newsletter campaigns, and the test mail a merchant sends
-  themself while writing one. They go through the shop's own server only, never the
-  `[mail]` server: a shop without one cannot send a campaign (the send page and the
-  test refuse with `mail_server_required`), and one sent before the server was
-  removed waits, with nobody claimed, until a server is set up again.
+  themself while writing one. They go through the server the merchant picked for
+  marketing only, never the `[mail]` server: a shop with none picked cannot send a
+  campaign (the send page and the test refuse with `mail_server_required`), and one
+  sent before its server was deleted waits, with nobody claimed, until a server is
+  picked again.
 
 - **Automated mails** of the shop's automation scenarios (see
-  `docs/automations.md`) are marketing too: the shop's own server only, each with
-  a link that stops them.
+  `docs/automations.md`) are marketing too: the server picked for marketing only,
+  each with a link that stops them.
 
-## A shop's own server
+## A shop's own servers
 
-Members with `mail:manage` set it up on `/t/{slug}/mail`. The form takes:
+Members with `mail:manage` set them up on `/t/{slug}/mail`, up to ten per shop, so
+that, say, order mails and newsletters go out through different providers. The form
+takes:
 
+- an optional name to tell the servers apart (without one, a server goes by its
+  address);
 - the host and port;
 - the security: STARTTLS, implicit TLS or none;
 - an optional user name and password;
@@ -30,13 +35,26 @@ Members with `mail:manage` set it up on `/t/{slug}/mail`. The form takes:
 
 Saving sends a test mail through the new settings to the address given in the form,
 which is prefilled with the member's own. The settings are recorded only if that mail
-goes out. Leaving the password blank keeps the saved one, as long as the user name
-stays the same. "Use the platform's server" removes the settings.
+goes out. Each server has its own page, where it is changed the same way (through a
+test mail) or deleted. Leaving the password blank keeps the saved one, as long as both
+the host and the user name stay the same: a saved password is never sent to another
+server.
 
-A shop whose server stops accepting mail does not fall back to the platform's server.
-The send fails and is logged, so a broken setup shows instead of being hidden. Order
-confirmations and review requests are claimed before they are sent, so one that fails
-is not retried.
+"Which server sends what" picks, among the shop's servers:
+
+- the one shop mails go through, or the platform's server;
+- the one marketing goes through, or none, and then no marketing goes out.
+
+The first server a shop adds is picked for both; a later one sends nothing until
+picked. Deleting a server leaves what it was picked for without one: shop mails then
+go out through the platform's server, and marketing waits. A server set up before shops
+could have several is listed as their first, picked for both.
+
+A server switched for marketing while a campaign goes out sends its next batches. A
+shop whose server stops accepting mail does not fall back to another one, nor to the
+platform's server. The send fails and is logged, so a broken setup shows instead of
+being hidden. Order confirmations and review requests are claimed before they are sent,
+so one that fails is not retried.
 
 ## A shop's own wording
 
@@ -48,7 +66,8 @@ shoppers" on `/t/{slug}/mail`. Each mail has an editor per language the shop mai
 - an optional plain-text version, for mail apps that show no HTML. Left empty, it is
   derived from the HTML;
 - a preview with made-up data, plain text included;
-- "Send me a test", which mails the draft to the member through the shop's server;
+- "Send me a test", which mails the draft to the member through the server picked for
+  shop mails;
 - a history of who saved or reset the mail, and when.
 
 A mail the merchant has not changed, or has reset, goes out in the built-in wording.
