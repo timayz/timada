@@ -52,7 +52,8 @@ async fn a_scenario_is_drafted_then_published_as_numbered_versions() {
 
     // A change saved after publishing waits for the next version.
     let mut changed = definition.clone();
-    changed.insert(&root(1), WAIT).unwrap();
+    let condition = changed.steps[0].id.clone();
+    changed.insert(&branch(&condition, 1, 0), WAIT).unwrap();
     let base = state.aggregate_version().unwrap();
     automations
         .save_scenario(ALICE, &id, base, "Large orders", &changed)

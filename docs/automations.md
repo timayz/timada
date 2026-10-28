@@ -3,7 +3,9 @@
 A shop's team draws *scenarios*: when something happens in the shop (the
 **trigger**), do these **steps**. The steps form a tree: a lane under the
 trigger, and a condition holding a Yes lane and a No lane of steps of its own.
-Both lanes go on to the steps under the condition.
+A condition ends its lane: the run goes down its Yes or its No lane, each to
+its own end, and nothing comes after it. A condition put between two steps
+takes the steps after it into its Yes lane.
 
 This page covers how a scenario is kept and edited. What runs it comes with
 the runs.

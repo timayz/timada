@@ -376,9 +376,18 @@ impl Editor {
         }
     }
 
-    /// Whether a block being moved or put down may go to `slot`: not inside
-    /// itself, and not right next to where it already is.
+    /// Whether a block being moved or put down may go to `slot`: not after
+    /// an If / else, not inside itself, and not right next to where it
+    /// already is.
     pub fn takes(&self, slot: &Slot) -> bool {
+        let after_branch = slot
+            .index
+            .checked_sub(1)
+            .and_then(|before| self.definition.lane(&slot.lane)?.get(before))
+            .is_some_and(|step| step.ends_lane());
+        if after_branch {
+            return false;
+        }
         match &self.moving {
             None => false,
             Some(Moving::Kind(_)) => true,
@@ -468,10 +477,10 @@ mod tests {
 
         editor.run(Op::Add(root(1), CONDITION.into()));
         editor.run(Op::Pick("s1".into()));
-        // Not next to where it is, nor inside itself.
+        // Not next to where it is, nor after an If / else, nor inside itself.
         assert!(!editor.takes(&root(0)));
         assert!(!editor.takes(&root(1)));
-        assert!(editor.takes(&root(2)));
+        assert!(!editor.takes(&root(2)));
         editor.run(Op::Drop(Slot::new(
             Lane::Branch {
                 step: "s2".into(),

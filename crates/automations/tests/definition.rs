@@ -2,13 +2,23 @@ mod common;
 
 use common::*;
 use timada_automations::{
-    Definition, EditError, Lane, MAX_DEPTH, MAX_STEPS, PROBLEM_NO_STEPS, PROBLEM_NO_TRIGGER,
-    PROBLEM_UNKNOWN_STEP, ProblemAt, Slot, Step,
+    Definition, EditError, Lane, MAX_DEPTH, MAX_STEPS, PROBLEM_AFTER_BRANCH, PROBLEM_NO_STEPS,
+    PROBLEM_NO_TRIGGER, PROBLEM_UNKNOWN_STEP, ProblemAt, Slot, Step,
     catalog::{CONDITION, ISSUE_MISSING, NOTIFY, ORDER_PLACED, REVIEW_SUBMITTED, Subject, WAIT},
 };
 
 fn ids(steps: &[Step]) -> Vec<&str> {
     steps.iter().map(|step| step.id.as_str()).collect()
+}
+
+/// The steps [`Definition::check`] finds after a condition.
+fn after_branch(definition: &Definition) -> Vec<ProblemAt> {
+    definition
+        .check()
+        .into_iter()
+        .filter(|problem| problem.code == PROBLEM_AFTER_BRANCH)
+        .map(|problem| problem.at)
+        .collect()
 }
 
 #[test]
@@ -83,10 +93,10 @@ fn moving_within_a_lane_counts_the_slot_before_the_move() {
 #[test]
 fn a_step_moves_between_lanes_with_its_own_lanes() {
     let mut definition = Definition::default();
-    let outer = definition.insert(&root(0), CONDITION).unwrap();
+    let before = definition.insert(&root(0), WAIT).unwrap();
+    let outer = definition.insert(&root(1), CONDITION).unwrap();
     let inner = definition.insert(&branch(&outer, 0, 0), CONDITION).unwrap();
     let deep = definition.insert(&branch(&inner, 1, 0), NOTIFY).unwrap();
-    let after = definition.insert(&root(1), WAIT).unwrap();
 
     // Not into itself, nor into a lane of its own.
     assert_eq!(
@@ -97,22 +107,63 @@ fn a_step_moves_between_lanes_with_its_own_lanes() {
         definition.move_to(&inner, &branch(&inner, 0, 0)),
         Err(EditError::IntoItself)
     );
-    // The inner condition goes to the end of the lane under the trigger,
-    // what it holds with it.
-    definition.move_to(&inner, &root(2)).unwrap();
-    assert_eq!(
-        ids(&definition.steps),
-        vec![outer.as_str(), after.as_str(), inner.as_str()]
-    );
+    // The inner condition goes to the No lane, what it holds with it.
+    definition.move_to(&inner, &branch(&outer, 1, 0)).unwrap();
+    assert_eq!(definition.locate(&inner), Some(branch(&outer, 1, 0)));
     assert_eq!(definition.locate(&deep), Some(branch(&inner, 1, 0)));
     assert!(definition.find(&outer).unwrap().branches[0].is_empty());
     // A plain step goes into a branch.
-    definition.move_to(&after, &branch(&outer, 1, 0)).unwrap();
-    assert_eq!(definition.locate(&after), Some(branch(&outer, 1, 0)));
+    definition.move_to(&before, &branch(&outer, 0, 0)).unwrap();
+    assert_eq!(definition.locate(&before), Some(branch(&outer, 0, 0)));
+    assert_eq!(ids(&definition.steps), vec![outer.as_str()]);
 }
 
 #[test]
-fn up_and_down_leave_a_branch_at_its_ends() {
+fn a_condition_ends_its_lane() {
+    let mut definition = Definition::default();
+    let wait = definition.insert(&root(0), WAIT).unwrap();
+    let notify = definition.insert(&root(1), NOTIFY).unwrap();
+    // Put between two steps, a condition takes the steps after it into its
+    // Yes lane.
+    let condition = definition.insert(&root(1), CONDITION).unwrap();
+    assert_eq!(
+        ids(&definition.steps),
+        vec![wait.as_str(), condition.as_str()]
+    );
+    assert_eq!(definition.locate(&notify), Some(branch(&condition, 0, 0)));
+    // Nothing goes after it.
+    assert_eq!(
+        definition.insert(&root(2), WAIT),
+        Err(EditError::AfterBranch)
+    );
+    assert_eq!(
+        definition.move_to(&notify, &root(2)),
+        Err(EditError::AfterBranch)
+    );
+    // Moved above a step, it takes that step along too, under its own.
+    definition.move_to(&condition, &root(0)).unwrap();
+    assert_eq!(ids(&definition.steps), vec![condition.as_str()]);
+    let yes = &definition.find(&condition).unwrap().branches[0];
+    assert_eq!(ids(yes), vec![notify.as_str(), wait.as_str()]);
+}
+
+#[test]
+fn what_follows_a_condition_ends_its_yes_path() {
+    let mut definition = Definition::default();
+    let outer = definition.insert(&root(0), CONDITION).unwrap();
+    let inner = definition.insert(&branch(&outer, 0, 0), CONDITION).unwrap();
+    let wait = definition.insert(&root(0), WAIT).unwrap();
+    assert_eq!(ids(&definition.steps), vec![wait.as_str(), outer.as_str()]);
+    // The outer Yes lane ends on a condition: the wait goes under that
+    // one's Yes lane, not after it.
+    definition.move_to(&outer, &root(0)).unwrap();
+    assert_eq!(ids(&definition.steps), vec![outer.as_str()]);
+    assert_eq!(definition.locate(&wait), Some(branch(&inner, 0, 0)));
+    assert_eq!(after_branch(&definition), vec![]);
+}
+
+#[test]
+fn up_and_down_step_into_and_out_of_a_branch() {
     let mut definition = Definition::default();
     let first = definition.insert(&root(0), WAIT).unwrap();
     let condition = definition.insert(&root(1), CONDITION).unwrap();
@@ -129,40 +180,70 @@ fn up_and_down_leave_a_branch_at_its_ends() {
     definition.move_up(&yes).unwrap();
     definition.move_up(&yes).unwrap();
     // First of the lane under the trigger: nowhere higher to go.
-    assert_eq!(ids(&definition.steps)[0], yes);
+    assert_eq!(
+        ids(&definition.steps),
+        vec![yes.as_str(), first.as_str(), condition.as_str()]
+    );
+    // Just above the condition: into its Yes lane, at the top.
     definition.move_down(&first).unwrap();
     assert_eq!(
         ids(&definition.steps),
-        vec![yes.as_str(), condition.as_str(), first.as_str()]
+        vec![yes.as_str(), condition.as_str()]
     );
-    let back = definition.move_to(&first, &branch(&condition, 1, 0));
-    assert!(back.is_ok());
+    assert_eq!(definition.locate(&first), Some(branch(&condition, 0, 0)));
+    // Last of its lane, or a condition: the run ends there, nowhere lower
+    // to go.
     definition.move_down(&first).unwrap();
-    // Out of the branch, below the condition.
+    definition.move_down(&condition).unwrap();
+    assert_eq!(definition.locate(&first), Some(branch(&condition, 0, 0)));
     assert_eq!(
         ids(&definition.steps),
-        vec![yes.as_str(), condition.as_str(), first.as_str()]
+        vec![yes.as_str(), condition.as_str()]
     );
+    // A condition moved up past a step takes it along, under its own.
+    definition.move_up(&condition).unwrap();
+    assert_eq!(ids(&definition.steps), vec![condition.as_str()]);
+    let lane = &definition.find(&condition).unwrap().branches[0];
+    assert_eq!(ids(lane), vec![first.as_str(), yes.as_str()]);
 }
 
 #[test]
 fn conditions_nest_only_so_deep() {
     let mut definition = Definition::default();
     let mut lane = root(0);
-    let mut last = String::new();
+    let mut chain = Vec::new();
     for _ in 0..MAX_DEPTH {
-        last = definition.insert(&lane, CONDITION).unwrap();
-        lane = branch(&last, 0, 0);
+        let condition = definition.insert(&lane, CONDITION).unwrap();
+        lane = branch(&condition, 0, 0);
+        chain.push(condition);
     }
     assert_eq!(definition.depth(), MAX_DEPTH);
     assert_eq!(definition.insert(&lane, CONDITION), Err(EditError::TooDeep));
     // A plain step still fits in the deepest lane.
     definition.insert(&lane, WAIT).unwrap();
-    // Moving the deepest condition next to a lane as deep would nest it once
-    // more than allowed.
-    let other = definition.insert(&root(1), CONDITION).unwrap();
+    // Moving a condition next to a lane as deep would nest it once more
+    // than allowed.
+    let other = definition
+        .insert(&branch(&chain[0], 1, 0), CONDITION)
+        .unwrap();
     assert_eq!(definition.move_to(&other, &lane), Err(EditError::TooDeep));
-    let _ = last;
+    // So would one put above the chain, taking it along.
+    assert_eq!(definition.condition_depth(&root(0)), Some(MAX_DEPTH + 1));
+    assert_eq!(
+        definition.insert(&root(0), CONDITION),
+        Err(EditError::TooDeep)
+    );
+    assert_eq!(
+        definition.move_to(&other, &root(0)),
+        Err(EditError::TooDeep)
+    );
+    // Up out of the lane holding it, a condition takes the one that held
+    // it along: counted without itself inside, it fits.
+    definition.remove(&other).unwrap();
+    definition.move_up(&chain[1]).unwrap();
+    assert_eq!(ids(&definition.steps), vec![chain[1].as_str()]);
+    assert!(definition.depth() <= MAX_DEPTH);
+    assert_eq!(after_branch(&definition), vec![]);
 }
 
 #[test]
@@ -201,7 +282,10 @@ fn what_keeps_a_scenario_from_being_published() {
 
     // A notice without its subject, on its own step.
     let mut definition = ready.clone();
-    let notify = definition.insert(&root(1), NOTIFY).unwrap();
+    let condition = definition.steps[0].id.clone();
+    let notify = definition
+        .insert(&branch(&condition, 1, 0), NOTIFY)
+        .unwrap();
     let problems = definition.check();
     assert_eq!(problems.len(), 1);
     assert_eq!(problems[0].at, ProblemAt::Step(notify));
@@ -213,6 +297,18 @@ fn what_keeps_a_scenario_from_being_published() {
     let mut definition = ready.clone();
     definition.set_trigger(REVIEW_SUBMITTED).unwrap();
     assert!(!definition.check().is_empty());
+
+    // Drawn otherwise, a step after a condition would never run: it is
+    // pointed at, and the draft still saves.
+    let mut definition = ready.clone();
+    let wait = definition.insert(&root(0), WAIT).unwrap();
+    let step = definition.steps.remove(0);
+    definition.steps.push(step);
+    let problems = definition.check();
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].at, ProblemAt::Step(wait));
+    assert_eq!(problems[0].code, PROBLEM_AFTER_BRANCH);
+    assert!(!problems[0].is_hard());
 }
 
 #[test]

@@ -1,8 +1,8 @@
 //! The editor's markup: the palette of blocks, the flow (the trigger, then
-//! its lane of steps, a condition's lanes side by side under it) and the
-//! toolbar. Every place between two steps is a slot (`data-drop-slot`):
-//! its "+" menu adds a block there, and while a block is picked up it offers
-//! "Move here". `editor.js` adds dragging on top: it only ever presses these
+//! its lane of steps, a condition's lanes side by side under it, each lane
+//! down to its end) and the toolbar. Every place between two steps is a
+//! slot (`data-drop-slot`), but none follows a condition: its "+" menu adds
+//! a block there, and while a block is picked up it offers "Move here". `editor.js` adds dragging on top: it only ever presses these
 //! same buttons, so the page works the same without it.
 
 use timada_automations::{
@@ -76,13 +76,13 @@ impl Canvas<'_> {
     }
 
     /// Whether a new block of `kind` may go into `lane`.
-    fn fits(&self, kind: &str, lane: &Lane) -> bool {
+    fn fits(&self, kind: &str, at: &Slot) -> bool {
         let branches = catalog::step_kind(kind).map_or(0, |kind| kind.branches);
         branches == 0
             || self
                 .definition()
-                .lane_depth(lane)
-                .is_some_and(|depth| depth < MAX_DEPTH)
+                .condition_depth(at)
+                .is_some_and(|depth| depth <= MAX_DEPTH)
     }
 }
 
@@ -240,7 +240,7 @@ async fn palette(canvas: &Canvas<'_>) -> Result<impl View> {
     })
 }
 
-/// The trigger's card, then its lane, then where the run ends.
+/// The trigger's card, then its lane.
 #[component]
 async fn flow(canvas: &Canvas<'_>) -> Result<impl View> {
     let definition = canvas.definition();
@@ -284,22 +284,28 @@ async fn flow(canvas: &Canvas<'_>) -> Result<impl View> {
             }
         </div>
         flow_lane(canvas: canvas, steps: &definition.steps, lane: &Lane::Root)
-        <div class="mt-1 rounded-full border border-dashed border-border px-3 py-1 text-xs text-muted-foreground" aria-hidden="true">"End"</div>
     })
 }
 
-/// A lane: a slot, then each step followed by a slot. Recursive through
-/// the steps' own lanes.
+/// A lane: a slot, then each step followed by a slot, then where the run
+/// ends. A condition ends its lane instead: each of its lanes ends on its
+/// own. Recursive through the steps' own lanes.
 #[component]
 async fn flow_lane(canvas: &Canvas<'_>, steps: &[Step], lane: &Lane) -> Result<impl View> {
     let slots: Vec<Slot> = (0..=steps.len())
         .map(|index| Slot::new(lane.clone(), index))
         .collect();
+    let ends = !steps.last().is_some_and(Step::ends_lane);
     Ok(view! {
         drop_slot(canvas: canvas, at: &slots[0])
         for (index, step) in steps.iter().enumerate() {
             step_block(canvas: canvas, step: step)
-            drop_slot(canvas: canvas, at: &slots[index + 1])
+            if !step.ends_lane() {
+                drop_slot(canvas: canvas, at: &slots[index + 1])
+            }
+        }
+        if ends {
+            <div class="mt-1 rounded-full border border-dashed border-border px-3 py-1 text-xs text-muted-foreground" aria-hidden="true" data-lane-end="">"End"</div>
         }
     }
     .boxed())
@@ -315,11 +321,11 @@ async fn drop_slot(canvas: &Canvas<'_>, at: &Slot) -> Result<impl View> {
     let kinds: Vec<&'static str> = catalog::STEPS
         .iter()
         .map(|kind| kind.key)
-        .filter(|kind| canvas.fits(kind, &at.lane))
+        .filter(|kind| canvas.fits(kind, at))
         .collect();
     let putting = matches!(canvas.editor.moving, Some(Moving::Kind(_)));
     let fits = match &canvas.editor.moving {
-        Some(Moving::Kind(kind)) => canvas.fits(kind, &at.lane),
+        Some(Moving::Kind(kind)) => canvas.fits(kind, at),
         _ => true,
     };
     Ok(view! {

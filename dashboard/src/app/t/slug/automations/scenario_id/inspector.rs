@@ -54,7 +54,7 @@ pub async fn inspector(canvas: &Canvas<'_>) -> Result<impl View> {
                 <ul class="flex list-disc flex-col gap-1 pl-5 text-sm text-muted-foreground">
                     <li>"Drag a block from the left onto a line between two steps, or use the + on a line."</li>
                     <li>"Drag a block by its handle to move it, or press Move, then “Move here”."</li>
-                    <li>"An If / else sends the run down its Yes or its No lane; both lanes go on to the steps under it."</li>
+                    <li>"An If / else splits the run: it goes down its Yes or its No lane, each to its own end."</li>
                 </ul>
             }
         </aside>

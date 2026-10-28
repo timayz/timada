@@ -6,9 +6,10 @@ use timada_automations::catalog::{
     ISSUE_TOO_MANY_RULES, ISSUE_UNKNOWN_FIELD, NOTIFY, Op, RuleValue, Subject, Unit, WAIT,
 };
 use timada_automations::{
-    EditError, PROBLEM_BRANCHES, PROBLEM_INVALID_ID, PROBLEM_NEWER_SCHEMA, PROBLEM_NO_STEPS,
-    PROBLEM_NO_TRIGGER, PROBLEM_TOO_DEEP, PROBLEM_TOO_LARGE, PROBLEM_TOO_MANY_STEPS,
-    PROBLEM_UNKNOWN_STEP, PROBLEM_UNKNOWN_TRIGGER, Problem, ScenarioStatus, Step,
+    EditError, PROBLEM_AFTER_BRANCH, PROBLEM_BRANCHES, PROBLEM_INVALID_ID, PROBLEM_NEWER_SCHEMA,
+    PROBLEM_NO_STEPS, PROBLEM_NO_TRIGGER, PROBLEM_TOO_DEEP, PROBLEM_TOO_LARGE,
+    PROBLEM_TOO_MANY_STEPS, PROBLEM_UNKNOWN_STEP, PROBLEM_UNKNOWN_TRIGGER, Problem, ScenarioStatus,
+    Step,
 };
 use topcoat::icon::IconData;
 
@@ -114,7 +115,7 @@ pub fn step_label(kind: &str) -> &'static str {
 pub fn step_description(kind: &str) -> &'static str {
     match kind {
         WAIT => "Pause for minutes, hours or days before the next step.",
-        CONDITION => "Check rules and go on down the Yes or the No lane.",
+        CONDITION => "Check rules, then go down the Yes or the No lane, each to its own end.",
         NOTIFY => "Mail the members who may see what started the run.",
         _ => "Made with a newer version: it is kept as it is.",
     }
@@ -270,6 +271,7 @@ pub fn problem_label(problem: &Problem) -> &'static str {
         PROBLEM_TOO_MANY_STEPS => "A scenario holds at most 50 steps.",
         PROBLEM_TOO_DEEP => "Conditions nest at most 4 deep.",
         PROBLEM_TOO_LARGE => "The scenario is too large.",
+        PROBLEM_AFTER_BRANCH => "Nothing runs after an If / else: move this into one of its lanes.",
         ISSUE_MISSING => "Fill this in.",
         ISSUE_INVALID => "This does not read: check it.",
         ISSUE_UNKNOWN_FIELD => "The trigger's subject has no such field: choose another.",
@@ -291,6 +293,7 @@ pub fn edit_error_label(error: EditError) -> &'static str {
         EditError::TooDeep => "Conditions nest at most 4 deep.",
         EditError::TooManyRules => "A condition checks at most 10 rules.",
         EditError::NewerSchema => "This scenario was drawn with a newer version and is shown only.",
+        EditError::AfterBranch => "Nothing comes after an If / else: put it in one of its lanes.",
     }
 }
 
@@ -357,6 +360,12 @@ mod tests {
         }
         for kind in catalog::STEPS {
             assert_ne!(step_label(kind.key), "Unknown block");
+            assert_ne!(
+                step_description(kind.key),
+                step_description("unknown"),
+                "{} has no description",
+                kind.key
+            );
         }
         for subject in [
             Subject::Order,

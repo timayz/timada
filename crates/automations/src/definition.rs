@@ -1,6 +1,8 @@
 //! A scenario as the merchant draws it: a trigger, then a lane of steps, a
-//! branching step (a condition) holding one more lane per branch. It is kept
-//! whole as JSON in the scenario's events (see [`Definition::to_json`]).
+//! branching step (a condition) holding one more lane per branch. A
+//! branching step ends its lane: the run goes down one of its lanes, each to
+//! its own end, and nothing comes after it. It is kept whole as JSON in the
+//! scenario's events (see [`Definition::to_json`]).
 //!
 //! Everything here is pure: the editor applies an operation to its working
 //! copy, shows it, and saves the copy whole. A place between two steps is a
@@ -90,6 +92,12 @@ impl Step {
             .map(Step::height)
             .max()
             .unwrap_or(0)
+    }
+
+    /// Whether the step ends its lane (a condition): the run goes down one
+    /// of its lanes, and nothing comes after it.
+    pub fn ends_lane(&self) -> bool {
+        !self.branches.is_empty()
     }
 
     /// Whether `id` names this step or one inside its lanes.
@@ -186,6 +194,10 @@ pub enum EditError {
     TooManyRules,
     #[error("the scenario was drawn by a newer version")]
     NewerSchema,
+    /// Nothing comes after an If / else in its lane: a step goes into one of
+    /// its lanes.
+    #[error("nothing comes after an If / else: put it in one of its lanes")]
+    AfterBranch,
 }
 
 /// What a problem is about.
@@ -233,6 +245,8 @@ pub const PROBLEM_INVALID_ID: &str = "invalid_id";
 pub const PROBLEM_TOO_MANY_STEPS: &str = "too_many_steps";
 pub const PROBLEM_TOO_DEEP: &str = "too_deep";
 pub const PROBLEM_TOO_LARGE: &str = "too_large";
+/// A step comes after a branching step in its lane: it never runs.
+pub const PROBLEM_AFTER_BRANCH: &str = "after_branch";
 
 const HARD_PROBLEMS: &[&str] = &[
     PROBLEM_NEWER_SCHEMA,
@@ -247,6 +261,28 @@ const HARD_PROBLEMS: &[&str] = &[
 fn valid_id(id: &str) -> bool {
     id.strip_prefix('s')
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Puts `step` at `index` of `lane`; a condition takes what follows it
+/// along, at the end of its Yes path.
+fn put(lane: &mut Vec<Step>, index: usize, mut step: Step) {
+    if step.ends_lane() {
+        let following = lane.split_off(index);
+        yes_end(&mut step).extend(following);
+        lane.push(step);
+    } else {
+        lane.insert(index, step);
+    }
+}
+
+/// Where the Yes path of a condition ends: its Yes lane, or, when that
+/// ends on a condition, the end of that one's Yes path.
+fn yes_end(step: &mut Step) -> &mut Vec<Step> {
+    let yes = &mut step.branches[0];
+    if yes.last().is_some_and(Step::ends_lane) {
+        return yes_end(yes.last_mut().expect("the lane ends on it"));
+    }
+    yes
 }
 
 fn id_number(id: &str) -> u32 {
@@ -309,6 +345,15 @@ impl Definition {
         steps
     }
 
+    /// Every lane: the one under the trigger, then each branch's.
+    pub fn lanes(&self) -> Vec<&[Step]> {
+        let mut lanes = vec![self.steps.as_slice()];
+        for step in self.walk() {
+            lanes.extend(step.branches.iter().map(Vec::as_slice));
+        }
+        lanes
+    }
+
     pub fn find(&self, id: &str) -> Option<&Step> {
         self.walk().into_iter().find(|step| step.id == id)
     }
@@ -353,6 +398,14 @@ impl Definition {
                 Some(self.lane_depth(&self.locate(step)?.lane)? + 1)
             }
         }
+    }
+
+    /// How deep a new condition put at `slot` would nest, with the steps
+    /// after the slot it takes into its Yes lane.
+    pub fn condition_depth(&self, slot: &Slot) -> Option<usize> {
+        let following = self.lane(&slot.lane)?.get(slot.index..)?;
+        let below = following.iter().map(Step::height).max().unwrap_or(0);
+        Some(self.lane_depth(&slot.lane)? + 1 + below)
     }
 
     /// Where a step sits.
@@ -411,19 +464,28 @@ impl Definition {
     }
 
     /// Puts a new step of `kind` at `slot`, with the kind's starting
-    /// settings; its id.
+    /// settings; its id. Nothing goes after a condition, as it ends its
+    /// lane: a condition put before steps takes them along, at the end of
+    /// its Yes path.
     pub fn insert(&mut self, slot: &Slot, kind: &str) -> Result<String, EditError> {
         self.editable()?;
         let step_kind = catalog::step_kind(kind).ok_or(EditError::UnknownKind)?;
         if self.count() >= MAX_STEPS {
             return Err(EditError::TooManySteps);
         }
-        let depth = self.lane_depth(&slot.lane).ok_or(EditError::NoSuchSlot)?;
-        if step_kind.branches > 0 && depth + 1 > MAX_DEPTH {
-            return Err(EditError::TooDeep);
-        }
-        if slot.index > self.lane(&slot.lane).ok_or(EditError::NoSuchSlot)?.len() {
+        let lane = self.lane(&slot.lane).ok_or(EditError::NoSuchSlot)?;
+        if slot.index > lane.len() {
             return Err(EditError::NoSuchSlot);
+        }
+        if slot.index > 0 && lane[slot.index - 1].ends_lane() {
+            return Err(EditError::AfterBranch);
+        }
+        if step_kind.branches > 0
+            && self
+                .condition_depth(slot)
+                .is_none_or(|depth| depth > MAX_DEPTH)
+        {
+            return Err(EditError::TooDeep);
         }
         let number = self
             .walk()
@@ -441,13 +503,16 @@ impl Definition {
             branches: vec![Vec::new(); step_kind.branches],
         };
         self.next_id = number;
-        self.lane_mut(&slot.lane)
-            .expect("the lane was found above")
-            .insert(slot.index, step);
+        put(
+            self.lane_mut(&slot.lane).expect("the lane was found above"),
+            slot.index,
+            step,
+        );
         Ok(id)
     }
 
-    /// Moves a step, with its lanes, to `slot`.
+    /// Moves a step, with its lanes, to `slot`; the same rules as
+    /// [`insert`](Self::insert).
     pub fn move_to(&mut self, id: &str, slot: &Slot) -> Result<(), EditError> {
         self.editable()?;
         let from = self.locate(id).ok_or(EditError::NoSuchStep)?;
@@ -457,26 +522,32 @@ impl Definition {
         {
             return Err(EditError::IntoItself);
         }
-        let height = step.height();
-        let depth = self.lane_depth(&slot.lane).ok_or(EditError::NoSuchSlot)?;
         if slot.index > self.lane(&slot.lane).ok_or(EditError::NoSuchSlot)?.len() {
             return Err(EditError::NoSuchSlot);
-        }
-        if depth + height > MAX_DEPTH {
-            return Err(EditError::TooDeep);
         }
         let mut index = slot.index;
         if from.lane == slot.lane && from.index < index {
             index -= 1;
         }
-        let step = self
+        let mut moved = self.clone();
+        let step = moved
             .lane_mut(&from.lane)
             .expect("the step was found above")
             .remove(from.index);
         // The target lane is not inside the step, so it is still there.
-        self.lane_mut(&slot.lane)
-            .expect("the lane was found above")
-            .insert(index, step);
+        let lane = moved
+            .lane_mut(&slot.lane)
+            .expect("the lane was found above");
+        if index > 0 && lane[index - 1].ends_lane() {
+            return Err(EditError::AfterBranch);
+        }
+        put(lane, index, step);
+        // An If / else moved takes the steps after it along: what that
+        // nests too deep is refused, not what was so already.
+        if moved.depth() > MAX_DEPTH.max(self.depth()) {
+            return Err(EditError::TooDeep);
+        }
+        *self = moved;
         Ok(())
     }
 
@@ -497,21 +568,23 @@ impl Definition {
         }
     }
 
-    /// Moves a step one place down its lane; the last of a branch goes out,
-    /// below the step holding the branch.
+    /// Moves a step one place down its lane; just above an If / else, it
+    /// goes into the If / else's Yes lane, at its top. The last of a lane
+    /// stays: nothing comes after an If / else.
     pub fn move_down(&mut self, id: &str) -> Result<(), EditError> {
         self.editable()?;
         let from = self.locate(id).ok_or(EditError::NoSuchStep)?;
-        let len = self.lane(&from.lane).map_or(0, Vec::len);
-        if from.index + 1 < len {
-            return self.move_to(id, &Slot::new(from.lane, from.index + 2));
-        }
-        match from.lane {
-            Lane::Root => Ok(()),
-            Lane::Branch { step: owner, .. } => {
-                let owner = self.locate(&owner).ok_or(EditError::NoSuchStep)?;
-                self.move_to(id, &Slot::new(owner.lane, owner.index + 1))
+        let lane = self.lane(&from.lane).ok_or(EditError::NoSuchStep)?;
+        match lane.get(from.index + 1) {
+            Some(next) if next.ends_lane() => {
+                let yes = Lane::Branch {
+                    step: next.id.clone(),
+                    branch: 0,
+                };
+                self.move_to(id, &Slot::new(yes, 0))
             }
+            Some(_) => self.move_to(id, &Slot::new(from.lane, from.index + 2)),
+            None => Ok(()),
         }
     }
 
@@ -596,6 +669,16 @@ impl Definition {
         }
         if self.to_json().len() > MAX_DEFINITION_BYTES {
             problems.push(Problem::new(ProblemAt::Scenario, PROBLEM_TOO_LARGE));
+        }
+        for lane in self.lanes() {
+            if let Some(split) = lane.iter().position(Step::ends_lane) {
+                for after in &lane[split + 1..] {
+                    problems.push(Problem::new(
+                        ProblemAt::Step(after.id.clone()),
+                        PROBLEM_AFTER_BRANCH,
+                    ));
+                }
+            }
         }
         let subject = self.subject();
         let mut seen = HashSet::new();

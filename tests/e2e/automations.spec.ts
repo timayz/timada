@@ -93,10 +93,17 @@ test("a scenario is drawn by dragging blocks, then saved", async ({ page }) => {
   await page.getByRole("button", { name: "Apply" }).click();
   await expect(page.locator("[data-to-set-up]")).toHaveAttribute("data-to-set-up", "0");
 
-  // Moved by its handle out of the lane, under the condition.
-  await drag(page, step(page, "s2").locator("[data-drag-handle]"), slot(page, "root.1"));
+  // The condition ends the lane under the trigger: each of its lanes ends
+  // on its own, and nothing goes under it.
+  await expect(page.locator('[data-branch="s1.0"] [data-lane-end]')).toHaveCount(1);
+  await expect(page.locator('[data-branch="s1.1"] [data-lane-end]')).toHaveCount(1);
+  await expect(page.locator("[data-lane-end]")).toHaveCount(2);
+  await expect(slot(page, "root.1")).toHaveCount(0);
+
+  // Moved by its handle into the No lane.
+  await drag(page, step(page, "s2").locator("[data-drag-handle]"), slot(page, "s1.1.0"));
   await expect(page.locator('[data-branch="s1.0"] [data-step]')).toHaveCount(0);
-  await expect(step(page, "s2")).toHaveCount(1);
+  await expect(page.locator('[data-branch="s1.1"] [data-step="s2"]')).toHaveCount(1);
 
   await page.getByRole("button", { name: "Save draft" }).click();
   await expect(page.getByRole("status")).toContainText("Draft saved.");
