@@ -21,6 +21,13 @@ event timada-aliexpress/Product::SyncFailed { reason: String, failed_by: String 
 event timada-aliexpress/Product::Synced { skus: Vec<SkuLink>, offline: bool, synced_by: String }
 event timada-aliexpress/Product::Unlinked { unlinked_by: String }
 event timada-aliexpress/TokenRefresh::Claimed { claimed_by: String }
+event timada-automations/Scenario::Archived { archived_by: String }
+event timada-automations/Scenario::Created { name: String, created_by: String }
+event timada-automations/Scenario::Paused { paused_by: String }
+event timada-automations/Scenario::Published { version: u32, definition: String, published_by: String }
+event timada-automations/Scenario::Renamed { name: String, renamed_by: String }
+event timada-automations/Scenario::Resumed { resumed_by: String }
+event timada-automations/Scenario::Saved { definition: String, saved_by: String }
 event timada-catalog/Category::Archived { archived_by: String }
 event timada-catalog/Category::BodyWritten { body: String, written_by: String }
 event timada-catalog/Category::Created { slug: String, name: String, parent_id: Option<String>, created_by: String }

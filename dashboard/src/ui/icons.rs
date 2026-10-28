@@ -21,6 +21,7 @@ pub const OFFERS: IconData = iconify_icon!("lucide:tag");
 pub const REVIEWS: IconData = iconify_icon!("lucide:star");
 pub const MESSAGES: IconData = iconify_icon!("lucide:message-square");
 pub const NEWSLETTER: IconData = iconify_icon!("lucide:newspaper");
+pub const AUTOMATIONS: IconData = iconify_icon!("lucide:workflow");
 pub const PAYMENTS: IconData = iconify_icon!("lucide:credit-card");
 pub const ALIEXPRESS: IconData = iconify_icon!("lucide:package-plus");
 pub const SHIPPING: IconData = iconify_icon!("lucide:truck");
@@ -46,3 +47,15 @@ pub const WARNING: IconData = iconify_icon!("lucide:triangle-alert");
 pub const INFO: IconData = iconify_icon!("lucide:info");
 pub const ERROR: IconData = iconify_icon!("lucide:circle-x");
 pub const CLOCK: IconData = iconify_icon!("lucide:clock");
+
+// Automation blocks.
+pub const TRIGGER: IconData = iconify_icon!("lucide:zap");
+pub const WAIT: IconData = iconify_icon!("lucide:timer");
+pub const CONDITION: IconData = iconify_icon!("lucide:split");
+pub const NOTIFY: IconData = iconify_icon!("lucide:bell-ring");
+pub const BLOCK: IconData = iconify_icon!("lucide:box");
+pub const GRIP: IconData = iconify_icon!("lucide:grip-vertical");
+pub const ARROW_UP: IconData = iconify_icon!("lucide:arrow-up");
+pub const ARROW_DOWN: IconData = iconify_icon!("lucide:arrow-down");
+pub const MOVE: IconData = iconify_icon!("lucide:move");
+pub const TRASH: IconData = iconify_icon!("lucide:trash-2");

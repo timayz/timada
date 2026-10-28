@@ -4,6 +4,7 @@
 
 pub mod aliexpress;
 pub mod api_keys;
+pub mod automations;
 pub mod carts;
 pub mod categories;
 pub mod customers;
@@ -33,12 +34,12 @@ use timada_shoppers::count_shoppers;
 use timada_support::{MessageFilter, MessageStatus, count_messages};
 use timada_tenancy::count_open_invitations_of_tenant;
 use timada_tenancy::{
-    PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_API_KEYS_MANAGE, PERMISSION_CUSTOMERS_READ,
-    PERMISSION_DISCOUNTS_READ, PERMISSION_MAIL_MANAGE, PERMISSION_MEMBERS_READ,
-    PERMISSION_NEWSLETTER_READ, PERMISSION_ORDERS_READ, PERMISSION_PAYMENTS_MANAGE,
-    PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ, PERMISSION_ROLES_MANAGE,
-    PERMISSION_SHIPPING_MANAGE, PERMISSION_SUPPORT_READ, PERMISSION_TENANT_MANAGE, ROLE_OWNER,
-    TenantState,
+    PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_API_KEYS_MANAGE, PERMISSION_AUTOMATIONS_READ,
+    PERMISSION_CUSTOMERS_READ, PERMISSION_DISCOUNTS_READ, PERMISSION_MAIL_MANAGE,
+    PERMISSION_MEMBERS_READ, PERMISSION_NEWSLETTER_READ, PERMISSION_ORDERS_READ,
+    PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ,
+    PERMISSION_ROLES_MANAGE, PERMISSION_SHIPPING_MANAGE, PERMISSION_SUPPORT_READ,
+    PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
 };
 use topcoat::{
     Result,
@@ -174,6 +175,7 @@ pub struct TenantNav {
     pub reviews: bool,
     pub messages: bool,
     pub newsletter: bool,
+    pub automations: bool,
     pub invoices: bool,
     pub payments: bool,
     pub aliexpress: bool,
@@ -206,6 +208,7 @@ impl TenantNav {
             reviews: access.can(cx, PERMISSION_REVIEWS_READ).await?,
             messages: access.can(cx, PERMISSION_SUPPORT_READ).await?,
             newsletter: access.can(cx, PERMISSION_NEWSLETTER_READ).await?,
+            automations: access.can(cx, PERMISSION_AUTOMATIONS_READ).await?,
             // Invoices are what the orders were billed as.
             invoices: orders,
             payments: access.can(cx, PERMISSION_PAYMENTS_MANAGE).await?,

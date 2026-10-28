@@ -296,6 +296,10 @@ fn subscriptions(
             timada_newsletter::read_model_subscription(write_pool.clone(), ring.clone()),
         ),
         (
+            "automations",
+            timada_automations::read_model_subscription(write_pool.clone()),
+        ),
+        (
             "invoicing",
             timada_invoicing::read_model_subscription(write_pool.clone()),
         ),
