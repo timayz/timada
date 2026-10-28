@@ -227,3 +227,25 @@ Unlike a mail, making a code is safe to ask for again: when it fails for a
 reason of the store's, the step is tried again after 1 minute, 5 minutes, 30
 minutes and 2 hours (`StepFailed` with `retry_at`) before the run fails. A
 scenario that makes codes is published by members holding `discounts:manage`.
+
+## Webhooks
+
+**Call a webhook** posts what started the run to an address of the merchant's.
+A hook's address is often its only key, and the definition replicates to the
+shop's storefronts, so the address is **sealed** in the definition
+(`url_sealed`, under a key derived from `[secrets] key`, bound to the tenant,
+the scenario and the step); only its host is kept in clear, for the card. The
+editor never shows it again once saved.
+
+The call is a JSON `POST` holding ids and no personal data (the run and step,
+the trigger, the shop, the scenario and its version, the subject's kind and id):
+the merchant's app reads the rest from the store with its key. It carries
+`Timada-Signature: t={unix},v1={hex}`, the HMAC-SHA256 of `"{t}.{body}"` under a
+secret of the step's own (`whsec_…`, derived from `[secrets] key`, shown in the
+step's settings, stored nowhere), and `Idempotency-Key: {run}:{step}`, the same
+on every try. Calls take at most `[automations] webhook_timeout_secs` and follow
+no redirect; a host that is not public is refused (unless
+`mail.allow_private_hosts`, for development). A 2xx is done; no answer, 408, 429
+or a 5xx is tried again (as for the codes); another answer fails the step.
+Publishing a scenario that calls webhooks needs `api-keys:manage`: like a key, it
+hands the shop's events to another system.

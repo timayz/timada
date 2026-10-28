@@ -191,6 +191,10 @@ pub fn describe_error(code: &str) -> &'static str {
         "scenario_too_large" => "The scenario is too large to save.",
         "run_not_found" => "There is no such run.",
         "automation_invalid_email" => "That does not look like an e-mail address.",
+        "automation_webhook_permission" => {
+            "A scenario that calls webhooks is published by members who may manage the API keys: it hands the shop's events to another system."
+        }
+        "automation_webhook_address" => "A webhook's address is a web address (https://…).",
         "automation_discount_permission" => {
             "A scenario that makes discount codes is published by members who may manage the discounts."
         }

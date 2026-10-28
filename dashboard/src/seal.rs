@@ -58,6 +58,32 @@ pub fn opt_out_key(config: &Config) -> Option<OptOutKey> {
     Some(OptOutKey(hasher.finalize().into()))
 }
 
+/// What the shops' webhook steps need: a sealer for their addresses and the
+/// key their signing secrets derive from; `None` without `secrets.key`.
+pub fn webhook_keys(config: &Config) -> Option<WebhookKeys> {
+    let secrets = config.secrets.as_ref()?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"timada/automation-webhook/sign\0");
+    hasher.update(secrets.key.as_bytes());
+    Some(WebhookKeys {
+        sealer: Sealer::new("automation-webhook", &secrets.key),
+        signing: hasher.finalize().into(),
+    })
+}
+
+/// See [`webhook_keys`].
+#[derive(Clone)]
+pub struct WebhookKeys {
+    pub sealer: Sealer,
+    pub signing: [u8; 32],
+}
+
+impl std::fmt::Debug for WebhookKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WebhookKeys(..)")
+    }
+}
+
 /// See [`opt_out_key`].
 #[derive(Clone, Copy)]
 pub struct OptOutKey(pub [u8; 32]);
