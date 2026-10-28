@@ -9,6 +9,7 @@ pub mod archive;
 mod canvas;
 mod editor;
 mod inspector;
+mod mail;
 pub mod pause;
 pub mod resume;
 pub mod runs;
@@ -131,6 +132,20 @@ pub async fn edit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> {
     } else {
         None
     };
+    // A scenario that mails customers is published only by members who may
+    // manage the newsletter, and only once the shop can send its mails.
+    let commit = match commit {
+        Some(Commit::Publish) if mail::sends_mail(&editor.definition) => {
+            match publish_blocked(cx, &access, &editor.definition).await? {
+                Some(code) => {
+                    error = Some(code);
+                    None
+                }
+                None => commit,
+            }
+        }
+        commit => commit,
+    };
     if let Some(commit) = commit {
         let automations = automations(&access)?;
         let written = match commit {
@@ -187,6 +202,44 @@ pub async fn edit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> {
     })
 }
 
+/// What keeps a scenario that mails customers from being published, if
+/// anything.
+async fn publish_blocked(
+    cx: &Cx,
+    access: &TenantAccess,
+    definition: &timada_automations::Definition,
+) -> Result<Option<&'static str>> {
+    if !access
+        .can(cx, timada_tenancy::PERMISSION_NEWSLETTER_MANAGE)
+        .await?
+    {
+        return Ok(Some("automation_mail_permission"));
+    }
+    if topcoat::context::app_context::<crate::app::OptOutLinks>(cx)
+        .0
+        .is_none()
+    {
+        return Ok(Some("automation_secret_required"));
+    }
+    if !mail::mails_read(cx, &access.tenant, definition) {
+        return Ok(Some("automation_mail_invalid"));
+    }
+    let storefront = timada_orders::Command::new(access.executor()?.clone(), access.tenant_id())
+        .storefront_address()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    if storefront.is_none() {
+        return Ok(Some("automation_storefront_required"));
+    }
+    let sender = crate::auth::mail::marketing_sender(cx, &access.tenant)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    if sender.is_none() {
+        return Ok(Some("mail_server_required"));
+    }
+    Ok(None)
+}
+
 /// The addresses the page links and posts to.
 struct Pages {
     edit: String,
@@ -214,6 +267,7 @@ impl Pages {
 
 #[component]
 async fn scenario_page(
+    cx: &Cx,
     access: &TenantAccess,
     nav: &TenantNav,
     scenario: &ScenarioState,
@@ -226,6 +280,12 @@ async fn scenario_page(
     let tenant = &access.tenant;
     let title = format!("{} · Automations · {}", scenario.name, tenant.name);
     let problems = editor.definition.check();
+    let preview = editor
+        .selected
+        .as_deref()
+        .and_then(|id| editor.definition.find(id))
+        .filter(|step| step.kind == timada_automations::catalog::EMAIL)
+        .map(|step| mail::preview(cx, tenant, &editor.definition, step));
     let canvas = Canvas {
         editor,
         scenario_id: &scenario.id,
@@ -233,6 +293,7 @@ async fn scenario_page(
         version: scenario.version,
         problems,
         manage,
+        preview,
     };
     let subtitle = match (scenario.status, scenario.version) {
         (ScenarioStatus::Draft, _) => "A draft: nothing runs from it yet.".to_owned(),

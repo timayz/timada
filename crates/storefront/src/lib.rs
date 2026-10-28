@@ -19,6 +19,7 @@
 //! `GET {prefix}/status`, is registered explicitly under the prefix the host
 //! chooses.
 
+mod automations;
 mod cart;
 mod components;
 mod config;
@@ -34,6 +35,7 @@ mod shoppers;
 mod store;
 mod support;
 
+pub use automations::*;
 pub use cart::*;
 pub use components::*;
 pub use config::*;

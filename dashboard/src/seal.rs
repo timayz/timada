@@ -47,6 +47,27 @@ pub fn keys_sealer(config: &Config) -> Option<Sealer> {
     Some(Sealer::new("shoppers", &secrets.key))
 }
 
+/// The key the links of the shops' automated mails are signed under, so the
+/// opt-out page can tell one it mailed: `None` without `secrets.key`. Every
+/// node derives the same from the operator's secret; nothing is stored.
+pub fn opt_out_key(config: &Config) -> Option<OptOutKey> {
+    let secrets = config.secrets.as_ref()?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"timada/automation-opt-out/mac\0");
+    hasher.update(secrets.key.as_bytes());
+    Some(OptOutKey(hasher.finalize().into()))
+}
+
+/// See [`opt_out_key`].
+#[derive(Clone, Copy)]
+pub struct OptOutKey(pub [u8; 32]);
+
+impl std::fmt::Debug for OptOutKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OptOutKey(..)")
+    }
+}
+
 #[derive(Clone)]
 pub struct Sealer {
     cipher: Aes256Gcm,

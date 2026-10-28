@@ -9,7 +9,8 @@ import { createTenant, uniqueTenant } from "./tenants";
 // between steps, a step by its handle), and the same with buttons only: the
 // "+" menu of a slot, then Move / Move here, with or without JavaScript.
 // Published, a scenario runs: a contact message handed in through the store
-// API makes "Notify the team" mail the owner.
+// API makes "Notify the team" mail the owner, and "E-mail the customer" mail
+// the visitor through the shop's own server, with a link that stops them.
 
 /// A new scenario, its editor open.
 async function newScenario(page: Page, name: string) {
@@ -361,4 +362,99 @@ test("an unfinished scenario is not published", async ({ page }) => {
     "data-scenario-state",
     "draft",
   );
+});
+
+test("a scenario mails the customer, who stops it from the mail's link", async ({
+  page,
+  request,
+}) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Mailing Shop");
+  await createTenant(page, name);
+
+  // Automated mails go through the shop's own server (the development
+  // mailbox stands in) and link to its storefront.
+  await page.goto(`/t/${slug}/mail`);
+  await page.getByLabel("Server", { exact: true }).fill("localhost");
+  await page.getByLabel("Port", { exact: true }).fill("1025");
+  await page.getByLabel("Security").selectOption("none");
+  await page.getByLabel("Send from address").fill(uniqueEmail("shop"));
+  await page.getByRole("button", { name: "Test and save" }).click();
+  await expect(page.getByRole("status")).toContainText("Test mail sent");
+  await page.goto(`/t/${slug}/api-keys`);
+  await page.getByLabel("Where shoppers find the shop").fill("https://shop.example");
+  await page.getByRole("button", { name: "Save address" }).click();
+  await expect(page.getByRole("status")).toContainText("Storefront address saved.");
+  await page.getByLabel("Label").fill("Storefront");
+  await page.getByLabel(/Fill carts and place orders/).check();
+  await page.getByRole("button", { name: "Create key" }).click();
+  const key = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
+
+  await newScenario(page, "Thank visitors");
+  await enhanced(page);
+  await chooseTrigger(page, "When a contact message arrives");
+  await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+  await page
+    .locator('[id="add-root.0"]')
+    .getByRole("button", { name: "E-mail the customer", exact: true })
+    .click();
+  // It starts from the shop's default automated mail, previewed.
+  await expect(page.locator("[data-preview-subject]")).toContainText(name);
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("Thanks for writing");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page.locator("[data-preview-subject]")).toHaveText("Thanks for writing");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Published as version 1");
+
+  const visitor = uniqueEmail("visitor");
+  const write = () =>
+    request.post("/store/contact", {
+      headers: { Authorization: `Bearer ${key}` },
+      form: { first_name: "Ada", last_name: "Lovelace", email: visitor, body: "Do you ship abroad?" },
+    });
+  expect((await write()).status()).toBe(201);
+  const mail = await mailTo(request, visitor, "Thanks for writing");
+  // The link at its foot (slashes come escaped in the HTML).
+  const html = (mail.html ?? "").replace(/&#x2f;/g, "/");
+  const token = html.match(/https:\/\/shop\.example\/emails\/opt-out\/([A-Za-z0-9._-]+)/)?.[1];
+  expect(token, "the mail links to the opt-out page").toBeTruthy();
+
+  // The storefront's page hands the token back: no more automated mails.
+  const stopped = await request.post("/store/automations/opt-out", {
+    headers: { Authorization: `Bearer ${key}` },
+    form: { token: token! },
+  });
+  expect(stopped.status()).toBe(204);
+  const forged = await request.post("/store/automations/opt-out", {
+    headers: { Authorization: `Bearer ${key}` },
+    form: { token: `${token}x` },
+  });
+  expect(forged.status()).toBe(422);
+
+  // The next message's run skips the mail, and says why.
+  expect((await write()).status()).toBe(201);
+  await page.getByRole("link", { name: "Runs", exact: true }).click();
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator('[data-run="finished"]')).toHaveCount(2, { timeout: 500 });
+  }).toPass();
+  await page.locator('[data-run="finished"] a').first().click();
+  await expect(page.locator("[data-run-log]")).toContainText(
+    "stopped the shop's automated mails",
+  );
+});
+
+test("a scenario that mails customers needs the shop set up to send them", async ({ page }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name } = uniqueTenant("Serverless Shop");
+  await createTenant(page, name);
+  await newScenario(page, "Thank buyers");
+  await chooseTrigger(page, "When an order is placed");
+  await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+  await page
+    .locator('[id="add-root.0"]')
+    .getByRole("button", { name: "E-mail the customer", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("storefront lives");
 });

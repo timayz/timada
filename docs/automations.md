@@ -176,3 +176,37 @@ be offered on the trigger it would fire.
 
 The runs of a scenario are listed under `/t/{slug}/automations/{id}/runs`, each
 with its steps; members with `automations:manage` cancel one under way.
+
+## Mails to customers
+
+**E-mail the customer** mails whoever the run is about: the buyer of an order
+(of the order a review is about, for a review trigger), the customer who made an
+account, the subscriber, the visitor who wrote. The merchant writes the subject
+and the HTML (and, if they like, the plain text) as templates over the shop's
+variables, plus the order's for a scenario about orders or reviews
+(`ShopMailKind::AutomationOrder`, else `AutomationCustomer`); each mail must link
+to `{{ unsubscribe_url }}`. The editor checks and previews it as it is written.
+
+These mails are marketing, so:
+
+- **They go through the shop's own mail server only**, never the platform's.
+  Publishing a scenario that mails customers needs `newsletter:manage`, the shop's
+  own server, its storefront's address (the link points there) and the operator's
+  secret (`[secrets] key`, which signs the links). A run that reaches a mail while
+  the shop lacks one of them waits for it, up to three days, then fails saying
+  which.
+- **Anyone can stop them.** The link is `{storefront}/emails/opt-out/{token}`,
+  the token being `{opt_out_id}.{tag}`: the id is a hash of the address
+  (`timada-automations/OptOut`, which keeps no address), the tag an HMAC of the
+  tenant and the id under a key every node derives from `[secrets] key`. Nothing
+  is stored to check it, it never expires, and it is worthless for another shop.
+  The storefront hands it back to `POST /store/automations/opt-out`; a mail
+  client's one-click unsubscribe (RFC 8058) does the same. A member stops (or
+  restores) an address on the Automations page, at a customer's request.
+- **Who is skipped:** an address that stopped them, one whose account was
+  erased, one that left (or was erased from) the newsletter, one whose sealed
+  address is gone, and one this scenario already mailed today
+  (`timada-automations/MailClaim`, one claim per scenario, address and day): a
+  contact form or a checkout, whose addresses nobody checked, is no relay. A
+  skipped mail lets the run go on, and the run's log says why.
+- Claimed before it goes out, a mail is never sent twice, as for the notices.

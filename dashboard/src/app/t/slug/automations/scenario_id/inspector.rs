@@ -5,7 +5,7 @@
 
 use timada_automations::{
     ProblemAt, Step,
-    catalog::{self, CONDITION, NOTIFY, Op, Unit, WAIT},
+    catalog::{self, CONDITION, EMAIL, NOTIFY, Op, Unit, WAIT},
 };
 use topcoat::{
     Result,
@@ -137,6 +137,8 @@ async fn step_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
             condition_settings(canvas: canvas, step: step)
         } else if step.kind == NOTIFY {
             notify_settings(canvas: canvas, step: step)
+        } else if step.kind == EMAIL {
+            email_settings(canvas: canvas, step: step)
         } else {
             <p class="text-sm text-muted-foreground">"This block was made with a newer version of Timada. It is kept as it is; remove it to publish the scenario."</p>
         }
@@ -328,5 +330,59 @@ async fn notify_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> 
             field_description((format!("Mailed to the members allowed to see {about}, with a link to it. Write what they should do.")))
             issue_list(texts: issues_of(canvas, &step.id, "note"))
         )
+    })
+}
+
+#[component]
+async fn email_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+    let setting = |key: &str| step.settings.get(key).cloned().unwrap_or_default();
+    let subject = setting("subject");
+    let html = setting("html");
+    let text = setting("text");
+    let about_orders = super::mail::kind_of(&canvas.editor.definition)
+        == timada_tenancy::ShopMailKind::AutomationOrder;
+    Ok(view! {
+        <p class="text-sm text-muted-foreground">
+            "Goes to the address of whoever the run is about, from the shop's own mail server, and at most once a day per scenario. Not to those who stopped the shop's automated mails, left its newsletter or erased their account."
+        </p>
+        field(
+            label_of(attrs: attributes! { for="email-subject" }, "Subject")
+            input(attrs: attributes! { id="email-subject" name="settings.subject" value=(&subject) maxlength="200" })
+            issue_list(texts: issues_of(canvas, &step.id, "subject"))
+        )
+        field(
+            label_of(attrs: attributes! { for="email-html" }, "Body (HTML)")
+            textarea(
+                attrs: attributes! { id="email-html" name="settings.html" rows="14" spellcheck="false" class="font-mono text-xs" },
+                (&html)
+            )
+            field_description(
+                if about_orders {
+                    "Write {{ shop.name }}, {{ order.reference }}, {{ order.total }} or loop over {{ order.lines }}; {{ link }} is the order's page."
+                } else {
+                    "Write {{ shop.name }} and the shop's other variables."
+                }
+                " Link to {{ unsubscribe_url }}: every automated mail lets its reader stop them."
+            )
+            issue_list(texts: issues_of(canvas, &step.id, "html"))
+        )
+        field(
+            label_of(attrs: attributes! { for="email-text" }, "Plain-text version")
+            textarea(
+                attrs: attributes! { id="email-text" name="settings.text" rows="5" spellcheck="false" class="font-mono text-xs" },
+                (&text)
+            )
+            field_description("Leave it empty to derive it from the HTML.")
+        )
+        if let Some(preview) = &canvas.preview {
+            if let Ok(rendered) = preview {
+                <p class="text-sm"><span class="text-muted-foreground">"Subject: "</span><span data-preview-subject="">(&rendered.subject)</span></p>
+                <iframe sandbox="" title="Preview of the mail" srcdoc=(&rendered.html)
+                    class="h-80 w-full rounded-lg border border-border bg-white"></iframe>
+            }
+            if let Err(err) = preview {
+                <p class="text-sm text-destructive" role="alert" data-template-error="">(err.to_string())</p>
+            }
+        }
     })
 }

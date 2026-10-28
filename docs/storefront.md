@@ -397,6 +397,18 @@ if takes_messages(cx) {                          // the host gave the dashboard'
   `[store]`'s window) or `writes_paused`. The limits are exported
   (`MIN_MESSAGE_LEN`, `MAX_MESSAGE_LEN`, `MAX_MESSAGE_NAME_LEN`).
 
+## Automated mails
+
+Every mail an automation scenario sends a customer (see `docs/automations.md`)
+ends with a link to the storefront's `/emails/opt-out/{token}`. The page asks for
+one click (a mail scanner opening it stops nothing), and the button, like a mail
+client's one-click unsubscribe (`List-Unsubscribe-Post`, a POST to the same
+address), hands the token back with `stop_automated_mails(cx, token)`
+(`POST /store/automations/opt-out`, a key allowing `store:checkout`): `true` once
+the address stops getting them, `false` for a link that does not check out. The
+token carries no address and needs nothing stored. The Chatounette example has
+the page (`examples/chatounette/src/app/emails/opt_out/token`).
+
 ## `GET /store/status`
 
 ```json

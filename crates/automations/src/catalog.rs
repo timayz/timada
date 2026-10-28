@@ -127,6 +127,9 @@ pub const WAIT: &str = "wait";
 pub const CONDITION: &str = "condition";
 /// Mails the shop's members a note about the subject.
 pub const NOTIFY: &str = "notify";
+/// Mails the customer the run is about (the buyer of an order, the visitor
+/// who wrote, …) a message the merchant wrote.
+pub const EMAIL: &str = "email";
 
 /// A kind of step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +151,10 @@ pub const STEPS: &[StepKind] = &[
     },
     StepKind {
         key: NOTIFY,
+        branches: 0,
+    },
+    StepKind {
+        key: EMAIL,
         branches: 0,
     },
 ];
@@ -684,6 +691,55 @@ pub fn parse_notify(settings: &BTreeMap<String, String>) -> Result<NotifySetting
     }
 }
 
+/// The longest subject of a mail to a customer, in characters.
+pub const MAX_EMAIL_SUBJECT_LEN: usize = 200;
+/// The longest body of a mail to a customer (HTML or text), in bytes.
+pub const MAX_EMAIL_BODY_LEN: usize = 100 * 1024;
+
+/// A mail to the customer, read: templates over the shop's variables and
+/// the subject's, which the host checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmailSettings {
+    pub subject: String,
+    pub html: String,
+    /// The plain-text part; none derives it from the HTML.
+    pub text: Option<String>,
+}
+
+pub fn parse_email(settings: &BTreeMap<String, String>) -> Result<EmailSettings, Vec<Issue>> {
+    let mut issues = Vec::new();
+    let subject = setting(settings, "subject");
+    if subject.is_empty() {
+        issues.push(issue("subject", ISSUE_MISSING));
+    } else if subject.chars().count() > MAX_EMAIL_SUBJECT_LEN
+        || subject.chars().any(char::is_control)
+    {
+        issues.push(issue("subject", ISSUE_INVALID));
+    }
+    let html = settings.get("html").map(|html| html.trim()).unwrap_or("");
+    if html.is_empty() {
+        issues.push(issue("html", ISSUE_MISSING));
+    } else if html.len() > MAX_EMAIL_BODY_LEN {
+        issues.push(issue("html", ISSUE_INVALID));
+    }
+    let text = settings
+        .get("text")
+        .map(|text| text.trim())
+        .filter(|text| !text.is_empty());
+    if text.is_some_and(|text| text.len() > MAX_EMAIL_BODY_LEN) {
+        issues.push(issue("text", ISSUE_INVALID));
+    }
+    if issues.is_empty() {
+        Ok(EmailSettings {
+            subject: subject.to_owned(),
+            html: html.to_owned(),
+            text: text.map(str::to_owned),
+        })
+    } else {
+        Err(issues)
+    }
+}
+
 /// What a new step of `kind` starts with, for a run about `subject`.
 pub fn default_settings(kind: &str, subject: Option<Subject>) -> BTreeMap<String, String> {
     let pairs: Vec<(String, String)> = match kind {
@@ -716,6 +772,7 @@ pub fn step_issues(
         WAIT => parse_wait(settings).map(|_| ()),
         CONDITION => parse_condition(subject, settings).map(|_| ()),
         NOTIFY => parse_notify(settings).map(|_| ()),
+        EMAIL => parse_email(settings).map(|_| ()),
         _ => Ok(()),
     };
     result.err().unwrap_or_default()
