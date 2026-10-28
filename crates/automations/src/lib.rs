@@ -19,6 +19,7 @@ pub mod catalog;
 mod command;
 mod definition;
 mod error;
+pub mod interpreter;
 mod query;
 mod value_object;
 

@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { registerWithEmail, uniqueEmail } from "./email";
+import { mailTo, registerWithEmail, uniqueEmail } from "./email";
 import { invite, inviteLink } from "./invitations";
 import { createTenant, uniqueTenant } from "./tenants";
 
@@ -8,6 +8,8 @@ import { createTenant, uniqueTenant } from "./tenants";
 // them. The editor works by dragging blocks (palette blocks onto the slots
 // between steps, a step by its handle), and the same with buttons only: the
 // "+" menu of a slot, then Move / Move here, with or without JavaScript.
+// Published, a scenario runs: a contact message handed in through the store
+// API makes "Notify the team" mail the owner.
 
 /// A new scenario, its editor open.
 async function newScenario(page: Page, name: string) {
@@ -268,4 +270,95 @@ test("the automations need automations:read, drawing automations:manage", async 
   await ownerContext.close();
   await viewer.context.close();
   await reader.context.close();
+});
+
+test("a published scenario runs: a contact message tells the team", async ({
+  page,
+  request,
+}) => {
+  const owner = uniqueEmail("owner");
+  await registerWithEmail(page, owner);
+  const { name } = uniqueTenant("Running Shop");
+  await createTenant(page, name);
+
+  // The key a storefront hands its contact form's messages in with.
+  await page.getByRole("link", { name: "API keys", exact: true }).click();
+  await page.getByLabel("Label").fill("Storefront");
+  await page.getByLabel(/Fill carts and place orders/).check();
+  await page.getByRole("button", { name: "Create key" }).click();
+  const token = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
+  expect(token).toMatch(/^tk_/);
+
+  await newScenario(page, "Tell the team");
+  await enhanced(page);
+  await chooseTrigger(page, "When a contact message arrives");
+  await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+  await page
+    .locator('[id="add-root.0"]')
+    .getByRole("button", { name: "Notify the team", exact: true })
+    .click();
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("A visitor wrote");
+  await page.locator("[data-inspector]").getByLabel("Note").fill("Answer within a day.");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Published as version 1");
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute(
+    "data-scenario-state",
+    "active",
+  );
+
+  const sent = await request.post("/store/contact", {
+    headers: { Authorization: `Bearer ${token}` },
+    form: {
+      first_name: "Ada",
+      last_name: "Lovelace",
+      email: uniqueEmail("visitor"),
+      body: "Do you ship to Iceland?",
+    },
+  });
+  expect(sent.status()).toBe(201);
+
+  // The runner mails the owner, who may read the messages.
+  const mail = await mailTo(request, owner, `${name}: A visitor wrote`);
+  expect(mail.html).toContain("Answer within a day.");
+  expect(mail.html).toContain("Tell the team");
+  // What the visitor wrote never travels.
+  expect(mail.html).not.toContain("Iceland");
+
+  // The run is listed, finished.
+  await page.getByRole("link", { name: "Runs", exact: true }).click();
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator('[data-run="finished"]')).toHaveCount(1, { timeout: 500 });
+  }).toPass();
+  await page.locator('[data-run="finished"] a').first().click();
+  await expect(page.locator("[data-run-status]")).toHaveText("Finished");
+  await expect(page.locator("[data-run-log]")).toContainText("Notify the team");
+
+  // Paused, then running again.
+  await page.getByRole("link", { name: "Back to the runs" }).click();
+  await page.getByRole("link", { name: "Back to the scenario" }).click();
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Paused");
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute(
+    "data-scenario-state",
+    "paused",
+  );
+  await page.getByRole("button", { name: "Resume", exact: true }).click();
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute(
+    "data-scenario-state",
+    "active",
+  );
+});
+
+test("an unfinished scenario is not published", async ({ page }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name } = uniqueTenant("Unfinished Shop");
+  await createTenant(page, name);
+  await newScenario(page, "Half done");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("not ready to publish");
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute(
+    "data-scenario-state",
+    "draft",
+  );
 });

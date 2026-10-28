@@ -154,7 +154,8 @@ by construction.
    read models (users, the tenant catalog, the members' history), the tenants' read
    models into the read-model database, this node's copies of the pictures and the
    personal-data keys, the answers the dashboard writes back (payments, invoices),
-   the mails it sends (order confirmations, message notices, newsletter opt-ins).
+   the mails it sends (order confirmations, message notices, newsletter opt-ins),
+   the automation runs it starts.
    A handler takes the tenant from `event.tenant` and builds the gateway it writes
    back with from it. Adding a tenant-scoped context means adding one entry there.
 3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens
@@ -526,7 +527,14 @@ back with the change made, until "Save draft" writes it (with the scenario versi
 the copy was made from, so a copy someone else saved over is refused). Dragging is a
 script on top that presses the same buttons; the "+" menu of a slot and Move / Move
 here do everything without it. The list is `automations_scenarios`
-(`automations:read`). The details, and what runs, are in `docs/automations.md`.
+(`automations:read`).
+
+Publishing freezes the draft as a numbered version. A trigger event starts a `Run`
+of every published scenario listening to it (`timada-dashboard/automation-triggers`,
+on every node; the run's id derives from the scenario and the event, so it starts
+once), and every node moves the runs due on a timer (`[automations] check_secs`,
+`runs_per_check`), each move written against the run's version so one node acts.
+The details are in `docs/automations.md`.
 
 ## The storefront side
 

@@ -52,3 +52,74 @@ pub mod scenario {
         },
     }
 }
+
+/// The run events: one stream per scenario and event that started it.
+pub mod run {
+    /// One run of a published scenario: what started it, then what each
+    /// step it reached did. Its id is [`run_id`](crate::run_id) of the
+    /// scenario and the event, so an event starts a scenario once however
+    /// many nodes see it. Only ids are kept: what a step needs is read
+    /// from the subject when it runs.
+    #[evento::aggregate(name = "timada-automations/Run")]
+    pub enum Run {
+        /// `trigger` is the trigger's kind; `subject_id` the order, review,
+        /// message, customer or subscriber it is about.
+        Started {
+            scenario_id: String,
+            scenario_version: u32,
+            trigger: String,
+            trigger_event_id: String,
+            subject_id: String,
+            started_by: String,
+        },
+        /// A wait began: the run goes on once the clock passes `until`.
+        Waiting {
+            step: String,
+            until: u64,
+            waited_by: String,
+        },
+        /// A condition was checked: the run goes down lane `branch` (0 is
+        /// Yes).
+        Branched {
+            step: String,
+            branch: u32,
+            branched_by: String,
+        },
+        /// A step that acts outside the run was taken, before it acts: the
+        /// node that writes this is the one that acts.
+        StepClaimed {
+            step: String,
+            attempt: u32,
+            claimed_by: String,
+        },
+        /// It acted; `output` is what later steps may use, as JSON.
+        StepSucceeded {
+            step: String,
+            output: String,
+            recorded_by: String,
+        },
+        /// It had nothing to do (nobody to tell, say); the run goes on.
+        StepSkipped {
+            step: String,
+            reason: String,
+            recorded_by: String,
+        },
+        /// It did not act. With `retry_at`, it is tried again then; without,
+        /// the run stops there.
+        StepFailed {
+            step: String,
+            attempt: u32,
+            reason: String,
+            retry_at: Option<u64>,
+            recorded_by: String,
+        },
+        /// Every step reached was done.
+        Finished { finished_by: String },
+        /// Stopped before the end: by a member, or because its scenario was
+        /// deleted.
+        Cancelled {
+            reason: String,
+            cancelled_by: String,
+        },
+    }
+}

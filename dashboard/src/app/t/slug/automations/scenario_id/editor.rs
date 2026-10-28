@@ -89,6 +89,16 @@ pub enum Op {
     RuleAdd,
     RuleRemove(usize),
     Save,
+    Publish,
+}
+
+/// What a button asks to be written, which the caller does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Commit {
+    /// The copy, as the draft.
+    Save,
+    /// The copy, as the next version.
+    Publish,
 }
 
 impl Op {
@@ -120,6 +130,7 @@ impl Op {
                 .and_then(|index| index.parse().ok())
                 .map(Self::RuleRemove),
             "save" => Some(Self::Save),
+            "publish" => Some(Self::Publish),
             _ => None,
         };
         parsed.unwrap_or(Self::Apply)
@@ -239,9 +250,9 @@ impl Editor {
         self.refusal = Some(edit_error_label(error));
     }
 
-    /// Runs a button on the copy; whether it asks for the copy to be saved
-    /// (which the caller does, as it writes).
-    pub fn run(&mut self, op: Op) -> bool {
+    /// Runs a button on the copy; what it asks to be written, if anything
+    /// (which the caller does).
+    pub fn run(&mut self, op: Op) -> Option<Commit> {
         match op {
             Op::Apply => self.announce = Some("Settings applied.".into()),
             Op::Select(id) => {
@@ -348,9 +359,10 @@ impl Editor {
                 }
                 self.focus = Some("inspector".into());
             }
-            Op::Save => return true,
+            Op::Save => return Some(Commit::Save),
+            Op::Publish => return Some(Commit::Publish),
         }
-        false
+        None
     }
 
     fn put(&mut self, slot: &Slot, kind: &str) {
@@ -456,6 +468,8 @@ mod tests {
         );
         assert_eq!(Op::parse("rule-remove:2"), Op::RuleRemove(2));
         assert_eq!(Op::parse("save"), Op::Save);
+        assert_eq!(Op::parse("publish"), Op::Publish);
+        assert_eq!(editor().run(Op::Publish), Some(Commit::Publish));
         // Anything else only applies the settings.
         assert_eq!(Op::parse(""), Op::Apply);
         assert_eq!(Op::parse("add:nowhere:wait"), Op::Apply);
@@ -465,7 +479,7 @@ mod tests {
     fn a_block_is_picked_up_then_put_down_without_dragging() {
         let mut editor = editor();
         editor.definition.set_trigger(ORDER_PLACED).unwrap();
-        assert!(!editor.run(Op::Place(WAIT.into())));
+        assert_eq!(editor.run(Op::Place(WAIT.into())), None);
         assert_eq!(editor.moving, Some(Moving::Kind(WAIT.into())));
         assert!(editor.takes(&root(0)));
         editor.run(Op::Drop(root(0)));

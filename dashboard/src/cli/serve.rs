@@ -158,6 +158,20 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.newsletter.send_check_secs.max(1),
     ));
 
+    // The runs of the shops' automation scenarios move on a timer.
+    let automation_runs = crate::automations::runner::Runner::new(
+        read_pool.clone(),
+        write_pool.clone(),
+        executor.clone(),
+        background_mail.clone(),
+        url.clone(),
+        keys.ring(),
+        config.automations.runs_per_check,
+    )
+    .start(std::time::Duration::from_secs(
+        config.automations.check_secs.max(1),
+    ));
+
     // The products imported from AliExpress are read again on a timer.
     let aliexpress_sync = crate::aliexpress::sync::AliexpressSync::new(
         read_pool.clone(),
@@ -202,6 +216,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     cluster_watch.abort();
     review_requests.abort();
     newsletter_sends.abort();
+    automation_runs.abort();
     aliexpress_sync.abort();
     for subscription in &read_models {
         subscription.stop();
@@ -356,6 +371,10 @@ fn subscriptions(
                 keys.clone(),
                 store.clone(),
             ),
+        ),
+        (
+            "automation triggers",
+            crate::automations::triggers::subscription(write_pool.clone(), store.clone()),
         ),
         (
             "order confirmations",

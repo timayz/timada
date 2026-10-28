@@ -7,8 +7,8 @@ A condition ends its lane: the run goes down its Yes or its No lane, each to
 its own end, and nothing comes after it. A condition put between two steps
 takes the steps after it into its Yes lane.
 
-This page covers how a scenario is kept and edited. What runs it comes with
-the runs.
+This page covers how a scenario is kept and edited, then how a published one
+runs.
 
 ## The definition
 
@@ -115,3 +115,64 @@ without dragging is picked up the same way.
 
 The script only sets data attributes; the classes they switch on are written in
 the Rust markup, which is what the stylesheet is built from.
+
+## Runs
+
+Publishing freezes the draft as the next version (`Published`); Pause and Resume
+hold a published scenario and let it go on; Delete archives it. Each event that
+is a trigger then starts a **run** of every published scenario of the shop
+listening to it: a `Run` stream (`timada-automations/Run`) whose id is a hash of
+the scenario and the event, written at version 0, so an event starts a scenario
+once however many nodes see it. A run keeps ids only (the scenario, its version,
+the trigger, the event, the subject); what a step needs is read from the subject
+when the run gets to it.
+
+| Event | What it records |
+|---|---|
+| `Started { scenario_id, scenario_version, trigger, trigger_event_id, subject_id }` | the run, pinned to the version it started on |
+| `Waiting { step, until }` | a wait began |
+| `Branched { step, branch }` | a condition chose its lane (0 is Yes) |
+| `StepClaimed { step, attempt }` | a step that acts was taken, before it acts |
+| `StepSucceeded { step, output }`, `StepSkipped { step, reason }` | it acted, or had nothing to do |
+| `StepFailed { step, attempt, reason, retry_at }` | it did not act; without `retry_at` the run ends there |
+| `Finished`, `Cancelled { reason }` | the end, or a stop (a member, or the scenario deleted) |
+
+**What starts runs.** One subscription on every node
+(`timada-dashboard/automation-triggers`, `automations/triggers.rs`) follows the
+trigger events: an order placed, shipped, cancelled or refunded, a customer
+account made, a newsletter subscription confirmed, a review submitted or
+published, a contact message received. The same subscription keeps
+`automations_listeners` from the scenarios' `Published`, `Paused`, `Resumed`
+and `Archived`, so the order of the store decides: an event after a publication
+starts a run of that version, one before it never does. An event older than an
+hour is history being replayed and starts nothing.
+
+**What moves them.** Nothing in the event store fires later, so every node looks
+for the runs due on a timer (`[automations] check_secs`, at most
+`runs_per_check` runs a look, from `automations_runs`). The runner
+(`automations/runner.rs`) loads a run and its version's definition, and a pure
+walk (`interpreter::next`) says what comes next: a wait to begin, a condition to
+check (on the subject's facts read now, so a condition after a wait sees the
+order as it is then), a step to act, or the end. Every move is written against
+the run's version: a node that loses the race writes nothing.
+
+- **A step that acts** is claimed first (`StepClaimed`); only the node whose
+  claim is written acts. A notice is not sent twice: a claim whose outcome never
+  comes (the node stopped) fails the step once its ten-minute lease is over.
+- **A paused scenario** holds its runs where they are; resumed, they go on. A
+  deleted one cancels them.
+- **A skipped step** (nobody to tell) lets the run go on; a failed one ends it.
+- **Ended runs** leave `automations_runs` after 90 days; their streams stay.
+
+**Notify the team** mails, on the platform's mail server, the members allowed to
+see the run's subject (`orders:read` for an order, `customers:read` for a
+customer, `newsletter:read`, `reviews:read`, `support:read`): the merchant's
+subject and note, and a link to the subject in the dashboard. Nothing a shopper
+wrote travels.
+
+**No loops.** No step makes an event that is a trigger, so a scenario cannot
+start itself. A step added later that does (cancelling an order, say) must not
+be offered on the trigger it would fire.
+
+The runs of a scenario are listed under `/t/{slug}/automations/{id}/runs`, each
+with its steps; members with `automations:manage` cancel one under way.

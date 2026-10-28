@@ -136,6 +136,14 @@ dir = "data/shopper-keys"
 # # The most mails one campaign sends per look.
 # mails_per_check = 100
 
+# A shop's automation scenarios run from every node: each run moves on a
+# timer, step by step, and each step acts once whichever node moves it.
+# [automations]
+# # How often, in seconds, this node looks for runs whose next step is due.
+# check_secs = 15
+# # The most runs one look moves.
+# runs_per_check = 200
+
 # What storefronts may ask for their shoppers. A storefront has the shop mail
 # sign-in codes, hands in the messages of its contact form and the sign-ups
 # to its news; past these limits it is refused for a while and nothing is

@@ -145,13 +145,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_head("Name")
                             table_head("Trigger")
                             table_head("Steps")
+                            table_head("Runs")
                             table_head("Status")
                             table_head("Changed")
                         )
                     )
                     table_body(
                         if rows.is_empty() {
-                            empty_row(colspan: 5, text: "No scenario here.")
+                            empty_row(colspan: 6, text: "No scenario here.")
                         }
                         for row in &rows {
                             table_row(
@@ -167,6 +168,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     }
                                 )
                                 table_cell((row.steps))
+                                table_cell((row.runs))
                                 table_cell(
                                     <div class="flex flex-wrap items-center gap-2">
                                         status_badge(tone: status_tone(row.status()), (status_label(row.status())))

@@ -6,10 +6,10 @@ use timada_automations::catalog::{
     ISSUE_TOO_MANY_RULES, ISSUE_UNKNOWN_FIELD, NOTIFY, Op, RuleValue, Subject, Unit, WAIT,
 };
 use timada_automations::{
-    EditError, PROBLEM_AFTER_BRANCH, PROBLEM_BRANCHES, PROBLEM_INVALID_ID, PROBLEM_NEWER_SCHEMA,
-    PROBLEM_NO_STEPS, PROBLEM_NO_TRIGGER, PROBLEM_TOO_DEEP, PROBLEM_TOO_LARGE,
-    PROBLEM_TOO_MANY_STEPS, PROBLEM_UNKNOWN_STEP, PROBLEM_UNKNOWN_TRIGGER, Problem, ScenarioStatus,
-    Step,
+    EditError, Outcome, PROBLEM_AFTER_BRANCH, PROBLEM_BRANCHES, PROBLEM_INVALID_ID,
+    PROBLEM_NEWER_SCHEMA, PROBLEM_NO_STEPS, PROBLEM_NO_TRIGGER, PROBLEM_TOO_DEEP,
+    PROBLEM_TOO_LARGE, PROBLEM_TOO_MANY_STEPS, PROBLEM_UNKNOWN_STEP, PROBLEM_UNKNOWN_TRIGGER,
+    Problem, RunStatus, ScenarioStatus, Step,
 };
 use topcoat::icon::IconData;
 
@@ -89,6 +89,60 @@ pub fn trigger_description(kind: &str) -> &'static str {
         catalog::REVIEW_PUBLISHED => "A review went public.",
         catalog::MESSAGE_RECEIVED => "A visitor wrote through the contact form.",
         _ => "This build does not know this trigger.",
+    }
+}
+
+pub fn run_status_label(status: RunStatus) -> &'static str {
+    match status {
+        RunStatus::Running => "Running",
+        RunStatus::Waiting => "Waiting",
+        RunStatus::Finished => "Finished",
+        RunStatus::Failed => "Failed",
+        RunStatus::Cancelled => "Cancelled",
+    }
+}
+
+pub fn run_status_tone(status: RunStatus) -> Tone {
+    match status {
+        RunStatus::Running => Tone::Primary,
+        RunStatus::Waiting => Tone::Neutral,
+        RunStatus::Finished => Tone::Success,
+        RunStatus::Failed => Tone::Danger,
+        RunStatus::Cancelled => Tone::Warning,
+    }
+}
+
+/// What a step of a run did, in a few words.
+pub fn outcome_label(outcome: &Outcome, kind: &str) -> String {
+    match outcome {
+        Outcome::Waiting { until } => format!("Waits until {}", crate::ui::format_time(*until)),
+        Outcome::Branched(branch) => {
+            format!("Went down {}", branch_label(kind, *branch as usize))
+        }
+        Outcome::Claimed { attempt: 1 } => "Taken to act".to_owned(),
+        Outcome::Claimed { attempt } => format!("Taken to act (attempt {attempt})"),
+        Outcome::Succeeded { .. } => "Done".to_owned(),
+        Outcome::Skipped { reason } => format!("Skipped: {reason}"),
+        Outcome::Failed {
+            reason,
+            retry_at: Some(at),
+            ..
+        } => format!(
+            "Failed: {reason} Tried again at {}.",
+            crate::ui::format_time(*at)
+        ),
+        Outcome::Failed { reason, .. } => format!("Failed: {reason}"),
+    }
+}
+
+/// What a run is about, as a word.
+pub fn subject_kind(subject: Subject) -> &'static str {
+    match subject {
+        Subject::Order => "Order",
+        Subject::Shopper => "Customer",
+        Subject::Subscriber => "Subscriber",
+        Subject::Review => "Review",
+        Subject::Message => "Message",
     }
 }
 
