@@ -2,8 +2,9 @@
 //! problem is called. The crate names kinds by key; here they read.
 
 use timada_automations::catalog::{
-    self, CONDITION, FieldType, ISSUE_INVALID, ISSUE_MISSING, ISSUE_NO_RULES, ISSUE_NO_SUBJECT,
-    ISSUE_TOO_MANY_RULES, ISSUE_UNKNOWN_FIELD, NOTIFY, Op, RuleValue, Subject, Unit, WAIT,
+    self, CONDITION, EMAIL, FieldType, ISSUE_INVALID, ISSUE_MISSING, ISSUE_NO_RULES,
+    ISSUE_NO_SUBJECT, ISSUE_TOO_MANY_RULES, ISSUE_UNKNOWN_FIELD, NOTIFY, Op, RuleValue, Subject,
+    Unit, WAIT,
 };
 use timada_automations::{
     EditError, Outcome, PROBLEM_AFTER_BRANCH, PROBLEM_BRANCHES, PROBLEM_INVALID_ID,
@@ -162,6 +163,7 @@ pub fn step_label(kind: &str) -> &'static str {
         WAIT => "Wait",
         CONDITION => "If / else",
         NOTIFY => "Notify the team",
+        EMAIL => "E-mail the customer",
         _ => "Unknown block",
     }
 }
@@ -171,6 +173,9 @@ pub fn step_description(kind: &str) -> &'static str {
         WAIT => "Pause for minutes, hours or days before the next step.",
         CONDITION => "Check rules, then go down the Yes or the No lane, each to its own end.",
         NOTIFY => "Mail the members who may see what started the run.",
+        EMAIL => {
+            "Mail the buyer, customer or visitor the run is about, from the shop's own server."
+        }
         _ => "Made with a newer version: it is kept as it is.",
     }
 }
@@ -180,6 +185,7 @@ pub fn step_icon(kind: &str) -> IconData {
         WAIT => icons::WAIT,
         CONDITION => icons::CONDITION,
         NOTIFY => icons::NOTIFY,
+        EMAIL => icons::MAIL,
         _ => icons::BLOCK,
     }
 }
@@ -308,6 +314,10 @@ pub fn step_summary(step: &Step, subject: Option<Subject>) -> String {
         NOTIFY => match catalog::parse_notify(&step.settings) {
             Ok(notify) => format!("“{}”", notify.subject),
             Err(_) => "Write what the team reads".to_owned(),
+        },
+        EMAIL => match catalog::parse_email(&step.settings) {
+            Ok(mail) => format!("“{}”", mail.subject),
+            Err(_) => "Write the mail".to_owned(),
         },
         _ => "Kept as it is".to_owned(),
     }

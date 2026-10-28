@@ -46,6 +46,14 @@ pub enum ShopMailKind {
     /// the merchant writes each campaign, there is no shop-wide template to
     /// edit; its default is what a new campaign starts from.
     Newsletter,
+    /// A mail an automation scenario sends about an order (or a review of
+    /// one). Not one of [`ALL`](Self::ALL), like [`Newsletter`](Self::Newsletter):
+    /// each step's copy is the merchant's.
+    AutomationOrder,
+    /// A mail an automation scenario sends a customer, a subscriber or a
+    /// visitor who wrote, with nothing of an order. Not one of
+    /// [`ALL`](Self::ALL).
+    AutomationCustomer,
 }
 
 /// A variable a template may use, as the editor lists it.
@@ -177,6 +185,14 @@ const NEWSLETTER_VARIABLES: [MailVariable; 1] = [MailVariable {
     description: "The page where the subscriber leaves the list. Every campaign links to it.",
 }];
 
+const AUTOMATION_UNSUBSCRIBE: MailVariable = MailVariable {
+    name: "unsubscribe_url",
+    description: "The page where the customer stops the shop's automated mails. Every \
+                  automated mail links to it.",
+};
+
+const AUTOMATION_CUSTOMER_VARIABLES: [MailVariable; 1] = [AUTOMATION_UNSUBSCRIBE];
+
 impl ShopMailKind {
     pub const ALL: [Self; 4] = [
         Self::ShopperCode,
@@ -193,6 +209,8 @@ impl ShopMailKind {
             Self::ReviewRequest => "review_request",
             Self::NewsletterConfirmation => "newsletter_confirmation",
             Self::Newsletter => "newsletter",
+            Self::AutomationOrder => "automation_order",
+            Self::AutomationCustomer => "automation_customer",
         }
     }
 
@@ -207,6 +225,8 @@ impl ShopMailKind {
             Self::ReviewRequest => "Review request",
             Self::NewsletterConfirmation => "Newsletter confirmation",
             Self::Newsletter => "Newsletter",
+            Self::AutomationOrder => "Automated mail about an order",
+            Self::AutomationCustomer => "Automated mail to a customer",
         }
     }
 
@@ -219,6 +239,8 @@ impl ShopMailKind {
                 "Sent when a shopper asks for the shop's news, to confirm their address."
             }
             Self::Newsletter => "A campaign, sent to the confirmed subscribers.",
+            Self::AutomationOrder => "Sent by an automation scenario, about an order.",
+            Self::AutomationCustomer => "Sent by an automation scenario to a customer.",
         }
     }
 
@@ -230,6 +252,15 @@ impl ShopMailKind {
             Self::ReviewRequest => &REVIEW_REQUEST_VARIABLES,
             Self::NewsletterConfirmation => &NEWSLETTER_CONFIRMATION_VARIABLES,
             Self::Newsletter => &NEWSLETTER_VARIABLES,
+            Self::AutomationOrder => {
+                return SHOP_VARIABLES
+                    .iter()
+                    .chain(&ORDER_CONFIRMATION_VARIABLES)
+                    .chain([&AUTOMATION_UNSUBSCRIBE])
+                    .copied()
+                    .collect();
+            }
+            Self::AutomationCustomer => &AUTOMATION_CUSTOMER_VARIABLES,
         };
         SHOP_VARIABLES.iter().chain(own).copied().collect()
     }
@@ -241,7 +272,8 @@ impl ShopMailKind {
             Self::OrderConfirmation | Self::ReviewRequest | Self::NewsletterConfirmation => {
                 &["link", "shop.logo_url"]
             }
-            Self::Newsletter => &["unsubscribe_url", "shop.logo_url"],
+            Self::Newsletter | Self::AutomationCustomer => &["unsubscribe_url", "shop.logo_url"],
+            Self::AutomationOrder => &["unsubscribe_url", "link", "shop.logo_url"],
         }
     }
 
@@ -252,7 +284,7 @@ impl ShopMailKind {
             .iter()
             .map(|variable| variable.name.to_owned())
             .collect();
-        if self == Self::OrderConfirmation {
+        if matches!(self, Self::OrderConfirmation | Self::AutomationOrder) {
             for field in ["code", "amount"] {
                 paths.insert(format!("order.discount.{field}"));
             }
@@ -275,6 +307,8 @@ impl ShopMailKind {
             Self::ReviewRequest => "How was your {{ shop.name }} order {{ order.reference }}?",
             Self::NewsletterConfirmation => "Confirm your subscription to {{ shop.name }}'s news",
             Self::Newsletter => "News from {{ shop.name }}",
+            Self::AutomationOrder => "About your {{ shop.name }} order {{ order.reference }}",
+            Self::AutomationCustomer => "A word from {{ shop.name }}",
         }
     }
 
@@ -287,6 +321,8 @@ impl ShopMailKind {
                 include_str!("mail_templates/newsletter_confirmation.html")
             }
             Self::Newsletter => include_str!("mail_templates/newsletter.html"),
+            Self::AutomationOrder => include_str!("mail_templates/automation_order.html"),
+            Self::AutomationCustomer => include_str!("mail_templates/automation_customer.html"),
         }
     }
 
@@ -316,48 +352,9 @@ impl ShopMailKind {
                 valid_minutes: 10,
             }),
             Self::OrderConfirmation => {
-                let address = |name: &str| AddressVars {
-                    name: name.to_owned(),
-                    line1: "12 rue des Lilas".to_owned(),
-                    line2: full.then(|| "Bâtiment B".to_owned()),
-                    postal_code: "75011".to_owned(),
-                    city: "Paris".to_owned(),
-                    country: "FR".to_owned(),
-                };
                 MailVars::OrderConfirmation(Box::new(OrderConfirmationVars {
                     shop,
-                    order: OrderVars {
-                        reference: "A1B2C3".to_owned(),
-                        email: "camille@example.com".to_owned(),
-                        lines: vec![
-                            LineVars {
-                                name: "Linen shirt".to_owned(),
-                                variant: full.then(|| "Blue, M".to_owned()),
-                                quantity: 2,
-                                amount: "90.00 EUR".to_owned(),
-                            },
-                            LineVars {
-                                name: "Canvas tote".to_owned(),
-                                variant: None,
-                                quantity: 1,
-                                amount: "25.00 EUR".to_owned(),
-                            },
-                        ],
-                        subtotal: "115.00 EUR".to_owned(),
-                        discount: full.then(|| DiscountVars {
-                            code: "WELCOME10".to_owned(),
-                            amount: "11.50 EUR".to_owned(),
-                        }),
-                        shipping_method: full.then(|| ShippingMethodVars {
-                            name: "Colissimo".to_owned(),
-                            amount: "4.90 EUR".to_owned(),
-                            free: false,
-                        }),
-                        total: if full { "108.40 EUR" } else { "115.00 EUR" }.to_owned(),
-                        shipping_address: address("Camille Martin"),
-                        billing_address: full.then(|| address("Martin & Fils SARL")),
-                        note: full.then(|| "Please leave it with the concierge.".to_owned()),
-                    },
+                    order: sample_order(full),
                     link: full.then(|| "https://shop.example.com/orders/A1B2C3".to_owned()),
                 }))
             }
@@ -382,7 +379,62 @@ impl ShopMailKind {
                 unsubscribe_url: "https://shop.example.com/newsletter/unsubscribe/sample"
                     .to_owned(),
             }),
+            Self::AutomationOrder => MailVars::AutomationOrder(Box::new(AutomationOrderVars {
+                shop,
+                order: sample_order(full),
+                link: full.then(|| "https://shop.example.com/orders/A1B2C3".to_owned()),
+                unsubscribe_url: "https://shop.example.com/emails/opt-out/sample".to_owned(),
+            })),
+            Self::AutomationCustomer => MailVars::AutomationCustomer(AutomationCustomerVars {
+                shop,
+                unsubscribe_url: "https://shop.example.com/emails/opt-out/sample".to_owned(),
+            }),
         }
+    }
+}
+
+/// A made-up order: with every optional part filled in (`full`), or with
+/// none.
+fn sample_order(full: bool) -> OrderVars {
+    let address = |name: &str| AddressVars {
+        name: name.to_owned(),
+        line1: "12 rue des Lilas".to_owned(),
+        line2: full.then(|| "Bâtiment B".to_owned()),
+        postal_code: "75011".to_owned(),
+        city: "Paris".to_owned(),
+        country: "FR".to_owned(),
+    };
+    OrderVars {
+        reference: "A1B2C3".to_owned(),
+        email: "camille@example.com".to_owned(),
+        lines: vec![
+            LineVars {
+                name: "Linen shirt".to_owned(),
+                variant: full.then(|| "Blue, M".to_owned()),
+                quantity: 2,
+                amount: "90.00 EUR".to_owned(),
+            },
+            LineVars {
+                name: "Canvas tote".to_owned(),
+                variant: None,
+                quantity: 1,
+                amount: "25.00 EUR".to_owned(),
+            },
+        ],
+        subtotal: "115.00 EUR".to_owned(),
+        discount: full.then(|| DiscountVars {
+            code: "WELCOME10".to_owned(),
+            amount: "11.50 EUR".to_owned(),
+        }),
+        shipping_method: full.then(|| ShippingMethodVars {
+            name: "Colissimo".to_owned(),
+            amount: "4.90 EUR".to_owned(),
+            free: false,
+        }),
+        total: if full { "108.40 EUR" } else { "115.00 EUR" }.to_owned(),
+        shipping_address: address("Camille Martin"),
+        billing_address: full.then(|| address("Martin & Fils SARL")),
+        note: full.then(|| "Please leave it with the concierge.".to_owned()),
     }
 }
 
@@ -399,6 +451,8 @@ pub enum MailVars {
     ReviewRequest(ReviewRequestVars),
     NewsletterConfirmation(NewsletterConfirmationVars),
     Newsletter(NewsletterVars),
+    AutomationOrder(Box<AutomationOrderVars>),
+    AutomationCustomer(AutomationCustomerVars),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -501,6 +555,24 @@ pub struct NewsletterConfirmationVars {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NewsletterVars {
+    pub shop: ShopVars,
+    pub unsubscribe_url: String,
+}
+
+/// An automated mail about an order: the order, its page on the shop when
+/// the shop has an address, and the page that stops the shop's automated
+/// mails.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AutomationOrderVars {
+    pub shop: ShopVars,
+    pub order: OrderVars,
+    pub link: Option<String>,
+    pub unsubscribe_url: String,
+}
+
+/// An automated mail to a customer, with nothing of an order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AutomationCustomerVars {
     pub shop: ShopVars,
     pub unsubscribe_url: String,
 }
@@ -797,6 +869,30 @@ mod tests {
                 .unwrap_or_else(|err| panic!("{kind:?}: {err}"));
             assert_eq!(ShopMailKind::from_key(kind.key()), Some(kind));
         }
+    }
+
+    #[test]
+    fn the_automation_defaults_validate_and_link_to_the_opt_out() {
+        for kind in [
+            ShopMailKind::AutomationOrder,
+            ShopMailKind::AutomationCustomer,
+        ] {
+            validate(kind, kind.default_subject(), kind.default_html()).unwrap();
+            let rendered = render(
+                kind.default_subject(),
+                kind.default_html(),
+                None,
+                &kind.sample(ShopVars::named("Acme")),
+            )
+            .unwrap();
+            // Slashes come out escaped (`&#x2f;`).
+            assert!(rendered.html.contains("opt-out"), "{kind:?}");
+        }
+        // An order mail lists the order; a customer mail has none to use.
+        let order = ShopMailKind::AutomationOrder;
+        validate(order, "{{ order.reference }}", "<p>{{ order.total }}</p>").unwrap();
+        let customer = ShopMailKind::AutomationCustomer;
+        assert!(validate(customer, "Hi", "<p>{{ order.total }}</p>").is_err());
     }
 
     #[test]

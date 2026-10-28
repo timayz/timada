@@ -10,6 +10,7 @@ pub mod boutique;
 pub mod c;
 pub mod cart;
 pub mod checkout;
+pub mod emails;
 pub mod filters;
 pub mod menu;
 pub mod newsletter;
