@@ -20,8 +20,14 @@ pub enum TenancyError {
     InvalidPricingRule,
     #[error("set up the AliExpress app first")]
     AliexpressNotConfigured,
-    #[error("give the mail server's host, port and security, and the address mails come from")]
+    #[error(
+        "give the mail server's host, port and security, the address mails come from, and a name of at most 80 characters"
+    )]
     InvalidMailServer,
+    #[error("a shop keeps at most 10 mail servers")]
+    TooManyMailServers,
+    #[error("no such mail server")]
+    MailServerNotFound,
     #[error("unknown mail")]
     UnknownMail,
     #[error("pick the languages from the list")]

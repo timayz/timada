@@ -38,15 +38,16 @@ use crate::aggregator::api_key::{
 };
 use crate::aggregator::{
     Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailBrandingCleared,
-    MailBrandingSet, MailLanguagesSet, MailServerConfigured, MailServerRemoved, MailTemplateReset,
+    MailBrandingSet, MailLanguagesSet, MailServerAdded, MailServerChanged, MailServerConfigured,
+    MailServerDeleted, MailServerRemoved, MailServersPicked, MailTemplateReset,
     MailTemplateResetIn, MailTemplateSaved, MailTemplateSavedIn, MailTemplateTextSaved,
     MailTemplateTextSavedIn, MemberGranted, MemberRevoked, MemberRoleChanged, PaymentsConfigured,
     PaymentsRemoved, Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated,
     Sent, Suspended,
 };
 use crate::value_object::{
-    LEGACY_API_KEY_SCOPES, ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id,
-    tenant_slug_id,
+    LEGACY_API_KEY_SCOPES, LEGACY_MAIL_SERVER_ID, ROLE_OWNER, api_key_id, api_key_scope_implies,
+    implies, invitation_id, tenant_slug_id,
 };
 
 /// The command gateway. Cheap to clone when `E` is (the dashboard's executor
@@ -86,8 +87,14 @@ pub struct TenantState {
     pub payments: Option<PaymentSettings>,
     /// The company it sells as, once linked.
     pub company: Option<TenantCompany>,
-    /// The merchant's own mail server, once set up.
-    pub mail_server: Option<MailServerSettings>,
+    /// The merchant's own mail servers, in the order they were added.
+    pub mail_servers: Vec<MailServerSettings>,
+    /// The server the shop's mails to its shoppers go out through; `None`
+    /// is the platform's. Read it through [`TenantState::shop_mails_server`].
+    pub shop_mails_server_id: Option<String>,
+    /// The server the shop's marketing goes out through; `None`: no
+    /// marketing goes out. Read it through [`TenantState::marketing_server`].
+    pub marketing_server_id: Option<String>,
     /// The languages the shop mails in, once picked; English until then.
     pub mail_languages: Option<MailLanguages>,
     /// The merchant's wording of the shop's mails, by
@@ -190,10 +197,15 @@ pub struct MailTemplateChange {
     pub reset: bool,
 }
 
-/// The mail server the shop's mails go out through. The password is sealed
-/// bytes only the host can open.
+/// One of the mail servers the shop's mails can go out through. The
+/// password is sealed bytes only the host can open.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MailServerSettings {
+    /// A ULID, or [`LEGACY_MAIL_SERVER_ID`] for the one server a shop set up
+    /// before it could have several.
+    pub id: String,
+    /// The merchant's name for it.
+    pub name: Option<String>,
     pub host: String,
     pub port: u16,
     /// One of [`MAIL_SECURITIES`](crate::MAIL_SECURITIES).
@@ -205,6 +217,13 @@ pub struct MailServerSettings {
     pub configured_by: String,
     /// Unix seconds.
     pub configured_at: u64,
+}
+
+impl MailServerSettings {
+    /// What the merchant knows it by: its name, else its address.
+    pub fn label(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.from_address)
+    }
 }
 
 /// The company a tenant sells as and the series its invoices are numbered
@@ -296,6 +315,10 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_company_unlinked())
         .handler(on_mail_server_configured())
         .handler(on_mail_server_removed())
+        .handler(on_mail_server_added())
+        .handler(on_mail_server_changed())
+        .handler(on_mail_server_deleted())
+        .handler(on_mail_servers_picked())
         .handler(on_aliexpress_configured())
         .handler(on_aliexpress_removed())
         .handler(on_aliexpress_forwarding_set())
@@ -436,8 +459,12 @@ async fn on_mail_server_configured(
     event: Event<MailServerConfigured>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
+    // The one server a shop had before it could have several: it sent all
+    // the shop's mail, so it takes what no server is picked for.
     let data = &event.data;
-    tenant.mail_server = Some(MailServerSettings {
+    tenant.put_mail_server(MailServerSettings {
+        id: LEGACY_MAIL_SERVER_ID.to_owned(),
+        name: None,
         host: data.host.to_owned(),
         port: data.port,
         security: data.security.to_owned(),
@@ -448,6 +475,75 @@ async fn on_mail_server_configured(
         configured_by: data.configured_by.to_owned(),
         configured_at: event.timestamp,
     });
+    if tenant.shop_mails_server().is_none() {
+        tenant.shop_mails_server_id = Some(LEGACY_MAIL_SERVER_ID.to_owned());
+    }
+    if tenant.marketing_server().is_none() {
+        tenant.marketing_server_id = Some(LEGACY_MAIL_SERVER_ID.to_owned());
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_server_added(
+    event: Event<MailServerAdded>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    tenant.put_mail_server(MailServerSettings {
+        id: data.server_id.to_owned(),
+        name: data.name.to_owned(),
+        host: data.host.to_owned(),
+        port: data.port,
+        security: data.security.to_owned(),
+        username: data.username.to_owned(),
+        password_sealed: data.password_sealed.to_owned(),
+        from_address: data.from_address.to_owned(),
+        from_name: data.from_name.to_owned(),
+        configured_by: data.added_by.to_owned(),
+        configured_at: event.timestamp,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_server_changed(
+    event: Event<MailServerChanged>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    tenant.put_mail_server(MailServerSettings {
+        id: data.server_id.to_owned(),
+        name: data.name.to_owned(),
+        host: data.host.to_owned(),
+        port: data.port,
+        security: data.security.to_owned(),
+        username: data.username.to_owned(),
+        password_sealed: data.password_sealed.to_owned(),
+        from_address: data.from_address.to_owned(),
+        from_name: data.from_name.to_owned(),
+        configured_by: data.changed_by.to_owned(),
+        configured_at: event.timestamp,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_server_deleted(
+    event: Event<MailServerDeleted>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.drop_mail_server(&event.data.server_id);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_servers_picked(
+    event: Event<MailServersPicked>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.shop_mails_server_id = event.data.shop_mails.to_owned();
+    tenant.marketing_server_id = event.data.marketing.to_owned();
     Ok(())
 }
 
@@ -502,11 +598,56 @@ async fn on_mail_server_removed(
     _event: Event<MailServerRemoved>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
-    tenant.mail_server = None;
+    tenant.drop_mail_server(LEGACY_MAIL_SERVER_ID);
     Ok(())
 }
 
 impl TenantState {
+    /// One of the shop's mail servers.
+    pub fn mail_server(&self, id: &str) -> Option<&MailServerSettings> {
+        self.mail_servers.iter().find(|server| server.id == id)
+    }
+
+    /// The server the shop's mails to its shoppers go out through; `None`
+    /// for the platform's.
+    pub fn shop_mails_server(&self) -> Option<&MailServerSettings> {
+        self.shop_mails_server_id
+            .as_deref()
+            .and_then(|id| self.mail_server(id))
+    }
+
+    /// The server the shop's marketing goes out through; `None` when none
+    /// is picked, and then no marketing goes out.
+    pub fn marketing_server(&self) -> Option<&MailServerSettings> {
+        self.marketing_server_id
+            .as_deref()
+            .and_then(|id| self.mail_server(id))
+    }
+
+    /// Adds `server`, or replaces the one with its id where it stands.
+    fn put_mail_server(&mut self, server: MailServerSettings) {
+        match self
+            .mail_servers
+            .iter_mut()
+            .find(|saved| saved.id == server.id)
+        {
+            Some(saved) => *saved = server,
+            None => self.mail_servers.push(server),
+        }
+    }
+
+    /// Removes a server; what it was picked for has no server picked any
+    /// more.
+    fn drop_mail_server(&mut self, id: &str) {
+        self.mail_servers.retain(|server| server.id != id);
+        if self.shop_mails_server_id.as_deref() == Some(id) {
+            self.shop_mails_server_id = None;
+        }
+        if self.marketing_server_id.as_deref() == Some(id) {
+            self.marketing_server_id = None;
+        }
+    }
+
     /// The language the shop mails in when a shopper's is not one of its
     /// others, or unknown: the one it picked, else English.
     pub fn mail_default_language(&self) -> &str {

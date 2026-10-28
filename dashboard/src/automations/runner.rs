@@ -52,8 +52,8 @@ impl<E: evento::Executor + Clone + Send + Sync + 'static> Store for E {}
 /// steps, and a run that keeps moving is looked at again next time.
 const MOVES_PER_LOOK: usize = 60;
 /// How long a run waits at a mail to the customer for the shop to set up
-/// what it needs (its own mail server, its storefront's address) before
-/// the step fails, in seconds.
+/// what it needs (a mail server picked for its marketing, its storefront's
+/// address) before the step fails, in seconds.
 const MAIL_HOLD_SECS: u64 = 3 * 24 * 60 * 60;
 /// How long after its delay a checkout left unpaid may still be found:
 /// older ones (a node away, the first look of a new scenario) start
@@ -474,7 +474,7 @@ impl<E: Store> Runner<E> {
         }
         let cx = Cx::new(self.mail.clone());
         if marketing_sender(&cx, tenant).await?.is_none() {
-            return Ok(Some("The shop has no mail server of its own."));
+            return Ok(Some("The shop picked no mail server for its marketing."));
         }
         Ok(None)
     }
@@ -577,8 +577,9 @@ impl<E: Store> Runner<E> {
     }
 
     /// Mails the customer the run is about the merchant's message, through
-    /// the shop's own server, with the link that stops these mails. At most
-    /// one mail a day from a scenario to an address.
+    /// the server the shop picked for its marketing, with the link that
+    /// stops these mails. At most one mail a day from a scenario to an
+    /// address.
     async fn email(
         &self,
         tenant: &TenantState,
@@ -630,7 +631,7 @@ impl<E: Store> Runner<E> {
         let cx = Cx::new(self.mail.clone());
         let Some(sender) = marketing_sender(&cx, tenant).await? else {
             return Ok(Acted::Failed(
-                "The shop has no mail server of its own.".into(),
+                "The shop picked no mail server for its marketing.".into(),
             ));
         };
         let about = order

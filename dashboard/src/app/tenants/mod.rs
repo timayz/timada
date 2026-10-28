@@ -43,6 +43,8 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::InvalidPricingRule => "invalid_pricing_rule",
         TenancyError::AliexpressNotConfigured => "aliexpress_not_configured",
         TenancyError::InvalidMailServer => "invalid_mail_server",
+        TenancyError::TooManyMailServers => "too_many_mail_servers",
+        TenancyError::MailServerNotFound => "mail_server_not_found",
         TenancyError::UnknownMail => "unknown_mail",
         TenancyError::InvalidMailLanguages => "invalid_mail_languages",
         TenancyError::UnknownLanguage => "unknown_language",

@@ -1,17 +1,22 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
-    MailBrandingCleared, MailBrandingSet, MailLanguagesSet, MailServerConfigured,
-    MailServerRemoved, MailTemplateResetIn, MailTemplateSavedIn, MailTemplateTextSavedIn,
+    MailBrandingCleared, MailBrandingSet, MailLanguagesSet, MailServerAdded, MailServerChanged,
+    MailServerDeleted, MailServersPicked, MailTemplateResetIn, MailTemplateSavedIn,
+    MailTemplateTextSavedIn,
 };
 use crate::error::TenancyError;
 use crate::languages::{is_language, language_rank};
 use crate::mail_template::{ShopMailKind, validate, validate_text};
-use crate::value_object::{MAIL_SECURITIES, PERMISSION_MAIL_MANAGE};
+use crate::value_object::{
+    MAIL_SECURITIES, MAX_MAIL_SERVER_NAME_LEN, MAX_MAIL_SERVERS, PERMISSION_MAIL_MANAGE,
+};
 
-/// The merchant's own mail server, its password sealed by the host.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigureMailServer {
+/// One of the merchant's own mail servers, its password sealed by the host.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SaveMailServer {
+    /// The merchant's name for it; blank shows it by its address.
+    pub name: Option<String>,
     pub host: String,
     pub port: u16,
     pub security: String,
@@ -19,6 +24,46 @@ pub struct ConfigureMailServer {
     pub password_sealed: Option<Vec<u8>>,
     pub from_address: String,
     pub from_name: Option<String>,
+}
+
+/// Which of the shop's servers sends what, by id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PickMailServers {
+    /// The shop's mails to its shoppers; `None`: the platform's server.
+    pub shop_mails: Option<String>,
+    /// Its newsletter campaigns and automated mails; `None`: none go out.
+    pub marketing: Option<String>,
+}
+
+/// `cmd` trimmed, blanks as `None`; `InvalidMailServer` when it cannot be
+/// a server.
+fn normalize_mail_server(cmd: SaveMailServer) -> Result<SaveMailServer, TenancyError> {
+    let host = cmd.host.trim().to_owned();
+    let from_address = cmd.from_address.trim().to_owned();
+    let name = filled(cmd.name);
+    if host.is_empty()
+        || host.len() > 253
+        || host.contains(|c: char| c.is_whitespace() || c == '/')
+        || cmd.port == 0
+        || !MAIL_SECURITIES.contains(&cmd.security.as_str())
+        || from_address.len() > 254
+        || !from_address.contains('@')
+        || name
+            .as_ref()
+            .is_some_and(|name| name.chars().count() > MAX_MAIL_SERVER_NAME_LEN)
+    {
+        return Err(TenancyError::InvalidMailServer);
+    }
+    Ok(SaveMailServer {
+        name,
+        host,
+        port: cmd.port,
+        security: cmd.security,
+        username: filled(cmd.username),
+        password_sealed: cmd.password_sealed,
+        from_address,
+        from_name: filled(cmd.from_name),
+    })
 }
 
 /// The look all of a shop's mails share. Blank parts are unset.
@@ -92,69 +137,163 @@ fn filled(value: Option<String>) -> Option<String> {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Sets (or replaces) the server the shop's mails go out through. Needs
-    /// `mail:manage`.
-    pub async fn configure_mail_server(
+    /// Adds a server the shop can send through; returns its id. The shop's
+    /// first server sends both its mails and its marketing; a later one
+    /// sends nothing until picked. Needs `mail:manage`.
+    pub async fn add_mail_server(
         &self,
         actor_user_id: &str,
         tenant_id: &str,
-        cmd: ConfigureMailServer,
+        cmd: SaveMailServer,
         routing_key: Option<String>,
-    ) -> Result<(), TenancyError> {
-        let host = cmd.host.trim().to_owned();
-        let from_address = cmd.from_address.trim().to_owned();
-        if host.is_empty()
-            || host.len() > 253
-            || host.contains(|c: char| c.is_whitespace() || c == '/')
-            || cmd.port == 0
-            || !MAIL_SECURITIES.contains(&cmd.security.as_str())
-            || from_address.len() > 254
-            || !from_address.contains('@')
-        {
-            return Err(TenancyError::InvalidMailServer);
-        }
+    ) -> Result<String, TenancyError> {
+        let cmd = normalize_mail_server(cmd)?;
         let tenant = self.require_active(tenant_id).await?;
         if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
             return Err(TenancyError::Forbidden);
         }
+        if tenant.mail_servers.len() >= MAX_MAIL_SERVERS {
+            return Err(TenancyError::TooManyMailServers);
+        }
+        let server_id = ulid::Ulid::generate().to_string();
+        let mut write = tenant.write()?;
+        let write = write.routing_key_opt(routing_key).event(&MailServerAdded {
+            server_id: server_id.clone(),
+            name: cmd.name,
+            host: cmd.host,
+            port: cmd.port,
+            security: cmd.security,
+            username: cmd.username,
+            password_sealed: cmd.password_sealed,
+            from_address: cmd.from_address,
+            from_name: cmd.from_name,
+            added_by: actor_user_id.to_owned(),
+        });
+        if tenant.mail_servers.is_empty() {
+            write.event(&MailServersPicked {
+                shop_mails: Some(server_id.clone()),
+                marketing: Some(server_id.clone()),
+                picked_by: actor_user_id.to_owned(),
+            });
+        }
+        write.commit(&self.0).await?;
+        Ok(server_id)
+    }
+
+    /// Replaces everything one of the shop's servers was; what it is picked
+    /// for stays. Unchanged is a no-op. Needs `mail:manage`.
+    pub async fn change_mail_server(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        server_id: &str,
+        cmd: SaveMailServer,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let cmd = normalize_mail_server(cmd)?;
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        let saved = tenant
+            .mail_server(server_id)
+            .ok_or(TenancyError::MailServerNotFound)?;
+        if saved.name == cmd.name
+            && saved.host == cmd.host
+            && saved.port == cmd.port
+            && saved.security == cmd.security
+            && saved.username == cmd.username
+            && saved.password_sealed == cmd.password_sealed
+            && saved.from_address == cmd.from_address
+            && saved.from_name == cmd.from_name
+        {
+            return Ok(());
+        }
         tenant
             .write()?
             .routing_key_opt(routing_key)
-            .event(&MailServerConfigured {
-                host,
+            .event(&MailServerChanged {
+                server_id: server_id.to_owned(),
+                name: cmd.name,
+                host: cmd.host,
                 port: cmd.port,
                 security: cmd.security,
-                username: filled(cmd.username),
+                username: cmd.username,
                 password_sealed: cmd.password_sealed,
-                from_address,
-                from_name: filled(cmd.from_name),
-                configured_by: actor_user_id.to_owned(),
+                from_address: cmd.from_address,
+                from_name: cmd.from_name,
+                changed_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)
             .await?;
         Ok(())
     }
 
-    /// The shop's mails go out through the platform's server again; nothing
-    /// set up is a no-op. Needs `mail:manage`.
-    pub async fn remove_mail_server(
+    /// Deletes one of the shop's servers. What it was picked for has no
+    /// server picked any more: the shop's mails go out through the
+    /// platform's server, and its marketing waits. Needs `mail:manage`.
+    pub async fn delete_mail_server(
         &self,
         actor_user_id: &str,
         tenant_id: &str,
+        server_id: &str,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
         let tenant = self.require_active(tenant_id).await?;
         if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
             return Err(TenancyError::Forbidden);
         }
-        if tenant.mail_server.is_none() {
+        if tenant.mail_server(server_id).is_none() {
+            return Err(TenancyError::MailServerNotFound);
+        }
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&MailServerDeleted {
+                server_id: server_id.to_owned(),
+                deleted_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Picks which of the shop's servers sends its mails and which its
+    /// marketing; each one named must be one of them. Unchanged is a
+    /// no-op. Needs `mail:manage`.
+    pub async fn pick_mail_servers(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        cmd: PickMailServers,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        let named = [&cmd.shop_mails, &cmd.marketing];
+        if named
+            .into_iter()
+            .flatten()
+            .any(|id| tenant.mail_server(id).is_none())
+        {
+            return Err(TenancyError::MailServerNotFound);
+        }
+        let current = (
+            tenant.shop_mails_server().map(|server| server.id.as_str()),
+            tenant.marketing_server().map(|server| server.id.as_str()),
+        );
+        if current == (cmd.shop_mails.as_deref(), cmd.marketing.as_deref()) {
             return Ok(());
         }
         tenant
             .write()?
             .routing_key_opt(routing_key)
-            .event(&MailServerRemoved {
-                removed_by: actor_user_id.to_owned(),
+            .event(&MailServersPicked {
+                shop_mails: cmd.shop_mails,
+                marketing: cmd.marketing,
+                picked_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)
             .await?;

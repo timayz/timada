@@ -189,10 +189,11 @@ to `{{ unsubscribe_url }}`. The editor checks and previews it as it is written.
 
 These mails are marketing, so:
 
-- **They go through the shop's own mail server only**, never the platform's.
-  Publishing a scenario that mails customers needs `newsletter:manage`, the shop's
-  own server, its storefront's address (the link points there) and the operator's
-  secret (`[secrets] key`, which signs the links). A run that reaches a mail while
+- **They go through the mail server the shop picked for marketing only**, never
+  the platform's. Publishing a scenario that mails customers needs
+  `newsletter:manage`, a server picked for marketing on `/t/{slug}/mail`, its
+  storefront's address (the link points there) and the operator's secret
+  (`[secrets] key`, which signs the links). A run that reaches a mail while
   the shop lacks one of them waits for it, up to three days, then fails saying
   which.
 - **Anyone can stop them.** The link is `{storefront}/emails/opt-out/{token}`,
