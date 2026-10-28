@@ -5,7 +5,7 @@
 
 use timada_automations::{
     ProblemAt, Step,
-    catalog::{self, CONDITION, DISCOUNT, EMAIL, NOTIFY, Op, Unit, WAIT},
+    catalog::{self, CONDITION, DISCOUNT, EMAIL, NOTIFY, Op, Unit, WAIT, WEBHOOK},
 };
 use topcoat::{
     Result,
@@ -141,6 +141,8 @@ async fn step_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
             email_settings(canvas: canvas, step: step)
         } else if step.kind == DISCOUNT {
             discount_settings(canvas: canvas, step: step)
+        } else if step.kind == WEBHOOK {
+            webhook_settings(canvas: canvas, step: step)
         } else {
             <p class="text-sm text-muted-foreground">"This block was made with a newer version of Timada. It is kept as it is; remove it to publish the scenario."</p>
         }
@@ -436,5 +438,38 @@ async fn discount_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View
             field_description("Letters and digits; the rest of the code is drawn for each run.")
             issue_list(texts: issues_of(canvas, &step.id, "prefix"))
         )
+    })
+}
+
+#[component]
+async fn webhook_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+    let sealed = step.settings.get("url_sealed").cloned().unwrap_or_default();
+    let host = step.settings.get("host").cloned().unwrap_or_default();
+    let placeholder = if sealed.is_empty() {
+        "https://…"
+    } else {
+        "Saved: type a new address to replace it"
+    };
+    Ok(view! {
+        <p class="text-sm text-muted-foreground">
+            "Posts what started the run (its ids, no personal data) as JSON to this address; your app reads the rest with its API key. Signed with Timada-Signature, the same key on every try (Idempotency-Key)."
+        </p>
+        field(
+            label_of(attrs: attributes! { for="webhook-url" }, "Address")
+            input(attrs: attributes! { id="webhook-url" name="settings.url" type="url" placeholder=(placeholder) autocomplete="off" })
+            if !host.is_empty() {
+                field_description((format!("Calls {host}. The address is kept sealed.")))
+            }
+            issue_list(texts: issues_of(canvas, &step.id, "url"))
+        )
+        <input type="hidden" name="settings.url_sealed" value=(&sealed)>
+        <input type="hidden" name="settings.host" value=(&host)>
+        if let Some(secret) = &canvas.webhook_secret {
+            field(
+                label_of(attrs: attributes! { for="webhook-secret" }, "Signing secret")
+                input(attrs: attributes! { id="webhook-secret" value=(secret) readonly="" class="font-mono text-xs" data-webhook-secret="" })
+                field_description("Check each call's Timada-Signature (t=…,v1=…, HMAC-SHA256 of \"{t}.{body}\") with it.")
+            )
+        }
     })
 }

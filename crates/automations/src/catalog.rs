@@ -132,6 +132,8 @@ pub const NOTIFY: &str = "notify";
 pub const EMAIL: &str = "email";
 /// Creates a single-use discount code, which a later mail may quote.
 pub const DISCOUNT: &str = "discount";
+/// Posts what started the run to an address of the merchant's, signed.
+pub const WEBHOOK: &str = "webhook";
 
 /// A kind of step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +163,10 @@ pub const STEPS: &[StepKind] = &[
     },
     StepKind {
         key: DISCOUNT,
+        branches: 0,
+    },
+    StepKind {
+        key: WEBHOOK,
         branches: 0,
     },
 ];
@@ -829,6 +835,26 @@ pub fn parse_discount(settings: &BTreeMap<String, String>) -> Result<DiscountSet
     }
 }
 
+/// A webhook step, read. The address is a secret (a hook's address often is
+/// its only key) and the definition replicates to storefronts, so it is kept
+/// sealed by the host (`url_sealed`); only its host is in clear, to show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebhookSettings {
+    pub url_sealed: String,
+    pub host: String,
+}
+
+pub fn parse_webhook(settings: &BTreeMap<String, String>) -> Result<WebhookSettings, Vec<Issue>> {
+    let url_sealed = setting(settings, "url_sealed");
+    if url_sealed.is_empty() {
+        return Err(vec![issue("url", ISSUE_MISSING)]);
+    }
+    Ok(WebhookSettings {
+        url_sealed: url_sealed.to_owned(),
+        host: setting(settings, "host").to_owned(),
+    })
+}
+
 /// What a new step of `kind` starts with, for a run about `subject`.
 pub fn default_settings(kind: &str, subject: Option<Subject>) -> BTreeMap<String, String> {
     let pairs: Vec<(String, String)> = match kind {
@@ -870,6 +896,7 @@ pub fn step_issues(
         NOTIFY => parse_notify(settings).map(|_| ()),
         EMAIL => parse_email(settings).map(|_| ()),
         DISCOUNT => parse_discount(settings).map(|_| ()),
+        WEBHOOK => parse_webhook(settings).map(|_| ()),
         _ => Ok(()),
     };
     result.err().unwrap_or_default()

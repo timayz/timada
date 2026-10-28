@@ -126,7 +126,7 @@ pub async fn edit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> {
     let mut editor = form
         .into_editor(&scenario)
         .map_err(topcoat::Error::from_anyhow)?;
-    let mut error = None;
+    let mut error = seal_webhook_url(cx, &access, &scenario.id, &mut editor);
     let commit = if editor.refusal.is_none() {
         editor.run(op)
     } else {
@@ -200,6 +200,56 @@ pub async fn edit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> {
     })
 }
 
+/// Seals the address typed in the open webhook step's settings: the
+/// definition only ever holds it sealed (with its host in clear, to show).
+/// An address that is not one, or no secret to seal it with, is refused.
+fn seal_webhook_url(
+    cx: &Cx,
+    access: &TenantAccess,
+    scenario_id: &str,
+    editor: &mut Editor,
+) -> Option<&'static str> {
+    let id = editor.selected.clone()?;
+    let step = editor.definition.find(&id)?;
+    if step.kind != timada_automations::catalog::WEBHOOK {
+        return None;
+    }
+    let mut settings = step.settings.clone();
+    let typed = settings
+        .remove("url")
+        .map(|url| url.trim().to_owned())
+        .filter(|url| !url.is_empty());
+    let mut refused = None;
+    if let Some(url) = typed {
+        match reqwest::Url::parse(&url) {
+            Ok(parsed) if matches!(parsed.scheme(), "https" | "http") => {
+                let keys = &topcoat::context::app_context::<crate::app::WebhookSealing>(cx).0;
+                match keys.as_ref().map(|keys| {
+                    crate::automations::webhook::seal_url(
+                        keys,
+                        &access.tenant.id,
+                        scenario_id,
+                        &id,
+                        &url,
+                    )
+                }) {
+                    Some(Ok(sealed)) => {
+                        settings.insert("url_sealed".into(), sealed);
+                        settings.insert(
+                            "host".into(),
+                            parsed.host_str().unwrap_or_default().to_owned(),
+                        );
+                    }
+                    _ => refused = Some("automation_secret_required"),
+                }
+            }
+            _ => refused = Some("automation_webhook_address"),
+        }
+    }
+    let _ = editor.definition.configure(&id, settings);
+    refused
+}
+
 /// What keeps a scenario from being published, if anything: a step that
 /// acts with a permission the member lacks, or a mail to customers the
 /// shop cannot send.
@@ -218,6 +268,24 @@ async fn publish_blocked(
             .await?
     {
         return Ok(Some("automation_discount_permission"));
+    }
+    let calls_webhooks = definition
+        .walk()
+        .iter()
+        .any(|step| step.kind == timada_automations::catalog::WEBHOOK);
+    if calls_webhooks {
+        if !access
+            .can(cx, timada_tenancy::PERMISSION_API_KEYS_MANAGE)
+            .await?
+        {
+            return Ok(Some("automation_webhook_permission"));
+        }
+        if topcoat::context::app_context::<crate::app::WebhookSealing>(cx)
+            .0
+            .is_none()
+        {
+            return Ok(Some("automation_secret_required"));
+        }
     }
     if !mail::sends_mail(definition) {
         return Ok(None);
@@ -299,6 +367,22 @@ async fn scenario_page(
         .and_then(|id| editor.definition.find(id))
         .filter(|step| step.kind == timada_automations::catalog::EMAIL)
         .map(|step| mail::preview(cx, tenant, &editor.definition, step));
+    let webhook_secret = editor
+        .selected
+        .as_deref()
+        .and_then(|id| editor.definition.find(id))
+        .filter(|step| step.kind == timada_automations::catalog::WEBHOOK)
+        .and_then(|step| {
+            let keys = topcoat::context::app_context::<crate::app::WebhookSealing>(cx)
+                .0
+                .as_ref()?;
+            Some(crate::automations::webhook::signing_secret(
+                keys,
+                &tenant.id,
+                &scenario.id,
+                &step.id,
+            ))
+        });
     let canvas = Canvas {
         editor,
         scenario_id: &scenario.id,
@@ -307,6 +391,7 @@ async fn scenario_page(
         problems,
         manage,
         preview,
+        webhook_secret,
     };
     let subtitle = match (scenario.status, scenario.version) {
         (ScenarioStatus::Draft, _) => "A draft: nothing runs from it yet.".to_owned(),

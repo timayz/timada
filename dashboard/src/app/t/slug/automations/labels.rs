@@ -4,7 +4,7 @@
 use timada_automations::catalog::{
     self, CONDITION, CodeValue, DISCOUNT, EMAIL, FieldType, ISSUE_INVALID, ISSUE_MISSING,
     ISSUE_NO_RULES, ISSUE_NO_SUBJECT, ISSUE_TOO_MANY_RULES, ISSUE_UNKNOWN_FIELD, NOTIFY, Op,
-    RuleValue, Subject, Unit, WAIT,
+    RuleValue, Subject, Unit, WAIT, WEBHOOK,
 };
 use timada_automations::{
     EditError, Outcome, PROBLEM_AFTER_BRANCH, PROBLEM_BRANCHES, PROBLEM_INVALID_ID,
@@ -165,6 +165,7 @@ pub fn step_label(kind: &str) -> &'static str {
         NOTIFY => "Notify the team",
         EMAIL => "E-mail the customer",
         DISCOUNT => "Create a discount code",
+        WEBHOOK => "Call a webhook",
         _ => "Unknown block",
     }
 }
@@ -178,6 +179,7 @@ pub fn step_description(kind: &str) -> &'static str {
             "Mail the buyer, customer or visitor the run is about, from the shop's own server."
         }
         DISCOUNT => "Make a single-use code that a mail after it can quote.",
+        WEBHOOK => "Post what started the run to your own app or another service, signed.",
         _ => "Made with a newer version: it is kept as it is.",
     }
 }
@@ -189,6 +191,7 @@ pub fn step_icon(kind: &str) -> IconData {
         NOTIFY => icons::NOTIFY,
         EMAIL => icons::MAIL,
         DISCOUNT => icons::DISCOUNTS,
+        WEBHOOK => icons::WEBHOOK,
         _ => icons::BLOCK,
     }
 }
@@ -335,6 +338,11 @@ pub fn step_summary(step: &Step, subject: Option<Subject>) -> String {
                 format!("{value} off, {} days", code.days)
             }
             Err(_) => "Set what the code takes off".to_owned(),
+        },
+        WEBHOOK => match catalog::parse_webhook(&step.settings) {
+            Ok(hook) if !hook.host.is_empty() => format!("Calls {}", hook.host),
+            Ok(_) => "Calls the saved address".to_owned(),
+            Err(_) => "Give the address to call".to_owned(),
         },
         _ => "Kept as it is".to_owned(),
     }
