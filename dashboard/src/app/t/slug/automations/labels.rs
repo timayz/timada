@@ -177,6 +177,7 @@ pub fn step_description(kind: &str) -> &'static str {
         EMAIL => {
             "Mail the buyer, customer or visitor the run is about, from the shop's own server."
         }
+        DISCOUNT => "Make a single-use code that a mail after it can quote.",
         _ => "Made with a newer version: it is kept as it is.",
     }
 }
