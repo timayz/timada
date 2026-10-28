@@ -347,7 +347,7 @@ async fn email_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
         == timada_tenancy::ShopMailKind::AutomationOrder;
     Ok(view! {
         <p class="text-sm text-muted-foreground">
-            "Goes to the address of whoever the run is about, from the shop's own mail server, and at most once a day per scenario. Not to those who stopped the shop's automated mails, left its newsletter or erased their account."
+            "Goes to the address of whoever the run is about, through the mail server the shop picked for marketing, and at most once a day per scenario. Not to those who stopped the shop's automated mails, left its newsletter or erased their account."
         </p>
         field(
             label_of(attrs: attributes! { for="email-subject" }, "Subject")

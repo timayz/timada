@@ -187,16 +187,20 @@ by construction.
    creates the order (`place_paid_order`). A second payment of a cart is refunded;
    cancelling an order refunds it first. Setting it up and testing it locally:
    `docs/payments.md`.
-5. **Shop mail** (`shop_mail.rs`). A shop's mails to its shoppers (order
-   confirmations, review requests, sign-in codes) go out through the merchant's own
-   SMTP server once it set one up on `/t/{slug}/mail`, and through the platform's
-   `[mail]` server under the shop's name otherwise. Saving sends a test mail first.
-   The password is recorded in the tenant's platform events (`MailServerConfigured`)
-   sealed under `[secrets] key`; secrets never enter the tenant store, which
+5. **Shop mail** (`shop_mail.rs`). A merchant sets up SMTP servers of its own on
+   `/t/{slug}/mail` (up to ten) and picks one for each kind of mail
+   (`MailServersPicked`). The shop's mails to its shoppers (order confirmations,
+   review requests, sign-in codes) go out through the server picked for them, and
+   through the platform's `[mail]` server under the shop's name when none is
+   (`ShopMail::sender_of`). Saving a server sends a test mail first. The passwords
+   are recorded in the tenant's platform events (`MailServerAdded`/`Changed`; the
+   single server of before, `MailServerConfigured`, folds as the first, picked for
+   both) sealed under `[secrets] key`; secrets never enter the tenant store, which
    replicates to storefronts. Hosts on this machine or a private network are refused
    unless `mail.allow_private_hosts` is set. Account codes and invitations always go
-   through the platform's server; newsletter campaigns and their test mails never do,
-   they go through the shop's own server only (`ShopMail::own_sender_of`). Each shop mail may be worded per language: the
+   through the platform's server; newsletter campaigns, automated mails and their
+   test mails never do, they go through the server picked for marketing only
+   (`ShopMail::marketing_sender_of`). Each shop mail may be worded per language: the
    shopper's language comes from the storefront's `Accept-Language` and is kept on
    the order (`LanguageGiven`/`LanguageSet`). Details: `docs/mail.md`.
 6. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
@@ -506,9 +510,11 @@ campaign once however many nodes send it; a mail the server refuses is recorded
 List-Unsubscribe=One-Click` (RFC 8058) pointing at the storefront's unsubscribe page,
 whose POST takes the subscriber off the list; a shop without a storefront address
 holds its campaign back until it has one. Marketing never borrows the platform's
-server: a campaign goes through the shop's own mail server only, the send page and
-the test mail refuse without one (`mail_server_required`), and a sweep that finds
-the server gone holds the campaign back, claiming nobody, until it is set up again.
+server: a campaign goes through the mail server the shop picked for its marketing
+only, the send page and the test mail refuse without one (`mail_server_required`),
+and a sweep that finds none picked holds the campaign back, claiming nobody, until
+one is. The sender is looked up per batch, so a server switched mid-campaign sends
+the next batches.
 
 ## Automations
 

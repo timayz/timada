@@ -1,9 +1,10 @@
 mod common;
 
 use common::*;
+use timada_tenancy::aggregator::{MailServerConfigured, MailServerRemoved};
 use timada_tenancy::{
-    ConfigureMailServer, DefineRole, SaveMailTemplate, SetMailBranding, SetMailLanguages,
-    ShopMailKind, TenancyError,
+    DefineRole, LEGACY_MAIL_SERVER_ID, MAX_MAIL_SERVERS, PickMailServers, SaveMailServer,
+    SaveMailTemplate, SetMailBranding, SetMailLanguages, ShopMailKind, TenancyError,
 };
 
 fn role(name: &str, permission: &str) -> DefineRole {
@@ -14,8 +15,9 @@ fn role(name: &str, permission: &str) -> DefineRole {
     }
 }
 
-fn server(host: &str, security: &str) -> ConfigureMailServer {
-    ConfigureMailServer {
+fn server(host: &str, security: &str) -> SaveMailServer {
+    SaveMailServer {
+        name: Some("  ".into()),
         host: host.into(),
         port: 587,
         security: security.into(),
@@ -26,17 +28,29 @@ fn server(host: &str, security: &str) -> ConfigureMailServer {
     }
 }
 
+fn picks(shop_mails: Option<&str>, marketing: Option<&str>) -> PickMailServers {
+    PickMailServers {
+        shop_mails: shop_mails.map(str::to_owned),
+        marketing: marketing.map(str::to_owned),
+    }
+}
+
 #[tokio::test]
-async fn an_owner_sets_up_and_removes_a_mail_server() {
+async fn an_owner_adds_changes_and_deletes_mail_servers() {
     let cmd = command().await;
     let alice = new_id();
     let tenant = create_tenant(&cmd, "Acme", &alice).await;
 
-    cmd.configure_mail_server(&alice, &tenant.id, server(" smtp.acme.test ", "starttls"))
+    // The first server sends everything.
+    let orders = cmd
+        .add_mail_server(&alice, &tenant.id, server(" smtp.acme.test ", "starttls"))
         .await
         .unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    let mail = state.mail_server.unwrap();
+    let mail = state.mail_server(&orders).unwrap();
+    assert_eq!(mail.id, orders);
+    assert_eq!(mail.name, None, "a blank name shows the address");
+    assert_eq!(mail.label(), "orders@acme.test");
     assert_eq!(mail.host, "smtp.acme.test");
     assert_eq!(mail.port, 587);
     assert_eq!(mail.security, "starttls");
@@ -45,41 +59,190 @@ async fn an_owner_sets_up_and_removes_a_mail_server() {
     assert_eq!(mail.from_address, "orders@acme.test");
     assert_eq!(mail.from_name, None, "a blank name is the tenant's");
     assert_eq!(mail.configured_by, alice);
+    assert_eq!(state.shop_mails_server().unwrap().id, orders);
+    assert_eq!(state.marketing_server().unwrap().id, orders);
+
+    // A later one sends nothing until picked.
+    let news = cmd
+        .add_mail_server(
+            &alice,
+            &tenant.id,
+            SaveMailServer {
+                name: Some(" News ".into()),
+                from_address: "news@acme.test".into(),
+                ..server("smtp.news.test", "tls")
+            },
+        )
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    let ids: Vec<&str> = state.mail_servers.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, [orders.as_str(), news.as_str()]);
+    assert_eq!(state.mail_server(&news).unwrap().label(), "News");
+    assert_eq!(state.shop_mails_server().unwrap().id, orders);
+    assert_eq!(state.marketing_server().unwrap().id, orders);
+
+    cmd.pick_mail_servers(&alice, &tenant.id, picks(Some(&orders), Some(&news)))
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.shop_mails_server().unwrap().id, orders);
+    assert_eq!(state.marketing_server().unwrap().id, news);
+    let version = state.aggregate_version;
+    cmd.pick_mail_servers(&alice, &tenant.id, picks(Some(&orders), Some(&news)))
+        .await
+        .unwrap();
+    let err = cmd
+        .pick_mail_servers(&alice, &tenant.id, picks(None, Some(&new_id())))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::MailServerNotFound), "{err}");
+
+    // A change keeps the server's place and what it is picked for.
+    let changed = SaveMailServer {
+        name: Some("Orders".into()),
+        ..server("smtp2.acme.test", "tls")
+    };
+    cmd.change_mail_server(&alice, &tenant.id, &orders, changed.clone())
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.mail_servers[0].id, orders);
+    assert_eq!(state.mail_servers[0].host, "smtp2.acme.test");
+    assert_eq!(state.mail_servers[0].label(), "Orders");
+    assert_eq!(state.shop_mails_server().unwrap().id, orders);
+    assert_eq!(state.marketing_server().unwrap().id, news);
+    assert_eq!(
+        state.aggregate_version,
+        version + 1,
+        "an unchanged pick wrote nothing"
+    );
+    let version = state.aggregate_version;
+    cmd.change_mail_server(&alice, &tenant.id, &orders, changed)
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(
+        state.aggregate_version, version,
+        "an unchanged server wrote nothing"
+    );
+    let err = cmd
+        .change_mail_server(
+            &alice,
+            &tenant.id,
+            &new_id(),
+            server("smtp.acme.test", "tls"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::MailServerNotFound), "{err}");
 
     for bad in [
         server("", "tls"),
         server("smtp.acme.test", "ssl"),
         server("smtp acme", "tls"),
-        ConfigureMailServer {
+        SaveMailServer {
             port: 0,
             ..server("smtp.acme.test", "tls")
         },
-        ConfigureMailServer {
+        SaveMailServer {
             from_address: "orders".into(),
+            ..server("smtp.acme.test", "tls")
+        },
+        SaveMailServer {
+            name: Some("n".repeat(81)),
             ..server("smtp.acme.test", "tls")
         },
     ] {
         let err = cmd
-            .configure_mail_server(&alice, &tenant.id, bad)
+            .add_mail_server(&alice, &tenant.id, bad.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TenancyError::InvalidMailServer), "{err}");
+        let err = cmd
+            .change_mail_server(&alice, &tenant.id, &orders, bad)
             .await
             .unwrap_err();
         assert!(matches!(err, TenancyError::InvalidMailServer), "{err}");
     }
+
+    let stranger = new_id();
     let err = cmd
-        .configure_mail_server(&new_id(), &tenant.id, server("smtp.acme.test", "tls"))
+        .add_mail_server(&stranger, &tenant.id, server("smtp.acme.test", "tls"))
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::Forbidden), "{err}");
     let err = cmd
-        .remove_mail_server(&new_id(), &tenant.id)
+        .change_mail_server(
+            &stranger,
+            &tenant.id,
+            &orders,
+            server("smtp.acme.test", "tls"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::Forbidden), "{err}");
+    let err = cmd
+        .pick_mail_servers(&stranger, &tenant.id, picks(None, None))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::Forbidden), "{err}");
+    let err = cmd
+        .delete_mail_server(&stranger, &tenant.id, &orders)
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::Forbidden), "{err}");
 
-    cmd.remove_mail_server(&alice, &tenant.id).await.unwrap();
-    cmd.remove_mail_server(&alice, &tenant.id).await.unwrap();
+    // Deleting the marketing server leaves marketing with no server: it
+    // waits, it never falls back to the shop mails' server.
+    cmd.delete_mail_server(&alice, &tenant.id, &news)
+        .await
+        .unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    assert!(state.mail_server.is_none());
+    assert_eq!(state.mail_servers.len(), 1);
+    assert_eq!(state.shop_mails_server().unwrap().id, orders);
+    assert!(state.marketing_server().is_none());
+    assert_eq!(state.marketing_server_id, None);
+    let err = cmd
+        .delete_mail_server(&alice, &tenant.id, &news)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::MailServerNotFound), "{err}");
+
+    // Shop mails through the platform's server, by choice.
+    cmd.pick_mail_servers(&alice, &tenant.id, picks(None, Some(&orders)))
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert!(state.shop_mails_server().is_none());
+    assert_eq!(state.marketing_server().unwrap().id, orders);
+
+    cmd.delete_mail_server(&alice, &tenant.id, &orders)
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert!(state.mail_servers.is_empty());
+    assert!(state.shop_mails_server().is_none());
+    assert!(state.marketing_server().is_none());
+
+    // With none left, the next one is the first again.
+    let mut ids = Vec::new();
+    for n in 0..MAX_MAIL_SERVERS {
+        let host = format!("smtp{n}.acme.test");
+        ids.push(
+            cmd.add_mail_server(&alice, &tenant.id, server(&host, "tls"))
+                .await
+                .unwrap(),
+        );
+    }
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.shop_mails_server().unwrap().id, ids[0]);
+    assert_eq!(state.marketing_server().unwrap().id, ids[0]);
+    let err = cmd
+        .add_mail_server(&alice, &tenant.id, server("smtp.acme.test", "tls"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::TooManyMailServers), "{err}");
 }
 
 #[tokio::test]
@@ -98,7 +261,7 @@ async fn a_member_needs_mail_manage() {
         .await
         .unwrap();
     let err = cmd
-        .configure_mail_server(&bob, &tenant.id, server("smtp.acme.test", "tls"))
+        .add_mail_server(&bob, &tenant.id, server("smtp.acme.test", "tls"))
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::Forbidden), "{err}");
@@ -106,9 +269,105 @@ async fn a_member_needs_mail_manage() {
     cmd.change_member_role(&alice, &tenant.id, &bob, "mailer")
         .await
         .unwrap();
-    cmd.configure_mail_server(&bob, &tenant.id, server("smtp.acme.test", "tls"))
+    let id = cmd
+        .add_mail_server(&bob, &tenant.id, server("smtp.acme.test", "tls"))
         .await
         .unwrap();
+    cmd.pick_mail_servers(&bob, &tenant.id, picks(None, Some(&id)))
+        .await
+        .unwrap();
+}
+
+/// The one server a shop set up before it could have several.
+fn legacy_server(host: &str) -> MailServerConfigured {
+    MailServerConfigured {
+        host: host.into(),
+        port: 587,
+        security: "starttls".into(),
+        username: Some("shop@acme.test".into()),
+        password_sealed: Some(vec![1, 2, 3]),
+        from_address: "orders@acme.test".into(),
+        from_name: None,
+        configured_by: "alice".into(),
+    }
+}
+
+#[tokio::test]
+async fn a_server_set_up_before_shops_could_have_several_does_both() {
+    let (executor, _pool) = executor_with_pool().await;
+    let cmd = timada_tenancy::Command(executor.clone());
+    let alice = new_id();
+    let tenant = create_tenant(&cmd, "Acme", &alice).await;
+    // What the log holds from before: set up, then set up again.
+    evento::append(&tenant.id)
+        .original_version(tenant.aggregate_version)
+        .event(&legacy_server("smtp.acme.test"))
+        .event(&legacy_server("smtp2.acme.test"))
+        .commit(&executor)
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.mail_servers.len(), 1);
+    let main = &state.mail_servers[0];
+    assert_eq!(main.id, LEGACY_MAIL_SERVER_ID);
+    assert_eq!(main.host, "smtp2.acme.test");
+    assert_eq!(main.label(), "orders@acme.test");
+    assert_eq!(state.shop_mails_server().unwrap().id, LEGACY_MAIL_SERVER_ID);
+    assert_eq!(state.marketing_server().unwrap().id, LEGACY_MAIL_SERVER_ID);
+
+    // The commands handle it like any other.
+    let news = cmd
+        .add_mail_server(&alice, &tenant.id, server("smtp.news.test", "tls"))
+        .await
+        .unwrap();
+    cmd.pick_mail_servers(
+        &alice,
+        &tenant.id,
+        picks(Some(LEGACY_MAIL_SERVER_ID), Some(&news)),
+    )
+    .await
+    .unwrap();
+    cmd.change_mail_server(
+        &alice,
+        &tenant.id,
+        LEGACY_MAIL_SERVER_ID,
+        SaveMailServer {
+            name: Some("Orders".into()),
+            ..server("smtp3.acme.test", "tls")
+        },
+    )
+    .await
+    .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.mail_servers[0].label(), "Orders");
+    assert_eq!(state.shop_mails_server().unwrap().id, LEGACY_MAIL_SERVER_ID);
+    assert_eq!(state.marketing_server().unwrap().id, news);
+
+    // A late one, from a node not upgraded yet, takes no pick away.
+    evento::append(&tenant.id)
+        .original_version(state.aggregate_version)
+        .event(&legacy_server("smtp4.acme.test"))
+        .commit(&executor)
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.mail_servers.len(), 2);
+    assert_eq!(state.mail_servers[0].host, "smtp4.acme.test");
+    assert_eq!(state.marketing_server().unwrap().id, news);
+
+    // Removed the old way, it takes its pick with it.
+    evento::append(&tenant.id)
+        .original_version(state.aggregate_version)
+        .event(&MailServerRemoved {
+            removed_by: alice.clone(),
+        })
+        .commit(&executor)
+        .await
+        .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.mail_servers.len(), 1);
+    assert!(state.shop_mails_server().is_none());
+    assert_eq!(state.marketing_server().unwrap().id, news);
 }
 
 /// A mail's wording, as the editor sends it.

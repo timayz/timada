@@ -3,8 +3,9 @@
 //! to, then sends the draft. From then on every node with the shop open
 //! mails it a batch at a time, and it can no longer be edited.
 //!
-//! A campaign goes out through the shop's own mail server only, never the
-//! platform's: a shop without one is sent to `/t/{slug}/mail` instead.
+//! A campaign goes out through the mail server the shop picked for its
+//! marketing only, never the platform's: a shop that picked none is sent to
+//! `/t/{slug}/mail` instead.
 
 use timada_newsletter::{CampaignStatus, count_audience};
 use timada_tenancy::PERMISSION_NEWSLETTER_MANAGE;
@@ -47,7 +48,21 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
     .map_err(topcoat::Error::from_anyhow)?;
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
-    let own_server = app_context::<ShopMail>(cx).has_own_server(&tenant);
+    let shop_mail = app_context::<ShopMail>(cx);
+    // The server it goes through, as the merchant knows it.
+    let through = tenant
+        .marketing_server()
+        .filter(|_| shop_mail.has_marketing_server(&tenant))
+        .map(|server| match &server.name {
+            Some(name) => format!("{name} <{}>", server.from_address),
+            None => server.from_address.clone(),
+        });
+    let own_server = through.is_some();
+    let set_up = if tenant.mail_servers.is_empty() {
+        "Set up the mail server"
+    } else {
+        "Pick a server for marketing"
+    };
     let mail_settings = href!(crate::app::t::slug::mail::index, Slug(slug.clone())).resolve(cx);
     let title = format!("Send · {} · Newsletter · {}", campaign.subject, tenant.name);
     let to = audience_label(campaign.language.as_deref());
@@ -63,7 +78,12 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
             section_card(
                 <p class="mb-4 text-sm" data-campaign-audience=(audience)>
                     (to) ": " <strong>(audience)</strong> " confirmed address(es) today. "
-                    "It goes out from the shop's own mail server over the next minutes, and can no longer be edited."
+                    if let Some(through) = &through {
+                        "It goes out through " <strong data-campaign-server="">(through)</strong>
+                        " over the next minutes, and can no longer be edited."
+                    } else {
+                        "It goes out through the server picked for marketing over the next minutes, and can no longer be edited."
+                    }
                 </p>
                 <div class="flex flex-wrap gap-2">
                     if own_server {
@@ -71,7 +91,7 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
                             button(attrs: attributes! { type="submit" }, (label))
                         </form>
                     } else {
-                        <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(mail_settings) data-mail-settings="">"Set up the mail server"</a>
+                        <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(mail_settings) data-mail-settings="">(set_up)</a>
                     }
                     <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Md)) href=(back)>"Not yet"</a>
                 </div>
@@ -88,7 +108,7 @@ pub async fn confirm(cx: &Cx) -> Result<SeeOther> {
         .await?;
     let campaign = require_campaign(&access, cx).await?;
     let slug = access.tenant.slug.clone();
-    if !app_context::<ShopMail>(cx).has_own_server(&access.tenant) {
+    if !app_context::<ShopMail>(cx).has_marketing_server(&access.tenant) {
         return Ok(see_other(campaign_url(
             cx,
             &slug,

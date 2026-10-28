@@ -27,7 +27,7 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `reviews:manage` — publish and reject reviews, take photos off them.
 /// - `customers:read` — see the shop's customer accounts.
 /// - `customers:manage` — delete a shopper's account (an erasure request).
-/// - `mail:manage` — set up the mail server the shop's mails go out through.
+/// - `mail:manage` — set up the mail servers the shop's mails go out through.
 /// - `shipping:manage` — set up the ways the shop ships and what they cost.
 /// - `support:read` — see the messages shoppers sent through the contact form.
 /// - `support:manage` — mark messages handled, and reopen them.
@@ -681,10 +681,10 @@ pub fn normalize_series_code(code: Option<&str>) -> Result<String, crate::Tenanc
     }
 }
 
-/// How a mail server connection is secured, as [`MailServerConfigured`]
+/// How a mail server connection is secured, as [`MailServerAdded`]
 /// records it: implicit TLS, STARTTLS, or none.
 ///
-/// [`MailServerConfigured`]: crate::aggregator::MailServerConfigured
+/// [`MailServerAdded`]: crate::aggregator::MailServerAdded
 pub const MAIL_SECURITIES: &[&str] = &[
     MAIL_SECURITY_TLS,
     MAIL_SECURITY_STARTTLS,
@@ -693,6 +693,16 @@ pub const MAIL_SECURITIES: &[&str] = &[
 pub const MAIL_SECURITY_TLS: &str = "tls";
 pub const MAIL_SECURITY_STARTTLS: &str = "starttls";
 pub const MAIL_SECURITY_NONE: &str = "none";
+
+/// How many mail servers a shop keeps at most.
+pub const MAX_MAIL_SERVERS: usize = 10;
+
+/// The longest name a merchant gives one of its mail servers, in characters.
+pub const MAX_MAIL_SERVER_NAME_LEN: usize = 80;
+
+/// The id of the one server a shop set up before it could have several
+/// (`MailServerConfigured`). A ULID is upper case, so no other server has it.
+pub const LEGACY_MAIL_SERVER_ID: &str = "main";
 
 /// How a price is rounded once marked up.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
