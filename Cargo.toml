@@ -25,7 +25,6 @@ evento = { version = "=2.0.0-alpha.36", features = ["sqlite", "remote"] }
 evento-sql = { version = "=2.0.0-alpha.36", features = ["sqlite", "accord"] }
 evento-sql-migrator = { version = "=2.0.0-alpha.36", features = ["sqlite", "accord"] }
 evento-accord = "=2.0.0-alpha.36"
-evento-lock = "=2.0.0-alpha.36"
 bitcode = "0.6"
 argon2 = { version = "0.5", features = ["std"] }
 ulid = "3.0"

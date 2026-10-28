@@ -16,5 +16,5 @@
 
 #[test]
 fn persisted_shapes_only_grow() {
-    evento_lock::check(env!("CARGO_MANIFEST_DIR")).unwrap();
+    evento::lock::check(env!("CARGO_MANIFEST_DIR")).unwrap();
 }
