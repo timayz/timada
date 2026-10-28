@@ -180,6 +180,15 @@ pub fn describe_error(code: &str) -> &'static str {
         "newsletter_not_found" => "This subscriber is no longer on the list.",
         "campaign_not_found" => "This campaign does not exist.",
         "campaign_sent" => "This campaign was sent already: it can no longer be changed.",
+        "scenario_invalid_name" => "A scenario's name is 1 to 80 characters.",
+        "scenario_not_found" => "There is no such scenario.",
+        "scenario_changed" => {
+            "Someone saved this scenario since you opened it: reload it to see their version."
+        }
+        "scenario_archived" => "This scenario was deleted.",
+        "scenario_not_published" => "This scenario was never published.",
+        "scenario_invalid" => "The scenario is not ready to publish: see what needs setting up.",
+        "scenario_too_large" => "The scenario is too large to save.",
         "campaign_invalid_subject" => "A subject is 1 to 200 characters.",
         "campaign_invalid_body" => "The body is empty or too long.",
         "order_cancelled" => "A cancelled order cannot be fulfilled.",
@@ -330,6 +339,8 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "newsletter:manage" => {
             "Unsubscribe and erase newsletter subscribers (includes seeing them)"
         }
+        "automations:read" => "See the automation scenarios",
+        "automations:manage" => "Draw, save and delete automation scenarios (includes seeing them)",
         _ => "Unknown permission",
     }
 }

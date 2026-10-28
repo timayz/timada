@@ -26,6 +26,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/shoppers` | `timada-shoppers` | A shop's customers who sign in: mailed codes, sessions, saved addresses, in a tenant's store |
 | `crates/support` | `timada-support` | The messages visitors send through a shop's contact form, and whether the merchant handled them |
 | `crates/newsletter` | `timada-newsletter` | The addresses that asked for a shop's news, confirmed through a mailed link (double opt-in) |
+| `crates/automations` | `timada-automations` | The scenarios a shop's team draws: a trigger, then a tree of steps, kept as a definition the editor works on (see `docs/automations.md`) |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
@@ -208,7 +209,7 @@ by construction.
 8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
-   orders, open carts, discounts, checkout offers, reviews, messages, newsletter, payments), `/stripe/webhooks/{tenant_id}`,
+   orders, open carts, discounts, checkout offers, reviews, messages, newsletter, automations, payments), `/stripe/webhooks/{tenant_id}`,
    `/store/reviews` (a storefront handing in a review, see *Reviews*), `/store/shoppers/*`
    (a storefront signing its shoppers in, see *Shopper accounts*), `/store/contact` (a
    storefront handing in a message from its contact form, see *Support messages*),
@@ -507,6 +508,25 @@ holds its campaign back until it has one. Marketing never borrows the platform's
 server: a campaign goes through the shop's own mail server only, the send page and
 the test mail refuse without one (`mail_server_required`), and a sweep that finds
 the server gone holds the campaign back, claiming nobody, until it is set up again.
+
+## Automations
+
+A scenario is a `Scenario` stream in the tenant's store (`timada-automations`, a
+ULID): a trigger (an order placed, a review submitted, a message arriving, …) and
+the steps under it, a condition holding a Yes and a No lane of steps of its own. The
+whole drawing is a `Definition`, kept as JSON in the events: `Saved` rewrites the
+draft whole, and `Published` freezes it as the next numbered version, which is what
+runs. Kinds of trigger and step are strings and a step's settings are kept exactly as
+typed, so no enum is frozen in `events.lock` and a kind a newer node wrote survives
+an edit on an older one (it shows as a block that cannot be published).
+
+The editor (`/t/{slug}/automations/{id}`, `automations:manage`) keeps the working
+copy in the page, not in the store: every button posts the copy and the page comes
+back with the change made, until "Save draft" writes it (with the scenario version
+the copy was made from, so a copy someone else saved over is refused). Dragging is a
+script on top that presses the same buttons; the "+" menu of a slot and Move / Move
+here do everything without it. The list is `automations_scenarios`
+(`automations:read`). The details, and what runs, are in `docs/automations.md`.
 
 ## The storefront side
 
