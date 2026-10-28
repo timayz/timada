@@ -17,13 +17,15 @@ use std::time::Duration;
 use sqlx::SqlitePool;
 use timada_automations::{
     AUTOMATION_ACTOR, ListenerState, RUN_HISTORY_SECS, RunState, Step, Transition,
-    catalog::{self, NOTIFY, Subject},
+    catalog::{self, EMAIL, NOTIFY, Subject},
     due_runs,
     interpreter::{self, Next, STUCK_SETTINGS, STUCK_UNKNOWN},
-    listener_of, prune_runs, scenario_name,
+    listener_of, normalize_email, opt_out_token, prune_runs, scenario_name,
 };
 use timada_core::keys::KeyRing;
 use timada_identity::UserRow;
+use timada_newsletter::{SubscriberStatus, subscriber_id};
+use timada_orders::OrderState;
 use timada_tenancy::{
     PERMISSION_CUSTOMERS_READ, PERMISSION_NEWSLETTER_READ, PERMISSION_ORDERS_READ,
     PERMISSION_REVIEWS_READ, PERMISSION_SUPPORT_READ, TenantState,
@@ -33,8 +35,12 @@ use topcoat::context::{AppContext, Cx};
 
 use super::definitions::Definitions;
 use super::facts::facts_of;
-use crate::auth::mail::send_automation_notice;
+use crate::auth::mail::{
+    CampaignCopy, automation_vars, marketing_sender, render_automated, send_automated,
+    send_automation_notice,
+};
 use crate::cluster::Executor;
+use crate::seal::OptOutKey;
 
 /// What the runner needs of a store.
 pub trait Store: evento::Executor + Clone + Send + Sync + 'static {}
@@ -44,6 +50,10 @@ impl<E: evento::Executor + Clone + Send + Sync + 'static> Store for E {}
 /// The most moves one run makes in one look: a scenario is at most 50
 /// steps, and a run that keeps moving is looked at again next time.
 const MOVES_PER_LOOK: usize = 60;
+/// How long a run waits at a mail to the customer for the shop to set up
+/// what it needs (its own mail server, its storefront's address) before
+/// the step fails, in seconds.
+const MAIL_HOLD_SECS: u64 = 3 * 24 * 60 * 60;
 
 /// What a step that acts did.
 enum Acted {
@@ -66,11 +76,15 @@ pub struct Runner<E = Executor> {
     /// The dashboard's public address, for the links the notices carry.
     base_url: String,
     keys: Arc<dyn KeyRing>,
+    /// Signs the links that stop a shop's automated mails; none without the
+    /// operator's secret, and then no mail goes to a customer.
+    opt_out_key: Option<OptOutKey>,
     runs_per_look: u32,
     definitions: Definitions,
 }
 
 impl<E: Store> Runner<E> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         read_pool: SqlitePool,
         write_pool: SqlitePool,
@@ -78,6 +92,7 @@ impl<E: Store> Runner<E> {
         mail: Arc<AppContext>,
         base_url: String,
         keys: Arc<dyn KeyRing>,
+        opt_out_key: Option<OptOutKey>,
         runs_per_look: u32,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -87,6 +102,7 @@ impl<E: Store> Runner<E> {
             mail,
             base_url,
             keys,
+            opt_out_key,
             runs_per_look: runs_per_look.max(1),
             definitions: Definitions::default(),
         })
@@ -201,6 +217,14 @@ impl<E: Store> Runner<E> {
                         .await?
                 }
                 Next::Act(step) => {
+                    // A mail to the customer waits for what the shop must set
+                    // up, then fails saying what is missing.
+                    if step.kind == EMAIL
+                        && self.mail_blocked(tenant).await?.is_some()
+                        && now < run.updated_at + MAIL_HOLD_SECS
+                    {
+                        return Ok(());
+                    }
                     let attempt = run.attempts(&step.id) + 1;
                     let claim = Transition::Claim {
                         step: step.id.clone(),
@@ -317,6 +341,7 @@ impl<E: Store> Runner<E> {
     ) -> Acted {
         let acted = match step.kind.as_str() {
             NOTIFY => self.notify(tenant, run, subject, step).await,
+            EMAIL => self.email(tenant, run, subject, step).await,
             _ => Ok(Acted::Failed(STUCK_UNKNOWN.into())),
         };
         acted.unwrap_or_else(|err| Acted::Failed(err.to_string()))
@@ -375,6 +400,193 @@ impl<E: Store> Runner<E> {
         Ok(Acted::Done(
             serde_json::json!({ "mailed": mailed }).to_string(),
         ))
+    }
+}
+
+impl<E: Store> Runner<E> {
+    /// What keeps the shop from mailing its customers, if anything.
+    async fn mail_blocked(&self, tenant: &TenantState) -> anyhow::Result<Option<&'static str>> {
+        if self.opt_out_key.is_none() {
+            return Ok(Some(
+                "The dashboard has no secret to sign the opt-out links with.",
+            ));
+        }
+        let storefront = timada_orders::Command::new(self.store.clone(), &tenant.id)
+            .storefront_address()
+            .await?;
+        if storefront.is_none() {
+            return Ok(Some("The shop has not said where its storefront lives."));
+        }
+        let cx = Cx::new(self.mail.clone());
+        if marketing_sender(&cx, tenant).await?.is_none() {
+            return Ok(Some("The shop has no mail server of its own."));
+        }
+        Ok(None)
+    }
+
+    /// The customer's address, and the order the mail is about when there
+    /// is one; `None` once the address is gone (erased).
+    async fn recipient(
+        &self,
+        tenant: &TenantState,
+        subject: Subject,
+        subject_id: &str,
+    ) -> anyhow::Result<Option<(String, Option<OrderState>)>> {
+        let keys = self.keys.for_tenant(&tenant.id);
+        let orders = timada_orders::Command::new(self.store.clone(), &tenant.id);
+        Ok(match subject {
+            Subject::Order => orders
+                .load_order(subject_id)
+                .await?
+                .map(|order| (order.email.clone(), Some(order))),
+            Subject::Review => {
+                let reviews = timada_reviews::Command::new(self.store.clone(), &tenant.id);
+                let Some(review) = reviews.load_review(subject_id).await? else {
+                    return Ok(None);
+                };
+                orders
+                    .load_order(&review.order_id)
+                    .await?
+                    .map(|order| (order.email.clone(), Some(order)))
+            }
+            Subject::Shopper => {
+                let shoppers = timada_shoppers::Command::new(self.store.clone(), &tenant.id);
+                match shoppers.load_shopper(subject_id).await? {
+                    Some(state) => state
+                        .open_with(&*keys)
+                        .await?
+                        .map(|shopper| (shopper.email, None)),
+                    None => None,
+                }
+            }
+            Subject::Subscriber => {
+                let newsletter = timada_newsletter::Command::new(self.store.clone(), &tenant.id);
+                match newsletter.load_subscriber(subject_id).await? {
+                    Some(state) => state
+                        .open_with(&*keys)
+                        .await?
+                        .map(|subscriber| (subscriber.email, None)),
+                    None => None,
+                }
+            }
+            Subject::Message => {
+                let support = timada_support::Command::new(self.store.clone(), &tenant.id);
+                match support.load_message(subject_id).await? {
+                    Some(state) => state
+                        .open_with(&*keys)
+                        .await?
+                        .map(|message| (message.email, None)),
+                    None => None,
+                }
+            }
+        })
+    }
+
+    /// Why an address must not get the shop's automated mails, if it must
+    /// not: it stopped them, its account was erased, or it left (or was
+    /// erased from) the newsletter.
+    async fn refused_by(
+        &self,
+        tenant: &TenantState,
+        address: &str,
+    ) -> anyhow::Result<Option<&'static str>> {
+        let automations = timada_automations::Command::new(self.store.clone(), &tenant.id);
+        if automations.is_opted_out(address).await? {
+            return Ok(Some("The customer stopped the shop's automated mails."));
+        }
+        let shoppers = timada_shoppers::Command::new(self.store.clone(), &tenant.id);
+        if shoppers
+            .load_shopper_by_email(address)
+            .await?
+            .is_some_and(|state| state.forgotten)
+        {
+            return Ok(Some("The customer's account was erased."));
+        }
+        let newsletter = timada_newsletter::Command::new(self.store.clone(), &tenant.id);
+        if newsletter
+            .load_subscriber(&subscriber_id(address))
+            .await?
+            .is_some_and(|state| state.forgotten || state.status == SubscriberStatus::Unsubscribed)
+        {
+            return Ok(Some("The customer left the shop's newsletter."));
+        }
+        Ok(None)
+    }
+
+    /// Mails the customer the run is about the merchant's message, through
+    /// the shop's own server, with the link that stops these mails. At most
+    /// one mail a day from a scenario to an address.
+    async fn email(
+        &self,
+        tenant: &TenantState,
+        run: &RunState,
+        subject: Option<Subject>,
+        step: &Step,
+    ) -> anyhow::Result<Acted> {
+        let (Some(subject), Ok(settings)) = (subject, catalog::parse_email(&step.settings)) else {
+            return Ok(Acted::Failed(STUCK_SETTINGS.into()));
+        };
+        if let Some(reason) = self.mail_blocked(tenant).await? {
+            return Ok(Acted::Failed(reason.into()));
+        }
+        let Some(key) = self.opt_out_key else {
+            return Ok(Acted::Failed(STUCK_SETTINGS.into()));
+        };
+        let Some((address, order)) = self.recipient(tenant, subject, &run.subject_id).await? else {
+            return Ok(Acted::Skipped(
+                "The customer's address is gone (erased).".into(),
+            ));
+        };
+        let Some(address) = normalize_email(&address) else {
+            return Ok(Acted::Skipped(
+                "The customer's address does not look like one.".into(),
+            ));
+        };
+        if let Some(reason) = self.refused_by(tenant, &address).await? {
+            return Ok(Acted::Skipped(reason.into()));
+        }
+        let automations = timada_automations::Command::new(self.store.clone(), &tenant.id);
+        let day = crate::auth::now() / (24 * 60 * 60);
+        if !automations
+            .claim_mail(AUTOMATION_ACTOR, &run.scenario_id, &address, day)
+            .await?
+        {
+            return Ok(Acted::Skipped(
+                "This scenario mailed the customer today already.".into(),
+            ));
+        }
+        let storefront = timada_orders::Command::new(self.store.clone(), &tenant.id)
+            .storefront_address()
+            .await?
+            .unwrap_or_default();
+        let storefront = storefront.trim_end_matches('/');
+        let unsubscribe = format!(
+            "{storefront}/emails/opt-out/{}",
+            opt_out_token(&key.0, &tenant.id, &address)
+        );
+        let cx = Cx::new(self.mail.clone());
+        let Some(sender) = marketing_sender(&cx, tenant).await? else {
+            return Ok(Acted::Failed(
+                "The shop has no mail server of its own.".into(),
+            ));
+        };
+        let about = order
+            .as_ref()
+            .map(|order| (order, Some(format!("{storefront}/orders/{}", order.id))));
+        let vars = automation_vars(&cx, tenant, about, &unsubscribe);
+        let copy = CampaignCopy {
+            subject: &settings.subject,
+            html: &settings.html,
+            text: settings.text.as_deref(),
+        };
+        let rendered = match render_automated(&copy, &vars) {
+            Ok(rendered) => rendered,
+            Err(err) => return Ok(Acted::Failed(err.to_string())),
+        };
+        match send_automated(&cx, &sender, &address, rendered, &unsubscribe).await {
+            Ok(()) => Ok(Acted::Done(serde_json::json!({ "mailed": 1 }).to_string())),
+            Err(err) => Ok(Acted::Failed(format!("The mail did not go out: {err}"))),
+        }
     }
 }
 
@@ -548,6 +760,7 @@ mod tests {
             Arc::new(AppContext::new()),
             "https://dashboard.example".into(),
             Arc::new(MemoryRing(keys.clone())),
+            None,
             10,
         )
     }

@@ -20,9 +20,10 @@ use timada_orders::OrderState;
 use timada_reviews::REVIEW_LINK_TTL_SECS;
 use timada_shoppers::CODE_TTL_SECS;
 use timada_tenancy::{
-    AddressVars, DiscountVars, LineVars, MailVars, NewsletterConfirmationVars, NewsletterVars,
-    OrderConfirmationVars, OrderVars, RenderedMail, ReviewOrderVars, ReviewRequestVars,
-    ShippingMethodVars, ShopMailKind, ShopVars, ShopperCodeVars, TenantState, render, render_text,
+    AddressVars, AutomationCustomerVars, AutomationOrderVars, DiscountVars, LineVars, MailVars,
+    NewsletterConfirmationVars, NewsletterVars, OrderConfirmationVars, OrderVars, RenderedMail,
+    ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind, ShopVars,
+    ShopperCodeVars, TenantState, render, render_text,
 };
 
 use crate::auth::cookies::EmailFlowKind;
@@ -536,6 +537,77 @@ async fn code_mail(cx: &Cx, to: &str, kind: EmailFlowKind, code: &str) -> Result
             <p>"If you did not ask for it, you can ignore this message."</p>
         },
     }?)
+}
+
+/// The variables of an automated mail: about `order` (with its page on the
+/// storefront, `link`) when there is one, to a customer otherwise; every
+/// one links to `unsubscribe_url`, the page that stops the shop's
+/// automated mails.
+pub fn automation_vars(
+    cx: &Cx,
+    shop: &TenantState,
+    order: Option<(&OrderState, Option<String>)>,
+    unsubscribe_url: &str,
+) -> MailVars {
+    let shop = shop_vars(cx, shop);
+    let unsubscribe_url = unsubscribe_url.to_owned();
+    match order {
+        Some((order, link)) => MailVars::AutomationOrder(Box::new(AutomationOrderVars {
+            shop,
+            order: order_vars(order),
+            link,
+            unsubscribe_url,
+        })),
+        None => MailVars::AutomationCustomer(AutomationCustomerVars {
+            shop,
+            unsubscribe_url,
+        }),
+    }
+}
+
+/// The kind an automated mail is checked and rendered as.
+pub fn automation_kind(about_an_order: bool) -> ShopMailKind {
+    if about_an_order {
+        ShopMailKind::AutomationOrder
+    } else {
+        ShopMailKind::AutomationCustomer
+    }
+}
+
+/// Renders an automated mail for `vars`.
+pub fn render_automated(copy: &CampaignCopy<'_>, vars: &MailVars) -> anyhow::Result<RenderedMail> {
+    let mut rendered = render(copy.subject, copy.html, None, vars)
+        .map_err(|err| anyhow::anyhow!("automated mail: {err}"))?;
+    if let Some(text) = copy.text {
+        rendered.text = Some(
+            render_text(text, vars).map_err(|err| anyhow::anyhow!("automated mail text: {err}"))?,
+        );
+    }
+    Ok(rendered)
+}
+
+/// Mails an automated mail through `sender` (the shop's own server, see
+/// [`marketing_sender`]), with the headers that let a mail client offer a
+/// one-click stop (RFC 8058): a POST to `unsubscribe_url` puts the address
+/// on the shop's opt-out list.
+pub async fn send_automated(
+    cx: &Cx,
+    sender: &ShopSender,
+    to: &str,
+    rendered: RenderedMail,
+    unsubscribe_url: &str,
+) -> Result<()> {
+    let headers = vec![
+        (
+            "List-Unsubscribe".to_owned(),
+            format!("<{unsubscribe_url}>"),
+        ),
+        (
+            "List-Unsubscribe-Post".to_owned(),
+            "List-Unsubscribe=One-Click".to_owned(),
+        ),
+    ];
+    send_rendered_via(cx, sender, to, rendered, headers).await
 }
 
 #[cfg(test)]

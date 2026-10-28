@@ -166,6 +166,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         background_mail.clone(),
         url.clone(),
         keys.ring(),
+        crate::seal::opt_out_key(&config),
         config.automations.runs_per_check,
     )
     .start(std::time::Duration::from_secs(

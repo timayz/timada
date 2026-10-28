@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<body>
+{% if shop.logo_url %}
+<p><img src="{{ shop.logo_url }}" alt="{{ shop.name }}" style="max-height: 64px; max-width: 240px;"></p>
+{% endif %}
+<h1 style="font-size: 20px;">Thank you for your order {{ order.reference }}</h1>
+<p>Write your message here.</p>
+<ul>
+{% for line in order.lines %}
+<li>{{ line.quantity }} × {{ line.name }}{% if line.variant %} ({{ line.variant }}){% endif %}</li>
+{% endfor %}
+</ul>
+{% if link %}
+<p><a href="{{ link }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>See your order</a></p>
+{% endif %}
+<hr style="border: none; border-top: 1px solid #e5e7eb;">
+{% if shop.footer %}
+<p style="color: #6b7280; font-size: 12px; white-space: pre-line;">{{ shop.footer }}</p>
+{% endif %}
+<p style="color: #6b7280; font-size: 12px;">{{ shop.name }} sends this mail on its own after your order. <a href="{{ unsubscribe_url }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>Stop these mails</a></p>
+</body>
+</html>

@@ -369,6 +369,15 @@ impl Editor {
         self.moving = None;
         match self.definition.insert(slot, kind) {
             Ok(id) => {
+                // A new mail starts from the shop's default automated mail.
+                if kind == catalog::EMAIL {
+                    let mail = super::mail::kind_of(&self.definition);
+                    let copy = [
+                        ("subject".to_owned(), mail.default_subject().to_owned()),
+                        ("html".to_owned(), mail.default_html().to_owned()),
+                    ];
+                    let _ = self.definition.configure(&id, copy.into_iter().collect());
+                }
                 self.announce = Some(format!("{} added.", step_label(kind)));
                 self.focus = Some(id.clone());
                 self.selected = Some(id);

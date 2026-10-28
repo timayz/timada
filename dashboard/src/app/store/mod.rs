@@ -3,6 +3,7 @@
 //! not be forged by whoever holds a key (shopper sign-ins), or come from
 //! anyone at all and are counted (the contact form's messages).
 
+pub mod automations;
 pub mod contact;
 pub mod newsletter;
 pub mod reviews;

@@ -123,3 +123,33 @@ pub mod run {
         },
     }
 }
+
+/// The shop's list of addresses that stopped its automated mails.
+pub mod opt_out {
+    /// One address that stopped the shop's automated mails. Its id is
+    /// [`opt_out_id`](crate::opt_out_id) of the address: the store keeps no
+    /// address, only that hash.
+    #[evento::aggregate(name = "timada-automations/OptOut")]
+    pub enum OptOut {
+        /// Through the link of a mail, or by a member at the customer's
+        /// request.
+        OptedOut { opted_out_by: String },
+        /// Taken off the list by a member: the address gets the mails again.
+        Withdrawn { withdrawn_by: String },
+    }
+}
+
+/// One scenario's mail to one address on one day, claimed before it goes
+/// out: an address gets at most one mail a day from a scenario, however
+/// often its trigger fires (a contact form or a checkout is no relay).
+pub mod mail_claim {
+    /// Its id is [`mail_claim_id`](crate::mail_claim_id) of the scenario, the
+    /// address and the day; the store keeps no address.
+    #[evento::aggregate(name = "timada-automations/MailClaim")]
+    pub enum MailClaim {
+        Claimed {
+            scenario_id: String,
+            claimed_by: String,
+        },
+    }
+}

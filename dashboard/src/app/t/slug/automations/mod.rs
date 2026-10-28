@@ -7,6 +7,8 @@
 
 pub mod labels;
 pub mod new;
+pub mod opt_in;
+pub mod opt_out;
 pub mod scenario_id;
 
 use timada_automations::{
@@ -26,6 +28,8 @@ use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::components::field::{field, field_description, field_label};
+use crate::components::input::input;
 use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
@@ -111,6 +115,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let title = format!("Automations · {}", tenant.name);
     let new_url = href!(new::new, Slug(slug.clone())).resolve(cx);
+    let opt_out_url = href!(opt_out::opt_out, Slug(slug.clone())).resolve(cx);
+    let opt_in_url = href!(opt_in::opt_in, Slug(slug.clone())).resolve(cx);
 
     Ok(view! {
         document(
@@ -195,6 +201,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     next: (page_number < pages).then(|| page_link(page_number + 1)),
                 )
             )
+            if can_manage {
+                section_card(
+                    title: Some("Automated mails"),
+                    description: Some("Every mail a scenario sends a customer links to a page that stops them. A customer who asks you instead is stopped here; the shop keeps no address for it, only a fingerprint of it."),
+                    <div class="grid gap-4 md:grid-cols-2">
+                        <form method="post" action=(&opt_out_url) class="flex flex-col gap-2" data-opt-out-form="">
+                            field(
+                                field_label(attrs: attributes! { for="opt-out-email" }, "Stop the automated mails to")
+                                input(attrs: attributes! { id="opt-out-email" name="email" type="email" autocomplete="off" })
+                            )
+                            <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop them")</div>
+                        </form>
+                        <form method="post" action=(&opt_in_url) class="flex flex-col gap-2">
+                            field(
+                                field_label(attrs: attributes! { for="opt-in-email" }, "Send them again to")
+                                input(attrs: attributes! { id="opt-in-email" name="email" type="email" autocomplete="off" })
+                                field_description("Only when the customer asks for them again.")
+                            )
+                            <div>button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Send them again")</div>
+                        </form>
+                    </div>
+                )
+            }
         )
     })
 }

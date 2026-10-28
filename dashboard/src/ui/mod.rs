@@ -190,6 +190,22 @@ pub fn describe_error(code: &str) -> &'static str {
         "scenario_invalid" => "The scenario is not ready to publish: see what needs setting up.",
         "scenario_too_large" => "The scenario is too large to save.",
         "run_not_found" => "There is no such run.",
+        "automation_invalid_email" => "That does not look like an e-mail address.",
+        "automation_invalid_link" => {
+            "This link does not stop any mail: it may have been cut short."
+        }
+        "automation_mail_permission" => {
+            "A scenario that mails customers is published by members who may manage the newsletter."
+        }
+        "automation_mail_invalid" => {
+            "A mail of the scenario does not read, or does not link to the page that stops it: open it to see why."
+        }
+        "automation_secret_required" => {
+            "Mails to customers need the operator's secret (secrets.key), which signs their opt-out links."
+        }
+        "automation_storefront_required" => {
+            "Say where the shop's storefront lives (on the API keys page) first: every automated mail links to its opt-out page."
+        }
         "run_changed" => "The run moved on meanwhile: look again before cancelling it.",
         "campaign_invalid_subject" => "A subject is 1 to 200 characters.",
         "campaign_invalid_body" => "The body is empty or too long.",

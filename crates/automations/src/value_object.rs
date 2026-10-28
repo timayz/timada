@@ -1,3 +1,7 @@
+use base64::Engine;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+
 /// Who writes what the host does on its own behalf (a run it advances, a
 /// code it creates), in the `*_by` fields.
 pub const AUTOMATION_ACTOR: &str = "timada-automations";
@@ -160,4 +164,68 @@ impl ListenerState {
             .into_iter()
             .find(|state| state.as_str() == value)
     }
+}
+
+/// The longest address, in characters.
+pub const MAX_EMAIL_LEN: usize = 254;
+
+/// An address as the lists keep it: trimmed and lowercased; `None` when it
+/// does not look like one.
+pub fn normalize_email(email: &str) -> Option<String> {
+    let email = email.trim().to_lowercase();
+    let (local, domain) = email.split_once('@')?;
+    (!local.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && email.len() <= MAX_EMAIL_LEN
+        && !email.chars().any(|c| c.is_whitespace() || c.is_control()))
+    .then_some(email)
+}
+
+/// The id of an address on the shop's opt-out list
+/// ([`OptOut`](crate::aggregator::opt_out::OptOut)), of the normalized
+/// address.
+pub fn opt_out_id(normalized_email: &str) -> String {
+    evento::hash_ids(vec!["automation-opt-out", normalized_email])
+}
+
+/// The id of one scenario's mail to one address on one day (days since the
+/// epoch).
+pub fn mail_claim_id(scenario_id: &str, normalized_email: &str, day: u64) -> String {
+    let day = day.to_string();
+    evento::hash_ids(vec!["automation-mail", scenario_id, normalized_email, &day])
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// The MAC binding an opt-out id to its tenant, under `key`.
+fn opt_out_mac(key: &[u8; 32], tenant_id: &str, opt_out_id: &str) -> HmacSha256 {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC takes any key length");
+    for part in ["unsubscribe", tenant_id, opt_out_id] {
+        mac.update(&(part.len() as u64).to_be_bytes());
+        mac.update(part.as_bytes());
+    }
+    mac
+}
+
+/// The token of the link that puts `normalized_email` on the tenant's
+/// opt-out list: `{opt_out_id}.{tag}`. It holds no address, needs nothing
+/// stored to check, and never expires. `key` is the host's, the same on
+/// every node.
+pub fn opt_out_token(key: &[u8; 32], tenant_id: &str, normalized_email: &str) -> String {
+    let id = opt_out_id(normalized_email);
+    let tag = opt_out_mac(key, tenant_id, &id).finalize().into_bytes();
+    let tag = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tag);
+    format!("{id}.{tag}")
+}
+
+/// The opt-out id a token names, when it checks out for the tenant.
+pub fn opt_out_id_of_token(key: &[u8; 32], tenant_id: &str, token: &str) -> Option<String> {
+    let (id, tag) = token.trim().rsplit_once('.')?;
+    let tag = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(tag)
+        .ok()?;
+    opt_out_mac(key, tenant_id, id).verify_slice(&tag).ok()?;
+    Some(id.to_owned())
 }

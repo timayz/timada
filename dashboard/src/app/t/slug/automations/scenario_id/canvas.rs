@@ -39,6 +39,9 @@ pub struct Canvas<'a> {
     pub problems: Vec<Problem>,
     /// Whether the member may edit: otherwise the flow is drawn read-only.
     pub manage: bool,
+    /// The open mail step, rendered with made-up variables, or why it does
+    /// not read.
+    pub preview: Option<Result<timada_tenancy::RenderedMail, timada_tenancy::MailTemplateError>>,
 }
 
 impl Canvas<'_> {

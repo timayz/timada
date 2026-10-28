@@ -52,6 +52,11 @@ use crate::store_api::StoreConnections;
 use crate::ui::chrome::initials;
 use crate::ui::{Shell, Tone, document, empty_state, icons, notice, status_badge};
 
+/// The key of the links that stop a shop's automated mails, when the
+/// operator gave a secret ([`crate::seal::opt_out_key`]).
+#[derive(Clone, Copy, Debug)]
+pub struct OptOutLinks(pub Option<crate::seal::OptOutKey>);
+
 /// Everything the pages reach through the app context.
 pub struct Services {
     pub executor: Executor,
@@ -152,6 +157,9 @@ pub fn router(services: Services) -> Router {
         .mail(mailer.transport)
         .app_context(mailer.sender)
         .app_context(shop_mail)
+        // Signs and checks the links that stop a shop's automated mails;
+        // none without `secrets.key`.
+        .app_context(OptOutLinks(crate::seal::opt_out_key(&config)))
         .app_context(config)
         .assets(assets)
         .runtime()

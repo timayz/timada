@@ -14,6 +14,10 @@ The dashboard sends two kinds of mail.
   test refuse with `mail_server_required`), and one sent before the server was
   removed waits, with nobody claimed, until a server is set up again.
 
+- **Automated mails** of the shop's automation scenarios (see
+  `docs/automations.md`) are marketing too: the shop's own server only, each with
+  a link that stops them.
+
 ## A shop's own server
 
 Members with `mail:manage` set it up on `/t/{slug}/mail`. The form takes:

@@ -25,6 +25,12 @@ pub enum AutomationError {
     TooLarge(Vec<Problem>),
     #[error("run not found")]
     RunNotFound,
+    #[error("the address does not look like one")]
+    InvalidEmail,
+    /// A link that was never mailed, was tampered with, or is another
+    /// shop's.
+    #[error("the link is not valid")]
+    InvalidLink,
     /// Moved on by the runner while a member acted on it.
     #[error("the run moved on meanwhile")]
     RunChanged,
@@ -58,6 +64,8 @@ impl AutomationError {
             Self::Invalid(_) => SCENARIO_INVALID,
             Self::TooLarge(_) => SCENARIO_TOO_LARGE,
             Self::RunNotFound => RUN_NOT_FOUND,
+            Self::InvalidEmail => AUTOMATION_INVALID_EMAIL,
+            Self::InvalidLink => AUTOMATION_INVALID_LINK,
             Self::RunChanged => RUN_CHANGED,
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
@@ -74,3 +82,6 @@ pub const SCENARIO_INVALID: &str = "scenario_invalid";
 pub const SCENARIO_TOO_LARGE: &str = "scenario_too_large";
 pub const RUN_NOT_FOUND: &str = "run_not_found";
 pub const RUN_CHANGED: &str = "run_changed";
+/// The codes a shopper may meet, which a refused request carries.
+pub const AUTOMATION_INVALID_EMAIL: &str = "automation_invalid_email";
+pub const AUTOMATION_INVALID_LINK: &str = "automation_invalid_link";
