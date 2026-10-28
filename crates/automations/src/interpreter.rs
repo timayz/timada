@@ -3,8 +3,9 @@
 //!
 //! The walk goes down the lane under the trigger, step by step. A step the
 //! log has done (it acted, it had nothing to do, its wait is over) is
-//! passed; a condition sends the walk down the lane it chose, then on
-//! below it; the first step not done is what comes next.
+//! passed; a condition sends the walk down the lane it chose, and the run
+//! ends where that lane ends, as nothing comes after a condition; the first
+//! step not done is what comes next.
 
 use crate::catalog::{self, CONDITION, WAIT};
 use crate::command::{Outcome, RunState};
@@ -58,9 +59,7 @@ fn walk<'a>(steps: &'a [Step], run: &RunState, now: u64) -> Option<Next<'a>> {
                 let Some(lane) = step.branches.get(*branch as usize) else {
                     return Some(Next::Stuck(step, STUCK_LANE));
                 };
-                if let Some(next) = walk(lane, run, now) {
-                    return Some(next);
-                }
+                return walk(lane, run, now);
             }
             Outcome::Succeeded { .. } | Outcome::Skipped { .. } => {}
             Outcome::Claimed { attempt } => {

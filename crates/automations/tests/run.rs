@@ -256,6 +256,49 @@ async fn a_run_walks_its_scenario() {
     assert_eq!(interpreter::next(&definition, &run, until), Next::Finish);
 }
 
+/// A condition ends its lane: once the lane it chose is done, so is the
+/// run.
+#[tokio::test]
+async fn a_run_ends_where_the_lane_it_chose_ends() {
+    let automations: Automations = Command::new(executor_with_pool().await.0, TENANT);
+    let mut definition = big_orders();
+    // The editor puts nothing after a condition; in a copy drawn otherwise,
+    // a step there still never runs.
+    let mut after = definition.steps[0].branches[0][0].clone();
+    after.id = "s9".into();
+    definition.steps.push(after);
+    let condition = &definition.steps[0];
+    let notify = &condition.branches[0][0];
+
+    automations
+        .start_run(ALICE, &start("sc1", "ev1"))
+        .await
+        .unwrap();
+    let id = run_id("sc1", "ev1");
+    for transition in [
+        Transition::Branch {
+            step: condition.id.clone(),
+            branch: 0,
+        },
+        Transition::Claim {
+            step: notify.id.clone(),
+            attempt: 1,
+        },
+        Transition::Succeed {
+            step: notify.id.clone(),
+            output: "{}".into(),
+        },
+    ] {
+        let run = automations.load_run(&id).await.unwrap().unwrap();
+        automations
+            .advance_run(ALICE, &run, &[transition])
+            .await
+            .unwrap();
+    }
+    let run = automations.load_run(&id).await.unwrap().unwrap();
+    assert_eq!(interpreter::next(&definition, &run, now()), Next::Finish);
+}
+
 #[test]
 fn a_block_this_build_does_not_know_is_stuck() {
     let definition = timada_automations::Definition::from_json(
