@@ -17,7 +17,7 @@ use std::time::Duration;
 use sqlx::SqlitePool;
 use timada_automations::{
     AUTOMATION_ACTOR, ListenerState, RUN_HISTORY_SECS, RunState, Step, Transition,
-    catalog::{self, EMAIL, NOTIFY, Subject},
+    catalog::{self, CodeValue, DISCOUNT, EMAIL, NOTIFY, Subject},
     due_runs,
     interpreter::{self, Next, STUCK_SETTINGS, STUCK_UNKNOWN},
     listener_of, normalize_email, opt_out_token, prune_runs, scenario_name,
@@ -63,6 +63,18 @@ enum Acted {
     Skipped(String),
     /// Why it did not act.
     Failed(String),
+    /// Why it did not act this time: asking again is safe (the step makes
+    /// the same thing whatever the attempt), so it is tried again later.
+    Retry(String),
+}
+
+/// When a step that may be tried again is, after its `attempt`th try; none
+/// once it was tried enough.
+fn retry_at(now: u64, attempt: u32) -> Option<u64> {
+    const DELAYS: [u64; 4] = [60, 5 * 60, 30 * 60, 2 * 60 * 60];
+    DELAYS
+        .get(attempt.saturating_sub(1) as usize)
+        .map(|delay| now + delay)
 }
 
 /// The sweep, with what it needs outside any request.
@@ -255,6 +267,12 @@ impl<E: Store> Runner<E> {
                             reason,
                             retry_at: None,
                         },
+                        Acted::Retry(reason) => Transition::Fail {
+                            step: step.id.clone(),
+                            attempt,
+                            reason,
+                            retry_at: retry_at(now, attempt),
+                        },
                     };
                     run = claimed;
                     automations
@@ -342,6 +360,7 @@ impl<E: Store> Runner<E> {
         let acted = match step.kind.as_str() {
             NOTIFY => self.notify(tenant, run, subject, step).await,
             EMAIL => self.email(tenant, run, subject, step).await,
+            DISCOUNT => self.discount(tenant, run, step).await,
             _ => Ok(Acted::Failed(STUCK_UNKNOWN.into())),
         };
         acted.unwrap_or_else(|err| Acted::Failed(err.to_string()))
@@ -573,7 +592,7 @@ impl<E: Store> Runner<E> {
         let about = order
             .as_ref()
             .map(|order| (order, Some(format!("{storefront}/orders/{}", order.id))));
-        let vars = automation_vars(&cx, tenant, about, &unsubscribe);
+        let vars = automation_vars(&cx, tenant, about, &unsubscribe, made_code(run));
         let copy = CampaignCopy {
             subject: &settings.subject,
             html: &settings.html,
@@ -588,6 +607,98 @@ impl<E: Store> Runner<E> {
             Err(err) => Ok(Acted::Failed(format!("The mail did not go out: {err}"))),
         }
     }
+}
+
+impl<E: Store> Runner<E> {
+    /// Makes the step's single-use code. Its id derives from the run and
+    /// the step, so a retry (or another node) makes the same one.
+    async fn discount(
+        &self,
+        tenant: &TenantState,
+        run: &RunState,
+        step: &Step,
+    ) -> anyhow::Result<Acted> {
+        let Ok(settings) = catalog::parse_discount(&step.settings) else {
+            return Ok(Acted::Failed(STUCK_SETTINGS.into()));
+        };
+        let id = evento::hash_ids(vec!["automation-discount", &run.id, &step.id]);
+        let suffix: String = id
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_uppercase())
+            .take(8)
+            .collect();
+        let code = format!("{}-{suffix}", settings.prefix);
+        let ends_at = crate::auth::now() + u64::from(settings.days) * 24 * 60 * 60;
+        let (value, worded) = match &settings.value {
+            CodeValue::Percent(bps) => (
+                timada_discounts::DiscountValue::Percent(*bps),
+                format!("{} %", timada_core_percent(*bps)),
+            ),
+            CodeValue::Amount { cents, currency } => (
+                timada_discounts::DiscountValue::Amount {
+                    cents: *cents,
+                    currency: currency.clone(),
+                },
+                timada_catalog::format_money(*cents, currency),
+            ),
+        };
+        let discounts = timada_discounts::Command::new(self.store.clone(), &tenant.id);
+        let made = discounts
+            .create_discount_with_id(
+                AUTOMATION_ACTOR,
+                &id,
+                timada_discounts::CreateDiscount {
+                    code,
+                    value,
+                    starts_at: None,
+                    ends_at: Some(ends_at),
+                    max_uses: Some(1),
+                    once_per_email: false,
+                },
+            )
+            .await;
+        match made {
+            Ok(discount) => Ok(Acted::Done(
+                serde_json::json!({
+                    "code": discount.code,
+                    "value": worded,
+                    "ends": crate::ui::format_date(ends_at),
+                })
+                .to_string(),
+            )),
+            Err(err) if err.is_user_facing() => Ok(Acted::Failed(err.to_string())),
+            Err(err) => Ok(Acted::Retry(err.to_string())),
+        }
+    }
+}
+
+/// `1000` basis points as `10`, `1250` as `12.5`.
+fn timada_core_percent(bps: u32) -> String {
+    let whole = bps / 100;
+    match bps % 100 {
+        0 => whole.to_string(),
+        cents if cents % 10 == 0 => format!("{whole}.{}", cents / 10),
+        cents => format!("{whole}.{cents:02}"),
+    }
+}
+
+/// The code a discount step made earlier in the run, for a mail to quote.
+fn made_code(run: &RunState) -> Option<timada_tenancy::AutomationDiscountVars> {
+    run.log
+        .iter()
+        .rev()
+        .find_map(|record| match &record.outcome {
+            timada_automations::Outcome::Succeeded { output } => {
+                let made: serde_json::Value = serde_json::from_str(output).ok()?;
+                Some(timada_tenancy::AutomationDiscountVars {
+                    code: made.get("code")?.as_str()?.to_owned(),
+                    value: made.get("value")?.as_str()?.to_owned(),
+                    ends: made.get("ends")?.as_str()?.to_owned(),
+                })
+            }
+            _ => None,
+        })
 }
 
 /// What a member must be able to read to be told about a subject.
@@ -961,6 +1072,16 @@ mod tests {
         runner.advance(&shop(), &run.id, now + 3600).await.unwrap();
         let done = automations.load_run(&run.id).await.unwrap().unwrap();
         assert_eq!(done.status, RunStatus::Finished);
+    }
+
+    #[test]
+    fn a_step_is_tried_again_four_times_then_not() {
+        assert_eq!(retry_at(100, 1), Some(160));
+        assert_eq!(retry_at(100, 4), Some(100 + 7200));
+        assert_eq!(retry_at(100, 5), None);
+        assert_eq!(timada_core_percent(1000), "10");
+        assert_eq!(timada_core_percent(1250), "12.5");
+        assert_eq!(timada_core_percent(1234), "12.34");
     }
 
     #[test]

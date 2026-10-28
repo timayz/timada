@@ -458,3 +458,60 @@ test("a scenario that mails customers needs the shop set up to send them", async
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("storefront lives");
 });
+
+test("a scenario makes a single-use code and mails it", async ({ page, request }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Coupon Shop");
+  await createTenant(page, name);
+  await page.goto(`/t/${slug}/mail`);
+  await page.getByLabel("Server", { exact: true }).fill("localhost");
+  await page.getByLabel("Port", { exact: true }).fill("1025");
+  await page.getByLabel("Security").selectOption("none");
+  await page.getByLabel("Send from address").fill(uniqueEmail("shop"));
+  await page.getByRole("button", { name: "Test and save" }).click();
+  await expect(page.getByRole("status")).toContainText("Test mail sent");
+  await page.goto(`/t/${slug}/api-keys`);
+  await page.getByLabel("Where shoppers find the shop").fill("https://shop.example");
+  await page.getByRole("button", { name: "Save address" }).click();
+  await page.getByLabel("Label").fill("Storefront");
+  await page.getByLabel(/Fill carts and place orders/).check();
+  await page.getByRole("button", { name: "Create key" }).click();
+  const key = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
+
+  await newScenario(page, "Win them back");
+  await chooseTrigger(page, "When a contact message arrives");
+  await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+  await page
+    .locator('[id="add-root.0"]')
+    .getByRole("button", { name: "Create a discount code", exact: true })
+    .click();
+  await page.locator("[data-inspector]").getByLabel("Code starts with").fill("HELLO");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toContainText("off, 30 days");
+  await slot(page, "root.1").getByRole("button", { name: "Add a step here" }).click();
+  await page
+    .locator('[id="add-root.1"]')
+    .getByRole("button", { name: "E-mail the customer", exact: true })
+    .click();
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("A code for you");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Published as version 1");
+
+  const visitor = uniqueEmail("visitor");
+  const sent = await request.post("/store/contact", {
+    headers: { Authorization: `Bearer ${key}` },
+    form: { first_name: "Ada", last_name: "Lovelace", email: visitor, body: "Do you have a discount?" },
+  });
+  expect(sent.status()).toBe(201);
+  // The default mail quotes the code the step before it made.
+  const mail = await mailTo(request, visitor, "A code for you");
+  const code = mail.html?.match(/HELLO-[A-Z0-9]{8}/)?.[0];
+  expect(code, "the mail quotes the code").toBeTruthy();
+  // It is one of the shop's discount codes, usable once.
+  await page.getByRole("link", { name: "Discounts", exact: true }).click();
+  await expect(async () => {
+    await page.reload();
+    await expect(page.getByText(code!)).toBeVisible({ timeout: 500 });
+  }).toPass();
+});

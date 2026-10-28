@@ -5,7 +5,7 @@
 
 use timada_automations::{
     ProblemAt, Step,
-    catalog::{self, CONDITION, EMAIL, NOTIFY, Op, Unit, WAIT},
+    catalog::{self, CONDITION, DISCOUNT, EMAIL, NOTIFY, Op, Unit, WAIT},
 };
 use topcoat::{
     Result,
@@ -139,6 +139,8 @@ async fn step_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
             notify_settings(canvas: canvas, step: step)
         } else if step.kind == EMAIL {
             email_settings(canvas: canvas, step: step)
+        } else if step.kind == DISCOUNT {
+            discount_settings(canvas: canvas, step: step)
         } else {
             <p class="text-sm text-muted-foreground">"This block was made with a newer version of Timada. It is kept as it is; remove it to publish the scenario."</p>
         }
@@ -384,5 +386,55 @@ async fn email_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
                 <p class="text-sm text-destructive" role="alert" data-template-error="">(err.to_string())</p>
             }
         }
+    })
+}
+
+#[component]
+async fn discount_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+    let setting = |key: &str| step.settings.get(key).cloned().unwrap_or_default();
+    let kind = setting("kind");
+    let value = setting("value");
+    let currency = setting("currency");
+    let days = setting("days");
+    let prefix = setting("prefix");
+    let mut found = issues_of(canvas, &step.id, "kind");
+    found.extend(issues_of(canvas, &step.id, "value"));
+    found.extend(issues_of(canvas, &step.id, "currency"));
+    Ok(view! {
+        <p class="text-sm text-muted-foreground">
+            "Makes a code that works once, for anyone, until it ends. A mail after this step quotes it as {{ discount.code }}."
+        </p>
+        <div class="flex items-end gap-2">
+            field(
+                attrs: attributes! { class="w-32" },
+                label_of(attrs: attributes! { for="discount-value" }, "Takes off")
+                input(attrs: attributes! { id="discount-value" name="settings.value" value=(&value) inputmode="decimal" })
+            )
+            field(
+                attrs: attributes! { class="flex-1" },
+                label_of(attrs: attributes! { for="discount-kind" class="sr-only" }, "As")
+                select(
+                    attrs: attributes! { id="discount-kind" name="settings.kind" },
+                    <option value="percent" selected=(kind == "percent")>"% of the order"</option>
+                    <option value="amount" selected=(kind == "amount")>"in the currency below"</option>
+                )
+            )
+        </div>
+        field(
+            label_of(attrs: attributes! { for="discount-currency" }, "Currency (for an amount)")
+            input(attrs: attributes! { id="discount-currency" name="settings.currency" value=(&currency) maxlength="3" class="w-24 uppercase" })
+        )
+        issue_list(texts: found)
+        field(
+            label_of(attrs: attributes! { for="discount-days" }, "Valid for (days)")
+            input(attrs: attributes! { id="discount-days" name="settings.days" value=(&days) inputmode="numeric" class="w-24" })
+            issue_list(texts: issues_of(canvas, &step.id, "days"))
+        )
+        field(
+            label_of(attrs: attributes! { for="discount-prefix" }, "Code starts with")
+            input(attrs: attributes! { id="discount-prefix" name="settings.prefix" value=(&prefix) maxlength="12" class="w-40 uppercase" })
+            field_description("Letters and digits; the rest of the code is drawn for each run.")
+            issue_list(texts: issues_of(canvas, &step.id, "prefix"))
+        )
     })
 }

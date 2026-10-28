@@ -166,3 +166,34 @@ async fn archiving_frees_the_code() {
     let found = cmd.load_discount_by_code("REUSE").await.unwrap().unwrap();
     assert_eq!(found.id, second.id);
 }
+
+#[tokio::test]
+async fn a_discount_made_under_an_id_is_made_once() {
+    let discounts = command().await;
+    let cmd = || timada_discounts::CreateDiscount {
+        code: "THANKS-AB12CD34".into(),
+        value: timada_discounts::DiscountValue::Percent(1000),
+        starts_at: None,
+        ends_at: None,
+        max_uses: Some(1),
+        once_per_email: false,
+    };
+    let first = discounts
+        .create_discount_with_id(ALICE, "made-for-run-1", cmd())
+        .await
+        .unwrap();
+    // Asked again (a retry): the same discount, nothing more.
+    let again = discounts
+        .create_discount_with_id(ALICE, "made-for-run-1", cmd())
+        .await
+        .unwrap();
+    assert_eq!(first.id, "made-for-run-1");
+    assert_eq!(again.id, first.id);
+    // Another id cannot take the code.
+    assert!(
+        discounts
+            .create_discount_with_id(ALICE, "made-for-run-2", cmd())
+            .await
+            .is_err()
+    );
+}

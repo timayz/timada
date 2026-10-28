@@ -20,10 +20,10 @@ use timada_orders::OrderState;
 use timada_reviews::REVIEW_LINK_TTL_SECS;
 use timada_shoppers::CODE_TTL_SECS;
 use timada_tenancy::{
-    AddressVars, AutomationCustomerVars, AutomationOrderVars, DiscountVars, LineVars, MailVars,
-    NewsletterConfirmationVars, NewsletterVars, OrderConfirmationVars, OrderVars, RenderedMail,
-    ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind, ShopVars,
-    ShopperCodeVars, TenantState, render, render_text,
+    AddressVars, AutomationCustomerVars, AutomationDiscountVars, AutomationOrderVars, DiscountVars,
+    LineVars, MailVars, NewsletterConfirmationVars, NewsletterVars, OrderConfirmationVars,
+    OrderVars, RenderedMail, ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind,
+    ShopVars, ShopperCodeVars, TenantState, render, render_text,
 };
 
 use crate::auth::cookies::EmailFlowKind;
@@ -548,6 +548,7 @@ pub fn automation_vars(
     shop: &TenantState,
     order: Option<(&OrderState, Option<String>)>,
     unsubscribe_url: &str,
+    discount: Option<AutomationDiscountVars>,
 ) -> MailVars {
     let shop = shop_vars(cx, shop);
     let unsubscribe_url = unsubscribe_url.to_owned();
@@ -557,10 +558,12 @@ pub fn automation_vars(
             order: order_vars(order),
             link,
             unsubscribe_url,
+            discount,
         })),
         None => MailVars::AutomationCustomer(AutomationCustomerVars {
             shop,
             unsubscribe_url,
+            discount,
         }),
     }
 }

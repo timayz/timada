@@ -130,6 +130,8 @@ pub const NOTIFY: &str = "notify";
 /// Mails the customer the run is about (the buyer of an order, the visitor
 /// who wrote, …) a message the merchant wrote.
 pub const EMAIL: &str = "email";
+/// Creates a single-use discount code, which a later mail may quote.
+pub const DISCOUNT: &str = "discount";
 
 /// A kind of step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +157,10 @@ pub const STEPS: &[StepKind] = &[
     },
     StepKind {
         key: EMAIL,
+        branches: 0,
+    },
+    StepKind {
+        key: DISCOUNT,
         branches: 0,
     },
 ];
@@ -740,12 +746,102 @@ pub fn parse_email(settings: &BTreeMap<String, String>) -> Result<EmailSettings,
     }
 }
 
+/// The longest prefix of a code a scenario makes, in characters.
+pub const MAX_CODE_PREFIX_LEN: usize = 12;
+/// The longest a code a scenario makes is valid, in days.
+pub const MAX_CODE_DAYS: u32 = 365;
+
+/// What a code a scenario makes takes off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodeValue {
+    /// In basis points (1000 is 10 %).
+    Percent(u32),
+    Amount {
+        cents: u64,
+        currency: String,
+    },
+}
+
+/// A discount code step, read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscountSettings {
+    pub value: CodeValue,
+    /// How many days the code is valid from when it is made.
+    pub days: u32,
+    /// What the code starts with (`THANKS` gives `THANKS-7KQ2M9PX`).
+    pub prefix: String,
+}
+
+pub fn parse_discount(settings: &BTreeMap<String, String>) -> Result<DiscountSettings, Vec<Issue>> {
+    let mut issues = Vec::new();
+    let value = match (
+        setting(settings, "kind"),
+        parse_cents(setting(settings, "value")),
+    ) {
+        ("percent", Some(hundredths)) if (1..=10_000).contains(&hundredths) => {
+            Some(CodeValue::Percent(hundredths as u32))
+        }
+        ("amount", Some(cents)) if (1..=100_000_000).contains(&cents) => {
+            let currency = setting(settings, "currency").to_ascii_uppercase();
+            if currency.len() == 3 && currency.bytes().all(|b| b.is_ascii_uppercase()) {
+                Some(CodeValue::Amount { cents, currency })
+            } else {
+                issues.push(issue("currency", ISSUE_INVALID));
+                None
+            }
+        }
+        ("percent" | "amount", None) if setting(settings, "value").is_empty() => {
+            issues.push(issue("value", ISSUE_MISSING));
+            None
+        }
+        ("percent" | "amount", _) => {
+            issues.push(issue("value", ISSUE_INVALID));
+            None
+        }
+        _ => {
+            issues.push(issue("kind", ISSUE_INVALID));
+            None
+        }
+    };
+    let days = match setting(settings, "days").parse::<u32>() {
+        Ok(days) if (1..=MAX_CODE_DAYS).contains(&days) => Some(days),
+        _ => {
+            issues.push(issue("days", ISSUE_INVALID));
+            None
+        }
+    };
+    let prefix = setting(settings, "prefix").to_ascii_uppercase();
+    if prefix.is_empty()
+        || prefix.len() > MAX_CODE_PREFIX_LEN
+        || !prefix
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    {
+        issues.push(issue("prefix", ISSUE_INVALID));
+    }
+    match (value, days) {
+        (Some(value), Some(days)) if issues.is_empty() => Ok(DiscountSettings {
+            value,
+            days,
+            prefix,
+        }),
+        _ => Err(issues),
+    }
+}
+
 /// What a new step of `kind` starts with, for a run about `subject`.
 pub fn default_settings(kind: &str, subject: Option<Subject>) -> BTreeMap<String, String> {
     let pairs: Vec<(String, String)> = match kind {
         WAIT => vec![
             ("amount".into(), "1".into()),
             ("unit".into(), Unit::Days.as_str().into()),
+        ],
+        DISCOUNT => vec![
+            ("kind".into(), "percent".into()),
+            ("value".into(), "10".into()),
+            ("currency".into(), "EUR".into()),
+            ("days".into(), "30".into()),
+            ("prefix".into(), "THANKS".into()),
         ],
         CONDITION => {
             let mut pairs = vec![("match".to_owned(), "all".to_owned())];
@@ -773,6 +869,7 @@ pub fn step_issues(
         CONDITION => parse_condition(subject, settings).map(|_| ()),
         NOTIFY => parse_notify(settings).map(|_| ()),
         EMAIL => parse_email(settings).map(|_| ()),
+        DISCOUNT => parse_discount(settings).map(|_| ()),
         _ => Ok(()),
     };
     result.err().unwrap_or_default()
@@ -913,6 +1010,37 @@ mod tests {
         let mut facts = Facts::new();
         facts.insert("message.language", Fact::Text("fr".into()));
         assert!(language.holds(&facts));
+    }
+
+    #[test]
+    fn a_code_step_reads_its_value_and_validity() {
+        let read = parse_discount(&default_settings(DISCOUNT, None)).unwrap();
+        assert_eq!(read.value, CodeValue::Percent(1000));
+        assert_eq!((read.days, read.prefix.as_str()), (30, "THANKS"));
+        let amount = parse_discount(&map(&[
+            ("kind", "amount"),
+            ("value", "5,50"),
+            ("currency", "eur"),
+            ("days", "7"),
+            ("prefix", "back2"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            amount.value,
+            CodeValue::Amount {
+                cents: 550,
+                currency: "EUR".into()
+            }
+        );
+        assert_eq!(amount.prefix, "BACK2");
+        let issues = parse_discount(&map(&[
+            ("kind", "percent"),
+            ("value", "150"),
+            ("days", "0"),
+            ("prefix", "no way"),
+        ]))
+        .unwrap_err();
+        assert_eq!(issues.len(), 3);
     }
 
     #[test]

@@ -191,6 +191,9 @@ pub fn describe_error(code: &str) -> &'static str {
         "scenario_too_large" => "The scenario is too large to save.",
         "run_not_found" => "There is no such run.",
         "automation_invalid_email" => "That does not look like an e-mail address.",
+        "automation_discount_permission" => {
+            "A scenario that makes discount codes is published by members who may manage the discounts."
+        }
         "automation_invalid_link" => {
             "This link does not stop any mail: it may have been cut short."
         }
