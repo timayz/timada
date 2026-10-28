@@ -35,7 +35,10 @@ takes:
 
 Saving sends a test mail through the new settings to the address given in the form,
 which is prefilled with the member's own. The settings are recorded only if that mail
-goes out. Each server has its own page, where it is changed the same way (through a
+goes out. Every send through a shop's server, the test included, gives up after 20
+seconds: a server that takes the connection and never answers, typically a port that
+speaks TLS from the first byte (465) set up with STARTTLS, would otherwise hold it for
+ever. The test then says to check that the security matches the port. Each server has its own page, where it is changed the same way (through a
 test mail) or deleted. Leaving the password blank keeps the saved one, as long as both
 the host and the user name stay the same: a saved password is never sent to another
 server.

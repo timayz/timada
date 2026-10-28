@@ -22,14 +22,21 @@ use timada_tenancy::{
 };
 use topcoat::{
     context::{Cx, app_context},
-    mail::{Mail, Mailbox, SmtpTransport, Transport, send},
+    mail::{Mail, Mailbox, SmtpTransport, Transport, TransportFuture, send},
 };
 
 use crate::auth::mail::MailSender;
 use crate::seal::Sealer;
 
-/// How long a shop's server has to answer before a send gives up.
+/// How long a shop's server has to take the connection.
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a whole send through a shop's server may take. The transport's
+/// own timeout only bounds the connection: a server that takes it and then
+/// says nothing (a port that speaks TLS from the first byte, asked for
+/// STARTTLS) would otherwise hold the send, and whatever waits on it, for
+/// ever.
+const SEND_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A shop's mail server, opened: the password in clear.
 pub struct MailServer {
@@ -52,9 +59,17 @@ impl std::fmt::Debug for MailServer {
 }
 
 impl MailServer {
-    /// A transport to this server. Its connections are pooled, so it is
-    /// worth keeping.
-    pub fn transport(&self) -> anyhow::Result<SmtpTransport> {
+    /// A transport to this server, whose sends give up after
+    /// [`SEND_TIMEOUT`] with [`NoAnswer`]. Its connections are pooled, so it
+    /// is worth keeping.
+    pub fn transport(&self) -> anyhow::Result<TimedTransport> {
+        Ok(TimedTransport {
+            inner: self.smtp()?,
+            limit: SEND_TIMEOUT,
+        })
+    }
+
+    fn smtp(&self) -> anyhow::Result<SmtpTransport> {
         let builder = match self.security.as_str() {
             MAIL_SECURITY_TLS => SmtpTransport::relay(&self.host)?,
             MAIL_SECURITY_STARTTLS => SmtpTransport::starttls(&self.host)?,
@@ -67,6 +82,34 @@ impl MailServer {
             _ => builder,
         };
         Ok(builder.build())
+    }
+}
+
+/// A shop's server took the connection and did not answer in time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoAnswer;
+
+impl std::fmt::Display for NoAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the mail server did not answer in time")
+    }
+}
+
+impl std::error::Error for NoAnswer {}
+
+/// A transport to a shop's server whose sends give up after `limit`.
+pub struct TimedTransport {
+    inner: SmtpTransport,
+    limit: Duration,
+}
+
+impl Transport for TimedTransport {
+    fn send<'a>(&'a self, cx: &'a Cx, mail: Mail) -> TransportFuture<'a> {
+        Box::pin(async move {
+            tokio::time::timeout(self.limit, self.inner.send(cx, mail))
+                .await
+                .unwrap_or_else(|_| Err(NoAnswer.into()))
+        })
     }
 }
 
@@ -454,6 +497,46 @@ mod tests {
         assert!(mail.check_host("127.0.0.1", 25).await.is_err());
         assert!(mail.check_host("10.1.2.3", 25).await.is_err());
         assert!(mail.check_host("93.184.215.14", 25).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_server_that_takes_the_connection_and_never_answers_is_given_up() {
+        // As a port that speaks TLS from the first byte does to a client
+        // waiting for its greeting: the connection is taken, nothing is said.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                held.push(socket);
+            }
+        });
+        let server = MailServer {
+            host: "127.0.0.1".into(),
+            port,
+            security: MAIL_SECURITY_NONE.into(),
+            username: None,
+            password: None,
+        };
+        assert_eq!(server.transport().unwrap().limit, SEND_TIMEOUT);
+        let transport = TimedTransport {
+            inner: server.smtp().unwrap(),
+            limit: Duration::from_millis(300),
+        };
+        let cx = topcoat::context::CxTestBuilder::new().build();
+        let mail = topcoat::mail::mail! {
+            from: "Shop <shop@acme.test>".parse::<Mailbox>().unwrap(),
+            to: Mailbox::new("buyer@acme.test").unwrap(),
+            subject: "Hello",
+            html: { cx => <p>"Hello"</p> },
+        }
+        .unwrap();
+        let err = tokio::time::timeout(Duration::from_secs(5), transport.send(&cx, mail))
+            .await
+            .expect("given up within its limit")
+            .unwrap_err();
+        assert!(err.is::<NoAnswer>(), "{err}");
     }
 
     #[test]

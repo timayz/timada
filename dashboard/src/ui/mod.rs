@@ -234,6 +234,9 @@ pub fn describe_error(code: &str) -> &'static str {
         "mail_server_failed" => {
             "The test mail did not go out: check the server, port, security, user name and password. Nothing was saved."
         }
+        "mail_server_silent" => {
+            "The server took the connection but never answered: check that the security matches the port (STARTTLS usually on 587, TLS on 465). Nothing was saved."
+        }
         "unknown_mail" => "This shop sends no such mail.",
         "invalid_mail_languages" => "Pick the languages from the list.",
         "unknown_language" => "This shop does not send mails in that language.",

@@ -23,7 +23,7 @@ use crate::components::button::button;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
-use crate::shop_mail::{MailServer, ShopMail};
+use crate::shop_mail::{MailServer, NoAnswer, ShopMail};
 
 /// A server as the merchant fills it in, to add or to change. Every field a
 /// string: a urlencoded form hands them so, and a bad port is the page's
@@ -159,7 +159,11 @@ pub async fn tested(
     }?;
     if let Err(err) = transport.send(cx, test).await {
         tracing::info!(tenant = %tenant.slug, %err, "a test mail did not go out");
-        return Ok(Err("mail_server_failed"));
+        return Ok(Err(if err.is::<NoAnswer>() {
+            "mail_server_silent"
+        } else {
+            "mail_server_failed"
+        }));
     }
     let password_sealed = match (kept, password) {
         (Some(sealed), _) => Some(sealed),
