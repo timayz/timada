@@ -1,3 +1,5 @@
+import { createHmac } from "node:crypto";
+import { createServer, type IncomingHttpHeaders } from "node:http";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mailTo, registerWithEmail, uniqueEmail } from "./email";
 import { invite, inviteLink } from "./invitations";
@@ -514,4 +516,72 @@ test("a scenario makes a single-use code and mails it", async ({ page, request }
     await page.reload();
     await expect(page.getByText(code!)).toBeVisible({ timeout: 500 });
   }).toPass();
+});
+
+test("a scenario calls a webhook, signed with the step's secret", async ({ page, request }) => {
+  // The merchant's own app: a server on this machine (the e2e config lets a
+  // shop call one) that keeps what it is sent.
+  const received: { headers: IncomingHttpHeaders; body: string }[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      received.push({ headers: req.headers, body });
+      res.writeHead(200);
+      res.end("ok");
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(12117, "127.0.0.1", resolve));
+  try {
+    await registerWithEmail(page, uniqueEmail("owner"));
+    const { name, slug } = uniqueTenant("Hook Shop");
+    await createTenant(page, name);
+    await page.goto(`/t/${slug}/api-keys`);
+    await page.getByLabel("Label").fill("Storefront");
+    await page.getByLabel(/Fill carts and place orders/).check();
+    await page.getByRole("button", { name: "Create key" }).click();
+    const key = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
+
+    await newScenario(page, "Tell my CRM");
+    await chooseTrigger(page, "When a contact message arrives");
+    await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+    await page
+      .locator('[id="add-root.0"]')
+      .getByRole("button", { name: "Call a webhook", exact: true })
+      .click();
+    await page.locator("[data-inspector]").getByLabel("Address").fill("http://127.0.0.1:12117/hook");
+    await page.getByRole("button", { name: "Apply" }).click();
+    // Sealed once applied: only its host shows, and the secret to check with.
+    await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText(
+      "Calls 127.0.0.1",
+    );
+    await expect(page.locator("[data-scenario-editor]")).not.toContainText("12117/hook");
+    const secret = await page.locator("[data-webhook-secret]").inputValue();
+    expect(secret).toMatch(/^whsec_[0-9a-f]{64}$/);
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Published as version 1");
+
+    const sent = await request.post("/store/contact", {
+      headers: { Authorization: `Bearer ${key}` },
+      form: { first_name: "Ada", last_name: "Lovelace", email: uniqueEmail("visitor"), body: "Please call me back." },
+    });
+    expect(sent.status()).toBe(201);
+
+    await expect.poll(() => received.length, { timeout: 15_000 }).toBe(1);
+    const call = received[0];
+    const payload = JSON.parse(call.body);
+    expect(payload.type).toBe("message.received");
+    expect(payload.shop).toBe(slug);
+    expect(payload.subject.kind).toBe("message");
+    expect(payload.scenario.name).toBe("Tell my CRM");
+    // Ids only: nothing the visitor wrote.
+    expect(call.body).not.toContain("call me back");
+    expect(call.headers["idempotency-key"]).toBe(payload.id);
+    const signature = String(call.headers["timada-signature"]);
+    const t = signature.match(/t=(\d+)/)?.[1];
+    const v1 = signature.match(/v1=([0-9a-f]+)/)?.[1];
+    expect(createHmac("sha256", secret).update(`${t}.${call.body}`).digest("hex")).toBe(v1);
+  } finally {
+    server.close();
+  }
 });

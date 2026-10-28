@@ -53,6 +53,7 @@ pub const TRIGGER: IconData = iconify_icon!("lucide:zap");
 pub const WAIT: IconData = iconify_icon!("lucide:timer");
 pub const CONDITION: IconData = iconify_icon!("lucide:split");
 pub const NOTIFY: IconData = iconify_icon!("lucide:bell-ring");
+pub const WEBHOOK: IconData = iconify_icon!("lucide:webhook");
 pub const BLOCK: IconData = iconify_icon!("lucide:box");
 pub const GRIP: IconData = iconify_icon!("lucide:grip-vertical");
 pub const ARROW_UP: IconData = iconify_icon!("lucide:arrow-up");

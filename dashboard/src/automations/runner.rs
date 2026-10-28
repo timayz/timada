@@ -17,7 +17,7 @@ use std::time::Duration;
 use sqlx::SqlitePool;
 use timada_automations::{
     AUTOMATION_ACTOR, ListenerState, RUN_HISTORY_SECS, RunState, Step, Transition,
-    catalog::{self, CodeValue, DISCOUNT, EMAIL, NOTIFY, Subject},
+    catalog::{self, CodeValue, DISCOUNT, EMAIL, NOTIFY, Subject, WEBHOOK},
     due_runs,
     interpreter::{self, Next, STUCK_SETTINGS, STUCK_UNKNOWN},
     listener_of, normalize_email, opt_out_token, prune_runs, scenario_name,
@@ -40,7 +40,7 @@ use crate::auth::mail::{
     send_automation_notice,
 };
 use crate::cluster::Executor;
-use crate::seal::OptOutKey;
+use crate::seal::{OptOutKey, WebhookKeys};
 
 /// What the runner needs of a store.
 pub trait Store: evento::Executor + Clone + Send + Sync + 'static {}
@@ -91,6 +91,14 @@ pub struct Runner<E = Executor> {
     /// Signs the links that stop a shop's automated mails; none without the
     /// operator's secret, and then no mail goes to a customer.
     opt_out_key: Option<OptOutKey>,
+    /// Opens the webhooks' addresses and signs their calls; none without
+    /// the operator's secret, and then no webhook is called.
+    webhooks: Option<WebhookKeys>,
+    /// What the webhook calls go out through.
+    http: reqwest::Client,
+    /// Whether a webhook may call a host on this machine or network
+    /// (development and tests only).
+    allow_private_hosts: bool,
     runs_per_look: u32,
     definitions: Definitions,
 }
@@ -105,8 +113,19 @@ impl<E: Store> Runner<E> {
         base_url: String,
         keys: Arc<dyn KeyRing>,
         opt_out_key: Option<OptOutKey>,
+        webhooks: Option<WebhookKeys>,
+        webhook_timeout: Duration,
+        allow_private_hosts: bool,
         runs_per_look: u32,
     ) -> Arc<Self> {
+        // rustls needs a process-wide crypto provider; installing twice is fine.
+        let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let http = reqwest::Client::builder()
+            .user_agent("timada")
+            .timeout(webhook_timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_default();
         Arc::new(Self {
             read_pool,
             write_pool,
@@ -115,6 +134,9 @@ impl<E: Store> Runner<E> {
             base_url,
             keys,
             opt_out_key,
+            webhooks,
+            http,
+            allow_private_hosts,
             runs_per_look: runs_per_look.max(1),
             definitions: Definitions::default(),
         })
@@ -361,6 +383,7 @@ impl<E: Store> Runner<E> {
             NOTIFY => self.notify(tenant, run, subject, step).await,
             EMAIL => self.email(tenant, run, subject, step).await,
             DISCOUNT => self.discount(tenant, run, step).await,
+            WEBHOOK => self.webhook(tenant, run, step).await,
             _ => Ok(Acted::Failed(STUCK_UNKNOWN.into())),
         };
         acted.unwrap_or_else(|err| Acted::Failed(err.to_string()))
@@ -673,6 +696,75 @@ impl<E: Store> Runner<E> {
     }
 }
 
+impl<E: Store> Runner<E> {
+    /// Posts what started the run to the step's address, signed. Asking
+    /// again is safe (the same `Idempotency-Key` every try), so a call that
+    /// got no answer is tried again later.
+    async fn webhook(
+        &self,
+        tenant: &TenantState,
+        run: &RunState,
+        step: &Step,
+    ) -> anyhow::Result<Acted> {
+        let Ok(settings) = catalog::parse_webhook(&step.settings) else {
+            return Ok(Acted::Failed(STUCK_SETTINGS.into()));
+        };
+        let Some(keys) = &self.webhooks else {
+            return Ok(Acted::Failed(
+                "The dashboard has no secret to open the webhook's address with.".into(),
+            ));
+        };
+        let Some(url) = super::webhook::open_url(
+            keys,
+            &tenant.id,
+            &run.scenario_id,
+            &step.id,
+            &settings.url_sealed,
+        ) else {
+            return Ok(Acted::Failed("The webhook's address does not open.".into()));
+        };
+        let scenario = scenario_name(&self.read_pool, &tenant.id, &run.scenario_id)
+            .await?
+            .unwrap_or_default();
+        let subject = catalog::trigger_kind(&run.trigger).map(|kind| kind.subject.as_str());
+        let now = crate::auth::now();
+        let id = format!("{}:{}", run.id, step.id);
+        let body = serde_json::to_vec(&serde_json::json!({
+            "id": id,
+            "type": run.trigger,
+            "shop": tenant.slug,
+            "scenario": {
+                "id": run.scenario_id,
+                "name": scenario,
+                "version": run.scenario_version,
+            },
+            "run": run.id,
+            "subject": { "kind": subject, "id": run.subject_id },
+            "sent_at": now,
+        }))?;
+        let secret = super::webhook::signing_secret(keys, &tenant.id, &run.scenario_id, &step.id);
+        let signature = super::webhook::signature(&secret, &body, now);
+        Ok(
+            match super::webhook::deliver(
+                &self.http,
+                &url,
+                body,
+                signature,
+                &id,
+                self.allow_private_hosts,
+            )
+            .await
+            {
+                super::webhook::Delivery::Taken(status) => {
+                    Acted::Done(serde_json::json!({ "status": status }).to_string())
+                }
+                super::webhook::Delivery::Again(reason) => Acted::Retry(reason),
+                super::webhook::Delivery::Refused(reason) => Acted::Failed(reason),
+            },
+        )
+    }
+}
+
 /// `1000` basis points as `10`, `1250` as `12.5`.
 fn timada_core_percent(bps: u32) -> String {
     let whole = bps / 100;
@@ -872,6 +964,9 @@ mod tests {
             "https://dashboard.example".into(),
             Arc::new(MemoryRing(keys.clone())),
             None,
+            None,
+            Duration::from_secs(5),
+            true,
             10,
         )
     }

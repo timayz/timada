@@ -143,6 +143,8 @@ dir = "data/shopper-keys"
 # check_secs = 15
 # # The most runs one look moves.
 # runs_per_check = 200
+# # How long, in seconds, a scenario's webhook call may take.
+# webhook_timeout_secs = 10
 
 # What storefronts may ask for their shoppers. A storefront has the shop mail
 # sign-in codes, hands in the messages of its contact form and the sign-ups

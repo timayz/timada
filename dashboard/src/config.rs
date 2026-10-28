@@ -259,6 +259,9 @@ pub struct AutomationsConfig {
     /// How many runs one look moves at most.
     #[serde(default = "default_automation_runs_per_check")]
     pub runs_per_check: u32,
+    /// How long, in seconds, a scenario's webhook call may take.
+    #[serde(default = "default_automation_webhook_timeout_secs")]
+    pub webhook_timeout_secs: u64,
 }
 
 impl Default for AutomationsConfig {
@@ -266,6 +269,7 @@ impl Default for AutomationsConfig {
         Self {
             check_secs: default_automation_check_secs(),
             runs_per_check: default_automation_runs_per_check(),
+            webhook_timeout_secs: default_automation_webhook_timeout_secs(),
         }
     }
 }
@@ -276,6 +280,10 @@ fn default_automation_check_secs() -> u64 {
 
 fn default_automation_runs_per_check() -> u32 {
     200
+}
+
+fn default_automation_webhook_timeout_secs() -> u64 {
+    10
 }
 
 /// What storefronts may ask of this node for their shoppers. Each node counts
