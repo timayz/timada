@@ -43,6 +43,14 @@ pub const TENANT: &str = "acme";
 pub const ALICE: &str = "user-alice";
 pub const BOB: &str = "user-bob";
 
+/// Now, in unix seconds: the store stamps events with the real clock.
+pub fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
 pub fn root(index: usize) -> Slot {
     Slot::new(Lane::Root, index)
 }

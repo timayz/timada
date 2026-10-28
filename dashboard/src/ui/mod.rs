@@ -189,6 +189,8 @@ pub fn describe_error(code: &str) -> &'static str {
         "scenario_not_published" => "This scenario was never published.",
         "scenario_invalid" => "The scenario is not ready to publish: see what needs setting up.",
         "scenario_too_large" => "The scenario is too large to save.",
+        "run_not_found" => "There is no such run.",
+        "run_changed" => "The run moved on meanwhile: look again before cancelling it.",
         "campaign_invalid_subject" => "A subject is 1 to 200 characters.",
         "campaign_invalid_body" => "The body is empty or too long.",
         "order_cancelled" => "A cancelled order cannot be fulfilled.",

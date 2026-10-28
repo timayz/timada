@@ -2,6 +2,7 @@ mod aliexpress;
 mod app;
 mod auth;
 mod authz;
+mod automations;
 mod cli;
 mod cluster;
 mod components;

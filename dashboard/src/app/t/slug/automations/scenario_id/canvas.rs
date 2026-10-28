@@ -163,8 +163,12 @@ pub async fn editor_view(canvas: &Canvas<'_>, action: &str) -> Result<impl View>
                     } else {
                         (to_set_up) " thing(s) to set up before it can be published."
                     }
+                    if canvas.version > 0 {
+                        " Publishing makes a new version; runs under way finish on theirs."
+                    }
                 </p>
-                button(attrs: attributes! { type="submit" name="op" value="save" }, "Save draft")
+                button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" name="op" value="save" }, "Save draft")
+                button(attrs: attributes! { type="submit" name="op" value="publish" }, "Publish")
             </div>
 
             if let Some(refusal) = editor.refusal {

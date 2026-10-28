@@ -19,6 +19,8 @@ pub struct ScenarioRow {
     pub unpublished: bool,
     /// How many steps it holds, every lane counted.
     pub steps: i64,
+    /// How many runs it made (still listed).
+    pub runs: i64,
     /// Unix seconds.
     pub created_at: i64,
     pub updated_at: i64,
@@ -51,10 +53,13 @@ pub async fn scenarios_of_tenant(
     offset: u32,
 ) -> anyhow::Result<Vec<ScenarioRow>> {
     Ok(sqlx::query_as(
-        "SELECT * FROM automations_scenarios
-         WHERE tenant_id = ?1
-           AND ((?2 IS NULL AND status <> 'archived') OR status = ?2)
-         ORDER BY updated_at DESC, id DESC
+        "SELECT s.*,
+            (SELECT COUNT(*) FROM automations_runs r
+             WHERE r.tenant_id = s.tenant_id AND r.scenario_id = s.id) AS runs
+         FROM automations_scenarios s
+         WHERE s.tenant_id = ?1
+           AND ((?2 IS NULL AND s.status <> 'archived') OR s.status = ?2)
+         ORDER BY s.updated_at DESC, s.id DESC
          LIMIT ?3 OFFSET ?4",
     )
     .bind(tenant_id)
@@ -81,4 +86,19 @@ pub async fn count_scenarios(
     .fetch_one(pool)
     .await?;
     Ok(count as u64)
+}
+
+/// The name of one of the tenant's scenarios.
+pub async fn scenario_name(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    scenario_id: &str,
+) -> anyhow::Result<Option<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT name FROM automations_scenarios WHERE tenant_id = ?1 AND id = ?2",
+    )
+    .bind(tenant_id)
+    .bind(scenario_id)
+    .fetch_optional(pool)
+    .await?)
 }

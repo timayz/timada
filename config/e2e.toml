@@ -46,6 +46,10 @@ request_check_secs = 2
 [newsletter]
 send_check_secs = 2
 
+# Automation runs move within a second of falling due.
+[automations]
+check_secs = 1
+
 # Every spec signs shoppers in, sends messages and signs up to newsletters
 # from this one machine, so the limits are far above what the
 # suite asks for.

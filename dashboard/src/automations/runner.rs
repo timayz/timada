@@ -1,0 +1,764 @@
+//! Takes the runs through their steps: nothing in the event store fires
+//! later, so every node looks for the runs due (`automations_runs`) on a
+//! timer and moves each as far as it can now. Every move is written against
+//! the version the run was loaded at: a node that loses the race writes
+//! nothing and leaves the run to the winner.
+//!
+//! A step that acts outside the run (a mail) is claimed first and acts only
+//! for the node whose claim is written; it is not tried again, since a
+//! member mailed twice is worse off than one not mailed. A claim whose
+//! outcome never comes (the node stopped) fails the step once its lease is
+//! over.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use sqlx::SqlitePool;
+use timada_automations::{
+    AUTOMATION_ACTOR, ListenerState, RUN_HISTORY_SECS, RunState, Step, Transition,
+    catalog::{self, NOTIFY, Subject},
+    due_runs,
+    interpreter::{self, Next, STUCK_SETTINGS, STUCK_UNKNOWN},
+    listener_of, prune_runs, scenario_name,
+};
+use timada_core::keys::KeyRing;
+use timada_identity::UserRow;
+use timada_tenancy::{
+    PERMISSION_CUSTOMERS_READ, PERMISSION_NEWSLETTER_READ, PERMISSION_ORDERS_READ,
+    PERMISSION_REVIEWS_READ, PERMISSION_SUPPORT_READ, TenantState,
+};
+use tokio::task::JoinHandle;
+use topcoat::context::{AppContext, Cx};
+
+use super::definitions::Definitions;
+use super::facts::facts_of;
+use crate::auth::mail::send_automation_notice;
+use crate::cluster::Executor;
+
+/// What the runner needs of a store.
+pub trait Store: evento::Executor + Clone + Send + Sync + 'static {}
+
+impl<E: evento::Executor + Clone + Send + Sync + 'static> Store for E {}
+
+/// The most moves one run makes in one look: a scenario is at most 50
+/// steps, and a run that keeps moving is looked at again next time.
+const MOVES_PER_LOOK: usize = 60;
+
+/// What a step that acts did.
+enum Acted {
+    /// Its output, as JSON.
+    Done(String),
+    /// Nothing to do, and why.
+    Skipped(String),
+    /// Why it did not act.
+    Failed(String),
+}
+
+/// The sweep, with what it needs outside any request.
+pub struct Runner<E = Executor> {
+    read_pool: SqlitePool,
+    /// The read-model database, writable: ended runs leave the list.
+    write_pool: SqlitePool,
+    /// The store, every tenant's.
+    store: E,
+    mail: Arc<AppContext>,
+    /// The dashboard's public address, for the links the notices carry.
+    base_url: String,
+    keys: Arc<dyn KeyRing>,
+    runs_per_look: u32,
+    definitions: Definitions,
+}
+
+impl<E: Store> Runner<E> {
+    pub fn new(
+        read_pool: SqlitePool,
+        write_pool: SqlitePool,
+        store: E,
+        mail: Arc<AppContext>,
+        base_url: String,
+        keys: Arc<dyn KeyRing>,
+        runs_per_look: u32,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            read_pool,
+            write_pool,
+            store,
+            mail,
+            base_url,
+            keys,
+            runs_per_look: runs_per_look.max(1),
+            definitions: Definitions::default(),
+        })
+    }
+
+    /// Sweeps every `every`, the first time right away.
+    pub fn start(self: Arc<Self>, every: Duration) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(every);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                if let Err(err) = self.sweep(crate::auth::now()).await {
+                    tracing::error!(error = %err, "automation runs not swept");
+                }
+            }
+        })
+    }
+
+    /// Moves every run due by `now`. A run that fails to move is logged and
+    /// the others still go.
+    pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
+        prune_runs(&self.write_pool, now.saturating_sub(RUN_HISTORY_SECS)).await?;
+        let mut tenants: HashMap<String, Option<TenantState>> = HashMap::new();
+        for (tenant_id, run_id) in due_runs(&self.read_pool, now, self.runs_per_look).await? {
+            if !tenants.contains_key(&tenant_id) {
+                let tenant = timada_tenancy::Command(self.store.clone())
+                    .load_tenant(&tenant_id)
+                    .await?;
+                tenants.insert(tenant_id.clone(), tenant);
+            }
+            let Some(tenant) = tenants.get(&tenant_id).and_then(Option::as_ref) else {
+                continue;
+            };
+            // A suspended shop's runs wait for it.
+            if tenant.is_suspended() {
+                continue;
+            }
+            if let Err(err) = self.advance(tenant, &run_id, now).await {
+                tracing::error!(tenant = %tenant_id, run = %run_id, error = %err, "automation run not moved");
+            }
+        }
+        Ok(())
+    }
+
+    /// Moves one run as far as it goes at `now`.
+    pub async fn advance(
+        &self,
+        tenant: &TenantState,
+        run_id: &str,
+        now: u64,
+    ) -> anyhow::Result<()> {
+        let automations = timada_automations::Command::new(self.store.clone(), &tenant.id);
+        let Some(mut run) = automations.load_run(run_id).await? else {
+            return Ok(());
+        };
+        for _ in 0..MOVES_PER_LOOK {
+            if run.status.is_done() {
+                return Ok(());
+            }
+            match listener_of(&self.read_pool, &tenant.id, &run.scenario_id)
+                .await?
+                .map(|listener| listener.state())
+            {
+                Some(ListenerState::Active) => {}
+                Some(ListenerState::Archived) => {
+                    let cancel = Transition::Cancel {
+                        reason: "The scenario was deleted.".into(),
+                    };
+                    automations
+                        .advance_run(AUTOMATION_ACTOR, &run, &[cancel])
+                        .await?;
+                    return Ok(());
+                }
+                // Held, or published a moment ago and not seen here yet.
+                Some(ListenerState::Paused) | None => return Ok(()),
+            }
+            let Some(definition) = self
+                .definitions
+                .get(
+                    &self.store,
+                    &tenant.id,
+                    &run.scenario_id,
+                    run.scenario_version,
+                )
+                .await?
+            else {
+                return Ok(());
+            };
+            let moved = match interpreter::next(&definition, &run, now) {
+                Next::Sleep(_) => return Ok(()),
+                Next::Finish => {
+                    automations
+                        .advance_run(AUTOMATION_ACTOR, &run, &[Transition::Finish])
+                        .await?
+                }
+                Next::Wait(step, until) => {
+                    let wait = Transition::Wait {
+                        step: step.id.clone(),
+                        until,
+                    };
+                    automations
+                        .advance_run(AUTOMATION_ACTOR, &run, &[wait])
+                        .await?
+                }
+                Next::Branch(step) => {
+                    let transition = self
+                        .branch(tenant, &run, definition.subject(), step)
+                        .await?;
+                    automations
+                        .advance_run(AUTOMATION_ACTOR, &run, &[transition])
+                        .await?
+                }
+                Next::Act(step) => {
+                    let attempt = run.attempts(&step.id) + 1;
+                    let claim = Transition::Claim {
+                        step: step.id.clone(),
+                        attempt,
+                    };
+                    if !automations
+                        .advance_run(AUTOMATION_ACTOR, &run, &[claim])
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                    let Some(claimed) = automations.load_run(run_id).await? else {
+                        return Ok(());
+                    };
+                    let outcome = match self.act(tenant, &claimed, definition.subject(), step).await
+                    {
+                        Acted::Done(output) => Transition::Succeed {
+                            step: step.id.clone(),
+                            output,
+                        },
+                        Acted::Skipped(reason) => Transition::Skip {
+                            step: step.id.clone(),
+                            reason,
+                        },
+                        Acted::Failed(reason) => Transition::Fail {
+                            step: step.id.clone(),
+                            attempt,
+                            reason,
+                            retry_at: None,
+                        },
+                    };
+                    run = claimed;
+                    automations
+                        .advance_run(AUTOMATION_ACTOR, &run, &[outcome])
+                        .await?
+                }
+                Next::Lapsed(step, attempt) => {
+                    let lapsed = Transition::Fail {
+                        step: step.id.clone(),
+                        attempt,
+                        reason: "Its outcome is unknown: the node acting on it stopped.".into(),
+                        retry_at: None,
+                    };
+                    automations
+                        .advance_run(AUTOMATION_ACTOR, &run, &[lapsed])
+                        .await?
+                }
+                Next::Stuck(step, reason) => {
+                    let stuck = Transition::Fail {
+                        step: step.id.clone(),
+                        attempt: 0,
+                        reason: reason.into(),
+                        retry_at: None,
+                    };
+                    automations
+                        .advance_run(AUTOMATION_ACTOR, &run, &[stuck])
+                        .await?
+                }
+            };
+            // Another node moved it meanwhile: it carries on from there.
+            if !moved {
+                return Ok(());
+            }
+            let Some(next) = automations.load_run(run_id).await? else {
+                return Ok(());
+            };
+            run = next;
+        }
+        Ok(())
+    }
+
+    /// Checks a condition on the subject as it is now: the lane it sends
+    /// the run down.
+    async fn branch(
+        &self,
+        tenant: &TenantState,
+        run: &RunState,
+        subject: Option<Subject>,
+        step: &Step,
+    ) -> anyhow::Result<Transition> {
+        let condition = catalog::parse_condition(subject, &step.settings);
+        let (Some(subject), Ok(condition)) = (subject, condition) else {
+            return Ok(Transition::Fail {
+                step: step.id.clone(),
+                attempt: 0,
+                reason: STUCK_SETTINGS.into(),
+                retry_at: None,
+            });
+        };
+        let keys = self.keys.for_tenant(&tenant.id);
+        let facts = facts_of(
+            &self.store,
+            &self.read_pool,
+            &*keys,
+            &tenant.id,
+            subject,
+            &run.subject_id,
+        )
+        .await?;
+        Ok(Transition::Branch {
+            step: step.id.clone(),
+            branch: if condition.holds(&facts) { 0 } else { 1 },
+        })
+    }
+
+    /// Acts on a step claimed for this node. Whatever happens is an outcome:
+    /// a claimed step never errors out of the run.
+    async fn act(
+        &self,
+        tenant: &TenantState,
+        run: &RunState,
+        subject: Option<Subject>,
+        step: &Step,
+    ) -> Acted {
+        let acted = match step.kind.as_str() {
+            NOTIFY => self.notify(tenant, run, subject, step).await,
+            _ => Ok(Acted::Failed(STUCK_UNKNOWN.into())),
+        };
+        acted.unwrap_or_else(|err| Acted::Failed(err.to_string()))
+    }
+
+    /// Mails the members who may see the run's subject: the merchant's note
+    /// and a link to the subject in the dashboard, nothing a shopper wrote.
+    async fn notify(
+        &self,
+        tenant: &TenantState,
+        run: &RunState,
+        subject: Option<Subject>,
+        step: &Step,
+    ) -> anyhow::Result<Acted> {
+        let (Some(subject), Ok(settings)) = (subject, catalog::parse_notify(&step.settings)) else {
+            return Ok(Acted::Failed(STUCK_SETTINGS.into()));
+        };
+        let permission = read_permission(subject);
+        let ids: Vec<String> = tenant
+            .members
+            .keys()
+            .filter(|user_id| tenant.can(user_id, permission))
+            .cloned()
+            .collect();
+        let recipients = mailboxes(timada_identity::users_by_ids(&self.read_pool, &ids).await?);
+        if recipients.is_empty() {
+            return Ok(Acted::Skipped("No member to tell.".into()));
+        }
+        let scenario = scenario_name(&self.read_pool, &tenant.id, &run.scenario_id)
+            .await?
+            .unwrap_or_else(|| "A scenario".into());
+        let link = subject_link(&self.base_url, &tenant.slug, subject, &run.subject_id);
+        let cx = Cx::new(self.mail.clone());
+        let mut mailed = 0;
+        let mut refused = None;
+        for to in &recipients {
+            match send_automation_notice(
+                &cx,
+                to,
+                &tenant.name,
+                &scenario,
+                &settings.subject,
+                &settings.note,
+                &link,
+            )
+            .await
+            {
+                Ok(()) => mailed += 1,
+                Err(err) => refused = Some(err.to_string()),
+            }
+        }
+        if mailed == 0 {
+            let reason = refused.unwrap_or_default();
+            return Ok(Acted::Failed(format!("The mail did not go out: {reason}")));
+        }
+        Ok(Acted::Done(
+            serde_json::json!({ "mailed": mailed }).to_string(),
+        ))
+    }
+}
+
+/// What a member must be able to read to be told about a subject.
+fn read_permission(subject: Subject) -> &'static str {
+    match subject {
+        Subject::Order => PERMISSION_ORDERS_READ,
+        Subject::Shopper => PERMISSION_CUSTOMERS_READ,
+        Subject::Subscriber => PERMISSION_NEWSLETTER_READ,
+        Subject::Review => PERMISSION_REVIEWS_READ,
+        Subject::Message => PERMISSION_SUPPORT_READ,
+    }
+}
+
+/// Where a subject is seen in the dashboard.
+pub fn subject_link(base_url: &str, slug: &str, subject: Subject, subject_id: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    match subject {
+        Subject::Order => format!("{base}/t/{slug}/orders/{subject_id}"),
+        Subject::Shopper => format!("{base}/t/{slug}/customers"),
+        Subject::Subscriber => format!("{base}/t/{slug}/newsletter"),
+        Subject::Review => format!("{base}/t/{slug}/reviews"),
+        Subject::Message => format!("{base}/t/{slug}/messages"),
+    }
+}
+
+/// The addresses to mail among these users: the living ones that have one.
+fn mailboxes(users: Vec<UserRow>) -> Vec<String> {
+    users
+        .into_iter()
+        .filter(|user| !user.deleted)
+        .filter_map(|user| user.email)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, HashMap};
+    use std::sync::Mutex;
+
+    use evento::Evento;
+    use evento::migrator::Migrate;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx_migrator::Info;
+    use timada_automations::{
+        Command, Definition, Lane, Outcome, RunStatus, Slot,
+        catalog::{CONDITION, SUBSCRIBER_CONFIRMED, WAIT},
+        read_model_subscription,
+    };
+    use timada_core::{Key, Keys};
+    use timada_newsletter::{RequestOutcome, RequestSubscription, SOURCE_FORM};
+
+    use super::*;
+
+    const TENANT: &str = "t1";
+    const MEMBER: &str = "user-1";
+
+    #[derive(Default)]
+    struct MemoryKeys(Mutex<HashMap<String, Key>>);
+
+    struct MemoryRing(Arc<MemoryKeys>);
+
+    impl KeyRing for MemoryRing {
+        fn for_tenant(&self, _tenant_id: &str) -> Arc<dyn Keys> {
+            self.0.clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Keys for MemoryKeys {
+        async fn put(&self, key_id: &str, key: &Key) -> anyhow::Result<()> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(key_id.to_owned(), key.clone());
+            Ok(())
+        }
+
+        async fn get(&self, key_id: &str) -> anyhow::Result<Option<Key>> {
+            Ok(self.0.lock().unwrap().get(key_id).cloned())
+        }
+
+        async fn delete(&self, key_id: &str) -> anyhow::Result<()> {
+            self.0.lock().unwrap().remove(key_id);
+            Ok(())
+        }
+    }
+
+    /// One in-memory database holding the store and the read models, the
+    /// store wrapped as the cluster's is.
+    async fn store() -> (Evento, SqlitePool) {
+        let options = SqliteConnectOptions::new()
+            .filename(":memory:")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
+        migrator
+            .add_migrations(timada_identity::migrations())
+            .unwrap();
+        migrator
+            .add_migrations(timada_orders::migrations())
+            .unwrap();
+        migrator
+            .add_migrations(timada_newsletter::migrations())
+            .unwrap();
+        migrator
+            .add_migrations(timada_automations::migrations())
+            .unwrap();
+        migrator
+            .run(&mut *conn, &evento::migrator::Plan::apply_all())
+            .await
+            .unwrap();
+        drop(conn);
+        let sqlite: evento::Sqlite = pool.clone().into();
+        (Evento::new(sqlite), pool)
+    }
+
+    /// The trigger subscription, caught up: the listeners, then the runs
+    /// the events start.
+    async fn follow(store: &Evento, pool: &SqlitePool) {
+        super::super::triggers::subscription(pool.clone(), store.clone())
+            .no_retry()
+            .run_once(store)
+            .await
+            .unwrap();
+    }
+
+    /// The runs' read model, caught up.
+    async fn catch_up(store: &Evento, pool: &SqlitePool) {
+        read_model_subscription::<Evento>(pool.clone())
+            .no_retry()
+            .run_once(store)
+            .await
+            .unwrap();
+    }
+
+    async fn subscribe(store: &Evento, keys: &MemoryKeys, email: &str) {
+        let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);
+        let RequestOutcome::ToConfirm { token, .. } = newsletter
+            .request_subscription(
+                keys,
+                "storefront",
+                RequestSubscription {
+                    email: email.to_owned(),
+                    language: None,
+                    source: SOURCE_FORM.to_owned(),
+                },
+                crate::auth::now(),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("nothing to confirm");
+        };
+        newsletter
+            .confirm_subscription(keys, "storefront", &token, crate::auth::now())
+            .await
+            .unwrap();
+    }
+
+    fn runner(store: &Evento, pool: &SqlitePool, keys: &Arc<MemoryKeys>) -> Arc<Runner<Evento>> {
+        Runner::new(
+            pool.clone(),
+            pool.clone(),
+            store.clone(),
+            Arc::new(AppContext::new()),
+            "https://dashboard.example".into(),
+            Arc::new(MemoryRing(keys.clone())),
+            10,
+        )
+    }
+
+    /// The shop, with no member to tell.
+    fn shop() -> TenantState {
+        TenantState {
+            id: TENANT.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    fn settings(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    /// "When someone joins the newsletter from the form, tell the team;
+    /// otherwise wait a day".
+    fn welcome() -> Definition {
+        let mut definition = Definition::default();
+        definition.set_trigger(SUBSCRIBER_CONFIRMED).unwrap();
+        let condition = definition
+            .insert(&Slot::new(Lane::Root, 0), CONDITION)
+            .unwrap();
+        definition
+            .configure(
+                &condition,
+                settings(&[
+                    ("rules.0.field", "subscriber.source"),
+                    ("rules.0.op", "eq"),
+                    ("rules.0.value", "form"),
+                ]),
+            )
+            .unwrap();
+        let yes = Lane::Branch {
+            step: condition.clone(),
+            branch: 0,
+        };
+        let notify = definition.insert(&Slot::new(yes, 0), NOTIFY).unwrap();
+        definition
+            .configure(&notify, settings(&[("subject", "New subscriber")]))
+            .unwrap();
+        let no = Lane::Branch {
+            step: condition,
+            branch: 1,
+        };
+        definition.insert(&Slot::new(no, 0), WAIT).unwrap();
+        assert_eq!(definition.check(), vec![]);
+        definition
+    }
+
+    async fn publish(store: &Evento, definition: &Definition) -> String {
+        let automations = Command::new(store.clone(), TENANT);
+        let id = automations
+            .create_scenario(MEMBER, "Welcome")
+            .await
+            .unwrap();
+        automations
+            .publish_scenario(MEMBER, &id, 1, "Welcome", definition)
+            .await
+            .unwrap();
+        id
+    }
+
+    async fn the_run(store: &Evento, pool: &SqlitePool) -> Option<RunState> {
+        catch_up(store, pool).await;
+        let due = due_runs(pool, crate::auth::now() + 10_000_000, 10)
+            .await
+            .unwrap();
+        let (_, id) = due.first()?;
+        Command::new(store.clone(), TENANT)
+            .load_run(id)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_event_starts_one_run_that_goes_through_its_steps() {
+        let (store, pool) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        publish(&store, &welcome()).await;
+        follow(&store, &pool).await;
+        subscribe(&store, &keys, "ada@example.com").await;
+        follow(&store, &pool).await;
+        // Seen again (a redelivery, another node): still one run.
+        follow(&store, &pool).await;
+        catch_up(&store, &pool).await;
+        let due = due_runs(&pool, crate::auth::now() + 1, 10).await.unwrap();
+        assert_eq!(due.len(), 1);
+
+        let run_id = &due[0].1;
+        runner(&store, &pool, &keys)
+            .advance(&shop(), run_id, crate::auth::now())
+            .await
+            .unwrap();
+        let run = Command::new(store.clone(), TENANT)
+            .load_run(run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, RunStatus::Finished);
+        let outcomes: Vec<&Outcome> = run.log.iter().map(|record| &record.outcome).collect();
+        // Joined from the form: the Yes lane. Nobody to tell in this shop:
+        // the notice is skipped and the run goes on to its end.
+        assert_eq!(outcomes[0], &Outcome::Branched(0));
+        assert_eq!(outcomes[1], &Outcome::Claimed { attempt: 1 });
+        assert!(matches!(outcomes[2], Outcome::Skipped { .. }));
+        assert_eq!(outcomes.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn an_event_before_the_publication_starts_nothing() {
+        let (store, pool) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        subscribe(&store, &keys, "ada@example.com").await;
+        publish(&store, &welcome()).await;
+        follow(&store, &pool).await;
+        assert!(the_run(&store, &pool).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_paused_scenario_holds_its_runs_until_resumed() {
+        let (store, pool) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        let id = publish(&store, &welcome()).await;
+        follow(&store, &pool).await;
+        subscribe(&store, &keys, "ada@example.com").await;
+        follow(&store, &pool).await;
+        let automations = Command::new(store.clone(), TENANT);
+        automations.pause_scenario(MEMBER, &id).await.unwrap();
+        follow(&store, &pool).await;
+
+        let run = the_run(&store, &pool).await.unwrap();
+        let runner = runner(&store, &pool, &keys);
+        runner
+            .advance(&shop(), &run.id, crate::auth::now())
+            .await
+            .unwrap();
+        let held = automations.load_run(&run.id).await.unwrap().unwrap();
+        assert!(held.log.is_empty());
+        assert_eq!(held.status, RunStatus::Running);
+
+        automations.resume_scenario(MEMBER, &id).await.unwrap();
+        follow(&store, &pool).await;
+        runner
+            .advance(&shop(), &run.id, crate::auth::now())
+            .await
+            .unwrap();
+        let done = automations.load_run(&run.id).await.unwrap().unwrap();
+        assert_eq!(done.status, RunStatus::Finished);
+    }
+
+    #[tokio::test]
+    async fn a_wait_holds_the_run_until_its_time() {
+        let (store, pool) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        let mut definition = Definition::default();
+        definition.set_trigger(SUBSCRIBER_CONFIRMED).unwrap();
+        let wait = definition.insert(&Slot::new(Lane::Root, 0), WAIT).unwrap();
+        definition
+            .configure(&wait, settings(&[("amount", "1"), ("unit", "hours")]))
+            .unwrap();
+        let notify = definition
+            .insert(&Slot::new(Lane::Root, 1), NOTIFY)
+            .unwrap();
+        definition
+            .configure(&notify, settings(&[("subject", "An hour later")]))
+            .unwrap();
+        publish(&store, &definition).await;
+        follow(&store, &pool).await;
+        subscribe(&store, &keys, "ada@example.com").await;
+        follow(&store, &pool).await;
+
+        let run = the_run(&store, &pool).await.unwrap();
+        let runner = runner(&store, &pool, &keys);
+        let automations = Command::new(store.clone(), TENANT);
+        let now = crate::auth::now();
+        runner.advance(&shop(), &run.id, now).await.unwrap();
+        let waiting = automations.load_run(&run.id).await.unwrap().unwrap();
+        assert_eq!(waiting.status, RunStatus::Waiting);
+        assert_eq!(waiting.next_at(), Some(now + 3600));
+        // A minute later: still waiting.
+        runner.advance(&shop(), &run.id, now + 60).await.unwrap();
+        assert_eq!(
+            automations
+                .load_run(&run.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .log
+                .len(),
+            1
+        );
+        // The hour is up: the notice, then the end.
+        runner.advance(&shop(), &run.id, now + 3600).await.unwrap();
+        let done = automations.load_run(&run.id).await.unwrap().unwrap();
+        assert_eq!(done.status, RunStatus::Finished);
+    }
+
+    #[test]
+    fn a_subject_links_to_its_page() {
+        assert_eq!(
+            subject_link("https://d.example/", "acme", Subject::Order, "o1"),
+            "https://d.example/t/acme/orders/o1"
+        );
+        assert_eq!(
+            subject_link("", "acme", Subject::Message, "m1"),
+            "/t/acme/messages"
+        );
+    }
+}

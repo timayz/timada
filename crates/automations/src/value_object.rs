@@ -74,3 +74,90 @@ pub fn checked_name(name: &str) -> Option<String> {
         && !name.chars().any(char::is_control))
     .then(|| name.to_owned())
 }
+
+/// How long a step taken to act may go without saying how it went before
+/// another node concludes the one acting stopped, in seconds. Longer than
+/// any mail or call a step makes.
+pub const CLAIM_LEASE_SECS: u64 = 10 * 60;
+/// How long a run is listed once it ended, in seconds.
+pub const RUN_HISTORY_SECS: u64 = 90 * 24 * 60 * 60;
+
+/// Where a run stands.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RunStatus {
+    /// Going through its steps.
+    #[default]
+    Running,
+    /// In a wait.
+    Waiting,
+    Finished,
+    /// A step failed for good.
+    Failed,
+    Cancelled,
+}
+
+impl RunStatus {
+    pub const ALL: [Self; 5] = [
+        Self::Running,
+        Self::Waiting,
+        Self::Finished,
+        Self::Failed,
+        Self::Cancelled,
+    ];
+
+    /// The value stored in the read model.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Waiting => "waiting",
+            Self::Finished => "finished",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|status| status.as_str() == value)
+    }
+
+    /// Whether it ended.
+    pub fn is_done(self) -> bool {
+        matches!(self, Self::Finished | Self::Failed | Self::Cancelled)
+    }
+}
+
+/// The id of the run an event starts of a scenario
+/// ([`Run`](crate::aggregator::run::Run)).
+pub fn run_id(scenario_id: &str, trigger_event_id: &str) -> String {
+    evento::hash_ids(vec!["automation-run", scenario_id, trigger_event_id])
+}
+
+/// Where a scenario stands for what starts runs and moves them on, as the
+/// trigger subscription last saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListenerState {
+    /// Published and running: its trigger starts runs.
+    Active,
+    /// Held: nothing starts, runs under way wait.
+    Paused,
+    /// Deleted: nothing starts, runs under way are cancelled.
+    Archived,
+}
+
+impl ListenerState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Archived => "archived",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        [Self::Active, Self::Paused, Self::Archived]
+            .into_iter()
+            .find(|state| state.as_str() == value)
+    }
+}

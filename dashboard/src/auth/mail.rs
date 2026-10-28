@@ -115,6 +115,43 @@ pub async fn send_message_notification(
     Ok(())
 }
 
+/// Tells a member what an automation scenario of their shop wants them to
+/// know: the merchant's subject and note, and a link to what started the
+/// run. Nothing a shopper wrote travels.
+pub async fn send_automation_notice(
+    cx: &Cx,
+    to: &str,
+    tenant_name: &str,
+    scenario: &str,
+    subject: &str,
+    note: &str,
+    link: &str,
+) -> Result<()> {
+    let from = app_context::<MailSender>(cx).0.clone();
+    let subject = format!("{tenant_name}: {subject}");
+    let paragraphs: Vec<&str> = note
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect();
+    let mail = mail! {
+        from: from,
+        to: Mailbox::new(to)?,
+        subject: &subject,
+        html: {
+            cx =>
+            for paragraph in &paragraphs {
+                <p>(paragraph)</p>
+            }
+            <p><a href=(link)>"Open it in the dashboard"</a></p>
+            <p>"Or open this address: " (link)</p>
+            <p>"Sent by the automation “" (scenario) "” of " <strong>(tenant_name)</strong> "."</p>
+        },
+    }?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
 /// Sends one of a shop's mails to `to`, in the merchant's wording when the
 /// shop has one and in the built-in one otherwise. The wording is the
 /// shopper's `language`'s when the shop mails in it and worded the mail,

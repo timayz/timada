@@ -43,6 +43,9 @@ pub struct Config {
     /// The shops' newsletters; every setting has a default.
     #[serde(default)]
     pub newsletter: NewsletterConfig,
+    /// The shops' automation scenarios; every setting has a default.
+    #[serde(default)]
+    pub automations: AutomationsConfig,
     /// What storefronts may ask for their shoppers; every setting has a
     /// default.
     #[serde(default)]
@@ -244,6 +247,35 @@ fn default_send_check_secs() -> u64 {
 
 fn default_mails_per_check() -> u32 {
     100
+}
+
+/// How the shops' automation scenarios are run.
+#[derive(Debug, Deserialize, Clone)]
+pub struct AutomationsConfig {
+    /// How often, in seconds, this node looks for the runs whose next step
+    /// is due.
+    #[serde(default = "default_automation_check_secs")]
+    pub check_secs: u64,
+    /// How many runs one look moves at most.
+    #[serde(default = "default_automation_runs_per_check")]
+    pub runs_per_check: u32,
+}
+
+impl Default for AutomationsConfig {
+    fn default() -> Self {
+        Self {
+            check_secs: default_automation_check_secs(),
+            runs_per_check: default_automation_runs_per_check(),
+        }
+    }
+}
+
+fn default_automation_check_secs() -> u64 {
+    15
+}
+
+fn default_automation_runs_per_check() -> u32 {
+    200
 }
 
 /// What storefronts may ask of this node for their shoppers. Each node counts

@@ -23,6 +23,11 @@ pub enum AutomationError {
     /// Beyond the limits even for a draft, or of a newer format.
     #[error("the scenario cannot be saved as it is")]
     TooLarge(Vec<Problem>),
+    #[error("run not found")]
+    RunNotFound,
+    /// Moved on by the runner while a member acted on it.
+    #[error("the run moved on meanwhile")]
+    RunChanged,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -52,6 +57,8 @@ impl AutomationError {
             Self::NotPublished => SCENARIO_NOT_PUBLISHED,
             Self::Invalid(_) => SCENARIO_INVALID,
             Self::TooLarge(_) => SCENARIO_TOO_LARGE,
+            Self::RunNotFound => RUN_NOT_FOUND,
+            Self::RunChanged => RUN_CHANGED,
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })
@@ -65,3 +72,5 @@ pub const SCENARIO_ARCHIVED: &str = "scenario_archived";
 pub const SCENARIO_NOT_PUBLISHED: &str = "scenario_not_published";
 pub const SCENARIO_INVALID: &str = "scenario_invalid";
 pub const SCENARIO_TOO_LARGE: &str = "scenario_too_large";
+pub const RUN_NOT_FOUND: &str = "run_not_found";
+pub const RUN_CHANGED: &str = "run_changed";
