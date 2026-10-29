@@ -22,10 +22,12 @@ use sqlx::SqlitePool;
 use timada_core::keys::KeyRing;
 
 use crate::aggregator::{
-    Campaign as CampaignStream, Delivery as DeliveryStream, Subscriber as SubscriberStream,
+    Campaign as CampaignStream, Delivery as DeliveryStream, Edition as EditionStream,
+    Subscriber as SubscriberStream,
 };
 use crate::command::{
-    CampaignState, Subscriber, campaign_projection, delivery_projection, subscriber_projection,
+    CampaignState, EditionState, Subscriber, campaign_projection, delivery_projection,
+    edition_projection, subscriber_projection,
 };
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -49,6 +51,7 @@ pub fn read_model_subscription<E: Executor>(
         .handler(on_subscriber_event())
         .handler(on_campaign_event())
         .handler(on_delivery_event())
+        .handler(on_edition_event())
         .any_routing_key()
         .retry(u8::MAX)
 }
@@ -111,16 +114,62 @@ async fn on_delivery_event<E: Executor>(
         return Ok(());
     };
     sqlx::query(
-        "INSERT INTO newsletter_deliveries (tenant_id, campaign_id, subscriber_id, failed)
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (tenant_id, campaign_id, subscriber_id) DO UPDATE SET
+        "INSERT INTO newsletter_deliveries
+            (tenant_id, campaign_id, edition_id, subscriber_id, failed)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (tenant_id, edition_id, subscriber_id) DO UPDATE SET
             failed = excluded.failed",
     )
     .bind(&event.tenant)
     .bind(&state.campaign_id)
+    // A campaign sent at once is its own edition.
+    .bind(state.edition_id.as_ref().unwrap_or(&state.campaign_id))
     .bind(&state.subscriber_id)
     .bind(state.failed.is_some())
     .execute(&pool)
+    .await?;
+    Ok(())
+}
+
+#[evento::subscription_all]
+async fn on_edition_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<EditionStream>,
+) -> anyhow::Result<()> {
+    let pool: SqlitePool = context.extract();
+    let Some(state) = edition_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_edition(&pool, &event.tenant, &state).await
+}
+
+/// Writes the row of an edition as the write model sees it.
+pub async fn upsert_edition(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    edition: &EditionState,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO newsletter_editions (tenant_id, id, campaign_id, cycle, status,
+            opened_at, closed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT (tenant_id, id) DO UPDATE SET
+            cycle = excluded.cycle, status = excluded.status,
+            opened_at = excluded.opened_at, closed_at = excluded.closed_at",
+    )
+    .bind(tenant_id)
+    .bind(&edition.id)
+    .bind(&edition.campaign_id)
+    .bind(&edition.cycle)
+    .bind(if edition.is_open() { "open" } else { "closed" })
+    .bind(edition.opened_at as i64)
+    .bind(edition.closed_at.map(|at| at as i64))
+    .execute(pool)
     .await?;
     Ok(())
 }
@@ -133,10 +182,11 @@ pub async fn upsert_campaign(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO newsletter_campaigns (tenant_id, id, subject, language, status,
-            created_at, sent_at, finished_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            created_at, sent_at, finished_at, updated_at, cadence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             subject = excluded.subject, language = excluded.language,
+            cadence = excluded.cadence,
             status = excluded.status, sent_at = excluded.sent_at,
             finished_at = excluded.finished_at, updated_at = excluded.updated_at",
     )
@@ -149,6 +199,12 @@ pub async fn upsert_campaign(
     .bind(campaign.sent_at.map(|at| at as i64))
     .bind(campaign.finished_at.map(|at| at as i64))
     .bind(campaign.updated_at as i64)
+    .bind(
+        campaign
+            .schedule
+            .as_ref()
+            .map(|schedule| schedule.cadence.as_str()),
+    )
     .execute(pool)
     .await?;
     Ok(())

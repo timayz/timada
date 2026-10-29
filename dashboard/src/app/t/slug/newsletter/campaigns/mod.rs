@@ -3,7 +3,8 @@
 //! those with `newsletter:manage` write, test and send them. A campaign is
 //! a template over the shop's variables and the subscriber's unsubscribe
 //! link, checked when saved; once sent, it goes out a batch at a time and
-//! can no longer be edited.
+//! can no longer be edited. A scheduled one goes out an edition per cycle
+//! of its schedule, and its copy may change for the editions to come.
 //!
 //! The preview is the merchant's own HTML. It sits in a sandboxed frame with
 //! no scripts and an origin of its own, so nothing in it can reach the
@@ -76,6 +77,8 @@ pub fn status_label(status: CampaignStatus) -> &'static str {
         CampaignStatus::Draft => "Draft",
         CampaignStatus::Sending => "Sending",
         CampaignStatus::Sent => "Sent",
+        CampaignStatus::Scheduled => "Scheduled",
+        CampaignStatus::Stopped => "Stopped",
     }
 }
 
@@ -88,6 +91,8 @@ fn status_tone(status: CampaignStatus) -> Tone {
         CampaignStatus::Draft => Tone::Neutral,
         CampaignStatus::Sending => Tone::Warning,
         CampaignStatus::Sent => Tone::Success,
+        CampaignStatus::Scheduled => Tone::Info,
+        CampaignStatus::Stopped => Tone::Neutral,
     }
 }
 
@@ -170,7 +175,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     (row.delivered)
                                     if row.failed > 0 { " (" (row.failed) " failed)" }
                                 )
-                                table_cell(status_badge(tone: status_tone(row_status(&row.status)), (status_label(row_status(&row.status)))))
+                                table_cell(
+                                    status_badge(tone: status_tone(row_status(&row.status)), (status_label(row_status(&row.status))))
+                                    if let Some(cadence) = &row.cadence {
+                                        <span class="ml-2 text-xs text-muted-foreground" data-campaign-cadence=(cadence)>(cadence)</span>
+                                    }
+                                )
                             )
                         }
                     )

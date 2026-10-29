@@ -1,5 +1,6 @@
-//! Queries over `newsletter_campaigns` and `newsletter_deliveries`: the
-//! campaigns page of a tenant, and what the sending still owes.
+//! Queries over `newsletter_campaigns`, `newsletter_editions` and
+//! `newsletter_deliveries`: the campaigns page of a tenant, and what the
+//! sending still owes.
 
 use sqlx::{FromRow, SqlitePool};
 
@@ -24,6 +25,8 @@ pub struct CampaignRow {
     pub delivered: i64,
     /// Mails the mail server did not take.
     pub failed: i64,
+    /// The cadence of its schedule, when it has one.
+    pub cadence: Option<String>,
 }
 
 /// A select of campaigns with their counts, then `$tail` (literal SQL, so
@@ -117,7 +120,7 @@ pub async fn undelivered_subscribers(
            AND (?3 IS NULL OR s.language = ?3)
            AND NOT EXISTS (
                SELECT 1 FROM newsletter_deliveries d
-               WHERE d.tenant_id = s.tenant_id AND d.campaign_id = ?2
+               WHERE d.tenant_id = s.tenant_id AND d.edition_id = ?2
                  AND d.subscriber_id = s.id)
          ORDER BY s.id
          LIMIT ?4",
@@ -146,4 +149,146 @@ pub async fn count_audience(
     .fetch_one(pool)
     .await?;
     Ok(count as u64)
+}
+
+/// The scheduled campaigns, every tenant's: `(tenant id, campaign id)`.
+pub async fn scheduled_campaigns(pool: &SqlitePool) -> anyhow::Result<Vec<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT tenant_id, id FROM newsletter_campaigns
+         WHERE status = 'scheduled'
+         ORDER BY sent_at, id",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+/// The editions going out, every tenant's: `(tenant id, edition id)`.
+pub async fn open_editions(pool: &SqlitePool) -> anyhow::Result<Vec<(String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT tenant_id, id FROM newsletter_editions
+         WHERE status = 'open'
+         ORDER BY opened_at, id",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+/// One row of `newsletter_editions`, with what its deliveries count.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct EditionRow {
+    pub tenant_id: String,
+    pub id: String,
+    pub campaign_id: String,
+    /// The first day of the cycle it goes out in, `YYYY-MM-DD`.
+    pub cycle: String,
+    /// `open` or `closed`.
+    pub status: String,
+    /// Unix seconds.
+    pub opened_at: i64,
+    pub closed_at: Option<i64>,
+    pub delivered: i64,
+    pub failed: i64,
+}
+
+/// A campaign's editions, newest first.
+pub async fn editions_of_campaign(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    campaign_id: &str,
+    limit: u32,
+) -> anyhow::Result<Vec<EditionRow>> {
+    Ok(sqlx::query_as(
+        "SELECT e.*,
+            (SELECT COUNT(*) FROM newsletter_deliveries d
+             WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.failed = 0)
+             AS delivered,
+            (SELECT COUNT(*) FROM newsletter_deliveries d
+             WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.failed = 1)
+             AS failed
+         FROM newsletter_editions e
+         WHERE e.tenant_id = ?1 AND e.campaign_id = ?2
+         ORDER BY e.opened_at DESC, e.id DESC
+         LIMIT ?3",
+    )
+    .bind(tenant_id)
+    .bind(campaign_id)
+    .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Where an edition stands in one time zone.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct ZoneProgress {
+    /// The subscribers' IANA zone, the shop's for those without one.
+    pub zone: String,
+    /// Mailed (or tried) so far.
+    pub delivered: i64,
+    /// Confirmed (in the edition's language) and not mailed yet.
+    pub owed: i64,
+}
+
+/// An edition's progress by the subscribers' time zone; `shop_zone` stands
+/// in for subscribers without one. Only zones with someone mailed or owed.
+pub async fn edition_progress(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    edition_id: &str,
+    language: Option<&str>,
+    shop_zone: &str,
+) -> anyhow::Result<Vec<ZoneProgress>> {
+    Ok(sqlx::query_as(
+        "SELECT zone, SUM(delivered) AS delivered, SUM(owed) AS owed FROM (
+            SELECT COALESCE(s.time_zone, ?4) AS zone,
+                CASE WHEN d.subscriber_id IS NOT NULL THEN 1 ELSE 0 END AS delivered,
+                CASE WHEN d.subscriber_id IS NULL AND s.status = 'confirmed'
+                     AND (?3 IS NULL OR s.language = ?3) THEN 1 ELSE 0 END AS owed
+            FROM newsletter_subscribers s
+            LEFT JOIN newsletter_deliveries d
+              ON d.tenant_id = s.tenant_id AND d.edition_id = ?2 AND d.subscriber_id = s.id
+            WHERE s.tenant_id = ?1)
+         GROUP BY zone
+         HAVING SUM(delivered) + SUM(owed) > 0
+         ORDER BY zone",
+    )
+    .bind(tenant_id)
+    .bind(edition_id)
+    .bind(language)
+    .bind(shop_zone)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Up to `limit` confirmed subscribers in `zone` (in `language`, when
+/// given) that the edition was not mailed to yet, by id; `shop_zone` stands
+/// in for subscribers without one.
+pub async fn undelivered_in_zone(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    edition_id: &str,
+    language: Option<&str>,
+    shop_zone: &str,
+    zone: &str,
+    limit: u32,
+) -> anyhow::Result<Vec<SubscriberRow>> {
+    Ok(sqlx::query_as(
+        "SELECT s.* FROM newsletter_subscribers s
+         WHERE s.tenant_id = ?1 AND s.status = 'confirmed'
+           AND (?3 IS NULL OR s.language = ?3)
+           AND COALESCE(s.time_zone, ?4) = ?5
+           AND NOT EXISTS (
+               SELECT 1 FROM newsletter_deliveries d
+               WHERE d.tenant_id = s.tenant_id AND d.edition_id = ?2
+                 AND d.subscriber_id = s.id)
+         ORDER BY s.id
+         LIMIT ?6",
+    )
+    .bind(tenant_id)
+    .bind(edition_id)
+    .bind(language)
+    .bind(shop_zone)
+    .bind(zone)
+    .bind(i64::from(limit))
+    .fetch_all(pool)
+    .await?)
 }

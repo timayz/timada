@@ -23,6 +23,7 @@ pub mod aggregator;
 mod command;
 mod error;
 mod query;
+pub mod schedule;
 mod value_object;
 
 pub use command::*;

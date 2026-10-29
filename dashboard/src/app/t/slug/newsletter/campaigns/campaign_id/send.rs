@@ -3,6 +3,9 @@
 //! to, then sends the draft. From then on every node with the shop open
 //! mails it a batch at a time, and it can no longer be edited.
 //!
+//! A campaign with a schedule is not sent but started: its editions then go
+//! out on the schedule's days.
+//!
 //! A campaign goes out through the mail server the shop picked for its
 //! marketing only, never the platform's: a shop that picked none is sent to
 //! `/t/{slug}/mail` instead.
@@ -19,6 +22,7 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
+use super::schedule::{describe, pacing, shop_today, upcoming};
 use super::{CampaignId, campaign_url, require_campaign};
 use crate::app::t::slug::newsletter::campaigns::audience_label;
 use crate::app::t::slug::{Slug, TenantNav, require_tenant};
@@ -66,19 +70,46 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
     let mail_settings = href!(crate::app::t::slug::mail::index, Slug(slug.clone())).resolve(cx);
     let title = format!("Send · {} · Newsletter · {}", campaign.subject, tenant.name);
     let to = audience_label(campaign.language.as_deref());
-    let label = format!("Send to {audience} subscriber(s)");
+    let shop_zone = tenant.shop_time_zone().to_owned();
+    let plan = campaign.schedule.as_ref().map(|plan| {
+        (
+            describe(plan, &shop_zone),
+            pacing(plan, audience),
+            upcoming(plan, shop_today(&shop_zone)),
+        )
+    });
+    let (heading, label, target) = match &plan {
+        Some(_) => (
+            "Start the schedule",
+            "Start the schedule".to_owned(),
+            href!(confirm, Slug(slug.clone()), CampaignId(campaign.id.clone())).resolve(cx),
+        ),
+        None => (
+            "Send the campaign",
+            format!("Send to {audience} subscriber(s)"),
+            href!(confirm, Slug(slug.clone()), CampaignId(campaign.id.clone())).resolve(cx),
+        ),
+    };
     Ok(view! {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "newsletter"),
-            page_header(title: "Send the campaign", subtitle: Some(campaign.subject.as_str()))
+            page_header(title: heading, subtitle: Some(campaign.subject.as_str()))
             if !own_server {
                 notice(error: Some("mail_server_required"), message: None)
             }
             section_card(
                 <p class="mb-4 text-sm" data-campaign-audience=(audience)>
                     (to) ": " <strong>(audience)</strong> " confirmed address(es) today. "
-                    if let Some(through) = &through {
+                    if let Some((summary, pacing, next)) = &plan {
+                        <span data-schedule-summary="">(summary)</span> " " (pacing)
+                        if !next.is_empty() { " Next: " (next.join(", ")) "." }
+                        " Each edition goes to the subscribers confirmed by then"
+                        if let Some(through) = &through {
+                            ", through " <strong data-campaign-server="">(through)</strong>
+                        }
+                        ". Its copy can still change for the editions to come."
+                    } else if let Some(through) = &through {
                         "It goes out through " <strong data-campaign-server="">(through)</strong>
                         " over the next minutes, and can no longer be edited."
                     } else {
@@ -87,7 +118,7 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
                 </p>
                 <div class="flex flex-wrap gap-2">
                     if own_server {
-                        <form method="post" action=(href!(confirm, Slug(slug.clone()), CampaignId(campaign.id.clone())))>
+                        <form method="post" action=(&target)>
                             button(attrs: attributes! { type="submit" }, (label))
                         </form>
                     } else {
@@ -117,16 +148,30 @@ pub async fn confirm(cx: &Cx) -> Result<SeeOther> {
             None,
         )));
     }
-    match crate::app::t::slug::newsletter::newsletter(&access)?
-        .send_campaign(&access.user_id, &campaign.id)
-        .await
-    {
+    let newsletter = crate::app::t::slug::newsletter::newsletter(&access)?;
+    let (done, message) = if campaign.schedule.is_some() {
+        let today = shop_today(access.tenant.shop_time_zone());
+        (
+            newsletter
+                .activate_schedule(&access.user_id, &campaign.id, today)
+                .await,
+            "Scheduled: each edition goes out on the schedule's days.",
+        )
+    } else {
+        (
+            newsletter
+                .send_campaign(&access.user_id, &campaign.id)
+                .await,
+            "Sending: the subscribers get it over the next minutes.",
+        )
+    };
+    match done {
         Ok(()) => Ok(see_other(campaign_url(
             cx,
             &slug,
             &campaign.id,
             None,
-            Some("Sending: the subscribers get it over the next minutes."),
+            Some(message),
         ))),
         Err(err) if err.is_user_facing() => Ok(see_other(campaign_url(
             cx,

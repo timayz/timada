@@ -76,8 +76,56 @@ pub enum Campaign {
     /// subscriber (in its language), a batch at a time, and can no longer be
     /// edited.
     SendRequested { requested_by: String },
-    /// Every subscriber confirmed when it went out was mailed (or tried).
+    /// Every subscriber confirmed when it went out was mailed (or tried);
+    /// of a scheduled campaign, its last edition went out.
     Finished { finished_by: String },
+    /// When it goes out, rather than at once: a preset of the calendar (see
+    /// [`crate::schedule::Schedule`]). Days are `YYYY-MM-DD`, times minutes
+    /// into the local day of each subscriber, `cadence` one of
+    /// `once`, `daily`, `weekly`, `monthly`. Set on a draft, or on a
+    /// scheduled campaign for its editions to come.
+    ScheduleSet {
+        cadence: String,
+        weekdays: Vec<u8>,
+        month_day: Option<u8>,
+        starts_on: String,
+        ends_on: Option<String>,
+        window_start: u16,
+        window_end: Option<u16>,
+        pace_minutes: u16,
+        set_by: String,
+    },
+    /// The draft goes out at once again, when sent.
+    ScheduleCleared { cleared_by: String },
+    /// The merchant started the schedule: from now on each cycle of it is
+    /// an edition, going out to the confirmed subscribers in its slots.
+    ScheduleActivated { activated_by: String },
+    /// The merchant stopped the schedule: no edition opens any more, and
+    /// one going out mails nobody else.
+    ScheduleStopped { stopped_by: String },
+}
+
+/// One cycle of a scheduled campaign: its copy as it stood when the cycle
+/// opened, and its own deliveries. Its id is
+/// [`edition_id`](crate::edition_id) of the campaign and its first cycle,
+/// so a cycle opens once however many nodes look.
+#[evento::aggregate(name = "timada-newsletter/Edition")]
+pub enum Edition {
+    EditionOpened {
+        campaign_id: String,
+        /// The first day of the cycle, `YYYY-MM-DD`.
+        cycle: String,
+        subject: String,
+        html: String,
+        text: Option<String>,
+        language: Option<String>,
+        opened_by: String,
+    },
+    /// A one-off edition still owed mails when its window closed: it goes
+    /// on in the next cycle's slots.
+    EditionRolled { cycle: String, rolled_by: String },
+    /// Its window closed: nobody else gets it.
+    EditionClosed { closed_by: String },
 }
 
 /// One campaign's mail to one subscriber. One stream per pair, with the id
@@ -94,4 +142,12 @@ pub enum Delivery {
     /// The mail could not be handed to the mail server; it is not tried
     /// again.
     Failed { reason: String },
+    /// Taken for one edition of a scheduled campaign; the stream id is
+    /// [`delivery_id`](crate::delivery_id) of the edition and subscriber.
+    ClaimedForEdition {
+        campaign_id: String,
+        edition_id: String,
+        subscriber_id: String,
+        claimed_by: String,
+    },
 }

@@ -251,3 +251,115 @@ async fn sending_walks_the_confirmed_subscribers_in_the_campaigns_language() {
         ("draft", 0)
     );
 }
+
+fn weekly(starts_on: &str) -> timada_newsletter::schedule::Schedule {
+    use timada_newsletter::schedule::{Cadence, Schedule, parse_day};
+    Schedule {
+        cadence: Cadence::Weekly,
+        weekdays: vec![4, 2, 2],
+        month_day: None,
+        starts_on: parse_day(starts_on).unwrap(),
+        ends_on: None,
+        window_start: 9 * 60,
+        window_end: Some(17 * 60),
+        pace_minutes: 30,
+    }
+}
+
+#[tokio::test]
+async fn a_scheduled_campaign_keeps_its_copy_open_for_the_editions_to_come() {
+    let newsletter = command().await;
+    let today = timada_newsletter::schedule::parse_day("2030-01-01").unwrap();
+    let id = newsletter
+        .draft_campaign(ALICE, draft("Weekly"))
+        .await
+        .unwrap();
+
+    // Nothing to start yet; a schedule in the past is refused.
+    assert!(matches!(
+        newsletter.activate_schedule(ALICE, &id, today).await,
+        Err(NewsletterError::NotScheduled)
+    ));
+    assert!(matches!(
+        newsletter
+            .set_schedule(ALICE, &id, weekly("2029-12-01"), today)
+            .await,
+        Err(NewsletterError::InvalidSchedule)
+    ));
+    newsletter
+        .set_schedule(ALICE, &id, weekly("2030-01-06"), today)
+        .await
+        .unwrap();
+    let state = newsletter.load_campaign(&id).await.unwrap().unwrap();
+    // Days are kept sorted, once.
+    assert_eq!(state.schedule.as_ref().unwrap().weekdays, [2, 4]);
+
+    newsletter
+        .activate_schedule(ALICE, &id, today)
+        .await
+        .unwrap();
+    let state = newsletter.load_campaign(&id).await.unwrap().unwrap();
+    assert_eq!(state.status, CampaignStatus::Scheduled);
+    // Started: no second start, no immediate send, no going back to a
+    // draft's schedule-less sending.
+    assert!(matches!(
+        newsletter.activate_schedule(ALICE, &id, today).await,
+        Err(NewsletterError::CampaignSent)
+    ));
+    assert!(matches!(
+        newsletter.send_campaign(ALICE, &id).await,
+        Err(NewsletterError::CampaignSent)
+    ));
+    assert!(matches!(
+        newsletter.clear_schedule(ALICE, &id).await,
+        Err(NewsletterError::CampaignSent)
+    ));
+
+    // The copy changes for the next edition; the one opened keeps its own.
+    let edition = newsletter
+        .open_edition(ALICE, &state, "2030-01-06")
+        .await
+        .unwrap();
+    // Opened again (another node): the same edition.
+    assert_eq!(
+        newsletter
+            .open_edition(ALICE, &state, "2030-01-06")
+            .await
+            .unwrap(),
+        edition
+    );
+    newsletter
+        .edit_campaign(ALICE, &id, draft("Weekly, revised"))
+        .await
+        .unwrap();
+    let opened = newsletter.load_edition(&edition).await.unwrap().unwrap();
+    assert_eq!(opened.subject, "Weekly");
+
+    // A subscriber is claimed once per edition.
+    assert!(
+        newsletter
+            .claim_edition_delivery(ALICE, &id, &edition, "sub-1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !newsletter
+            .claim_edition_delivery(ALICE, &id, &edition, "sub-1")
+            .await
+            .unwrap()
+    );
+
+    newsletter.stop_schedule(ALICE, &id).await.unwrap();
+    let state = newsletter.load_campaign(&id).await.unwrap().unwrap();
+    assert_eq!(state.status, CampaignStatus::Stopped);
+    assert!(matches!(
+        newsletter.stop_schedule(ALICE, &id).await,
+        Err(NewsletterError::NotScheduled)
+    ));
+    assert!(matches!(
+        newsletter
+            .edit_campaign(ALICE, &id, draft("Too late"))
+            .await,
+        Err(NewsletterError::CampaignSent)
+    ));
+}

@@ -140,3 +140,75 @@ test("the newsletter page needs newsletter:read, its actions newsletter:manage",
   await viewer.context.close();
   await reader.context.close();
 });
+
+test("a merchant schedules a campaign, starts it and stops it", async ({
+  page,
+}) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Scheduled News");
+  await createTenant(page, name);
+  // Marketing goes through the shop's own server: one is needed to start.
+  await page.goto(`/t/${slug}/mail`);
+  await page.getByLabel("Server", { exact: true }).fill("localhost");
+  await page.getByLabel("Port", { exact: true }).fill("1025");
+  await page.getByLabel("Security").selectOption("none");
+  await page.getByLabel("Send from address").fill(`news-${slug}@example.com`);
+  await page.getByRole("button", { name: "Test and save" }).click();
+  await expect(page.getByRole("status")).toContainText("Test mail sent");
+
+  await page.goto(`/t/${slug}/newsletter/campaigns/new`);
+  const form = page.locator("[data-campaign-form]");
+  await form.getByLabel("Subject").fill("This week at {{ shop.name }}");
+  await form
+    .getByLabel("Body (HTML)")
+    .fill('<p>New in.</p><a href="{{ unsubscribe_url }}">Leave</a>');
+  await form.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  const campaignUrl = page.url().split("?")[0];
+
+  // Every week with no day does not hold together.
+  await page.getByRole("link", { name: "Schedule…" }).click();
+  const schedule = page.locator("[data-schedule-form]");
+  await schedule.getByLabel("Tuesday").uncheck();
+  await schedule.getByLabel("Thursday").uncheck();
+  await schedule.getByRole("button", { name: "Save the schedule" }).click();
+  await expect(page.getByRole("alert")).toContainText("does not hold together");
+
+  // Tuesdays and Thursdays, 9:00 to 17:00, a batch every 30 minutes.
+  await page.getByRole("link", { name: "Schedule…" }).click();
+  await expect(schedule.getByLabel("Repeat")).toHaveValue("weekly");
+  await schedule.getByRole("button", { name: "Save the schedule" }).click();
+  await expect(page.getByRole("status")).toContainText("Schedule saved.");
+  const summary = page.locator(
+    "[data-campaign-schedule] [data-schedule-summary]",
+  );
+  await expect(summary).toContainText("Every week on Tuesdays and Thursdays");
+  await expect(summary).toContainText(
+    "from 09:00 to 17:00, a batch every 30 min",
+  );
+  await expect(summary).toContainText("UTC for those whose zone is unknown");
+
+  await page.getByRole("link", { name: "Start the schedule…" }).click();
+  await page.getByRole("button", { name: "Start the schedule" }).click();
+  await expect(page.getByRole("status")).toContainText("Scheduled");
+  await expect(page.locator("dd [data-campaign-status]")).toHaveCount(0);
+  // Still editable, for the editions to come.
+  await expect(page.locator("[data-campaign-form]")).toBeVisible();
+  // The list follows a moment later.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/newsletter/campaigns`);
+    await expect(
+      page.locator(
+        '[data-campaign-status="scheduled"] [data-campaign-cadence]',
+      ),
+    ).toHaveText("weekly");
+  }).toPass();
+
+  await page.goto(campaignUrl);
+  await page.getByRole("button", { name: "Stop the schedule" }).click();
+  await expect(page.getByRole("status")).toContainText("Schedule stopped");
+  await expect(page.locator("dd [data-campaign-status]")).toHaveAttribute(
+    "data-campaign-status",
+    "stopped",
+  );
+});

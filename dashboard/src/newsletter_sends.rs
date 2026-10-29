@@ -4,6 +4,15 @@
 //! (`Delivery`), so a subscriber gets a campaign once however many nodes
 //! send it; a campaign with nobody left to mail is finished.
 //!
+//! A scheduled campaign goes out an edition per cycle of its schedule
+//! ([`timada_newsletter::schedule`]): an edition opens when its first slot
+//! comes somewhere on Earth, and at each look every time zone's subscribers
+//! get the share their passed slots owe them, so 9:00 is 9:00 where each
+//! subscriber lives (the shop's zone for those whose zone is unknown). The
+//! look's interval bounds how close to a slot its mails go. Once its window
+//! has closed everywhere, an edition is closed; a one-off one still owing
+//! mails rolls on to the schedule's next cycle instead.
+//!
 //! A campaign goes through the mail server the shop picked for its
 //! marketing and nothing else: a shop that picked none (or deleted it
 //! mid-campaign) has its campaign held back, claimed by nobody, until it
@@ -12,9 +21,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use jiff::tz::TimeZone;
 use sqlx::SqlitePool;
 use timada_core::Keys;
-use timada_newsletter::{CampaignStatus, sending_campaigns, undelivered_subscribers};
+use timada_newsletter::schedule::{parse_day, quota};
+use timada_newsletter::{
+    CampaignStatus, SubscriberRow, edition_progress, open_editions, scheduled_campaigns,
+    sending_campaigns, undelivered_in_zone, undelivered_subscribers,
+};
 use tokio::task::JoinHandle;
 use topcoat::context::{AppContext, Cx};
 
@@ -22,6 +36,7 @@ use crate::auth::mail::{CampaignCopy, marketing_sender, send_campaign};
 use crate::cluster::Executor;
 use crate::key_vault::KeyVault;
 use crate::newsletter::unsubscribe_link;
+use crate::shop_mail::ShopSender;
 
 /// Who the deliveries say mailed them.
 pub const MAILER: &str = "timada-dashboard";
@@ -67,27 +82,62 @@ impl NewsletterSends {
         })
     }
 
-    /// Sends a batch of every campaign going out. A campaign that fails is
-    /// logged and the others still go.
+    /// Sends a batch of every campaign going out, opens the editions of
+    /// scheduled campaigns that are due and sends what their slots owe. A
+    /// campaign that fails is logged and the others still go.
     pub async fn sweep(&self) -> anyhow::Result<()> {
+        let now = crate::auth::now() as i64;
         for (tenant_id, campaign_id) in sending_campaigns(&self.read_pool).await? {
             if let Err(err) = self.sweep_campaign(&tenant_id, &campaign_id).await {
                 tracing::error!(tenant = %tenant_id, campaign = %campaign_id, error = %err, "newsletter batch not sent");
             }
         }
+        for (tenant_id, campaign_id) in scheduled_campaigns(&self.read_pool).await? {
+            let Some(tenant) = self.active_tenant(&tenant_id).await? else {
+                continue;
+            };
+            if let Err(err) = open_due_editions(&self.store, &tenant, &campaign_id, now).await {
+                tracing::error!(tenant = %tenant_id, campaign = %campaign_id, error = %err, "newsletter editions not opened");
+            }
+        }
+        for (tenant_id, edition_id) in open_editions(&self.read_pool).await? {
+            let Some(tenant) = self.active_tenant(&tenant_id).await? else {
+                continue;
+            };
+            let cx = Cx::new(self.mail.clone());
+            if let Err(err) = send_edition_batch(
+                &self.store,
+                &self.read_pool,
+                &cx,
+                &tenant,
+                &*self.keys.for_tenant(&tenant_id),
+                &edition_id,
+                self.batch,
+                now,
+            )
+            .await
+            {
+                tracing::error!(tenant = %tenant_id, edition = %edition_id, error = %err, "newsletter edition batch not sent");
+            }
+        }
         Ok(())
     }
 
-    async fn sweep_campaign(&self, tenant_id: &str, campaign_id: &str) -> anyhow::Result<()> {
-        let Some(tenant) = timada_tenancy::Command(self.store.clone())
+    /// The tenant, unless it is gone or suspended.
+    async fn active_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<timada_tenancy::TenantState>> {
+        Ok(timada_tenancy::Command(self.store.clone())
             .load_tenant(tenant_id)
             .await?
-        else {
+            .filter(|tenant| !tenant.is_suspended()))
+    }
+
+    async fn sweep_campaign(&self, tenant_id: &str, campaign_id: &str) -> anyhow::Result<()> {
+        let Some(tenant) = self.active_tenant(tenant_id).await? else {
             return Ok(());
         };
-        if tenant.is_suspended() {
-            return Ok(());
-        }
         let cx = Cx::new(self.mail.clone());
         send_batch(
             &self.store,
@@ -149,46 +199,326 @@ pub async fn send_batch<E: evento::Executor + Clone>(
         html: &campaign.html,
         text: campaign.text.as_deref(),
     };
-    let mut mailed = 0;
-    for row in &owed {
-        // The read model is a moment behind: the write model says whether
-        // they are still on the list.
-        let Some(state) = newsletter.load_subscriber(&row.id).await? else {
-            continue;
-        };
-        if !state.is_confirmed() {
-            continue;
-        }
-        // Opened before the claim: a key not here yet leaves the mail for a
-        // later sweep rather than claimed and never sent.
-        let (Some(subscriber), Some(token)) = (
-            state.open_with(keys).await?,
-            state.unsubscribe_token(keys).await?,
-        ) else {
-            continue;
-        };
-        if !newsletter
-            .claim_delivery(MAILER, &campaign.id, &state.id)
-            .await?
-        {
-            continue;
-        }
-        // Claimed, then sent: a failure is recorded, not retried, since a
-        // subscriber mailed twice is worse off than one missed.
-        let link = unsubscribe_link(&storefront, &token);
-        match send_campaign(cx, &sender, tenant, &subscriber.email, &copy, &link).await {
-            Ok(()) => mailed += 1,
-            Err(err) => {
-                tracing::error!(tenant = %tenant.id, campaign = %campaign.id, subscriber = %state.id, error = %err, "newsletter not delivered");
-                newsletter
-                    .fail_delivery(&campaign.id, &state.id, &err.to_string())
-                    .await?;
-            }
-        }
-    }
+    let out = Outgoing {
+        newsletter: &newsletter,
+        cx,
+        sender: &sender,
+        tenant,
+        keys,
+        storefront: &storefront,
+        copy: &copy,
+        claim: Claim::Campaign(&campaign.id),
+    };
+    let mailed = out.mail(&owed).await?;
     if owed.len() < batch as usize {
         newsletter.finish_campaign(MAILER, &campaign.id).await?;
         tracing::info!(tenant = %tenant.id, campaign = %campaign.id, "newsletter sent");
+    }
+    Ok(mailed)
+}
+
+/// What a delivery is claimed for.
+#[derive(Clone, Copy)]
+enum Claim<'a> {
+    /// A campaign sent at once.
+    Campaign(&'a str),
+    /// An edition of a scheduled campaign.
+    Edition {
+        campaign_id: &'a str,
+        edition_id: &'a str,
+    },
+}
+
+impl Claim<'_> {
+    /// The id the deliveries are keyed by.
+    fn key(&self) -> &str {
+        match self {
+            Self::Campaign(id) => id,
+            Self::Edition { edition_id, .. } => edition_id,
+        }
+    }
+}
+
+/// One copy going out to some of a shop's subscribers.
+struct Outgoing<'a, E: evento::Executor> {
+    newsletter: &'a timada_newsletter::Command<E>,
+    cx: &'a Cx,
+    sender: &'a ShopSender,
+    tenant: &'a timada_tenancy::TenantState,
+    keys: &'a dyn Keys,
+    storefront: &'a str,
+    copy: &'a CampaignCopy<'a>,
+    claim: Claim<'a>,
+}
+
+impl<E: evento::Executor> Outgoing<'_, E> {
+    /// Claims and mails each of `rows` still on the list; how many were
+    /// handed to the mail server.
+    async fn mail(&self, rows: &[SubscriberRow]) -> anyhow::Result<usize> {
+        let newsletter = self.newsletter;
+        let mut mailed = 0;
+        for row in rows {
+            // The read model is a moment behind: the write model says whether
+            // they are still on the list.
+            let Some(state) = newsletter.load_subscriber(&row.id).await? else {
+                continue;
+            };
+            if !state.is_confirmed() {
+                continue;
+            }
+            // Opened before the claim: a key not here yet leaves the mail for a
+            // later sweep rather than claimed and never sent.
+            let (Some(subscriber), Some(token)) = (
+                state.open_with(self.keys).await?,
+                state.unsubscribe_token(self.keys).await?,
+            ) else {
+                continue;
+            };
+            let claimed = match self.claim {
+                Claim::Campaign(campaign_id) => {
+                    newsletter
+                        .claim_delivery(MAILER, campaign_id, &state.id)
+                        .await?
+                }
+                Claim::Edition {
+                    campaign_id,
+                    edition_id,
+                } => {
+                    newsletter
+                        .claim_edition_delivery(MAILER, campaign_id, edition_id, &state.id)
+                        .await?
+                }
+            };
+            if !claimed {
+                continue;
+            }
+            // Claimed, then sent: a failure is recorded, not retried, since a
+            // subscriber mailed twice is worse off than one missed.
+            let link = unsubscribe_link(self.storefront, &token);
+            match send_campaign(
+                self.cx,
+                self.sender,
+                self.tenant,
+                &subscriber.email,
+                self.copy,
+                &link,
+            )
+            .await
+            {
+                Ok(()) => mailed += 1,
+                Err(err) => {
+                    tracing::error!(tenant = %self.tenant.id, campaign = %self.claim.key(), subscriber = %state.id, error = %err, "newsletter not delivered");
+                    newsletter
+                        .fail_delivery(self.claim.key(), &state.id, &err.to_string())
+                        .await?;
+                }
+            }
+        }
+        Ok(mailed)
+    }
+}
+
+/// The day `now` (unix seconds) is in UTC.
+fn utc_day(now: i64) -> jiff::civil::Date {
+    jiff::Timestamp::from_second(now)
+        .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+        .to_zoned(TimeZone::UTC)
+        .date()
+}
+
+/// Opens the editions of a scheduled campaign whose cycle has begun
+/// somewhere on Earth and not ended everywhere, as of `now` (unix
+/// seconds); finishes a recurring one whose last cycle is over.
+pub async fn open_due_editions<E: evento::Executor + Clone>(
+    store: &E,
+    tenant: &timada_tenancy::TenantState,
+    campaign_id: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    let newsletter = timada_newsletter::Command::new(store.clone(), &tenant.id);
+    let Some(campaign) = newsletter.load_campaign(campaign_id).await? else {
+        return Ok(());
+    };
+    if campaign.status != CampaignStatus::Scheduled {
+        return Ok(());
+    }
+    let Some(schedule) = campaign.schedule.as_ref() else {
+        return Ok(());
+    };
+    if !schedule.is_recurring() {
+        // One edition, in the first cycle: rolled on from there while owed.
+        if let Some(cycle) = schedule.first_cycle()
+            && schedule
+                .window_of(cycle)
+                .is_some_and(|(opens, _)| opens <= now)
+        {
+            newsletter
+                .open_edition(MAILER, &campaign, &cycle.to_string())
+                .await?;
+        }
+        return Ok(());
+    }
+    // A cycle may still be open somewhere up to a day after it ended in UTC:
+    // look from two days back.
+    let from = schedule.cycle_of(
+        utc_day(now)
+            .checked_sub(jiff::ToSpan::days(2))
+            .unwrap_or(utc_day(now)),
+    );
+    let Some(mut cycle) = schedule.cycle_with_slots(from) else {
+        // Past its end date: every edition has had its window.
+        newsletter.finish_campaign(MAILER, &campaign.id).await?;
+        tracing::info!(tenant = %tenant.id, campaign = %campaign.id, "newsletter schedule over");
+        return Ok(());
+    };
+    while let Some((opens, closes)) = schedule.window_of(cycle) {
+        if opens > now {
+            break;
+        }
+        if now < closes {
+            newsletter
+                .open_edition(MAILER, &campaign, &cycle.to_string())
+                .await?;
+        }
+        match schedule.cycle_with_slots(schedule.next_cycle(cycle)) {
+            Some(next) => cycle = next,
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+/// Mails what an open edition's passed slots owe each time zone, up to
+/// `budget` mails, as of `now` (unix seconds); closes (or, one-off and
+/// still owing, rolls on) an edition whose window is over. Returns how
+/// many were mailed.
+#[allow(clippy::too_many_arguments)]
+pub async fn send_edition_batch<E: evento::Executor + Clone>(
+    store: &E,
+    read_pool: &SqlitePool,
+    cx: &Cx,
+    tenant: &timada_tenancy::TenantState,
+    keys: &dyn Keys,
+    edition_id: &str,
+    budget: u32,
+    now: i64,
+) -> anyhow::Result<usize> {
+    let newsletter = timada_newsletter::Command::new(store.clone(), &tenant.id);
+    let Some(edition) = newsletter.load_edition(edition_id).await? else {
+        return Ok(0);
+    };
+    if !edition.is_open() {
+        return Ok(0);
+    }
+    let campaign = newsletter.load_campaign(&edition.campaign_id).await?;
+    let (Some(campaign), Some(cycle)) = (campaign, parse_day(&edition.cycle)) else {
+        newsletter.close_edition(MAILER, &edition.id).await?;
+        return Ok(0);
+    };
+    let schedule = match (&campaign.schedule, campaign.status) {
+        (_, CampaignStatus::Stopped) | (None, _) => {
+            newsletter.close_edition(MAILER, &edition.id).await?;
+            return Ok(0);
+        }
+        (Some(schedule), _) => schedule,
+    };
+    let shop_zone = tenant.shop_time_zone();
+    let progress = edition_progress(
+        read_pool,
+        &tenant.id,
+        &edition.id,
+        edition.language.as_deref(),
+        shop_zone,
+    )
+    .await?;
+    let window = schedule.window_of(cycle);
+    if window.is_none_or(|(_, closes)| now >= closes) {
+        let owed: i64 = progress.iter().map(|zone| zone.owed).sum();
+        if owed > 0
+            && !schedule.is_recurring()
+            && let Some(next) = schedule.cycle_with_slots(schedule.next_cycle(cycle))
+        {
+            newsletter
+                .roll_edition(MAILER, &edition.id, &next.to_string())
+                .await?;
+            tracing::info!(tenant = %tenant.id, edition = %edition.id, cycle = %next, "newsletter edition rolled on");
+            return Ok(0);
+        }
+        newsletter.close_edition(MAILER, &edition.id).await?;
+        if !schedule.is_recurring() {
+            newsletter.finish_campaign(MAILER, &campaign.id).await?;
+        }
+        tracing::info!(tenant = %tenant.id, edition = %edition.id, "newsletter edition closed");
+        return Ok(0);
+    }
+    let Some(storefront) = timada_orders::Command::new(store.clone(), &tenant.id)
+        .storefront_address()
+        .await?
+    else {
+        tracing::warn!(tenant = %tenant.id, edition = %edition.id, "newsletter held back: the shop has no storefront address");
+        return Ok(0);
+    };
+    let Some(sender) = marketing_sender(cx, tenant).await? else {
+        tracing::warn!(tenant = %tenant.id, edition = %edition.id, "newsletter held back: the shop picked no mail server for its marketing");
+        return Ok(0);
+    };
+    let copy = CampaignCopy {
+        subject: &edition.subject,
+        html: &edition.html,
+        text: edition.text.as_deref(),
+    };
+    let out = Outgoing {
+        newsletter: &newsletter,
+        cx,
+        sender: &sender,
+        tenant,
+        keys,
+        storefront: &storefront,
+        copy: &copy,
+        claim: Claim::Edition {
+            campaign_id: &campaign.id,
+            edition_id: &edition.id,
+        },
+    };
+    let slots = schedule.slots(cycle);
+    let fallback = TimeZone::get(shop_zone).unwrap_or(TimeZone::UTC);
+    let mut mailed = 0usize;
+    for zone in &progress {
+        let left = (budget as usize).saturating_sub(mailed);
+        if left == 0 || zone.owed <= 0 {
+            continue;
+        }
+        let tz = TimeZone::get(&zone.zone).unwrap_or_else(|_| fallback.clone());
+        // Slots before the edition opened (a schedule started mid-window)
+        // are not this edition's.
+        let instants: Vec<i64> = slots
+            .iter()
+            .map(|slot| slot.instant_in(&tz))
+            .filter(|at| *at >= edition.opened_at as i64)
+            .collect();
+        let passed = instants.iter().filter(|at| **at <= now).count();
+        if passed == 0 {
+            continue;
+        }
+        let (delivered, owed) = (zone.delivered as u64, zone.owed as u64);
+        let due = quota(delivered + owed, passed, instants.len())
+            .saturating_sub(delivered)
+            .min(owed)
+            .min(left as u64);
+        if due == 0 {
+            continue;
+        }
+        let rows = undelivered_in_zone(
+            read_pool,
+            &tenant.id,
+            &edition.id,
+            edition.language.as_deref(),
+            shop_zone,
+            &zone.zone,
+            due as u32,
+        )
+        .await?;
+        mailed += out.mail(&rows).await?;
     }
     Ok(mailed)
 }
@@ -278,6 +608,15 @@ mod tests {
     }
 
     async fn subscribe(store: &evento::Sqlite, keys: &MemoryKeys, email: &str) {
+        subscribe_in(store, keys, email, None).await;
+    }
+
+    async fn subscribe_in(
+        store: &evento::Sqlite,
+        keys: &MemoryKeys,
+        email: &str,
+        time_zone: Option<&str>,
+    ) {
         let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);
         let RequestOutcome::ToConfirm { token, .. } = newsletter
             .request_subscription(
@@ -287,7 +626,7 @@ mod tests {
                     email: email.to_owned(),
                     language: None,
                     source: SOURCE_FORM.to_owned(),
-                    time_zone: None,
+                    time_zone: time_zone.map(str::to_owned),
                 },
                 crate::auth::now(),
             )
@@ -455,5 +794,237 @@ mod tests {
         assert!(wire.contains("Subject: News from Acme Tea"));
         assert!(wire.contains("List-Unsubscribe: <https://shop.example/newsletter/unsubscribe/"));
         assert!(wire.contains("List-Unsubscribe-Post: List-Unsubscribe=One-Click"));
+    }
+
+    /// Unix seconds of a UTC moment.
+    fn at(moment: &str) -> i64 {
+        moment.parse::<jiff::Timestamp>().unwrap().as_second()
+    }
+
+    fn day(value: &str) -> jiff::civil::Date {
+        value.parse().unwrap()
+    }
+
+    async fn scheduled_campaign(
+        store: &evento::Sqlite,
+        schedule: timada_newsletter::schedule::Schedule,
+    ) -> String {
+        let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);
+        let campaign = newsletter
+            .draft_campaign(
+                "user-alice",
+                CampaignDraft {
+                    subject: "News".to_owned(),
+                    html: r#"<a href="{{ unsubscribe_url }}">Leave</a>"#.to_owned(),
+                    text: None,
+                    language: None,
+                },
+            )
+            .await
+            .unwrap();
+        let today = day("2026-10-29");
+        newsletter
+            .set_schedule("user-alice", &campaign, schedule, today)
+            .await
+            .unwrap();
+        newsletter
+            .activate_schedule("user-alice", &campaign, today)
+            .await
+            .unwrap();
+        campaign
+    }
+
+    fn shop() -> timada_tenancy::TenantState {
+        timada_tenancy::TenantState {
+            id: TENANT.into(),
+            name: "Acme Tea".into(),
+            mail_servers: vec![
+                server("orders", "orders@acme.test"),
+                server("news", "news@acme.test"),
+            ],
+            shop_mails_server_id: Some("orders".into()),
+            marketing_server_id: Some("news".into()),
+            ..Default::default()
+        }
+    }
+
+    /// Who got a mail, sorted.
+    fn recipients(transport: &MemoryTransport) -> Vec<String> {
+        let mut to: Vec<String> = transport
+            .sent()
+            .iter()
+            .flat_map(|mail| mail.to().iter().map(|to| to.address().to_owned()))
+            .collect();
+        to.sort();
+        to
+    }
+
+    #[tokio::test]
+    async fn a_scheduled_edition_reaches_each_zone_at_its_own_nine_oclock() {
+        use timada_newsletter::schedule::{Cadence, Schedule};
+
+        let (store, pool) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        for n in 0..4 {
+            subscribe_in(
+                &store,
+                &keys,
+                &format!("paris{n}@example.com"),
+                Some("Europe/Paris"),
+            )
+            .await;
+        }
+        for n in 0..2 {
+            subscribe_in(
+                &store,
+                &keys,
+                &format!("ny{n}@example.com"),
+                Some("America/New_York"),
+            )
+            .await;
+        }
+        // No zone: the shop's, UTC.
+        subscribe(&store, &keys, "nowhere@example.com").await;
+        timada_orders::Command::new(store.clone(), TENANT)
+            .set_storefront_address("user-alice", Some(SHOP))
+            .await
+            .unwrap();
+        // Once, on Tuesday 8 January 2030, 9:00 to 10:00, every 30 minutes:
+        // two slots.
+        let campaign = scheduled_campaign(
+            &store,
+            Schedule {
+                cadence: Cadence::Once,
+                weekdays: vec![],
+                month_day: None,
+                starts_on: day("2030-01-08"),
+                ends_on: None,
+                window_start: 9 * 60,
+                window_end: Some(10 * 60),
+                pace_minutes: 30,
+            },
+        )
+        .await;
+        let shop = shop();
+        let (cx, _, _, transport) = mail(&shop);
+        let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);
+
+        // Too early anywhere: nothing opens.
+        open_due_editions(&store, &shop, &campaign, at("2030-01-07T18:00:00Z"))
+            .await
+            .unwrap();
+        catch_up(&store, &pool, keys.clone()).await;
+        assert!(open_editions(&pool).await.unwrap().is_empty());
+
+        // 9:00 in Kiritimati: open, but nobody's slot has come.
+        open_due_editions(&store, &shop, &campaign, at("2030-01-07T19:00:00Z"))
+            .await
+            .unwrap();
+        catch_up(&store, &pool, keys.clone()).await;
+        let [(_, edition)] = open_editions(&pool).await.unwrap().try_into().unwrap();
+        let sweep = async |moment: &str| {
+            let mailed =
+                send_edition_batch(&store, &pool, &cx, &shop, &*keys, &edition, 100, at(moment))
+                    .await
+                    .unwrap();
+            catch_up(&store, &pool, keys.clone()).await;
+            mailed
+        };
+        assert_eq!(sweep("2030-01-07T19:00:00Z").await, 0);
+        assert_eq!(sweep("2030-01-08T07:59:00Z").await, 0);
+
+        // 9:00 in Paris (UTC+1): half of Paris, nobody else.
+        assert_eq!(sweep("2030-01-08T08:00:00Z").await, 2);
+        // Looked at again before the next slot: nothing more.
+        assert_eq!(sweep("2030-01-08T08:10:00Z").await, 0);
+        // 9:30 in Paris: the rest of Paris.
+        assert_eq!(sweep("2030-01-08T08:30:00Z").await, 2);
+        // 9:00 in UTC, the shop's zone: its one subscriber.
+        assert_eq!(sweep("2030-01-08T09:00:00Z").await, 1);
+        // 9:00 and 9:30 in New York (UTC-5).
+        assert_eq!(sweep("2030-01-08T13:59:00Z").await, 0);
+        assert_eq!(sweep("2030-01-08T14:00:00Z").await, 1);
+        assert_eq!(sweep("2030-01-08T14:30:00Z").await, 1);
+        assert_eq!(transport.sent().len(), 7);
+
+        // Its window over everywhere: closed, and the campaign done.
+        assert_eq!(sweep("2030-01-08T22:00:00Z").await, 0);
+        let state = newsletter.load_edition(&edition).await.unwrap().unwrap();
+        assert!(!state.is_open());
+        let campaign = newsletter.load_campaign(&campaign).await.unwrap().unwrap();
+        assert_eq!(campaign.status, CampaignStatus::Sent);
+        assert_eq!(recipients(&transport).len(), 7);
+    }
+
+    #[tokio::test]
+    async fn a_recurring_campaign_mails_each_subscriber_once_per_edition() {
+        use timada_newsletter::schedule::{Cadence, Schedule};
+
+        let (store, pool) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        subscribe_in(&store, &keys, "ada@example.com", Some("Europe/Paris")).await;
+        timada_orders::Command::new(store.clone(), TENANT)
+            .set_storefront_address("user-alice", Some(SHOP))
+            .await
+            .unwrap();
+        // Every day at 9:00, for two days.
+        let campaign = scheduled_campaign(
+            &store,
+            Schedule {
+                cadence: Cadence::Daily,
+                weekdays: vec![],
+                month_day: None,
+                starts_on: day("2030-01-08"),
+                ends_on: Some(day("2030-01-09")),
+                window_start: 9 * 60,
+                window_end: None,
+                pace_minutes: 30,
+            },
+        )
+        .await;
+        let shop = shop();
+        let (cx, _, _, transport) = mail(&shop);
+        let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);
+
+        for (moment, editions) in [("2030-01-08T08:00:00Z", 1), ("2030-01-09T08:00:00Z", 2)] {
+            open_due_editions(&store, &shop, &campaign, at(moment))
+                .await
+                .unwrap();
+            catch_up(&store, &pool, keys.clone()).await;
+            for (_, edition) in open_editions(&pool).await.unwrap() {
+                send_edition_batch(&store, &pool, &cx, &shop, &*keys, &edition, 100, at(moment))
+                    .await
+                    .unwrap();
+                catch_up(&store, &pool, keys.clone()).await;
+                // Twice in the same slot: no second mail.
+                send_edition_batch(&store, &pool, &cx, &shop, &*keys, &edition, 100, at(moment))
+                    .await
+                    .unwrap();
+                catch_up(&store, &pool, keys.clone()).await;
+            }
+            assert_eq!(transport.sent().len(), editions);
+        }
+        assert_eq!(
+            timada_newsletter::editions_of_campaign(&pool, TENANT, &campaign, 10)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // Past its end date, the windows closed: the campaign is done.
+        let after = at("2030-01-12T00:00:00Z");
+        for (_, edition) in open_editions(&pool).await.unwrap() {
+            send_edition_batch(&store, &pool, &cx, &shop, &*keys, &edition, 100, after)
+                .await
+                .unwrap();
+        }
+        open_due_editions(&store, &shop, &campaign, after)
+            .await
+            .unwrap();
+        catch_up(&store, &pool, keys.clone()).await;
+        assert!(open_editions(&pool).await.unwrap().is_empty());
+        let state = newsletter.load_campaign(&campaign).await.unwrap().unwrap();
+        assert_eq!(state.status, CampaignStatus::Sent);
     }
 }
