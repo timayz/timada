@@ -320,6 +320,10 @@ fn subscriptions(
             timada_automations::read_model_subscription(write_pool.clone()),
         ),
         (
+            "pages",
+            timada_pages::read_model_subscription(write_pool.clone()),
+        ),
+        (
             "invoicing",
             timada_invoicing::read_model_subscription(write_pool.clone()),
         ),
