@@ -189,6 +189,17 @@ event timada-orders/ShippingMethods::MethodChanged { method_id: String, name: St
 event timada-orders/ShippingMethods::MethodRemoved { method_id: String, removed_by: String }
 event timada-orders/Storefront::StorefrontAddressCleared { cleared_by: String }
 event timada-orders/Storefront::StorefrontAddressSet { url: String, set_by: String }
+event timada-pages/Page::Created { slug: String, title: String, body: String, created_by: String }
+event timada-pages/Page::Deleted { deleted_by: String }
+event timada-pages/Page::Edited { title: String, body: String, edited_by: String }
+event timada-pages/Page::ImageAdded { image_id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32>, added_by: String }
+event timada-pages/Page::ImageRemoved { image_id: String, removed_by: String }
+event timada-pages/Page::Published { published_by: String }
+event timada-pages/Page::Renamed { slug: String, renamed_by: String }
+event timada-pages/Page::SeoSet { meta_title: String, meta_description: String, set_by: String }
+event timada-pages/Page::Unpublished { unpublished_by: String }
+event timada-pages/PageSlug::Claimed { page_id: String }
+event timada-pages/PageSlug::Released unit
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
 event timada-reviews/Review::Rejected { reason: String, rejected_by: String }
