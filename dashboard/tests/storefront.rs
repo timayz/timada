@@ -40,8 +40,9 @@ use timada_catalog::{
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
     SubscriptionState, category_ancestors, find_category, menu_of, published_categories,
-    published_category_body, published_category_by_slug, published_product_by_slug,
+    published_category_body, published_category_by_slug, published_page, published_product_by_slug,
     published_product_categories, published_products, published_related_products,
+    search_published_pages,
 };
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
@@ -220,6 +221,11 @@ impl Harness {
     /// use it.
     fn catalog(&self, tenant: &TenantState) -> timada_catalog::Command<cluster::Executor> {
         timada_catalog::Command::new(self.platform.clone(), &tenant.id)
+    }
+
+    /// The pages gateway in the tenant's streams.
+    fn pages(&self, tenant: &TenantState) -> timada_pages::Command<cluster::Executor> {
+        timada_pages::Command::new(self.platform.clone(), &tenant.id)
     }
 
     /// The subscription cursors recorded in the store.
@@ -1975,4 +1981,149 @@ async fn a_product_leaves_a_category_it_was_filed_under() {
         .await
         .unwrap();
     h.finish().await;
+}
+
+#[tokio::test]
+async fn a_store_shows_the_published_pages() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let pages = h.pages(&acme);
+    let page = |title: &str, body: &str| timada_pages::CreatePage {
+        slug: String::new(),
+        title: title.into(),
+        body: body.into(),
+    };
+    let terms = pages
+        .create_page(
+            "alice",
+            page("Conditions de vente", "## Prix\n\nEn **euros**."),
+        )
+        .await
+        .unwrap();
+    let legal = pages
+        .create_page("alice", page("Mentions légales", "Édité par Acme."))
+        .await
+        .unwrap();
+    pages
+        .create_page("alice", page("Brouillon", "Pas encore."))
+        .await
+        .unwrap();
+    let image = timada_pages::new_page_image_id();
+    pages
+        .add_page_image(
+            "alice",
+            &legal,
+            timada_pages::AddPageImage {
+                image_id: image.clone(),
+                ext: "png".into(),
+                size: 10,
+                width: None,
+                height: None,
+            },
+        )
+        .await
+        .unwrap();
+    pages
+        .edit_page(
+            "alice",
+            &legal,
+            "Mentions légales",
+            &format!("Édité par Acme.\n\n![Le siège]({image}.png)"),
+        )
+        .await
+        .unwrap();
+    pages.publish_page("alice", &terms).await.unwrap();
+    pages.publish_page("alice", &legal).await.unwrap();
+    pages
+        .set_page_seo("alice", &terms, "CGV | Acme", "")
+        .await
+        .unwrap();
+
+    let pool = h.local_pool("acme-shop").await;
+    let config = h.config(&token).media_url("https://cdn.example/media/acme");
+    let store = Store::connect(config, pool.clone()).await.unwrap();
+    eventually("the published pages reach the local copy", async || {
+        published_page(&pool, "mentions-legales", None)
+            .await
+            .unwrap()
+            .is_some()
+    })
+    .await;
+
+    // The draft has no page.
+    assert!(
+        published_page(&pool, "brouillon", None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let shown = published_page(&pool, "conditions-de-vente", store.media_url())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(shown.title, "Conditions de vente");
+    assert!(shown.html.contains("<h2>Prix</h2>"), "{}", shown.html);
+    assert!(
+        shown.html.contains("<strong>euros</strong>"),
+        "{}",
+        shown.html
+    );
+    assert_eq!(shown.meta_title, "CGV | Acme");
+    assert_eq!(shown.meta_description, "Prix En euros.");
+    let legal_page = published_page(&pool, "mentions-legales", store.media_url())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        legal_page.html.contains(&format!(
+            r#"src="https://cdn.example/media/acme/{image}.png""#
+        )),
+        "{}",
+        legal_page.html
+    );
+
+    // Search matches the start of a word, title matches first.
+    let found = search_published_pages(&pool, "edit", 5).await.unwrap();
+    assert_eq!(
+        found
+            .iter()
+            .map(|link| link.slug.as_str())
+            .collect::<Vec<_>>(),
+        ["mentions-legales"]
+    );
+
+    // Unpublished, moved and deleted pages follow.
+    pages.unpublish_page("alice", &terms).await.unwrap();
+    pages.rename_page("alice", &legal, "legal").await.unwrap();
+    eventually("a moved page is found at its new slug", async || {
+        published_page(&pool, "legal", None)
+            .await
+            .unwrap()
+            .is_some()
+    })
+    .await;
+    assert!(
+        published_page(&pool, "mentions-legales", None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        published_page(&pool, "conditions-de-vente", None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    pages.delete_page("alice", &legal).await.unwrap();
+    eventually("a deleted page leaves the copy", async || {
+        published_page(&pool, "legal", None)
+            .await
+            .unwrap()
+            .is_none()
+    })
+    .await;
+
+    store.shutdown().await;
 }
