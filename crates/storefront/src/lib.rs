@@ -3,7 +3,8 @@
 //!
 //! [`Store::connect`] opens the connection to the store API with the tenant's
 //! key, keeps a local copy of the published catalog current in the app's own
-//! SQLite database, and [`RouterBuilderStoreExt::store`] puts it in the app
+//! SQLite database ([`StoreDb::open`]: a read pool for the pages, one writer
+//! for the copy), and [`RouterBuilderStoreExt::store`] puts it in the app
 //! context. Pages then read the catalog with [`products`] and
 //! [`require_product`] inside their own markup; the one component shipped,
 //! [`price`], renders a formatted price and nothing else: every class and
@@ -24,6 +25,7 @@ mod cart;
 mod components;
 mod config;
 mod context;
+mod db;
 mod invoice;
 mod migrations;
 mod newsletter;
@@ -41,6 +43,7 @@ pub use cart::*;
 pub use components::*;
 pub use config::*;
 pub use context::*;
+pub use db::*;
 pub use invoice::*;
 pub use migrations::*;
 pub use newsletter::*;

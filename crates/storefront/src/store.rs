@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use evento::subscription::Subscription;
-use evento::{Evento, Executor as _, RemoteClient, Sidecar};
+use evento::{Evento, Executor as _, RemoteClient, Rw, Sidecar};
 use sqlx::SqlitePool;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::config::StoreConfig;
+use crate::db::StoreDb;
 use crate::read_model::catalog_subscription;
 
 /// How long the supervisor waits before restarting a failed subscription,
@@ -27,7 +28,7 @@ pub struct Store {
 
 struct Inner {
     executor: Evento,
-    pool: SqlitePool,
+    db: StoreDb,
     prefix: String,
     media_url: Option<String>,
     /// The dashboard's HTTP side, when the host gave its address.
@@ -67,9 +68,11 @@ pub enum SubscriptionState {
 
 impl Store {
     /// Connects to the store (failing at once when it is unreachable or
-    /// refuses the key), prepares `pool` (evento's tables and the library's
-    /// own) and starts following the catalog into it.
-    pub async fn connect(config: StoreConfig, pool: SqlitePool) -> anyhow::Result<Store> {
+    /// refuses the key), prepares the local database (evento's tables and
+    /// the library's own) and starts following the catalog into it. `db` is
+    /// [`StoreDb::open`]'s, or a single pool (a test's in-memory database).
+    pub async fn connect(config: StoreConfig, db: impl Into<StoreDb>) -> anyhow::Result<Store> {
+        let db = db.into();
         let mut builder =
             RemoteClient::builder(config.addr.clone()).request_timeout(config.request_timeout);
         builder = builder.token(config.token.clone());
@@ -80,12 +83,14 @@ impl Store {
             .connect()
             .await
             .with_context(|| format!("cannot connect to the store at {}", config.addr))?;
-        // Events on the store, cursors and snapshots here. The client carries
-        // the store's routing key, which prefixes the cursor key.
-        let local: evento::Sqlite = pool.clone().into();
+        // Events on the store, cursors and snapshots here, read through the
+        // read pool and written through the writer. The client carries the
+        // store's routing key, which prefixes the cursor key.
+        let local: Rw<evento::Sqlite, evento::Sqlite> =
+            (db.read().clone().into(), db.write().clone().into()).into();
         let executor = Evento::new(Sidecar::from((client, local)));
 
-        crate::migrate(&pool).await?;
+        crate::migrate(db.write()).await?;
         let api = match &config.api_url {
             Some(url) => Some(crate::reviews::Api::new(
                 url,
@@ -95,14 +100,14 @@ impl Store {
             None => None,
         };
 
-        let subscription = catalog_subscription(pool.clone())
+        let subscription = catalog_subscription(db.write().clone())
             .start(&executor)
             .await
             .context("cannot start following the catalog")?;
         let (stop, stopped) = watch::channel(false);
         let inner = Arc::new(Inner {
             executor,
-            pool,
+            db,
             prefix: config.prefix.into_owned(),
             media_url: config.media_url,
             api,
@@ -123,9 +128,10 @@ impl Store {
         &self.inner.executor
     }
 
-    /// The local database: the catalog copy, cursors and snapshots.
+    /// The local database, for reading: the catalog copy, cursors and
+    /// snapshots. Only the library writes to it.
     pub fn pool(&self) -> &SqlitePool {
-        &self.inner.pool
+        self.inner.db.read()
     }
 
     /// The URL prefix of the library's endpoints.
@@ -164,12 +170,12 @@ impl Store {
         let products: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM storefront_products WHERE status = 'published'",
         )
-        .fetch_one(&self.inner.pool)
+        .fetch_one(self.inner.db.read())
         .await
         .unwrap_or(0);
         let last_event_at: Option<i64> =
             sqlx::query_scalar("SELECT max(updated_at) FROM storefront_products")
-                .fetch_one(&self.inner.pool)
+                .fetch_one(self.inner.db.read())
                 .await
                 .unwrap_or(None);
         StoreStatus {
@@ -231,7 +237,7 @@ async fn supervise(inner: Arc<Inner>, mut handle: Subscription, mut stop: watch:
                 _ = tokio::time::sleep(delay) => {}
             }
             delay = (delay * 2).min(MAX_RESTART_DELAY);
-            match catalog_subscription(inner.pool.clone())
+            match catalog_subscription(inner.db.write().clone())
                 .start(&inner.executor)
                 .await
             {

@@ -9,6 +9,8 @@
 //!   on every reconnect
 //! - `STORE_TOKEN` — the API key's token, from the tenant's API keys page
 //! - `STORE_DB` — the local SQLite file (`storefront.db`)
+//! - `STORE_DB_READ_CONNECTIONS` — how many pages read the local file at once
+//!   (8)
 //! - `STORE_TLS_CA` — TLS to the store (optional), checked against
 //!   `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by default)
 //! - `STORE_MEDIA_URL` — where the product pictures are loaded from, as the
@@ -41,8 +43,7 @@ use std::net::IpAddr;
 use std::path::Path;
 
 use anyhow::Context as _;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use timada_storefront::{Store, StoreConfig, StoreTls};
+use timada_storefront::{Store, StoreConfig, StoreDb, StoreTls};
 use topcoat::cookie::Key;
 use topcoat::router::IpNet;
 
@@ -77,18 +78,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let pool = SqlitePoolOptions::new()
-        .max_connections(3)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(env_or("STORE_DB", "storefront.db"))
-                .create_if_missing(true)
-                .journal_mode(SqliteJournalMode::Wal),
-        )
+    let read_connections: u32 = env_or(
+        "STORE_DB_READ_CONNECTIONS",
+        &timada_storefront::DEFAULT_READ_CONNECTIONS.to_string(),
+    )
+    .parse()
+    .context("STORE_DB_READ_CONNECTIONS is not a number")?;
+    let db = StoreDb::open(env_or("STORE_DB", "storefront.db"), read_connections)
         .await
         .context("cannot open the local database")?;
     if std::env::args().nth(1).as_deref() == Some("migrate") {
-        timada_storefront::migrate(&pool).await?;
+        timada_storefront::migrate(db.write()).await?;
         tracing::info!("local database ready");
         return Ok(());
     }
@@ -124,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
 
     let trusted_proxies = trusted_proxies(&env_or("TRUSTED_PROXIES", ""))?;
 
-    let store = Store::connect(config, pool).await?;
+    let store = Store::connect(config, db).await?;
 
     let host = env_or("HOST", "127.0.0.1");
     let port: u16 = env_or("PORT", "3456")

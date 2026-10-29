@@ -8,13 +8,13 @@ SQLite database, and hands pages the data; the markup is the merchant's.
 ## Connecting
 
 ```rust
-use timada_storefront::{RouterBuilderStoreExt, Store, StoreConfig, StoreTls};
+use timada_storefront::{RouterBuilderStoreExt, Store, StoreConfig, StoreDb, StoreTls};
 
-let pool = SqlitePoolOptions::new().connect_with(options).await?;   // the app's database
+let db = StoreDb::open("storefront.db", 8).await?;                 // the app's database
 let config = StoreConfig::new("store.example.com:4321", token)
     .tls(StoreTls::from_ca_pem(Path::new("store-ca.pem"), "store.example.com")?)
     .prefix("/store");                                              // the default
-let store = Store::connect(config, pool).await?;
+let store = Store::connect(config, db).await?;
 let router = module_router!().discover().store(store.clone()).build();
 topcoat::serve(listener, router).await?;
 store.shutdown().await;
@@ -39,8 +39,16 @@ store.shutdown().await;
   photos) and signs its shoppers in, over HTTPS with the same key. Without it the store
   shows reviews but takes none (`Store::takes_reviews`), and nobody signs in
   (`Store::signs_shoppers_in`).
+- The **local database** is opened as the dashboard opens its own: `StoreDb::open`
+  gives the pages a pool of read-only connections (the second argument: how many pages
+  read at once, since each connection runs on a thread of its own) and every write
+  (the catalog copy, the cursor, the snapshots) one connection, so writes queue
+  instead of contending for SQLite's lock while holding a connection a page waits
+  for. The copy is rebuilt from the store when lost, so the writer commits with
+  `synchronous = NORMAL`. A single `SqlitePool` converts too, for a test's in-memory
+  database.
 - `Store::connect` fails at once when the store is unreachable or refuses the key. It
-  applies evento's tables and `storefront_products` to the pool (`timada_storefront::
+  applies evento's tables and `storefront_products` to the local database (`timada_storefront::
   migrations()` exists for hosts running their own migrator), then follows the catalog.
 
 ## What lives where
@@ -513,7 +521,8 @@ STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
 open http://127.0.0.1:3456/
 ```
 
-All three values are on the tenant's API keys page. `STORE_ADDR`, `STORE_DB`, `HOST`,
+All three values are on the tenant's API keys page. `STORE_ADDR`, `STORE_DB`,
+`STORE_DB_READ_CONNECTIONS` (the read pool, 8 by default), `HOST`,
 `PORT`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by
 default) are the other knobs, `TRUSTED_PROXIES` (comma-separated addresses or CIDR
 networks) names the reverse proxies whose `X-Forwarded-For` gives the shopper's
