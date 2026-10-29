@@ -71,6 +71,9 @@ enum Commands {
     /// Load a catalogue snapshot into a tenant (server stopped), then print
     /// the settings of a storefront for it
     Seed(cli::SeedArgs),
+    /// Keep the platform (store, read models, pictures, shopper keys) in a
+    /// directory, or put a kept one back (server stopped)
+    Snapshot(cli::SnapshotArgs),
     /// Drop the databases and recreate them from scratch (debug builds only)
     #[cfg(debug_assertions)]
     Reset,
@@ -91,6 +94,7 @@ async fn main() -> Result<()> {
         Commands::Migrate => cli::migrate(config).await,
         Commands::Rejoin => cli::rejoin(config).await,
         Commands::Seed(args) => cli::seed(config, args).await,
+        Commands::Snapshot(args) => cli::snapshot(config, args).await,
         #[cfg(debug_assertions)]
         Commands::Reset => cli::reset(config).await,
     }

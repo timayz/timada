@@ -1,4 +1,4 @@
-.PHONY: loadtest dev storefront storefront.migrate chatounette chatounette.migrate seed.chatounette snapshot.chatounette lint fmt fmt-check test check machete e2e
+.PHONY: loadtest dev seed.chatounette.save seed.chatounette.restore storefront storefront.migrate chatounette chatounette.migrate seed.chatounette snapshot.chatounette lint fmt fmt-check test check machete e2e
 
 start: up dev
 
@@ -39,7 +39,26 @@ seed.chatounette:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml seed \
 		--snapshot seeds/chatounette --tenant Chatounette --owner "$${OWNER:?set OWNER to the owner's e-mail}" \
 		--storefront-url "$${STOREFRONT_URL-https://chatounette.localhost}" \
-		--pages examples/chatounette/pages
+		--pages examples/chatounette/pages --env-file data/seed.chatounette.env
+
+# Keeps the platform as `make seed.chatounette` left it in DEV_SNAPSHOT (the
+# server stopped): the store, the read models, the pictures and the shopper
+# keys, with the Chatounette clone's database (best once its catalogue is in)
+# and the settings the seed printed. Restore brings it all back in seconds,
+# replacing what is there: stop the server and Chatounette first. Then
+# `make chatounette` with the settings restore prints.
+DEV_SNAPSHOT ?= seeds/dev-platform
+
+seed.chatounette.save:
+	cargo run -p timada-dashboard -- --config config/dev.local.toml snapshot save $(DEV_SNAPSHOT) --replace \
+		$(if $(wildcard chatounette.db),--also chatounette.db) \
+		$(if $(wildcard data/seed.chatounette.env),--also data/seed.chatounette.env)
+
+seed.chatounette.restore:
+	cargo run -p timada-dashboard -- --config config/dev.local.toml snapshot restore $(DEV_SNAPSHOT) \
+		$(if $(wildcard $(DEV_SNAPSHOT)/also/chatounette.db),--also chatounette.db) \
+		$(if $(wildcard $(DEV_SNAPSHOT)/also/seed.chatounette.env),--also data/seed.chatounette.env)
+	@cat data/seed.chatounette.env 2>/dev/null || true
 
 # Takes the snapshot from the live shop, pictures included (see
 # seeds/README.md); run again, it fetches only the pictures not there yet.
