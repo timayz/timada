@@ -24,6 +24,7 @@ pub mod rename;
 pub mod reviews;
 pub mod roles;
 pub mod shipping;
+pub mod time_zone;
 
 use std::sync::Arc;
 
@@ -63,6 +64,7 @@ use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::button;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
+use crate::components::select::select;
 use crate::db::ReadPool;
 use crate::store_api::StoreConnections;
 use crate::ui::{
@@ -362,6 +364,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let role = role_label(&tenant, &role);
     let connections = app_context::<Arc<StoreConnections>>(cx).count_tenant(&tenant.id);
     let tiles = tiles(cx, &tenant, &nav).await?;
+    let zones = timada_core::time_zones();
     let members = match tenant.members.len() {
         1 => "1 member".to_owned(),
         n => format!("{n} members"),
@@ -437,7 +440,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if can_manage {
                 section_card(
                     title: Some("Settings"),
-                    description: Some("The name members and the platform see this tenant under."),
+                    description: Some("The name members and the platform see this tenant under, and where the shop lives."),
                     <form method="post" action=(href!(rename::rename, Slug(tenant.slug.clone()))) class="flex max-w-xl flex-col gap-4">
                         field(
                             field_label(attrs: attributes! { for="tenant-name" }, "Name")
@@ -448,6 +451,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         <div>
                             button(attrs: attributes! { type="submit" }, "Rename")
+                        </div>
+                    </form>
+                    <form method="post" action=(href!(time_zone::time_zone, Slug(tenant.slug.clone()))) class="mt-8 flex max-w-xl flex-col gap-4" data-shop-time-zone="">
+                        field(
+                            field_label(attrs: attributes! { for="tenant-time-zone" }, "Time zone")
+                            select(
+                                attrs: attributes! { id="tenant-time-zone" name="time_zone" aria-describedby="tenant-time-zone-hint" },
+                                for zone in &zones {
+                                    <option value=(zone) selected=(zone == tenant.shop_time_zone())>(zone)</option>
+                                }
+                            )
+                            <p id="tenant-time-zone-hint" class="text-sm text-muted-foreground">
+                                "Where the shop lives. A newsletter scheduled for 9:00 reaches each subscriber at 9:00 where they are; those whose zone is unknown get it at 9:00 here."
+                            </p>
+                        )
+                        <div>
+                            button(attrs: attributes! { type="submit" }, "Save the time zone")
                         </div>
                     </form>
                 )

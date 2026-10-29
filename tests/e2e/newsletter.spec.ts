@@ -27,6 +27,19 @@ test("an owner sees the newsletter section, empty at first", async ({
   ).toBeVisible();
 });
 
+test("an owner sets where the shop lives", async ({ page }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name } = uniqueTenant("Zoned Shop");
+  await createTenant(page, name);
+
+  const form = page.locator("[data-shop-time-zone]");
+  await expect(form.getByLabel("Time zone")).toHaveValue("UTC");
+  await form.getByLabel("Time zone").selectOption("Europe/Paris");
+  await form.getByRole("button", { name: "Save the time zone" }).click();
+  await expect(page.getByText("Time zone saved.")).toBeVisible();
+  await expect(form.getByLabel("Time zone")).toHaveValue("Europe/Paris");
+});
+
 test("the newsletter page needs newsletter:read, its actions newsletter:manage", async ({
   browser,
   request,

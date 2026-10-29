@@ -176,10 +176,11 @@ pub async fn upsert_subscriber(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO newsletter_subscribers (tenant_id, id, email, language, source, status,
-            requested_at, confirmed_at, unsubscribed_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            requested_at, confirmed_at, unsubscribed_at, updated_at, time_zone)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             email = excluded.email, language = excluded.language,
+            time_zone = excluded.time_zone,
             source = excluded.source, status = excluded.status,
             requested_at = excluded.requested_at, confirmed_at = excluded.confirmed_at,
             unsubscribed_at = excluded.unsubscribed_at, updated_at = excluded.updated_at",
@@ -194,6 +195,7 @@ pub async fn upsert_subscriber(
     .bind(subscriber.confirmed_at.map(|at| at as i64))
     .bind(subscriber.unsubscribed_at.map(|at| at as i64))
     .bind(subscriber.updated_at as i64)
+    .bind(&subscriber.time_zone)
     .execute(pool)
     .await?;
     Ok(())

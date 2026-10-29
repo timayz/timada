@@ -39,6 +39,10 @@ pub enum Subscriber {
         key_id: String,
         forgotten_by: String,
     },
+    /// Where the subscriber lives, as their browser said when they asked:
+    /// an IANA name (`Europe/Paris`), for a campaign to reach them at the
+    /// hour it names in their own day. Coarse, so kept in clear.
+    TimeZoneSet { time_zone: String, set_by: String },
 }
 
 /// One mail of news the merchant writes, then sends to the confirmed

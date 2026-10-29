@@ -80,6 +80,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_slug" => "A slug is 2 to 32 lowercase letters, digits and dashes.",
         "slug_taken" => "This slug is already taken. Choose another one.",
         "invalid_name" => "The name must be between 1 and 80 characters.",
+        "invalid_time_zone" => "Pick a time zone from the list.",
         "tenant_not_found" => "This tenant does not exist.",
         "tenant_suspended" => "This tenant is suspended.",
         "not_suspended" => "This tenant is not suspended.",

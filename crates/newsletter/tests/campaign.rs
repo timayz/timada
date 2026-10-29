@@ -35,6 +35,7 @@ async fn subscribe(newsletter: &Newsletter, keys: &MemoryKeys, email: &str, lang
                 email: email.to_owned(),
                 language: Some(language.to_owned()),
                 source: SOURCE_FORM.to_owned(),
+                time_zone: None,
             },
             now(),
         )

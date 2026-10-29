@@ -146,6 +146,7 @@ pub fn checkout() -> Checkout {
         shipping_method: None,
         language: None,
         newsletter: false,
+        time_zone: None,
     }
 }
 

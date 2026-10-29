@@ -19,7 +19,7 @@ pub use subscriber::*;
 use evento::{Executor, Projection, metadata::Event};
 use timada_core::keys::{self, Key, Keys};
 
-use crate::aggregator::{Confirmed, Forgotten, Requested, Unsubscribed};
+use crate::aggregator::{Confirmed, Forgotten, Requested, TimeZoneSet, Unsubscribed};
 use crate::value_object::{SubscriberStatus, subscriber_id, unsubscribe_token};
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -78,6 +78,8 @@ pub struct SubscriberState {
     pub key_id: String,
     pub email: Vec<u8>,
     pub language: Option<String>,
+    /// Their IANA time zone, when their browser gave it.
+    pub time_zone: Option<String>,
     /// Where the last request came from.
     pub source: String,
     pub status: SubscriberStatus,
@@ -99,6 +101,7 @@ pub struct Subscriber {
     pub id: String,
     pub email: String,
     pub language: Option<String>,
+    pub time_zone: Option<String>,
     pub source: String,
     pub status: SubscriberStatus,
     pub requested_at: u64,
@@ -126,6 +129,7 @@ impl SubscriberState {
             id: self.id.clone(),
             email: String::from_utf8(email)?,
             language: self.language.clone(),
+            time_zone: self.time_zone.clone(),
             source: self.source.clone(),
             status: self.status,
             requested_at: self.requested_at,
@@ -174,6 +178,7 @@ pub fn subscriber_projection<E: Executor>() -> Projection<E, SubscriberState> {
         .handler(on_confirmed())
         .handler(on_unsubscribed())
         .handler(on_forgotten())
+        .handler(on_time_zone_set())
         .strict()
 }
 
@@ -218,7 +223,18 @@ async fn on_unsubscribed(
 async fn on_forgotten(event: Event<Forgotten>, state: &mut SubscriberState) -> anyhow::Result<()> {
     state.key_id.clear();
     state.email.clear();
+    state.time_zone = None;
     state.forgotten = true;
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_time_zone_set(
+    event: Event<TimeZoneSet>,
+    state: &mut SubscriberState,
+) -> anyhow::Result<()> {
+    state.time_zone = Some(event.data.time_zone.to_owned());
     state.updated_at = event.timestamp;
     Ok(())
 }
