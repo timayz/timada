@@ -21,9 +21,9 @@ use timada_reviews::REVIEW_LINK_TTL_SECS;
 use timada_shoppers::CODE_TTL_SECS;
 use timada_tenancy::{
     AddressVars, AutomationCustomerVars, AutomationDiscountVars, AutomationOrderVars, DiscountVars,
-    LineVars, MailVars, NewsletterConfirmationVars, NewsletterVars, OrderConfirmationVars,
-    OrderVars, RenderedMail, ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind,
-    ShopVars, ShopperCodeVars, TenantState, render, render_text,
+    LineVars, MailVars, NewProductVars, NewsletterConfirmationVars, NewsletterVars,
+    OrderConfirmationVars, OrderVars, RenderedMail, ReviewOrderVars, ReviewRequestVars,
+    ShippingMethodVars, ShopMailKind, ShopVars, ShopperCodeVars, TenantState, render, render_text,
 };
 
 use crate::auth::cookies::EmailFlowKind;
@@ -454,16 +454,18 @@ pub struct CampaignCopy<'a> {
 }
 
 /// Renders a campaign for one subscriber, whose unsubscribe page is
-/// `unsubscribe_url`.
+/// `unsubscribe_url`, showing `new_products`.
 pub fn render_campaign(
     cx: &Cx,
     shop: &TenantState,
     copy: &CampaignCopy<'_>,
     unsubscribe_url: &str,
+    new_products: &[NewProductVars],
 ) -> anyhow::Result<RenderedMail> {
     let vars = MailVars::Newsletter(NewsletterVars {
         shop: shop_vars(cx, shop),
         unsubscribe_url: unsubscribe_url.to_owned(),
+        new_products: new_products.to_vec(),
     });
     let mut rendered = render(copy.subject, copy.html, None, &vars)
         .map_err(|err| anyhow::anyhow!("campaign: {err}"))?;
@@ -495,9 +497,10 @@ pub async fn send_campaign(
     to: &str,
     copy: &CampaignCopy<'_>,
     unsubscribe_url: &str,
+    new_products: &[NewProductVars],
 ) -> Result<()> {
-    let rendered =
-        render_campaign(cx, shop, copy, unsubscribe_url).map_err(topcoat::Error::from_anyhow)?;
+    let rendered = render_campaign(cx, shop, copy, unsubscribe_url, new_products)
+        .map_err(topcoat::Error::from_anyhow)?;
     let headers = vec![
         (
             "List-Unsubscribe".to_owned(),
