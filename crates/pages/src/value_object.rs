@@ -15,8 +15,6 @@ pub const MAX_SLUG_LEN: usize = 64;
 pub const FALLBACK_SLUG: &str = "page";
 /// How many pictures one page carries, at most.
 pub const MAX_IMAGES_PER_PAGE: usize = 50;
-/// The largest footer position.
-pub const MAX_FOOTER_POSITION: u32 = 999;
 /// The picture formats a page takes, as `(extension, type)`.
 pub const IMAGE_FORMATS: &[(&str, &str)] = &[
     ("jpg", "image/jpeg"),

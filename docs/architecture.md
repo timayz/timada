@@ -26,7 +26,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/shoppers` | `timada-shoppers` | A shop's customers who sign in: mailed codes, sessions, saved addresses, in a tenant's store |
 | `crates/support` | `timada-support` | The messages visitors send through a shop's contact form, and whether the merchant handled them |
 | `crates/newsletter` | `timada-newsletter` | The addresses that asked for a shop's news, confirmed through a mailed link (double opt-in) |
-| `crates/pages` | `timada-pages` | The shop's own pages (legal notice, terms, about) in Markdown: drafts, publication, footer order, pictures |
+| `crates/pages` | `timada-pages` | The shop's own pages (legal notice, terms, about) in Markdown: drafts, publication, pictures; the storefront picks them by slug |
 | `crates/automations` | `timada-automations` | The scenarios a shop's team draws: a trigger, then a tree of steps, kept as a definition the editor works on (see `docs/automations.md`) |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
@@ -547,9 +547,9 @@ The details are in `docs/automations.md`.
 
 A page is a `Page` stream in the tenant's store (`timada-pages`, a ULID): a title, a
 slug unique in the shop (a `PageSlug` index aggregate) and a body in Markdown, kept as
-written. It starts as a draft; `Published` shows it on the storefront at
-`/pages/{slug}`, and `ShownInFooter` places it in the storefront's footer (lowest
-position first, listed only while published). It carries the title and description
+written. The storefront decides which pages it has and where (its own routes, such
+as `/mentions-legales`, and its own footer), and reads each one's text by its slug; it
+starts as a draft, and only once `Published` does the storefront show it. It carries the title and description
 search engines show, and pictures uploaded beside it, kept like a product's (see
 *Product pictures*: on a majority of nodes before `ImageAdded`, fetched by the others
 through `timada-dashboard/media`, deleted with `ImageRemoved` or `Deleted`). The body

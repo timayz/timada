@@ -188,7 +188,6 @@ pub fn describe_error(code: &str) -> &'static str {
             "An address is 2 to 64 lowercase letters, digits or dashes, with no dash at either end."
         }
         "page_slug_taken" => "Another page has this address.",
-        "page_invalid_position" => "A footer position is a number from 0 to 999.",
         "page_too_many_images" => "A page carries at most 50 pictures.",
         "page_not_found" => "This page does not exist.",
         "page_image_not_found" => "This picture is no longer on the page.",
@@ -385,9 +384,7 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "automations:read" => "See the automation scenarios",
         "automations:manage" => "Draw, save and delete automation scenarios (includes seeing them)",
         "pages:read" => "See the shop's pages (legal notice, terms, about), drafts included",
-        "pages:manage" => {
-            "Write, publish, place in the footer and delete the shop's pages (includes seeing them)"
-        }
+        "pages:manage" => "Write, publish and delete the shop's pages (includes seeing them)",
         _ => "Unknown permission",
     }
 }

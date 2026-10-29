@@ -38,14 +38,6 @@ pub enum Page {
     Unpublished {
         unpublished_by: String,
     },
-    /// Listed in the storefront's footer, lowest position first.
-    ShownInFooter {
-        position: u32,
-        shown_by: String,
-    },
-    HiddenFromFooter {
-        hidden_by: String,
-    },
     /// A picture uploaded for the body, kept as `{image_id}.{ext}`.
     ImageAdded {
         image_id: String,

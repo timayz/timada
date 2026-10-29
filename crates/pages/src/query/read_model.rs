@@ -71,19 +71,17 @@ pub async fn upsert_page_row(
     page: &PageState,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        "INSERT INTO pages (tenant_id, id, slug, title, published, footer_position,
-            created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO pages (tenant_id, id, slug, title, published, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             slug = excluded.slug, title = excluded.title, published = excluded.published,
-            footer_position = excluded.footer_position, updated_at = excluded.updated_at",
+            updated_at = excluded.updated_at",
     )
     .bind(tenant_id)
     .bind(&page.id)
     .bind(&page.slug)
     .bind(&page.title)
     .bind(page.published)
-    .bind(page.footer_position.map(i64::from))
     .bind(page.created_at as i64)
     .bind(page.updated_at as i64)
     .execute(pool)

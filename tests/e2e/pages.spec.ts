@@ -12,10 +12,10 @@ async function openPages(page: Page, tenant: string, slug: string) {
 }
 
 // The shop's own pages: an owner writes one in Markdown under
-// /t/{slug}/pages, previews it, publishes it, places it in the footer, moves
-// it to another address and deletes it.
+// /t/{slug}/pages, previews it, publishes it, moves it to another address and
+// deletes it.
 
-test("an owner writes, publishes and places a page in the footer", async ({ page }) => {
+test("an owner writes, previews and publishes a page", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));
   const { name, slug } = uniqueTenant("Pages Shop");
   await createTenant(page, name);
@@ -51,15 +51,11 @@ test("an owner writes, publishes and places a page in the footer", async ({ page
   await expect(page.getByRole("status")).toContainText("Page saved.");
   await expect(page.locator("#page-body")).toHaveValue("## Hébergeur\n\nChez nous.");
 
-  // Search engines, the footer, then published.
+  // Search engines, then published.
   await page.locator("#page-meta-title").fill("Mentions légales | Acme");
   await page.getByRole("button", { name: "Save for search engines" }).click();
   await expect(page.getByRole("status")).toContainText("Saved for search engines.");
   await expect(page.locator("#page-meta-title")).toHaveValue("Mentions légales | Acme");
-  await page.getByLabel("List it in the storefront's footer").check();
-  await page.getByLabel("Position (lowest first)").fill("2");
-  await page.getByRole("button", { name: "Save footer" }).click();
-  await expect(page.getByRole("status")).toContainText("Footer saved.");
   await page.getByRole("button", { name: "Publish" }).click();
   await expect(page.getByRole("status")).toContainText("Published");
   await expect(page.locator("[data-page-status]")).toHaveAttribute("data-page-status", "Published");
@@ -67,7 +63,6 @@ test("an owner writes, publishes and places a page in the footer", async ({ page
   await openPages(page, slug, "mentions-legales");
   const row = page.locator("[data-page=mentions-legales]");
   await expect(row).toHaveAttribute("data-page-status", "Published");
-  await expect(row.locator("[data-page-footer]")).toHaveAttribute("data-page-footer", "2");
 
   // A second page cannot take the address; the first moves elsewhere.
   await page.getByRole("link", { name: "New page" }).click();

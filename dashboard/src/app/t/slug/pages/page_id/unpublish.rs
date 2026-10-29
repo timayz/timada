@@ -1,5 +1,5 @@
 //! `POST /t/{slug}/pages/{page_id}/unpublish`: back to a draft, off the
-//! storefront and its footer.
+//! storefront.
 
 use topcoat::{
     Result,

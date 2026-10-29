@@ -1,12 +1,12 @@
-//! Pages bounded context: the shop's own pages, the ones a storefront links
-//! from its footer (legal notice, terms of sale, privacy policy, about us).
+//! Pages bounded context: the text of the shop's own pages (legal notice,
+//! terms of sale, privacy policy, about us).
 //!
 //! A page is a title and a body the merchant writes in Markdown, under a
-//! slug unique in the shop (`/pages/{slug}`). It stays a draft, seen in the
-//! back office only, until it is published; a published page may be listed
-//! in the storefront's footer, at a position of its own, and carries the
-//! title and description search engines show. Its pictures are uploaded
-//! beside it and written into the body by file name
+//! slug unique in the shop. The storefront decides which pages it has, and
+//! where (`/mentions-legales`), and reads each one's text by its slug. A
+//! page stays a draft, seen in the back office only, until it is published,
+//! and carries the title and description search engines show. Its pictures
+//! are uploaded beside it and written into the body by file name
 //! (`![The workshop](01J….webp)`).
 //!
 //! The store keeps the Markdown as written; [`render_markdown`] turns it into

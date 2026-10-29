@@ -10,19 +10,17 @@ pub struct PageRow {
     pub slug: String,
     pub title: String,
     pub published: bool,
-    pub footer_position: Option<i64>,
     /// Unix seconds.
     pub created_at: i64,
     /// Unix seconds.
     pub updated_at: i64,
 }
 
-/// The tenant's pages: those in the footer first, in its order, then the
-/// others by title.
+/// The tenant's pages, by title.
 pub async fn pages_of_tenant(pool: &SqlitePool, tenant_id: &str) -> anyhow::Result<Vec<PageRow>> {
     Ok(sqlx::query_as(
         "SELECT * FROM pages WHERE tenant_id = ?1
-         ORDER BY footer_position IS NULL, footer_position, title COLLATE NOCASE, id",
+         ORDER BY title COLLATE NOCASE, id",
     )
     .bind(tenant_id)
     .fetch_all(pool)

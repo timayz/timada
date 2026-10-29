@@ -1,7 +1,7 @@
 //! `/t/{slug}/pages`: the shop's own pages (legal notice, terms of sale,
 //! privacy policy, about us), for members with `pages:read`; those with
-//! `pages:manage` write them in Markdown, publish them and place them in
-//! the storefront's footer. The list comes from the shared read model (a
+//! `pages:manage` write them in Markdown and publish them; the storefront
+//! shows each one where it links to it, by its address. The list comes from the shared read model (a
 //! moment behind); a page's own screen reads its stream.
 
 pub mod new;
@@ -81,7 +81,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             shell: Shell::tenant(&tenant, &nav, "pages"),
             page_header(
                 title: "Pages",
-                subtitle: Some("The shop's own pages: legal notice, terms of sale, privacy, about us. The storefront serves the published ones at /pages/{address}."),
+                subtitle: Some("The shop's own pages: legal notice, terms of sale, privacy, about us. The storefront shows the published ones where it links to them, by their address."),
                 if can_manage {
                     <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Sm)) href=(href!(new::new, Slug(slug.clone())))>"New page"</a>
                 }
@@ -95,24 +95,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         table_row(
                             table_head("Title")
                             table_head("Address")
-                            table_head("Footer")
                             table_head("Updated")
                             table_head("Status")
                         )
                     )
                     table_body(
                         if rows.is_empty() {
-                            empty_row(colspan: 5, text: "No page yet.")
+                            empty_row(colspan: 4, text: "No page yet.")
                         }
                         for row in &rows {
                             table_row(
                                 attrs: attributes! { data-page=(&row.slug) data-page-status=(status_of(row.published).0) },
                                 table_cell(<a class=(LINK) href=(href!(page_id::index, Slug(slug.clone()), page_id::PageId(row.id.clone())))>(&row.title)</a>)
                                 table_cell(<code class="text-xs">"/pages/" (&row.slug)</code>)
-                                table_cell(
-                                    attrs: attributes! { data-page-footer=(row.footer_position.map(|p| p.to_string()).unwrap_or_default()) },
-                                    if let Some(position) = row.footer_position { "#" (position) } else { "—" }
-                                )
                                 table_cell(<time datetime=(row.updated_at)>(format_time(row.updated_at as u64))</time>)
                                 table_cell(status_badge(tone: status_of(row.published).1, (status_of(row.published).0)))
                             )
