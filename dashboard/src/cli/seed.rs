@@ -65,6 +65,10 @@ pub struct SeedArgs {
     /// keys of `TEST_PAYMENTS`, for a stand-in for Stripe (the load test's)
     #[arg(long)]
     pub test_payments: bool,
+    /// Also write the storefront's settings it prints to this file, for a
+    /// script, or a snapshot to keep (`snapshot save --also`)
+    #[arg(long)]
+    pub env_file: Option<PathBuf>,
 }
 
 /// The delivery method and the code the seeded shop opens with.
@@ -84,7 +88,7 @@ const TEST_SECRET_KEY: &str = "sk_test_load";
 const TEST_WEBHOOK_SECRET: &str = "whsec_load";
 
 pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
-    refuse_if_serving(&config).await?;
+    super::refuse_if_serving(&config).await?;
     let snapshot = Snapshot::read(&args.snapshot)?;
     let pictures = snapshot.images().count();
     tracing::info!(
@@ -291,14 +295,27 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     store_cursors.close().await;
     store_write.close().await;
 
+    let mut settings = Vec::new();
     if let Some(key) = key {
-        // The command's answer, for the shell that runs the storefront.
-        println!("STORE_TOKEN={}", key.token);
-        println!("STORE_MEDIA_URL={}", media.tenant_url(&tenant.id));
-        println!("STORE_API_URL={}", config.server.url.trim_end_matches('/'));
+        settings.push(format!("STORE_TOKEN={}", key.token));
+        settings.push(format!("STORE_MEDIA_URL={}", media.tenant_url(&tenant.id)));
+        settings.push(format!(
+            "STORE_API_URL={}",
+            config.server.url.trim_end_matches('/')
+        ));
     }
     if args.test_payments {
-        println!("STORE_TENANT_ID={}", tenant.id);
+        settings.push(format!("STORE_TENANT_ID={}", tenant.id));
+    }
+    // The command's answer, for the shell that runs the storefront.
+    for line in &settings {
+        println!("{line}");
+    }
+    if let Some(file) = &args.env_file
+        && !settings.is_empty()
+    {
+        std::fs::write(file, settings.join("\n") + "\n")
+            .with_context(|| format!("cannot write {}", file.display()))?;
     }
     Ok(())
 }
@@ -389,24 +406,6 @@ async fn test_payments(
         )
         .await?;
     tracing::info!("test payments connected");
-    Ok(())
-}
-
-/// Two processes on one node's files would each run their own consensus
-/// over the same journal: the seed runs only while the server is stopped,
-/// which the server's port tells.
-async fn refuse_if_serving(config: &Config) -> Result<()> {
-    let host = config.server.host.as_str();
-    let port = config.server.port;
-    match tokio::net::TcpListener::bind((host, port)).await {
-        Ok(probe) => drop(probe),
-        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
-            bail!(
-                "{host}:{port} is in use: stop the server (`timada-dashboard serve`) before seeding"
-            )
-        }
-        Err(err) => return Err(err).with_context(|| format!("cannot probe {host}:{port}")),
-    }
     Ok(())
 }
 
