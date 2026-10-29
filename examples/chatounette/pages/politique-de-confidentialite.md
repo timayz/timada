@@ -1,6 +1,5 @@
 ---
 title: Politique de confidentialité
-footer: 3
 meta_description: Ce que la boutique fait des informations saisies lors d'une commande.
 ---
 Les informations saisies lors d'une commande (nom, adresse de livraison, e-mail, téléphone) servent uniquement à préparer, expédier et suivre la commande, puis à éditer la facture.

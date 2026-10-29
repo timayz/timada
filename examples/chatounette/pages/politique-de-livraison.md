@@ -1,6 +1,5 @@
 ---
 title: Politique de livraison
-footer: 5
 meta_description: Pays desservis, délais et frais de livraison.
 ---
 Nous livrons en France, en Belgique et en Suisse, avec suivi de colis. La livraison est offerte dès 65 € d'achats ; en dessous, elle est facturée 4,90 €.

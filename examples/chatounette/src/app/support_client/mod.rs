@@ -188,9 +188,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </div>
                         <p class="hint">
                             "Le détail est dans notre "
-                            <a href=(href!(crate::app::pages::slug::index, crate::app::pages::slug::Slug("politique-de-remboursement".to_owned())))>"politique de remboursement"</a>
+                            <a href=(href!(crate::app::politique_de_remboursement::index))>"politique de remboursement"</a>
                             " et notre "
-                            <a href=(href!(crate::app::pages::slug::index, crate::app::pages::slug::Slug("politique-de-livraison".to_owned())))>"politique de livraison"</a>
+                            <a href=(href!(crate::app::politique_de_livraison::index))>"politique de livraison"</a>
                             "."
                         </p>
                     </div>

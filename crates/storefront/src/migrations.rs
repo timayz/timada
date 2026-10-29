@@ -417,7 +417,6 @@ sqlx_migrator::sqlite_migration!(
                 text TEXT NOT NULL,
                 meta_title TEXT NOT NULL,
                 meta_description TEXT NOT NULL,
-                footer_position INTEGER,
                 updated_at INTEGER NOT NULL
             )",
             "DROP TABLE storefront_pages"

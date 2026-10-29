@@ -16,7 +16,7 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
-use crate::app::{boutique, c, p, pages, price_line, support_client};
+use crate::app::{boutique, c, own_page, p, price_line, support_client};
 
 /// How many of each the dropdown shows.
 const PRODUCTS: u32 = 4;
@@ -85,19 +85,26 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: support.title.to_owned(),
         });
     }
-    own_pages.extend(search_pages(cx, &q, PAGES_SHOWN - own_pages.len()).await?);
+    // Only the pages the shop has an address for.
+    own_pages.extend(
+        search_pages(cx, &q, PAGES_SHOWN)
+            .await?
+            .into_iter()
+            .filter(|page| own_page::url(cx, &page.slug).is_some()),
+    );
+    own_pages.truncate(PAGES_SHOWN);
     let nothing = found.as_ref().is_some_and(|found| found.items.is_empty())
         && hits.is_empty()
         && own_pages.is_empty();
     let all = href!(boutique::index)
         .query(AllResults { q: &q })
         .resolve(cx);
-    // The support page is its own route; the others are the merchant's.
+    // The support page is the shop's own; the others carry the merchant's text.
     let page_link = |slug: &str| {
         if slug == support_client::SEARCH_ENTRY.slug {
             href!(support_client::index).resolve(cx)
         } else {
-            href!(pages::slug::index, pages::slug::Slug(slug.to_owned())).resolve(cx)
+            own_page::url(cx, slug).unwrap_or_default()
         }
     };
 

@@ -1,6 +1,5 @@
 ---
 title: Conditions générales de vente
-footer: 2
 meta_description: Prix, commande, droit de rétractation : les conditions de vente de la boutique.
 ---
 Les présentes conditions encadrent toute commande passée sur la boutique. Passer commande vaut acceptation de ces conditions.

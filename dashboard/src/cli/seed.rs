@@ -337,13 +337,12 @@ struct SeedPage {
     title: String,
     meta_title: String,
     meta_description: String,
-    footer: Option<u32>,
     body: String,
 }
 
 /// Reads the pages of a directory: each `{slug}.md` opens with a header
 /// between `---` lines of `key: value` (`title`, required; `meta_title`,
-/// `meta_description`, and `footer`, the position in the footer), and the
+/// and `meta_description`), and the
 /// Markdown body follows. In file-name order.
 fn read_pages(dir: &std::path::Path) -> Result<Vec<SeedPage>> {
     let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
@@ -388,13 +387,6 @@ fn parse_page(slug: String, text: &str) -> Result<SeedPage> {
             "title" => page.title = value,
             "meta_title" => page.meta_title = value,
             "meta_description" => page.meta_description = value,
-            "footer" => {
-                page.footer = Some(
-                    value
-                        .parse()
-                        .with_context(|| format!("footer {value:?} is not a position"))?,
-                )
-            }
             other => bail!("unknown header {other:?}"),
         }
     }
@@ -428,9 +420,6 @@ async fn seed_pages(
         pages
             .set_page_seo(actor, &id, &page.meta_title, &page.meta_description)
             .await?;
-        if let Some(position) = page.footer {
-            pages.show_page_in_footer(actor, &id, position).await?;
-        }
         pages.publish_page(actor, &id).await?;
         created += 1;
     }
@@ -445,7 +434,7 @@ mod tests {
     fn a_page_file_is_a_header_and_markdown() {
         let page = parse_page(
             "cgv".into(),
-            "---\ntitle: Conditions : vente\nfooter: 2\nmeta_description: Les règles.\n---\n## Prix\n\nEn euros.\n",
+            "---\ntitle: Conditions : vente\nmeta_description: Les règles.\n---\n## Prix\n\nEn euros.\n",
         )
         .unwrap();
         assert_eq!(
@@ -455,12 +444,11 @@ mod tests {
                 title: "Conditions : vente".into(),
                 meta_title: String::new(),
                 meta_description: "Les règles.".into(),
-                footer: Some(2),
                 body: "## Prix\n\nEn euros.".into(),
             }
         );
         assert!(parse_page("x".into(), "no header").is_err());
-        assert!(parse_page("x".into(), "---\nfooter: 1\n---\nbody").is_err());
+        assert!(parse_page("x".into(), "---\nmeta_title: T\n---\nbody").is_err());
     }
 
     #[test]
@@ -473,11 +461,6 @@ mod tests {
             pages
                 .iter()
                 .all(|page| timada_pages::normalize_slug(&page.slug).is_ok())
-        );
-        assert_eq!(
-            pages.iter().filter(|page| page.footer.is_some()).count(),
-            5,
-            "every page but \"qui sommes-nous\" is in the footer"
         );
     }
 }

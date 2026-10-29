@@ -40,9 +40,9 @@ use timada_catalog::{
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
     SubscriptionState, category_ancestors, find_category, menu_of, published_categories,
-    published_category_body, published_category_by_slug, published_footer_pages, published_page,
-    published_product_by_slug, published_product_categories, published_products,
-    published_related_products, search_published_pages,
+    published_category_body, published_category_by_slug, published_page, published_product_by_slug,
+    published_product_categories, published_products, published_related_products,
+    search_published_pages,
 };
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
@@ -1984,7 +1984,7 @@ async fn a_product_leaves_a_category_it_was_filed_under() {
 }
 
 #[tokio::test]
-async fn a_store_shows_the_published_pages_and_its_footer() {
+async fn a_store_shows_the_published_pages() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (token, _) = h.key(&acme).await;
@@ -2005,7 +2005,7 @@ async fn a_store_shows_the_published_pages_and_its_footer() {
         .create_page("alice", page("Mentions légales", "Édité par Acme."))
         .await
         .unwrap();
-    let draft = pages
+    pages
         .create_page("alice", page("Brouillon", "Pas encore."))
         .await
         .unwrap();
@@ -2033,12 +2033,6 @@ async fn a_store_shows_the_published_pages_and_its_footer() {
         )
         .await
         .unwrap();
-    for (id, position) in [(&terms, 2), (&legal, 1), (&draft, 0)] {
-        pages
-            .show_page_in_footer("alice", id, position)
-            .await
-            .unwrap();
-    }
     pages.publish_page("alice", &terms).await.unwrap();
     pages.publish_page("alice", &legal).await.unwrap();
     pages
@@ -2050,20 +2044,14 @@ async fn a_store_shows_the_published_pages_and_its_footer() {
     let config = h.config(&token).media_url("https://cdn.example/media/acme");
     let store = Store::connect(config, pool.clone()).await.unwrap();
     eventually("the published pages reach the local copy", async || {
-        published_footer_pages(&pool).await.unwrap().len() == 2
+        published_page(&pool, "mentions-legales", None)
+            .await
+            .unwrap()
+            .is_some()
     })
     .await;
 
-    // The footer lists the published ones in the merchant's order; the
-    // draft stays out of it and has no page.
-    let footer = published_footer_pages(&pool).await.unwrap();
-    assert_eq!(
-        footer
-            .iter()
-            .map(|link| link.slug.as_str())
-            .collect::<Vec<_>>(),
-        ["mentions-legales", "conditions-de-vente"]
-    );
+    // The draft has no page.
     assert!(
         published_page(&pool, "brouillon", None)
             .await
@@ -2109,16 +2097,19 @@ async fn a_store_shows_the_published_pages_and_its_footer() {
     // Unpublished, moved and deleted pages follow.
     pages.unpublish_page("alice", &terms).await.unwrap();
     pages.rename_page("alice", &legal, "legal").await.unwrap();
-    eventually("an unpublished page leaves the footer", async || {
-        published_footer_pages(&pool)
+    eventually("a moved page is found at its new slug", async || {
+        published_page(&pool, "legal", None)
             .await
             .unwrap()
-            .iter()
-            .map(|link| link.slug.clone())
-            .collect::<Vec<_>>()
-            == ["legal"]
+            .is_some()
     })
     .await;
+    assert!(
+        published_page(&pool, "mentions-legales", None)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(
         published_page(&pool, "conditions-de-vente", None)
             .await

@@ -1,8 +1,9 @@
-//! The shop's own pages (legal notice, terms of sale, about us), as the
-//! merchant published them in the back office (`timada-pages`). The catalog
+//! The text of the shop's own pages (legal notice, terms of sale, about
+//! us), as the merchant published it in the back office (`timada-pages`).
+//! The host decides which pages it has and where (`/mentions-legales`), and
+//! each of its routes asks for its text by slug with [`page`]. The catalog
 //! subscription copies each published page into `storefront_pages`, and
-//! drops it once unpublished or deleted; a page asks for one by slug with
-//! [`page`] and lists the footer's with [`footer_pages`]. The body is kept
+//! drops it once unpublished or deleted. The body is kept
 //! as Markdown and turned into HTML on each read, with the pictures served
 //! from [`StoreConfig::media_url`](crate::StoreConfig::media_url).
 
@@ -36,7 +37,7 @@ pub struct PublicPage {
     pub meta_description: String,
 }
 
-/// A link to a published page: what the footer and a search list.
+/// A link to a published page: what a search lists.
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct PageLink {
     pub slug: String,
@@ -85,16 +86,6 @@ pub async fn published_page(
         slug: row.slug,
         title: row.title,
     }))
-}
-
-/// The published pages the merchant placed in the footer, in its order.
-pub async fn published_footer_pages(pool: &SqlitePool) -> sqlx::Result<Vec<PageLink>> {
-    sqlx::query_as(
-        "SELECT slug, title FROM storefront_pages WHERE footer_position IS NOT NULL
-         ORDER BY footer_position, title COLLATE NOCASE, id",
-    )
-    .fetch_all(pool)
-    .await
 }
 
 /// The published pages a word of whose title or text starts with `q`,
@@ -148,13 +139,6 @@ pub async fn require_page(cx: &Cx, slug: &str) -> Result<PublicPage> {
     page(cx, slug).await?.ok_or_else(|| not_found().into())
 }
 
-/// The links of the footer the merchant arranged.
-pub async fn footer_pages(cx: &Cx) -> Result<Vec<PageLink>> {
-    published_footer_pages(store(cx).pool())
-        .await
-        .map_err(|err| Error::from_anyhow(err.into()))
-}
-
 /// The pages a search finds; see [`search_published_pages`].
 pub async fn search_pages(cx: &Cx, q: &str, limit: usize) -> Result<Vec<PageLink>> {
     search_published_pages(store(cx).pool(), q, limit)
@@ -189,13 +173,12 @@ async fn upsert_page(pool: &SqlitePool, page: &PageState) -> anyhow::Result<()> 
     }
     sqlx::query(
         "INSERT INTO storefront_pages (id, slug, title, body, text, meta_title,
-            meta_description, footer_position, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            meta_description, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (id) DO UPDATE SET
             slug = excluded.slug, title = excluded.title, body = excluded.body,
             text = excluded.text, meta_title = excluded.meta_title,
-            meta_description = excluded.meta_description,
-            footer_position = excluded.footer_position, updated_at = excluded.updated_at",
+            meta_description = excluded.meta_description, updated_at = excluded.updated_at",
     )
     .bind(&page.id)
     .bind(&page.slug)
@@ -204,7 +187,6 @@ async fn upsert_page(pool: &SqlitePool, page: &PageState) -> anyhow::Result<()> 
     .bind(markdown_text(&page.body))
     .bind(&page.meta_title)
     .bind(&page.meta_description)
-    .bind(page.footer_position.map(i64::from))
     .bind(page.updated_at as i64)
     .execute(pool)
     .await?;

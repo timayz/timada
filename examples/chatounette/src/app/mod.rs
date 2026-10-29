@@ -2,7 +2,7 @@
 //! at `/c/{slug}`, a product at `/p/{slug}`, the cart at `/cart`, the checkout
 //! at `/checkout`, a placed order at `/orders/{order_id}`, the shopper's
 //! account at `/account`, the support page at `/support-client`, the shop's
-//! own pages at `/pages/{slug}`, and the library's `/store/status`. The look is chatounette.com's: one stylesheet
+//! own pages at their own addresses (`/mentions-legales`, …), and the library's `/store/status`. The look is chatounette.com's: one stylesheet
 //! (`theme.css`) inlined in every page, no asset bundle.
 
 pub mod account;
@@ -10,20 +10,26 @@ pub mod boutique;
 pub mod c;
 pub mod cart;
 pub mod checkout;
+pub mod conditions_generales_de_vente;
 pub mod emails;
 pub mod filters;
+pub mod mentions_legales;
 pub mod menu;
 pub mod newsletter;
 pub mod orders;
+pub mod own_page;
 pub mod p;
-pub mod pages;
+pub mod politique_de_confidentialite;
+pub mod politique_de_livraison;
+pub mod politique_de_remboursement;
+pub mod qui_sommes_nous;
 pub mod reviews;
 pub mod search;
 pub mod support_client;
 
 use timada_storefront::{
-    CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, footer_pages,
-    menu, product_image, products, recent_reviews,
+    CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, menu,
+    product_image, products, recent_reviews,
 };
 use topcoat::{
     Result,
@@ -204,13 +210,11 @@ pub async fn document(
     })
 }
 
-/// The footer: the shop, the pages the merchant placed in it (its legal
-/// pages, from the back office), the useful links and how to reach it, as
-/// the live shop lays them out.
+/// The footer: the shop, its legal pages, the useful links and how to
+/// reach it, as the live shop lays them out. The pages are the shop's own
+/// routes; their text comes from the back office.
 #[topcoat::view::component]
-pub async fn site_footer(cx: &Cx) -> Result<impl View> {
-    let page = |slug: &str| href!(pages::slug::index, pages::slug::Slug(slug.to_owned()));
-    let links = footer_pages(cx).await?;
+pub async fn site_footer() -> Result<impl View> {
     Ok(view! {
         <footer class="sitefooter">
             <div class="wrap">
@@ -218,23 +222,23 @@ pub async fn site_footer(cx: &Cx) -> Result<impl View> {
                     <a class="brand" href=(href!(index))>"Chat" <span>"ounette"</span></a>
                     <p>"Chatounette, l'endroit parfait pour les accessoires et jouets pour votre chat. Une boutique de démonstration : rien n'est expédié."</p>
                 </div>
-                if !links.is_empty() {
-                    <div>
-                        <h2>"A propos"</h2>
-                        <ul data-footer-pages="">
-                            for link in &links {
-                                <li><a href=(page(&link.slug))>(&link.title)</a></li>
-                            }
-                        </ul>
-                    </div>
-                }
+                <div>
+                    <h2>"A propos"</h2>
+                    <ul>
+                        <li><a href=(href!(mentions_legales::index))>"Mentions légales"</a></li>
+                        <li><a href=(href!(conditions_generales_de_vente::index))>"Conditions générales de vente"</a></li>
+                        <li><a href=(href!(politique_de_confidentialite::index))>"Politique de confidentialité"</a></li>
+                        <li><a href=(href!(politique_de_remboursement::index))>"Politique de remboursement"</a></li>
+                        <li><a href=(href!(politique_de_livraison::index))>"Politique de livraison"</a></li>
+                    </ul>
+                </div>
                 <div>
                     <h2>"Liens utiles"</h2>
                     <ul>
                         <li><a href=(href!(account::index))>"Suivre ma commande"</a></li>
                         <li><a href=(href!(boutique::index))>"Nos produits"</a></li>
                         <li><a href=(href!(support_client::index))>"Support client"</a></li>
-                        <li><a href=(page("qui-sommes-nous"))>"Qui sommes-nous ?"</a></li>
+                        <li><a href=(href!(qui_sommes_nous::index))>"Qui sommes-nous ?"</a></li>
                     </ul>
                 </div>
                 <div>
@@ -432,7 +436,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <div class="wrap prose">
                     <h2>"À propos"</h2>
                     <p>"Chatounette est née de deux amoureux des chats qui ne trouvaient pas, en une seule boutique, tout ce dont leurs compagnons avaient besoin. Nous sélectionnons chaque article pour sa qualité, son confort et, avouons-le, sa bouille."</p>
-                    <a class="btn btn-ghost" href=(href!(pages::slug::index, pages::slug::Slug("qui-sommes-nous")))>"En savoir plus"</a>
+                    <a class="btn btn-ghost" href=(href!(qui_sommes_nous::index))>"En savoir plus"</a>
                 </div>
             </section>
             if !quotes.is_empty() {
