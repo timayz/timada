@@ -7,7 +7,7 @@ use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
     Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet, NewsletterOptInSet,
     NewsletterOptedIn, PaymentRefused, PaymentRequested, Placed, ShippingCharged, ShippingGranted,
-    ShippingMethodChosen,
+    ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
 };
 use crate::error::OrdersError;
 use crate::value_object::{
@@ -52,6 +52,9 @@ pub struct Checkout {
     pub language: Option<String>,
     /// The shopper ticked the box asking for the shop's news.
     pub newsletter: bool,
+    /// The IANA time zone the shopper's browser gives; dropped when the
+    /// zone database does not name it.
+    pub time_zone: Option<String>,
 }
 
 /// The order a payment made.
@@ -598,6 +601,17 @@ impl<E: Executor> super::Command<E> {
                 opted_in_by: actor.to_owned(),
             });
         }
+        if let Some(time_zone) = checkout
+            .time_zone
+            .as_deref()
+            .and_then(timada_core::time_zone)
+        {
+            write.event(&TimeZoneGiven {
+                request_id: request_id.clone(),
+                time_zone,
+                given_by: actor.to_owned(),
+            });
+        }
         write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(request_id)
     }
@@ -779,6 +793,12 @@ impl<E: Executor> super::Command<E> {
         }
         if request.newsletter {
             write.event(&NewsletterOptInSet {
+                set_by: actor.to_owned(),
+            });
+        }
+        if let Some(time_zone) = &request.time_zone {
+            write.event(&TimeZoneSet {
+                time_zone: time_zone.clone(),
                 set_by: actor.to_owned(),
             });
         }

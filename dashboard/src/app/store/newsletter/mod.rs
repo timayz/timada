@@ -3,7 +3,9 @@
 //! mails it a link to confirm (`{storefront}/newsletter/confirm/{token}`,
 //! which the storefront hands back through [`confirm`]); the address counts
 //! only once it is followed. `language` is a tag or a whole
-//! `Accept-Language` value (optional), the language the link is mailed in.
+//! `Accept-Language` value (optional), the language the link is mailed in;
+//! `time_zone` the IANA zone the visitor's browser gives (optional, anything
+//! else ignored), the hours a scheduled campaign keeps for them.
 //!
 //! Answers 202 `{}` whether the address was mailed, is on the list already
 //! or was mailed less than an hour ago, so the answer says nothing of who is
@@ -55,6 +57,8 @@ pub struct SignupForm {
     email: String,
     #[serde(default)]
     language: Option<String>,
+    #[serde(default)]
+    time_zone: Option<String>,
 }
 
 #[route(POST)]
@@ -67,6 +71,7 @@ pub async fn subscribe(cx: &Cx, Form(form): Form<SignupForm>) -> Result<Answer> 
         email: form.email,
         language: form.language,
         source: SOURCE_FORM.to_owned(),
+        time_zone: form.time_zone,
     };
     // Refused before anything is counted or opened when it can be.
     if let Err(err) = draft.validate() {

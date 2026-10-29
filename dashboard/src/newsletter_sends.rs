@@ -287,6 +287,7 @@ mod tests {
                     email: email.to_owned(),
                     language: None,
                     source: SOURCE_FORM.to_owned(),
+                    time_zone: None,
                 },
                 crate::auth::now(),
             )

@@ -1,7 +1,7 @@
 use evento::{Executor, ProjectionAggregate, WriteBuilder, WriteError};
 use timada_core::keys::{self, Key, Keys, new_key_id};
 
-use crate::aggregator::{Confirmed, Requested, Unsubscribed};
+use crate::aggregator::{Confirmed, Requested, TimeZoneSet, Unsubscribed};
 use crate::error::NewsletterError;
 use crate::value_object::{
     CONFIRM_TTL_SECS, ConfirmLink, RESEND_AFTER_SECS, SOURCE_ACCOUNT, SubscriberStatus,
@@ -19,6 +19,9 @@ pub struct RequestSubscription {
     pub language: Option<String>,
     /// One of [`SOURCES`](crate::SOURCES).
     pub source: String,
+    /// The IANA time zone the shopper's browser gave; anything else is
+    /// ignored, as is a blank.
+    pub time_zone: Option<String>,
 }
 
 impl RequestSubscription {
@@ -92,11 +95,19 @@ impl<E: Executor> super::Command<E> {
             .language
             .as_deref()
             .and_then(timada_core::primary_language);
+        let time_zone = cmd.time_zone.as_deref().and_then(timada_core::time_zone);
         let id = subscriber_id(&email);
         let current = self.load_subscriber_any(&id).await?;
         if let Some(state) = current.as_ref().filter(|state| !state.forgotten) {
             match state.status {
-                SubscriberStatus::Confirmed => return Ok(RequestOutcome::AlreadyConfirmed),
+                SubscriberStatus::Confirmed => {
+                    // On the list already, maybe from somewhere else now.
+                    if let Some(time_zone) = time_zone {
+                        self.set_time_zone(actor, &id, &time_zone, routing_key)
+                            .await?;
+                    }
+                    return Ok(RequestOutcome::AlreadyConfirmed);
+                }
                 SubscriberStatus::Pending
                     if now.saturating_sub(state.requested_at) < RESEND_AFTER_SECS =>
                 {
@@ -114,12 +125,14 @@ impl<E: Executor> super::Command<E> {
             requested_by: actor.to_owned(),
         };
         let mut writer = writer;
-        let committed = writer
-            .routing_key_opt(routing_key)
-            .event(&event)
-            .tenant(&self.tenant)
-            .commit(&self.executor)
-            .await;
+        writer.routing_key_opt(routing_key).event(&event);
+        if let Some(time_zone) = time_zone {
+            writer.event(&TimeZoneSet {
+                time_zone,
+                set_by: actor.to_owned(),
+            });
+        }
+        let committed = writer.tenant(&self.tenant).commit(&self.executor).await;
         if let Err(err) = committed {
             if fresh {
                 // Nothing names the key: drop it rather than keep it unused.
@@ -153,18 +166,24 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         email: &str,
         language: Option<String>,
+        time_zone: Option<String>,
         routing_key: Option<String>,
     ) -> Result<(), NewsletterError> {
         let email = normalize_email(email)?;
         let language = language.as_deref().and_then(timada_core::primary_language);
+        let time_zone = time_zone.as_deref().and_then(timada_core::time_zone);
         let id = subscriber_id(&email);
         let current = self.load_subscriber_any(&id).await?;
         if current.as_ref().is_some_and(SubscriberState::is_confirmed) {
+            if let Some(time_zone) = time_zone {
+                self.set_time_zone(actor, &id, &time_zone, routing_key)
+                    .await?;
+            }
             return Ok(());
         }
         let (writer, key_id, key, fresh) = self.writer(keys, &id, current).await?;
         let mut writer = writer;
-        let committed = writer
+        writer
             .routing_key_opt(routing_key)
             .event(&Requested {
                 email: keys::seal(&key, &email_aad(&id, &key_id), email.as_bytes())?,
@@ -175,10 +194,14 @@ impl<E: Executor> super::Command<E> {
             })
             .event(&Confirmed {
                 confirmed_by: actor.to_owned(),
-            })
-            .tenant(&self.tenant)
-            .commit(&self.executor)
-            .await;
+            });
+        if let Some(time_zone) = time_zone {
+            writer.event(&TimeZoneSet {
+                time_zone,
+                set_by: actor.to_owned(),
+            });
+        }
+        let committed = writer.tenant(&self.tenant).commit(&self.executor).await;
         if let Err(err) = committed {
             if fresh {
                 let _ = keys.delete(&key_id).await;
@@ -281,6 +304,38 @@ impl<E: Executor> super::Command<E> {
 }
 
 impl<E: Executor> super::Command<E> {
+    /// Records where a subscriber on the list lives now; the same zone, or
+    /// a write that lost a race (the next request says it again), is a
+    /// no-op.
+    async fn set_time_zone(
+        &self,
+        actor: &str,
+        subscriber_id: &str,
+        time_zone: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        let Some(state) = self.load_subscriber(subscriber_id).await? else {
+            return Ok(());
+        };
+        if state.time_zone.as_deref() == Some(time_zone) {
+            return Ok(());
+        }
+        match state
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&TimeZoneSet {
+                time_zone: time_zone.to_owned(),
+                set_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await
+        {
+            Ok(_) | Err(WriteError::InvalidOriginalVersion) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     async fn take_off(
         &self,
         actor: &str,

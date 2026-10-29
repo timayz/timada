@@ -25,7 +25,7 @@ pub use timada_newsletter::{
 };
 
 use crate::context::store;
-use crate::shoppers::{SHOPPER_SIGNED_OUT, request_language};
+use crate::shoppers::{SHOPPER_SIGNED_OUT, request_language, request_time_zone};
 use crate::store::Store;
 
 /// The header the visitor's address travels in to the dashboard.
@@ -86,16 +86,21 @@ impl Store {
     /// a link to confirm. The dashboard answers the same whether the
     /// address was mailed, is on the list already or was mailed a moment
     /// ago. `ip` is the visitor's address, which the dashboard limits
-    /// sign-ups by; `language` a tag or a whole `Accept-Language` value.
+    /// sign-ups by; `language` a tag or a whole `Accept-Language` value;
+    /// `time_zone` the browser's IANA zone.
     pub async fn subscribe(
         &self,
         email: &str,
         ip: Option<IpAddr>,
         language: Option<&str>,
+        time_zone: Option<&str>,
     ) -> anyhow::Result<NewsletterRefusable<()>> {
         let mut form = vec![("email", email)];
         if let Some(language) = language {
             form.push(("language", language));
+        }
+        if let Some(time_zone) = time_zone {
+            form.push(("time_zone", time_zone));
         }
         let mut request = self.newsletter_call(reqwest::Method::POST, "")?.form(&form);
         if let Some(ip) = ip {
@@ -163,10 +168,14 @@ impl Store {
         token: &str,
         subscribed: bool,
         language: Option<&str>,
+        time_zone: Option<&str>,
     ) -> anyhow::Result<NewsletterRefusable<()>> {
         let mut form = vec![("subscribed", subscribed.to_string())];
         if let Some(language) = language {
             form.push(("language", language.to_owned()));
+        }
+        if let Some(time_zone) = time_zone {
+            form.push(("time_zone", time_zone.to_owned()));
         }
         let response = self
             .shopper_newsletter_call(reqwest::Method::POST, token)?
@@ -241,11 +250,16 @@ async fn answer<T>(
 
 /// Hands in the request's address for the shop's news; see
 /// [`Store::subscribe`]. The visitor's address is the request's client,
-/// as the host's trusted proxies report it, and their language the
-/// request's `Accept-Language`.
+/// as the host's trusted proxies report it, their language the request's
+/// `Accept-Language`, and their time zone [`request_time_zone`]'s.
 pub async fn subscribe(cx: &Cx, email: &str) -> Result<NewsletterRefusable<()>> {
     store(cx)
-        .subscribe(email, client_ip(cx), request_language(cx).as_deref())
+        .subscribe(
+            email,
+            client_ip(cx),
+            request_language(cx).as_deref(),
+            request_time_zone(cx).as_deref(),
+        )
         .await
         .map_err(Error::from_anyhow)
 }
@@ -277,14 +291,20 @@ pub async fn shopper_newsletter(cx: &Cx, token: &str) -> Result<NewsletterRefusa
         .map_err(Error::from_anyhow)
 }
 
-/// See [`Store::set_shopper_newsletter`]; the language is the request's.
+/// See [`Store::set_shopper_newsletter`]; the language and time zone are
+/// the request's.
 pub async fn set_shopper_newsletter(
     cx: &Cx,
     token: &str,
     subscribed: bool,
 ) -> Result<NewsletterRefusable<()>> {
     store(cx)
-        .set_shopper_newsletter(token, subscribed, request_language(cx).as_deref())
+        .set_shopper_newsletter(
+            token,
+            subscribed,
+            request_language(cx).as_deref(),
+            request_time_zone(cx).as_deref(),
+        )
         .await
         .map_err(Error::from_anyhow)
 }

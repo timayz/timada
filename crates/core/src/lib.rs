@@ -1,6 +1,6 @@
 //! What every bounded context shares: the refusal code of a write the
-//! store is not taking right now, the reading of a shopper's language, and
-//! the keys personal data is sealed under ([`keys`]).
+//! store is not taking right now, the reading of a shopper's language and
+//! time zone, and the keys personal data is sealed under ([`keys`]).
 
 pub mod keys;
 
@@ -36,6 +36,33 @@ pub fn primary_language(value: &str) -> Option<String> {
     ok.then(|| primary.to_ascii_lowercase())
 }
 
+/// The longest time zone name kept, in bytes (the longest IANA name is 32).
+pub const MAX_TIME_ZONE_LEN: usize = 64;
+
+/// A time zone name from the IANA database, as the database spells it:
+/// `" europe/paris "` gives `"Europe/Paris"`. Anything the database does not
+/// name (a blank, an offset, garbage) gives `None`.
+pub fn time_zone(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > MAX_TIME_ZONE_LEN {
+        return None;
+    }
+    let zone = jiff::tz::TimeZone::get(value).ok()?;
+    let name = zone.iana_name()?;
+    // Fixed offsets and POSIX rules have no IANA name.
+    Some(name.to_owned())
+}
+
+/// Every time zone name the database knows, sorted, for a form to offer.
+pub fn time_zones() -> Vec<String> {
+    let mut names: Vec<String> = jiff::tz::db()
+        .available()
+        .map(|name| name.to_string())
+        .collect();
+    names.sort();
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,6 +96,17 @@ mod tests {
         ] {
             assert_eq!(primary_language(value), None, "{value:?}");
         }
+    }
+
+    #[test]
+    fn a_time_zone_is_spelled_as_the_database_does() {
+        assert_eq!(time_zone("Europe/Paris").as_deref(), Some("Europe/Paris"));
+        assert_eq!(time_zone(" europe/paris ").as_deref(), Some("Europe/Paris"));
+        assert_eq!(time_zone("UTC").as_deref(), Some("UTC"));
+        for value in ["", "  ", "Mars/Olympus", "+02:00", "../../etc/passwd"] {
+            assert_eq!(time_zone(value), None, "{value:?}");
+        }
+        assert!(time_zones().iter().any(|name| name == "America/New_York"));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "newsletter";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Newsletter0001, Newsletter0002]
+    vec_box![Newsletter0001, Newsletter0002, Newsletter0003]
 }
 
 pub struct Newsletter0001;
@@ -76,4 +76,16 @@ sqlx_migrator::sqlite_migration!(
             "DROP TABLE newsletter_deliveries"
         ),
     ]
+);
+
+pub struct Newsletter0003;
+sqlx_migrator::sqlite_migration!(
+    Newsletter0003,
+    "newsletter",
+    "0003_subscriber_time_zones",
+    vec_box![Newsletter0002],
+    vec_box![(
+        "ALTER TABLE newsletter_subscribers ADD COLUMN time_zone TEXT",
+        "ALTER TABLE newsletter_subscribers DROP COLUMN time_zone"
+    )]
 );

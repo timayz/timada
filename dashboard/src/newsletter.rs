@@ -144,6 +144,7 @@ async fn on_placed<E: Executor>(
                 email: order.email.clone(),
                 language: order.language.clone(),
                 source: SOURCE_CHECKOUT.to_owned(),
+                time_zone: order.time_zone.clone(),
             },
             now,
         )

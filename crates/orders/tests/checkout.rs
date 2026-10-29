@@ -457,6 +457,39 @@ async fn an_order_remembers_the_shoppers_language() {
 }
 
 #[tokio::test]
+async fn an_order_remembers_the_shoppers_time_zone() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(
+        &orders,
+        &cart,
+        Checkout {
+            time_zone: Some("america/new_york".into()),
+            ..checkout()
+        },
+    )
+    .await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.time_zone.as_deref(), Some("America/New_York"));
+
+    // A zone the database does not name is dropped.
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(
+        &orders,
+        &cart,
+        Checkout {
+            time_zone: Some("Mars/Olympus".into()),
+            ..checkout()
+        },
+    )
+    .await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.time_zone, None);
+}
+
+#[tokio::test]
 async fn an_order_remembers_the_shopper_asked_for_news() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;

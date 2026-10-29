@@ -601,6 +601,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
                 language: Some("fr-FR,fr;q=0.9".into()),
                 // Asking for the shop's news: a shopper's event too.
                 newsletter: true,
+                time_zone: None,
             },
         )
         .await

@@ -138,6 +138,14 @@ pub enum Cart {
         request_id: String,
         opted_in_by: String,
     },
+    /// The IANA time zone the shopper's browser gave (`Europe/Paris`),
+    /// written with the `CheckoutRequested` of the same request: the hours
+    /// the shop's news keep for them, should they ask for it.
+    TimeZoneGiven {
+        request_id: String,
+        time_zone: String,
+        given_by: String,
+    },
     /// What shipping the payment of a request is priced with, written with
     /// its `PaymentRequested`: the payment's total is the lines, less any
     /// discount, plus `amount_cents`.
@@ -222,6 +230,9 @@ pub enum Order {
     /// The shopper asked for the shop's news at checkout, written with
     /// `Placed`: a confirmation link goes to the order's address.
     NewsletterOptInSet { set_by: String },
+    /// The shopper's IANA time zone, written with `Placed` when their
+    /// browser gave it.
+    TimeZoneSet { time_zone: String, set_by: String },
 }
 
 /// The index `reference → order`: one stream per reference, with the

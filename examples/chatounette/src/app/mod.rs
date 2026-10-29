@@ -28,8 +28,8 @@ pub mod search;
 pub mod support_client;
 
 use timada_storefront::{
-    CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, menu,
-    product_image, products, recent_reviews,
+    CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store,
+    TIME_ZONE_SCRIPT, menu, product_image, products, recent_reviews,
 };
 use topcoat::{
     Result,
@@ -199,6 +199,7 @@ pub async fn document(
                     <script>(Unescaped::new_unchecked(MENU_SCRIPT))</script>
                 }
                 <script>(Unescaped::new_unchecked(SEARCH_SCRIPT))</script>
+                <script>(Unescaped::new_unchecked(TIME_ZONE_SCRIPT))</script>
                 <main>(child)</main>
                 site_footer()
                 if !no_drawer {

@@ -151,6 +151,7 @@ event timada-newsletter/Delivery::Failed { reason: String }
 event timada-newsletter/Subscriber::Confirmed { confirmed_by: String }
 event timada-newsletter/Subscriber::Forgotten { key_id: String, forgotten_by: String }
 event timada-newsletter/Subscriber::Requested { key_id: String, email: Vec<u8>, language: Option<String>, source: String, requested_by: String }
+event timada-newsletter/Subscriber::TimeZoneSet { time_zone: String, set_by: String }
 event timada-newsletter/Subscriber::Unsubscribed { unsubscribed_by: String }
 event timada-orders/BusinessBuyers::BusinessBuyersAccepted { accepted_by: String }
 event timada-orders/BusinessBuyers::BusinessBuyersRefused { refused_by: String }
@@ -171,6 +172,7 @@ event timada-orders/Cart::PaymentRequested { request_id: String, provider: Strin
 event timada-orders/Cart::QuantitySet { product_id: String, variant_id: Option<String>, quantity: u32, set_by: String }
 event timada-orders/Cart::ShippingGranted { request_id: String, method_id: String, name: String, amount_cents: u64, granted_by: String }
 event timada-orders/Cart::ShippingMethodChosen { request_id: String, method_id: String, chosen_by: String }
+event timada-orders/Cart::TimeZoneGiven { request_id: String, time_zone: String, given_by: String }
 event timada-orders/Order::BillingAddressSet { billing: ShippingAddress, set_by: String }
 event timada-orders/Order::Cancelled { reason: String, cancelled_by: String }
 event timada-orders/Order::Discounted { discount_id: String, code: String, subtotal_cents: u64, amount_cents: u64, discounted_by: String }
@@ -180,6 +182,7 @@ event timada-orders/Order::NewsletterOptInSet { set_by: String }
 event timada-orders/Order::Placed { reference: String, cart_id: String, email: String, shipping: ShippingAddress, note: Option<String>, lines: Vec<OrderLine>, currency: String, total_cents: u64, payment: Payment, placed_by: String }
 event timada-orders/Order::Refunded { payment_id: String, refund_id: String, amount_cents: u64, refunded_by: String }
 event timada-orders/Order::ShippingCharged { method_id: String, name: String, amount_cents: u64, charged_by: String }
+event timada-orders/Order::TimeZoneSet { time_zone: String, set_by: String }
 event timada-orders/OrderConfirmation::ConfirmationMailed { order_id: String, email: String, mailed_by: String }
 event timada-orders/OrderReference::Claimed { order_id: String }
 event timada-orders/PaymentMethod::PaymentsDisabled { disabled_by: String }
@@ -273,6 +276,7 @@ event timada-tenancy/Tenant::RoleDefined { role: String, label: String, permissi
 event timada-tenancy/Tenant::RoleRemoved { role: String }
 event timada-tenancy/Tenant::RoleUpdated { role: String, label: String, permissions: Vec<String> }
 event timada-tenancy/Tenant::Suspended { reason: String }
+event timada-tenancy/Tenant::TimeZoneSet { time_zone: String, set_by: String }
 event timada-tenancy/TenantSlug::Claimed { tenant_id: String }
 event timada-tenancy/TenantSlug::Released unit
 

@@ -66,6 +66,9 @@ impl<E: Executor> Deref for Command<E> {
 // Tenant
 // =============================================================================
 
+/// The zone of a shop that set none.
+pub const DEFAULT_TIME_ZONE: &str = "UTC";
+
 #[evento::projection(id = id, name = "timada-tenancy/TenantState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
@@ -109,6 +112,9 @@ pub struct TenantState {
     pub mail_branding: Option<MailBranding>,
     /// What the shop buys on AliExpress, once set up.
     pub aliexpress: Option<AliexpressSettings>,
+    /// Where the shop lives, once set. Read it through
+    /// [`TenantState::shop_time_zone`].
+    pub time_zone: Option<String>,
 }
 
 /// What the shop buys on AliExpress, through the platform's app and the
@@ -257,6 +263,11 @@ pub struct RoleDef {
 }
 
 impl TenantState {
+    /// Where the shop lives: the zone it set, else UTC.
+    pub fn shop_time_zone(&self) -> &str {
+        self.time_zone.as_deref().unwrap_or(DEFAULT_TIME_ZONE)
+    }
+
     pub fn is_suspended(&self) -> bool {
         self.suspended.is_some()
     }
@@ -301,6 +312,7 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
     Projection::new::<crate::aggregator::Tenant>()
         .handler(on_created())
         .handler(on_renamed())
+        .handler(on_time_zone_set())
         .handler(on_suspended())
         .handler(on_resumed())
         .handler(on_member_granted())
@@ -347,6 +359,15 @@ async fn on_created(event: Event<Created>, tenant: &mut TenantState) -> anyhow::
 #[evento::handler]
 async fn on_renamed(event: Event<Renamed>, tenant: &mut TenantState) -> anyhow::Result<()> {
     tenant.name = event.data.name.to_owned();
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_time_zone_set(
+    event: Event<crate::aggregator::TimeZoneSet>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.time_zone = Some(event.data.time_zone.to_owned());
     Ok(())
 }
 

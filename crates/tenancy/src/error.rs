@@ -10,6 +10,8 @@ pub enum TenancyError {
     InvalidName,
     #[error("tenant not found")]
     NotFound,
+    #[error("pick a time zone from the list")]
+    InvalidTimeZone,
     #[error("not allowed")]
     Forbidden,
     #[error("a publishable key starts with pk_")]
