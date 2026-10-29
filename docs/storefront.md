@@ -121,6 +121,27 @@ its own size however large the store is, and its total is the stored count. `in_
 directly under any of the ids, which is what related products use. An archived category
 is in none of this; the products that were in it stay on sale.
 
+## The shop's own pages
+
+The pages a merchant writes under `/t/{slug}/pages` (legal notice, terms of sale,
+privacy, about us; `timada-pages`) are copied into `storefront_pages` once published,
+and leave it when unpublished or deleted. A page reads one by slug and shows its HTML
+as is: the body is the merchant's Markdown turned into HTML on each read, raw HTML
+shown as text, only the page's own pictures (from `STORE_MEDIA_URL`), and the whole
+cleaned by an allow-list sanitiser.
+
+```rust
+let page = timada_storefront::require_page(cx, slug).await?; // a draft is a 404
+// page.title, page.html (cleaned), page.meta_title, page.meta_description
+let footer = timada_storefront::footer_pages(cx).await?; // [PageLink { slug, title }]
+let found = timada_storefront::search_pages(cx, "livrais", 3).await?;
+```
+
+`footer_pages` lists the published pages the merchant placed in the footer, in their
+order. `meta_title` is the page's title unless the merchant set one for search engines,
+and `meta_description` is theirs or the start of the text. `search_pages` matches a
+word of the title or text that starts with the query, accents aside, titles first.
+
 ## What a product varies by
 
 ```rust
@@ -448,6 +469,22 @@ STORE_TOKEN=tk_…
 STORE_MEDIA_URL=https://timada.localhost/media/<tenant id>
 STORE_API_URL=https://timada.localhost
 ```
+
+`--pages <dir>` also writes and publishes the shop's own pages, one Markdown file per
+page named after its slug, opening with a header:
+
+```
+---
+title: Politique de livraison
+footer: 5
+meta_description: Pays desservis, délais et frais de livraison.
+---
+Nous livrons en France, en Belgique et en Suisse…
+```
+
+(`footer` places it in the footer at that position; `meta_title` is the other optional
+key.) `examples/chatounette/pages` holds the Chatounette's six, which
+`make seed.chatounette` passes.
 
 A second run skips what is already there (by slug), so a run that stopped halfway can
 be started again. The read models of the back office catch up when the server next

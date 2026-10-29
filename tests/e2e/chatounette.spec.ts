@@ -69,6 +69,32 @@ async function createCategory(
   await expect(page.getByRole("status")).toContainText("Category created.");
 }
 
+/// Writes one of the shop's own pages in the dashboard and publishes it,
+/// placed in the footer at `footer` when given. Returns its dashboard page.
+async function publishPage(
+  page: Page,
+  slug: string,
+  title: string,
+  body: string,
+  footer?: number,
+): Promise<string> {
+  await page.goto(`/t/${slug}/pages/new`);
+  await page.locator("#page-title").fill(title);
+  await page.locator("#page-body").fill(body);
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  const url = page.url().split("?")[0];
+  if (footer !== undefined) {
+    await page.getByLabel("List it in the storefront's footer").check();
+    await page.getByLabel("Position (lowest first)").fill(String(footer));
+    await page.getByRole("button", { name: "Save footer" }).click();
+    await expect(page.getByRole("status")).toContainText("Footer saved.");
+  }
+  await page.getByRole("button", { name: "Publish" }).click();
+  await expect(page.getByRole("status")).toContainText("Published");
+  return url;
+}
+
 /// A picture on the product whose dashboard page is open.
 async function addPicture(page: Page, url: string, alt: string) {
   await page.goto(url);
@@ -89,6 +115,25 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   await registerWithEmail(page, owner);
   const { name, slug } = uniqueTenant("Chat Clone");
   await createTenant(page, name);
+
+  // The shop's own pages, written in the back office: the footer lists the
+  // ones placed in it, in their order. Written before the products, so a
+  // storefront that has the products has them too.
+  const delivery = await publishPage(
+    page,
+    slug,
+    "Politique de livraison",
+    "Livraison offerte dès **65 €**.\n\n| Étape | Délai |\n|---|---|\n| Préparation | 48 h |",
+    5,
+  );
+  await publishPage(
+    page,
+    slug,
+    "Conditions générales de vente",
+    "## Prix\n\nEn euros.",
+    2,
+  );
+  await publishPage(page, slug, "Qui sommes-nous ?", "Deux amoureux des chats.");
 
   await createCategory(page, slug, "Couchage");
   // The longer text the shop shows below a category's products.
@@ -163,9 +208,13 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   await expect(page.locator("nav.sections [data-menu-all]")).toHaveText(
     "Nos produits",
   );
-  await expect(page.locator(".sitefooter")).toContainText(
+  await expect(page.locator(".sitefooter [data-footer-pages] a")).toHaveText([
     "Conditions générales de vente",
-  );
+    "Politique de livraison",
+  ]);
+  await expect(
+    page.locator(".sitefooter").getByRole("link", { name: "Qui sommes-nous ?" }),
+  ).toHaveAttribute("href", "/pages/qui-sommes-nous");
 
   // A category: the breadcrumb, the sub-categories, the count and the
   // shop's sort labels.
@@ -387,9 +436,22 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Politique de livraison",
   );
-  await expect(
-    page.locator("[data-page=politique-de-livraison]"),
-  ).toContainText("65 €");
+  const article = page.locator("[data-page=politique-de-livraison]");
+  await expect(article.locator("strong")).toHaveText("65 €");
+  await expect(article.locator("td").last()).toHaveText("48 h");
+
+  // An edit in the back office reaches the storefront; unpublished, the
+  // page is gone.
+  await page.goto(delivery);
+  await page.locator("#page-body").fill("Livraison offerte dès **50 €**.");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Page saved.");
+  await expect(async () => {
+    await page.goto(`${app.url}/pages/politique-de-livraison`);
+    await expect(article.locator("strong")).toHaveText("50 €", {
+      timeout: 1000,
+    });
+  }).toPass({ timeout: 15_000 });
   expect((await page.goto(`${app.url}/pages/nothing-here`))?.status()).toBe(
     404,
   );

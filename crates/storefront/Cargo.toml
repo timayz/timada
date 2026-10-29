@@ -28,5 +28,6 @@ timada-reviews = { path = "../reviews" }
 timada-shoppers = { path = "../shoppers" }
 timada-newsletter = { path = "../newsletter" }
 timada-support = { path = "../support" }
+timada-pages = { path = "../pages" }
 reqwest.workspace = true
 timada-invoicing = { path = "../invoicing", features = ["pdf"] }

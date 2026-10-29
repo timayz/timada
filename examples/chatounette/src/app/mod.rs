@@ -22,8 +22,8 @@ pub mod search;
 pub mod support_client;
 
 use timada_storefront::{
-    CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, menu,
-    product_image, products, recent_reviews,
+    CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store, footer_pages,
+    menu, product_image, products, recent_reviews,
 };
 use topcoat::{
     Result,
@@ -111,6 +111,9 @@ pub async fn document(
     title: &str,
     #[default] nav: &[CategoryNode],
     #[default] no_drawer: bool,
+    /// What search engines show under the title.
+    #[default]
+    description: Option<&str>,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
     let cart = cart::current_cart(cx).await?;
@@ -141,6 +144,9 @@ pub async fn document(
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <title>(page_title)</title>
+                if let Some(description) = description {
+                    <meta name="description" content=(description)>
+                }
                 <style>(Unescaped::new_unchecked(THEME_CSS))</style>
                 <style>(Unescaped::new_unchecked(DRAWER_CSS))</style>
                 <style>(Unescaped::new_unchecked(MENU_CSS))</style>
@@ -198,11 +204,13 @@ pub async fn document(
     })
 }
 
-/// The footer: the shop, its legal pages, the useful links and how to
-/// reach it, as the live shop lays them out.
+/// The footer: the shop, the pages the merchant placed in it (its legal
+/// pages, from the back office), the useful links and how to reach it, as
+/// the live shop lays them out.
 #[topcoat::view::component]
-pub async fn site_footer() -> Result<impl View> {
+pub async fn site_footer(cx: &Cx) -> Result<impl View> {
     let page = |slug: &str| href!(pages::slug::index, pages::slug::Slug(slug.to_owned()));
+    let links = footer_pages(cx).await?;
     Ok(view! {
         <footer class="sitefooter">
             <div class="wrap">
@@ -210,16 +218,16 @@ pub async fn site_footer() -> Result<impl View> {
                     <a class="brand" href=(href!(index))>"Chat" <span>"ounette"</span></a>
                     <p>"Chatounette, l'endroit parfait pour les accessoires et jouets pour votre chat. Une boutique de démonstration : rien n'est expédié."</p>
                 </div>
-                <div>
-                    <h2>"A propos"</h2>
-                    <ul>
-                        <li><a href=(page("mentions-legales"))>"Mentions légales"</a></li>
-                        <li><a href=(page("conditions-generales-de-vente"))>"Conditions générales de vente"</a></li>
-                        <li><a href=(page("politique-de-confidentialite"))>"Politique de confidentialité"</a></li>
-                        <li><a href=(page("politique-de-remboursement"))>"Politique de remboursement"</a></li>
-                        <li><a href=(page("politique-de-livraison"))>"Politique de livraison"</a></li>
-                    </ul>
-                </div>
+                if !links.is_empty() {
+                    <div>
+                        <h2>"A propos"</h2>
+                        <ul data-footer-pages="">
+                            for link in &links {
+                                <li><a href=(page(&link.slug))>(&link.title)</a></li>
+                            }
+                        </ul>
+                    </div>
+                }
                 <div>
                     <h2>"Liens utiles"</h2>
                     <ul>

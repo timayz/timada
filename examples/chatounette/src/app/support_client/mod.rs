@@ -18,7 +18,6 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::pages::slug::StaticPage;
 use crate::app::{document, reassurance, say};
 
 /// The address the page names, and the footer with it.
@@ -61,8 +60,16 @@ pub const FAQ: &[(&str, &str)] = &[
     ),
 ];
 
-/// How the live search finds this page: its title and its questions.
-pub const SEARCH_ENTRY: StaticPage = StaticPage {
+/// What the live search matches a page of the shop's own against.
+pub struct SearchEntry {
+    pub slug: &'static str,
+    pub title: &'static str,
+    pub paragraphs: &'static [&'static str],
+}
+
+/// How the live search finds this page: its title and its questions. The
+/// other pages are the merchant's, found in the store.
+pub const SEARCH_ENTRY: SearchEntry = SearchEntry {
     slug: "support-client",
     title: "Support client",
     paragraphs: &[

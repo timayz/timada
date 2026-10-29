@@ -3,8 +3,9 @@
 //! products through the catalog's commands (copying their pictures from the
 //! snapshot into this node's media directory, or fetching from the shop the
 //! ones the snapshot lacks), gives the shop one delivery method and a
-//! promo code so a storefront can sell right away, then mints a key for
-//! that storefront and prints its settings.
+//! promo code so a storefront can sell right away, writes and publishes the
+//! shop's own pages from a directory of Markdown files when given one, then
+//! mints a key for that storefront and prints its settings.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,6 +51,11 @@ pub struct SeedArgs {
     /// Do not mint a storefront key
     #[arg(long)]
     pub no_key: bool,
+    /// A directory of the shop's own pages, one Markdown file each, published
+    /// under the file's name (see `read_pages`); a page whose address is
+    /// taken already is left alone
+    #[arg(long)]
+    pub pages: Option<PathBuf>,
 }
 
 /// The delivery method and the code the seeded shop opens with.
@@ -211,6 +217,15 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         .run_once(&platform)
         .await?;
 
+    if let Some(dir) = &args.pages {
+        let pages = timada_pages::Command::new(executor.clone(), &tenant.id);
+        let (created, skipped) = seed_pages(&pages, &owner.id, dir).await?;
+        tracing::info!(created, skipped, "pages loaded");
+        timada_pages::read_model_subscription::<Executor>(write_pool.clone())
+            .run_once(&platform)
+            .await?;
+    }
+
     let key = if args.no_key {
         None
     } else {
@@ -313,4 +328,156 @@ async fn open_shop(
         tracing::info!(code = PROMO_CODE, "promo code added");
     }
     Ok(())
+}
+
+/// One page of a `--pages` directory.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SeedPage {
+    slug: String,
+    title: String,
+    meta_title: String,
+    meta_description: String,
+    footer: Option<u32>,
+    body: String,
+}
+
+/// Reads the pages of a directory: each `{slug}.md` opens with a header
+/// between `---` lines of `key: value` (`title`, required; `meta_title`,
+/// `meta_description`, and `footer`, the position in the footer), and the
+/// Markdown body follows. In file-name order.
+fn read_pages(dir: &std::path::Path) -> Result<Vec<SeedPage>> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("cannot read {}", dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| {
+            let slug = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("cannot read {}", path.display()))?;
+            parse_page(slug, &text).with_context(|| format!("in {}", path.display()))
+        })
+        .collect()
+}
+
+fn parse_page(slug: String, text: &str) -> Result<SeedPage> {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        bail!("a page opens with a `---` header");
+    };
+    let Some((header, body)) = rest.split_once("\n---\n") else {
+        bail!("the header ends with a `---` line");
+    };
+    let mut page = SeedPage {
+        slug,
+        body: body.trim().to_owned(),
+        ..Default::default()
+    };
+    for line in header.lines().filter(|line| !line.trim().is_empty()) {
+        let Some((key, value)) = line.split_once(':') else {
+            bail!("{line:?} is not `key: value`");
+        };
+        let value = value.trim().to_owned();
+        match key.trim() {
+            "title" => page.title = value,
+            "meta_title" => page.meta_title = value,
+            "meta_description" => page.meta_description = value,
+            "footer" => {
+                page.footer = Some(
+                    value
+                        .parse()
+                        .with_context(|| format!("footer {value:?} is not a position"))?,
+                )
+            }
+            other => bail!("unknown header {other:?}"),
+        }
+    }
+    ensure!(!page.title.is_empty(), "a page has a title");
+    Ok(page)
+}
+
+/// Writes and publishes the pages of `dir`, leaving alone those whose
+/// address is taken: how many it created, and skipped.
+async fn seed_pages(
+    pages: &timada_pages::Command<Executor>,
+    actor: &str,
+    dir: &std::path::Path,
+) -> Result<(usize, usize)> {
+    let (mut created, mut skipped) = (0, 0);
+    for page in read_pages(dir)? {
+        if pages.load_page_by_slug(&page.slug).await?.is_some() {
+            skipped += 1;
+            continue;
+        }
+        let id = pages
+            .create_page(
+                actor,
+                timada_pages::CreatePage {
+                    slug: page.slug.clone(),
+                    title: page.title,
+                    body: page.body,
+                },
+            )
+            .await?;
+        pages
+            .set_page_seo(actor, &id, &page.meta_title, &page.meta_description)
+            .await?;
+        if let Some(position) = page.footer {
+            pages.show_page_in_footer(actor, &id, position).await?;
+        }
+        pages.publish_page(actor, &id).await?;
+        created += 1;
+    }
+    Ok((created, skipped))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_page_file_is_a_header_and_markdown() {
+        let page = parse_page(
+            "cgv".into(),
+            "---\ntitle: Conditions : vente\nfooter: 2\nmeta_description: Les règles.\n---\n## Prix\n\nEn euros.\n",
+        )
+        .unwrap();
+        assert_eq!(
+            page,
+            SeedPage {
+                slug: "cgv".into(),
+                title: "Conditions : vente".into(),
+                meta_title: String::new(),
+                meta_description: "Les règles.".into(),
+                footer: Some(2),
+                body: "## Prix\n\nEn euros.".into(),
+            }
+        );
+        assert!(parse_page("x".into(), "no header").is_err());
+        assert!(parse_page("x".into(), "---\nfooter: 1\n---\nbody").is_err());
+    }
+
+    #[test]
+    fn the_chatounette_pages_read() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/chatounette/pages");
+        let pages = read_pages(&dir).unwrap();
+        assert_eq!(pages.len(), 6);
+        assert!(
+            pages
+                .iter()
+                .all(|page| timada_pages::normalize_slug(&page.slug).is_ok())
+        );
+        assert_eq!(
+            pages.iter().filter(|page| page.footer.is_some()).count(),
+            5,
+            "every page but \"qui sommes-nous\" is in the footer"
+        );
+    }
 }
