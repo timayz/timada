@@ -30,6 +30,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/automations` | `timada-automations` | The scenarios a shop's team draws: a trigger, then a tree of steps, kept as a definition the editor works on (see `docs/automations.md`) |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
+| `crates/loadtest` | `timada-loadtest` | Crowds of random shoppers on a storefront over plain HTTP, paying through a stand-in for Stripe: latency, capacity and anomalies (see `docs/loadtest.md`) |
 | `crates/core` | `timada-core` | Reserved; holds no code yet |
 | `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
 | `examples/storefront` | `storefront-example` | A minimal merchant app on the library, driven by the browser suite |

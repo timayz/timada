@@ -1,4 +1,4 @@
-.PHONY: dev storefront storefront.migrate chatounette chatounette.migrate seed.chatounette snapshot.chatounette lint fmt fmt-check test check machete e2e
+.PHONY: loadtest dev storefront storefront.migrate chatounette chatounette.migrate seed.chatounette snapshot.chatounette lint fmt fmt-check test check machete e2e
 
 start: up dev
 
@@ -79,6 +79,13 @@ chatounette.migrate:
 # dex container as the OIDC provider (`make up` first).
 e2e:
 	scripts/e2e.sh
+
+# Random shoppers on the three-node cluster through the Chatounette clone,
+# on a platform made afresh under data/load (`make up` first); the arguments
+# go to timada-loadtest (`ramp` by default):
+#   make loadtest ARGS="soak --rate 5 --secs 1800"
+loadtest:
+	scripts/loadtest.sh $(ARGS)
 
 # Run Clippy linter for code quality
 lint:

@@ -1,0 +1,59 @@
+# Node 1 of the load-test cluster (`make loadtest`, scripts/loadtest.sh):
+# three nodes on this machine behind the compose Traefik, on a throwaway
+# platform that is reset before every run. Everything in here is a test
+# fixture; nothing is a secret.
+
+[server]
+url = "https://timada.localhost"
+port = 3001
+trusted_proxies = ["172.16.0.0/12"]
+
+[database]
+store = "sqlite:data/load/node1/store.db"
+read_models = "sqlite:data/load/node1/read-models.db"
+
+[media]
+dir = "data/load/node1/media"
+public_url = "https://timada.localhost/media"
+
+[data_keys]
+dir = "data/load/node1/shopper-keys"
+
+[store_api]
+listen = "0.0.0.0:4322"
+public_addr = "store.timada.localhost:4320"
+
+# Payments go to the stand-in for Stripe the load test runs, itself in front
+# of stripe-mock from compose.yml.
+[payments]
+secret_key = "load-only-payments-key-never-used-outside-the-load-test"
+stripe_api_url = "http://127.0.0.1:12112"
+
+# Every shopper comes from this one machine, so the limits are far above
+# what a run asks for.
+[store]
+shopper_codes_per_ip = 1000000
+shopper_codes_per_key = 1000000
+contact_messages_per_ip = 1000000
+contact_messages_per_key = 1000000
+newsletter_signups_per_ip = 1000000
+newsletter_signups_per_key = 1000000
+
+[auth]
+secret_key = "load-only-secret-key-never-used-outside-the-load-test"
+
+[mail]
+from = "Timada <no-reply@timada.localhost>"
+smtp_url = "smtp://localhost:1025"
+
+[secrets]
+key = "load-only-secrets-key-never-used-outside-the-load-test"
+
+[monitoring]
+log_level = "info"
+
+[cluster]
+node_id = 1
+peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
+web_peers = ["http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002"]
+secret = "load-only-cluster-secret-shared-by-the-three-nodes"
