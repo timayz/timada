@@ -180,10 +180,20 @@ const NEWSLETTER_CONFIRMATION_VARIABLES: [MailVariable; 2] = [
     },
 ];
 
-const NEWSLETTER_VARIABLES: [MailVariable; 1] = [MailVariable {
-    name: "unsubscribe_url",
-    description: "The page where the subscriber leaves the list. Every campaign links to it.",
-}];
+const NEWSLETTER_VARIABLES: [MailVariable; 2] = [
+    MailVariable {
+        name: "unsubscribe_url",
+        description: "The page where the subscriber leaves the list. Every campaign links to it.",
+    },
+    MailVariable {
+        name: "new_products",
+        description: "The products put on sale since the last edition (the last 30 days for \
+                      a campaign sent at once), newest first, at most 12, a list: \
+                      {% for product in new_products %} <a href=\"{{ product.url }}\">\
+                      {{ product.name }}</a> {{ product.price }} {% endfor %}; \
+                      {{ product.image_url }} is its first picture, when it has one.",
+    },
+];
 
 const AUTOMATION_UNSUBSCRIBE: MailVariable = MailVariable {
     name: "unsubscribe_url",
@@ -280,7 +290,13 @@ impl ShopMailKind {
             Self::OrderConfirmation | Self::ReviewRequest | Self::NewsletterConfirmation => {
                 &["link", "shop.logo_url"]
             }
-            Self::Newsletter | Self::AutomationCustomer => &["unsubscribe_url", "shop.logo_url"],
+            Self::Newsletter => &[
+                "unsubscribe_url",
+                "shop.logo_url",
+                "product.url",
+                "product.image_url",
+            ],
+            Self::AutomationCustomer => &["unsubscribe_url", "shop.logo_url"],
             Self::AutomationOrder => &["unsubscribe_url", "link", "shop.logo_url"],
         }
     }
@@ -391,6 +407,26 @@ impl ShopMailKind {
                 shop,
                 unsubscribe_url: "https://shop.example.com/newsletter/unsubscribe/sample"
                     .to_owned(),
+                new_products: if full {
+                    vec![
+                        NewProductVars {
+                            name: "Linen shirt".to_owned(),
+                            url: "https://shop.example.com/p/linen-shirt".to_owned(),
+                            price: Some("49.00 EUR".to_owned()),
+                            image_url: Some(
+                                "https://shop.example.com/media/linen-shirt.jpg".to_owned(),
+                            ),
+                        },
+                        NewProductVars {
+                            name: "Canvas tote".to_owned(),
+                            url: "https://shop.example.com/p/canvas-tote".to_owned(),
+                            price: None,
+                            image_url: None,
+                        },
+                    ]
+                } else {
+                    Vec::new()
+                },
             }),
             Self::AutomationOrder => MailVars::AutomationOrder(Box::new(AutomationOrderVars {
                 shop,
@@ -581,6 +617,21 @@ pub struct NewsletterConfirmationVars {
 pub struct NewsletterVars {
     pub shop: ShopVars,
     pub unsubscribe_url: String,
+    /// The products put on sale lately, newest first.
+    pub new_products: Vec<NewProductVars>,
+}
+
+/// A product a campaign shows, linked to its page on the storefront.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NewProductVars {
+    pub name: String,
+    /// Its page on the storefront.
+    pub url: String,
+    /// What it sells for, formatted (`49.00 EUR`, or a range); none when it
+    /// has no price.
+    pub price: Option<String>,
+    /// Its first picture, when it has one.
+    pub image_url: Option<String>,
 }
 
 /// An automated mail about an order: the order, its page on the shop when
@@ -1077,6 +1128,30 @@ mod tests {
              {% if order.billing_address %}{{ order.billing_address.city }}{% endif %}",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_campaign_lists_the_new_products_with_their_links() {
+        let html = r#"{% for product in new_products %}<a href="{{ product.url }}"><img src="{{ product.image_url }}" alt="">{{ product.name }}</a> {{ product.price }}{% endfor %}<a href="{{ unsubscribe_url }}">Leave</a>"#;
+        validate(ShopMailKind::Newsletter, "News", html).unwrap();
+        let rendered = render(
+            "News",
+            html,
+            None,
+            &ShopMailKind::Newsletter.sample(ShopVars::named("Acme")),
+        )
+        .unwrap();
+        assert!(rendered.html.contains("Linen shirt"));
+        assert!(rendered.html.contains("49.00 EUR"));
+        assert!(rendered.html.contains("linen-shirt"));
+        // Any other link must still start with https://.
+        let err = validate(
+            ShopMailKind::Newsletter,
+            "News",
+            r#"{% for product in new_products %}<a href="{{ product.name }}">x</a>{% endfor %}"#,
+        )
+        .unwrap_err();
+        assert!(err.0.contains("must start with https://"), "{}", err.0);
     }
 
     #[test]

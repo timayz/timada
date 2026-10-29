@@ -6,6 +6,17 @@
 {% endif %}
 <h1 style="font-size: 20px;">What's new at {{ shop.name }}</h1>
 <p>Write your news here.</p>
+{% if new_products %}
+<h2 style="font-size: 16px;">Just in</h2>
+<table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; border-collapse: collapse;">
+{% for product in new_products %}
+<tr>
+<td style="padding: 8px 12px 8px 0; width: 96px; vertical-align: top;">{% if product.image_url %}<a href="{{ product.url }}"><img src="{{ product.image_url }}" alt="" width="96" style="display: block; width: 96px; border-radius: 6px;"></a>{% endif %}</td>
+<td style="padding: 8px 0; vertical-align: top;"><a href="{{ product.url }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>{{ product.name }}</a>{% if product.price %}<br><span style="color: #6b7280;">{{ product.price }}</span>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
 <hr style="border: none; border-top: 1px solid #e5e7eb;">
 {% if shop.footer %}
 <p style="color: #6b7280; font-size: 12px; white-space: pre-line;">{{ shop.footer }}</p>

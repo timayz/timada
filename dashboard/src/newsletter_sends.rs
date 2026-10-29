@@ -29,6 +29,7 @@ use timada_newsletter::{
     CampaignStatus, SubscriberRow, edition_progress, open_editions, scheduled_campaigns,
     sending_campaigns, undelivered_in_zone, undelivered_subscribers,
 };
+use timada_tenancy::NewProductVars;
 use tokio::task::JoinHandle;
 use topcoat::context::{AppContext, Cx};
 
@@ -40,6 +41,41 @@ use crate::shop_mail::ShopSender;
 
 /// Who the deliveries say mailed them.
 pub const MAILER: &str = "timada-dashboard";
+
+/// The most products a campaign shows as just in.
+const NEW_PRODUCTS_SHOWN: i64 = 12;
+
+/// How far back a campaign without an earlier edition looks for new
+/// products, in seconds.
+const NEW_PRODUCTS_LOOKBACK_SECS: i64 = 30 * 24 * 3600;
+
+/// The shop's published products made after `since` (unix seconds), as a
+/// campaign shows them: linked to their page on the storefront
+/// (`{storefront}/p/{slug}`), with their first picture.
+pub async fn new_products(
+    read_pool: &SqlitePool,
+    cx: &Cx,
+    tenant: &timada_tenancy::TenantState,
+    storefront: &str,
+    since: i64,
+) -> anyhow::Result<Vec<NewProductVars>> {
+    let media = topcoat::context::app_context::<Arc<crate::media::Media>>(cx);
+    Ok(
+        timada_catalog::new_products(read_pool, &tenant.id, since, NEW_PRODUCTS_SHOWN)
+            .await?
+            .into_iter()
+            .map(|product| NewProductVars {
+                url: format!("{}/p/{}", storefront.trim_end_matches('/'), product.slug),
+                price: product.price_label(),
+                image_url: product
+                    .thumbnail
+                    .as_deref()
+                    .map(|file| media.url(&tenant.id, file)),
+                name: product.name,
+            })
+            .collect(),
+    )
+}
 
 /// The sweep, with what it needs outside any request.
 pub struct NewsletterSends {
@@ -199,6 +235,8 @@ pub async fn send_batch<E: evento::Executor + Clone>(
         html: &campaign.html,
         text: campaign.text.as_deref(),
     };
+    let since = campaign.sent_at.unwrap_or(campaign.created_at) as i64 - NEW_PRODUCTS_LOOKBACK_SECS;
+    let new_products = new_products(read_pool, cx, tenant, &storefront, since).await?;
     let out = Outgoing {
         newsletter: &newsletter,
         cx,
@@ -207,6 +245,7 @@ pub async fn send_batch<E: evento::Executor + Clone>(
         keys,
         storefront: &storefront,
         copy: &copy,
+        new_products: &new_products,
         claim: Claim::Campaign(&campaign.id),
     };
     let mailed = out.mail(&owed).await?;
@@ -248,6 +287,7 @@ struct Outgoing<'a, E: evento::Executor> {
     keys: &'a dyn Keys,
     storefront: &'a str,
     copy: &'a CampaignCopy<'a>,
+    new_products: &'a [NewProductVars],
     claim: Claim<'a>,
 }
 
@@ -302,6 +342,7 @@ impl<E: evento::Executor> Outgoing<'_, E> {
                 &subscriber.email,
                 self.copy,
                 &link,
+                self.new_products,
             )
             .await
             {
@@ -467,6 +508,16 @@ pub async fn send_edition_batch<E: evento::Executor + Clone>(
         html: &edition.html,
         text: edition.text.as_deref(),
     };
+    // New since the edition before this one opened; the first looks back a
+    // month.
+    let since = timada_newsletter::editions_of_campaign(read_pool, &tenant.id, &campaign.id, 50)
+        .await?
+        .into_iter()
+        .filter(|other| other.id != edition.id && other.opened_at < edition.opened_at as i64)
+        .map(|other| other.opened_at)
+        .max()
+        .unwrap_or(edition.opened_at as i64 - NEW_PRODUCTS_LOOKBACK_SECS);
+    let new_products = new_products(read_pool, cx, tenant, &storefront, since).await?;
     let out = Outgoing {
         newsletter: &newsletter,
         cx,
@@ -475,6 +526,7 @@ pub async fn send_edition_batch<E: evento::Executor + Clone>(
         keys,
         storefront: &storefront,
         copy: &copy,
+        new_products: &new_products,
         claim: Claim::Edition {
             campaign_id: &campaign.id,
             edition_id: &edition.id,
@@ -590,6 +642,9 @@ mod tests {
             .add_migrations(timada_newsletter::migrations())
             .unwrap();
         migrator
+            .add_migrations(timada_catalog::migrations())
+            .unwrap();
+        migrator
             .run(&mut *conn, &evento::migrator::Plan::apply_all())
             .await
             .unwrap();
@@ -598,6 +653,10 @@ mod tests {
     }
 
     async fn catch_up(store: &evento::Sqlite, pool: &SqlitePool, keys: Arc<MemoryKeys>) {
+        timada_catalog::read_model_subscription::<evento::Sqlite>(pool.clone())
+            .run_once(store)
+            .await
+            .unwrap();
         timada_newsletter::read_model_subscription::<evento::Sqlite>(
             pool.clone(),
             Arc::new(MemoryRing(keys)),
@@ -663,6 +722,13 @@ mod tests {
             .app_context(MailConfig::builder().transport(platform.clone()).build())
             .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
             .app_context(shop_mail)
+            .app_context(Arc::new(crate::media::Media::new(
+                &crate::config::MediaConfig {
+                    dir: std::env::temp_dir(),
+                    public_url: "https://media.example".to_owned(),
+                },
+                None,
+            )))
             .build();
         (cx, platform, orders, news)
     }
@@ -1026,5 +1092,79 @@ mod tests {
         assert!(open_editions(&pool).await.unwrap().is_empty());
         let state = newsletter.load_campaign(&campaign).await.unwrap().unwrap();
         assert_eq!(state.status, CampaignStatus::Sent);
+    }
+
+    #[tokio::test]
+    async fn a_campaign_shows_the_products_just_in() {
+        let (store, pool) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        subscribe(&store, &keys, "ada@example.com").await;
+        timada_orders::Command::new(store.clone(), TENANT)
+            .set_storefront_address("user-alice", Some(SHOP))
+            .await
+            .unwrap();
+        let catalog = timada_catalog::Command::new(store.clone(), TENANT);
+        let mug = catalog
+            .create_product(
+                "user-alice",
+                timada_catalog::CreateProduct {
+                    name: "Blue mug".to_owned(),
+                    slug: Some("blue-mug".to_owned()),
+                },
+            )
+            .await
+            .unwrap();
+        catalog
+            .price_product("user-alice", &mug.id, 1250, "EUR")
+            .await
+            .unwrap();
+        catalog
+            .publish_product("user-alice", &mug.id)
+            .await
+            .unwrap();
+        // A draft is not on sale: not shown.
+        catalog
+            .create_product(
+                "user-alice",
+                timada_catalog::CreateProduct {
+                    name: "Secret teapot".to_owned(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);
+        let campaign = newsletter
+            .draft_campaign(
+                "user-alice",
+                CampaignDraft {
+                    subject: "Just in".to_owned(),
+                    html: r#"{% for product in new_products %}<a href="{{ product.url }}">{{ product.name }}</a> {{ product.price }}{% endfor %}<a href="{{ unsubscribe_url }}">Leave</a>"#.to_owned(),
+                    text: None,
+                    language: None,
+                },
+            )
+            .await
+            .unwrap();
+        newsletter
+            .send_campaign("user-alice", &campaign)
+            .await
+            .unwrap();
+        catch_up(&store, &pool, keys.clone()).await;
+        let shop = shop();
+        let (cx, _, _, transport) = mail(&shop);
+        assert_eq!(
+            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 10)
+                .await
+                .unwrap(),
+            1
+        );
+        let sent = transport.sent();
+        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = wire.replace("&#x2f;", "/").replace("=\r\n", "");
+        assert!(wire.contains("Blue mug"), "{wire}");
+        assert!(wire.contains("https://shop.example/p/blue-mug"), "{wire}");
+        assert!(!wire.contains("Secret teapot"));
     }
 }

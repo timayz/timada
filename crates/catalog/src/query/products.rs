@@ -226,3 +226,27 @@ pub async fn product_by_id(
     .fetch_optional(pool)
     .await
 }
+
+/// A tenant's published products made after `since` (unix seconds), newest
+/// first: what a newsletter shows as just in.
+pub async fn new_products(
+    pool: &SqlitePool,
+    tenant_id: &str,
+    since: i64,
+    limit: i64,
+) -> sqlx::Result<Vec<ProductRow>> {
+    sqlx::query_as(
+        "SELECT tenant_id, id, slug, name, description, amount_cents, currency, status,
+            created_by, created_at, updated_at, thumbnail, image_count,
+            min_amount_cents, max_amount_cents, variant_count, stock_state
+         FROM catalog_products
+         WHERE tenant_id = ?1 AND status = 'published' AND created_at > ?2
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?3",
+    )
+    .bind(tenant_id)
+    .bind(since)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}

@@ -348,6 +348,8 @@ pub async fn campaign_editor(
                 <p class="mt-4 text-sm text-muted-foreground">
                     "Write " <code>"{{ shop.name }}"</code> " and the shop's other variables as in the shop's mails. "
                     "Every campaign links to " <code>"{{ unsubscribe_url }}"</code> ", the page where the reader leaves the list."
+                    " " <code>"{% for product in new_products %}"</code> " lists the products put on sale since the last edition, each with "
+                    <code>"{{ product.name }}"</code> ", " <code>"{{ product.price }}"</code> ", " <code>"{{ product.url }}"</code> " and " <code>"{{ product.image_url }}"</code> "."
                 </p>
             )
             campaign_preview(checked: checked)
