@@ -22,6 +22,24 @@ and the snapshot in `seeds/chatounette`):
 4. `timada-loadtest`, which also serves the stand-in for Stripe the nodes
    call (`payments.stripe_api_url`), in front of stripe-mock.
 
+Seeding takes about 35 minutes and the storefront's copy of the catalogue about
+10. Every run leaves carts, orders and invoices behind, and a platform with more
+history is slower, so two runs over the same files do not compare. Hence:
+
+- `LOAD_SNAPSHOT=1` keeps the platform as it is once seeded and the catalogue
+  copy is in, in `data/load-seeded`: the servers are stopped for the copy (every
+  database whole, the three nodes' copies agreeing), then started again for the
+  run.
+- `LOAD_REUSE=1` starts from that copy, in seconds, so every run starts from the
+  same state: change one thing, run again, and the difference is that change.
+  Without a copy it starts again over what the last run left (to measure how the
+  platform ages, on purpose).
+
+```
+LOAD_SNAPSHOT=1 make loadtest ARGS="ramp --max 3"   # once: seed, keep, short run
+LOAD_REUSE=1 make loadtest ARGS="ramp --keep-going --max 60"
+```
+
 ## What a shopper does
 
 Visits arrive at random (a Poisson process) at the step's rate whatever the

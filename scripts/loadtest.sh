@@ -13,6 +13,13 @@
 #   scripts/loadtest.sh ramp --start 2 --factor 1.5 --step-secs 60
 #   scripts/loadtest.sh soak --rate 5 --secs 1800
 #
+# Every run leaves carts, orders and invoices behind, so the next one would
+# start from a bigger platform. LOAD_SNAPSHOT=1 keeps the platform as it is
+# once seeded and the storefront's catalogue is in (data/load-seeded:
+# the servers are stopped for the copy, then started again), and
+# LOAD_REUSE=1 starts from that copy instead of seeding, so runs compare.
+# Without a copy, LOAD_REUSE=1 starts again over what the last run left.
+#
 # The nodes' and the storefront's logs, and the report, stay in data/load.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -42,10 +49,14 @@ fi
 topcoat asset bundle -p timada-dashboard --profile "$profile"
 cargo build --profile "$profile" -p timada-dashboard -p chatounette-example -p timada-loadtest
 
-# LOAD_REUSE=1 keeps the platform a run made (seeding takes a while) and
-# starts its three nodes over it again.
+seeded=data/load-seeded
 reuse=""
-if [ "${LOAD_REUSE:-}" = 1 ] && [ -s data/load/seed.env ]; then
+if [ "${LOAD_REUSE:-}" = 1 ] && [ -s "$seeded/seed.env" ]; then
+  reuse=1
+  rm -rf data/load
+  cp -a "$seeded" data/load
+  echo "starting from the copy in $seeded" >&2
+elif [ "${LOAD_REUSE:-}" = 1 ] && [ -s data/load/seed.env ]; then
   reuse=1
   rm -f data/load/report.json
 else
@@ -53,11 +64,13 @@ else
   mkdir -p data/load
 fi
 pids=()
-cleanup() {
+# Stops every server this script started, and waits until they are gone.
+stop_platform() {
   for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
-  wait 2>/dev/null || true
+  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+  pids=()
 }
-trap cleanup EXIT
+trap stop_platform EXIT
 
 # Waits for $1 to answer, for up to $2 seconds.
 wait_for() {
@@ -75,9 +88,11 @@ node() {
 # a function sent to the background is a subshell, and killing it would
 # leave the server running.
 serve() {
-  "$bin/timada-dashboard" --config "config/load-node$1.toml" serve >"data/load/node$1.log" 2>&1 &
+  "$bin/timada-dashboard" --config "config/load-node$1.toml" serve >>"data/load/node$1.log" 2>&1 &
   pids+=($!)
+  node_pid[$1]=$!
 }
+declare -A node_pid
 
 # A server left from an earlier run would take the ports and answer instead.
 for port in 3000 3001 3002 3457 4321 4322 4323 7000 7001 7002 12112; do
@@ -87,35 +102,6 @@ for port in 3000 3001 3002 3457 4321 4322 4323 7000 7001 7002 12112; do
   fi
 done
 
-if [ -z "$reuse" ]; then
-  for i in 0 1 2; do node "$i" migrate >/dev/null; done
-fi
-serve 1
-serve 2
-wait_for http://127.0.0.1:3001/auth/login 60
-wait_for http://127.0.0.1:3002/auth/login 60
-
-if [ -z "$reuse" ]; then
-  # The seed logs on stdout too: only its STORE_* lines are settings.
-  if ! node 0 seed --snapshot seeds/chatounette --tenant Chatounette \
-    --owner load@example.org --owner-password load-test-password \
-    --storefront-url "$target" --pages examples/chatounette/pages \
-    --test-payments >data/load/seed.out 2>&1; then
-    echo "the seed failed: see data/load/seed.out" >&2
-    exit 1
-  fi
-  grep '^STORE_' data/load/seed.out >data/load/seed.env
-fi
-set -a
-# shellcheck disable=SC1091
-. data/load/seed.env
-set +a
-
-serve 0
-wait_for http://127.0.0.1:3000/auth/login 60
-wait_for "$dashboard/auth/login" 30
-
-[ -f data/load/chatounette.db ] || STORE_DB=data/load/chatounette.db "$bin/chatounette" migrate >/dev/null
 # The storefront gives up when the store is not answering yet (nodes just
 # started, waiting for one another): it is started again until it stays up.
 start_storefront() {
@@ -127,44 +113,92 @@ start_storefront() {
     "$bin/chatounette" >>data/load/chatounette.log 2>&1 &
   storefront=$!
 }
-for _ in $(seq 30); do
-  start_storefront
-  sleep 3
-  if kill -0 "$storefront" 2>/dev/null; then break; fi
-done
-if ! kill -0 "$storefront" 2>/dev/null; then
-  echo "the storefront does not start: see data/load/chatounette.log" >&2
-  exit 1
-fi
-pids+=("$storefront")
 
-# The storefront's copy of the catalogue fills from the store, a while for
-# a whole snapshot: the run starts once it stops growing.
 products() {
   sqlite3 data/load/chatounette.db "SELECT count(*) FROM storefront_products" 2>/dev/null || echo 0
 }
-last=-1
-still=0
-for _ in $(seq 720); do
-  count=$(products)
-  if [ "$count" -gt 0 ] && [ "$count" = "$last" ]; then
-    still=$((still + 1))
-    if [ "$still" -ge 4 ]; then break; fi
-  else
-    still=0
-    echo "storefront: $count products" >&2
+
+# Starts the three nodes (migrating and seeding a fresh platform), then the
+# storefront, and returns once its copy of the catalogue stops growing.
+start_platform() {
+  if [ -z "$reuse" ]; then
+    for i in 0 1 2; do node "$i" migrate >/dev/null; done
   fi
-  last=$count
-  sleep 5
-done
-if [ "$still" -lt 4 ]; then
-  echo "the storefront's catalogue is still filling after an hour: see data/load/chatounette.log" >&2
-  exit 1
+  serve 1
+  serve 2
+  wait_for http://127.0.0.1:3001/auth/login 60
+  wait_for http://127.0.0.1:3002/auth/login 60
+
+  if [ -z "$reuse" ]; then
+    # The seed logs on stdout too: only its STORE_* lines are settings.
+    if ! node 0 seed --snapshot seeds/chatounette --tenant Chatounette \
+      --owner load@example.org --owner-password load-test-password \
+      --storefront-url "$target" --pages examples/chatounette/pages \
+      --test-payments >data/load/seed.out 2>&1; then
+      echo "the seed failed: see data/load/seed.out" >&2
+      exit 1
+    fi
+    grep '^STORE_' data/load/seed.out >data/load/seed.env
+  fi
+  set -a
+  # shellcheck disable=SC1091
+  . data/load/seed.env
+  set +a
+
+  serve 0
+  wait_for http://127.0.0.1:3000/auth/login 60
+  wait_for "$dashboard/auth/login" 30
+
+  [ -f data/load/chatounette.db ] || STORE_DB=data/load/chatounette.db "$bin/chatounette" migrate >/dev/null
+  for _ in $(seq 30); do
+    start_storefront
+    sleep 3
+    if kill -0 "$storefront" 2>/dev/null; then break; fi
+  done
+  if ! kill -0 "$storefront" 2>/dev/null; then
+    echo "the storefront does not start: see data/load/chatounette.log" >&2
+    exit 1
+  fi
+  pids+=("$storefront")
+
+  # The storefront's copy of the catalogue fills from the store, a while for
+  # a whole snapshot: the run starts once it stops growing.
+  last=-1
+  still=0
+  for _ in $(seq 720); do
+    count=$(products)
+    if [ "$count" -gt 0 ] && [ "$count" = "$last" ]; then
+      still=$((still + 1))
+      if [ "$still" -ge 4 ]; then break; fi
+    else
+      still=0
+      echo "storefront: $count products" >&2
+    fi
+    last=$count
+    sleep 5
+  done
+  if [ "$still" -lt 4 ]; then
+    echo "the storefront's catalogue is still filling after an hour: see data/load/chatounette.log" >&2
+    exit 1
+  fi
+}
+
+start_platform
+
+if [ "${LOAD_SNAPSHOT:-}" = 1 ]; then
+  # The files are copied with the servers stopped, so every database is
+  # whole and the three nodes' copies agree; then the run starts over them.
+  stop_platform
+  rm -rf "$seeded"
+  cp -a data/load "$seeded"
+  rm -f "$seeded"/*.log "$seeded"/report.json
+  echo "platform kept in $seeded" >&2
+  reuse=1
+  start_platform
 fi
 
-# pids[0..1] are nodes 1 and 2, pids[2] node 0.
 watch=(
-  --watch "node1=${pids[0]}" --watch "node2=${pids[1]}" --watch "node0=${pids[2]}"
+  --watch "node0=${node_pid[0]}" --watch "node1=${node_pid[1]}" --watch "node2=${node_pid[2]}"
   --watch "storefront=$storefront"
 )
 # Traefik ends the TLS of every request: watched too, from its container's
