@@ -27,10 +27,12 @@ Seeding takes about 35 minutes and the storefront's copy of the catalogue about
 history is slower, so two runs over the same files do not compare. Hence:
 
 - `LOAD_SNAPSHOT=1` keeps the platform as it is once seeded and the catalogue
-  copy is in, in `data/load-seeded`: the servers are stopped for the copy (every
-  database whole, the three nodes' copies agreeing), then started again for the
-  run.
-- `LOAD_REUSE=1` starts from that copy, in seconds, so every run starts from the
+  copy is in, in `data/load-snapshot`: one `timada-dashboard snapshot save` per
+  node with the servers stopped (every database whole, the three nodes' copies
+  agreeing; node 0's also holds the storefront's database and the seed's
+  settings), then the servers start again for the run.
+- `LOAD_REUSE=1` starts from that copy (`snapshot restore --all-nodes` on every
+  node), in seconds, so every run starts from the
   same state: change one thing, run again, and the difference is that change.
   Without a copy it starts again over what the last run left (to measure how the
   platform ages, on purpose).

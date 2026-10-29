@@ -15,9 +15,10 @@
 #
 # Every run leaves carts, orders and invoices behind, so the next one would
 # start from a bigger platform. LOAD_SNAPSHOT=1 keeps the platform as it is
-# once seeded and the storefront's catalogue is in (data/load-seeded:
-# the servers are stopped for the copy, then started again), and
-# LOAD_REUSE=1 starts from that copy instead of seeding, so runs compare.
+# once seeded and the storefront's catalogue is in (data/load-snapshot, one
+# `timada-dashboard snapshot` per node: the servers are stopped for it, then
+# started again), and LOAD_REUSE=1 starts from that copy instead of seeding,
+# so runs compare.
 # Without a copy, LOAD_REUSE=1 starts again over what the last run left.
 #
 # The nodes' and the storefront's logs, and the report, stay in data/load.
@@ -49,13 +50,28 @@ fi
 topcoat asset bundle -p timada-dashboard --profile "$profile"
 cargo build --profile "$profile" -p timada-dashboard -p chatounette-example -p timada-loadtest
 
-seeded=data/load-seeded
+node() {
+  "$bin/timada-dashboard" --config "config/load-node$1.toml" "${@:2}"
+}
+
+# One `timada-dashboard snapshot` per node; node 0's also holds the
+# storefront's database and the seed's settings.
+kept=data/load-snapshot
+storefront_files=(--also data/load/chatounette.db --also data/load/seed.env)
+
 reuse=""
-if [ "${LOAD_REUSE:-}" = 1 ] && [ -s "$seeded/seed.env" ]; then
+if [ "${LOAD_REUSE:-}" = 1 ] && [ -s "$kept/node0/also/seed.env" ]; then
   reuse=1
   rm -rf data/load
-  cp -a "$seeded" data/load
-  echo "starting from the copy in $seeded" >&2
+  mkdir -p data/load
+  # Every node from copies taken together, all stopped (the ports are
+  # checked below, before anything starts).
+  for i in 0 1 2; do
+    extra=()
+    [ "$i" = 0 ] && extra=("${storefront_files[@]}")
+    node "$i" snapshot restore "$kept/node$i" --all-nodes "${extra[@]}" >/dev/null
+  done
+  echo "starting from the copy in $kept" >&2
 elif [ "${LOAD_REUSE:-}" = 1 ] && [ -s data/load/seed.env ]; then
   reuse=1
   rm -f data/load/report.json
@@ -78,10 +94,6 @@ wait_for() {
     echo "$1 did not answer: see data/load/*.log" >&2
     exit 1
   fi
-}
-
-node() {
-  "$bin/timada-dashboard" --config "config/load-node$1.toml" "${@:2}"
 }
 
 # Starts node $1 in the background. The binary itself, not through `node`:
@@ -134,11 +146,10 @@ start_platform() {
     if ! node 0 seed --snapshot seeds/chatounette --tenant Chatounette \
       --owner load@example.org --owner-password load-test-password \
       --storefront-url "$target" --pages examples/chatounette/pages \
-      --test-payments >data/load/seed.out 2>&1; then
+      --test-payments --env-file data/load/seed.env >data/load/seed.out 2>&1; then
       echo "the seed failed: see data/load/seed.out" >&2
       exit 1
     fi
-    grep '^STORE_' data/load/seed.out >data/load/seed.env
   fi
   set -a
   # shellcheck disable=SC1091
@@ -189,10 +200,12 @@ if [ "${LOAD_SNAPSHOT:-}" = 1 ]; then
   # The files are copied with the servers stopped, so every database is
   # whole and the three nodes' copies agree; then the run starts over them.
   stop_platform
-  rm -rf "$seeded"
-  cp -a data/load "$seeded"
-  rm -f "$seeded"/*.log "$seeded"/report.json
-  echo "platform kept in $seeded" >&2
+  for i in 0 1 2; do
+    extra=()
+    [ "$i" = 0 ] && extra=("${storefront_files[@]}")
+    node "$i" snapshot save "$kept/node$i" --replace "${extra[@]}" >/dev/null
+  done
+  echo "platform kept in $kept" >&2
   reuse=1
   start_platform
 fi
