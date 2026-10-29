@@ -1,10 +1,16 @@
 //! `/t/{slug}/newsletter/campaigns/{campaign_id}`: one campaign. A draft is
-//! written here by members with `newsletter:manage`, and sent from
-//! [`send`]; one sent shows how far it went out, and its copy.
+//! written here by members with `newsletter:manage`, scheduled from
+//! [`schedule`] and sent (or its schedule started) from [`send`]; one sent
+//! shows how far it went out, and its copy. A scheduled one keeps its
+//! editor, for the editions to come, and lists its editions.
 
+pub mod schedule;
 pub mod send;
 
-use timada_newsletter::{CampaignDraft, CampaignState, CampaignStatus, campaign_row};
+use timada_newsletter::{
+    CampaignDraft, CampaignState, CampaignStatus, campaign_row, count_audience,
+    editions_of_campaign,
+};
 use timada_tenancy::{PERMISSION_NEWSLETTER_MANAGE, PERMISSION_NEWSLETTER_READ};
 use topcoat::{
     Result,
@@ -14,7 +20,7 @@ use topcoat::{
         error::{not_found, see_other},
         href, module_param, page, path_param, query_params,
     },
-    view::{View, view},
+    view::{View, attributes, view},
 };
 
 use super::{
@@ -23,9 +29,15 @@ use super::{
 };
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
-use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::components::table::{
+    table, table_body, table_cell, table_head, table_header, table_row,
+};
 use crate::db::ReadPool;
-use crate::ui::{Shell, document, fact, facts, format_time, notice, page_header, section_card};
+use crate::ui::{
+    Shell, Tone, document, fact, facts, format_time, notice, page_header, section_card,
+    status_badge,
+};
 
 module_param!(pub campaign_id);
 
@@ -82,14 +94,44 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let draft = draft_of(&campaign);
     let checked = preview(cx, &access.tenant, &draft);
-    let row = campaign_row(app_context::<ReadPool>(cx), &access.tenant.id, &campaign.id)
+    let pool = app_context::<ReadPool>(cx);
+    let row = campaign_row(pool, &access.tenant.id, &campaign.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let (delivered, failed) = row.map_or((0, 0), |row| (row.delivered, row.failed));
+    let editions = editions_of_campaign(pool, &access.tenant.id, &campaign.id, 50)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let audience = count_audience(pool, &access.tenant.id, campaign.language.as_deref())
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let tenant = access.tenant;
     let slug = tenant.slug.clone();
     let title = format!("{} · Newsletter · {}", campaign.subject, tenant.name);
-    let editable = can_manage && campaign.status == CampaignStatus::Draft;
+    let editable = can_manage && campaign.is_editable();
+    let is_draft = campaign.status == CampaignStatus::Draft;
+    let is_scheduled = campaign.status == CampaignStatus::Scheduled;
+    let shop_zone = tenant.shop_time_zone().to_owned();
+    let today = schedule::shop_today(&shop_zone);
+    let plan = campaign.schedule.as_ref().map(|current| {
+        (
+            schedule::describe(current, &shop_zone),
+            schedule::pacing(current, audience),
+            schedule::upcoming(current, today),
+        )
+    });
+    let schedule_link = href!(
+        schedule::schedule,
+        Slug(slug.clone()),
+        CampaignId(campaign.id.clone())
+    )
+    .resolve(cx);
+    let stop = href!(
+        schedule::save,
+        Slug(slug.clone()),
+        CampaignId(campaign.id.clone())
+    )
+    .resolve(cx);
     let action = href!(submit, Slug(slug.clone()), CampaignId(campaign.id.clone())).resolve(cx);
     let back = campaigns_url(cx, &slug, None, None);
     let send = href!(
@@ -107,10 +149,73 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 subtitle: Some(status_label(campaign.status)),
                 <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(back)>"Back to Campaigns"</a>
                 if editable {
-                    <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Sm)) href=(send)>"Send…"</a>
+                    <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(&schedule_link) data-schedule-link="">
+                        (if campaign.schedule.is_some() { "Change the schedule…" } else { "Schedule…" })
+                    </a>
+                }
+                if editable && is_draft {
+                    <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Sm)) href=(send)>
+                        (if campaign.schedule.is_some() { "Start the schedule…" } else { "Send…" })
+                    </a>
+                }
+                if can_manage && is_scheduled {
+                    <form method="post" action=(&stop)>
+                        <input type="hidden" name="action" value="stop">
+                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop the schedule")
+                    </form>
                 }
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
+            if let Some((summary, pacing, next)) = &plan {
+                section_card(
+                    title: Some("Schedule"),
+                    attrs: attributes! { data-campaign-schedule="" },
+                    <p class="text-sm" data-schedule-summary="">(summary)</p>
+                    <p class="mt-1 text-sm text-muted-foreground" data-schedule-pacing="">(pacing)</p>
+                    if !next.is_empty() && (is_draft || is_scheduled) {
+                        <p class="mt-1 text-sm text-muted-foreground" data-schedule-next="">"Next: " (next.join(", "))</p>
+                    }
+                    if is_scheduled {
+                        <p class="mt-1 text-sm text-muted-foreground">"Changes to the copy go out with the next edition."</p>
+                    }
+                )
+            }
+            if !editions.is_empty() {
+                section_card(
+                    title: Some("Editions"),
+                    table(
+                        table_header(
+                            table_row(
+                                table_head("Cycle")
+                                table_head("Opened")
+                                table_head("Mailed")
+                                table_head("Status")
+                            )
+                        )
+                        table_body(
+                            for edition in &editions {
+                                table_row(
+                                    attrs: attributes! { data-edition=(&edition.cycle) data-edition-status=(&edition.status) },
+                                    table_cell((&edition.cycle))
+                                    table_cell(<time datetime=(edition.opened_at)>(format_time(edition.opened_at as u64))</time>)
+                                    table_cell(
+                                        attrs: attributes! { data-edition-delivered=(edition.delivered) },
+                                        (edition.delivered)
+                                        if edition.failed > 0 { " (" (edition.failed) " failed)" }
+                                    )
+                                    table_cell(
+                                        if edition.status == "open" {
+                                            status_badge(tone: Tone::Warning, "Going out")
+                                        } else {
+                                            status_badge(tone: Tone::Success, "Done")
+                                        }
+                                    )
+                                )
+                            }
+                        )
+                    )
+                )
+            }
             if editable {
                 campaign_editor(tenant: &tenant, action: action, draft: &draft, checked: &checked)
             } else {

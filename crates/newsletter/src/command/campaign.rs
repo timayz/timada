@@ -1,7 +1,11 @@
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
-use crate::aggregator::{Claimed, Drafted, Edited, Failed, Finished, SendRequested};
+use crate::aggregator::{
+    Claimed, ClaimedForEdition, Drafted, Edited, Failed, Finished, ScheduleActivated,
+    ScheduleCleared, ScheduleSet, ScheduleStopped, SendRequested,
+};
 use crate::error::NewsletterError;
+use crate::schedule::{Cadence, Schedule, parse_day};
 use crate::value_object::{
     CampaignStatus, MAX_CAMPAIGN_BODY_LEN, MAX_CAMPAIGN_SUBJECT_LEN, delivery_id, new_campaign_id,
 };
@@ -77,6 +81,21 @@ pub struct CampaignState {
     pub finished_at: Option<u64>,
     /// Unix seconds of the last event.
     pub updated_at: u64,
+    /// When it goes out, once scheduled; none goes out at once.
+    pub schedule: Option<Schedule>,
+    /// Unix seconds of `ScheduleActivated`.
+    pub activated_at: Option<u64>,
+}
+
+impl CampaignState {
+    /// Whether its copy may still change: a draft, or a scheduled campaign
+    /// (whose next editions take the new copy).
+    pub fn is_editable(&self) -> bool {
+        matches!(
+            self.status,
+            CampaignStatus::Draft | CampaignStatus::Scheduled
+        )
+    }
 }
 
 pub fn campaign_projection<E: Executor>() -> Projection<E, CampaignState> {
@@ -85,7 +104,69 @@ pub fn campaign_projection<E: Executor>() -> Projection<E, CampaignState> {
         .handler(on_edited())
         .handler(on_send_requested())
         .handler(on_finished())
+        .handler(on_schedule_set())
+        .handler(on_schedule_cleared())
+        .handler(on_schedule_activated())
+        .handler(on_schedule_stopped())
         .strict()
+}
+
+/// The schedule an event records; a value no longer read is dropped, so
+/// the campaign stays loadable.
+fn schedule_of(data: &ScheduleSet) -> Option<Schedule> {
+    Some(Schedule {
+        cadence: Cadence::parse(&data.cadence)?,
+        weekdays: data.weekdays.clone(),
+        month_day: data.month_day,
+        starts_on: parse_day(&data.starts_on)?,
+        ends_on: data.ends_on.as_deref().and_then(parse_day),
+        window_start: data.window_start,
+        window_end: data.window_end,
+        pace_minutes: data.pace_minutes,
+    })
+}
+
+#[evento::handler]
+async fn on_schedule_set(
+    event: Event<ScheduleSet>,
+    state: &mut CampaignState,
+) -> anyhow::Result<()> {
+    state.schedule = schedule_of(&event.data);
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_schedule_cleared(
+    event: Event<ScheduleCleared>,
+    state: &mut CampaignState,
+) -> anyhow::Result<()> {
+    state.schedule = None;
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_schedule_activated(
+    event: Event<ScheduleActivated>,
+    state: &mut CampaignState,
+) -> anyhow::Result<()> {
+    state.status = CampaignStatus::Scheduled;
+    state.activated_at = Some(event.timestamp);
+    state.sent_at = Some(event.timestamp);
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_schedule_stopped(
+    event: Event<ScheduleStopped>,
+    state: &mut CampaignState,
+) -> anyhow::Result<()> {
+    state.status = CampaignStatus::Stopped;
+    state.finished_at = Some(event.timestamp);
+    state.updated_at = event.timestamp;
+    Ok(())
 }
 
 #[evento::handler]
@@ -139,6 +220,8 @@ async fn on_finished(event: Event<Finished>, state: &mut CampaignState) -> anyho
 pub struct DeliveryState {
     pub id: String,
     pub campaign_id: String,
+    /// The edition of a scheduled campaign it was claimed for.
+    pub edition_id: Option<String>,
     pub subscriber_id: String,
     pub failed: Option<String>,
     /// Unix seconds of `Claimed`.
@@ -148,6 +231,7 @@ pub struct DeliveryState {
 pub fn delivery_projection<E: Executor>() -> Projection<E, DeliveryState> {
     Projection::new::<crate::aggregator::Delivery>()
         .handler(on_claimed())
+        .handler(on_claimed_for_edition())
         .handler(on_failed())
         .strict()
 }
@@ -156,6 +240,19 @@ pub fn delivery_projection<E: Executor>() -> Projection<E, DeliveryState> {
 async fn on_claimed(event: Event<Claimed>, state: &mut DeliveryState) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
     state.campaign_id = event.data.campaign_id.to_owned();
+    state.subscriber_id = event.data.subscriber_id.to_owned();
+    state.claimed_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_claimed_for_edition(
+    event: Event<ClaimedForEdition>,
+    state: &mut DeliveryState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.campaign_id = event.data.campaign_id.to_owned();
+    state.edition_id = Some(event.data.edition_id.to_owned());
     state.subscriber_id = event.data.subscriber_id.to_owned();
     state.claimed_at = event.timestamp;
     Ok(())
@@ -194,8 +291,8 @@ impl<E: Executor> super::Command<E> {
         Ok(id)
     }
 
-    /// Rewrites a draft, whole; one sent already is
-    /// [`NewsletterError::CampaignSent`].
+    /// Rewrites a draft (or a scheduled campaign, for its editions to
+    /// come), whole; one sent already is [`NewsletterError::CampaignSent`].
     pub async fn edit_campaign(
         &self,
         actor: &str,
@@ -205,7 +302,7 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<(), NewsletterError> {
         let draft = draft.check()?;
         let state = self.require_campaign(campaign_id).await?;
-        if state.status != CampaignStatus::Draft {
+        if !state.is_editable() {
             return Err(NewsletterError::CampaignSent);
         }
         state
@@ -253,7 +350,8 @@ impl<E: Executor> super::Command<E> {
         }
     }
 
-    /// Records that every subscriber was mailed; finished already is a no-op.
+    /// Records that every subscriber was mailed, or that a scheduled
+    /// campaign's last edition went out; finished already is a no-op.
     pub async fn finish_campaign(
         &self,
         actor: &str,
@@ -261,7 +359,10 @@ impl<E: Executor> super::Command<E> {
         routing_key: Option<String>,
     ) -> Result<(), NewsletterError> {
         let state = self.require_campaign(campaign_id).await?;
-        if state.status != CampaignStatus::Sending {
+        if !matches!(
+            state.status,
+            CampaignStatus::Sending | CampaignStatus::Scheduled
+        ) {
             return Ok(());
         }
         match state
@@ -277,6 +378,150 @@ impl<E: Executor> super::Command<E> {
             // Finished by another node at the same moment.
             Ok(_) | Err(WriteError::InvalidOriginalVersion) => Ok(()),
             Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Sets when a draft (or a scheduled campaign, for its editions to come)
+    /// goes out. `today` is the shop's day: a schedule may not start before
+    /// it. A campaign sent or stopped is [`NewsletterError::CampaignSent`].
+    pub async fn set_schedule(
+        &self,
+        actor: &str,
+        campaign_id: &str,
+        schedule: Schedule,
+        today: jiff::civil::Date,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        let mut schedule = schedule;
+        schedule.weekdays.sort_unstable();
+        schedule.weekdays.dedup();
+        let state = self.require_campaign(campaign_id).await?;
+        if !state.is_editable() {
+            return Err(NewsletterError::CampaignSent);
+        }
+        // A running schedule keeps its start: only its days to come change.
+        let today = match (state.status, &state.schedule) {
+            (CampaignStatus::Scheduled, Some(current)) => today.min(current.starts_on),
+            _ => today,
+        };
+        schedule.validate(today)?;
+        if state.schedule.as_ref() == Some(&schedule) {
+            return Ok(());
+        }
+        state
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&ScheduleSet {
+                cadence: schedule.cadence.as_str().to_owned(),
+                weekdays: schedule.weekdays.clone(),
+                month_day: schedule.month_day,
+                starts_on: schedule.starts_on.to_string(),
+                ends_on: schedule.ends_on.map(|day| day.to_string()),
+                window_start: schedule.window_start,
+                window_end: schedule.window_end,
+                pace_minutes: schedule.pace_minutes,
+                set_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(())
+    }
+
+    /// Drops a draft's schedule: sent, it goes out at once. Without one is
+    /// a no-op; a campaign no longer a draft is
+    /// [`NewsletterError::CampaignSent`].
+    pub async fn clear_schedule(
+        &self,
+        actor: &str,
+        campaign_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        let state = self.require_campaign(campaign_id).await?;
+        if state.status != CampaignStatus::Draft {
+            return Err(NewsletterError::CampaignSent);
+        }
+        if state.schedule.is_none() {
+            return Ok(());
+        }
+        state
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&ScheduleCleared {
+                cleared_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(())
+    }
+
+    /// Starts a draft's schedule: from now on its cycles go out, and the
+    /// campaign can only be edited for the editions to come. Without a
+    /// schedule is [`NewsletterError::NotScheduled`]; one whose days are
+    /// all past now (`today`, the shop's) is
+    /// [`NewsletterError::InvalidSchedule`].
+    pub async fn activate_schedule(
+        &self,
+        actor: &str,
+        campaign_id: &str,
+        today: jiff::civil::Date,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        let state = self.require_campaign(campaign_id).await?;
+        if state.status != CampaignStatus::Draft {
+            return Err(NewsletterError::CampaignSent);
+        }
+        let schedule = state
+            .schedule
+            .as_ref()
+            .ok_or(NewsletterError::NotScheduled)?;
+        schedule.validate(today)?;
+        match state
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&ScheduleActivated {
+                activated_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(WriteError::InvalidOriginalVersion) => Err(NewsletterError::CampaignSent),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Stops a scheduled campaign: no edition opens any more and one going
+    /// out mails nobody else. Not running is
+    /// [`NewsletterError::NotScheduled`].
+    pub async fn stop_schedule(
+        &self,
+        actor: &str,
+        campaign_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        loop {
+            let state = self.require_campaign(campaign_id).await?;
+            if state.status != CampaignStatus::Scheduled {
+                return Err(NewsletterError::NotScheduled);
+            }
+            match state
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&ScheduleStopped {
+                    stopped_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await
+            {
+                Ok(_) => return Ok(()),
+                // Edited meanwhile: decide again on the fresh state.
+                Err(WriteError::InvalidOriginalVersion) => continue,
+                Err(err) => return Err(err.into()),
+            }
         }
     }
 
@@ -308,7 +553,38 @@ impl<E: Executor> super::Command<E> {
         }
     }
 
-    /// Records that a claimed mail could not be handed over.
+    /// Takes the mailing of an edition to a subscriber, before it goes out.
+    /// Returns whether this caller took it.
+    pub async fn claim_edition_delivery(
+        &self,
+        actor: &str,
+        campaign_id: &str,
+        edition_id: &str,
+        subscriber_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<bool, NewsletterError> {
+        let claimed = evento::append(delivery_id(edition_id, subscriber_id))
+            .original_version(0)
+            .routing_key_opt(routing_key)
+            .event(&ClaimedForEdition {
+                campaign_id: campaign_id.to_owned(),
+                edition_id: edition_id.to_owned(),
+                subscriber_id: subscriber_id.to_owned(),
+                claimed_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        match claimed {
+            Ok(_) => Ok(true),
+            Err(WriteError::InvalidOriginalVersion) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Records that a claimed mail could not be handed over. `campaign_id`
+    /// is what the mail was claimed for: the campaign, or the edition of a
+    /// scheduled one.
     pub async fn fail_delivery(
         &self,
         campaign_id: &str,

@@ -26,6 +26,12 @@ pub enum NewsletterError {
     /// Sent (or going out): it can no longer be edited or sent again.
     #[error("the campaign was sent already")]
     CampaignSent,
+    #[error("the schedule does not hold together")]
+    InvalidSchedule,
+    /// Starting or stopping a schedule the campaign does not have (or no
+    /// longer runs).
+    #[error("the campaign has no schedule to run")]
+    NotScheduled,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -57,6 +63,8 @@ impl NewsletterError {
             Self::InvalidBody => CAMPAIGN_INVALID_BODY,
             Self::CampaignNotFound => CAMPAIGN_NOT_FOUND,
             Self::CampaignSent => CAMPAIGN_SENT,
+            Self::InvalidSchedule => CAMPAIGN_INVALID_SCHEDULE,
+            Self::NotScheduled => CAMPAIGN_NOT_SCHEDULED,
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })
@@ -74,6 +82,8 @@ pub const CAMPAIGN_INVALID_SUBJECT: &str = "campaign_invalid_subject";
 pub const CAMPAIGN_INVALID_BODY: &str = "campaign_invalid_body";
 pub const CAMPAIGN_NOT_FOUND: &str = "campaign_not_found";
 pub const CAMPAIGN_SENT: &str = "campaign_sent";
+pub const CAMPAIGN_INVALID_SCHEDULE: &str = "campaign_invalid_schedule";
+pub const CAMPAIGN_NOT_SCHEDULED: &str = "campaign_not_scheduled";
 /// The shop has not said where its storefront lives, so no confirmation link
 /// can be mailed; not a refusal of the newsletter context itself.
 pub const NEWSLETTER_UNAVAILABLE: &str = "newsletter_unavailable";

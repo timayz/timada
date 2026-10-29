@@ -193,6 +193,10 @@ pub fn describe_error(code: &str) -> &'static str {
         "page_not_found" => "This page does not exist.",
         "page_image_not_found" => "This picture is no longer on the page.",
         "campaign_sent" => "This campaign was sent already: it can no longer be changed.",
+        "campaign_invalid_schedule" => {
+            "This schedule does not hold together: pick at least one day (every week), a day 1 to 28 (every month), an end time after the start time, and dates from today on."
+        }
+        "campaign_not_scheduled" => "This campaign has no schedule running.",
         "scenario_invalid_name" => "A scenario's name is 1 to 80 characters.",
         "scenario_not_found" => "There is no such scenario.",
         "scenario_changed" => {

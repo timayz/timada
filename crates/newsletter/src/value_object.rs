@@ -39,10 +39,20 @@ pub enum CampaignStatus {
     /// Going out, a batch at a time.
     Sending,
     Sent,
+    /// Going out on its schedule, an edition per cycle.
+    Scheduled,
+    /// Its schedule was stopped by the merchant.
+    Stopped,
 }
 
 impl CampaignStatus {
-    pub const ALL: [Self; 3] = [Self::Draft, Self::Sending, Self::Sent];
+    pub const ALL: [Self; 5] = [
+        Self::Draft,
+        Self::Sending,
+        Self::Sent,
+        Self::Scheduled,
+        Self::Stopped,
+    ];
 
     /// The value stored in the read model.
     pub fn as_str(self) -> &'static str {
@@ -50,6 +60,8 @@ impl CampaignStatus {
             Self::Draft => "draft",
             Self::Sending => "sending",
             Self::Sent => "sent",
+            Self::Scheduled => "scheduled",
+            Self::Stopped => "stopped",
         }
     }
 
@@ -65,7 +77,13 @@ pub fn new_campaign_id() -> String {
     ulid::Ulid::generate().to_string()
 }
 
-/// The id of one campaign's mail to one subscriber
+/// The id of one cycle of a scheduled campaign
+/// ([`Edition`](crate::aggregator::Edition)), by its first cycle.
+pub fn edition_id(campaign_id: &str, first_cycle: &str) -> String {
+    evento::hash_ids(vec!["newsletter-edition", campaign_id, first_cycle])
+}
+
+/// The id of one campaign's (or edition's) mail to one subscriber
 /// ([`Delivery`](crate::aggregator::Delivery)).
 pub fn delivery_id(campaign_id: &str, subscriber_id: &str) -> String {
     evento::hash_ids(vec!["newsletter-delivery", campaign_id, subscriber_id])
