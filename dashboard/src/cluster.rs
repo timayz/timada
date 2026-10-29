@@ -319,6 +319,23 @@ impl Cluster {
         Ok((cluster, executor))
     }
 
+    /// Waits, up to `limit`, until this node takes part: a node opened over
+    /// a journal that holds something refuses writes until its peers
+    /// confirm the journal is current. `serve` answers meanwhile with
+    /// refusals; a command that writes as soon as it opens (`seed`) waits
+    /// here first.
+    pub async fn until_confirmed(&self, limit: Duration) -> anyhow::Result<()> {
+        let started = tokio::time::Instant::now();
+        while !self.node.confirmed() {
+            anyhow::ensure!(
+                started.elapsed() < limit,
+                "this node's peers did not confirm its journal within {limit:?}: are a majority of the nodes running?"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        Ok(())
+    }
+
     /// This node, as the pages show it.
     pub fn health(&self) -> NodeHealth {
         let absent = self.node.absent_peers();

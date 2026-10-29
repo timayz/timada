@@ -56,6 +56,15 @@ pub struct SeedArgs {
     /// taken already is left alone
     #[arg(long)]
     pub pages: Option<PathBuf>,
+    /// Registers the owner with this password when no user has their
+    /// address yet, without mailing a code: for a throwaway platform (the
+    /// load test's), never a real one
+    #[arg(long)]
+    pub owner_password: Option<String>,
+    /// Makes the shop sell for pretend: a test company and the Stripe test
+    /// keys of `TEST_PAYMENTS`, for a stand-in for Stripe (the load test's)
+    #[arg(long)]
+    pub test_payments: bool,
 }
 
 /// The delivery method and the code the seeded shop opens with.
@@ -66,6 +75,13 @@ const SHIPPING_COUNTRIES: &[&str] = &["FR", "BE", "CH"];
 const PROMO_CODE: &str = "MONSTER10";
 /// Basis points: 10 %.
 const PROMO_PERCENT: u32 = 1_000;
+/// How long the seed waits for the other nodes of a cluster to answer.
+const PEERS_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+/// The keys `--test-payments` connects: what the stand-in for Stripe the
+/// load test runs signs its webhooks with.
+const TEST_PUBLISHABLE_KEY: &str = "pk_test_load";
+const TEST_SECRET_KEY: &str = "sk_test_load";
+const TEST_WEBHOOK_SECRET: &str = "whsec_load";
 
 pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     refuse_if_serving(&config).await?;
@@ -112,10 +128,30 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     let peers = crate::peers::Peers::from_cluster(config.cluster.as_ref())?.map(Arc::new);
     let media = Arc::new(Media::new(&config.media, peers));
 
+    cluster.until_confirmed(PEERS_WAIT).await?;
+
     // The owner, by the address they registered with.
     let identity = timada_identity::Command(platform.clone());
     let email = timada_identity::normalize_email(&args.owner)
         .map_err(|_| anyhow::anyhow!("{:?} is not an e-mail address", args.owner))?;
+    // The first read waits for a quorum, which a node just opened may not
+    // reach until it hears from its peers.
+    let started = tokio::time::Instant::now();
+    let registered = loop {
+        match identity.load_email_account(&email).await {
+            Ok(account) => break account.is_some(),
+            Err(err) if started.elapsed() < PEERS_WAIT => {
+                tracing::info!(%err, "waiting for the other nodes");
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            Err(err) => return Err(err),
+        }
+    };
+    if let Some(password) = &args.owner_password
+        && !registered
+    {
+        register_owner(&identity, &email, password).await?;
+    }
     let account = identity
         .load_email_account(&email)
         .await?
@@ -217,6 +253,10 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         .run_once(&platform)
         .await?;
 
+    if args.test_payments {
+        test_payments(&config, &tenancy, &executor, &tenant.id, &owner.id).await?;
+    }
+
     if let Some(dir) = &args.pages {
         let pages = timada_pages::Command::new(executor.clone(), &tenant.id);
         let (created, skipped) = seed_pages(&pages, &owner.id, dir).await?;
@@ -257,6 +297,98 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         println!("STORE_MEDIA_URL={}", media.tenant_url(&tenant.id));
         println!("STORE_API_URL={}", config.server.url.trim_end_matches('/'));
     }
+    if args.test_payments {
+        println!("STORE_TENANT_ID={}", tenant.id);
+    }
+    Ok(())
+}
+
+/// Registers `email` as a user with `password`, issuing and burning the
+/// registration code in place of the mail that would carry it.
+async fn register_owner(
+    identity: &timada_identity::Command<Executor>,
+    email: &str,
+    password: &str,
+) -> Result<()> {
+    let now = crate::auth::now();
+    let issued = identity
+        .issue_email_code(email, timada_identity::ChallengePurpose::Register, now)
+        .await?;
+    identity
+        .register_with_password(
+            timada_identity::RegisterWithPassword {
+                email: issued.email,
+                code: issued.code,
+                password_hash: timada_identity::hash_password(password).await?,
+                context: timada_identity::LoginContext::default(),
+            },
+            now,
+        )
+        .await?;
+    tracing::info!(%email, "owner registered");
+    Ok(())
+}
+
+/// The test company the shop sells as, registered once, and the Stripe test
+/// keys, sealed as the payments page seals them; then the setup the
+/// storefront reads, as the payments subscription would write it.
+async fn test_payments(
+    config: &Config,
+    tenancy: &timada_tenancy::Command<Executor>,
+    executor: &Executor,
+    tenant_id: &str,
+    owner_id: &str,
+) -> Result<()> {
+    let sealer = crate::seal::payments_sealer(config)
+        .context("--test-payments needs payments enabled (a [payments] section)")?;
+    let identity = timada_tenancy::LegalIdentity {
+        legal_name: "Load Test SAS".into(),
+        legal_form: "SAS".into(),
+        siret: "12002701600092".into(),
+        line1: "1 rue de la Paix".into(),
+        postal_code: "75002".into(),
+        city: "Paris".into(),
+        country: "FR".into(),
+        contact_email: "shop@example.org".into(),
+        vat_number: Some("FR85120027016".into()),
+        ..Default::default()
+    };
+    let tenant = tenancy
+        .load_tenant(tenant_id)
+        .await?
+        .context("the tenant vanished")?;
+    if tenant.company.is_none() {
+        let company_id = match tenancy.load_company_siren(identity.siren()).await? {
+            Some(siren) if !siren.released => siren.company_id,
+            _ => tenancy.create_company(owner_id, identity).await?.id,
+        };
+        tenancy
+            .link_tenant(owner_id, &company_id, tenant_id, None)
+            .await?;
+        tracing::info!(%company_id, "test company linked");
+    }
+    tenancy
+        .configure_payments(
+            owner_id,
+            tenant_id,
+            timada_tenancy::ConfigurePayments {
+                provider: timada_orders::PROVIDER_STRIPE.into(),
+                publishable_key: TEST_PUBLISHABLE_KEY.into(),
+                secret_key_sealed: sealer.seal(TEST_SECRET_KEY)?,
+                webhook_secret_sealed: sealer.seal(TEST_WEBHOOK_SECRET)?,
+            },
+        )
+        .await?;
+    timada_orders::Command::new(executor.clone(), tenant_id)
+        .set_payment_method(
+            crate::payments::DASHBOARD_ACTOR,
+            Some(timada_orders::PaymentSetup {
+                provider: timada_orders::PROVIDER_STRIPE.into(),
+                publishable_key: TEST_PUBLISHABLE_KEY.into(),
+            }),
+        )
+        .await?;
+    tracing::info!("test payments connected");
     Ok(())
 }
 
