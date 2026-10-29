@@ -6,8 +6,8 @@
 //! without the script the form still sends to `/boutique`.
 
 use timada_storefront::{
-    Category, ProductQuery, ProductSort, categories, product_image, products, search_categories,
-    search_key,
+    Category, PageLink, ProductQuery, ProductSort, categories, product_image, products,
+    search_categories, search_key, search_pages,
 };
 use topcoat::{
     Result,
@@ -16,7 +16,7 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
-use crate::app::{boutique, c, p, pages, price_line, support_client};
+use crate::app::{boutique, c, own_page, p, price_line, support_client};
 
 /// How many of each the dropdown shows.
 const PRODUCTS: u32 = 4;
@@ -76,26 +76,35 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     .starts_with(&key)
             })
     };
-    let own_pages: Vec<&pages::slug::StaticPage> = pages::slug::PAGES
-        .iter()
-        .chain(std::iter::once(&support_client::SEARCH_ENTRY))
-        .filter(|page| {
-            starts_a_word(page.title) || page.paragraphs.iter().any(|p| starts_a_word(p))
-        })
-        .take(PAGES_SHOWN)
-        .collect();
+    // The support page first when it matches, then the merchant's pages.
+    let support = &support_client::SEARCH_ENTRY;
+    let mut own_pages: Vec<PageLink> = Vec::new();
+    if starts_a_word(support.title) || support.paragraphs.iter().any(|p| starts_a_word(p)) {
+        own_pages.push(PageLink {
+            slug: support.slug.to_owned(),
+            title: support.title.to_owned(),
+        });
+    }
+    // Only the pages the shop has an address for.
+    own_pages.extend(
+        search_pages(cx, &q, PAGES_SHOWN)
+            .await?
+            .into_iter()
+            .filter(|page| own_page::url(cx, &page.slug).is_some()),
+    );
+    own_pages.truncate(PAGES_SHOWN);
     let nothing = found.as_ref().is_some_and(|found| found.items.is_empty())
         && hits.is_empty()
         && own_pages.is_empty();
     let all = href!(boutique::index)
         .query(AllResults { q: &q })
         .resolve(cx);
-    // The support page is its own route; the others are static pages.
+    // The support page is the shop's own; the others carry the merchant's text.
     let page_link = |slug: &str| {
         if slug == support_client::SEARCH_ENTRY.slug {
             href!(support_client::index).resolve(cx)
         } else {
-            href!(pages::slug::index, pages::slug::Slug(slug.to_owned())).resolve(cx)
+            own_page::url(cx, slug).unwrap_or_default()
         }
     };
 
@@ -143,8 +152,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <ul class="search-list search-pages">
                         for page in &own_pages {
                             <li>
-                                <a class="search-row" href=(page_link(page.slug)) data-search-page=(page.slug)>
-                                    <span class="search-name">(page.title)</span>
+                                <a class="search-row" href=(page_link(&page.slug)) data-search-page=(&page.slug)>
+                                    <span class="search-name">(&page.title)</span>
                                     <small class="search-kind">"Page"</small>
                                 </a>
                             </li>

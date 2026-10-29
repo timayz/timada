@@ -237,9 +237,20 @@ section.related { margin-top: 3rem; }
 .sitefooter .newsletter label { color: #d9d7ea; }
 .sitefooter .newsletter .btn { white-space: nowrap; }
 
-/* Static pages */
+/* The shop's own pages: the Markdown the merchant wrote, as HTML */
 article.page { max-width: 46rem; margin: 0 auto; }
-article.page p { color: var(--ink-soft); }
+article.page p, article.page li { color: var(--ink-soft); }
+article.page h2 { font-size: 1.3rem; margin: 2rem 0 .6rem; }
+article.page h3 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; }
+article.page ul, article.page ol { padding-left: 1.4rem; }
+article.page li + li { margin-top: .3rem; }
+article.page a { color: var(--coral-dark); }
+article.page blockquote { margin: 1rem 0; padding: .2rem 1rem; border-left: 3px solid var(--coral); background: var(--soft); }
+article.page img { display: block; max-width: 100%; height: auto; margin: 1.25rem auto; border-radius: var(--radius); }
+article.page table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .95rem; }
+article.page th, article.page td { border-bottom: 1px solid var(--line); padding: .5rem .6rem; text-align: left; }
+article.page th { color: var(--ink); }
+article.page hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
 
 /* Support: the contact form beside the questions, as the live page */
 .support { display: grid; gap: 1.5rem; align-items: start; margin-top: 1rem; }

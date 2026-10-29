@@ -9,6 +9,9 @@
 //! The same subscription follows the reviews: a published one is copied, one
 //! rejected leaves, and its product's count and average are worked out again
 //! with it.
+//!
+//! And the shop's pages: a published one is copied, one unpublished or
+//! deleted leaves.
 
 use evento::{
     Executor,
@@ -38,6 +41,7 @@ pub fn catalog_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilde
         .handler(on_category_event())
         .handler(on_stock_event())
         .handler(on_review_event())
+        .handler(crate::pages::on_page_event())
         .any_routing_key()
 }
 

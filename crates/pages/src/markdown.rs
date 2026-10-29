@@ -13,7 +13,9 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
 use crate::value_object::is_image_file;
 
 /// The HTML of a page's body. `media_url` is where the shop's pictures are
-/// served from, with no trailing slash (`https://media.example.com/acme`).
+/// served from, with no trailing slash (`https://media.example.com/acme`);
+/// empty leaves a picture's bare file name, as a storefront with no media
+/// address does for its products.
 pub fn render_markdown(source: &str, media_url: &str) -> String {
     let mut dropped_image = false;
     let events = Parser::new_ext(source, options()).filter_map(|event| match event {
@@ -26,7 +28,11 @@ pub fn render_markdown(source: &str, media_url: &str) -> String {
             if is_image_file(&dest_url) {
                 Some(Event::Start(Tag::Image {
                     link_type,
-                    dest_url: format!("{media_url}/{dest_url}").into(),
+                    dest_url: if media_url.is_empty() {
+                        dest_url
+                    } else {
+                        format!("{media_url}/{dest_url}").into()
+                    },
                     title,
                     id,
                 }))

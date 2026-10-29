@@ -38,7 +38,8 @@ migrate:
 seed.chatounette:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml seed \
 		--snapshot seeds/chatounette --tenant Chatounette --owner "$${OWNER:?set OWNER to the owner's e-mail}" \
-		--storefront-url "$${STOREFRONT_URL-https://chatounette.localhost}"
+		--storefront-url "$${STOREFRONT_URL-https://chatounette.localhost}" \
+		--pages examples/chatounette/pages
 
 # Takes the snapshot from the live shop, pictures included (see
 # seeds/README.md); run again, it fetches only the pictures not there yet.

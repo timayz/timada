@@ -121,6 +121,33 @@ its own size however large the store is, and its total is the stored count. `in_
 directly under any of the ids, which is what related products use. An archived category
 is in none of this; the products that were in it stay on sale.
 
+## The shop's own pages
+
+The host decides which pages it has (legal notice, terms of sale, privacy, about us)
+and where: each is a route of its own (Chatounette serves `/mentions-legales`,
+`/politique-de-livraison`, …) and its footer links to them. Their text is the
+merchant's, written under `/t/{slug}/pages` (`timada-pages`) and read by slug: a
+published page is copied into `storefront_pages`, and leaves it when unpublished or
+deleted. The body is the merchant's Markdown turned into HTML on each read, raw HTML
+shown as text, only the page's own pictures (from `STORE_MEDIA_URL`), and the whole
+cleaned by an allow-list sanitiser.
+
+```rust
+#[page]
+pub async fn index(cx: &Cx) -> Result<impl View> {
+    // A draft, or a slug the merchant has not written, is a 404.
+    let page = timada_storefront::require_page(cx, "mentions-legales").await?;
+    // page.title, page.html (cleaned), page.meta_title, page.meta_description
+    …
+}
+let found = timada_storefront::search_pages(cx, "livrais", 3).await?; // [PageLink { slug, title }]
+```
+
+`meta_title` is the page's title unless the merchant set one for search engines, and
+`meta_description` is theirs or the start of the text. `search_pages` matches a word of
+the title or text that starts with the query, accents aside, titles first; the host
+keeps the hits it has a route for.
+
 ## What a product varies by
 
 ```rust
@@ -448,6 +475,20 @@ STORE_TOKEN=tk_…
 STORE_MEDIA_URL=https://timada.localhost/media/<tenant id>
 STORE_API_URL=https://timada.localhost
 ```
+
+`--pages <dir>` also writes and publishes the shop's own pages, one Markdown file per
+page named after its slug, opening with a header:
+
+```
+---
+title: Politique de livraison
+meta_description: Pays desservis, délais et frais de livraison.
+---
+Nous livrons en France, en Belgique et en Suisse…
+```
+
+(`meta_title` is the other optional key.) `examples/chatounette/pages` holds the text of
+the Chatounette's six pages, which `make seed.chatounette` passes.
 
 A second run skips what is already there (by slug), so a run that stopped halfway can
 be started again. The read models of the back office catch up when the server next

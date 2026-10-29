@@ -6513,6 +6513,7 @@ dependencies = [
  "timada-invoicing",
  "timada-newsletter",
  "timada-orders",
+ "timada-pages",
  "timada-reviews",
  "timada-shoppers",
  "timada-support",
