@@ -255,6 +255,7 @@ fn checkout(expected_total_cents: Option<u64>) -> Checkout {
         shipping_method: None,
         language: None,
         newsletter: false,
+        time_zone: None,
     }
 }
 

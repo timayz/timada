@@ -3186,6 +3186,7 @@ dependencies = [
  "defmt",
  "jiff-core",
  "jiff-static",
+ "jiff-tzdb",
  "jiff-tzdb-platform",
  "log",
  "portable-atomic",
@@ -6286,6 +6287,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "evento",
+ "jiff",
  "rand 0.9.5",
 ]
 

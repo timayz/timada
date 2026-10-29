@@ -403,6 +403,33 @@ pub fn request_language(cx: &Cx) -> Option<String> {
         .and_then(timada_core::primary_language)
 }
 
+/// The cookie [`TIME_ZONE_SCRIPT`] keeps the browser's time zone in.
+pub const TIME_ZONE_COOKIE: &str = "time_zone";
+
+/// Puts the browser's IANA time zone (`Europe/Paris`) in the
+/// [`TIME_ZONE_COOKIE`] cookie, for [`request_time_zone`] to read on the
+/// next request: a page includes it once, in a `<script>`. Without
+/// JavaScript there is no cookie, and the shop's own zone stands in.
+pub const TIME_ZONE_SCRIPT: &str = "(function(){try{var z=Intl.DateTimeFormat().resolvedOptions().timeZone;if(z){document.cookie='time_zone='+encodeURIComponent(z)+';path=/;max-age=31536000;samesite=lax'}}catch(e){}})();";
+
+/// The browser's time zone, as [`TIME_ZONE_SCRIPT`] left it in its cookie;
+/// `None` without the cookie or with one the zone database does not name.
+/// For [`Checkout::time_zone`](timada_orders::Checkout) and the newsletter
+/// sign-ups, so a scheduled campaign reaches the shopper at the hour it
+/// names in their own day.
+pub fn request_time_zone(cx: &Cx) -> Option<String> {
+    headers(cx)
+        .get_all("cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .find_map(|pair| {
+            let (name, value) = pair.trim().split_once('=')?;
+            (name == TIME_ZONE_COOKIE).then(|| value.replace("%2F", "/").replace("%2f", "/"))
+        })
+        .and_then(|value| timada_core::time_zone(&value))
+}
+
 /// Has the dashboard mail a sign-in code; see [`Store::request_sign_in_code`].
 /// The shopper's address is the request's client, as the host's trusted
 /// proxies report it, and their language the request's `Accept-Language`.

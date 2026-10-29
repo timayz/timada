@@ -210,6 +210,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_head("Address")
                             table_head("From")
                             table_head("Language")
+                            table_head("Time zone")
                             table_head("Asked")
                             table_head("Status")
                             if can_manage {
@@ -219,7 +220,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                     table_body(
                         if rows.is_empty() {
-                            empty_row(colspan: if can_manage { 6 } else { 5 }, text: "No subscriber here.")
+                            empty_row(colspan: if can_manage { 7 } else { 6 }, text: "No subscriber here.")
                         }
                         for row in &rows {
                             table_row(
@@ -227,6 +228,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(<a class=(LINK) href=(format!("mailto:{}", row.email))>(&row.email)</a>)
                                 table_cell(attrs: attributes! { data-subscriber-source=(&row.source) }, (source_label(&row.source)))
                                 table_cell((row.language.as_deref().unwrap_or("—")))
+                                table_cell(attrs: attributes! { data-subscriber-time-zone="" }, (row.time_zone.as_deref().unwrap_or("Shop's")))
                                 table_cell(<time datetime=(row.requested_at)>(format_time(row.requested_at as u64))</time>)
                                 table_cell(status_badge(tone: subscriber_tone(row.status()), (status_label(row.status()))))
                                 if can_manage {

@@ -22,6 +22,8 @@ pub struct SubscriberRow {
     pub unsubscribed_at: Option<i64>,
     /// Unix seconds.
     pub updated_at: i64,
+    /// The IANA time zone their browser gave, when it did.
+    pub time_zone: Option<String>,
 }
 
 impl SubscriberRow {

@@ -30,7 +30,8 @@ use crate::aggregator::{
     ItemRemoved, LanguageGiven, LanguageSet, MethodAdded, MethodChanged, MethodRemoved,
     NewsletterOptInSet, NewsletterOptedIn, PaymentRefused, PaymentRequested, PaymentsDisabled,
     PaymentsEnabled, Placed, QuantitySet, Refunded, ShippingCharged, ShippingGranted,
-    ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet,
+    ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet, TimeZoneGiven,
+    TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -162,6 +163,8 @@ pub struct CheckoutRequest {
     pub language: Option<String>,
     /// The shopper asked for the shop's news.
     pub newsletter: bool,
+    /// The shopper's IANA time zone, when the browser said one.
+    pub time_zone: Option<String>,
     pub answer: Option<PaymentAnswer>,
 }
 
@@ -256,6 +259,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_shipping_method_chosen())
         .handler(on_shipping_granted())
         .handler(on_language_given())
+        .handler(on_time_zone_given())
         .handler(on_newsletter_opted_in())
         .strict()
 }
@@ -333,6 +337,7 @@ async fn on_checkout_requested(
         shipping_method: None,
         language: None,
         newsletter: false,
+        time_zone: None,
         answer: None,
     });
     cart.updated_at = event.timestamp;
@@ -469,6 +474,21 @@ async fn on_shipping_method_chosen(
 }
 
 #[evento::handler]
+async fn on_time_zone_given(
+    event: Event<TimeZoneGiven>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|request| request.request_id == event.data.request_id)
+    {
+        request.time_zone = Some(event.data.time_zone.to_owned());
+    }
+    Ok(())
+}
+
+#[evento::handler]
 async fn on_language_given(
     event: Event<LanguageGiven>,
     cart: &mut CartState,
@@ -594,6 +614,8 @@ pub struct OrderState {
     pub language: Option<String>,
     /// The shopper asked for the shop's news at checkout.
     pub newsletter: bool,
+    /// The shopper's IANA time zone, when their browser gave it.
+    pub time_zone: Option<String>,
     /// What went back to the shopper, in minor units, all refunds together.
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
@@ -637,6 +659,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_shipping_charged())
         .handler(on_language_set())
         .handler(on_newsletter_opt_in_set())
+        .handler(on_time_zone_set())
         .strict()
 }
 
@@ -688,6 +711,12 @@ async fn on_shipping_charged(
         name: event.data.name.to_owned(),
         amount_cents: event.data.amount_cents,
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_time_zone_set(event: Event<TimeZoneSet>, order: &mut OrderState) -> anyhow::Result<()> {
+    order.time_zone = Some(event.data.time_zone.to_owned());
     Ok(())
 }
 

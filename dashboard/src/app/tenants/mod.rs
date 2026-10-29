@@ -19,6 +19,7 @@ pub fn error_code(err: &TenancyError) -> &'static str {
         TenancyError::InvalidSlug => "invalid_slug",
         TenancyError::SlugTaken => "slug_taken",
         TenancyError::InvalidName => "invalid_name",
+        TenancyError::InvalidTimeZone => "invalid_time_zone",
         TenancyError::NotFound => "tenant_not_found",
         TenancyError::Forbidden => "not_allowed",
         TenancyError::Suspended => "tenant_suspended",

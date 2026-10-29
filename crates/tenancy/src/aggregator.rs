@@ -236,6 +236,12 @@ pub enum Tenant {
         try_to_pay: bool,
         set_by: String,
     },
+    /// Where the shop lives: an IANA name (`Europe/Paris`). Its hours are
+    /// the ones a campaign keeps for subscribers whose own zone is unknown.
+    TimeZoneSet {
+        time_zone: String,
+        set_by: String,
+    },
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).

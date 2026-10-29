@@ -45,6 +45,8 @@ pub struct SwitchForm {
     subscribed: bool,
     #[serde(default)]
     language: Option<String>,
+    #[serde(default)]
+    time_zone: Option<String>,
 }
 
 #[route(POST)]
@@ -67,6 +69,7 @@ pub async fn switch(cx: &Cx, Form(form): Form<SwitchForm>) -> Result<Answer> {
             STOREFRONT_ACTOR,
             &shopper.email,
             form.language,
+            form.time_zone,
         )
         .await
     } else {

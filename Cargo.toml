@@ -78,6 +78,9 @@ ammonia = "4.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider", "multipart", "json"] }
 # Reads and writes the gzipped catalogue snapshots a shop is seeded from.
 flate2 = "1"
+# Calendar and time zones: the shops' and subscribers' local hours. The zone
+# database ships inside the binary, so every node reads the same rules.
+jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
 anyhow = "1.0"
 thiserror = "2.0"
 tracing = "0.1"

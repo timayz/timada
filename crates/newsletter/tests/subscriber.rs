@@ -245,7 +245,7 @@ async fn a_signed_in_shopper_is_confirmed_at_once() {
     let newsletter = command().await;
     let keys = MemoryKeys::default();
     newsletter
-        .subscribe_verified(&keys, VISITOR, EMAIL, Some("en".to_owned()))
+        .subscribe_verified(&keys, VISITOR, EMAIL, Some("en".to_owned()), None)
         .await
         .unwrap();
     let state = newsletter.subscriber_of(EMAIL).await.unwrap().unwrap();
@@ -253,12 +253,12 @@ async fn a_signed_in_shopper_is_confirmed_at_once() {
     assert_eq!(state.source, "account");
     // Twice is a no-op.
     newsletter
-        .subscribe_verified(&keys, VISITOR, EMAIL, None)
+        .subscribe_verified(&keys, VISITOR, EMAIL, None, None)
         .await
         .unwrap();
     newsletter.unsubscribe(VISITOR, &state.id).await.unwrap();
     newsletter
-        .subscribe_verified(&keys, VISITOR, EMAIL, None)
+        .subscribe_verified(&keys, VISITOR, EMAIL, None, None)
         .await
         .unwrap();
     assert!(
@@ -273,6 +273,55 @@ async fn a_signed_in_shopper_is_confirmed_at_once() {
         newsletter.unsubscribe(VISITOR, "unknown").await,
         Err(NewsletterError::NotFound)
     ));
+}
+
+#[tokio::test]
+async fn the_browsers_time_zone_follows_the_subscriber() {
+    let newsletter = command().await;
+    let keys = MemoryKeys::default();
+    let asked = RequestSubscription {
+        time_zone: Some("europe/paris".to_owned()),
+        ..ask(EMAIL)
+    };
+    let RequestOutcome::ToConfirm { token, .. } = newsletter
+        .request_subscription(&keys, VISITOR, asked, now())
+        .await
+        .unwrap()
+    else {
+        panic!("nothing to mail");
+    };
+    let state = newsletter.subscriber_of(EMAIL).await.unwrap().unwrap();
+    assert_eq!(state.time_zone.as_deref(), Some("Europe/Paris"));
+    newsletter
+        .confirm_subscription(&keys, VISITOR, &token, now())
+        .await
+        .unwrap();
+
+    // Garbage is ignored and keeps the zone known.
+    let garbage = RequestSubscription {
+        time_zone: Some("Mars/Olympus".to_owned()),
+        ..ask(EMAIL)
+    };
+    newsletter
+        .request_subscription(&keys, VISITOR, garbage, now())
+        .await
+        .unwrap();
+    // On the list already, asked again from elsewhere: the zone moves.
+    newsletter
+        .subscribe_verified(
+            &keys,
+            VISITOR,
+            EMAIL,
+            None,
+            Some("America/New_York".to_owned()),
+        )
+        .await
+        .unwrap();
+    let state = newsletter.subscriber_of(EMAIL).await.unwrap().unwrap();
+    assert_eq!(state.time_zone.as_deref(), Some("America/New_York"));
+    assert!(state.is_confirmed());
+    let opened = state.open_with(&keys).await.unwrap().unwrap();
+    assert_eq!(opened.time_zone.as_deref(), Some("America/New_York"));
 }
 
 #[tokio::test]

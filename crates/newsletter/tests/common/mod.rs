@@ -59,6 +59,7 @@ pub fn ask(email: &str) -> RequestSubscription {
         email: email.to_owned(),
         language: Some("fr-FR,fr;q=0.9,en;q=0.8".to_owned()),
         source: SOURCE_FORM.to_owned(),
+        time_zone: None,
     }
 }
 

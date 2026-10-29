@@ -124,7 +124,12 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
     "Conditions générales de vente",
     "## Prix\n\nEn euros.",
   );
-  await publishPage(page, slug, "Qui sommes-nous ?", "Deux amoureux des chats.");
+  await publishPage(
+    page,
+    slug,
+    "Qui sommes-nous ?",
+    "Deux amoureux des chats.",
+  );
 
   await createCategory(page, slug, "Couchage");
   // The longer text the shop shows below a category's products.
@@ -205,7 +210,9 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
       .getByRole("link", { name: "Conditions générales de vente" }),
   ).toHaveAttribute("href", "/conditions-generales-de-vente");
   await expect(
-    page.locator(".sitefooter").getByRole("link", { name: "Qui sommes-nous ?" }),
+    page
+      .locator(".sitefooter")
+      .getByRole("link", { name: "Qui sommes-nous ?" }),
   ).toHaveAttribute("href", "/qui-sommes-nous");
 
   // A category: the breadcrumb, the sub-categories, the count and the
@@ -584,7 +591,11 @@ test("a shopper signs up to the Chatounette newsletter from the footer and confi
 
   // No storefront address yet: no link can be mailed, and the shopper is
   // told the newsletter is unavailable.
-  const shopperContext = await browser.newContext({ locale: "fr-FR" });
+  // The browser's time zone rides along, for scheduled campaigns.
+  const shopperContext = await browser.newContext({
+    locale: "fr-FR",
+    timezoneId: "America/New_York",
+  });
   const shopper = await shopperContext.newPage();
   const email = uniqueEmail("abonne");
   await shopper.goto(app.url);
@@ -633,6 +644,9 @@ test("a shopper signs up to the Chatounette newsletter from the footer and confi
     await page.goto(`/t/${slug}/newsletter?status=pending`);
     await expect(row).toHaveAttribute("data-subscriber-status", "pending");
   }).toPass();
+  await expect(row.locator("[data-subscriber-time-zone]")).toHaveText(
+    "America/New_York",
+  );
   await expect(row.locator("[data-subscriber-source]")).toHaveAttribute(
     "data-subscriber-source",
     "form",
