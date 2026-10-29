@@ -21,7 +21,6 @@ sqlx_migrator::sqlite_migration!(
             slug TEXT NOT NULL,
             title TEXT NOT NULL,
             published INTEGER NOT NULL,
-            footer_position INTEGER,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             PRIMARY KEY (tenant_id, id)

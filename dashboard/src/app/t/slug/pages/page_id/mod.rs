@@ -1,7 +1,6 @@
 //! `/t/{slug}/pages/{page_id}`: one page, read from its own stream (so an
 //! edit shows at once). Members with `pages:manage` write it here beside its
-//! preview, and the forms below publish it, place it in the footer, set what
-//! search engines show, move it to another address, add pictures and delete
+//! preview, and the forms below publish it, set what search engines show, move it to another address, add pictures and delete
 //! it.
 //!
 //! The preview is the HTML the storefront shows, already cleaned by
@@ -9,7 +8,6 @@
 //! as the newsletter's previews do.
 
 pub mod delete;
-pub mod footer;
 pub mod publish;
 pub mod remove_image;
 pub mod rename;
@@ -21,8 +19,8 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use timada_pages::{
-    MAX_BODY_LEN, MAX_FOOTER_POSITION, MAX_IMAGES_PER_PAGE, MAX_META_DESCRIPTION_LEN,
-    MAX_META_TITLE_LEN, MAX_SLUG_LEN, MAX_TITLE_LEN, PageState, PagesError, render_markdown,
+    MAX_BODY_LEN, MAX_IMAGES_PER_PAGE, MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_SLUG_LEN,
+    MAX_TITLE_LEN, PageState, PagesError, render_markdown,
 };
 use timada_tenancy::{PERMISSION_PAGES_MANAGE, PERMISSION_PAGES_READ};
 use topcoat::{
@@ -41,10 +39,8 @@ use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::card::CARD;
-use crate::components::checkbox::checkbox;
 use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
-use crate::components::label::label;
 use crate::components::textarea::textarea;
 use crate::media::Media;
 use crate::ui::{Shell, document, format_time, notice, page_header, section_card, status_badge};
@@ -270,10 +266,6 @@ async fn page_screen(
     can_manage: bool,
 ) -> Result<impl View> {
     let id = page.id.as_str();
-    let footer_position = page
-        .footer_position
-        .map(|p| p.to_string())
-        .unwrap_or_default();
     let images_full = page.images.len() >= MAX_IMAGES_PER_PAGE;
     Ok(view! {
         <div class="mb-6 grid gap-6 lg:grid-cols-2">
@@ -319,7 +311,7 @@ async fn page_screen(
                 <div class=(class!(CARD, "gap-4 px-6"))>
                     <h2 class="text-base font-semibold">"Publication"</h2>
                     if page.published {
-                        <p class="text-sm text-muted-foreground">"Shown on the storefront at " <code>"/pages/" (&page.slug)</code> "."</p>
+                        <p class="text-sm text-muted-foreground">"Shown wherever the storefront links to " <code>(&page.slug)</code> "."</p>
                         <form method="post" action=(href!(unpublish::unpublish, Slug(slug.to_owned()), PageId(id.to_owned())))>
                             button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Unpublish")
                         </form>
@@ -331,23 +323,6 @@ async fn page_screen(
                     }
                     <p class="text-xs text-muted-foreground">"Created " (format_time(page.created_at)) ", updated " (format_time(page.updated_at)) "."</p>
                 </div>
-
-                <form method="post" action=(href!(footer::footer, Slug(slug.to_owned()), PageId(id.to_owned()))) class=(class!(CARD, "gap-4 px-6"))>
-                    <h2 class="text-base font-semibold">"Footer"</h2>
-                    label(
-                        checkbox(attrs: attributes! { name="in_footer" value="on" checked=(page.footer_position.is_some()) })
-                        "List it in the storefront's footer"
-                    )
-                    field(
-                        field_label(attrs: attributes! { for="page-footer-position" }, "Position (lowest first)")
-                        input(attrs: attributes! {
-                            id="page-footer-position" name="position" type="number" min="0" max=(MAX_FOOTER_POSITION)
-                            value=(&footer_position) placeholder="0"
-                        })
-                    )
-                    <p class="text-sm text-muted-foreground">"A draft is listed once it is published."</p>
-                    <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save footer")</div>
-                </form>
 
                 <form method="post" action=(href!(seo::seo, Slug(slug.to_owned()), PageId(id.to_owned()))) class=(class!(CARD, "gap-4 px-6"))>
                     <h2 class="text-base font-semibold">"Search engines"</h2>
@@ -376,8 +351,8 @@ async fn page_screen(
                 <form method="post" action=(href!(rename::rename, Slug(slug.to_owned()), PageId(id.to_owned()))) class=(class!(CARD, "gap-4 px-6"))>
                     <h2 class="text-base font-semibold">"Address"</h2>
                     field(
-                        field_label(attrs: attributes! { for="page-slug" }, "/pages/…")
-                        field_description(attrs: attributes! { id="page-slug-hint" }, "Lowercase letters, digits and dashes. Links to the old address stop working.")
+                        field_label(attrs: attributes! { for="page-slug" }, "Address")
+                        field_description(attrs: attributes! { id="page-slug-hint" }, "Lowercase letters, digits and dashes: the storefront finds the page by it.")
                         input(attrs: attributes! {
                             id="page-slug" name="slug" required="" maxlength=(MAX_SLUG_LEN) aria-describedby="page-slug-hint"
                             pattern="[a-z0-9][a-z0-9-]*[a-z0-9]" value=(&page.slug)

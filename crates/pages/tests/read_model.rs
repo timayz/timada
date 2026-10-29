@@ -11,7 +11,7 @@ async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
 }
 
 #[tokio::test]
-async fn pages_are_listed_footer_first() {
+async fn pages_are_listed_by_title() {
     let (executor, pool) = executor_with_pool().await;
     let pages = timada_pages::Command::new(executor.clone(), TENANT);
     let terms = pages.create_page(ALICE, draft("Terms")).await.unwrap();
@@ -21,8 +21,6 @@ async fn pages_are_listed_footer_first() {
         .await
         .unwrap();
     let draft_page = pages.create_page(ALICE, draft("Draft")).await.unwrap();
-    pages.show_page_in_footer(ALICE, &legal, 1).await.unwrap();
-    pages.show_page_in_footer(ALICE, &terms, 2).await.unwrap();
     pages.publish_page(ALICE, &terms).await.unwrap();
 
     catch_up(&executor, &pool).await;
@@ -30,17 +28,17 @@ async fn pages_are_listed_footer_first() {
     let rows = pages_of_tenant(&pool, TENANT).await.unwrap();
     assert_eq!(
         rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
-        [&legal, &terms, &about, &draft_page].map(String::as_str)
+        [&about, &draft_page, &legal, &terms].map(String::as_str)
     );
-    assert!(rows[1].published);
-    assert_eq!(rows[1].footer_position, Some(2));
-    assert_eq!(rows[1].slug, "terms");
+    assert!(rows[3].published);
+    assert!(!rows[2].published);
+    assert_eq!(rows[3].slug, "terms");
 
     pages.delete_page(ALICE, &about).await.unwrap();
     pages.rename_page(ALICE, &terms, "cgv").await.unwrap();
     catch_up(&executor, &pool).await;
     let rows = pages_of_tenant(&pool, TENANT).await.unwrap();
     assert_eq!(rows.len(), 3);
-    assert_eq!(rows[1].slug, "cgv");
+    assert_eq!(rows[2].slug, "cgv");
     assert!(pages_of_tenant(&pool, "other").await.unwrap().is_empty());
 }

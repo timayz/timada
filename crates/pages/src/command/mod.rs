@@ -15,8 +15,8 @@ pub use page::*;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
-    Claimed, Created, Deleted, Edited, HiddenFromFooter, ImageAdded, ImageRemoved, Published,
-    Released, Renamed, SeoSet, ShownInFooter, Unpublished,
+    Claimed, Created, Deleted, Edited, ImageAdded, ImageRemoved, Published, Released, Renamed,
+    SeoSet, Unpublished,
 };
 use crate::value_object::page_slug_id;
 
@@ -97,8 +97,6 @@ pub struct PageState {
     pub meta_title: String,
     pub meta_description: String,
     pub published: bool,
-    /// Where it is listed in the footer, while it is.
-    pub footer_position: Option<u32>,
     pub images: Vec<PageImage>,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -116,11 +114,6 @@ impl PageState {
             &self.meta_title
         }
     }
-
-    /// Whether a storefront lists it in its footer.
-    pub fn in_footer(&self) -> bool {
-        self.published && self.footer_position.is_some()
-    }
 }
 
 pub fn page_projection<E: Executor>() -> Projection<E, PageState> {
@@ -131,8 +124,6 @@ pub fn page_projection<E: Executor>() -> Projection<E, PageState> {
         .handler(on_renamed())
         .handler(on_published())
         .handler(on_unpublished())
-        .handler(on_shown_in_footer())
-        .handler(on_hidden_from_footer())
         .handler(on_image_added())
         .handler(on_image_removed())
         .handler(on_deleted())
@@ -188,26 +179,6 @@ async fn on_unpublished(event: Event<Unpublished>, page: &mut PageState) -> anyh
 }
 
 #[evento::handler]
-async fn on_shown_in_footer(
-    event: Event<ShownInFooter>,
-    page: &mut PageState,
-) -> anyhow::Result<()> {
-    page.footer_position = Some(event.data.position);
-    page.updated_at = event.timestamp;
-    Ok(())
-}
-
-#[evento::handler]
-async fn on_hidden_from_footer(
-    event: Event<HiddenFromFooter>,
-    page: &mut PageState,
-) -> anyhow::Result<()> {
-    page.footer_position = None;
-    page.updated_at = event.timestamp;
-    Ok(())
-}
-
-#[evento::handler]
 async fn on_image_added(event: Event<ImageAdded>, page: &mut PageState) -> anyhow::Result<()> {
     let data = &event.data;
     page.images.push(PageImage {
@@ -233,7 +204,6 @@ async fn on_image_removed(event: Event<ImageRemoved>, page: &mut PageState) -> a
 async fn on_deleted(event: Event<Deleted>, page: &mut PageState) -> anyhow::Result<()> {
     page.deleted = true;
     page.published = false;
-    page.footer_position = None;
     page.updated_at = event.timestamp;
     Ok(())
 }

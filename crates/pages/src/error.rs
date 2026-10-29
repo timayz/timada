@@ -18,8 +18,6 @@ pub enum PagesError {
     InvalidSlug,
     #[error("another page has this slug")]
     SlugTaken,
-    #[error("a footer position is 0 to 999")]
-    InvalidPosition,
     #[error("a page carries at most {MAX_IMAGES_PER_PAGE} pictures")]
     TooManyImages,
     #[error("a page takes JPEG, PNG, WebP or GIF pictures")]
@@ -56,7 +54,6 @@ impl PagesError {
             Self::InvalidSeo => "page_invalid_seo",
             Self::InvalidSlug => "page_invalid_slug",
             Self::SlugTaken => "page_slug_taken",
-            Self::InvalidPosition => "page_invalid_position",
             Self::TooManyImages => "page_too_many_images",
             Self::UnsupportedImage => "unsupported_image",
             Self::NotFound => "page_not_found",

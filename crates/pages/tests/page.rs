@@ -15,7 +15,6 @@ async fn a_page_starts_as_a_draft_under_a_slug_of_its_title() {
     assert_eq!(page.title, "Conditions générales de vente");
     assert_eq!(page.body, "## Article 1\n\nLes ventes sont fermes.");
     assert!(!page.published);
-    assert_eq!(page.footer_position, None);
     let by_slug = pages
         .load_page_by_slug("conditions-generales-de-vente")
         .await
@@ -79,7 +78,7 @@ async fn renaming_frees_the_old_slug() {
 }
 
 #[tokio::test]
-async fn edit_seo_publish_and_footer() {
+async fn edit_seo_and_publish() {
     let pages = command().await;
     let id = pages.create_page(ALICE, draft("Livraison")).await.unwrap();
     pages
@@ -95,28 +94,17 @@ async fn edit_seo_publish_and_footer() {
         matches!(too_long, Err(PagesError::InvalidSeo)),
         "{too_long:?}"
     );
-    pages.show_page_in_footer(ALICE, &id, 3).await.unwrap();
     let page = pages.load_page(&id).await.unwrap().unwrap();
     assert_eq!(page.title, "Politique de livraison");
     assert_eq!(page.body, "Sous 48 h.");
     assert_eq!(page.seo_title(), "Livraison | Acme");
     assert_eq!(page.meta_description, "Délais et tarifs.");
-    assert_eq!(page.footer_position, Some(3));
-    // Not listed while it is a draft.
-    assert!(!page.in_footer());
+    assert!(!page.published);
 
     pages.publish_page(ALICE, &id).await.unwrap();
-    assert!(pages.load_page(&id).await.unwrap().unwrap().in_footer());
-    pages.hide_page_from_footer(ALICE, &id).await.unwrap();
+    assert!(pages.load_page(&id).await.unwrap().unwrap().published);
     pages.unpublish_page(ALICE, &id).await.unwrap();
-    let page = pages.load_page(&id).await.unwrap().unwrap();
-    assert!(!page.published);
-    assert_eq!(page.footer_position, None);
-    let position = pages.show_page_in_footer(ALICE, &id, 1000).await;
-    assert!(
-        matches!(position, Err(PagesError::InvalidPosition)),
-        "{position:?}"
-    );
+    assert!(!pages.load_page(&id).await.unwrap().unwrap().published);
 }
 
 #[tokio::test]

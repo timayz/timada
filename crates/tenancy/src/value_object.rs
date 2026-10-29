@@ -39,7 +39,7 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `automations:manage` — draw, save and delete automation scenarios.
 /// - `pages:read` — see the shop's pages (legal notice, terms, about) as
 ///   written, drafts included.
-/// - `pages:manage` — write, publish, place in the footer and delete them.
+/// - `pages:manage` — write, publish and delete them.
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,

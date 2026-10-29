@@ -1,13 +1,12 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
-    Created, Deleted, Edited, HiddenFromFooter, ImageAdded, ImageRemoved, Published, Renamed,
-    SeoSet, ShownInFooter, Unpublished,
+    Created, Deleted, Edited, ImageAdded, ImageRemoved, Published, Renamed, SeoSet, Unpublished,
 };
 use crate::error::PagesError;
 use crate::value_object::{
-    MAX_FOOTER_POSITION, MAX_IMAGES_PER_PAGE, image_mime, new_page_id, normalize_body,
-    normalize_seo, normalize_slug, normalize_title, slugify,
+    MAX_IMAGES_PER_PAGE, image_mime, new_page_id, normalize_body, normalize_seo, normalize_slug,
+    normalize_title, slugify,
 };
 
 use super::PageState;
@@ -193,55 +192,6 @@ impl<E: Executor> super::Command<E> {
             &page,
             &Unpublished {
                 unpublished_by: actor.to_owned(),
-            },
-            routing_key,
-        )
-        .await
-    }
-
-    /// Lists it in the footer at `position` (lowest first; two pages at the
-    /// same one go by title). Shown there already at it is a no-op. A draft
-    /// may be placed too: the footer lists it once it is published.
-    pub async fn show_page_in_footer(
-        &self,
-        actor: &str,
-        page_id: &str,
-        position: u32,
-        routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
-        if position > MAX_FOOTER_POSITION {
-            return Err(PagesError::InvalidPosition);
-        }
-        let page = self.require_page(page_id).await?;
-        if page.footer_position == Some(position) {
-            return Ok(());
-        }
-        self.write_page(
-            &page,
-            &ShownInFooter {
-                position,
-                shown_by: actor.to_owned(),
-            },
-            routing_key,
-        )
-        .await
-    }
-
-    /// Takes it out of the footer; not there is a no-op.
-    pub async fn hide_page_from_footer(
-        &self,
-        actor: &str,
-        page_id: &str,
-        routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
-        let page = self.require_page(page_id).await?;
-        if page.footer_position.is_none() {
-            return Ok(());
-        }
-        self.write_page(
-            &page,
-            &HiddenFromFooter {
-                hidden_by: actor.to_owned(),
             },
             routing_key,
         )
