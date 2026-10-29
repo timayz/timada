@@ -39,7 +39,7 @@ if [ ! -f seeds/chatounette/catalog.json.gz ]; then
   exit 1
 fi
 
-topcoat asset bundle -p timada-dashboard
+topcoat asset bundle -p timada-dashboard --profile "$profile"
 cargo build --profile "$profile" -p timada-dashboard -p chatounette-example -p timada-loadtest
 
 # LOAD_REUSE=1 keeps the platform a run made (seeding takes a while) and

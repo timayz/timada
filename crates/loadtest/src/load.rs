@@ -27,7 +27,8 @@ pub struct Step {
 /// When a step counts as more than the shop can take.
 #[derive(Clone, Copy, Serialize)]
 pub struct Limits {
-    pub p99_ms: f64,
+    pub page_p99_ms: f64,
+    pub action_p99_ms: f64,
     pub error_pct: f64,
     pub order_p99_ms: f64,
 }
@@ -154,10 +155,16 @@ impl Runner {
     fn breaches(&self, window: &Window, secs: f64) -> Vec<String> {
         let summary = window.summary(secs);
         let mut breaches = Vec::new();
-        if summary.latency.p99 > self.limits.p99_ms {
+        if summary.pages.p99 > self.limits.page_p99_ms {
             breaches.push(format!(
-                "p99 {:.0} ms > {:.0} ms",
-                summary.latency.p99, self.limits.p99_ms
+                "pages p99 {:.0} ms > {:.0} ms",
+                summary.pages.p99, self.limits.page_p99_ms
+            ));
+        }
+        if summary.actions.p99 > self.limits.action_p99_ms {
+            breaches.push(format!(
+                "forms p99 {:.0} ms > {:.0} ms",
+                summary.actions.p99, self.limits.action_p99_ms
             ));
         }
         if summary.error_pct > self.limits.error_pct {

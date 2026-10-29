@@ -157,9 +157,16 @@ impl Window {
 
     /// Every request's latency together.
     pub fn all_latency(&self) -> Histogram<u64> {
+        self.latency_of(|_| true)
+    }
+
+    /// The latency of the routes `pick` names, together.
+    fn latency_of(&self, pick: impl Fn(&str) -> bool) -> Histogram<u64> {
         let mut all = histogram();
-        for route in self.routes.values() {
-            all.add(&route.latency).expect("same bounds");
+        for (name, route) in &self.routes {
+            if pick(name) {
+                all.add(&route.latency).expect("same bounds");
+            }
         }
         all
     }
@@ -172,6 +179,10 @@ impl Window {
             rps: requests as f64 / seconds.max(0.001),
             error_pct: pct(self.failed(), requests),
             latency: Percentiles::of(&all),
+            // What a shopper waits for: a page, or the answer to a form
+            // (which writes, through the cluster).
+            pages: Percentiles::of(&self.latency_of(|name| name.starts_with("GET /"))),
+            actions: Percentiles::of(&self.latency_of(|name| name.starts_with("POST /"))),
             order_latency: Percentiles::of(&self.order_latency),
             routes: self
                 .routes
@@ -241,6 +252,8 @@ pub struct Summary {
     pub rps: f64,
     pub error_pct: f64,
     pub latency: Percentiles,
+    pub pages: Percentiles,
+    pub actions: Percentiles,
     pub order_latency: Percentiles,
     pub routes: BTreeMap<String, RouteSummary>,
     pub events: BTreeMap<String, u64>,

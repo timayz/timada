@@ -39,7 +39,7 @@ reloads the return page until it sends on to the order.
 ## Modes
 
 - `ramp --start 1 --factor 1.5 --step-secs 60`: rates rising until a step
-  breaks a limit: p99 over every request (`--p99-ms`), failed requests
+  breaks a limit: p99 (`--page-p99-ms` for the pages, `--action-p99-ms` for the forms), failed requests
   (`--error-pct`), paying to the order showing (`--order-p99-ms`), a checkout
   the dashboard did not answer in the storefront's wait, or visits dropped
   because `--max-visits` are under way. The last step held is the capacity.

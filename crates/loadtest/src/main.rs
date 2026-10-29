@@ -134,9 +134,13 @@ struct Common {
     #[arg(long, default_value_t = 0.85)]
     pay: f64,
 
-    /// A step breaks above this p99 over every request, in milliseconds.
+    /// A step breaks above this p99 over the pages (GET), in milliseconds.
     #[arg(long, default_value_t = 1000.0)]
-    p99_ms: f64,
+    page_p99_ms: f64,
+    /// ... or above this p99 over the forms (POST), which write through the
+    /// cluster; a checkout waits for the dashboard to open the payment.
+    #[arg(long, default_value_t = 5000.0)]
+    action_p99_ms: f64,
     /// ... or above this share of failed requests, in percent.
     #[arg(long, default_value_t = 1.0)]
     error_pct: f64,
@@ -270,7 +274,8 @@ async fn main() -> Result<()> {
         drain: Duration::from_secs(common.drain_secs),
         stop_on_breach,
         limits: Limits {
-            p99_ms: common.p99_ms,
+            page_p99_ms: common.page_p99_ms,
+            action_p99_ms: common.action_p99_ms,
             error_pct: common.error_pct,
             order_p99_ms: common.order_p99_ms,
         },

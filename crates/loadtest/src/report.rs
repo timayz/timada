@@ -9,12 +9,14 @@ pub fn step_line(step: &StepReport) {
     let cpu: f64 = step.processes.values().map(|u| u.cpu_avg).sum();
     let rss: f64 = step.processes.values().map(|u| u.rss_max_mb).sum();
     println!(
-        "{:>7.1}/s  {:>7.1} rps  p50 {:>6.1}  p99 {:>7.1} ms  err {:>5.2} %  orders {:>4} (p99 {:>6.0} ms)  \
+        "{:>7.1}/s  {:>7.1} rps  pages p50 {:>6.1} p99 {:>7.1}  forms p50 {:>6.1} p99 {:>7.1} ms  err {:>5.2} %  orders {:>4} (p99 {:>6.0} ms)  \
          active {:>5}  cpu {:>4.1}  rss {:>6.0} MB  {}",
         step.rate,
         s.rps,
-        s.latency.p50,
-        s.latency.p99,
+        s.pages.p50,
+        s.pages.p99,
+        s.actions.p50,
+        s.actions.p99,
         s.error_pct,
         s.events.get("order.shown").copied().unwrap_or(0),
         s.order_latency.p99,
