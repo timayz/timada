@@ -167,6 +167,12 @@ watch=(
   --watch "node1=${pids[0]}" --watch "node2=${pids[1]}" --watch "node0=${pids[2]}"
   --watch "storefront=$storefront"
 )
+# Traefik ends the TLS of every request: watched too, from its container's
+# process on this host.
+traefik=$(docker inspect -f '{{.State.Pid}}' "$(docker ps -qf name=traefik | head -1)" 2>/dev/null || true)
+if [ -n "$traefik" ] && [ "$traefik" != 0 ]; then
+  watch+=(--watch "traefik=$traefik")
+fi
 for i in 0 1 2; do
   watch+=(--watch-file "data/load/node$i/store.db" --watch-file "data/load/node$i/store.db-wal")
 done

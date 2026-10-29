@@ -268,7 +268,20 @@ async fn main() -> Result<()> {
     });
     let runner = Runner {
         context,
-        probe: Probe::start(common.watch.clone(), common.watch_files.clone()),
+        probe: Probe::start(
+            // This process too: a generator short of CPU would read as a
+            // slow shop.
+            common
+                .watch
+                .iter()
+                .cloned()
+                .chain([Watched {
+                    name: "loadtest".into(),
+                    pid: std::process::id(),
+                }])
+                .collect(),
+            common.watch_files.clone(),
+        ),
         seed: common.seed,
         max_visits: common.max_visits,
         drain: Duration::from_secs(common.drain_secs),
