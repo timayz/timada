@@ -8,12 +8,14 @@
 //! gives the plaintext [`Subscriber`] while the key exists.
 
 mod campaign;
+mod edition;
 mod forget;
 mod subscriber;
 
 use std::ops::Deref;
 
 pub use campaign::*;
+pub use edition::*;
 pub use subscriber::*;
 
 use evento::{Executor, Projection, metadata::Event};

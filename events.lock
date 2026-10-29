@@ -145,9 +145,17 @@ event timada-invoicing/Document::Reserved { series: String, year: u16 }
 event timada-newsletter/Campaign::Drafted { subject: String, html: String, text: Option<String>, language: Option<String>, drafted_by: String }
 event timada-newsletter/Campaign::Edited { subject: String, html: String, text: Option<String>, language: Option<String>, edited_by: String }
 event timada-newsletter/Campaign::Finished { finished_by: String }
+event timada-newsletter/Campaign::ScheduleActivated { activated_by: String }
+event timada-newsletter/Campaign::ScheduleCleared { cleared_by: String }
+event timada-newsletter/Campaign::ScheduleSet { cadence: String, weekdays: Vec<u8>, month_day: Option<u8>, starts_on: String, ends_on: Option<String>, window_start: u16, window_end: Option<u16>, pace_minutes: u16, set_by: String }
+event timada-newsletter/Campaign::ScheduleStopped { stopped_by: String }
 event timada-newsletter/Campaign::SendRequested { requested_by: String }
 event timada-newsletter/Delivery::Claimed { campaign_id: String, subscriber_id: String, claimed_by: String }
+event timada-newsletter/Delivery::ClaimedForEdition { campaign_id: String, edition_id: String, subscriber_id: String, claimed_by: String }
 event timada-newsletter/Delivery::Failed { reason: String }
+event timada-newsletter/Edition::EditionClosed { closed_by: String }
+event timada-newsletter/Edition::EditionOpened { campaign_id: String, cycle: String, subject: String, html: String, text: Option<String>, language: Option<String>, opened_by: String }
+event timada-newsletter/Edition::EditionRolled { cycle: String, rolled_by: String }
 event timada-newsletter/Subscriber::Confirmed { confirmed_by: String }
 event timada-newsletter/Subscriber::Forgotten { key_id: String, forgotten_by: String }
 event timada-newsletter/Subscriber::Requested { key_id: String, email: Vec<u8>, language: Option<String>, source: String, requested_by: String }

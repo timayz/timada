@@ -14,6 +14,7 @@ base64.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 ulid.workspace = true
+jiff.workspace = true
 sqlx = { workspace = true, features = ["derive"] }
 sqlx_migrator.workspace = true
 
