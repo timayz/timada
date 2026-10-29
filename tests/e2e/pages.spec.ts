@@ -60,9 +60,15 @@ test("an owner writes, previews and publishes a page", async ({ page }) => {
   await expect(page.getByRole("status")).toContainText("Published");
   await expect(page.locator("[data-page-status]")).toHaveAttribute("data-page-status", "Published");
 
-  await openPages(page, slug, "mentions-legales");
-  const row = page.locator("[data-page=mentions-legales]");
-  await expect(row).toHaveAttribute("data-page-status", "Published");
+  // The list is a read model, a moment behind: wait for the row to say so.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/pages`);
+    await expect(page.locator("[data-page=mentions-legales]")).toHaveAttribute(
+      "data-page-status",
+      "Published",
+      { timeout: 1000 },
+    );
+  }).toPass({ timeout: 15_000 });
 
   // A second page cannot take the address; the first moves elsewhere.
   await page.getByRole("link", { name: "New page" }).click();
