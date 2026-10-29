@@ -179,6 +179,19 @@ pub fn describe_error(code: &str) -> &'static str {
         "order_not_found" => "This order does not exist.",
         "newsletter_not_found" => "This subscriber is no longer on the list.",
         "campaign_not_found" => "This campaign does not exist.",
+        "page_invalid_title" => "A page's title is 1 to 120 characters.",
+        "page_invalid_body" => "A page is at most 100,000 characters.",
+        "page_invalid_seo" => {
+            "The search engines' title is at most 70 characters, the description at most 160."
+        }
+        "page_invalid_slug" => {
+            "An address is 2 to 64 lowercase letters, digits or dashes, with no dash at either end."
+        }
+        "page_slug_taken" => "Another page has this address.",
+        "page_invalid_position" => "A footer position is a number from 0 to 999.",
+        "page_too_many_images" => "A page carries at most 50 pictures.",
+        "page_not_found" => "This page does not exist.",
+        "page_image_not_found" => "This picture is no longer on the page.",
         "campaign_sent" => "This campaign was sent already: it can no longer be changed.",
         "scenario_invalid_name" => "A scenario's name is 1 to 80 characters.",
         "scenario_not_found" => "There is no such scenario.",
@@ -371,6 +384,10 @@ pub fn describe_permission(permission: &str) -> &'static str {
         }
         "automations:read" => "See the automation scenarios",
         "automations:manage" => "Draw, save and delete automation scenarios (includes seeing them)",
+        "pages:read" => "See the shop's pages (legal notice, terms, about), drafts included",
+        "pages:manage" => {
+            "Write, publish, place in the footer and delete the shop's pages (includes seeing them)"
+        }
         _ => "Unknown permission",
     }
 }

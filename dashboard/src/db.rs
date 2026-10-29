@@ -169,6 +169,7 @@ pub fn read_model_migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Er
     migrator.add_migrations(timada_reviews::migrations())?;
     migrator.add_migrations(timada_support::migrations())?;
     migrator.add_migrations(timada_newsletter::migrations())?;
+    migrator.add_migrations(timada_pages::migrations())?;
     migrator.add_migrations(timada_automations::migrations())?;
     migrator.add_migrations(timada_invoicing::migrations())?;
     migrator.add_migrations(timada_aliexpress::migrations())?;

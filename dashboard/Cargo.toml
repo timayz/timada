@@ -34,6 +34,7 @@ timada-discounts = { path = "../crates/discounts" }
 timada-reviews = { path = "../crates/reviews" }
 timada-support = { path = "../crates/support" }
 timada-newsletter = { path = "../crates/newsletter" }
+timada-pages = { path = "../crates/pages" }
 timada-automations = { path = "../crates/automations" }
 timada-shoppers = { path = "../crates/shoppers" }
 timada-invoicing = { path = "../crates/invoicing", features = ["pdf"] }

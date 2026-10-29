@@ -1,0 +1,202 @@
+mod common;
+
+use common::*;
+use timada_pages::{AddPageImage, CreatePage, PagesError, new_page_image_id};
+
+#[tokio::test]
+async fn a_page_starts_as_a_draft_under_a_slug_of_its_title() {
+    let pages = command().await;
+    let id = pages
+        .create_page(ALICE, draft("Conditions générales de vente"))
+        .await
+        .unwrap();
+    let page = pages.load_page(&id).await.unwrap().unwrap();
+    assert_eq!(page.slug, "conditions-generales-de-vente");
+    assert_eq!(page.title, "Conditions générales de vente");
+    assert_eq!(page.body, "## Article 1\n\nLes ventes sont fermes.");
+    assert!(!page.published);
+    assert_eq!(page.footer_position, None);
+    let by_slug = pages
+        .load_page_by_slug("conditions-generales-de-vente")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(by_slug.id, id);
+}
+
+#[tokio::test]
+async fn a_slug_belongs_to_one_page() {
+    let pages = command().await;
+    pages
+        .create_page(ALICE, draft("Mentions légales"))
+        .await
+        .unwrap();
+    let again = pages.create_page(ALICE, draft("Mentions légales")).await;
+    assert!(matches!(again, Err(PagesError::SlugTaken)), "{again:?}");
+    let invalid = pages
+        .create_page(
+            ALICE,
+            CreatePage {
+                slug: "Not a slug!".to_owned(),
+                ..draft("About")
+            },
+        )
+        .await;
+    assert!(
+        matches!(invalid, Err(PagesError::InvalidSlug)),
+        "{invalid:?}"
+    );
+}
+
+#[tokio::test]
+async fn renaming_frees_the_old_slug() {
+    let pages = command().await;
+    let id = pages.create_page(ALICE, draft("About us")).await.unwrap();
+    let other = pages.create_page(ALICE, draft("Contact")).await.unwrap();
+    let taken = pages.rename_page(ALICE, &id, "contact").await;
+    assert!(matches!(taken, Err(PagesError::SlugTaken)), "{taken:?}");
+
+    pages
+        .rename_page(ALICE, &id, "qui-sommes-nous")
+        .await
+        .unwrap();
+    assert_eq!(
+        pages.load_page(&id).await.unwrap().unwrap().slug,
+        "qui-sommes-nous"
+    );
+    assert!(pages.load_page_by_slug("about-us").await.unwrap().is_none());
+    // The old slug is free for another page.
+    pages.rename_page(ALICE, &other, "about-us").await.unwrap();
+    assert_eq!(
+        pages
+            .load_page_by_slug("about-us")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        other
+    );
+}
+
+#[tokio::test]
+async fn edit_seo_publish_and_footer() {
+    let pages = command().await;
+    let id = pages.create_page(ALICE, draft("Livraison")).await.unwrap();
+    pages
+        .edit_page(ALICE, &id, " Politique de livraison ", "Sous 48 h.")
+        .await
+        .unwrap();
+    pages
+        .set_page_seo(ALICE, &id, "Livraison | Acme", "  Délais  et\ntarifs. ")
+        .await
+        .unwrap();
+    let too_long = pages.set_page_seo(ALICE, &id, &"x".repeat(71), "").await;
+    assert!(
+        matches!(too_long, Err(PagesError::InvalidSeo)),
+        "{too_long:?}"
+    );
+    pages.show_page_in_footer(ALICE, &id, 3).await.unwrap();
+    let page = pages.load_page(&id).await.unwrap().unwrap();
+    assert_eq!(page.title, "Politique de livraison");
+    assert_eq!(page.body, "Sous 48 h.");
+    assert_eq!(page.seo_title(), "Livraison | Acme");
+    assert_eq!(page.meta_description, "Délais et tarifs.");
+    assert_eq!(page.footer_position, Some(3));
+    // Not listed while it is a draft.
+    assert!(!page.in_footer());
+
+    pages.publish_page(ALICE, &id).await.unwrap();
+    assert!(pages.load_page(&id).await.unwrap().unwrap().in_footer());
+    pages.hide_page_from_footer(ALICE, &id).await.unwrap();
+    pages.unpublish_page(ALICE, &id).await.unwrap();
+    let page = pages.load_page(&id).await.unwrap().unwrap();
+    assert!(!page.published);
+    assert_eq!(page.footer_position, None);
+    let position = pages.show_page_in_footer(ALICE, &id, 1000).await;
+    assert!(
+        matches!(position, Err(PagesError::InvalidPosition)),
+        "{position:?}"
+    );
+}
+
+#[tokio::test]
+async fn pictures_are_added_and_removed() {
+    let pages = command().await;
+    let id = pages.create_page(ALICE, draft("Atelier")).await.unwrap();
+    let image_id = new_page_image_id();
+    let image = AddPageImage {
+        image_id: image_id.clone(),
+        ext: "webp".to_owned(),
+        size: 1234,
+        width: Some(800),
+        height: Some(600),
+    };
+    pages
+        .add_page_image(ALICE, &id, image.clone())
+        .await
+        .unwrap();
+    // Twice is once.
+    pages.add_page_image(ALICE, &id, image).await.unwrap();
+    let page = pages.load_page(&id).await.unwrap().unwrap();
+    assert_eq!(page.images.len(), 1);
+    assert_eq!(page.images[0].mime, "image/webp");
+    assert_eq!(page.images[0].file(), format!("{image_id}.webp"));
+    let bmp = pages
+        .add_page_image(
+            ALICE,
+            &id,
+            AddPageImage {
+                image_id: new_page_image_id(),
+                ext: "bmp".to_owned(),
+                ..AddPageImage::default()
+            },
+        )
+        .await;
+    assert!(matches!(bmp, Err(PagesError::UnsupportedImage)), "{bmp:?}");
+
+    pages
+        .remove_page_image(ALICE, &id, &image_id)
+        .await
+        .unwrap();
+    assert!(
+        pages
+            .load_page(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .images
+            .is_empty()
+    );
+    let gone = pages.remove_page_image(ALICE, &id, &image_id).await;
+    assert!(matches!(gone, Err(PagesError::ImageNotFound)), "{gone:?}");
+}
+
+#[tokio::test]
+async fn a_deleted_page_frees_its_slug() {
+    let pages = command().await;
+    let id = pages.create_page(ALICE, draft("Old terms")).await.unwrap();
+    pages.publish_page(ALICE, &id).await.unwrap();
+    let deleted = pages.delete_page(ALICE, &id).await.unwrap();
+    assert_eq!(deleted.slug, "old-terms");
+    assert!(pages.load_page(&id).await.unwrap().is_none());
+    assert!(
+        pages
+            .load_page_by_slug("old-terms")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let gone = pages.publish_page(ALICE, &id).await;
+    assert!(matches!(gone, Err(PagesError::NotFound)), "{gone:?}");
+    // The slug is taken again by a new page.
+    let new = pages.create_page(ALICE, draft("Old terms")).await.unwrap();
+    assert_eq!(
+        pages
+            .load_page_by_slug("old-terms")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        new
+    );
+}

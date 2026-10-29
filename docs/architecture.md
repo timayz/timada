@@ -26,6 +26,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/shoppers` | `timada-shoppers` | A shop's customers who sign in: mailed codes, sessions, saved addresses, in a tenant's store |
 | `crates/support` | `timada-support` | The messages visitors send through a shop's contact form, and whether the merchant handled them |
 | `crates/newsletter` | `timada-newsletter` | The addresses that asked for a shop's news, confirmed through a mailed link (double opt-in) |
+| `crates/pages` | `timada-pages` | The shop's own pages (legal notice, terms, about) in Markdown: drafts, publication, footer order, pictures |
 | `crates/automations` | `timada-automations` | The scenarios a shop's team draws: a trigger, then a tree of steps, kept as a definition the editor works on (see `docs/automations.md`) |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
@@ -214,7 +215,7 @@ by construction.
 8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
-   orders, open carts, discounts, checkout offers, reviews, messages, newsletter, automations, payments), `/stripe/webhooks/{tenant_id}`,
+   orders, open carts, discounts, checkout offers, reviews, messages, newsletter, automations, pages, payments), `/stripe/webhooks/{tenant_id}`,
    `/store/reviews` (a storefront handing in a review, see *Reviews*), `/store/shoppers/*`
    (a storefront signing its shoppers in, see *Shopper accounts*), `/store/contact` (a
    storefront handing in a message from its contact form, see *Support messages*),
@@ -541,6 +542,24 @@ on every node; the run's id derives from the scenario and the event, so it start
 once), and every node moves the runs due on a timer (`[automations] check_secs`,
 `runs_per_check`), each move written against the run's version so one node acts.
 The details are in `docs/automations.md`.
+
+## Shop pages
+
+A page is a `Page` stream in the tenant's store (`timada-pages`, a ULID): a title, a
+slug unique in the shop (a `PageSlug` index aggregate) and a body in Markdown, kept as
+written. It starts as a draft; `Published` shows it on the storefront at
+`/pages/{slug}`, and `ShownInFooter` places it in the storefront's footer (lowest
+position first, listed only while published). It carries the title and description
+search engines show, and pictures uploaded beside it, kept like a product's (see
+*Product pictures*: on a majority of nodes before `ImageAdded`, fetched by the others
+through `timada-dashboard/media`, deleted with `ImageRemoved` or `Deleted`). The body
+names a picture by its file name (`![The workshop](01J….webp)`).
+
+`timada_pages::render_markdown` turns the body into HTML each time it is shown:
+CommonMark with tables, raw HTML shown as text, only the page's own pictures (served
+from the shop's media address), and the result cleaned by an allow-list sanitiser.
+The back office (`/t/{slug}/pages`, `pages:read` / `pages:manage`) writes a page beside
+that rendering in a sandboxed frame; the list is the `pages` read model.
 
 ## The storefront side
 

@@ -24,6 +24,9 @@
 //! The photos shoppers attach to their reviews are kept the same way, next to
 //! the product pictures: a rejected review, or a photo the merchant takes
 //! off one, takes its files with it.
+//!
+//! So are the pictures of the shop's pages (`timada_pages`): a picture taken
+//! off a page, or a page deleted, takes its files with it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,6 +35,10 @@ use evento::subscription::{Context, SubscriptionBuilder};
 use evento::{Executor, metadata::Event};
 use timada_catalog::aggregator::{ImageAdded, ImageRemoved};
 use timada_catalog::{MAX_IMAGE_BYTES, product_projection};
+use timada_pages::aggregator::{
+    Deleted as PageDeleted, ImageAdded as PageImageAdded, ImageRemoved as PageImageRemoved,
+};
+use timada_pages::page_projection;
 use timada_reviews::aggregator::{
     PhotoRemoved as ReviewPhotoRemoved, Rejected as ReviewRejected, Revised as ReviewRevised,
     Submitted as ReviewSubmitted,
@@ -277,6 +284,9 @@ pub fn subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<E> {
         .handler(on_review_rejected())
         .handler(on_review_photo_removed())
         .handler(on_review_revised())
+        .handler(on_page_image_added())
+        .handler(on_page_image_removed())
+        .handler(on_page_deleted())
         .any_routing_key()
         // About four hours of attempts at most a minute apart: a picture is
         // on a majority of nodes before it is recorded, so a fetch only fails
@@ -487,6 +497,70 @@ impl Layer for MediaCache {
             Ok(response)
         })
     }
+}
+
+#[evento::subscription]
+async fn on_page_image_added<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<PageImageAdded>,
+) -> anyhow::Result<()> {
+    let media: Arc<Media> = context.extract();
+    // Only a picture still on a page that is still there.
+    let still_there = page_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+        .filter(|page| !page.deleted)
+        .is_some_and(|page| {
+            page.images
+                .iter()
+                .any(|image| image.id == event.data.image_id)
+        });
+    if !still_there {
+        return Ok(());
+    }
+    media
+        .fetch(
+            &event.tenant,
+            &event.data.image_id,
+            &event.data.ext,
+            event.data.size,
+        )
+        .await
+}
+
+#[evento::subscription]
+async fn on_page_image_removed<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<PageImageRemoved>,
+) -> anyhow::Result<()> {
+    let media: Arc<Media> = context.extract();
+    media
+        .remove_image(&event.tenant, &event.data.image_id)
+        .await;
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_page_deleted<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<PageDeleted>,
+) -> anyhow::Result<()> {
+    let media: Arc<Media> = context.extract();
+    // The deleted state still lists the pictures the page had.
+    let Some(page) = page_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    for image in &page.images {
+        media.remove_image(&event.tenant, &image.id).await;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
