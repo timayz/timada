@@ -25,8 +25,7 @@ store.shutdown().await;
   allow: `store:read` (read events, run subscriptions) is all a storefront that only
   shows the catalog needs; one that sells also needs `store:checkout`, which appends
   what a shopper does (carts, placing an order) and nothing else. `store:write`
-  appends any event (it implies `store:checkout`); a storefront should not hold it. A
-  key created before scopes existed holds read and write.
+  appends any event (it implies `store:checkout`); a storefront should not hold it.
 - The **address** is one node's store API, or a `host:port` in front of several (a
   load balancer, a geo-routed name). A name is looked up again on every reconnect, so
   when a node goes away the storefront follows the name to one that answers; any

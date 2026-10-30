@@ -110,10 +110,6 @@ pub const SCOPE_STORE_WRITE: &str = "store:write";
 /// from them. What a storefront needs to sell, without the power to change
 /// the catalog or an order once placed.
 pub const SCOPE_STORE_CHECKOUT: &str = "store:checkout";
-/// What a key created before scopes existed holds: everything there was then.
-/// Frozen: a scope added later is never granted to those keys silently.
-pub const LEGACY_API_KEY_SCOPES: &[&str] = &[SCOPE_STORE_READ, SCOPE_STORE_WRITE];
-
 pub const MAX_ROLE_LABEL_LEN: usize = 40;
 pub const MAX_API_KEY_LABEL_LEN: usize = 40;
 /// Every store API token starts with it, so one is recognizable in a config.
@@ -444,11 +440,6 @@ mod tests {
             SCOPE_STORE_CHECKOUT,
             SCOPE_STORE_READ
         ));
-        assert!(
-            LEGACY_API_KEY_SCOPES
-                .iter()
-                .all(|s| API_KEY_SCOPES.contains(s))
-        );
     }
 
     #[test]
@@ -707,10 +698,6 @@ pub const MAX_MAIL_SERVERS: usize = 10;
 /// The longest name a merchant gives one of its mail servers, in characters.
 pub const MAX_MAIL_SERVER_NAME_LEN: usize = 80;
 
-/// The id of the one server a shop set up before it could have several
-/// (`MailServerConfigured`). A ULID is upper case, so no other server has it.
-pub const LEGACY_MAIL_SERVER_ID: &str = "main";
-
 /// How a price is rounded once marked up.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
 pub enum Rounding {
@@ -832,12 +819,6 @@ impl Pricing {
     /// The shop's price for something that costs `cost_cents`.
     pub fn price(&self, cost_cents: u64) -> u64 {
         self.rule_for(cost_cents).price(cost_cents)
-    }
-}
-
-impl From<PricingRule> for Pricing {
-    fn from(rule: PricingRule) -> Self {
-        Self::flat(rule)
     }
 }
 

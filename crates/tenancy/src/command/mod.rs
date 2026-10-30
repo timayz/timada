@@ -38,16 +38,13 @@ use crate::aggregator::api_key::{
 };
 use crate::aggregator::{
     Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailBrandingCleared,
-    MailBrandingSet, MailLanguagesSet, MailServerAdded, MailServerChanged, MailServerConfigured,
-    MailServerDeleted, MailServerRemoved, MailServersPicked, MailTemplateReset,
-    MailTemplateResetIn, MailTemplateSaved, MailTemplateSavedIn, MailTemplateTextSaved,
-    MailTemplateTextSavedIn, MemberGranted, MemberRevoked, MemberRoleChanged, PaymentsConfigured,
-    PaymentsRemoved, Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated,
-    Sent, Suspended,
+    MailBrandingSet, MailLanguagesSet, MailServerAdded, MailServerChanged, MailServerDeleted,
+    MailServersPicked, MailTemplateReset, MailTemplateSaved, MailTemplateTextSaved, MemberGranted,
+    MemberRevoked, MemberRoleChanged, PaymentsConfigured, PaymentsRemoved, Released, Renamed,
+    Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
 };
 use crate::value_object::{
-    LEGACY_API_KEY_SCOPES, LEGACY_MAIL_SERVER_ID, ROLE_OWNER, api_key_id, api_key_scope_implies,
-    implies, invitation_id, tenant_slug_id,
+    ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id, tenant_slug_id,
 };
 
 /// The command gateway. Cheap to clone when `E` is (the dashboard's executor
@@ -102,8 +99,7 @@ pub struct TenantState {
     pub mail_languages: Option<MailLanguages>,
     /// The merchant's wording of the shop's mails, by
     /// [`ShopMailKind`](crate::ShopMailKind) key and language code. A mail
-    /// not here is sent in the built-in wording. Wordings saved before the
-    /// shop could pick languages are English.
+    /// not here is sent in the built-in wording.
     pub mail_templates: BTreeMap<(String, String), MailTemplate>,
     /// Who changed the mails' wording and when, newest last; the last
     /// [`MAIL_TEMPLATE_HISTORY`] changes of each mail in each language.
@@ -208,8 +204,7 @@ pub struct MailTemplateChange {
 /// password is sealed bytes only the host can open.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MailServerSettings {
-    /// A ULID, or [`LEGACY_MAIL_SERVER_ID`] for the one server a shop set up
-    /// before it could have several.
+    /// A ULID.
     pub id: String,
     /// The merchant's name for it.
     pub name: Option<String>,
@@ -326,8 +321,6 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_payments_removed())
         .handler(on_company_linked())
         .handler(on_company_unlinked())
-        .handler(on_mail_server_configured())
-        .handler(on_mail_server_removed())
         .handler(on_mail_server_added())
         .handler(on_mail_server_changed())
         .handler(on_mail_server_deleted())
@@ -335,13 +328,10 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_aliexpress_configured())
         .handler(on_aliexpress_removed())
         .handler(on_aliexpress_forwarding_set())
+        .handler(on_mail_languages_set())
         .handler(on_mail_template_saved())
         .handler(on_mail_template_text_saved())
         .handler(on_mail_template_reset())
-        .handler(on_mail_languages_set())
-        .handler(on_mail_template_saved_in())
-        .handler(on_mail_template_text_saved_in())
-        .handler(on_mail_template_reset_in())
         .handler(on_mail_branding_set())
         .handler(on_mail_branding_cleared())
         .strict()
@@ -477,36 +467,6 @@ async fn on_payments_removed(
 }
 
 #[evento::handler]
-async fn on_mail_server_configured(
-    event: Event<MailServerConfigured>,
-    tenant: &mut TenantState,
-) -> anyhow::Result<()> {
-    // The one server a shop had before it could have several: it sent all
-    // the shop's mail, so it takes what no server is picked for.
-    let data = &event.data;
-    tenant.put_mail_server(MailServerSettings {
-        id: LEGACY_MAIL_SERVER_ID.to_owned(),
-        name: None,
-        host: data.host.to_owned(),
-        port: data.port,
-        security: data.security.to_owned(),
-        username: data.username.to_owned(),
-        password_sealed: data.password_sealed.to_owned(),
-        from_address: data.from_address.to_owned(),
-        from_name: data.from_name.to_owned(),
-        configured_by: data.configured_by.to_owned(),
-        configured_at: event.timestamp,
-    });
-    if tenant.shop_mails_server().is_none() {
-        tenant.shop_mails_server_id = Some(LEGACY_MAIL_SERVER_ID.to_owned());
-    }
-    if tenant.marketing_server().is_none() {
-        tenant.marketing_server_id = Some(LEGACY_MAIL_SERVER_ID.to_owned());
-    }
-    Ok(())
-}
-
-#[evento::handler]
 async fn on_mail_server_added(
     event: Event<MailServerAdded>,
     tenant: &mut TenantState,
@@ -571,7 +531,7 @@ async fn on_mail_servers_picked(
 
 #[evento::handler]
 async fn on_aliexpress_configured(
-    event: Event<crate::aggregator::AliexpressConfiguredV2>,
+    event: Event<crate::aggregator::AliexpressConfigured>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     let data = &event.data;
@@ -612,15 +572,6 @@ async fn on_aliexpress_forwarding_set(
         settings.auto_forward = event.data.auto_forward;
         settings.try_to_pay = event.data.try_to_pay;
     }
-    Ok(())
-}
-
-#[evento::handler]
-async fn on_mail_server_removed(
-    _event: Event<MailServerRemoved>,
-    tenant: &mut TenantState,
-) -> anyhow::Result<()> {
-    tenant.drop_mail_server(LEGACY_MAIL_SERVER_ID);
     Ok(())
 }
 
@@ -792,8 +743,8 @@ async fn on_mail_languages_set(
 }
 
 #[evento::handler]
-async fn on_mail_template_saved_in(
-    event: Event<MailTemplateSavedIn>,
+async fn on_mail_template_saved(
+    event: Event<MailTemplateSaved>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     let data = &event.data;
@@ -813,58 +764,11 @@ async fn on_mail_template_saved_in(
 }
 
 #[evento::handler]
-async fn on_mail_template_text_saved_in(
-    event: Event<MailTemplateTextSavedIn>,
-    tenant: &mut TenantState,
-) -> anyhow::Result<()> {
-    let key = (event.data.mail.to_owned(), event.data.language.to_owned());
-    if let Some(template) = tenant.mail_templates.get_mut(&key) {
-        template.text = Some(event.data.text.to_owned());
-    }
-    Ok(())
-}
-
-#[evento::handler]
-async fn on_mail_template_reset_in(
-    event: Event<MailTemplateResetIn>,
-    tenant: &mut TenantState,
-) -> anyhow::Result<()> {
-    let data = &event.data;
-    tenant.reset_mail_template(&data.mail, &data.language, &data.reset_by, event.timestamp);
-    Ok(())
-}
-
-#[evento::handler]
-async fn on_mail_template_saved(
-    event: Event<MailTemplateSaved>,
-    tenant: &mut TenantState,
-) -> anyhow::Result<()> {
-    // Saved before a shop could pick languages: English.
-    let data = &event.data;
-    tenant.save_mail_template(
-        &data.mail,
-        crate::DEFAULT_LANGUAGE,
-        MailTemplate {
-            subject: data.subject.to_owned(),
-            html: data.html.to_owned(),
-            text: None,
-            saved_by: data.saved_by.to_owned(),
-            saved_at: event.timestamp,
-        },
-        event.timestamp,
-    );
-    Ok(())
-}
-
-#[evento::handler]
 async fn on_mail_template_text_saved(
     event: Event<MailTemplateTextSaved>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
-    let key = (
-        event.data.mail.to_owned(),
-        crate::DEFAULT_LANGUAGE.to_owned(),
-    );
+    let key = (event.data.mail.to_owned(), event.data.language.to_owned());
     if let Some(template) = tenant.mail_templates.get_mut(&key) {
         template.text = Some(event.data.text.to_owned());
     }
@@ -877,12 +781,7 @@ async fn on_mail_template_reset(
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     let data = &event.data;
-    tenant.reset_mail_template(
-        &data.mail,
-        crate::DEFAULT_LANGUAGE,
-        &data.reset_by,
-        event.timestamp,
-    );
+    tenant.reset_mail_template(&data.mail, &data.language, &data.reset_by, event.timestamp);
     Ok(())
 }
 
@@ -1057,8 +956,7 @@ pub struct ApiKeyState {
     pub created_at: u64,
     pub revoked_by: Option<String>,
     pub revoked_at: Option<u64>,
-    /// What the key may do, sorted. A key created before scopes existed
-    /// holds [`LEGACY_API_KEY_SCOPES`] until its scopes are changed.
+    /// What the key may do, sorted.
     pub scopes: BTreeSet<String>,
 }
 
@@ -1094,11 +992,7 @@ async fn on_api_key_created(
     key.hint = event.data.hint.to_owned();
     key.created_by = event.data.created_by.to_owned();
     key.created_at = event.data.created_at;
-    // Replaced by the `Scoped` committed with every key created since.
-    key.scopes = LEGACY_API_KEY_SCOPES
-        .iter()
-        .map(|s| (*s).to_owned())
-        .collect();
+    key.scopes = event.data.scopes.iter().cloned().collect();
     Ok(())
 }
 

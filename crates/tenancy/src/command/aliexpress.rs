@@ -1,7 +1,7 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::company::{AliexpressAuthorized, AliexpressDisconnected};
-use crate::aggregator::{AliexpressConfiguredV2, AliexpressForwardingSet, AliexpressRemoved};
+use crate::aggregator::{AliexpressConfigured, AliexpressForwardingSet, AliexpressRemoved};
 use crate::command::CompanyState;
 use crate::error::TenancyError;
 use crate::value_object::{PERMISSION_ALIEXPRESS_MANAGE, Pricing};
@@ -65,7 +65,7 @@ impl<E: Executor> super::Command<E> {
         tenant
             .write()?
             .routing_key_opt(routing_key)
-            .event(&AliexpressConfiguredV2 {
+            .event(&AliexpressConfigured {
                 ship_to_country: country,
                 currency,
                 language,

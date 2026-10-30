@@ -14,15 +14,12 @@ use crate::config::Config;
 
 const NONCE_LEN: usize = 12;
 
-/// What seals the tenants' payment secrets: `payments.secret_key`, or else
-/// `secrets.key`. `None` when payments are off.
+/// What seals the tenants' payment secrets: `None` when payments are off or
+/// without `secrets.key`.
 pub fn payments_sealer(config: &Config) -> Option<Sealer> {
-    let payments = config.payments.as_ref()?;
-    let key = payments
-        .secret_key
-        .as_deref()
-        .or(config.secrets.as_ref().map(|secrets| secrets.key.as_str()))?;
-    Some(Sealer::new("payments", key))
+    config.payments.as_ref()?;
+    let secrets = config.secrets.as_ref()?;
+    Some(Sealer::new("payments", &secrets.key))
 }
 
 /// What seals the shops' mail server passwords: `None` without
@@ -196,25 +193,5 @@ mod tests {
         let mut tampered = sealed.clone();
         *tampered.last_mut().unwrap() ^= 1;
         assert!(sealer.open(&tampered).is_err());
-    }
-
-    /// The payment secrets recorded before the sealer took a purpose still
-    /// open: the label is byte for byte the one it used.
-    #[test]
-    fn payments_keep_their_key() {
-        let secret = "a-test-secret-of-thirty-two-chars!!";
-        let mut hasher = Sha256::new();
-        hasher.update(b"timada/payments/seal\0");
-        hasher.update(secret.as_bytes());
-        let old = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&hasher.finalize()));
-        let nonce = [7u8; NONCE_LEN];
-        let body = old
-            .encrypt(Nonce::from_slice(&nonce), b"sk_test_old".as_slice())
-            .unwrap();
-        let sealed = [nonce.as_slice(), &body].concat();
-        assert_eq!(
-            Sealer::new("payments", secret).open(&sealed).unwrap(),
-            "sk_test_old"
-        );
     }
 }

@@ -62,18 +62,18 @@ pub async fn history(cx: &Cx) -> Result<impl View> {
     });
     let ids: Vec<String> = rows
         .iter()
-        .flat_map(|row| [row.actor.clone(), row.user_id.clone()])
+        .flat_map(|row| [Some(row.actor.clone()), row.user_id.clone()])
         .flatten()
         .collect();
     let labels = user_labels(cx, &ids).await?;
     let entries: Vec<(i64, String, String)> = rows
         .iter()
         .map(|row| {
-            let actor = row
-                .actor
-                .as_ref()
-                .map_or_else(|| "—".to_owned(), |id| labels[id].clone());
-            (row.at, actor, describe(&tenant, row, &labels))
+            (
+                row.at,
+                labels[&row.actor].clone(),
+                describe(&tenant, row, &labels),
+            )
         })
         .collect();
     let members_link = href!(super::index, Slug(tenant.slug.clone())).resolve(cx);
@@ -150,7 +150,7 @@ fn describe(
         .map(|role| role_label(tenant, role))
         .unwrap_or_default();
     let email = row.email.as_deref().unwrap_or_default();
-    let by_self = row.actor.is_some() && row.actor == row.user_id;
+    let by_self = row.user_id.as_deref() == Some(row.actor.as_str());
     match row.action.as_str() {
         AUDIT_GRANTED if by_self => format!("joined as {role}"),
         AUDIT_GRANTED => format!("added {member} as {role}"),

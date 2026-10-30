@@ -5,25 +5,23 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "catalog";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![
-        Products0001,
-        Categories0002,
-        ProductImages0003,
-        ProductVariants0004,
-        ProductSearch0005,
-        CategoryMenu0006,
-        Stock0007
-    ]
+    vec_box![Catalog0001]
 }
 
-pub struct Products0001;
+pub struct Catalog0001;
 sqlx_migrator::sqlite_migration!(
-    Products0001,
+    Catalog0001,
     "catalog",
     "0001_products",
     vec_box![],
     vec_box![
         (
+            // One row per product of a tenant. `thumbnail` is the first
+            // picture's file name, for a listing's thumbnail. When a product
+            // varies, `min_amount_cents` and `max_amount_cents` are the
+            // cheapest and the dearest a shopper may pay. `stock_state` is
+            // worked out from the stock rows after the row is written, hence
+            // its default.
             "CREATE TABLE catalog_products (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
@@ -36,6 +34,12 @@ sqlx_migrator::sqlite_migration!(
                 created_by TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
+                thumbnail TEXT,
+                image_count INTEGER NOT NULL,
+                min_amount_cents INTEGER,
+                max_amount_cents INTEGER,
+                variant_count INTEGER NOT NULL,
+                stock_state TEXT NOT NULL DEFAULT 'untracked',
                 PRIMARY KEY (tenant_id, id)
             )",
             "DROP TABLE catalog_products"
@@ -49,17 +53,19 @@ sqlx_migrator::sqlite_migration!(
             "CREATE INDEX catalog_products_name ON catalog_products (tenant_id, name)",
             "DROP INDEX catalog_products_name"
         ),
-    ]
-);
-
-pub struct Categories0002;
-sqlx_migrator::sqlite_migration!(
-    Categories0002,
-    "catalog",
-    "0002_categories",
-    vec_box![("catalog", "0001_products")],
-    vec_box![
         (
+            // Cut in runs of three characters, so a search matches anywhere
+            // in a word as `LIKE '%q%'` would, ignoring case and accents. The
+            // tenant is a column too, so a search narrows to one tenant's
+            // products inside the index. The rowid is the product row's.
+            "CREATE VIRTUAL TABLE catalog_products_fts USING fts5(
+                tenant_id, slug, name, tokenize = 'trigram remove_diacritics 1'
+            )",
+            "DROP TABLE catalog_products_fts"
+        ),
+        (
+            // The counts are refreshed from the product rows, after the
+            // category's own row is written.
             "CREATE TABLE catalog_categories (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
@@ -69,6 +75,7 @@ sqlx_migrator::sqlite_migration!(
                 parent_id TEXT,
                 position INTEGER NOT NULL,
                 archived INTEGER NOT NULL,
+                in_menu INTEGER NOT NULL,
                 created_by TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
@@ -102,96 +109,6 @@ sqlx_migrator::sqlite_migration!(
                 ON catalog_product_categories (tenant_id, category_id)",
             "DROP INDEX catalog_product_categories_category"
         ),
-    ]
-);
-
-pub struct ProductImages0003;
-sqlx_migrator::sqlite_migration!(
-    ProductImages0003,
-    "catalog",
-    "0003_product_images",
-    vec_box![("catalog", "0002_categories")],
-    vec_box![
-        (
-            // The first picture's file name, for a listing's thumbnail.
-            "ALTER TABLE catalog_products ADD COLUMN thumbnail TEXT",
-            "ALTER TABLE catalog_products DROP COLUMN thumbnail"
-        ),
-        (
-            "ALTER TABLE catalog_products ADD COLUMN image_count INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE catalog_products DROP COLUMN image_count"
-        ),
-    ]
-);
-
-pub struct ProductVariants0004;
-sqlx_migrator::sqlite_migration!(
-    ProductVariants0004,
-    "catalog",
-    "0004_product_variants",
-    vec_box![("catalog", "0003_product_images")],
-    vec_box![
-        (
-            // What a listing shows when a product varies: the cheapest and
-            // the dearest a shopper may pay.
-            "ALTER TABLE catalog_products ADD COLUMN min_amount_cents INTEGER",
-            "ALTER TABLE catalog_products DROP COLUMN min_amount_cents"
-        ),
-        (
-            "ALTER TABLE catalog_products ADD COLUMN max_amount_cents INTEGER",
-            "ALTER TABLE catalog_products DROP COLUMN max_amount_cents"
-        ),
-        (
-            "ALTER TABLE catalog_products ADD COLUMN variant_count INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE catalog_products DROP COLUMN variant_count"
-        ),
-    ]
-);
-
-pub struct ProductSearch0005;
-sqlx_migrator::sqlite_migration!(
-    ProductSearch0005,
-    "catalog",
-    "0005_product_search",
-    vec_box![("catalog", "0004_product_variants")],
-    vec_box![
-        (
-            // Cut in runs of three characters, so a search matches anywhere
-            // in a word as `LIKE '%q%'` did, ignoring case and accents. The
-            // tenant is a column too, so a search narrows to one tenant's
-            // products inside the index. The rowid is the product row's.
-            "CREATE VIRTUAL TABLE catalog_products_fts USING fts5(
-                tenant_id, slug, name, tokenize = 'trigram remove_diacritics 1'
-            )",
-            "DROP TABLE catalog_products_fts"
-        ),
-        (
-            "INSERT INTO catalog_products_fts (rowid, tenant_id, slug, name)
-                SELECT rowid, tenant_id, slug, name FROM catalog_products",
-            "DELETE FROM catalog_products_fts"
-        ),
-    ]
-);
-
-pub struct CategoryMenu0006;
-sqlx_migrator::sqlite_migration!(
-    CategoryMenu0006,
-    "catalog",
-    "0006_category_menu",
-    vec_box![("catalog", "0005_product_search")],
-    vec_box![(
-        "ALTER TABLE catalog_categories ADD COLUMN in_menu INTEGER NOT NULL DEFAULT 1",
-        "ALTER TABLE catalog_categories DROP COLUMN in_menu"
-    )]
-);
-
-pub struct Stock0007;
-sqlx_migrator::sqlite_migration!(
-    Stock0007,
-    "catalog",
-    "0007_stock",
-    vec_box![("catalog", "0006_category_menu")],
-    vec_box![
         (
             // One row per thing the shop counts: a product without variants
             // (`variant_id` '') or one variant. What checkouts hold is left
@@ -206,10 +123,6 @@ sqlx_migrator::sqlite_migration!(
                 PRIMARY KEY (tenant_id, product_id, variant_id)
             )",
             "DROP TABLE catalog_stock"
-        ),
-        (
-            "ALTER TABLE catalog_products ADD COLUMN stock_state TEXT NOT NULL DEFAULT 'untracked'",
-            "ALTER TABLE catalog_products DROP COLUMN stock_state"
         ),
     ]
 );

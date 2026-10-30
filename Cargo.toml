@@ -28,7 +28,6 @@ evento-accord = "=2.0.0-alpha.36"
 bitcode = "0.6"
 argon2 = { version = "0.5", features = ["std"] }
 ulid = "3.0"
-libc = "0.2"
 deunicode = "1.6"
 openidconnect = "4.0.1"
 webauthn-rs = { version = "0.5.5", features = ["danger-allow-state-serialisation", "conditional-ui"] }

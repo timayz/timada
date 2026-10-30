@@ -1111,7 +1111,7 @@ mod sql {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     use super::*;
-    use crate::migrations::{migrate, migrate_plan};
+    use crate::migrations::migrate;
 
     /// One connection, or each one of the pool would be its own empty
     /// database.
@@ -1145,8 +1145,9 @@ mod sql {
         };
         sqlx::query(
             "INSERT INTO storefront_products (id, slug, name, description, amount_cents,
-                currency, status, updated_at, options_json, min_amount_cents, max_amount_cents)
-             VALUES (?1, ?1, ?1, '', ?2, 'EUR', ?3, 1, ?4, ?5, ?6)",
+                currency, status, updated_at, images_json, options_json, variants_json,
+                attributes_json, min_amount_cents, max_amount_cents)
+             VALUES (?1, ?1, ?1, '', ?2, 'EUR', ?3, 1, '[]', ?4, '[]', '[]', ?5, ?6)",
         )
         .bind(id)
         .bind(range.map(|(min, _)| min))
@@ -1197,9 +1198,9 @@ mod sql {
         insert_product(&pool, "service", "published", None, &[]).await;
         insert_product(&pool, "draft", "draft", Some((1000, 1000)), &["Rose"]).await;
         sqlx::query(
-            "INSERT INTO storefront_categories (id, slug, name, description, position,
-                archived, updated_at, product_count, subtree_count)
-             VALUES ('cat', 'cat', 'Cat', '', 0, 0, 1, 2, 2)",
+            "INSERT INTO storefront_categories (id, slug, name, description, body, position,
+                archived, in_menu, updated_at, product_count, subtree_count)
+             VALUES ('cat', 'cat', 'Cat', '', '', 0, 0, 1, 1, 2, 2)",
         )
         .execute(&pool)
         .await
@@ -1207,8 +1208,9 @@ mod sql {
         for product in ["collar", "basket"] {
             sqlx::query(
                 "INSERT INTO storefront_category_products (category_id, product_id,
-                    updated_at, min_amount_cents, max_amount_cents)
-                 SELECT 'cat', id, updated_at, min_amount_cents, max_amount_cents
+                    updated_at, min_amount_cents, max_amount_cents, review_count, rating_x100)
+                 SELECT 'cat', id, updated_at, min_amount_cents, max_amount_cents, review_count,
+                    rating_x100
                  FROM storefront_products WHERE id = ?1",
             )
             .bind(product)
@@ -1369,51 +1371,6 @@ mod sql {
                 .await
                 .unwrap()
                 .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn the_migration_backfills_the_rows_already_copied() {
-        let pool = pool().await;
-        migrate_plan(
-            &pool,
-            &evento::migrator::Plan::apply_name("storefront", Some("0008_review_replies")),
-        )
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO storefront_products (id, slug, name, description, status, updated_at,
-                options_json)
-             VALUES ('old', 'old', 'Old', '', 'published', 1,
-                '[{\"id\":\"o\",\"name\":\"Couleur\",\"values\":[\"Rose foncé\",\"Bleu\"]}]')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        migrate(&pool).await.unwrap();
-        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
-            "SELECT name_key, value_key, name, value FROM storefront_product_options
-             WHERE product_id = 'old' ORDER BY value_key",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        assert_eq!(
-            rows,
-            vec![
-                (
-                    "couleur".into(),
-                    "bleu".into(),
-                    "Couleur".into(),
-                    "Bleu".into()
-                ),
-                (
-                    "couleur".into(),
-                    "rose-fonce".into(),
-                    "Couleur".into(),
-                    "Rose foncé".into()
-                ),
-            ]
         );
     }
 }

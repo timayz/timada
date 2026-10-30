@@ -108,29 +108,18 @@ pub struct CheckoutDraft {
     pub country: String,
     pub phone: String,
     pub note: String,
-    /// A business buyer's EU VAT number; absent from drafts kept before it
-    /// existed.
-    #[serde(default)]
+    /// A business buyer's EU VAT number.
     pub vat_number: String,
     /// Not empty when the shopper is billed at another address than the
-    /// delivery one; that address follows. All absent from older drafts.
-    #[serde(default)]
+    /// delivery one; that address follows.
     pub billing_different: String,
-    #[serde(default)]
     pub billing_name: String,
-    #[serde(default)]
     pub billing_line1: String,
-    #[serde(default)]
     pub billing_line2: String,
-    #[serde(default)]
     pub billing_postal_code: String,
-    #[serde(default)]
     pub billing_city: String,
-    #[serde(default)]
     pub billing_country: String,
-    /// The shipping method picked; absent from older drafts and in a shop
-    /// that ships for free.
-    #[serde(default)]
+    /// The shipping method picked; empty in a shop that ships for free.
     pub shipping_method: String,
 }
 

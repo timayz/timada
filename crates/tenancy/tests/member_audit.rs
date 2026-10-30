@@ -4,8 +4,8 @@ use common::*;
 use timada_tenancy::{
     AUDIT_GRANTED, AUDIT_INVITATION_ACCEPTED, AUDIT_INVITATION_REVOKED, AUDIT_INVITED,
     AUDIT_REVOKED, AUDIT_ROLE_CHANGED, AcceptInvitation, Command, DefineRole, InviteMember,
-    MemberAuditRow, PERMISSION_MEMBERS_MANAGE, aggregator::MemberGranted, invitation_id,
-    member_audit_of_tenant, member_audit_subscription,
+    MemberAuditRow, PERMISSION_MEMBERS_MANAGE, invitation_id, member_audit_of_tenant,
+    member_audit_subscription,
 };
 
 const NOW: u64 = 1_800_000_000;
@@ -34,7 +34,7 @@ fn invite(tenant_id: &str, email: &str, role: &str) -> InviteMember {
 /// `(action, actor, user, email, role)`, for comparing whole histories.
 type Line = (
     String,
-    Option<String>,
+    String,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -63,7 +63,7 @@ fn line(
 ) -> Line {
     (
         action.to_owned(),
-        Some(actor.to_owned()),
+        actor.to_owned(),
         user.map(str::to_owned),
         email.map(str::to_owned),
         role.map(str::to_owned),
@@ -250,31 +250,4 @@ async fn a_repeated_delivery_records_nothing_twice() {
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
-}
-
-#[tokio::test]
-async fn a_member_change_without_its_actor_is_listed_with_none() {
-    let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
-    let alice = new_id();
-    let bob = new_id();
-    let tenant = create_tenant(&cmd, "Acme", &alice).await;
-    // What the log holds from before actors were recorded.
-    evento::append(&tenant.id)
-        .original_version(tenant.aggregate_version)
-        .event(&MemberGranted {
-            user_id: bob.clone(),
-            role: "owner".to_owned(),
-        })
-        .commit(&executor)
-        .await
-        .unwrap();
-
-    catch_up(&executor, &pool).await;
-    let rows = member_audit_of_tenant(&pool, &tenant.id, None, 50)
-        .await
-        .unwrap();
-    assert_eq!(rows[0].user_id.as_deref(), Some(bob.as_str()));
-    assert_eq!(rows[0].actor, None);
-    assert_eq!(rows[1].actor.as_deref(), Some(alice.as_str()));
 }
