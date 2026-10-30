@@ -386,12 +386,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .iter()
         .filter(|(.., reason)| reason.is_none())
         .count();
-    let link_rule = link.as_ref().and_then(|link| link.pricing);
-    let link_rule_fields = crate::app::t::slug::aliexpress::RuleFields::of(link_rule);
-    let link_rule_label = link_rule
-        .map(|rule| {
-            crate::app::t::slug::aliexpress::rule_label(
-                Some(rule),
+    let link_pricing = link.as_ref().and_then(|link| link.pricing.as_ref());
+    let link_rule_fields =
+        crate::app::t::slug::aliexpress::RuleFields::of(link_pricing.map(|pricing| &pricing.above));
+    let link_rule_label = link_pricing
+        .map(|pricing| {
+            crate::app::t::slug::aliexpress::pricing_label(
+                Some(pricing),
                 product.currency().unwrap_or(CURRENCIES[0]),
             )
         })

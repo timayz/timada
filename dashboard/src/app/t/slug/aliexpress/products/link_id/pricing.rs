@@ -17,8 +17,8 @@ pub struct ProductPricingForm {
     pricing: PricingForm,
 }
 
-/// Gives the product its own price rule (blank: the shop's). It applies at
-/// the next read.
+/// Gives the product its own price rule, for every cost (blank: the
+/// shop's). It applies at the next read.
 #[route(POST)]
 pub async fn pricing(cx: &Cx, Form(form): Form<ProductPricingForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -26,7 +26,7 @@ pub async fn pricing(cx: &Cx, Form(form): Form<ProductPricingForm>) -> Result<Se
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
     let link_id = path_param::<LinkId>(cx).to_owned();
-    let rule = match form.pricing.rule() {
+    let rule = match form.pricing.pricing() {
         Ok(rule) => rule,
         Err(code) => return Ok(back_to(cx, &access, &form.back, Some(code), None)),
     };

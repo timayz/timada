@@ -779,6 +779,68 @@ impl PricingRule {
     }
 }
 
+/// One cost band of a shop's [`Pricing`]: costs up to `up_to_cents`
+/// (inclusive) that no lower band takes are priced by `rule`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct PriceBand {
+    pub up_to_cents: u64,
+    pub rule: PricingRule,
+}
+
+/// How a shop prices what it imports: one rule per cost band, the bands
+/// lowest first, and `above` for every cost past the last band. A single
+/// rule for every cost is no band at all ([`Pricing::flat`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct Pricing {
+    pub bands: Vec<PriceBand>,
+    pub above: PricingRule,
+}
+
+/// How many cost bands a pricing keeps at most, `above` aside.
+pub const MAX_PRICE_BANDS: usize = 10;
+
+impl Pricing {
+    /// One rule for every cost.
+    pub fn flat(rule: PricingRule) -> Self {
+        Self {
+            bands: Vec::new(),
+            above: rule,
+        }
+    }
+
+    /// Whether every rule is one a shop may keep and the bands read: not
+    /// too many, each ending above the one before.
+    pub fn is_valid(&self) -> bool {
+        self.bands.len() <= MAX_PRICE_BANDS
+            && self.above.is_valid()
+            && self.bands.iter().all(|band| band.rule.is_valid())
+            && self
+                .bands
+                .windows(2)
+                .all(|pair| pair[0].up_to_cents < pair[1].up_to_cents)
+    }
+
+    /// The rule that prices something costing `cost_cents`: the lowest band
+    /// reaching it, else `above`.
+    pub fn rule_for(&self, cost_cents: u64) -> &PricingRule {
+        self.bands
+            .iter()
+            .find(|band| cost_cents <= band.up_to_cents)
+            .map_or(&self.above, |band| &band.rule)
+    }
+
+    /// The shop's price for something that costs `cost_cents`.
+    pub fn price(&self, cost_cents: u64) -> u64 {
+        self.rule_for(cost_cents).price(cost_cents)
+    }
+}
+
+impl From<PricingRule> for Pricing {
+    fn from(rule: PricingRule) -> Self {
+        Self::flat(rule)
+    }
+}
+
 #[cfg(test)]
 mod pricing_tests {
     use super::*;
@@ -800,6 +862,61 @@ mod pricing_tests {
         assert_eq!(rule(10_000, 0, Rounding::Ninety9).price(1299), 1299);
         assert_eq!(rule(10_000, 0, Rounding::Whole).price(1201), 1300);
         assert_eq!(rule(10_000, 0, Rounding::Whole).price(1200), 1200);
+    }
+
+    fn banded() -> Pricing {
+        Pricing {
+            bands: vec![
+                PriceBand {
+                    up_to_cents: 3_000,
+                    rule: rule(25_000, 0, Rounding::Cent),
+                },
+                PriceBand {
+                    up_to_cents: 10_000,
+                    rule: rule(20_000, 0, Rounding::Cent),
+                },
+            ],
+            above: rule(15_000, 0, Rounding::Ninety9),
+        }
+    }
+
+    #[test]
+    fn a_pricing_picks_the_band_the_cost_falls_in() {
+        let pricing = banded();
+        assert_eq!(pricing.price(1_000), 2_500);
+        // A band's end belongs to it.
+        assert_eq!(pricing.price(3_000), 7_500);
+        assert_eq!(pricing.price(3_001), 6_002);
+        assert_eq!(pricing.price(10_000), 20_000);
+        assert_eq!(pricing.price(10_001), 15_099);
+        assert_eq!(
+            Pricing::flat(rule(20_000, 0, Rounding::Cent)).price(431),
+            862
+        );
+    }
+
+    #[test]
+    fn bands_must_rise_and_every_rule_must_hold() {
+        assert!(banded().is_valid());
+        let mut same_end = banded();
+        same_end.bands[1].up_to_cents = 3_000;
+        assert!(!same_end.is_valid());
+        let mut falling = banded();
+        falling.bands.reverse();
+        assert!(!falling.is_valid());
+        let mut below_cost = banded();
+        below_cost.bands[0].rule.multiplier_bps = 9_999;
+        assert!(!below_cost.is_valid());
+        let mut too_many = banded();
+        too_many.bands = (1..=MAX_PRICE_BANDS as u64 + 1)
+            .map(|n| PriceBand {
+                up_to_cents: n * 100,
+                rule: rule(20_000, 0, Rounding::Cent),
+            })
+            .collect();
+        assert!(!too_many.is_valid());
+        too_many.bands.pop();
+        assert!(too_many.is_valid());
     }
 
     #[test]

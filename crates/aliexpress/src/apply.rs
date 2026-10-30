@@ -14,7 +14,7 @@ use timada_catalog::{
 };
 use timada_catalog_import::Images;
 use timada_catalog_import::woocommerce::fit_sku;
-use timada_tenancy::PricingRule;
+use timada_tenancy::Pricing;
 
 use crate::aggregator::{NewSku, SkuLink};
 use crate::command::LinkState;
@@ -85,14 +85,14 @@ fn link_of(sku: &MappedSku, variant_id: Option<String>) -> SkuLink {
 }
 
 /// Brings the linked product in step with `product` as just read (`None`:
-/// AliExpress no longer has it). `rule` is the price rule that applies, the
-/// link's own or the shop's; without one prices are left alone.
+/// AliExpress no longer has it). `pricing` is what applies, the link's own
+/// or the shop's; without one prices are left alone.
 pub async fn apply_sync<E: Executor>(
     catalog: &timada_catalog::Command<E>,
     actor: &str,
     link: &LinkState,
     product: Option<&AeProduct>,
-    rule: Option<PricingRule>,
+    pricing: Option<&Pricing>,
 ) -> Result<SyncOutcome, CatalogError> {
     let mut outcome = SyncOutcome {
         skus: link.skus.clone(),
@@ -154,11 +154,11 @@ pub async fn apply_sync<E: Executor>(
             }
             Err(err) => return Err(err),
         }
-        if let (Some(rule), Some(currency)) = (rule, currency.as_deref())
+        if let (Some(pricing), Some(currency)) = (pricing, currency.as_deref())
             && !outcome.offline
             && read.is_some()
         {
-            let price = rule.price(cost_cents);
+            let price = pricing.price(cost_cents);
             let current = match linked.variant_id.as_deref() {
                 Some(variant_id) => state
                     .variant(variant_id)
@@ -341,15 +341,15 @@ pub struct AddOutcome {
 
 /// Adds combinations the link found (`sku_ids`; empty: every one offered)
 /// as variants of its product: the values their options lack, their
-/// picture (through `images`), a price by `rule` (the cost without one) and
-/// their stock. One a variant is already (an add that was not recorded) is
-/// linked to it.
+/// picture (through `images`), a price by `pricing` (the cost without one)
+/// and their stock. One a variant is already (an add that was not recorded)
+/// is linked to it.
 pub async fn add_combinations<E: Executor>(
     catalog: &timada_catalog::Command<E>,
     actor: &str,
     link: &LinkState,
     sku_ids: &[String],
-    rule: Option<PricingRule>,
+    pricing: Option<&Pricing>,
     images: &dyn Images,
 ) -> Result<AddOutcome, CatalogError> {
     let mut outcome = AddOutcome::default();
@@ -385,7 +385,7 @@ pub async fn add_combinations<E: Executor>(
                 found,
                 selections,
                 new_values,
-                rule,
+                pricing,
                 images,
                 &mut pictures,
             )
@@ -437,7 +437,7 @@ async fn define<E: Executor>(
     found: &NewSku,
     selections: Vec<OptionSelection>,
     new_values: Vec<(String, String)>,
-    rule: Option<PricingRule>,
+    pricing: Option<&Pricing>,
     images: &dyn Images,
     pictures: &mut HashMap<String, String>,
 ) -> Result<String, CatalogError> {
@@ -462,7 +462,7 @@ async fn define<E: Executor>(
     let mut cmd = DefineVariant {
         selections,
         sku: fit_sku(&found.sku_id),
-        amount_cents: shop_price(rule, found.cost_cents),
+        amount_cents: shop_price(pricing, found.cost_cents),
         currency,
         image_id,
     };

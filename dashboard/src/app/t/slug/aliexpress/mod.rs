@@ -11,11 +11,15 @@ pub mod import;
 pub mod products;
 pub mod remove;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use timada_aliexpress::{LinkRow, links_of_tenant};
 use timada_catalog::{CURRENCIES, format_money};
-use timada_tenancy::{CompanyState, PERMISSION_ALIEXPRESS_MANAGE, PricingRule, Rounding};
+use timada_tenancy::{
+    CompanyState, MAX_PRICE_BANDS, PERMISSION_ALIEXPRESS_MANAGE, PriceBand, Pricing, PricingRule,
+    Rounding,
+};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -71,6 +75,11 @@ pub struct PricingForm {
 }
 
 impl PricingForm {
+    /// Whether any field was filled in.
+    fn is_blank(&self) -> bool {
+        self.multiplier.trim().is_empty() && self.plus.trim().is_empty()
+    }
+
     /// The rule, `None` without a multiplier; `Err` with the error code of
     /// a rule that does not read.
     pub fn rule(&self) -> std::result::Result<Option<PricingRule>, &'static str> {
@@ -97,15 +106,68 @@ impl PricingForm {
         }
         Ok(Some(rule))
     }
+
+    /// The pricing this one rule is, for every cost.
+    pub fn pricing(&self) -> std::result::Result<Option<Pricing>, &'static str> {
+        Ok(self.rule()?.map(Pricing::flat))
+    }
 }
 
-/// `×2.50 + 1.00, to .99`, or `By hand` without a rule.
-pub fn rule_label(rule: Option<PricingRule>, currency: &str) -> String {
-    let Some(rule) = rule else {
-        return "By hand (the cost is the starting price)".to_owned();
+/// The form field of band `n`'s `part`: `band_<n>_<part>`.
+fn band_field(n: usize, part: &str) -> String {
+    format!("band_{n}_{part}")
+}
+
+/// A shop's pricing as its form sends it: the rule for every cost past the
+/// bands (`multiplier`, `plus`, `rounding`) and up to [`MAX_PRICE_BANDS`]
+/// bands, each `band_<n>_up_to` with its own rule fields. A band whose row
+/// is blank is dropped; the rows may come in any order.
+pub fn pricing_of_form(
+    form: &HashMap<String, String>,
+) -> std::result::Result<Option<Pricing>, &'static str> {
+    let sent = |name: &str| form.get(name).cloned().unwrap_or_default();
+    let above = PricingForm {
+        multiplier: sent("multiplier"),
+        plus: sent("plus"),
+        rounding: sent("rounding"),
     };
+    let mut bands = Vec::new();
+    for n in 1..=MAX_PRICE_BANDS {
+        let up_to = sent(&band_field(n, "up_to"));
+        let rule = PricingForm {
+            multiplier: sent(&band_field(n, "multiplier")),
+            plus: sent(&band_field(n, "plus")),
+            rounding: sent(&band_field(n, "rounding")),
+        };
+        if up_to.trim().is_empty() && rule.is_blank() {
+            continue;
+        }
+        let up_to_cents = timada_aliexpress::parse_amount(&up_to.trim().replace(',', "."))
+            .filter(|cents| *cents > 0)
+            .ok_or("invalid_pricing_rule")?;
+        let rule = rule.rule()?.ok_or("invalid_pricing_rule")?;
+        bands.push(PriceBand { up_to_cents, rule });
+    }
+    let Some(above) = above.rule()? else {
+        // Bands with nothing above them price nothing.
+        return if bands.is_empty() {
+            Ok(None)
+        } else {
+            Err("invalid_pricing_rule")
+        };
+    };
+    bands.sort_by_key(|band| band.up_to_cents);
+    let pricing = Pricing { bands, above };
+    if !pricing.is_valid() {
+        return Err("invalid_pricing_rule");
+    }
+    Ok(Some(pricing))
+}
+
+/// `×2.50 + 1.00, up to .99`.
+fn rule_text(rule: &PricingRule, currency: &str) -> String {
     let mut label = format!(
-        "Cost ×{}.{:02}",
+        "×{}.{:02}",
         rule.multiplier_bps / 10_000,
         rule.multiplier_bps % 10_000 / 100
     );
@@ -120,6 +182,33 @@ pub fn rule_label(rule: Option<PricingRule>, currency: &str) -> String {
     label
 }
 
+/// `Cost ×2.50 + 1.00, up to .99` for one rule; `Up to 30.00 EUR: cost
+/// ×2.50 · above: cost ×2.00` by band; `By hand` without a pricing.
+pub fn pricing_label(pricing: Option<&Pricing>, currency: &str) -> String {
+    let Some(pricing) = pricing else {
+        return "By hand (the cost is the starting price)".to_owned();
+    };
+    if pricing.bands.is_empty() {
+        return format!("Cost {}", rule_text(&pricing.above, currency));
+    }
+    let mut parts: Vec<String> = pricing
+        .bands
+        .iter()
+        .map(|band| {
+            format!(
+                "Up to {}: cost {}",
+                format_money(band.up_to_cents, currency),
+                rule_text(&band.rule, currency)
+            )
+        })
+        .collect();
+    parts.push(format!(
+        "above: cost {}",
+        rule_text(&pricing.above, currency)
+    ));
+    parts.join(" · ")
+}
+
 /// What a rule's fields show in a form.
 pub struct RuleFields {
     pub multiplier: String,
@@ -128,7 +217,7 @@ pub struct RuleFields {
 }
 
 impl RuleFields {
-    pub fn of(rule: Option<PricingRule>) -> Self {
+    pub fn of(rule: Option<&PricingRule>) -> Self {
         match rule {
             Some(rule) => Self {
                 multiplier: format!(
@@ -148,6 +237,53 @@ impl RuleFields {
                 plus: String::new(),
                 rounding: Rounding::Cent.as_str(),
             },
+        }
+    }
+}
+
+/// One row of the bands table in the shop's form: the band's number, its
+/// fields and its upper bound (blank for the row that adds a band).
+pub struct BandFields {
+    pub n: usize,
+    pub up_to: String,
+    pub rule: RuleFields,
+}
+
+impl BandFields {
+    /// The rows a form shows: every band, then one blank row while there is
+    /// room for another band.
+    pub fn of(pricing: Option<&Pricing>) -> Vec<Self> {
+        let mut rows: Vec<Self> = pricing
+            .map(|pricing| pricing.bands.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+            .map(|(i, band)| Self {
+                n: i + 1,
+                up_to: format!("{}.{:02}", band.up_to_cents / 100, band.up_to_cents % 100),
+                rule: RuleFields::of(Some(&band.rule)),
+            })
+            .collect();
+        if rows.len() < MAX_PRICE_BANDS {
+            rows.push(Self {
+                n: rows.len() + 1,
+                up_to: String::new(),
+                rule: RuleFields::of(None),
+            });
+        }
+        rows
+    }
+
+    pub fn input_name(&self, part: &str) -> String {
+        band_field(self.n, part)
+    }
+
+    /// `Band 1` for a band, `New band` for the row that adds one.
+    pub fn name(&self) -> String {
+        if self.up_to.is_empty() {
+            "New band".to_owned()
+        } else {
+            format!("Band {}", self.n)
         }
     }
 }
@@ -239,9 +375,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .map(|settings| settings.currency.clone())
         .unwrap_or_else(|| CURRENCIES[0].to_owned());
-    let rule = settings.as_ref().and_then(|settings| settings.pricing);
-    let rule_text = rule_label(rule, &currency);
-    let fields = RuleFields::of(rule);
+    let pricing = settings
+        .as_ref()
+        .and_then(|settings| settings.pricing.as_ref());
+    let pricing_text = pricing_label(pricing, &currency);
+    let fields = RuleFields::of(pricing.map(|pricing| &pricing.above));
+    let bands = BandFields::of(pricing);
     let country = settings
         .as_ref()
         .map(|settings| settings.ship_to_country.clone())
@@ -302,7 +441,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         if let Some(settings) = &settings {
                             fact(term: "Buys for", (&settings.ship_to_country) " · " (&settings.currency) " · " (&settings.language))
-                            fact(term: "Price rule", attrs: attributes! { data-aliexpress-rule="" }, (&rule_text))
+                            fact(term: "Price rule", attrs: attributes! { data-aliexpress-rule="" }, (&pricing_text))
                         } else {
                             fact(term: "Buys for", status_badge(tone: Tone::Neutral, "Not set") " " <span class="text-muted-foreground">"Choose below what the shop buys in."</span>)
                         }
@@ -442,23 +581,64 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             input(attrs: attributes! { id="aliexpress-language" name="language" required="" maxlength="2" class="w-24" value=(&language) })
                         )
                     </div>
-                    <fieldset class="flex flex-wrap gap-4">
+                    <fieldset>
                         <legend class="mb-2 text-sm font-medium">"Price rule (blank: price by hand)"</legend>
-                        field(
-                            field_label(attrs: attributes! { for="aliexpress-multiplier" }, "Multiply the cost by")
-                            input(attrs: attributes! { id="aliexpress-multiplier" name="multiplier" inputmode="decimal" placeholder="2.5" class="w-28" value=(&fields.multiplier) })
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="aliexpress-plus" }, "Then add")
-                            input(attrs: attributes! { id="aliexpress-plus" name="plus" inputmode="decimal" placeholder="1.00" class="w-28" value=(&fields.plus) })
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="aliexpress-rounding" }, "Round")
-                            select(
-                                attrs: attributes! { id="aliexpress-rounding" name="rounding" class="w-48" },
-                                for (value, label) in ROUNDINGS {
-                                    <option value=(value) selected=(fields.rounding == value)>(label)</option>
+                        <p class="mb-3 text-sm text-muted-foreground">"One rule for every cost, or one per cost band: a cost takes the first band reaching it, and any higher cost takes the last row. A blank band is dropped."</p>
+                        table(
+                            attrs: attributes! { data-aliexpress-bands="" },
+                            table_header(
+                                table_row(
+                                    table_head("Costs up to")
+                                    table_head("Multiply the cost by")
+                                    table_head("Then add")
+                                    table_head("Round")
+                                )
+                            )
+                            table_body(
+                                for band in &bands {
+                                    table_row(
+                                        attrs: attributes! { data-aliexpress-band=(band.n) },
+                                        table_cell(
+                                            input(attrs: attributes! { name=(band.input_name("up_to")) inputmode="decimal" placeholder="30.00" class="w-28" value=(&band.up_to) aria-label=(format!("{}: costs up to", band.name())) })
+                                        )
+                                        table_cell(
+                                            input(attrs: attributes! { name=(band.input_name("multiplier")) inputmode="decimal" placeholder="2.5" class="w-28" value=(&band.rule.multiplier) aria-label=(format!("{}: multiplier", band.name())) })
+                                        )
+                                        table_cell(
+                                            input(attrs: attributes! { name=(band.input_name("plus")) inputmode="decimal" placeholder="1.00" class="w-28" value=(&band.rule.plus) aria-label=(format!("{}: amount added", band.name())) })
+                                        )
+                                        table_cell(
+                                            select(
+                                                attrs: attributes! { name=(band.input_name("rounding")) class="w-48" aria-label=(format!("{}: rounding", band.name())) },
+                                                for (value, label) in ROUNDINGS {
+                                                    <option value=(value) selected=(band.rule.rounding == value)>(label)</option>
+                                                }
+                                            )
+                                        )
+                                    )
                                 }
+                                table_row(
+                                    attrs: attributes! { data-aliexpress-band="above" },
+                                    table_cell(
+                                        <span class="text-sm" id="aliexpress-above">
+                                            if bands.len() > 1 { "Any higher cost" } else { "Every cost" }
+                                        </span>
+                                    )
+                                    table_cell(
+                                        input(attrs: attributes! { id="aliexpress-multiplier" name="multiplier" inputmode="decimal" placeholder="2.5" class="w-28" value=(&fields.multiplier) aria-label="Multiply the cost by" })
+                                    )
+                                    table_cell(
+                                        input(attrs: attributes! { id="aliexpress-plus" name="plus" inputmode="decimal" placeholder="1.00" class="w-28" value=(&fields.plus) aria-label="Then add" })
+                                    )
+                                    table_cell(
+                                        select(
+                                            attrs: attributes! { id="aliexpress-rounding" name="rounding" class="w-48" aria-label="Round" },
+                                            for (value, label) in ROUNDINGS {
+                                                <option value=(value) selected=(fields.rounding == value)>(label)</option>
+                                            }
+                                        )
+                                    )
+                                )
                             )
                         )
                     </fieldset>

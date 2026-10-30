@@ -17,6 +17,7 @@ event timada-aliexpress/Product::ImportRequested { ae_product_id: String, reques
 event timada-aliexpress/Product::ImportStarted { started_by: String }
 event timada-aliexpress/Product::Imported { product_id: String, skus: Vec<SkuLink>, imported_by: String }
 event timada-aliexpress/Product::PricingSet { pricing: Option<timada_tenancy::PricingRule>, set_by: String }
+event timada-aliexpress/Product::PricingSetV2 { pricing: Option<timada_tenancy::Pricing>, set_by: String }
 event timada-aliexpress/Product::SyncFailed { reason: String, failed_by: String }
 event timada-aliexpress/Product::Synced { skus: Vec<SkuLink>, offline: bool, synced_by: String }
 event timada-aliexpress/Product::Unlinked { unlinked_by: String }
@@ -253,6 +254,7 @@ event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }
 event timada-tenancy/Tenant::AliexpressConfigured { ship_to_country: String, currency: String, language: String, pricing: Option<PricingRule>, configured_by: String }
+event timada-tenancy/Tenant::AliexpressConfiguredV2 { ship_to_country: String, currency: String, language: String, pricing: Option<Pricing>, configured_by: String }
 event timada-tenancy/Tenant::AliexpressForwardingSet { auto_forward: bool, try_to_pay: bool, set_by: String }
 event timada-tenancy/Tenant::AliexpressRemoved { removed_by: String }
 event timada-tenancy/Tenant::CompanyLinked { company_id: String, series_code: String, linked_by: String }
@@ -302,5 +304,7 @@ type timada_orders::value_object::OrderLine { product_id: String, variant_id: Op
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, country: String, phone: Option<String> }
 type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32> }
+type timada_tenancy::value_object::PriceBand { up_to_cents: u64, rule: PricingRule }
+type timada_tenancy::value_object::Pricing { bands: Vec<PriceBand>, above: PricingRule }
 type timada_tenancy::value_object::PricingRule { multiplier_bps: u32, plus_cents: u64, rounding: Rounding }
 type timada_tenancy::value_object::Rounding enum { Cent, Ninety9, Whole }

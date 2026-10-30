@@ -312,13 +312,13 @@ impl Aliexpress {
             }
         };
         let catalog = timada_catalog::Command::new(store.clone(), &tenant.id);
-        let rule = link.pricing.or(settings.pricing);
+        let pricing = link.pricing.as_ref().or(settings.pricing.as_ref());
         let outcome = timada_aliexpress::apply_sync(
             &catalog,
             ALIEXPRESS_ACTOR,
             &link,
             product.as_ref(),
-            rule,
+            pricing,
         )
         .await?;
         for warning in &outcome.warnings {
@@ -388,7 +388,7 @@ impl Aliexpress {
             actor,
             &link,
             sku_ids,
-            link.pricing.or(settings.pricing),
+            link.pricing.as_ref().or(settings.pricing.as_ref()),
             &images,
         )
         .await?;

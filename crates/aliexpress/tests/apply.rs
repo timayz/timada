@@ -9,7 +9,7 @@ use timada_aliexpress::{
     map_product, track_imported,
 };
 use timada_catalog_import::{ImportOptions, NoImages, import_one};
-use timada_tenancy::{PricingRule, Rounding};
+use timada_tenancy::{Pricing, PricingRule, Rounding};
 
 const ALICE: &str = "user-alice";
 /// The tenant the tests act in.
@@ -51,6 +51,10 @@ const RULE: PricingRule = PricingRule {
     plus_cents: 0,
     rounding: Rounding::Cent,
 };
+const PRICING: Pricing = Pricing {
+    bands: Vec::new(),
+    above: RULE,
+};
 
 #[tokio::test]
 async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
@@ -69,7 +73,7 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
     assert!(links.start_import("node-a", &link_id).await.unwrap());
     assert!(!links.start_import("node-b", &link_id).await.unwrap());
 
-    let mapped = map_product(&fixture(), "EUR", Some(RULE)).unwrap();
+    let mapped = map_product(&fixture(), "EUR", Some(&PRICING)).unwrap();
     let imported = import_one(
         &catalog,
         ALICE,
@@ -120,7 +124,7 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
     read.skus[0].cost_cents = Some(500);
     let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
     assert_eq!(link.status, LinkStatus::Linked);
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(RULE))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
         .await
         .unwrap();
     assert!(!outcome.offline);
@@ -158,7 +162,7 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
     // Withdrawn: nothing left to sell, and off sale.
     let mut read = fixture();
     read.status = "offline".into();
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(RULE))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
         .await
         .unwrap();
     assert!(outcome.offline);
@@ -199,7 +203,7 @@ async fn imported(executor: &evento::Sqlite) -> (String, String) {
         .request_import(ALICE, "1005006123456789")
         .await
         .unwrap();
-    let mapped = map_product(&fixture(), "EUR", Some(RULE)).unwrap();
+    let mapped = map_product(&fixture(), "EUR", Some(&PRICING)).unwrap();
     let imported = import_one(
         &catalog,
         ALICE,
@@ -274,7 +278,7 @@ async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
         &[("Color", "Rose"), ("Size", "S"), ("Pack", "2")],
     ));
     let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(RULE))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
         .await
         .unwrap();
     let found: Vec<_> = outcome
@@ -324,7 +328,7 @@ async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
 
     // Adding all that is offered adds green and leaves the pack.
     let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
-    let added = add_combinations(&catalog, ALICE, &link, &[], Some(RULE), &NoImages)
+    let added = add_combinations(&catalog, ALICE, &link, &[], Some(&PRICING), &NoImages)
         .await
         .unwrap();
     assert_eq!(added.skus.len(), 1);
@@ -347,7 +351,7 @@ async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
         ALICE,
         &link,
         &["12000037004".to_owned()],
-        Some(RULE),
+        Some(&PRICING),
         &NoImages,
     )
     .await
@@ -373,7 +377,7 @@ async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
     assert_eq!(link.offered().count(), 2);
 
     // The next read counts green, and no longer finds it.
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(RULE))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
         .await
         .unwrap();
     assert_eq!(outcome.skus.len(), 3);
@@ -381,7 +385,7 @@ async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
 
     // Offline: nothing is offered.
     read.status = "offline".into();
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(RULE))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
         .await
         .unwrap();
     assert!(outcome.found.is_empty());

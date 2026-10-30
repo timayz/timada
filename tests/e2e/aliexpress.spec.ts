@@ -46,11 +46,35 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page).toHaveURL(/error=invalid_pricing_rule/);
     await page.getByLabel("Multiply the cost by").fill("2");
-    await page.getByLabel("Round").selectOption("99");
+    await page.getByLabel("Round", { exact: true }).selectOption("99");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("status")).toContainText("AliExpress settings saved.");
     await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "connected");
     await expect(page.locator("[data-aliexpress-rule]")).toHaveText("Cost ×2.00, up to .99");
+
+    // Cheap items take a higher rate: a band up to 5.00 at ×3, the rest as
+    // before. A band without a rule is refused; one ending where another
+    // does too.
+    await page.getByLabel("New band: costs up to").fill("5");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page).toHaveURL(/error=invalid_pricing_rule/);
+    await page.getByLabel("New band: costs up to").fill("5");
+    await page.getByLabel("New band: multiplier").fill("3");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("AliExpress settings saved.");
+    await expect(page.locator("[data-aliexpress-rule]")).toHaveText(
+      "Up to 5.00 EUR: cost ×3.00 · above: cost ×2.00, up to .99",
+    );
+    await expect(page.getByLabel("Band 1: costs up to")).toHaveValue("5.00");
+    await expect(page.getByLabel("Band 1: multiplier")).toHaveValue("3.00");
+    await expect(page.getByLabel("New band: costs up to")).toHaveValue("");
+    await page.getByLabel("New band: costs up to").fill("5");
+    await page.getByLabel("New band: multiplier").fill("4");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page).toHaveURL(/error=invalid_pricing_rule/);
+    await expect(page.locator("[data-aliexpress-rule]")).toHaveText(
+      "Up to 5.00 EUR: cost ×3.00 · above: cost ×2.00, up to .99",
+    );
 
     // An address that is not an item's is refused; an item's is imported.
     await page.getByLabel("AliExpress product").fill("https://example.com/p/12");
@@ -65,7 +89,8 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
       await expect(row).toHaveAttribute("data-link-status", "linked", { timeout: 1000 });
     }).toPass({ timeout: 20_000 });
 
-    // A draft with both colours, their pictures and stock, priced by the rule.
+    // A draft with both colours, their pictures and stock, priced by the
+    // rule: rose costs 4.31, in the band; blue 5.50, above it.
     await row.getByRole("link", { name: "Open" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Cat Tunnel Deluxe");
     await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "draft");
@@ -74,7 +99,7 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     const blue = page.locator("[data-variant]", { hasText: "Colour: Blue" });
     await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "120");
     await expect(blue.locator("[data-stock]")).toHaveAttribute("data-stock", "0");
-    await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("8.99");
+    await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("12.93");
     await expect(blue.getByLabel("Price of Colour: Blue")).toHaveValue("11.99");
     await expect(page.locator("[data-product-aliexpress]")).toHaveAttribute("data-product-aliexpress", PRODUCT_ID);
     await page.getByRole("button", { name: "Publish" }).click();
