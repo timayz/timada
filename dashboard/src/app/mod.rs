@@ -77,6 +77,10 @@ pub struct Services {
     pub media: Arc<Media>,
     /// Where the keys personal data is sealed under are kept.
     pub keys: Arc<KeyVault>,
+    /// What checks the mailed codes of the platform's users and of the shops'
+    /// shoppers.
+    pub email_codes: crate::seal::EmailCodes,
+    pub shopper_codes: crate::seal::ShopperCodes,
     /// The tenants' Stripe accounts and the provider they are reached through.
     pub payments: Arc<crate::payments::Payments>,
     /// The shops' own mail servers.
@@ -100,6 +104,8 @@ pub fn router(services: Services) -> Router {
         authorizer,
         media,
         keys,
+        email_codes,
+        shopper_codes,
         payments,
         shop_mail,
         aliexpress,
@@ -152,6 +158,8 @@ pub fn router(services: Services) -> Router {
         .app_context(authorizer)
         .app_context(media)
         .app_context(keys)
+        .app_context(email_codes)
+        .app_context(shopper_codes)
         .app_context(payments)
         .app_context(aliexpress)
         .app_context(store)

@@ -45,7 +45,12 @@ pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
 }
 
 pub async fn command() -> Command<evento::Sqlite> {
-    Command(executor().await)
+    Command::new(executor().await, codes())
+}
+
+/// The verifier the tests' codes are tagged under.
+pub fn codes() -> std::sync::Arc<dyn timada_identity::CodeVerifier> {
+    std::sync::Arc::new(timada_identity::HmacCodeVerifier::new([7; 32]))
 }
 
 pub fn identity(provider: &str, sub: &str) -> timada_identity::ProviderIdentity {

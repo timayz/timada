@@ -26,10 +26,15 @@ pub async fn session(cx: &Cx, Form(form): Form<SessionForm>) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
+    let codes = match super::codes(cx) {
+        Ok(codes) => codes,
+        Err(answer) => return answer,
+    };
     let store = super::super::store(cx, &access);
     match timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
         .sign_in(
             &*super::keys(cx, &access.tenant.id),
+            &*codes,
             &form.email,
             &form.code,
             now(),

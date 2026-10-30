@@ -24,4 +24,5 @@ pub use command::*;
 pub use error::*;
 pub use password::*;
 pub use query::*;
+pub use timada_core::{CodeVerifier, HmacCodeVerifier};
 pub use value_object::*;

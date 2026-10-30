@@ -60,7 +60,7 @@ impl<E: Executor> super::Command<E> {
                 .write()?
                 .routing_key_opt(routing_key)
                 .event(&Removed)
-                .commit(&self.0)
+                .commit(&self.executor)
                 .await?;
         }
         Ok(())

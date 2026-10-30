@@ -28,7 +28,10 @@ use crate::db::ReadPool;
 
 /// The command gateway over this node's executor.
 pub fn identity(cx: &Cx) -> Command<Executor> {
-    Command(app_context::<Executor>(cx).clone())
+    Command::new(
+        app_context::<Executor>(cx).clone(),
+        app_context::<crate::seal::EmailCodes>(cx).0.clone(),
+    )
 }
 
 pub fn now() -> u64 {

@@ -5,12 +5,53 @@
 //! from the operator's secret: a random 12-byte nonce followed by the sealed
 //! bytes.
 
+use std::sync::Arc;
+
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
+use timada_core::{CodeVerifier, HmacCodeVerifier};
 
 use crate::config::Config;
+
+/// What checks the codes mailed to the platform's users against what their
+/// streams keep: a MAC under a key derived from `auth.secret_key`, which
+/// every node shares and the store never holds.
+#[derive(Clone)]
+pub struct EmailCodes(pub Arc<dyn CodeVerifier>);
+
+impl std::fmt::Debug for EmailCodes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EmailCodes(..)")
+    }
+}
+
+pub fn email_codes(config: &Config) -> EmailCodes {
+    EmailCodes(Arc::new(HmacCodeVerifier::derive(
+        "email-code",
+        &config.auth.secret_key,
+    )))
+}
+
+/// The same for the shops' shoppers, under `secrets.key`: `None` without it
+/// (no shopper accounts then). A storefront's key reads the tenant's whole
+/// store, challenge streams included, so what they keep must say nothing
+/// without this.
+#[derive(Clone)]
+pub struct ShopperCodes(pub Option<Arc<dyn CodeVerifier>>);
+
+impl std::fmt::Debug for ShopperCodes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ShopperCodes(..)")
+    }
+}
+
+pub fn shopper_codes(config: &Config) -> ShopperCodes {
+    ShopperCodes(config.secrets.as_ref().map(|secrets| {
+        Arc::new(HmacCodeVerifier::derive("shopper-code", &secrets.key)) as Arc<dyn CodeVerifier>
+    }))
+}
 
 const NONCE_LEN: usize = 12;
 

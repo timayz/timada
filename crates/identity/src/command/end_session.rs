@@ -23,7 +23,7 @@ impl<E: Executor> super::Command<E> {
             .write()?
             .routing_key_opt(routing_key.clone())
             .event(&Ended)
-            .commit(&self.0)
+            .commit(&self.executor)
             .await?;
 
         // History only; a deleted user is still signed out.

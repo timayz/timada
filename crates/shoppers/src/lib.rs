@@ -36,5 +36,5 @@ pub use error::*;
 pub use query::*;
 pub use timada_core::keys::KeyRing as ShopperKeyRing;
 pub use timada_core::keys::new_key_id;
-pub use timada_core::{Key as ShopperKey, Keys as ShopperKeys};
+pub use timada_core::{CodeVerifier, HmacCodeVerifier, Key as ShopperKey, Keys as ShopperKeys};
 pub use value_object::*;

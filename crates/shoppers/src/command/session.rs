@@ -5,6 +5,7 @@ use crate::error::ShopperError;
 use crate::value_object::{SESSION_TTL_SECS, generate_token, session_id, shopper_id};
 
 use super::{SessionState, ShopperState, email_aad, normalize_email};
+use timada_core::CodeVerifier;
 use timada_core::keys::{self as key, Key as ShopperKey, Keys as ShopperKeys, new_key_id};
 
 /// A sign-in that checked out. The token is the browser's to keep; the store
@@ -42,13 +43,14 @@ impl<E: Executor> super::Command<E> {
     pub async fn sign_in(
         &self,
         keys: &dyn ShopperKeys,
+        codes: &dyn CodeVerifier,
         email: &str,
         code: &str,
         now: u64,
         routing_key: Option<String>,
     ) -> Result<SignedIn, ShopperError> {
         let email = normalize_email(email)?;
-        self.consume_code(&email, code, now, routing_key.clone())
+        self.consume_code(codes, &email, code, now, routing_key.clone())
             .await?;
 
         let shopper_id = shopper_id(&email);

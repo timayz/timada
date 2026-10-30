@@ -2,7 +2,7 @@ mod common;
 
 use std::sync::{Arc, LazyLock};
 
-use common::{MemoryKeys, TENANT, ring};
+use common::{MemoryKeys, TENANT, codes, ring};
 use evento::migrator::Migrate;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
@@ -54,9 +54,9 @@ async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
 }
 
 async fn sign_in(shoppers: &Command<evento::Sqlite>, email: &str, now: u64) -> String {
-    let issued = shoppers.issue_code(email, now).await.unwrap();
+    let issued = shoppers.issue_code(&codes(), email, now).await.unwrap();
     shoppers
-        .sign_in(&**KEYS, email, &issued.code, now)
+        .sign_in(&**KEYS, &codes(), email, &issued.code, now)
         .await
         .unwrap()
         .shopper_id

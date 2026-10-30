@@ -159,13 +159,6 @@ pub fn email_challenge_id(email: &str) -> String {
     evento::hash_ids(vec!["email-challenge", email])
 }
 
-/// What the challenge stream stores instead of a code. A six-digit code is
-/// guessable under any hash; the attempt cap and the expiry are what protect
-/// it, the hash only keeps the plaintext out of the store.
-pub fn email_code_hash(challenge_id: &str, code: &str) -> String {
-    evento::hash_ids(vec!["email-code", challenge_id, code])
-}
-
 /// The canonical form of an address: trimmed, lower-cased, one `@` with
 /// something on both sides, nothing that is not printable.
 pub fn normalize_email(email: &str) -> Result<String, IdentityError> {

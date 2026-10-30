@@ -2,11 +2,12 @@ mod common;
 
 use std::ops::Deref;
 
-use common::{MemoryKeys, TENANT};
+use common::{MemoryKeys, TENANT, codes};
 use evento::migrator::Migrate;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use timada_orders::ShippingAddress;
+use timada_shoppers::CodeVerifier;
 use timada_shoppers::{
     CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, Command, MAX_ADDRESSES,
     SESSION_TTL_SECS, Shopper, ShopperError, ShopperKeys, ShopperState,
@@ -72,9 +73,9 @@ async fn shoppers_with(keys: MemoryKeys) -> Shoppers {
 }
 
 async fn signed_in(shoppers: &Shoppers, email: &str, now: u64) -> timada_shoppers::SignedIn {
-    let issued = shoppers.issue_code(email, now).await.unwrap();
+    let issued = shoppers.issue_code(&codes(), email, now).await.unwrap();
     shoppers
-        .sign_in(&shoppers.keys, email, &issued.code, now)
+        .sign_in(&shoppers.keys, &codes(), email, &issued.code, now)
         .await
         .unwrap()
 }
@@ -113,30 +114,33 @@ async fn the_first_sign_in_creates_the_shopper_and_the_next_reuses_it() {
 #[tokio::test]
 async fn a_code_is_not_resent_too_soon_and_works_once() {
     let shoppers = shoppers().await;
-    let issued = shoppers.issue_code(EMAIL, NOW).await.unwrap();
+    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
     assert_eq!(issued.email, "ada@example.com");
     assert!(matches!(
-        shoppers.issue_code(EMAIL, NOW + 10).await,
+        shoppers.issue_code(&codes(), EMAIL, NOW + 10).await,
         Err(ShopperError::CodeRecentlySent)
     ));
     shoppers
-        .sign_in(&shoppers.keys, EMAIL, &issued.code, NOW + 10)
+        .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW + 10)
         .await
         .unwrap();
     assert!(matches!(
         shoppers
-            .sign_in(&shoppers.keys, EMAIL, &issued.code, NOW + 11)
+            .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW + 11)
             .await,
         Err(ShopperError::WrongCode)
     ));
     // A used code does not hold back the next one.
-    shoppers.issue_code(EMAIL, NOW + 12).await.unwrap();
+    shoppers
+        .issue_code(&codes(), EMAIL, NOW + 12)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn wrong_guesses_kill_the_code() {
     let shoppers = shoppers().await;
-    let issued = shoppers.issue_code(EMAIL, NOW).await.unwrap();
+    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
     let wrong = if issued.code == "000000" {
         "000001"
     } else {
@@ -144,7 +148,7 @@ async fn wrong_guesses_kill_the_code() {
     };
     for attempt in 1..=CODE_MAX_ATTEMPTS {
         let err = shoppers
-            .sign_in(&shoppers.keys, EMAIL, wrong, NOW)
+            .sign_in(&shoppers.keys, &codes(), EMAIL, wrong, NOW)
             .await
             .unwrap_err();
         if attempt < CODE_MAX_ATTEMPTS {
@@ -155,7 +159,7 @@ async fn wrong_guesses_kill_the_code() {
     }
     assert!(matches!(
         shoppers
-            .sign_in(&shoppers.keys, EMAIL, &issued.code, NOW)
+            .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW)
             .await,
         Err(ShopperError::TooManyAttempts)
     ));
@@ -164,15 +168,21 @@ async fn wrong_guesses_kill_the_code() {
 #[tokio::test]
 async fn codes_and_sessions_expire() {
     let shoppers = shoppers().await;
-    let issued = shoppers.issue_code(EMAIL, NOW).await.unwrap();
+    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
     assert!(matches!(
         shoppers
-            .sign_in(&shoppers.keys, EMAIL, &issued.code, NOW + CODE_TTL_SECS)
+            .sign_in(
+                &shoppers.keys,
+                &codes(),
+                EMAIL,
+                &issued.code,
+                NOW + CODE_TTL_SECS
+            )
             .await,
         Err(ShopperError::CodeExpired)
     ));
     assert!(matches!(
-        shoppers.issue_code("not an address", NOW).await,
+        shoppers.issue_code(&codes(), "not an address", NOW).await,
         Err(ShopperError::InvalidEmail)
     ));
 
@@ -434,9 +444,9 @@ async fn address_ids_are_keyed_by_the_registration() {
 #[tokio::test]
 async fn a_key_that_cannot_be_kept_registers_nothing() {
     let shoppers = shoppers_with(MemoryKeys::refusing()).await;
-    let issued = shoppers.issue_code(EMAIL, NOW).await.unwrap();
+    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
     let err = shoppers
-        .sign_in(&shoppers.keys, EMAIL, &issued.code, NOW)
+        .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW)
         .await
         .unwrap_err();
     assert!(!err.is_user_facing(), "{err:?}");
@@ -447,4 +457,52 @@ async fn a_key_that_cannot_be_kept_registers_nothing() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn the_store_keeps_nothing_that_gives_the_code_back() {
+    let shoppers = shoppers().await;
+    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
+    let challenge = shoppers
+        .load_challenge(&issued.email)
+        .await
+        .unwrap()
+        .unwrap();
+    // Neither the code nor a plain hash of it is in the stream.
+    assert!(
+        !challenge
+            .code_tag
+            .windows(issued.code.len())
+            .any(|window| window == issued.code.as_bytes())
+    );
+    assert_ne!(
+        challenge.code_tag,
+        evento::hash_ids(vec!["shopper-code", &challenge.id, &issued.code]).into_bytes()
+    );
+    // Without the key the tag says nothing: the right code is a wrong guess.
+    let other = timada_shoppers::HmacCodeVerifier::new([8; 32]);
+    assert!(matches!(
+        shoppers
+            .sign_in(&shoppers.keys, &other, EMAIL, &issued.code, NOW)
+            .await,
+        Err(ShopperError::WrongCode)
+    ));
+    let challenge = shoppers
+        .load_challenge(&issued.email)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(challenge.failed_attempts, 1);
+    // A tag made for another shop or another challenge does not fit either.
+    assert!(!codes().verify(
+        "other-shop",
+        &challenge.id,
+        &issued.code,
+        &challenge.code_tag
+    ));
+    assert!(!codes().verify(TENANT, "another", &issued.code, &challenge.code_tag));
+    shoppers
+        .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW)
+        .await
+        .unwrap();
 }
