@@ -14,7 +14,7 @@ use timada_catalog_import::{
     AttributeSeed, ImageSeed, OptionSeed, ProductSeed, SelectionSeed, VariantSeed, decode_entities,
     html_to_text, truncate_chars,
 };
-use timada_tenancy::PricingRule;
+use timada_tenancy::Pricing;
 
 use crate::model::{AeProduct, AeSku, AeSkuProperty};
 
@@ -75,18 +75,18 @@ pub fn picture_url(url: &str) -> String {
     }
 }
 
-/// The shop's price of something that costs `cost_cents`: `rule`'s, or the
-/// cost itself without one (the merchant prices it before publishing).
-pub fn shop_price(rule: Option<PricingRule>, cost_cents: u64) -> u64 {
-    rule.map_or(cost_cents, |rule| rule.price(cost_cents))
+/// The shop's price of something that costs `cost_cents`: by `pricing`, or
+/// the cost itself without one (the merchant prices it before publishing).
+pub fn shop_price(pricing: Option<&Pricing>, cost_cents: u64) -> u64 {
+    pricing.map_or(cost_cents, |pricing| pricing.price(cost_cents))
 }
 
 /// Maps `product`, priced in `currency` (what the shop asked AliExpress
-/// for), with `rule` turning costs into prices.
+/// for), with `pricing` turning costs into prices.
 pub fn map_product(
     product: &AeProduct,
     currency: &str,
-    rule: Option<PricingRule>,
+    pricing: Option<&Pricing>,
 ) -> Result<Mapped, MapError> {
     if !product.on_sale() {
         return Err(MapError::Offline);
@@ -157,7 +157,7 @@ pub fn map_product(
 
     if !varies {
         let (sku, cost) = priced[0];
-        seed.amount_cents = Some(shop_price(rule, cost));
+        seed.amount_cents = Some(shop_price(pricing, cost));
         skus.push(MappedSku {
             sku_id: sku.id.clone(),
             cost_cents: cost,
@@ -230,7 +230,7 @@ pub fn map_product(
             seed.variants.push(VariantSeed {
                 selections,
                 sku: fit_sku(&sku.id),
-                amount_cents: shop_price(rule, *cost),
+                amount_cents: shop_price(pricing, *cost),
                 image,
             });
             skus.push(MappedSku {

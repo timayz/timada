@@ -1,5 +1,5 @@
 use timada_aliexpress::{AeProduct, MapError, map_product, selections_of};
-use timada_tenancy::{PricingRule, Rounding};
+use timada_tenancy::{Pricing, PricingRule, Rounding};
 
 fn fixture() -> AeProduct {
     let body: serde_json::Value =
@@ -33,7 +33,7 @@ fn a_product_maps_to_options_variants_and_their_costs() {
         plus_cents: 0,
         rounding: Rounding::Ninety9,
     };
-    let mapped = map_product(&fixture(), "EUR", Some(rule)).unwrap();
+    let mapped = map_product(&fixture(), "EUR", Some(&Pricing::flat(rule))).unwrap();
     let seed = &mapped.seed;
     assert_eq!(seed.name, "Cat Harness & Leash Set");
     assert_eq!(seed.slug, "cat-harness-leash-set");

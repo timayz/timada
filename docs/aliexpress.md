@@ -44,6 +44,13 @@ On `/t/{slug}/aliexpress`, for members with `aliexpress:manage`:
    Without one, the import uses the cost as the starting price and later reads leave
    prices alone.
 
+   Cheap items usually bear a higher rate than dear ones, so the rule can go by
+   **cost band**: each row prices costs up to its amount (inclusive) that no lower
+   band took, and the last row prices any higher cost — say ×2.5 up to 30.00, ×2 up to
+   100.00, ×1.5 above. Up to ten bands; each has its own multiplier, amount added and
+   rounding. A blank row is dropped, and two bands ending at the same amount are
+   refused. A product's own rule (on its page) is one rate for every cost.
+
 *Stop importing* forgets the shop's settings; the imported products stay as they are,
 and so does the company's account.
 
@@ -148,7 +155,9 @@ these calls too.
 - **Platform store (`timada-tenancy`).** On the company, the sealed tokens of its
   buyer account: `Company::AliexpressAuthorized`, `Company::AliexpressDisconnected`.
   On the tenant, the market, the shop's rule and how orders go:
-  `AliexpressConfigured`, `AliexpressRemoved`, `AliexpressForwardingSet`. The tokens
+  `AliexpressConfiguredV2` (`AliexpressConfigured`, with one rule for every cost, is
+  kept to decode what was stored and read as the newer event), `AliexpressRemoved`,
+  `AliexpressForwardingSet`. The tokens
   are sealed under `secrets.key` with the purpose `aliexpress`; the app's key and
   secret are host configuration.
 - **Tenant store (`timada-aliexpress/Product`).** One stream per item: the import's
