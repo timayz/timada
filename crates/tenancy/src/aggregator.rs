@@ -1,7 +1,7 @@
 //! Events. Every variant and every field is frozen once it ships (bitcode is
 //! positional); evolve by adding variants.
 
-use crate::value_object::PricingRule;
+use crate::value_object::{Pricing, PricingRule};
 
 /// A merchant on the platform. Roles are free-form names a tenant defines
 /// for itself (`RoleDefined`); `owner` is built in and unrestricted (see
@@ -212,14 +212,26 @@ pub enum Tenant {
     },
     /// The shop imports products from AliExpress through the platform's
     /// app, acting for the AliExpress account of the company it sells as.
-    /// Products are fetched as shipped to `ship_to_country`, priced in
-    /// `currency` and worded in `language`; `pricing` turns what AliExpress
-    /// charges into the shop's price (`None`: the merchant prices by hand).
+    /// The first shape of [`AliexpressConfiguredV2`](Tenant::AliexpressConfiguredV2),
+    /// with one rule for every cost. Kept to decode what was stored; read
+    /// as the newer event.
+    #[evento(upcast_to = AliexpressConfiguredV2)]
     AliexpressConfigured {
         ship_to_country: String,
         currency: String,
         language: String,
         pricing: Option<PricingRule>,
+        configured_by: String,
+    },
+    /// Products are fetched as shipped to `ship_to_country`, priced in
+    /// `currency` and worded in `language`; `pricing` turns what AliExpress
+    /// charges into the shop's price, by cost band (`None`: the merchant
+    /// prices by hand).
+    AliexpressConfiguredV2 {
+        ship_to_country: String,
+        currency: String,
+        language: String,
+        pricing: Option<Pricing>,
         configured_by: String,
     },
     /// The shop no longer imports from AliExpress.
@@ -245,6 +257,18 @@ pub enum Tenant {
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).
+impl From<AliexpressConfigured> for AliexpressConfiguredV2 {
+    fn from(old: AliexpressConfigured) -> Self {
+        Self {
+            ship_to_country: old.ship_to_country,
+            currency: old.currency,
+            language: old.language,
+            pricing: old.pricing.map(Pricing::flat),
+            configured_by: old.configured_by,
+        }
+    }
+}
+
 #[evento::aggregate(name = "timada-tenancy/TenantSlug")]
 pub enum TenantSlug {
     Claimed { tenant_id: String },

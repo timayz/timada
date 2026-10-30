@@ -124,7 +124,8 @@ pub struct AliexpressSettings {
     pub ship_to_country: String,
     pub currency: String,
     pub language: String,
-    pub pricing: Option<crate::value_object::PricingRule>,
+    /// How imports are priced, by cost band (`None`: by hand).
+    pub pricing: Option<crate::value_object::Pricing>,
     pub configured_by: String,
     /// Unix seconds.
     pub configured_at: u64,
@@ -570,7 +571,7 @@ async fn on_mail_servers_picked(
 
 #[evento::handler]
 async fn on_aliexpress_configured(
-    event: Event<crate::aggregator::AliexpressConfigured>,
+    event: Event<crate::aggregator::AliexpressConfiguredV2>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     let data = &event.data;
@@ -584,7 +585,7 @@ async fn on_aliexpress_configured(
         ship_to_country: data.ship_to_country.to_owned(),
         currency: data.currency.to_owned(),
         language: data.language.to_owned(),
-        pricing: data.pricing,
+        pricing: data.pricing.clone(),
         configured_by: data.configured_by.to_owned(),
         configured_at: event.timestamp,
         auto_forward,

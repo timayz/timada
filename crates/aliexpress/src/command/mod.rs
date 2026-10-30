@@ -10,11 +10,11 @@ use std::ops::Deref;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
-use timada_tenancy::PricingRule;
+use timada_tenancy::Pricing;
 
 use crate::aggregator::{
     CombinationIgnored, CombinationRestored, CombinationsAdded, CombinationsFound, ImportFailed,
-    ImportRequested, ImportStarted, Imported, NewSku, PricingSet, SkuLink, SyncFailed, Synced,
+    ImportRequested, ImportStarted, Imported, NewSku, PricingSetV2, SkuLink, SyncFailed, Synced,
     Unlinked,
 };
 use crate::error::AliexpressError;
@@ -126,8 +126,8 @@ pub struct LinkState {
     pub found: Vec<NewSku>,
     /// The combinations the merchant does not want offered, by id.
     pub ignored: Vec<String>,
-    /// The product's own rule; `None` follows the shop's.
-    pub pricing: Option<PricingRule>,
+    /// The product's own pricing; `None` follows the shop's.
+    pub pricing: Option<Pricing>,
     /// AliExpress no longer sells it (as of the last read).
     pub offline: bool,
     /// Unix seconds of the last read that worked (the import counts).
@@ -246,8 +246,8 @@ async fn on_sync_failed(event: Event<SyncFailed>, link: &mut LinkState) -> anyho
 }
 
 #[evento::handler]
-async fn on_pricing_set(event: Event<PricingSet>, link: &mut LinkState) -> anyhow::Result<()> {
-    link.pricing = event.data.pricing;
+async fn on_pricing_set(event: Event<PricingSetV2>, link: &mut LinkState) -> anyhow::Result<()> {
+    link.pricing = event.data.pricing.clone();
     link.updated_at = event.timestamp;
     Ok(())
 }
@@ -563,15 +563,15 @@ impl<E: Executor> Command<E> {
         Ok(())
     }
 
-    /// The product's own price rule; `None` follows the shop's.
+    /// The product's own pricing; `None` follows the shop's.
     pub async fn set_pricing(
         &self,
         actor: &str,
         link_id: &str,
-        pricing: Option<PricingRule>,
+        pricing: Option<Pricing>,
         routing_key: Option<String>,
     ) -> Result<(), AliexpressError> {
-        if pricing.is_some_and(|rule| !rule.is_valid()) {
+        if pricing.as_ref().is_some_and(|pricing| !pricing.is_valid()) {
             return Err(AliexpressError::InvalidPricingRule);
         }
         let link = self.require_link(link_id).await?;
@@ -580,7 +580,7 @@ impl<E: Executor> Command<E> {
         }
         link.write()?
             .routing_key_opt(routing_key)
-            .event(&PricingSet {
+            .event(&PricingSetV2 {
                 pricing,
                 set_by: actor.to_owned(),
             })

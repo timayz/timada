@@ -1,10 +1,10 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::company::{AliexpressAuthorized, AliexpressDisconnected};
-use crate::aggregator::{AliexpressConfigured, AliexpressForwardingSet, AliexpressRemoved};
+use crate::aggregator::{AliexpressConfiguredV2, AliexpressForwardingSet, AliexpressRemoved};
 use crate::command::CompanyState;
 use crate::error::TenancyError;
-use crate::value_object::{PERMISSION_ALIEXPRESS_MANAGE, PricingRule};
+use crate::value_object::{PERMISSION_ALIEXPRESS_MANAGE, Pricing};
 
 /// What the shop buys on AliExpress.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,7 +15,8 @@ pub struct ConfigureAliexpress {
     pub currency: String,
     /// ISO 639-1 (`fr`).
     pub language: String,
-    pub pricing: Option<PricingRule>,
+    /// How imports are priced, by cost band (`None`: by hand).
+    pub pricing: Option<Pricing>,
 }
 
 /// The tokens an AliExpress account gave the platform's app, sealed by the
@@ -50,7 +51,11 @@ impl<E: Executor> super::Command<E> {
         if !is_code(&country, 2) || !is_code(&currency, 3) || !is_code(&language, 2) {
             return Err(TenancyError::InvalidAliexpressMarket);
         }
-        if cmd.pricing.is_some_and(|rule| !rule.is_valid()) {
+        if cmd
+            .pricing
+            .as_ref()
+            .is_some_and(|pricing| !pricing.is_valid())
+        {
             return Err(TenancyError::InvalidPricingRule);
         }
         let tenant = self.require_active(tenant_id).await?;
@@ -60,7 +65,7 @@ impl<E: Executor> super::Command<E> {
         tenant
             .write()?
             .routing_key_opt(routing_key)
-            .event(&AliexpressConfigured {
+            .event(&AliexpressConfiguredV2 {
                 ship_to_country: country,
                 currency,
                 language,

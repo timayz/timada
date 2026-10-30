@@ -1,6 +1,6 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use serde::Deserialize;
 use timada_tenancy::{ConfigureAliexpress, PERMISSION_ALIEXPRESS_MANAGE};
 use topcoat::{
     Result,
@@ -12,23 +12,16 @@ use topcoat::{
     },
 };
 
-use super::{PricingForm, aliexpress_url};
+use super::{aliexpress_url, pricing_of_form};
 use crate::aliexpress::Aliexpress;
 use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
 
-#[derive(Deserialize)]
-pub struct ConfigureForm {
-    ship_to_country: String,
-    currency: String,
-    language: String,
-    #[serde(flatten)]
-    pricing: PricingForm,
-}
-
-/// Saves what the shop buys on AliExpress and how it prices it.
+/// Saves what the shop buys on AliExpress and how it prices it. The form
+/// is read as a map: its bands are numbered fields (see
+/// [`pricing_of_form`]).
 #[route(POST)]
-pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOther> {
+pub async fn configure(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
     access
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
@@ -38,18 +31,19 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
     if !app_context::<Arc<Aliexpress>>(cx).enabled() {
         return refused("aliexpress_disabled");
     }
-    let pricing = match form.pricing.rule() {
-        Ok(rule) => rule,
+    let pricing = match pricing_of_form(&form) {
+        Ok(pricing) => pricing,
         Err(code) => return refused(code),
     };
+    let sent = |name: &str| form.get(name).cloned().unwrap_or_default();
     let configured = tenancy(cx)
         .configure_aliexpress(
             &access.user_id,
             &access.tenant.id,
             ConfigureAliexpress {
-                ship_to_country: form.ship_to_country,
-                currency: form.currency,
-                language: form.language,
+                ship_to_country: sent("ship_to_country"),
+                currency: sent("currency"),
+                language: sent("language"),
                 pricing,
             },
         )
