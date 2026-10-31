@@ -11,7 +11,7 @@ use stripe_core::balance::RetrieveForMyAccountBalance;
 use stripe_core::payment_intent::{
     CreatePaymentIntent, CreatePaymentIntentAutomaticPaymentMethods, RetrievePaymentIntent,
 };
-use stripe_core::refund::CreateRefund;
+use stripe_core::refund::{CreateRefund, ListRefund};
 
 /// A payment to open for a cart.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +34,17 @@ pub struct NewPayment {
 pub struct OpenPayment {
     pub payment_id: String,
     pub client_secret: String,
+}
+
+/// A refund of a payment as the provider holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefundRecord {
+    pub refund_id: String,
+    /// Minor units of the payment's currency.
+    pub amount_cents: u64,
+    /// Whether the money is on its way back (as opposed to pending, failed
+    /// or cancelled).
+    pub succeeded: bool,
 }
 
 /// A payment as the provider sees it now.
@@ -71,6 +82,13 @@ pub trait PaymentGateway: Send + Sync {
         amount_cents: u64,
         idempotency_key: &str,
     ) -> anyhow::Result<String>;
+    /// The refunds the provider holds for the payment, the ones made by this
+    /// server and the ones made in the provider's own dashboard alike.
+    async fn refunds_of(
+        &self,
+        secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<Vec<RefundRecord>>;
 }
 
 /// Stripe, through async-stripe. One client per secret key, kept.
@@ -188,5 +206,26 @@ impl PaymentGateway for StripeGateway {
             .send(&self.client(secret_key)?)
             .await?;
         Ok(refund.id.to_string())
+    }
+
+    async fn refunds_of(
+        &self,
+        secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<Vec<RefundRecord>> {
+        let refunds = ListRefund::new()
+            .payment_intent(payment_id)
+            .limit(100)
+            .send(&self.client(secret_key)?)
+            .await?;
+        Ok(refunds
+            .data
+            .into_iter()
+            .map(|refund| RefundRecord {
+                refund_id: refund.id.to_string(),
+                amount_cents: refund.amount.max(0) as u64,
+                succeeded: refund.status.as_deref() == Some("succeeded"),
+            })
+            .collect())
     }
 }

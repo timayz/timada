@@ -189,9 +189,12 @@ by construction.
    records it (`Cart::PaymentRequested`) or the refusal. The shopper confirms with
    Stripe's card form; Stripe calls `POST /stripe/webhooks/{tenant_id}`, any node,
    which checks the signature, reads the payment back from Stripe and only then
-   creates the order (`place_paid_order`). A second payment of a cart is refunded;
-   cancelling an order refunds it first. Setting it up and testing it locally:
-   `docs/payments.md`.
+   creates the order (`place_paid_order`). A second payment of a cart is refunded; a
+   payment confirmed after the checkout's holds lapsed and went to someone else is given
+   back (`Cart::PaymentReturned`). Cancelling an order records the refund request first
+   (`Order::RefundRequested`, the idempotency key), then asks Stripe, records the refund
+   and cancels; `charge.refunded` reconciles refunds Stripe holds that the order does not
+   know. Setting it up and testing it locally: `docs/payments.md`.
 5. **Shop mail** (`shop_mail.rs`). A merchant sets up SMTP servers of its own on
    `/t/{slug}/mail` (up to ten) and picks one for each kind of mail
    (`MailServersPicked`). The shop's mails to its shoppers (order confirmations,

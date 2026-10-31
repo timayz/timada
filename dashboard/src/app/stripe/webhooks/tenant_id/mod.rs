@@ -60,6 +60,7 @@ pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
         Outcome::Placed { .. }
         | Outcome::Refunded { .. }
         | Outcome::Returned { .. }
+        | Outcome::Reconciled { .. }
         | Outcome::Ignored => StatusCode::NO_CONTENT,
         Outcome::Rejected => {
             tracing::warn!(tenant = %tenant.slug, "a Stripe webhook that does not check out");

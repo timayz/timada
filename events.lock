@@ -189,6 +189,7 @@ event timada-orders/Order::Fulfilled { tracking: Option<String>, fulfilled_by: S
 event timada-orders/Order::LanguageSet { language: String, set_by: String }
 event timada-orders/Order::NewsletterOptInSet { set_by: String }
 event timada-orders/Order::Placed { reference: String, cart_id: String, email: String, shipping: ShippingAddress, note: Option<String>, lines: Vec<OrderLine>, currency: String, total_cents: u64, payment: Payment, placed_by: String }
+event timada-orders/Order::RefundRequested { payment_id: String, amount_cents: u64, idempotency_key: String, requested_by: String }
 event timada-orders/Order::Refunded { payment_id: String, refund_id: String, amount_cents: u64, refunded_by: String }
 event timada-orders/Order::ShippingCharged { method_id: String, name: String, amount_cents: u64, charged_by: String }
 event timada-orders/Order::TimeZoneSet { time_zone: String, set_by: String }

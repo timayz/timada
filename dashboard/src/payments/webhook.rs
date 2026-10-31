@@ -11,6 +11,12 @@
 //! money goes back ([`Outcome::Returned`]) and the cart records it
 //! (`Cart::PaymentReturned`): an order is never placed for goods already
 //! sold or a code already spent.
+//!
+//! A `charge.refunded` is reconciled: the refunds Stripe holds for the
+//! payment (made here, or in Stripe's own dashboard) that the order does
+//! not know yet are recorded, so a refund made by hand, or one whose
+//! recording failed after Stripe took it, reaches the order and its credit
+//! note.
 
 use timada_catalog::CatalogError;
 use timada_discounts::{
@@ -36,6 +42,9 @@ pub enum Outcome {
     /// else, so the money went back and no order was placed (now, or
     /// already). `code` says what was gone.
     Returned { refund_id: String, code: String },
+    /// A `charge.refunded` matched against what the order knows: that many
+    /// refunds Stripe holds were not recorded yet and are now.
+    Reconciled { recorded: usize },
     /// Not ours to act on: another event type, a payment not made through
     /// timada, one that did not succeed.
     Ignored,
@@ -61,6 +70,9 @@ struct EventData {
 #[derive(serde::Deserialize)]
 struct ObjectHead {
     id: String,
+    /// On a charge: the payment it belongs to.
+    #[serde(default)]
+    payment_intent: Option<String>,
 }
 
 /// Handles one webhook of `tenant_id`, whose Stripe account is `account` and
@@ -82,19 +94,27 @@ pub async fn receive(
     let Ok(event) = serde_json::from_slice::<EventHead>(body) else {
         return Ok(Outcome::Rejected);
     };
-    if event.type_ != "payment_intent.succeeded" {
-        return Ok(Outcome::Ignored);
-    }
+    let payment_id = match event.type_.as_str() {
+        "payment_intent.succeeded" => event.data.object.id.clone(),
+        "charge.refunded" => match event.data.object.payment_intent.clone() {
+            Some(payment_id) => payment_id,
+            None => return Ok(Outcome::Ignored),
+        },
+        _ => return Ok(Outcome::Ignored),
+    };
 
     // Stripe's word, not the payload's: the payment as it stands now.
     let status = payments
         .gateway
-        .payment_status(&account.secret_key, &event.data.object.id)
+        .payment_status(&account.secret_key, &payment_id)
         .await?;
     let ours = status.metadata.get("tenant_id").map(String::as_str) == Some(tenant_id);
     let Some(cart_id) = status.metadata.get("cart_id").filter(|_| ours) else {
         return Ok(Outcome::Ignored);
     };
+    if event.type_ == "charge.refunded" {
+        return reconcile_refunds(payments, account, tenant_id, store, cart_id, &payment_id).await;
+    }
     if !status.succeeded {
         return Ok(Outcome::Ignored);
     }
@@ -173,6 +193,49 @@ pub async fn receive(
             Ok(Outcome::Retry)
         }
     }
+}
+
+/// Records the refunds Stripe holds for `payment_id` that the order made
+/// from `cart_id` does not know yet. No order (the payment never became
+/// one) is nothing to reconcile.
+async fn reconcile_refunds(
+    payments: &Payments,
+    account: &Account,
+    tenant_id: &str,
+    store: Executor,
+    cart_id: &str,
+    payment_id: &str,
+) -> anyhow::Result<Outcome> {
+    let orders = timada_orders::Command::new(store, tenant_id);
+    let Some(order) = orders.load_order_of_cart(cart_id).await? else {
+        return Ok(Outcome::Ignored);
+    };
+    if order.payment.payment_id != payment_id {
+        return Ok(Outcome::Ignored);
+    }
+    let mut recorded = 0;
+    for refund in payments
+        .gateway
+        .refunds_of(&account.secret_key, payment_id)
+        .await?
+    {
+        if !refund.succeeded || order.refund_ids.contains(&refund.refund_id) {
+            continue;
+        }
+        orders
+            .record_refund(
+                DASHBOARD_ACTOR,
+                &order.id,
+                &refund.refund_id,
+                refund.amount_cents,
+            )
+            .await?;
+        recorded += 1;
+    }
+    if recorded > 0 {
+        tracing::info!(%tenant_id, order = %order.id, recorded, "refunds made in Stripe recorded on the order");
+    }
+    Ok(Outcome::Reconciled { recorded })
 }
 
 /// Takes again what the checkout paid by `payment_id` held: nothing changes
