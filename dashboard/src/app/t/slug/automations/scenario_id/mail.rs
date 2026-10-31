@@ -8,7 +8,8 @@ use timada_automations::{
     catalog::{self, EMAIL, Subject},
 };
 use timada_tenancy::{
-    MailTemplateError, RenderedMail, ShopMailKind, TenantState, render, validate, validate_text,
+    MailTemplateError, RenderedMail, ShopMailKind, TenantState, links_to, render, render_text,
+    validate, validate_text,
 };
 use topcoat::context::Cx;
 
@@ -42,17 +43,21 @@ pub fn preview(
     if let Some(text) = &settings.text {
         validate_text(kind, text)?;
     }
-    if !settings.html.contains("unsubscribe_url") {
+    // The rendered mail must carry the link, not merely mention the variable.
+    let vars = kind.sample(shop_vars(cx, tenant));
+    let rendered = render(
+        &settings.subject,
+        &settings.html,
+        settings.text.as_deref(),
+        &vars,
+    )?;
+    let unsubscribe = render_text("{{ unsubscribe_url }}", &vars)?;
+    if !links_to(&rendered.html, &unsubscribe) {
         return Err(MailTemplateError(
             "Link to {{ unsubscribe_url }}: every automated mail lets its reader stop them.".into(),
         ));
     }
-    render(
-        &settings.subject,
-        &settings.html,
-        settings.text.as_deref(),
-        &kind.sample(shop_vars(cx, tenant)),
-    )
+    Ok(rendered)
 }
 
 /// Whether every mail of the scenario reads.
