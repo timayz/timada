@@ -55,7 +55,7 @@ use timada_invoicing::tax;
 use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
 pub use timada_orders::{
     Checkout, OrderDiscount, OrderLine, OrderShipping, OrderState, OrderStatus, OrdersError,
-    PAYMENTS_UNAVAILABLE, PaymentSetup, ShippingAddress,
+    PAYMENTS_UNAVAILABLE, PaymentSetup, ReturnedPayment, ShippingAddress,
 };
 
 use crate::context::store;
@@ -719,6 +719,10 @@ impl Store {
             Some(PaymentAnswer::Refused(code)) => {
                 Some(Err(OrdersError::PaymentRefused { code: code.clone() }))
             }
+            // Paid too late and given back: nothing to confirm any more.
+            Some(PaymentAnswer::Returned(returned)) => Some(Err(OrdersError::PaymentRefused {
+                code: returned_code(&returned.code),
+            })),
             Some(PaymentAnswer::Requested(payment)) => Some(Ok(PaymentSession {
                 request_id: request.request_id.clone(),
                 provider: payment.provider.clone(),
@@ -737,6 +741,23 @@ impl Store {
     /// See [`order_of_cart`].
     pub async fn order_of_cart(&self, cart_id: &str) -> anyhow::Result<Option<OrderState>> {
         self.orders().load_order_of_cart(cart_id).await
+    }
+
+    /// See [`payment_returned`].
+    pub async fn payment_returned(
+        &self,
+        cart_id: &str,
+        request_id: &str,
+    ) -> anyhow::Result<Option<ReturnedPayment>> {
+        let Some(cart) = self.orders().load_cart(cart_id).await? else {
+            return Ok(None);
+        };
+        Ok(cart
+            .request(request_id)
+            .and_then(|request| match &request.answer {
+                Some(PaymentAnswer::Returned(returned)) => Some(returned.as_ref().clone()),
+                _ => None,
+            }))
     }
 
     /// See [`order`].
@@ -861,6 +882,30 @@ pub async fn order_of_cart(cx: &Cx, cart_id: &str) -> Result<Option<OrderState>>
         .order_of_cart(cart_id)
         .await
         .map_err(Error::from_anyhow)
+}
+
+/// The payment of a request that went through too late and was given back:
+/// what the checkout held (the goods, the discount's use) had lapsed and
+/// gone to someone else, so there is no order and the money is on its way
+/// back. A page waiting for the order checks this too, and words
+/// [`returned_code`] (`payment_returned_out_of_stock`, ...) to the shopper.
+pub async fn payment_returned(
+    cx: &Cx,
+    cart_id: &str,
+    request_id: &str,
+) -> Result<Option<ReturnedPayment>> {
+    store(cx)
+        .payment_returned(cart_id, request_id)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// The refusal code a page words for a payment given back: the reason the
+/// store recorded (`out_of_stock`, `discount_exhausted`,
+/// `discount_already_used`) under the `payment_returned_` prefix, so the
+/// wording can say the money is on its way back.
+pub fn returned_code(code: &str) -> String {
+    format!("payment_returned_{code}")
 }
 
 /// An order, read from the store. Anyone holding its id can read it: the

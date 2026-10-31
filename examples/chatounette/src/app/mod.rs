@@ -539,6 +539,15 @@ pub fn say(code: &str) -> &'static str {
         }
         "payment_failed" => "Le paiement n'a pas abouti. Réessayez ou utilisez une autre carte.",
         "payment_expired" => "Ce paiement n'est plus ouvert. Veuillez recommencer votre commande.",
+        "payment_returned_out_of_stock" => {
+            "Le dernier exemplaire est parti pendant votre paiement : il vous est remboursé en entier. Votre panier est inchangé."
+        }
+        "payment_returned_discount_exhausted" => {
+            "Ce code promo a été épuisé pendant votre paiement : il vous est remboursé en entier. Retirez le code et réessayez."
+        }
+        "payment_returned_discount_already_used" => {
+            "Ce code promo a déjà servi pour votre adresse : votre paiement vous est remboursé en entier. Retirez le code et réessayez."
+        }
         "invalid_email" => "Saisissez une adresse e-mail valide.",
         "invalid_vat_number" => {
             "Saisissez un numéro de TVA intracommunautaire : le préfixe du pays, puis lettres et chiffres."

@@ -28,10 +28,10 @@ use crate::aggregator::{
     BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, ConfirmationMailed,
     Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded,
     ItemRemoved, LanguageGiven, LanguageSet, MethodAdded, MethodChanged, MethodRemoved,
-    NewsletterOptInSet, NewsletterOptedIn, PaymentRefused, PaymentRequested, PaymentsDisabled,
-    PaymentsEnabled, Placed, QuantitySet, Refunded, ShippingCharged, ShippingGranted,
-    ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet, TimeZoneGiven,
-    TimeZoneSet,
+    NewsletterOptInSet, NewsletterOptedIn, PaymentRefused, PaymentRequested, PaymentReturned,
+    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded, ShippingCharged,
+    ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet,
+    TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -135,6 +135,18 @@ pub struct PaymentSnapshot {
     pub shipping: Option<OrderShipping>,
 }
 
+/// A payment that went through too late to be an order: what the checkout
+/// held had lapsed and gone to someone else, so the money went back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnedPayment {
+    pub payment_id: String,
+    pub refund_id: String,
+    pub amount_cents: u64,
+    /// What was gone: `out_of_stock`, `discount_exhausted`,
+    /// `discount_already_used`.
+    pub code: String,
+}
+
 /// How a request to pay was answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaymentAnswer {
@@ -142,6 +154,9 @@ pub enum PaymentAnswer {
     Requested(Box<PaymentSnapshot>),
     /// It cannot go ahead; the code says why.
     Refused(String),
+    /// It was paid, too late for what the checkout held: given back, no
+    /// order.
+    Returned(Box<ReturnedPayment>),
 }
 
 /// A shopper's request to pay for the cart, and its answer once there is one.
@@ -224,6 +239,16 @@ impl CartState {
             .find(|r| r.payment().is_some_and(|p| p.payment_id == payment_id))
     }
 
+    /// The payment with that provider id, when it was given back.
+    pub fn returned_payment(&self, payment_id: &str) -> Option<&ReturnedPayment> {
+        self.requests.iter().find_map(|r| match &r.answer {
+            Some(PaymentAnswer::Returned(returned)) if returned.payment_id == payment_id => {
+                Some(returned.as_ref())
+            }
+            _ => None,
+        })
+    }
+
     /// Whether a payment is open for it (the shopper may be paying).
     pub fn is_paying(&self) -> bool {
         !self.is_checked_out() && self.requests.iter().any(|r| r.payment().is_some())
@@ -253,6 +278,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_billing_address_given())
         .handler(on_payment_requested())
         .handler(on_payment_refused())
+        .handler(on_payment_returned())
         .handler(on_discount_applied())
         .handler(on_discount_removed())
         .handler(on_discount_granted())
@@ -411,6 +437,27 @@ async fn on_payment_refused(
         .find(|r| r.request_id == event.data.request_id)
     {
         request.answer = Some(PaymentAnswer::Refused(event.data.code.to_owned()));
+    }
+    cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payment_returned(
+    event: Event<PaymentReturned>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|r| r.request_id == event.data.request_id)
+    {
+        request.answer = Some(PaymentAnswer::Returned(Box::new(ReturnedPayment {
+            payment_id: event.data.payment_id.to_owned(),
+            refund_id: event.data.refund_id.to_owned(),
+            amount_cents: event.data.amount_cents,
+            code: event.data.code.to_owned(),
+        })));
     }
     cart.updated_at = event.timestamp;
     Ok(())

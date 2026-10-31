@@ -3,11 +3,12 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 use timada_discounts::{Offer, OfferItem, OffersState, offers_id, offers_projection};
 use ulid::Ulid;
 
+use super::ReturnedPayment;
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
     Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet, NewsletterOptInSet,
-    NewsletterOptedIn, PaymentRefused, PaymentRequested, Placed, ShippingCharged, ShippingGranted,
-    ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
+    NewsletterOptedIn, PaymentRefused, PaymentRequested, PaymentReturned, Placed, ShippingCharged,
+    ShippingGranted, ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
 };
 use crate::error::OrdersError;
 use crate::value_object::{
@@ -697,6 +698,50 @@ impl<E: Executor> super::Command<E> {
                     request_id: request_id.to_owned(),
                     code: code.to_owned(),
                     refused_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < CART_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Records that the payment of a request went through too late (what
+    /// its checkout held had lapsed and gone) and was given back:
+    /// `returned` names the payment, the refund and what was gone. Told
+    /// twice, the second time is a no-op; a payment the cart never opened,
+    /// or that already made an order, is `PaymentNotFound`.
+    pub async fn return_payment(
+        &self,
+        actor: &str,
+        cart_id: &str,
+        returned: ReturnedPayment,
+        routing_key: Option<String>,
+    ) -> Result<(), OrdersError> {
+        for attempt in 1..=CART_WRITE_ATTEMPTS {
+            let cart = self.require_cart(cart_id).await?;
+            if cart.returned_payment(&returned.payment_id).is_some() {
+                return Ok(());
+            }
+            let request = cart
+                .request_paid_by(&returned.payment_id)
+                .filter(|_| !cart.is_checked_out())
+                .ok_or(OrdersError::PaymentNotFound)?;
+            let written = cart
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&PaymentReturned {
+                    request_id: request.request_id.clone(),
+                    payment_id: returned.payment_id.clone(),
+                    refund_id: returned.refund_id.clone(),
+                    amount_cents: returned.amount_cents,
+                    code: returned.code.clone(),
+                    returned_by: actor.to_owned(),
                 })
                 .tenant(&self.tenant)
                 .commit(&self.executor)
