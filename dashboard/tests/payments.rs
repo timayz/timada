@@ -36,7 +36,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
 use timada_catalog::{CreateProduct, StockLine};
 use timada_discounts::RESERVATION_SECS;
-use timada_orders::{CartItem, Checkout, PaymentAnswer, STOREFRONT_ACTOR, ShippingAddress};
+use timada_orders::{
+    CartCursor, CartItem, Checkout, PaymentAnswer, STOREFRONT_ACTOR, ShippingAddress,
+};
 use timada_tenancy::{
     Command, ConfigurePayments, CreateTenant, LegalIdentity, TenantState, read_model_subscription,
 };
@@ -45,7 +47,7 @@ use cluster::Cluster;
 use payments::webhook::{Outcome, receive};
 use payments::{
     Cancellation, DASHBOARD_ACTOR, LapsedCheckouts, NewPayment, OpenPayment, PaymentGateway,
-    PaymentStatus, Payments, RefundRecord, signature,
+    PaymentStatus, Payments, RECHECK_SECS, RefundRecord, signature,
 };
 
 const WEBHOOK_SECRET: &str = "whsec_test";
@@ -58,7 +60,7 @@ struct FakeStripe {
     opened: Mutex<HashMap<String, (OpenPayment, NewPayment)>>,
     /// Payments the shopper paid.
     paid: Mutex<Vec<String>>,
-    /// Payments the shopper is confirming (a bank's challenge open).
+    /// Payments confirmed that Stripe is settling (a bank debit).
     confirming: Mutex<Vec<String>>,
     /// Payments cancelled, by this server or in Stripe's own dashboard.
     cancelled: Mutex<Vec<String>>,
@@ -470,7 +472,9 @@ impl<G: PaymentGateway + 'static> Harness<G> {
             .request_checkout(STOREFRONT_ACTOR, cart_id, checkout)
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(10), async {
+        // Generous: under load (another build on the machine) the
+        // subscriptions answer in seconds, not milliseconds.
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let cart = orders.load_cart(cart_id).await.unwrap().unwrap();
                 if let Some(answer) = cart.request(&request_id).unwrap().answer.clone() {
@@ -631,9 +635,9 @@ async fn a_paid_cart_becomes_one_order() {
     h.finish().await;
 }
 
-/// Waits for what a subscription writes.
+/// Waits for what a subscription writes; generously, for a loaded machine.
 async fn eventually<T>(mut probe: impl AsyncFnMut() -> Option<T>) -> T {
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if let Some(value) = probe().await {
                 return value;
@@ -1078,9 +1082,9 @@ async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
         };
         (cart_id, *payment)
     };
-    // Ada walks away from her card form; Bob is in his bank's challenge;
-    // Carol paid, her webhook still to come; Dave's was cancelled in
-    // Stripe's own dashboard.
+    // Ada walks away from her card form; Bob confirmed a bank debit Stripe
+    // is settling; Carol paid, her webhook still to come; Dave's was
+    // cancelled in Stripe's own dashboard.
     let (ada_cart, ada) = open().await;
     let (bob_cart, bob) = open().await;
     let (carol_cart, carol) = open().await;
@@ -1096,17 +1100,35 @@ async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
         .lock()
         .unwrap()
         .push(dave.payment_id.clone());
-    // The carts the sweep looks at come from the read model.
+    // The carts the sweep looks at come from the read model, a shop at a
+    // time and a page at a time.
     timada_orders::read_model_subscription::<cluster::Executor>(h.pool.clone())
         .run_once(&h.platform.0)
         .await
         .unwrap();
     assert_eq!(
-        timada_orders::paying_carts_before(&h.pool, i64::MAX, 10)
+        timada_orders::paying_tenants_before(&h.pool, i64::MAX)
             .await
-            .unwrap()
-            .len(),
-        4
+            .unwrap(),
+        vec![acme.id.clone()]
+    );
+    let first = timada_orders::paying_carts_before(&h.pool, &acme.id, i64::MAX, None, 3)
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 3);
+    let rest = timada_orders::paying_carts_before(
+        &h.pool,
+        &acme.id,
+        i64::MAX,
+        Some(&CartCursor::from(&first[2])),
+        3,
+    )
+    .await
+    .unwrap();
+    assert_eq!(rest.len(), 1);
+    assert!(
+        !first.contains(&rest[0]),
+        "the page goes on after the cursor"
     );
     let now = now() as u64;
 
@@ -1145,10 +1167,12 @@ async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
     let Outcome::Placed { .. } = h.webhook(&acme, &body, signed(&body)).await else {
         panic!("the order is placed");
     };
-    // Bob's challenge fails and his form is open again: the next look
+    // Bob's debit fails and his form is open again: the sweep does not ask
+    // Stripe about a payment it left alone until its time comes, then
     // closes it.
     h.stripe.confirming.lock().unwrap().clear();
-    assert_eq!(sweep.sweep(later).await.unwrap(), 1);
+    assert_eq!(sweep.sweep(later).await.unwrap(), 0);
+    assert_eq!(sweep.sweep(later + RECHECK_SECS).await.unwrap(), 1);
     assert!(
         orders
             .load_cart(&bob_cart)

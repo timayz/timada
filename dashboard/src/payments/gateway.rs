@@ -69,9 +69,10 @@ pub enum Cancellation {
     /// The payment is cancelled (now, or it already was): the shopper's
     /// card form cannot confirm it any more, and nothing was charged.
     Cancelled,
-    /// The shopper is confirming it right now (a bank's challenge, a
-    /// payment method that settles later): left alone, the webhook settles
-    /// it.
+    /// The shopper confirmed it and the provider is settling it (a payment
+    /// method that takes days, a bank debit): it cannot be cancelled any
+    /// more, and the webhook settles it. A card form still open, a bank's
+    /// challenge included, is not this: it is cancelled.
     Confirming,
     /// The shopper paid: the webhook turns it into the order, or gives it
     /// back.
@@ -118,16 +119,19 @@ pub trait PaymentGateway: Send + Sync {
 }
 
 /// Reads [`Cancellation`] off a payment's status, for one the shopper may
-/// confirm no more; `None` while it may still be cancelled.
+/// confirm no more; `None` while it may still be cancelled. Stripe cancels
+/// a payment awaiting its method, its confirmation, the bank's challenge
+/// (`requires_action`) or a capture, so a shopper who left the challenge
+/// open is closed like one who left the form open: the challenge does not
+/// expire by itself, and finishing it days later would charge for goods
+/// long gone. Only a payment Stripe is settling (`processing`) stays.
 fn settled(status: &PaymentIntentStatus) -> Option<Cancellation> {
     match status {
         PaymentIntentStatus::Canceled => Some(Cancellation::Cancelled),
         PaymentIntentStatus::Succeeded => Some(Cancellation::Paid),
-        PaymentIntentStatus::Processing
-        | PaymentIntentStatus::RequiresAction
-        | PaymentIntentStatus::RequiresCapture => Some(Cancellation::Confirming),
-        // A status this crate does not know is tried as well: Stripe
-        // refuses the cancel itself when it must.
+        PaymentIntentStatus::Processing => Some(Cancellation::Confirming),
+        // Cancellable, or a status this crate does not know, tried as well:
+        // Stripe refuses the cancel itself when it must.
         _ => None,
     }
 }
@@ -318,5 +322,34 @@ impl PaymentGateway for StripeGateway {
         };
         let intent = send(&RetrievePaymentIntent::new(payment_id), None, &client).await?;
         settled(&intent.status).ok_or(refused)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_payment_is_cancelled_unless_paid_or_settling() {
+        for cancellable in [
+            PaymentIntentStatus::RequiresPaymentMethod,
+            PaymentIntentStatus::RequiresConfirmation,
+            PaymentIntentStatus::RequiresAction,
+            PaymentIntentStatus::RequiresCapture,
+        ] {
+            assert_eq!(settled(&cancellable), None, "{cancellable:?}");
+        }
+        assert_eq!(
+            settled(&PaymentIntentStatus::Processing),
+            Some(Cancellation::Confirming)
+        );
+        assert_eq!(
+            settled(&PaymentIntentStatus::Succeeded),
+            Some(Cancellation::Paid)
+        );
+        assert_eq!(
+            settled(&PaymentIntentStatus::Canceled),
+            Some(Cancellation::Cancelled)
+        );
     }
 }
