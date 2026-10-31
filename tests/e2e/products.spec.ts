@@ -44,7 +44,7 @@ test("an owner creates, edits, publishes and archives a product", async ({ page 
   await page.getByLabel("Currency").selectOption("EUR");
   await page.getByRole("button", { name: "Set price" }).click();
   await expect(page.getByRole("status")).toContainText("Price set.");
-  await expect(page.locator("[data-product-price]")).toContainText("12.50 EUR");
+  await expect(page.locator("[data-product-price]")).toContainText("12.50 €");
   await page.getByLabel("Description").fill("Holds 50 cl of anything hot.");
   await page.getByRole("button", { name: "Save description" }).click();
   await expect(page.locator("[data-product-description]")).toContainText("Holds 50 cl");
@@ -61,7 +61,7 @@ test("an owner creates, edits, publishes and archives a product", async ({ page 
     await page.goto(`/t/${slug}/products`);
     await expect(row).toHaveAttribute("data-product-status", "published", { timeout: 1000 });
     await expect(row).toContainText("Big Blue Mug", { timeout: 1000 });
-    await expect(row).toContainText("12.50 EUR", { timeout: 1000 });
+    await expect(row).toContainText("12.50 €", { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
   await page.getByLabel("Search").fill("nothing-like-it");
   await page.getByRole("button", { name: "Search" }).click();
@@ -228,7 +228,7 @@ test("an owner makes a product vary by colour and size, each combination priced"
 
   // The price a listing shows is what a shopper may pay.
   await page.goto(productUrl);
-  await expect(page.locator("[data-product-price]")).toContainText("22.90–24.90 EUR");
+  await expect(page.locator("[data-product-price]")).toContainText("22.90–24.90 €");
 
   // The options are settled now: no way to add one, and no way to edit one.
   await expect(page.getByLabel("Add an option")).toHaveCount(0);
@@ -251,7 +251,7 @@ test("an owner makes a product vary by colour and size, each combination priced"
   await expect(async () => {
     await page.goto(`/t/${slug}/products`);
     await expect(page.locator("[data-product=cat-harness] [data-product-price]")).toContainText(
-      "22.90–24.90 EUR",
+      "22.90–24.90 €",
       { timeout: 1000 },
     );
   }).toPass({ timeout: 15_000 });

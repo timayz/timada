@@ -375,7 +375,7 @@ impl<G: PaymentGateway + 'static> Harness<G> {
         self.platform.0.clone()
     }
 
-    /// A cart holding two mugs at 12.50 EUR; returns the cart and the mug.
+    /// A cart holding two mugs at 12.50 €; returns the cart and the mug.
     async fn cart(&self, tenant: &TenantState) -> (String, String) {
         let store = self.store(tenant);
         let catalog = timada_catalog::Command::new(store.clone(), &tenant.id);

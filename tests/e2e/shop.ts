@@ -4,7 +4,7 @@ import { type FakeStripe, stripeSignature } from "./stripe";
 // The Chatounette example as a shopper drives it, shared by the specs that
 // buy something there: the merchant's Stripe account in the dashboard, the
 // cart drawer, the one-page checkout and Stripe's way back. The shop is in
-// French; its totals are written as the library writes them (`25.00 EUR`),
+// French; its totals are written as the library writes them (`25.00 €`),
 // its catalogue prices as the shop does (`12,50€`).
 
 /// Connects the shop's Stripe account in the dashboard (the fake Stripe of

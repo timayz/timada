@@ -6,8 +6,8 @@ use timada_orders::{Checkout, OrderError};
 
 type Discounts = timada_discounts::Command<evento::Sqlite>;
 
-/// A tracker at 30.00 EUR, a bowl at 20.00 EUR, and an offer of one
-/// tracker at 12.00 EUR shaped by `offer`.
+/// A tracker at 30.00 €, a bowl at 20.00 €, and an offer of one
+/// tracker at 12.00 € shaped by `offer`.
 async fn shop(
     offer: impl FnOnce(&str, &str) -> CreateOffer,
 ) -> (Orders, Discounts, String, String, String) {

@@ -39,7 +39,7 @@ async fn orders_and_carts_are_listed() {
     assert_eq!(row.reference, placed.reference);
     assert_eq!(row.status(), OrderStatus::Paid);
     assert!(row.payment_id.starts_with("pi_"));
-    assert_eq!(row.total_label(), "25.00 EUR");
+    assert_eq!(row.total_label(), "25.00 €");
     assert_eq!(row.item_count, 2);
     assert_eq!(row.name, "Ada Lovelace");
 

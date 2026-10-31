@@ -152,7 +152,7 @@ async fn a_variant_names_every_option_once_and_prices_itself() {
         vec![pick(&colour, "Beige"), pick(&size, "S")],
         "the product's own option order, not the caller's"
     );
-    assert_eq!(state.variants[0].price.to_string(), "22.90 EUR");
+    assert_eq!(state.variants[0].price.to_string(), "22.90 €");
     assert_eq!(
         state
             .variant_for(&[pick(&size, "S"), pick(&colour, "Beige")])
@@ -195,7 +195,7 @@ async fn a_variant_names_every_option_once_and_prices_itself() {
             .variants[0]
             .price
             .to_string(),
-        "24.90 EUR"
+        "24.90 €"
     );
     let missing = cmd
         .price_variant(ALICE, &product_id, "nope", 1000, "EUR")

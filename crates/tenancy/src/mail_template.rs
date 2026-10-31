@@ -416,7 +416,7 @@ impl ShopMailKind {
                         NewProductVars {
                             name: "Linen shirt".to_owned(),
                             url: "https://shop.example.com/p/linen-shirt".to_owned(),
-                            price: Some("49.00 EUR".to_owned()),
+                            price: Some("49.00 €".to_owned()),
                             image_url: Some(
                                 "https://shop.example.com/media/linen-shirt.jpg".to_owned(),
                             ),
@@ -476,26 +476,26 @@ fn sample_order(full: bool) -> OrderVars {
                 name: "Linen shirt".to_owned(),
                 variant: full.then(|| "Blue, M".to_owned()),
                 quantity: 2,
-                amount: "90.00 EUR".to_owned(),
+                amount: "90.00 €".to_owned(),
             },
             LineVars {
                 name: "Canvas tote".to_owned(),
                 variant: None,
                 quantity: 1,
-                amount: "25.00 EUR".to_owned(),
+                amount: "25.00 €".to_owned(),
             },
         ],
-        subtotal: "115.00 EUR".to_owned(),
+        subtotal: "115.00 €".to_owned(),
         discount: full.then(|| DiscountVars {
             code: "WELCOME10".to_owned(),
-            amount: "11.50 EUR".to_owned(),
+            amount: "11.50 €".to_owned(),
         }),
         shipping_method: full.then(|| ShippingMethodVars {
             name: "Colissimo".to_owned(),
-            amount: "4.90 EUR".to_owned(),
+            amount: "4.90 €".to_owned(),
             free: false,
         }),
-        total: if full { "108.40 EUR" } else { "115.00 EUR" }.to_owned(),
+        total: if full { "108.40 €" } else { "115.00 €" }.to_owned(),
         shipping_address: address("Camille Martin"),
         billing_address: full.then(|| address("Martin & Fils SARL")),
         note: full.then(|| "Please leave it with the concierge.".to_owned()),
@@ -646,7 +646,7 @@ pub struct NewProductVars {
     pub name: String,
     /// Its page on the storefront.
     pub url: String,
-    /// What it sells for, formatted (`49.00 EUR`, or a range); none when it
+    /// What it sells for, formatted (`49.00 €`, or a range); none when it
     /// has no price.
     pub price: Option<String>,
     /// Its first picture, when it has one.
@@ -677,7 +677,7 @@ pub struct AutomationCustomerVars {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AutomationDiscountVars {
     pub code: String,
-    /// What it takes off (`10 %`, `5.00 EUR`).
+    /// What it takes off (`10 %`, `5.00 €`).
     pub value: String,
     /// The last day it is valid.
     pub ends: String,
@@ -1096,9 +1096,9 @@ mod tests {
             "Linen shirt · Blue, M",
             "× 2",
             "Discount WELCOME10",
-            "-11.50 EUR",
+            "-11.50 €",
             "Shipping: Colissimo",
-            "108.40 EUR",
+            "108.40 €",
             "Bâtiment B",
             "Martin &amp; Fils SARL",
             "Your note: Please leave it with the concierge.",
@@ -1240,7 +1240,7 @@ mod tests {
         )
         .unwrap();
         assert!(rendered.html.contains("Linen shirt"));
-        assert!(rendered.html.contains("49.00 EUR"));
+        assert!(rendered.html.contains("49.00 €"));
         assert!(rendered.html.contains("linen-shirt"));
         // Any other link must still start with https://.
         let err = validate(

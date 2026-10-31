@@ -27,7 +27,7 @@ async fn edits_update_the_state_and_repeat_as_no_ops() {
             currency: "EUR".into()
         })
     );
-    assert_eq!(edited.price.as_ref().unwrap().to_string(), "12.50 EUR");
+    assert_eq!(edited.price.as_ref().unwrap().to_string(), "12.50 €");
     assert_eq!(edited.aggregate_version().unwrap(), 4);
 
     // The same values again write nothing.

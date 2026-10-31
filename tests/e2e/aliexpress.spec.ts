@@ -63,7 +63,7 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByRole("status")).toContainText("AliExpress settings saved.");
     await expect(page.locator("[data-aliexpress-rule]")).toHaveText(
-      "Up to 5.00 EUR: cost ×3.00 · above: cost ×2.00, up to .99",
+      "Up to 5.00 €: cost ×3.00 · above: cost ×2.00, up to .99",
     );
     await expect(page.getByLabel("Band 1: costs up to")).toHaveValue("5.00");
     await expect(page.getByLabel("Band 1: multiplier")).toHaveValue("3.00");
@@ -73,7 +73,7 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page).toHaveURL(/error=invalid_pricing_rule/);
     await expect(page.locator("[data-aliexpress-rule]")).toHaveText(
-      "Up to 5.00 EUR: cost ×3.00 · above: cost ×2.00, up to .99",
+      "Up to 5.00 €: cost ×3.00 · above: cost ×2.00, up to .99",
     );
 
     // An address that is not an item's is refused; an item's is imported.

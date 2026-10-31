@@ -100,7 +100,7 @@ product picture: copied to a majority of nodes before it is recorded. The other 
 fetch it as they follow the platform's stream. The accent colour is `#rrggbb`. The
 footer is plain text of at most 500 characters, and its line breaks are kept.
 
-Amounts are already worded with their currency, for example `12.50 EUR`.
+Amounts are already worded with their currency, for example `12.50 €`.
 
 On save, a template is refused with the reason, and nothing is recorded, when:
 

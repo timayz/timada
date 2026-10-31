@@ -75,8 +75,8 @@ pub async fn product(catalog: &Catalog, name: &str, amount_cents: u64, currency:
     product.id
 }
 
-/// A published product sold in two colours, `Beige` at 10.00 EUR (code
-/// `MAT-B`) and `Blue` at 12.00 EUR; returns the product and both variants.
+/// A published product sold in two colours, `Beige` at 10.00 € (code
+/// `MAT-B`) and `Blue` at 12.00 €; returns the product and both variants.
 pub async fn varied_product(catalog: &Catalog, name: &str) -> (String, String, String) {
     let product = catalog
         .create_product(

@@ -440,13 +440,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if min == max {
                 format_money(min, currency)
             } else {
-                format!(
-                    "{}–{}",
-                    format_money(min, currency)
-                        .trim_end_matches(currency)
-                        .trim_end(),
-                    format_money(max, currency)
-                )
+                timada_core::format_money_range(min, max, currency)
             }
         })
         .unwrap_or_else(|| "Not priced yet".to_owned());

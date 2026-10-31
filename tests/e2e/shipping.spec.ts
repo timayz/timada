@@ -30,8 +30,8 @@ test("an owner adds, changes and removes shipping methods", async ({ page }) => 
   await page.getByRole("button", { name: "Add shipping method" }).click();
   await expect(page.getByRole("status")).toContainText("Shipping method added.");
   const tracked = page.locator('[data-shipping-method="Tracked delivery"]');
-  await expect(tracked.locator("[data-shipping-price]")).toHaveText("4.90 EUR");
-  await expect(tracked.locator("[data-shipping-free]")).toHaveText("From 50.00 EUR");
+  await expect(tracked.locator("[data-shipping-price]")).toHaveText("4.90 €");
+  await expect(tracked.locator("[data-shipping-free]")).toHaveText("From 50.00 €");
   await expect(tracked.locator("[data-shipping-countries]")).toHaveText("BE, FR");
 
   // No country ticked ships everywhere.
@@ -52,7 +52,7 @@ test("an owner adds, changes and removes shipping methods", async ({ page }) => 
   await page.getByRole("button", { name: "Save shipping method" }).click();
   await expect(page.getByRole("status")).toContainText("Shipping method saved.");
   const insured = page.locator('[data-shipping-method="VIP: insured"]');
-  await expect(insured.locator("[data-shipping-price]")).toHaveText("7.90 EUR");
+  await expect(insured.locator("[data-shipping-price]")).toHaveText("7.90 €");
   await expect(insured.locator("[data-shipping-countries]")).toHaveText("FR");
 
   // What a method ships to comes back ticked, at the top of the list.

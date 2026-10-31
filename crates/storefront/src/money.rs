@@ -15,7 +15,7 @@ pub const DEFAULT_FREE: &str = "Free";
 /// How an amount of money is written wherever a person reads one: a cart's
 /// totals, what a discount takes off, a shipping price, an offer's price,
 /// the VAT a total includes, an order's total. The default writes
-/// `12.50 EUR` ([`format_money`]); a shop hands its own through
+/// `12.50 €` ([`format_money`]); a shop hands its own through
 /// [`StoreConfig::money`](crate::StoreConfig::money) so the library writes
 /// prices the way its own pages do (`12,50€`). Shipping that costs nothing
 /// is a word rather than an amount: [`free`](Self::free) sets it.
@@ -56,6 +56,22 @@ impl MoneyFormat {
         match &self.format {
             Format::Default => format_money(cents, currency),
             Format::Custom(format) => format(cents, currency),
+        }
+    }
+
+    /// Two amounts of `currency` as a range: `12.00–18.00 €` by default,
+    /// and both amounts written in full (`12,00€–18,00€`) with a host's
+    /// format, which the library cannot take apart.
+    pub fn range(&self, min_cents: u64, max_cents: u64, currency: &str) -> String {
+        match &self.format {
+            Format::Default => timada_core::format_money_range(min_cents, max_cents, currency),
+            Format::Custom(format) => {
+                format!(
+                    "{}–{}",
+                    format(min_cents, currency),
+                    format(max_cents, currency)
+                )
+            }
         }
     }
 
@@ -106,10 +122,10 @@ mod tests {
     #[test]
     fn the_default_writes_the_locale_neutral_form() {
         let money = MoneyFormat::default();
-        assert_eq!(money.format(1250, "EUR"), "12.50 EUR");
+        assert_eq!(money.format(1250, "EUR"), "12.50 €");
         assert_eq!(money.free_word(), "Free");
         assert_eq!(money, MoneyFormat::default());
-        assert!(format!("{money:?}").contains("12.50 EUR"));
+        assert!(format!("{money:?}").contains("12.50 €"));
     }
 
     #[test]

@@ -83,7 +83,7 @@ pub struct StoreConfig {
     pub api_url: Option<String>,
     /// The URL prefix of the library's own endpoints (`/store`).
     pub prefix: Cow<'static, str>,
-    /// How every amount a person reads is written: `12.50 EUR` unless the
+    /// How every amount a person reads is written: `12.50 €` unless the
     /// host writes prices its own way.
     pub money: MoneyFormat,
 }

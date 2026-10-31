@@ -96,7 +96,7 @@ impl ShopperOrder {
         OrderStatus::parse(&self.status).unwrap_or_default()
     }
 
-    /// The total as a person reads it (`24.00 EUR`, or as the host writes
+    /// The total as a person reads it (`24.00 €`, or as the host writes
     /// prices).
     pub fn total_label(&self) -> String {
         self.money
