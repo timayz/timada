@@ -1,4 +1,4 @@
-use evento::{Executor, ProjectionAggregate};
+use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::{PaymentsDisabled, PaymentsEnabled};
 use crate::error::OrderError;
@@ -24,7 +24,11 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Brings the payment method in step with the merchant's account:
-    /// `None` stops it. Already so is a no-op, so every node may tell it.
+    /// `None` stops it. Already so is a no-op, so every node may tell it,
+    /// and two telling it the same thing at once (the settings page and the
+    /// subscription that follows it) both succeed: the one whose write lost
+    /// the race reads what the other wrote and finds nothing left to do. A
+    /// different setup written in between is still a conflict.
     pub async fn set_payment_method(
         &self,
         actor: &str,
@@ -45,17 +49,22 @@ impl<E: Executor> super::Command<E> {
             }
         };
         write.routing_key_opt(routing_key);
-        match setup {
+        match &setup {
             Some(setup) => write.event(&PaymentsEnabled {
-                provider: setup.provider,
-                publishable_key: setup.publishable_key,
+                provider: setup.provider.clone(),
+                publishable_key: setup.publishable_key.clone(),
                 enabled_by: actor.to_owned(),
             }),
             None => write.event(&PaymentsDisabled {
                 disabled_by: actor.to_owned(),
             }),
         };
-        write.tenant(&self.tenant).commit(&self.executor).await?;
-        Ok(())
+        match write.tenant(&self.tenant).commit(&self.executor).await {
+            Ok(_) => Ok(()),
+            Err(WriteError::InvalidOriginalVersion) if self.payment_setup().await? == setup => {
+                Ok(())
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 }

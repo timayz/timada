@@ -29,6 +29,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use evento::ProjectionAggregate;
 use evento::migrator::Migrate;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -1305,6 +1306,51 @@ async fn the_tenant_store_learns_how_its_shoppers_pay() {
     h.platform.remove_payments("alice", &acme.id).await.unwrap();
     follow().await;
     assert_eq!(orders.payment_setup().await.unwrap(), None);
+    h.finish().await;
+}
+
+/// The settings page tells the tenant's store at once and the payment-setup
+/// subscription tells it again when it gets to the event: when both write at
+/// the same time, the one that lost the race finds the same setup there and
+/// has nothing left to do, so neither fails.
+#[tokio::test]
+async fn the_store_is_told_the_same_setup_twice_at_once() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let setup = timada_orders::PaymentSetup {
+        provider: "stripe".into(),
+        publishable_key: "pk_test_123".into(),
+    };
+
+    // Both load a store that knows nothing yet, so both write: the second
+    // write lands on a stream the first one created.
+    let mut follow = payments::setup_subscription(h.payments.clone(), h.store(&acme));
+    let (page, subscription) = tokio::join!(
+        payments::publish_setup(&h.payments, &acme, h.store(&acme)),
+        follow.run_once(&h.platform.0),
+    );
+    page.unwrap();
+    subscription.unwrap();
+    assert_eq!(orders.payment_setup().await.unwrap(), Some(setup.clone()));
+    let written = orders.load_payment_method().await.unwrap().unwrap();
+
+    // The same when the stream exists already: the merchant stops payments
+    // and two nodes tell the store at once.
+    h.platform.remove_payments("alice", &acme.id).await.unwrap();
+    let (first, second) = tokio::join!(
+        orders.set_payment_method("timada-dashboard", None),
+        orders.set_payment_method("timada-dashboard", None),
+    );
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(orders.payment_setup().await.unwrap(), None);
+    let stopped = orders.load_payment_method().await.unwrap().unwrap();
+    assert_eq!(
+        stopped.aggregate_version().unwrap(),
+        written.aggregate_version().unwrap() + 1
+    );
     h.finish().await;
 }
 
