@@ -99,4 +99,52 @@ impl CatalogError {
             _ => true,
         }
     }
+
+    /// A stable code for the refusal, for a page or a storefront to word in
+    /// its own language; `None` for an infrastructure failure. A category
+    /// page rewords the codes a category shares with a product.
+    pub fn code(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::InvalidName => "invalid_product_name",
+            Self::InvalidSlug => "invalid_product_slug",
+            Self::SlugTaken => "product_slug_taken",
+            Self::InvalidDescription => "invalid_description",
+            Self::InvalidAmount => "invalid_amount",
+            Self::InvalidCurrency => "invalid_currency",
+            Self::NotFound => "product_not_found",
+            Self::Archived => "product_archived",
+            Self::NotPriced => "product_not_priced",
+            Self::CategoryNotFound => "category_not_found",
+            Self::CategoryArchived => "category_archived",
+            Self::CategoryCycle => "category_cycle",
+            Self::CategoryTooDeep => "category_too_deep",
+            Self::TooManyCategories => "too_many_categories",
+            Self::TooManyImages => "too_many_images",
+            Self::InvalidImage => "unsupported_image",
+            Self::InvalidAlt => "invalid_alt",
+            Self::ImageNotFound => "image_not_found",
+            Self::InvalidImageOrder => "invalid_image_order",
+            Self::TooManyOptions => "too_many_options",
+            Self::InvalidOptionName => "invalid_option_name",
+            Self::OptionExists => "option_exists",
+            Self::InvalidOptionValues => "invalid_option_values",
+            Self::OptionNotFound => "option_not_found",
+            Self::OptionInUse => "option_in_use",
+            Self::OptionValueInUse => "option_value_in_use",
+            Self::TooManyVariants => "too_many_variants",
+            Self::InvalidSelection => "invalid_selection",
+            Self::VariantExists => "variant_exists",
+            Self::VariantNotFound => "variant_not_found",
+            Self::CurrencyMismatch => "currency_mismatch",
+            Self::InvalidSku => "invalid_sku",
+            Self::SkuTaken => "sku_taken",
+            Self::InvalidAttribute => "invalid_attribute",
+            Self::TooManyAttributes => "too_many_attributes",
+            Self::InvalidTaxCategory => "invalid_tax_category",
+            Self::InvalidStock => "invalid_stock",
+            Self::OutOfStock { .. } => "out_of_stock",
+            Self::Write(err) => return timada_core::write_refusal(err),
+            Self::Other(_) => return None,
+        })
+    }
 }

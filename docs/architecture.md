@@ -37,15 +37,18 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `tests/e2e` | | Playwright suite against the running dashboard |
 | `events.lock` | | Every persisted shape, frozen (see *Evolving events*) |
 
-Dependencies point one way: context crates depend on evento and sqlx only (plus
-Typst in `timada-invoicing` behind its `pdf` feature,
-`timada-catalog` from the storefront library, from `timada-orders`, which prices
-an order from the products it loads, and from `timada-discounts`, for its currencies
-and amounts; `timada-reviews` depends on `timada-orders`, to check that a reviewer
-bought what they review, and `timada-shoppers` on it, for the shape of an address and
-the rule an e-mail is kept under; `timada-aliexpress` depends on the catalog, the
-import and tenancy, for what it fills and the shop's price rule, and on reqwest, the
-one context crate that calls out); the dashboard depends on every crate;
+Dependencies point one way. Every context crate depends on evento, sqlx and
+`timada-core`, and a few on another context whose values they share:
+`timada-discounts` on the catalog (currencies and amounts), `timada-orders` on the
+catalog (it prices an order from the products it loads) and on the discounts,
+`timada-reviews` on the orders (a reviewer bought what they review),
+`timada-shoppers` on the orders (the shape of an address), `timada-aliexpress` on
+the catalog, the import and the orders (what it fills, the orders it forwards) and on
+tenancy (the shop's price rule and buyer account); it and `timada-catalog-import` are
+the context crates that call out, with reqwest. `timada-invoicing` draws with Typst
+behind its `pdf` feature. The storefront library depends on every context a shop
+reads (catalog, orders, discounts through them, reviews, shoppers, support,
+newsletter, pages, invoicing) and on topcoat; the dashboard depends on every crate;
 nothing depends on the dashboard.
 
 ## Bounded contexts
@@ -56,9 +59,11 @@ what; the host decides permissions and hands the crate verified facts.
 
 Each crate follows the same layout, copied from evento's `examples/bank`:
 `aggregator.rs` (the `#[evento::aggregate]` enums, names pinned to
-`timada-<ctx>/<Enum>` because the aggregate type is persisted), `command/` (one file
-per verb on a `Command<'_, E>` that borrows the executor), `query/` (one file per
-read model), `error.rs`, `value_object.rs`.
+`timada-<ctx>/<Enum>` because the aggregate type is persisted), `command/` (the
+verbs, a file per aggregate or theme, on a `Command<E>` gateway that holds the
+executor and, in a tenant-scoped context, the tenant), `query/` (one file per read
+model), `error.rs` (the refusals, each with `is_user_facing` and `code`, the stable
+code a page or a storefront words in its own language), `value_object.rs`.
 
 Recurring patterns:
 
@@ -95,8 +100,8 @@ data/media/<id>/          one per tenant: the product pictures and the review ph
                           named <image id>.<ext>
 data/shopper-keys/<id>/   one per tenant: each shopper account's and each contact message's
                           key, sealed, named <key id> (<key id>.gone once destroyed)
-<merchant app>/store.db   a storefront replica: subscription cursor, snapshots, product and
-                          category rows
+<merchant app>/chatounette.db  the shop's replica (`STORE_DB`): subscription cursor,
+                          snapshots, product and category rows
 ```
 
 Each file is opened with a read pool and single-connection write pools
@@ -134,8 +139,9 @@ by construction.
    missed it has it, so a node that stays down makes the others keep everything, up
    to `cluster.write_backlog` writes, past which this node refuses writes: a page then
    shows that changes are temporarily not accepted (the `writes_paused` code of
-   `timada_core::write_refusal`, which every context's `is_user_facing`/`code`
-   recognise), the store HTTP endpoints answer 503 with that code, and the store API
+   `timada_core::write_refusal`, which the `is_user_facing`/`code` of every context a
+   page talks to recognise), the store HTTP endpoints answer 503 with that code, and
+   the store API
    carries it as a refusal a storefront shows the same way. A node not heard from for
    `cluster.absent_after_secs` (an hour by default) is therefore given up: the others
    tidy up without it, and when it returns they tell it it fell behind. It then
@@ -231,12 +237,20 @@ by construction.
 8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
-   orders, open carts, discounts, checkout offers, reviews, messages, newsletter, automations, pages, payments), `/stripe/webhooks/{tenant_id}`,
-   `/store/reviews` (a storefront handing in a review, see *Reviews*), `/store/shoppers/*`
-   (a storefront signing its shoppers in, see *Shopper accounts*), `/store/contact` (a
-   storefront handing in a message from its contact form, see *Support messages*),
-   `/store/newsletter/*` (sign-ups and their links, see *Newsletter*), `/invitations/{token}`,
-   `/admin/*` (users, tenants). `ui.rs` holds the shared furniture.
+   orders, open carts, customers, discounts, checkout offers, shipping, reviews,
+   messages, newsletter, automations, pages, payments, invoicing and the invoices,
+   mail, AliExpress, the shop's name and time zone), `/companies` and
+   `/companies/{id}` (the legal entities the shops sell as, their AliExpress buyer
+   account), `/aliexpress` (the platform app's callback), `/stripe/webhooks/{tenant_id}`,
+   `/store/reviews` and `/store/reviews/revise` (a storefront handing in a review, see
+   *Reviews*), `/store/shoppers/*` (a storefront signing its shoppers in, see *Shopper
+   accounts*), `/store/contact` (a storefront handing in a message from its contact
+   form, see *Support messages*), `/store/newsletter/*` (sign-ups and their links, see
+   *Newsletter*), `/store/automations/opt-out` (a customer declining a shop's
+   automated mails), `/cluster/media/*` and `/cluster/keys/*` (the nodes copying
+   pictures and keys to one another, under `cluster.secret`), `/invitations/{token}`,
+   `/admin/*` (users, tenants, companies, this node's cluster view). `ui/` holds the
+   shared furniture: the chrome, the page helpers, the theme, the icons.
 
 Shutdown stops the HTTP server, then the store API, the sweeps, the subscriptions,
 the node and finally the pools.
@@ -539,6 +553,21 @@ and a sweep that finds none picked holds the campaign back, claiming nobody, unt
 one is. The sender is looked up per batch, so a server switched mid-campaign sends
 the next batches.
 
+A campaign may go out on a schedule instead of at once (`ScheduleSet`: once, daily,
+weekly on some days or monthly on a day, between two dates, within a window of the
+day, at a pace). Started (`ScheduleActivated`), each cycle of the cadence opens an
+`Edition` stream (its id derives from the campaign and the cycle, so a cycle opens
+once however many nodes look) holding the copy as it stood, and the sweep spreads
+the edition's mails over the window's slots (`crates/newsletter/src/schedule.rs`:
+at each slot passed, the share mailed so far grows). A slot is a time of the local
+day: each subscriber's browser said where they live when they asked
+(`TimeZoneSet`, an IANA name, kept in clear), so 9:00 reaches Paris six hours
+before New York. A one-off edition still owed mails when its window closes rolls
+into the next cycle; a recurring one closes. The copy may name
+`{{ new_products }}`, the products published since the last edition, so a
+recurring campaign writes itself. Stopping (`ScheduleStopped`) opens no further
+edition.
+
 ## Automations
 
 A scenario is a `Scenario` stream in the tenant's store (`timada-automations`, a
@@ -590,8 +619,9 @@ events go through the remote client to the store API, while the subscription cur
 the projection snapshots and the product rows live in the app's own SQLite file. One
 file per replica, so replicas never fence each other out of the subscription and
 nothing accumulates on the tenant's store. The library registers no page of its own
-(route discovery belongs to the host); it offers queries, a guard, one component and
-`GET {prefix}/status`. Details and the example app are in `docs/storefront.md`.
+(route discovery belongs to the host); it offers queries, a guard, two components (a
+price, a picture) and `GET {prefix}/status`. Details and the example app are in
+`docs/storefront.md`.
 
 ## Evolving events
 
@@ -622,11 +652,29 @@ a move does not orphan snapshots.
 `--config` (or `TIMADA_CONFIG`) overrides it, and `TIMADA__<SECTION>__<KEY>`
 environment variables override both. Sections: `server` (URL, bind, region, trusted
 proxies), `database` (the store and the read models), `auth` (secret, session
-lifetime, OIDC providers), `mail`, `store_api` (omit to not expose it), `cluster`
-(omit for a single node),
-`monitoring`. `config/dev.local.toml` is the developer's own file and is ignored by
-git; `config/e2e.toml` is what the browser suite runs on. Configuration is written for
+lifetime, sign-in limits, OIDC providers), `mail` (the platform's server), `secrets`
+(the one key the shops' secrets are sealed under; omit it and no shop can connect
+payments, mail servers or shopper accounts), `media` (the pictures' directory and
+public address), `data_keys` (the personal-data key vault), `payments` (Stripe's
+address, for the stand-in), `invoicing` (the VAT-number check), `reviews`
+(the review-request timer), `newsletter` (the send sweep), `automations` (the run
+timer, the abandoned-checkout delay), `store` (the limits on what a storefront hands
+in), `invitations` (their limits), `aliexpress` (the platform's app), `store_api`
+(omit to not expose it), `cluster` (omit for a single node), `monitoring`.
+`config/dev.local.toml` is the developer's own file and is ignored by git;
+`config/e2e.toml` is what the browser suite runs on. Configuration is written for
 operators: it names what things do, not the libraries behind them.
+
+## The command line
+
+`timada-dashboard serve` runs a node; `migrate` creates the databases and applies
+what is pending; `reset` (debug builds) drops and recreates them; `rejoin` marks the
+store for a copy from a peer at the next start (see *The runtime*); `seed` loads a
+catalogue snapshot into a tenant and prints a storefront's settings for it (see
+`docs/storefront.md`); `snapshot save` keeps the platform (store, read models,
+pictures, keys, and with `--also` a storefront's own file) in a directory, and
+`snapshot restore` puts one back, every node of a cluster from copies taken together.
+Everything but `serve` runs with the server stopped.
 
 ## Testing
 
@@ -636,8 +684,9 @@ operators: it names what things do, not the libraries behind them.
   node in that tenant only, a node that missed writes catches up, a node away too
   long is given up and copies the store back at its next start, a node at its write
   backlog refuses writes), `store_api` (TCP, keys, TLS),
-  `storefront` (the library against a live store), `events_lock`. The review endpoint is
-  covered over HTTP by the browser suite.
+  `storefront` (the library against a live store), `payments` (the webhook, the late
+  payments and the refunds against a fake Stripe), `styles` (the stylesheet build),
+  `events_lock`. The review endpoint is covered over HTTP by the browser suite.
 - `make e2e`: `scripts/e2e.sh` builds the dashboard and the Chatounette example, resets
   the database, starts the server on `config/e2e.toml` and runs Playwright through the
   compose stack (`make up`: Traefik for HTTPS, dex as an OIDC provider, MailDev as the
