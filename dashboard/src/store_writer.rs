@@ -16,11 +16,11 @@
 
 use std::sync::Arc;
 
+use evento::Sqlite;
 use evento::cursor::{Args, ReadResult, Value};
 use evento::{
     Event, EventFilter, Executor, RoutingKey, SubscriberStatus, TenantFilter, WriteError,
 };
-use evento_sql::Sqlite;
 use ulid::Ulid;
 
 #[derive(Clone)]

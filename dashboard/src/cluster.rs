@@ -26,12 +26,12 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use evento::Evento;
 use evento::Rw;
-use evento_accord::{
+use evento::accord::{
     AccordExecutor, DataStore, ExecutorDataStore, HybridLogicalClock, InMemoryNetwork, Journal,
     MessageSink, Node, NodeConfig, NodeId, PartialSnapshot, StaticTopology, TcpTransport, Topology,
     serve,
 };
-use evento_sql::{Sql, SqlJournal, Sqlite};
+use evento::sql::{Sql, SqlJournal, Sqlite};
 use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteConnectOptions;
 use tokio::sync::mpsc;
@@ -243,7 +243,7 @@ impl Cluster {
         let mut tasks = Vec::new();
         let (sink, inbox): (
             Arc<dyn MessageSink>,
-            mpsc::Receiver<evento_accord::Envelope>,
+            mpsc::Receiver<evento::accord::Envelope>,
         ) = match listener {
             None => {
                 let net = InMemoryNetwork::new();

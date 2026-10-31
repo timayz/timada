@@ -39,7 +39,7 @@ You almost never implement this trait yourself — use one of the built-in execu
 | `Rw<R, W>` | `rw` (implied by `fjall`) | `evento-core` |
 | `Sidecar<E, L>` | `rw` | `evento-core` |
 | `evento::RemoteClient` (`evento_remote::Client`) | `remote` | `evento-remote` |
-| `AccordExecutor` (consensus-replicated) | — | `evento-accord` |
+| `AccordExecutor` (consensus-replicated) | `accord` (since alpha.37; flips `accord` on every enabled backend) | `evento-accord` |
 
 ## SQL setup
 
@@ -236,8 +236,10 @@ in clear text: trusted networks only.
 
 `AccordExecutor` replicates events across `N = 2f + 1` nodes (leaderless,
 strictly serializable) over a `DataStore` + `Journal` the caller supplies
-(`evento_sql::Sql` + `evento_sql::SqlJournal` on one SQLite file; the
-`accord` feature of `evento-sql-migrator` adds the journal tables). One
+(`evento::sql::Sql` + `evento::sql::SqlJournal` on one SQLite file; the
+facade's `accord` feature re-exports `evento::accord` / `evento::AccordExecutor`
+and adds the journal tables to `evento::sql_migrator`, so `evento` is the
+only dependency). One
 `Node` per process: `Node::new(id, topology, clock, sink, datastore, journal)
 .with_config(config)`, `recover_state().await?` over its journal, then
 `start(inbox)` and `start_recovery()`; `AccordExecutor::new(node, local)` is

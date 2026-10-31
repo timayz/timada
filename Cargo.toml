@@ -21,10 +21,7 @@ topcoat-view = "=0.11.0"
 topcoat-view-macro = "=0.11.0"
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.20", features = ["sqlite"] }
-evento = { version = "=2.0.0-alpha.36", features = ["sqlite", "remote"] }
-evento-sql = { version = "=2.0.0-alpha.36", features = ["sqlite", "accord"] }
-evento-sql-migrator = { version = "=2.0.0-alpha.36", features = ["sqlite", "accord"] }
-evento-accord = "=2.0.0-alpha.36"
+evento = { version = "=2.0.0-alpha.37", features = ["sqlite", "remote", "accord"] }
 bitcode = "0.6"
 argon2 = { version = "0.5", features = ["std"] }
 ulid = "3.0"

@@ -466,6 +466,10 @@ async fn a_node_at_its_write_backlog_refuses_writes() {
 /// returned (the pages load an aggregate right after writing it).
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_writers_never_see_stale_versions() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
     let root = temp_root("stress");
     let files = Files {
         store_url: format!("sqlite:{}", root.join("store.db").display()),
