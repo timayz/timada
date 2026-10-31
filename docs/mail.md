@@ -113,7 +113,14 @@ On save, a template is refused with the reason, and nothing is recorded, when:
   Raster `data:image/…` pictures are allowed;
 - it fails to render with sample data, both with every optional part filled in and
   with every optional part empty. This catches a `{{ order.discount.code }}` that is
-  not inside an `{% if order.discount %}`.
+  not inside an `{% if order.discount %}`;
+- what it renders to fails the markup check above. The check reads the template as
+  written and then every mail rendered from it (the samples on save, the real one on
+  every send), with character references decoded as a mail app decodes them: a tag
+  spelt out of pieces (`<{% if true %}script{% endif %}>`) or a `javascript&#58;`
+  address is refused all the same. A campaign or an automated mail must also carry a
+  real link to its unsubscribe page in the rendered mail, not merely mention the
+  variable.
 
 A plain-text version goes through the same checks, except the markup one: it must
 parse, name only the mail's variables, render with both samples, and stay under
