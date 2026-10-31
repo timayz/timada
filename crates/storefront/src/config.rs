@@ -11,6 +11,8 @@ use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
+use crate::money::MoneyFormat;
+
 /// Where the status endpoint lives unless the host chooses otherwise.
 pub const DEFAULT_PREFIX: &str = "/store";
 
@@ -81,6 +83,9 @@ pub struct StoreConfig {
     pub api_url: Option<String>,
     /// The URL prefix of the library's own endpoints (`/store`).
     pub prefix: Cow<'static, str>,
+    /// How every amount a person reads is written: `12.50 EUR` unless the
+    /// host writes prices its own way.
+    pub money: MoneyFormat,
 }
 
 impl StoreConfig {
@@ -93,6 +98,7 @@ impl StoreConfig {
             prefix: Cow::Borrowed(DEFAULT_PREFIX),
             media_url: None,
             api_url: None,
+            money: MoneyFormat::default(),
         }
     }
 
@@ -124,6 +130,13 @@ impl StoreConfig {
         self
     }
 
+    /// How the library writes every amount a person reads, so a cart's total
+    /// looks like the prices on the host's own pages.
+    pub fn money(mut self, money: MoneyFormat) -> Self {
+        self.money = money;
+        self
+    }
+
     /// The URL prefix of the library's endpoints; a leading slash is added
     /// and a trailing one dropped.
     pub fn prefix(mut self, prefix: impl Into<Cow<'static, str>>) -> Self {
@@ -150,6 +163,7 @@ impl fmt::Debug for StoreConfig {
             .field("media_url", &self.media_url)
             .field("api_url", &self.api_url)
             .field("prefix", &self.prefix)
+            .field("money", &self.money)
             .finish()
     }
 }

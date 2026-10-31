@@ -1,7 +1,9 @@
 //! What a storefront page reads: the published products of the local copy.
 
 use sqlx::{FromRow, SqlitePool};
-use timada_catalog::{TreeNode, TreeOf, format_money, tree_of};
+use timada_catalog::{TreeNode, TreeOf, tree_of};
+
+use crate::money::MoneyFormat;
 
 /// A picture of a product. `url` is where a browser loads it from: absolute
 /// once the host set [`StoreConfig::media_url`](crate::StoreConfig::media_url),
@@ -46,7 +48,12 @@ pub struct Variant {
 impl Variant {
     /// The price as a person reads it (`22.90 EUR`).
     pub fn price(&self) -> String {
-        format_money(self.amount_cents.max(0) as u64, &self.currency)
+        self.price_with(&MoneyFormat::default())
+    }
+
+    /// The price as `money` writes it ([`money`](crate::money)).
+    pub fn price_with(&self, money: &MoneyFormat) -> String {
+        money.format(self.amount_cents.max(0) as u64, &self.currency)
     }
 
     /// The value it takes for an option, if it names one.
@@ -100,11 +107,19 @@ impl PriceRange {
 
     /// `12.50 EUR`, or `12.00–18.00 EUR` when it varies.
     pub fn label(&self) -> String {
-        let max = format_money(self.max_cents.max(0) as u64, &self.currency);
+        self.label_with(&MoneyFormat::default())
+    }
+
+    /// [`label`](Self::label) as `money` writes amounts
+    /// ([`money`](crate::money)): `12,50€`, or `12,00€–18,50€` when it
+    /// varies (the currency is dropped from the first amount only when it
+    /// ends it).
+    pub fn label_with(&self, money: &MoneyFormat) -> String {
+        let max = money.format(self.max_cents.max(0) as u64, &self.currency);
         if !self.varies() {
             return max;
         }
-        let min = format_money(self.min_cents.max(0) as u64, &self.currency);
+        let min = money.format(self.min_cents.max(0) as u64, &self.currency);
         format!("{}–{max}", min.trim_end_matches(&self.currency).trim_end())
     }
 }
@@ -175,6 +190,13 @@ impl Product {
     /// when the variants differ. Empty when it has no price at all.
     pub fn price(&self) -> Option<String> {
         Some(self.price_range()?.label())
+    }
+
+    /// [`price`](Self::price) as `money` writes amounts
+    /// ([`money`](crate::money)): what the [`price`](crate::price) component
+    /// shows.
+    pub fn price_with(&self, money: &MoneyFormat) -> Option<String> {
+        Some(self.price_range()?.label_with(money))
     }
 
     /// The cheapest and the dearest a shopper may pay.

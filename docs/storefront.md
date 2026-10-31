@@ -211,6 +211,25 @@ src alt width height loading="lazy" decoding="async">`. The library ships no oth
 markup and no CSS classes (a host's Tailwind build does not scan a dependency anyway):
 everything a page shows is the merchant's own `view!` around `Product` values.
 
+## How amounts are written
+
+Every amount a person reads — the `price` component, a cart's totals and what a
+discount takes off, a shipping option's price, an offer's price, the VAT estimate, an
+order's total in a shopper's history — is written by one `MoneyFormat`. The default
+is the locale-neutral `12.50 EUR`, and `Free` for shipping that costs nothing. A host
+whose pages write prices their own way hands that way in once, and the library
+follows it everywhere:
+
+```rust
+let config = StoreConfig::new(addr, token)
+    .money(MoneyFormat::new(|cents, currency| my_money(cents, currency)).free("Offerte"));
+```
+
+The views carry the format (`cart.total()`, `option.price()`, `estimate.amount()`),
+so a page never formats a total itself; `money(cx)` hands it to a page that formats
+cents of its own, and `Product::price_with(money(cx))` writes a product's price with
+it. The Chatounette example passes its `12,50€` formatter this way.
+
 ## Cart and checkout
 
 (Setting up payments and testing them with Stripe's test mode: `docs/payments.md`.)

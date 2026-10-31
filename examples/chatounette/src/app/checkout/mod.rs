@@ -14,8 +14,8 @@ pub mod countries;
 pub mod start;
 
 use timada_storefront::{
-    CartView, Checkout, OfferView, OrderError, VatEstimate, accepts_business_buyers, format_money,
-    menu, payment_setup, recent_reviews, request_language, request_time_zone, save_address,
+    CartView, Checkout, OfferView, OrderError, VatEstimate, accepts_business_buyers, menu,
+    payment_setup, recent_reviews, request_language, request_time_zone, save_address,
     start_payment,
 };
 use topcoat::{
@@ -61,7 +61,6 @@ const shippingLine = document.querySelector("[data-checkout-shipping]");
 const totalLine = document.querySelector("[data-checkout-total]");
 const placeTotal = form.querySelector("[data-place-total]");
 const goods = Number(form.dataset.goods);
-const money = (cents) => `${(cents / 100).toFixed(2)} ${form.dataset.currency.toUpperCase()}`;
 const picked = () => methods.find((method) => method.checked && !method.disabled);
 
 function showVat() {
@@ -91,9 +90,11 @@ function showShipping() {
   const method = picked();
   if (noShipping) noShipping.hidden = !methods.length || !!method;
   const total = goods + (method ? Number(method.dataset.amount) : 0);
+  // Written by the server, the way the shop writes its prices.
+  const totalText = method ? method.dataset.total : form.dataset.goodsTotal;
   if (shippingLine && methods.length) shippingLine.textContent = method ? method.dataset.price : "—";
-  totalLine.textContent = money(total);
-  if (placeTotal) placeTotal.textContent = money(total);
+  totalLine.textContent = totalText;
+  if (placeTotal) placeTotal.textContent = totalText;
   form.elements.expected_total_cents.value = total;
   form.dataset.amount = total;
   if (elements && total > 0) elements.update({ amount: total });
@@ -306,7 +307,7 @@ fn saved_url(cx: &Cx, address: Option<&str>, billing: Option<&str>) -> String {
     href!(index).query(Link { address, billing }).resolve(cx)
 }
 
-/// `dont 9.97 EUR VAT FR 20%`.
+/// `dont 9,97€ VAT FR 20%`: the amount as the shop writes it.
 fn vat_text(estimate: &VatEstimate) -> String {
     format!("dont {} {}", estimate.amount(), estimate.label())
 }
@@ -428,7 +429,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(vat_text)
         .filter(|_| draft.vat_number.trim().is_empty() || country == "FR");
     let total_cents = cart.total_with(shipping.as_ref());
-    let total = format_money(total_cents, &currency);
+    let total = cart.total_with_label(shipping.as_ref()).unwrap_or_default();
+    // The total without shipping, for the script when no method ships to
+    // the country picked.
+    let goods_total = cart.total().unwrap_or_default();
     let rates = express_rates(&cart);
     // The offers the shopper may add, among the products this site sells.
     let offers: Vec<OfferView> = cart
@@ -549,7 +553,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <form class="checkout" method="post" action=(href!(place)) data-checkout-form=""
                         data-start-path=(href!(start::start)) data-return-path=(href!(complete::index))
                         data-publishable-key=(&publishable_key) data-amount=(total_cents)
-                        data-goods=(cart.total_cents) data-shipping=(&rates)
+                        data-goods=(cart.total_cents) data-goods-total=(&goods_total) data-shipping=(&rates)
                         data-currency=(currency.to_lowercase())>
                         <input type="hidden" name="expected_total_cents" value=(total_cents)>
                         <section class="card">
@@ -608,6 +612,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         <label class="method" hidden=(!option.ships_to(&country))>
                                             <input type="radio" name="shipping_method" value=(&option.id)
                                                 data-amount=(option.amount_cents) data-price=(option.price())
+                                                data-total=(cart.total_with_label(Some(option)).unwrap_or_default())
                                                 data-countries=(option.countries.join(" "))
                                                 checked=(shipping.as_ref().is_some_and(|picked| picked.id == option.id))
                                                 disabled=(!option.ships_to(&country))>

@@ -47,7 +47,7 @@ use std::net::IpAddr;
 use std::path::Path;
 
 use anyhow::Context as _;
-use timada_storefront::{Store, StoreConfig, StoreDb, StoreTls};
+use timada_storefront::{MoneyFormat, Store, StoreConfig, StoreDb, StoreTls};
 use topcoat::cookie::Key;
 use topcoat::router::IpNet;
 
@@ -103,7 +103,11 @@ async fn main() -> anyhow::Result<()> {
     };
     let store_host = store_host.trim_matches(['[', ']']).to_owned();
     let token = std::env::var("STORE_TOKEN").context("STORE_TOKEN is not set")?;
-    let mut config = StoreConfig::new(addr, token);
+    // Every total the library writes (cart, checkout, orders, shipping, offers)
+    // looks like the prices on the shop's own pages.
+    let mut config = StoreConfig::new(addr, token).money(
+        MoneyFormat::new(|cents, currency| app::money(cents as i64, currency)).free("Offerte"),
+    );
     if let Ok(ca) = std::env::var("STORE_TLS_CA") {
         let server_name = env_or("STORE_TLS_SERVER_NAME", &store_host);
         config = config.tls(StoreTls::from_ca_pem(Path::new(&ca), &server_name)?);

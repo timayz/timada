@@ -1,20 +1,29 @@
 //! The two components the library ships: everything else a page shows is the
 //! merchant's own markup around [`Product`] values.
 
+use topcoat_core::context::Cx;
 use topcoat_core::error::Result;
 use topcoat_view::{Attributes, View};
 use topcoat_view_macro::{class, component, view};
 
+use crate::context::money;
 use crate::query::{Image, Product};
 
-/// The price of a product in a `<span data-price>`, formatted (`12.50 EUR`),
-/// or nothing when it has none. Every class and attribute comes from the
-/// caller: `price(product: &p, attrs: attributes! { class="price" })`.
+/// The price of a product in a `<span data-price>`, written as the store
+/// writes amounts (`12.50 EUR`, or the host's own way:
+/// [`StoreConfig::money`](crate::StoreConfig::money)), or nothing when it
+/// has none. Every class and attribute comes from the caller:
+/// `price(product: &p, attrs: attributes! { class="price" })`.
 #[component]
-pub async fn price(product: &Product, #[default] mut attrs: Attributes) -> Result<impl View> {
+pub async fn price(
+    cx: &Cx,
+    product: &Product,
+    #[default] mut attrs: Attributes,
+) -> Result<impl View> {
     let class = class!(attrs.remove("class"));
+    let price = product.price_with(money(cx)).unwrap_or_default();
     Ok(view! {
-        <span data-price="" class=(class) (attrs)>(product.price().unwrap_or_default())</span>
+        <span data-price="" class=(class) (attrs)>(price)</span>
     })
 }
 

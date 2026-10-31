@@ -5,6 +5,7 @@ use topcoat_core::context::{Cx, app_context};
 use topcoat_core::error::{Error, Result};
 use topcoat_router::error::not_found;
 
+use crate::money::MoneyFormat;
 use crate::query::{
     Category, CategoryNode, FacetValue, Product, ProductPage, ProductQuery, category_ancestors,
     menu_of, published_categories, published_category_body, published_category_by_slug,
@@ -26,6 +27,13 @@ pub fn store(cx: &Cx) -> &Store {
 /// [`StoreConfig::media_url`](crate::StoreConfig::media_url).
 pub fn media_url(cx: &Cx) -> Option<&str> {
     store(cx).media_url()
+}
+
+/// How the store writes an amount of money
+/// ([`StoreConfig::money`](crate::StoreConfig::money)), for a page that
+/// formats cents of its own; the views the library builds already carry it.
+pub fn money(cx: &Cx) -> &MoneyFormat {
+    store(cx).money()
 }
 
 /// A page of the published catalog.

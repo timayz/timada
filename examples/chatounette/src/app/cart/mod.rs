@@ -7,7 +7,7 @@ pub mod drawer;
 pub mod quantity;
 pub mod remove;
 
-use timada_storefront::{CartLineView, CartView, cart, format_money, menu};
+use timada_storefront::{CartLineView, CartView, cart, menu};
 use topcoat::{
     Result,
     context::Cx,
@@ -15,7 +15,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::{document, say};
+use crate::app::{document, money, say};
 use crate::shopper::cart_id;
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -123,7 +123,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         <div><small>(label)</small></div>
                                     }
                                     if let Some(offer) = &line.offer {
-                                        <div><small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (format_money(offer.unit_amount_cents, &currency))</small></div>
+                                        <div><small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (money(offer.unit_amount_cents as i64, &currency))</small></div>
                                     }
                                     if line.unit_amount_cents.is_none() {
                                         <div><small>"Plus en vente : retirez-le pour commander le reste."</small></div>
@@ -131,7 +131,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </td>
                                 <td>
                                     if let Some(unit) = line.unit_amount_cents {
-                                        (format_money(unit, &currency))
+                                        (money(unit as i64, &currency))
                                     }
                                 </td>
                                 <td>
@@ -147,7 +147,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </td>
                                 <td data-line-amount="">
                                     if let Some(amount) = line.amount_cents {
-                                        (format_money(amount, &currency))
+                                        (money(amount as i64, &currency))
                                     }
                                 </td>
                                 <td>
@@ -249,7 +249,7 @@ pub async fn summary_line(
                 }
                 if let Some(label) = &line.variant_label { <small class="variant">(label)</small> }
                 if let Some(offer) = &line.offer {
-                    <small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (format_money(offer.unit_amount_cents, currency))</small>
+                    <small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (money(offer.unit_amount_cents as i64, currency))</small>
                 }
                 if line.amount_cents.is_some() {
                     <span class="qty">
@@ -277,7 +277,7 @@ pub async fn summary_line(
             </span>
             <span class="amount">
                 if let Some(amount) = line.amount_cents {
-                    (format_money(amount, currency))
+                    (money(amount as i64, currency))
                 }
                 <form method="post" action=(href!(remove::remove))>
                     <input type="hidden" name="product_id" value=(&line.product_id)>

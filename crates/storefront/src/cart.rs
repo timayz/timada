@@ -50,7 +50,6 @@
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
-pub use timada_catalog::format_money;
 use timada_invoicing::tax;
 use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
 pub use timada_orders::{
@@ -59,6 +58,7 @@ pub use timada_orders::{
 };
 
 use crate::context::store;
+use crate::money::MoneyFormat;
 use crate::query::{Product, published_products_by_ids};
 use crate::store::Store;
 
@@ -88,12 +88,15 @@ pub struct PaymentSession {
     pub discount: Option<OrderDiscount>,
     /// The shipping the payment is priced with; `None` when it is included.
     pub shipping: Option<OrderShipping>,
+    /// How the store writes an amount ([`Store::money`]).
+    pub money: MoneyFormat,
 }
 
 impl PaymentSession {
-    /// The total as a person reads it (`24.00 EUR`).
+    /// The total as a person reads it (`24.00 EUR`, or as the host writes
+    /// prices).
     pub fn total(&self) -> String {
-        timada_catalog::format_money(self.total_cents, &self.currency)
+        self.money.format(self.total_cents, &self.currency)
     }
 
     /// What the discount takes off, as a person reads it (`-2.50 EUR`).
@@ -101,7 +104,7 @@ impl PaymentSession {
         let discount = self.discount.as_ref()?;
         Some(format!(
             "-{}",
-            timada_catalog::format_money(discount.amount_cents, &self.currency)
+            self.money.format(discount.amount_cents, &self.currency)
         ))
     }
 }
@@ -168,6 +171,8 @@ pub struct OfferView {
     /// What the one unit costs with it.
     pub offer_amount_cents: u64,
     pub currency: String,
+    /// How the store writes an amount ([`Store::money`]).
+    pub money: MoneyFormat,
 }
 
 impl OfferView {
@@ -177,14 +182,15 @@ impl OfferView {
         self.title.as_deref().unwrap_or(&self.name)
     }
 
-    /// The full price as a person reads it (`30.00 EUR`).
+    /// The full price as a person reads it (`30.00 EUR`, or as the host
+    /// writes prices).
     pub fn price(&self) -> String {
-        timada_catalog::format_money(self.unit_amount_cents, &self.currency)
+        self.money.format(self.unit_amount_cents, &self.currency)
     }
 
     /// The offer's price as a person reads it (`12.00 EUR`).
     pub fn offer_price(&self) -> String {
-        timada_catalog::format_money(self.offer_amount_cents, &self.currency)
+        self.money.format(self.offer_amount_cents, &self.currency)
     }
 
     /// How much is off, in whole percent, rounded down (`60`).
@@ -234,6 +240,10 @@ pub struct CartView {
     pub item_count: u32,
     /// The order it became, once checked out.
     pub order_id: Option<String>,
+    /// How the store writes an amount ([`Store::money`]): what every total
+    /// here, and the shipping options and VAT estimate built from it, are
+    /// written with.
+    pub money: MoneyFormat,
 }
 
 impl CartView {
@@ -241,16 +251,17 @@ impl CartView {
         self.lines.is_empty() && self.unavailable.is_empty()
     }
 
-    /// The total as a person reads it (`24.00 EUR`).
+    /// The total as a person reads it (`24.00 EUR`, or as the host writes
+    /// prices).
     pub fn total(&self) -> Option<String> {
         let currency = self.currency.as_deref()?;
-        Some(timada_catalog::format_money(self.total_cents, currency))
+        Some(self.money.format(self.total_cents, currency))
     }
 
     /// The subtotal as a person reads it.
     pub fn subtotal(&self) -> Option<String> {
         let currency = self.currency.as_deref()?;
-        Some(timada_catalog::format_money(self.subtotal_cents, currency))
+        Some(self.money.format(self.subtotal_cents, currency))
     }
 
     /// What the discount takes off, as a person reads it (`-2.50 EUR`).
@@ -259,8 +270,15 @@ impl CartView {
         let discount = self.discount.as_ref()?;
         Some(format!(
             "-{}",
-            timada_catalog::format_money(discount.amount_cents, currency)
+            self.money.format(discount.amount_cents, currency)
         ))
+    }
+
+    /// The cart's total with `shipping` on top, as a person reads it: what
+    /// a checkout writes for each shipping method the shopper may pick.
+    pub fn total_with_label(&self, shipping: Option<&ShippingOption>) -> Option<String> {
+        let currency = self.currency.as_deref()?;
+        Some(self.money.format(self.total_with(shipping), currency))
     }
 
     /// The shipping options that ship to `country` (ISO 3166-1 alpha-2).
@@ -348,6 +366,7 @@ impl CartView {
             rate_bps,
             vat_cents: subtotals.iter().map(|subtotal| subtotal.vat_cents).sum(),
             currency: currency.to_owned(),
+            money: self.money.clone(),
         })
     }
 
@@ -369,6 +388,8 @@ pub struct ShippingOption {
     pub currency: String,
     /// Two-letter codes; empty means every country.
     pub countries: Vec<String>,
+    /// How the store writes an amount ([`Store::money`]).
+    pub money: MoneyFormat,
 }
 
 impl ShippingOption {
@@ -376,11 +397,13 @@ impl ShippingOption {
         self.countries.is_empty() || self.countries.iter().any(|c| c == country)
     }
 
-    /// The price as a person reads it: `4.90 EUR`, or `Free`.
+    /// The price as a person reads it: `4.90 EUR` (or as the host writes
+    /// prices), or the host's word for free shipping (`Free`,
+    /// [`MoneyFormat::free`]).
     pub fn price(&self) -> String {
         match self.amount_cents {
-            0 => "Free".to_owned(),
-            cents => timada_catalog::format_money(cents, &self.currency),
+            0 => self.money.free_word().to_owned(),
+            cents => self.money.format(cents, &self.currency),
         }
     }
 }
@@ -394,12 +417,15 @@ pub struct VatEstimate {
     pub rate_bps: Option<u32>,
     pub vat_cents: u64,
     pub currency: String,
+    /// How the store writes an amount ([`Store::money`]).
+    pub money: MoneyFormat,
 }
 
 impl VatEstimate {
-    /// The VAT as a person reads it (`9.97 EUR`).
+    /// The VAT as a person reads it (`9.97 EUR`, or as the host writes
+    /// prices).
     pub fn amount(&self) -> String {
-        timada_catalog::format_money(self.vat_cents, &self.currency)
+        self.money.format(self.vat_cents, &self.currency)
     }
 
     /// `VAT FR 20%`, or `VAT FR` over several rates.
@@ -449,6 +475,7 @@ impl Store {
                     amount_cents: quote.shipping_for(method)?,
                     currency: method.currency.clone(),
                     countries: method.countries.clone(),
+                    money: self.money().clone(),
                 })
             })
             .collect();
@@ -523,6 +550,7 @@ impl Store {
                     unit_amount_cents: offer.unit_amount_cents,
                     offer_amount_cents: offer.offer_amount_cents,
                     currency: currency.clone(),
+                    money: self.money().clone(),
                 }
             })
             .collect();
@@ -562,6 +590,7 @@ impl Store {
             shipping_options,
             shipping_required: !methods.is_empty(),
             order_id: state.order_id,
+            money: self.money().clone(),
         }))
     }
 
@@ -730,6 +759,7 @@ impl Store {
                 total_cents: payment.total_cents,
                 discount: payment.discount.clone(),
                 shipping: payment.shipping.clone(),
+                money: self.money().clone(),
             })),
         })
     }
