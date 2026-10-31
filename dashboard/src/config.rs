@@ -586,6 +586,14 @@ pub struct PaymentsConfig {
     /// point it at a local stand-in.
     #[serde(default)]
     pub stripe_api_url: Option<String>,
+    /// How often, in seconds, this node looks for card forms left open past
+    /// the time their goods were held for, and closes them with Stripe.
+    #[serde(default = "default_cancel_check_secs")]
+    pub cancel_check_secs: u64,
+}
+
+fn default_cancel_check_secs() -> u64 {
+    60
 }
 
 impl PaymentsConfig {
@@ -925,6 +933,7 @@ mod tests {
         };
         let payments = PaymentsConfig {
             stripe_api_url: None,
+            cancel_check_secs: default_cancel_check_secs(),
         };
         assert!(payments.validate(Some(&secrets)).is_ok());
         let err = payments.validate(None).unwrap_err();

@@ -550,3 +550,66 @@ async fn a_shop_sells_to_businesses_only_once_its_merchant_says_so() {
         .unwrap_err();
     assert_eq!(err.code(), Some("business_buyers_refused"));
 }
+
+#[tokio::test]
+async fn a_payment_left_unconfirmed_is_cancelled_once_and_closes_the_request() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let cart_id = cart_with(&orders, &mug, 1).await;
+    let (request_id, payment) = open_payment(&orders, &cart_id, checkout()).await;
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    let opened = cart.request(&request_id).unwrap().payment().unwrap();
+    assert!(opened.opened_at > 0);
+    // Still held: nothing to cancel yet; held long enough: this one.
+    assert!(cart.lapsed_payments(opened.opened_at, 1800).is_empty());
+    assert_eq!(
+        cart.lapsed_payments(opened.opened_at + 1800, 1800),
+        vec![opened]
+    );
+
+    // A payment the cart never opened is nothing to cancel.
+    assert!(matches!(
+        orders.cancel_payment(DASHBOARD, &cart_id, "pi_other").await,
+        Err(OrderError::PaymentNotFound)
+    ));
+    orders
+        .cancel_payment(DASHBOARD, &cart_id, &payment.payment_id)
+        .await
+        .unwrap();
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.request(&request_id).unwrap().answer,
+        Some(PaymentAnswer::Cancelled(payment.payment_id.clone()))
+    );
+    assert!(cart.is_payment_cancelled(&payment.payment_id));
+    assert!(!cart.is_paying(), "nothing left to confirm");
+    assert_eq!(cart.status(), "open");
+    assert!(cart.lapsed_payments(u64::MAX, 0).is_empty());
+    // Told twice: the same answer.
+    orders
+        .cancel_payment(DASHBOARD, &cart_id, &payment.payment_id)
+        .await
+        .unwrap();
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(cart.status(), "open");
+    // Nor can the cancelled payment still place the order.
+    assert!(matches!(
+        orders
+            .place_paid_order(DASHBOARD, &cart_id, payment.clone())
+            .await,
+        Err(OrderError::PaymentNotFound)
+    ));
+
+    // The shopper asks again and pays: that payment is no longer cancellable.
+    let (_, again) = open_payment(&orders, &cart_id, checkout()).await;
+    orders
+        .place_paid_order(DASHBOARD, &cart_id, again.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        orders
+            .cancel_payment(DASHBOARD, &cart_id, &again.payment_id)
+            .await,
+        Err(OrderError::PaymentNotFound)
+    ));
+}

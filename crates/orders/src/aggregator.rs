@@ -170,6 +170,17 @@ pub enum Cart {
         amount_cents: u64,
         granted_by: String,
     },
+    /// The payment of a request was cancelled with the provider before the
+    /// shopper confirmed it: what the checkout held (the goods, the
+    /// discount's use) had lapsed, so the card form it was opened for is
+    /// closed rather than left to charge for goods it may not get. The
+    /// shopper asks to pay again to go on. Written by the dashboard, never
+    /// a shopper.
+    PaymentCancelled {
+        request_id: String,
+        payment_id: String,
+        cancelled_by: String,
+    },
 }
 
 /// A paid order. Its id derives from the cart it was placed from

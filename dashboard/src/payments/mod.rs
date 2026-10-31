@@ -5,13 +5,16 @@
 //! tenant's secret key and records it (`Cart::PaymentRequested`) for the
 //! storefront's card form. Stripe tells the webhook (`app/stripe`) when the
 //! payment went through, and only then does the order exist. Cancelling an
-//! order gives the money back through Stripe first.
+//! order gives the money back through Stripe first. A card form left open
+//! past the time its goods were held for is closed by [`lapsed`]'s sweep
+//! before it can charge.
 //!
 //! The tenant's Stripe secrets are recorded sealed ([`Sealer`]) under the
 //! operator's `secrets.key`; without a
 //! `[payments]` section no tenant takes payments.
 
 mod gateway;
+mod lapsed;
 mod setup;
 pub mod signature;
 mod subscription;
@@ -20,6 +23,7 @@ pub mod webhook;
 use std::sync::Arc;
 
 pub use gateway::*;
+pub use lapsed::*;
 pub use setup::*;
 pub use subscription::*;
 
