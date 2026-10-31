@@ -50,6 +50,9 @@ ciborium = "0.2"
 async-stripe = { version = "=1.0.0-rc.9", default-features = false, features = ["rustls-tls-webpki-roots", "rustls-aws-lc-rs"] }
 async-stripe-core = { version = "=1.0.0-rc.9", features = ["payment_intent", "refund", "balance"] }
 async-stripe-types = { version = "=1.0.0-rc.9" }
+# Only names the `Deserialize` bound of async-stripe's `send`; the dashboard never
+# calls it directly.
+miniserde = "0.1"
 # Encrypts the tenants' payment secrets; checks Stripe's webhook signatures.
 aes-gcm = "0.10"
 hmac = "0.12"
@@ -96,6 +99,12 @@ strip = true
 [profile.dev]
 opt-level = 1
 debug = "line-tables-only"
+
+# The dashboard is the biggest crate and the last one in every build; at
+# opt-level 1 LLVM and thin-local LTO take half of its compile time, so it
+# stays unoptimised in dev. Its hot paths run in the dependencies anyway.
+[profile.dev.package.timada-dashboard]
+opt-level = 0
 
 [profile.dev.package.'*']
 opt-level = 3

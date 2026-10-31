@@ -3,6 +3,8 @@
 //! with the tenant's own secret key on every call.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Mutex;
 
 use stripe::{ClientBuilder, IdempotencyKey, RequestStrategy, StripeRequest};
@@ -134,12 +136,46 @@ fn idempotent(key: &str) -> anyhow::Result<RequestStrategy> {
     ))
 }
 
+/// Sends a request, its future boxed and its error already anyhow's.
+///
+/// Awaiting async-stripe's `send` straight from the `async_trait` methods
+/// below cost about forty seconds of type checking and as much borrow
+/// checking per method, two thirds of the crate's compile time. Proving the
+/// future `Send` proves the response type `Send`, and a Stripe response type
+/// reaches the whole Stripe object graph; rustc redoes that proof in every
+/// function that needs it. So the request is sent for a JSON value, a type
+/// the proof settles at once, and the response is read from the value only
+/// after the await, where its type no longer matters to the future. The
+/// value round-trips through text because miniserde reads a type from text
+/// alone, a few kilobytes per call.
+fn send<'a, R>(
+    request: &R,
+    strategy: Option<RequestStrategy>,
+    client: &'a stripe::Client,
+) -> Pin<Box<dyn Future<Output = anyhow::Result<R::Output>> + Send + 'a>>
+where
+    R: StripeRequest,
+    R::Output: miniserde::Deserialize + 'static,
+{
+    let mut request = request.build().customize::<miniserde::json::Value>();
+    if let Some(strategy) = strategy {
+        request = request.request_strategy(strategy);
+    }
+    Box::pin(async move {
+        let value = request
+            .send(client)
+            .await
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+        miniserde::json::from_str(&miniserde::json::to_string(&value))
+            .map_err(|err| anyhow::anyhow!("Stripe answered with an unexpected body: {err}"))
+    })
+}
+
 #[async_trait::async_trait]
 impl PaymentGateway for StripeGateway {
     async fn check_key(&self, secret_key: &str) -> anyhow::Result<()> {
-        RetrieveForMyAccountBalance::new()
-            .send(&self.client(secret_key)?)
-            .await?;
+        let client = self.client(secret_key)?;
+        send(&RetrieveForMyAccountBalance::new(), None, &client).await?;
         Ok(())
     }
 
@@ -161,11 +197,9 @@ impl PaymentGateway for StripeGateway {
         if let Some(description) = payment.description {
             request = request.description(description);
         }
-        let intent = request
-            .customize()
-            .request_strategy(idempotent(&payment.idempotency_key)?)
-            .send(&self.client(secret_key)?)
-            .await?;
+        let client = self.client(secret_key)?;
+        let strategy = idempotent(&payment.idempotency_key)?;
+        let intent = send(&request, Some(strategy), &client).await?;
         Ok(OpenPayment {
             payment_id: intent.id.to_string(),
             client_secret: intent.client_secret.ok_or_else(|| {
@@ -179,9 +213,8 @@ impl PaymentGateway for StripeGateway {
         secret_key: &str,
         payment_id: &str,
     ) -> anyhow::Result<PaymentStatus> {
-        let intent = RetrievePaymentIntent::new(payment_id)
-            .send(&self.client(secret_key)?)
-            .await?;
+        let client = self.client(secret_key)?;
+        let intent = send(&RetrievePaymentIntent::new(payment_id), None, &client).await?;
         Ok(PaymentStatus {
             payment_id: intent.id.to_string(),
             succeeded: intent.status == PaymentIntentStatus::Succeeded,
@@ -198,13 +231,11 @@ impl PaymentGateway for StripeGateway {
         amount_cents: u64,
         idempotency_key: &str,
     ) -> anyhow::Result<String> {
-        let refund = CreateRefund::new()
+        let client = self.client(secret_key)?;
+        let request = CreateRefund::new()
             .payment_intent(payment_id)
-            .amount(amount_cents as i64)
-            .customize()
-            .request_strategy(idempotent(idempotency_key)?)
-            .send(&self.client(secret_key)?)
-            .await?;
+            .amount(amount_cents as i64);
+        let refund = send(&request, Some(idempotent(idempotency_key)?), &client).await?;
         Ok(refund.id.to_string())
     }
 
@@ -213,11 +244,9 @@ impl PaymentGateway for StripeGateway {
         secret_key: &str,
         payment_id: &str,
     ) -> anyhow::Result<Vec<RefundRecord>> {
-        let refunds = ListRefund::new()
-            .payment_intent(payment_id)
-            .limit(100)
-            .send(&self.client(secret_key)?)
-            .await?;
+        let client = self.client(secret_key)?;
+        let request = ListRefund::new().payment_intent(payment_id).limit(100);
+        let refunds = send(&request, None, &client).await?;
         Ok(refunds
             .data
             .into_iter()
