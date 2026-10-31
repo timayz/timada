@@ -154,7 +154,7 @@ pub fn prepare_database_dir(database_url: &str) -> Result<()> {
 
 /// The store's schema: events, snapshots, subscribers and the Accord journal.
 pub fn store_migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
-    evento_sql_migrator::new::<sqlx::Sqlite>()
+    evento::sql_migrator::new::<sqlx::Sqlite>()
 }
 
 /// The bounded contexts' read models.
