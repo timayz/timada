@@ -10,6 +10,7 @@ pdf = ["dep:typst", "dep:typst-as-lib", "dep:typst-pdf", "dep:typst-assets"]
 
 [dependencies]
 evento.workspace = true
+timada-core = { path = "../core" }
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true

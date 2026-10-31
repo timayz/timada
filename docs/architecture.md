@@ -31,7 +31,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/loadtest` | `timada-loadtest` | Crowds of random shoppers on a storefront over plain HTTP, paying through a stand-in for Stripe: latency, capacity and anomalies (see `docs/loadtest.md`) |
-| `crates/core` | `timada-core` | Reserved; holds no code yet |
+| `crates/core` | `timada-core` | What every context shares and none owns: the paused-store refusal, languages and time zones, the personal-data keys (`keys`), the mailed-code MAC (`codes`), and the one form of an e-mail address, a slug, a currency, the clock, a calendar date, an amount and a `LIKE` pattern (`email`, `slug`, `currency`, `time`, `civil`, `money`, `sql`). Depends on evento only, never on a database driver or the web framework; every context depends on it |
 | `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
 | `examples/storefront` | `storefront-example` | A minimal merchant app on the library, driven by the browser suite |
 | `examples/chatounette` | `chatounette-example` | A French cat shop in chatounette.com's layout and colours on the library, fed by the `seeds/chatounette` snapshot |

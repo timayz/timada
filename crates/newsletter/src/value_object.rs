@@ -6,7 +6,7 @@ use timada_core::Key;
 
 use crate::error::NewsletterError;
 
-pub const MAX_EMAIL_LEN: usize = 254;
+pub use timada_core::MAX_EMAIL_LEN;
 
 /// How long the link mailed to confirm a subscription works, in seconds.
 pub const CONFIRM_TTL_SECS: u64 = 7 * 24 * 60 * 60;
@@ -136,16 +136,7 @@ pub fn subscriber_id(email: &str) -> String {
 /// shoppers and support contexts have the same rule; the crates do not
 /// depend on each other.)
 pub fn normalize_email(email: &str) -> Result<String, NewsletterError> {
-    let email = email.trim().to_lowercase();
-    let valid = email.len() <= MAX_EMAIL_LEN
-        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
-        && matches!(email.split_once('@'), Some((local, domain))
-            if !local.is_empty() && !domain.is_empty() && !domain.contains('@'));
-    if valid {
-        Ok(email)
-    } else {
-        Err(NewsletterError::InvalidEmail)
-    }
+    timada_core::normalize_email(email).ok_or(NewsletterError::InvalidEmail)
 }
 
 /// One of [`SOURCES`].

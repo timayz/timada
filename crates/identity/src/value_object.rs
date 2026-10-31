@@ -162,23 +162,14 @@ pub fn email_challenge_id(email: &str) -> String {
 /// The canonical form of an address: trimmed, lower-cased, one `@` with
 /// something on both sides, nothing that is not printable.
 pub fn normalize_email(email: &str) -> Result<String, IdentityError> {
-    let email = email.trim().to_lowercase();
-    let valid = email.len() <= MAX_EMAIL_LEN
-        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
-        && matches!(email.split_once('@'), Some((local, domain))
-            if !local.is_empty() && !domain.is_empty() && !domain.contains('@'));
-    if valid {
-        Ok(email)
-    } else {
-        Err(IdentityError::InvalidEmail)
-    }
+    timada_core::normalize_email(email).ok_or(IdentityError::InvalidEmail)
 }
 
 /// Aggregate id of the singleton that remembers who registered first.
 pub const REGISTRY_ID: &str = "registry";
 
 /// Longest address accepted (RFC 5321's path limit).
-pub const MAX_EMAIL_LEN: usize = 254;
+pub use timada_core::MAX_EMAIL_LEN;
 
 /// How long a mailed code stays valid, in seconds.
 pub const CODE_TTL_SECS: u64 = 10 * 60;

@@ -175,7 +175,7 @@ pub fn describe_free_above(method: &ShippingMethod) -> String {
 
 /// Minor units as the price field shows them: `490` gives `4.90`.
 pub fn amount_field(cents: u64) -> String {
-    format!("{}.{:02}", cents / 100, cents % 100)
+    timada_core::format_amount(cents)
 }
 
 #[page]
