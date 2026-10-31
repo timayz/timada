@@ -25,5 +25,7 @@ curl -sk --retry 30 --retry-delay 1 --retry-all-errors -o /dev/null "$base_url/a
 
 # Without arguments the whole suite; with them only what they name (a spec path
 # or a title filter). The directory must not be passed alongside: Playwright
-# ORs filters, so it would match everything again.
-playwright test "${@:-tests/e2e}"
+# ORs filters, so it would match everything again. One worker: the fake Stripe
+# and VIES servers the shop specs start bind fixed ports (12112 and 12113) that
+# the server config points at, so two spec files must never run at once.
+playwright test --workers=1 "${@:-tests/e2e}"
