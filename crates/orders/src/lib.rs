@@ -1,10 +1,11 @@
 //! Orders bounded context: the carts shoppers fill and the orders they place.
 //!
-//! Lives in the tenant's streams of the store, next to the catalog. A storefront
-//! writes the shopper's side (a cart, then the order it becomes) through the
-//! store API; the merchant moves the order along from the dashboard (paid,
-//! fulfilled, cancelled). The crate is pure domain code: no permission checks
-//! and no HTTP.
+//! Lives in the tenant's streams of the store, next to the catalog. The
+//! dashboard writes the shopper's side (a cart, then the order it becomes)
+//! for the storefront, which asks over HTTP about one cart or order at a
+//! time ([`wire`] is what travels); the merchant moves the order along from
+//! the dashboard (paid, fulfilled, cancelled). The crate is pure domain code:
+//! no permission checks and no HTTP.
 //!
 //! An order keeps what was sold as it was sold: each line copies the
 //! product's name, the variant, its code and its price at the moment the
@@ -29,6 +30,7 @@ mod error;
 mod query;
 mod stock_usage;
 mod value_object;
+pub mod wire;
 
 pub use command::*;
 pub use discount_usage::*;

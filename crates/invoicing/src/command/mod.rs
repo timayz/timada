@@ -93,7 +93,7 @@ impl<E: Executor> Deref for Command<E> {
 // Documents
 // =============================================================================
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DocumentKind {
     #[default]
     Invoice,
@@ -110,7 +110,7 @@ impl DocumentKind {
 }
 
 /// A discount code taken off an invoice's lines.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct InvoiceDiscount {
     pub code: String,
     /// VAT included, in minor units.
@@ -118,7 +118,7 @@ pub struct InvoiceDiscount {
 }
 
 /// What shipping an invoice's order was charged.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct InvoiceShipping {
     /// The shipping method, as the shop names it.
     pub name: String,
@@ -128,7 +128,7 @@ pub struct InvoiceShipping {
 
 /// An issued document as it reads: an invoice or a credit note (the fields
 /// of the other kind are empty).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct IssuedDocument {
     pub document_id: String,
     /// The company that issued it.
