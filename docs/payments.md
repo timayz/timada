@@ -26,6 +26,14 @@ else in between, the payment is refunded in full, the cart records it
 codes) instead of waiting for an order that will not come. Stripe keeps its fee on such
 a refund; it is the price of never selling the same unit twice.
 
+Most card forms left open never get that far: every `cancel_check_secs` (a minute by
+default) each node sweeps the checkouts whose payment is still unconfirmed once their
+hold lapsed and cancels the payment with Stripe (`Cart::PaymentCancelled`), a bank
+challenge left open included; the storefront reads it as `payment_expired` and the
+shopper asks to pay again, nothing having been charged. A payment Stripe is settling, or
+paid with its webhook still to come, is left alone and asked about again later. The
+refund remains for the confirmation that lands between the hold lapsing and the cancel.
+
 Cancelling an order in the dashboard refunds it through Stripe first: the order
 records the request (`Order::RefundRequested`, which fixes the idempotency key),
 Stripe is asked, the refund is recorded (`Order::Refunded`), and only then is the order
@@ -46,6 +54,7 @@ not know yet, and the credit note follows.
   # secrets: changing it makes them unreadable, and merchants enter them again.
   secret_key = "…"
   # stripe_api_url = "http://localhost:12111"   # tests only; Stripe itself when unset
+  # cancel_check_secs = 60   # how often lapsed, unconfirmed payments are cancelled
   ```
 
 - **Merchant, first.** The tenant sells as a company: on `/t/<slug>/invoicing`

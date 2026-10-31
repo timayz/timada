@@ -28,9 +28,9 @@ use crate::aggregator::{
     BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, ConfirmationMailed,
     Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded,
     ItemRemoved, LanguageGiven, LanguageSet, MethodAdded, MethodChanged, MethodRemoved,
-    NewsletterOptInSet, NewsletterOptedIn, PaymentRefused, PaymentRequested, PaymentReturned,
-    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
+    NewsletterOptInSet, NewsletterOptedIn, PaymentCancelled, PaymentRefused, PaymentRequested,
+    PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested,
+    Refunded, ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
     StorefrontAddressSet, TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
@@ -133,6 +133,10 @@ pub struct PaymentSnapshot {
     pub total_cents: u64,
     pub discount: Option<OrderDiscount>,
     pub shipping: Option<OrderShipping>,
+    /// Unix seconds the payment was opened at: what the checkout holds (the
+    /// goods, the discount's use) was taken just before, so it has lapsed
+    /// once the reservation's length has passed since.
+    pub opened_at: u64,
 }
 
 /// A payment that went through too late to be an order: what the checkout
@@ -157,6 +161,10 @@ pub enum PaymentAnswer {
     /// It was paid, too late for what the checkout held: given back, no
     /// order.
     Returned(Box<ReturnedPayment>),
+    /// It was cancelled with the provider before the shopper confirmed it,
+    /// what the checkout held having lapsed: nothing to confirm any more,
+    /// the shopper asks again. Carries the provider's id of the payment.
+    Cancelled(String),
 }
 
 /// A shopper's request to pay for the cart, and its answer once there is one.
@@ -249,6 +257,27 @@ impl CartState {
         })
     }
 
+    /// Whether the payment with that provider id was cancelled.
+    pub fn is_payment_cancelled(&self, payment_id: &str) -> bool {
+        self.requests.iter().any(|r| {
+            matches!(&r.answer, Some(PaymentAnswer::Cancelled(cancelled)) if cancelled == payment_id)
+        })
+    }
+
+    /// The payments still open whose checkout holds have lapsed at `now`:
+    /// opened `held_secs` or more ago, on a cart that is no order yet. What
+    /// the dashboard cancels with the provider.
+    pub fn lapsed_payments(&self, now: u64, held_secs: u64) -> Vec<&PaymentSnapshot> {
+        if self.is_checked_out() {
+            return Vec::new();
+        }
+        self.requests
+            .iter()
+            .filter_map(CheckoutRequest::payment)
+            .filter(|payment| now.saturating_sub(payment.opened_at) >= held_secs)
+            .collect()
+    }
+
     /// Whether a payment is open for it (the shopper may be paying).
     pub fn is_paying(&self) -> bool {
         !self.is_checked_out() && self.requests.iter().any(|r| r.payment().is_some())
@@ -279,6 +308,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_payment_requested())
         .handler(on_payment_refused())
         .handler(on_payment_returned())
+        .handler(on_payment_cancelled())
         .handler(on_discount_applied())
         .handler(on_discount_removed())
         .handler(on_discount_granted())
@@ -420,6 +450,7 @@ async fn on_payment_requested(
             total_cents: event.data.total_cents,
             discount: None,
             shipping: None,
+            opened_at: event.timestamp,
         })));
     }
     cart.updated_at = event.timestamp;
@@ -458,6 +489,22 @@ async fn on_payment_returned(
             amount_cents: event.data.amount_cents,
             code: event.data.code.to_owned(),
         })));
+    }
+    cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payment_cancelled(
+    event: Event<PaymentCancelled>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|r| r.request_id == event.data.request_id)
+    {
+        request.answer = Some(PaymentAnswer::Cancelled(event.data.payment_id.to_owned()));
     }
     cart.updated_at = event.timestamp;
     Ok(())

@@ -11,7 +11,8 @@ use stripe::{ClientBuilder, IdempotencyKey, RequestStrategy, StripeRequest};
 use stripe_core::PaymentIntentStatus;
 use stripe_core::balance::RetrieveForMyAccountBalance;
 use stripe_core::payment_intent::{
-    CreatePaymentIntent, CreatePaymentIntentAutomaticPaymentMethods, RetrievePaymentIntent,
+    CancelPaymentIntent, CancelPaymentIntentCancellationReason, CreatePaymentIntent,
+    CreatePaymentIntentAutomaticPaymentMethods, RetrievePaymentIntent,
 };
 use stripe_core::refund::{CreateRefund, ListRefund};
 
@@ -61,6 +62,23 @@ pub struct PaymentStatus {
     pub metadata: HashMap<String, String>,
 }
 
+/// What came of asking the provider to cancel a payment the shopper has not
+/// confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cancellation {
+    /// The payment is cancelled (now, or it already was): the shopper's
+    /// card form cannot confirm it any more, and nothing was charged.
+    Cancelled,
+    /// The shopper confirmed it and the provider is settling it (a payment
+    /// method that takes days, a bank debit): it cannot be cancelled any
+    /// more, and the webhook settles it. A card form still open, a bank's
+    /// challenge included, is not this: it is cancelled.
+    Confirming,
+    /// The shopper paid: the webhook turns it into the order, or gives it
+    /// back.
+    Paid,
+}
+
 #[async_trait::async_trait]
 pub trait PaymentGateway: Send + Sync {
     /// Whether the secret key works (a cheap authenticated call).
@@ -91,6 +109,31 @@ pub trait PaymentGateway: Send + Sync {
         secret_key: &str,
         payment_id: &str,
     ) -> anyhow::Result<Vec<RefundRecord>>;
+    /// Cancels the payment unless the shopper confirmed it: the answer says
+    /// which. Asked twice, the second time answers `Cancelled` again.
+    async fn cancel_payment(
+        &self,
+        secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<Cancellation>;
+}
+
+/// Reads [`Cancellation`] off a payment's status, for one the shopper may
+/// confirm no more; `None` while it may still be cancelled. Stripe cancels
+/// a payment awaiting its method, its confirmation, the bank's challenge
+/// (`requires_action`) or a capture, so a shopper who left the challenge
+/// open is closed like one who left the form open: the challenge does not
+/// expire by itself, and finishing it days later would charge for goods
+/// long gone. Only a payment Stripe is settling (`processing`) stays.
+fn settled(status: &PaymentIntentStatus) -> Option<Cancellation> {
+    match status {
+        PaymentIntentStatus::Canceled => Some(Cancellation::Cancelled),
+        PaymentIntentStatus::Succeeded => Some(Cancellation::Paid),
+        PaymentIntentStatus::Processing => Some(Cancellation::Confirming),
+        // Cancellable, or a status this crate does not know, tried as well:
+        // Stripe refuses the cancel itself when it must.
+        _ => None,
+    }
 }
 
 /// Stripe, through async-stripe. One client per secret key, kept.
@@ -256,5 +299,57 @@ impl PaymentGateway for StripeGateway {
                 succeeded: refund.status.as_deref() == Some("succeeded"),
             })
             .collect())
+    }
+
+    /// Stripe cancels a payment only while nobody confirmed it, so its
+    /// status is read first; a confirmation that lands between the two
+    /// calls fails the cancel, and the status is read again to say so.
+    async fn cancel_payment(
+        &self,
+        secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<Cancellation> {
+        let client = self.client(secret_key)?;
+        let intent = send(&RetrievePaymentIntent::new(payment_id), None, &client).await?;
+        if let Some(settled) = settled(&intent.status) {
+            return Ok(settled);
+        }
+        let cancel = CancelPaymentIntent::new(payment_id)
+            .cancellation_reason(CancelPaymentIntentCancellationReason::Abandoned);
+        let refused = match send(&cancel, None, &client).await {
+            Ok(_) => return Ok(Cancellation::Cancelled),
+            Err(err) => err,
+        };
+        let intent = send(&RetrievePaymentIntent::new(payment_id), None, &client).await?;
+        settled(&intent.status).ok_or(refused)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_payment_is_cancelled_unless_paid_or_settling() {
+        for cancellable in [
+            PaymentIntentStatus::RequiresPaymentMethod,
+            PaymentIntentStatus::RequiresConfirmation,
+            PaymentIntentStatus::RequiresAction,
+            PaymentIntentStatus::RequiresCapture,
+        ] {
+            assert_eq!(settled(&cancellable), None, "{cancellable:?}");
+        }
+        assert_eq!(
+            settled(&PaymentIntentStatus::Processing),
+            Some(Cancellation::Confirming)
+        );
+        assert_eq!(
+            settled(&PaymentIntentStatus::Succeeded),
+            Some(Cancellation::Paid)
+        );
+        assert_eq!(
+            settled(&PaymentIntentStatus::Canceled),
+            Some(Cancellation::Cancelled)
+        );
     }
 }

@@ -105,6 +105,7 @@ const KNOWN_CODES: &[&str] = &[
     "shipping_unavailable",
     crate::PAYMENTS_UNAVAILABLE,
     crate::INVOICING_NOT_CONFIGURED,
+    crate::PAYMENT_EXPIRED,
 ];
 
 impl OrderError {

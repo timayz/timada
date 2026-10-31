@@ -176,6 +176,7 @@ event timada-orders/Cart::ItemAdded { product_id: String, variant_id: Option<Str
 event timada-orders/Cart::ItemRemoved { product_id: String, variant_id: Option<String>, removed_by: String }
 event timada-orders/Cart::LanguageGiven { request_id: String, language: String, given_by: String }
 event timada-orders/Cart::NewsletterOptedIn { request_id: String, opted_in_by: String }
+event timada-orders/Cart::PaymentCancelled { request_id: String, payment_id: String, cancelled_by: String }
 event timada-orders/Cart::PaymentRefused { request_id: String, code: String, refused_by: String }
 event timada-orders/Cart::PaymentRequested { request_id: String, provider: String, payment_id: String, client_secret: String, publishable_key: String, lines: Vec<OrderLine>, currency: String, total_cents: u64, requested_by: String }
 event timada-orders/Cart::PaymentReturned { request_id: String, payment_id: String, refund_id: String, amount_cents: u64, code: String, returned_by: String }
