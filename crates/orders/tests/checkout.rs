@@ -330,10 +330,6 @@ async fn a_business_buyer_gives_its_vat_number_with_the_request() {
         .unwrap();
     let state = orders.load_cart(&cart).await.unwrap().unwrap();
     assert_eq!(state.request(&plain).unwrap().vat_number, None);
-    assert!(timada_orders::is_shopper_event(
-        "timada-orders/Cart",
-        "BuyerIdentified"
-    ));
 }
 
 #[tokio::test]
@@ -506,11 +502,6 @@ async fn an_order_remembers_the_shopper_asked_for_news() {
     let placed = pay(&orders, &cart, checkout()).await;
     let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
     assert!(!order.newsletter);
-    // A checkout key may write it.
-    assert!(timada_orders::is_shopper_event(
-        "timada-orders/Cart",
-        "NewsletterOptedIn"
-    ));
 }
 
 #[tokio::test]

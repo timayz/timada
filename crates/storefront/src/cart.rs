@@ -1,10 +1,15 @@
 //! Selling: the shopper's cart and the order it becomes.
 //!
-//! Unlike the catalog, none of this is read from the local copy. A cart and
-//! an order are written to the store and read back from it, so a page shows
-//! a change at once; a cart's prices are worked out from the products in the
-//! store too ([`timada_orders::Command::quote_cart`]), so the total a cart
-//! page shows is exactly what a payment asked for now charges. The local copy only
+//! Unlike the catalog, none of this is read from the local copy, nor from
+//! the store: a storefront's key may read neither the carts nor the orders
+//! of its shop (every shopper's, with their addresses), so every call here
+//! goes to the dashboard's `/store/carts/*` and `/store/orders/*` endpoints
+//! ([`StoreConfig::api_url`](crate::StoreConfig::api_url)), which answer
+//! for the one cart or order whose id the storefront holds and write what
+//! the shopper does to it. A page still shows a change at once, and a
+//! cart's prices are worked out there from the products as they stand
+//! ([`timada_orders::Command::quote_cart`]), so the total a cart page shows
+//! is exactly what a payment asked for now charges. The local copy only
 //! adds what a page needs to link and illustrate a line (its slug and
 //! picture).
 //!
@@ -15,8 +20,8 @@
 //! tells the dashboard it went through ([`order_of_cart`]). A storefront
 //! never creates an order itself.
 //!
-//! Writing needs a key holding `store:checkout` (or `store:write`); with a
-//! read-only key every call here fails.
+//! Selling needs the dashboard's address and a key holding `store:checkout`;
+//! with a read-only key, or without the address, every call here fails.
 //!
 //! Each call returns two layers: the outer `Result` is a failure of the store
 //! (a topcoat error, so `?` turns it into a 500), the inner one a refusal to
@@ -47,11 +52,13 @@
 //! The library keeps no notion of whose cart is whose: the host remembers
 //! the cart id, typically in a cookie.
 
+use anyhow::Context as _;
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
 use timada_invoicing::tax;
-use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
+use timada_orders::wire::{CartAnswer, DiscountCode, Refusal, RequestAnswer, Started};
+use timada_orders::{CartItem, CartLine, Command, PaymentAnswer};
 pub use timada_orders::{
     Checkout, OrderDiscount, OrderError, OrderLine, OrderShipping, OrderState, OrderStatus,
     PAYMENTS_UNAVAILABLE, PaymentSetup, ReturnedPayment, ShippingAddress,
@@ -61,11 +68,6 @@ use crate::context::store;
 use crate::money::MoneyFormat;
 use crate::query::{Product, published_products_by_ids};
 use crate::store::Store;
-
-/// How long [`start_payment`] waits for the dashboard's answer.
-const PAYMENT_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-/// How often it looks again when no write wakes it.
-const PAYMENT_ANSWER_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// A payment open with the merchant's provider: what the card form needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -450,22 +452,111 @@ fn refusable<T>(outcome: std::result::Result<T, OrderError>) -> anyhow::Result<R
     }
 }
 
+/// What the dashboard answered about a cart or an order.
+pub(crate) enum Fetched {
+    /// 200 or 201, with the body.
+    Found(bytes::Bytes),
+    /// 404: the shop has no cart, order or request under that id.
+    NotFound,
+    /// 422 or 503: a refusal to show the shopper.
+    Refused(OrderError),
+}
+
+impl Fetched {
+    /// The body as the type the call answers; a refusal or a miss as it is.
+    pub(crate) fn parsed<T: serde::de::DeserializeOwned>(
+        self,
+    ) -> anyhow::Result<Option<Refusable<T>>> {
+        match self {
+            Fetched::Found(body) => {
+                let value: T =
+                    serde_json::from_slice(&body).context("the dashboard's answer is not one")?;
+                Ok(Some(Ok(value)))
+            }
+            Fetched::NotFound => Ok(None),
+            Fetched::Refused(err) => Ok(Some(Err(err))),
+        }
+    }
+
+    /// A write's outcome: 404 is the cart not found.
+    fn written(self) -> anyhow::Result<Refusable<()>> {
+        match self {
+            Fetched::Found(_) => Ok(Ok(())),
+            Fetched::NotFound => Ok(Err(OrderError::CartNotFound)),
+            Fetched::Refused(err) => refusable(Err(err)),
+        }
+    }
+}
+
+/// Nothing to send.
+pub(crate) const NO_BODY: Option<&()> = None;
+
 impl Store {
     fn orders(&self) -> Command<evento::Evento> {
         Command::unscoped(self.executor().clone())
     }
 
+    /// One call about a cart or an order to the dashboard's `/store/{path}`,
+    /// with the key: the store API lets the key read neither carts nor
+    /// orders (nor invoices), so the dashboard answers for the one the path
+    /// names.
+    pub(crate) async fn cart_call(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&impl serde::Serialize>,
+    ) -> anyhow::Result<Fetched> {
+        let api = self
+            .api()
+            .context("no dashboard address: set StoreConfig::api_url to sell")?;
+        let mut request = api
+            .client
+            .request(method, format!("{}/store/{path}", api.url))
+            .bearer_auth(&api.token);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request.send().await.context("cannot reach the dashboard")?;
+        let status = response.status();
+        let body = response
+            .bytes()
+            .await
+            .context("cannot read the dashboard's answer")?;
+        match status.as_u16() {
+            200 | 201 => Ok(Fetched::Found(body)),
+            404 => Ok(Fetched::NotFound),
+            // 422: refused; 503: the shop is not taking writes for the moment
+            // (`writes_paused`). Both carry what to show the shopper.
+            422 | 503 => {
+                let refusal: Refusal =
+                    serde_json::from_slice(&body).context("the dashboard's answer is not one")?;
+                Ok(Fetched::Refused(refusal.into_error()))
+            }
+            401 => anyhow::bail!(
+                "the dashboard does not know this key (401): revoked, or not this shop's"
+            ),
+            403 => anyhow::bail!(
+                "the dashboard refused the key (403): selling needs the store:checkout scope"
+            ),
+            _ => anyhow::bail!("the dashboard did not answer as expected: {status}"),
+        }
+    }
+
     /// See [`cart`].
     pub async fn cart(&self, cart_id: &str) -> anyhow::Result<Option<CartView>> {
-        let orders = self.orders();
-        let Some(state) = orders.load_cart(cart_id).await? else {
-            return Ok(None);
+        let answer = self
+            .cart_call(reqwest::Method::GET, &format!("carts/{cart_id}"), NO_BODY)
+            .await?
+            .parsed::<CartAnswer>()?;
+        let CartAnswer {
+            cart: state,
+            quote,
+            shipping_methods: methods,
+        } = match answer {
+            Some(Ok(answer)) => answer,
+            Some(Err(err)) => return Err(err.into()),
+            None => return Ok(None),
         };
-        let quote = orders
-            .quote_cart(cart_id)
-            .await
-            .map_err(anyhow::Error::from)?;
-        let methods = orders.shipping_methods().await?;
         let shipping_options = methods
             .iter()
             .filter_map(|method| {
@@ -596,22 +687,26 @@ impl Store {
 
     /// See [`apply_discount`].
     pub async fn apply_discount(&self, cart_id: &str, code: &str) -> anyhow::Result<Refusable<()>> {
-        refusable(
-            self.orders()
-                .apply_discount(STOREFRONT_ACTOR, cart_id, code)
-                .await
-                .map(|_| ()),
+        self.cart_call(
+            reqwest::Method::POST,
+            &format!("carts/{cart_id}/discount"),
+            Some(&DiscountCode {
+                code: code.to_owned(),
+            }),
         )
+        .await?
+        .written()
     }
 
     /// See [`remove_discount`].
     pub async fn remove_discount(&self, cart_id: &str) -> anyhow::Result<Refusable<()>> {
-        refusable(
-            self.orders()
-                .remove_discount(STOREFRONT_ACTOR, cart_id)
-                .await
-                .map(|_| ()),
+        self.cart_call(
+            reqwest::Method::POST,
+            &format!("carts/{cart_id}/discount/remove"),
+            NO_BODY,
         )
+        .await?
+        .written()
     }
 
     /// See [`add_to_cart`].
@@ -622,28 +717,35 @@ impl Store {
         variant_id: Option<&str>,
         quantity: u32,
     ) -> anyhow::Result<Refusable<String>> {
-        let orders = self.orders();
         let item = CartItem {
             product_id: product_id.to_owned(),
             variant_id: variant_id.map(str::to_owned),
             quantity,
         };
         if let Some(cart_id) = cart_id {
-            match orders
-                .add_to_cart(STOREFRONT_ACTOR, cart_id, item.clone())
-                .await
+            match self
+                .cart_call(
+                    reqwest::Method::POST,
+                    &format!("carts/{cart_id}/items"),
+                    Some(&item),
+                )
+                .await?
+                .written()?
             {
-                Ok(_) => return Ok(Ok(cart_id.to_owned())),
+                Ok(()) => return Ok(Ok(cart_id.to_owned())),
                 Err(OrderError::CartNotFound | OrderError::CheckedOut) => {}
-                Err(err) => return refusable(Err(err)),
+                Err(err) => return Ok(Err(err)),
             }
         }
-        let cart_id = match orders.create_cart(STOREFRONT_ACTOR).await {
-            Ok(id) => id,
-            Err(err) => return refusable(Err(err)),
-        };
-        let added = orders.add_to_cart(STOREFRONT_ACTOR, &cart_id, item).await;
-        refusable(added.map(|_| cart_id))
+        match self
+            .cart_call(reqwest::Method::POST, "carts", Some(&item))
+            .await?
+            .parsed::<Started>()?
+        {
+            Some(Ok(started)) => Ok(Ok(started.id)),
+            Some(Err(err)) => refusable(Err(err)),
+            None => anyhow::bail!("the dashboard did not start the cart"),
+        }
     }
 
     /// See [`set_cart_quantity`].
@@ -659,12 +761,13 @@ impl Store {
             variant_id: variant_id.map(str::to_owned),
             quantity,
         };
-        refusable(
-            self.orders()
-                .set_cart_quantity(STOREFRONT_ACTOR, cart_id, item)
-                .await
-                .map(|_| ()),
+        self.cart_call(
+            reqwest::Method::POST,
+            &format!("carts/{cart_id}/quantity"),
+            Some(&item),
         )
+        .await?
+        .written()
     }
 
     /// See [`start_payment`].
@@ -673,34 +776,30 @@ impl Store {
         cart_id: &str,
         checkout: Checkout,
     ) -> anyhow::Result<Refusable<PaymentSession>> {
-        let orders = self.orders();
-        let request_id = match orders
-            .request_checkout(STOREFRONT_ACTOR, cart_id, checkout)
-            .await
-        {
-            Ok(id) => id,
-            Err(err) => return refusable(Err(err)),
+        let answer = self
+            .cart_call(
+                reqwest::Method::POST,
+                &format!("carts/{cart_id}/checkout"),
+                Some(&checkout),
+            )
+            .await?
+            .parsed::<RequestAnswer>()?;
+        let request = match answer {
+            Some(Ok(request)) => request,
+            Some(Err(err)) => return refusable(Err(err)),
+            None => return Ok(Err(OrderError::CartNotFound)),
         };
-        let mut watch = evento::Executor::write_watch(self.executor());
-        let deadline = tokio::time::Instant::now() + PAYMENT_ANSWER_TIMEOUT;
-        loop {
-            match self.payment_answer(cart_id, &request_id).await? {
-                Some(answer) => return Ok(answer),
-                None if tokio::time::Instant::now() >= deadline => {
-                    tracing::warn!(cart_id, request_id, "no answer to a request to pay");
-                    return Ok(Err(OrderError::PaymentRefused {
-                        code: PAYMENTS_UNAVAILABLE.to_owned(),
-                    }));
-                }
-                None => {}
-            }
-            // A write to the store wakes us; the poll covers a missed one.
-            let wait = PAYMENT_ANSWER_POLL;
-            match watch.as_mut() {
-                Some(watch) => {
-                    let _ = tokio::time::timeout(wait, watch.changed()).await;
-                }
-                None => tokio::time::sleep(wait).await,
+        match self.session_of(&request) {
+            Some(answer) => Ok(answer),
+            None => {
+                tracing::warn!(
+                    cart_id,
+                    request_id = request.request_id,
+                    "no answer to a request to pay"
+                );
+                Ok(Err(OrderError::PaymentRefused {
+                    code: PAYMENTS_UNAVAILABLE.to_owned(),
+                }))
             }
         }
     }
@@ -722,33 +821,45 @@ impl Store {
         request_id: &str,
     ) -> anyhow::Result<Option<PaymentSession>> {
         Ok(self
-            .payment_answer(cart_id, request_id)
+            .payment_request(cart_id, request_id)
             .await?
+            .and_then(|request| self.session_of(&request))
             .and_then(Result::ok))
     }
 
-    /// The answer to a request to pay, once there is one.
-    async fn payment_answer(
+    /// A request to pay as the dashboard has it, `None` for a cart or
+    /// request the shop has not.
+    async fn payment_request(
         &self,
         cart_id: &str,
         request_id: &str,
-    ) -> anyhow::Result<Option<Refusable<PaymentSession>>> {
-        let Some(cart) = self.orders().load_cart(cart_id).await? else {
-            return Ok(None);
-        };
-        let Some(request) = cart.request(request_id) else {
-            return Ok(None);
-        };
-        Ok(match &request.answer {
-            None => None,
-            Some(PaymentAnswer::Refused(code)) => {
+    ) -> anyhow::Result<Option<RequestAnswer>> {
+        match self
+            .cart_call(
+                reqwest::Method::GET,
+                &format!("carts/{cart_id}/requests/{request_id}"),
+                NO_BODY,
+            )
+            .await?
+            .parsed::<RequestAnswer>()?
+        {
+            Some(Ok(request)) => Ok(Some(request)),
+            Some(Err(err)) => Err(err.into()),
+            None => Ok(None),
+        }
+    }
+
+    /// The answer to a request to pay, once there is one.
+    fn session_of(&self, request: &RequestAnswer) -> Option<Refusable<PaymentSession>> {
+        match request.answer.as_ref()? {
+            PaymentAnswer::Refused(code) => {
                 Some(Err(OrderError::PaymentRefused { code: code.clone() }))
             }
             // Paid too late and given back: nothing to confirm any more.
-            Some(PaymentAnswer::Returned(returned)) => Some(Err(OrderError::PaymentRefused {
+            PaymentAnswer::Returned(returned) => Some(Err(OrderError::PaymentRefused {
                 code: returned_code(&returned.code),
             })),
-            Some(PaymentAnswer::Requested(payment)) => Some(Ok(PaymentSession {
+            PaymentAnswer::Requested(payment) => Some(Ok(PaymentSession {
                 request_id: request.request_id.clone(),
                 provider: payment.provider.clone(),
                 payment_id: payment.payment_id.clone(),
@@ -761,12 +872,12 @@ impl Store {
                 shipping: payment.shipping.clone(),
                 money: self.money().clone(),
             })),
-        })
+        }
     }
 
     /// See [`order_of_cart`].
     pub async fn order_of_cart(&self, cart_id: &str) -> anyhow::Result<Option<OrderState>> {
-        self.orders().load_order_of_cart(cart_id).await
+        self.fetch_order(&format!("carts/{cart_id}/order")).await
     }
 
     /// See [`payment_returned`].
@@ -775,20 +886,30 @@ impl Store {
         cart_id: &str,
         request_id: &str,
     ) -> anyhow::Result<Option<ReturnedPayment>> {
-        let Some(cart) = self.orders().load_cart(cart_id).await? else {
-            return Ok(None);
-        };
-        Ok(cart
-            .request(request_id)
-            .and_then(|request| match &request.answer {
-                Some(PaymentAnswer::Returned(returned)) => Some(returned.as_ref().clone()),
+        Ok(self
+            .payment_request(cart_id, request_id)
+            .await?
+            .and_then(|request| match request.answer {
+                Some(PaymentAnswer::Returned(returned)) => Some(*returned),
                 _ => None,
             }))
     }
 
     /// See [`order`].
     pub async fn order(&self, order_id: &str) -> anyhow::Result<Option<OrderState>> {
-        self.orders().load_order(order_id).await
+        self.fetch_order(&format!("orders/{order_id}")).await
+    }
+
+    async fn fetch_order(&self, path: &str) -> anyhow::Result<Option<OrderState>> {
+        match self
+            .cart_call(reqwest::Method::GET, path, NO_BODY)
+            .await?
+            .parsed::<OrderState>()?
+        {
+            Some(Ok(order)) => Ok(Some(order)),
+            Some(Err(err)) => Err(err.into()),
+            None => Ok(None),
+        }
     }
 }
 
@@ -934,8 +1055,9 @@ pub fn returned_code(code: &str) -> String {
     format!("payment_returned_{code}")
 }
 
-/// An order, read from the store. Anyone holding its id can read it: the
-/// host decides who may (the browser that placed it, typically).
+/// An order, as the dashboard answers for its id. Anyone holding the id can
+/// read it: the host decides who may (the browser that placed it,
+/// typically).
 pub async fn order(cx: &Cx, order_id: &str) -> Result<Option<OrderState>> {
     store(cx).order(order_id).await.map_err(Error::from_anyhow)
 }

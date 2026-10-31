@@ -1,11 +1,15 @@
 //! What a storefront calls over HTTP, with its store API key: the writes the
 //! store API does not carry, because they come with files (reviews), must
 //! not be forged by whoever holds a key (shopper sign-ins), or come from
-//! anyone at all and are counted (the contact form's messages).
+//! anyone at all and are counted (the contact form's messages); and the
+//! carts and orders, which the key may not read as streams, answered one
+//! at a time by their id ([`carts`], [`orders`]).
 
 pub mod automations;
+pub mod carts;
 pub mod contact;
 pub mod newsletter;
+pub mod orders;
 pub mod reviews;
 pub mod shoppers;
 

@@ -86,7 +86,7 @@ impl<E: Executor> Deref for Command<E> {
 // =============================================================================
 
 /// One line of a cart: a product, or one variant of it, and how many.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CartLine {
     pub product_id: String,
     pub variant_id: Option<String>,
@@ -101,7 +101,7 @@ impl CartLine {
 }
 
 /// A discount code taken off a cart's or an order's items.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OrderDiscount {
     pub discount_id: String,
     pub code: String,
@@ -113,7 +113,7 @@ pub struct OrderDiscount {
 
 /// The shipping a payment or an order is charged: the method as it was
 /// then, and its price for those goods (0 once they reach its threshold).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OrderShipping {
     pub method_id: String,
     pub name: String,
@@ -121,7 +121,7 @@ pub struct OrderShipping {
 }
 
 /// A payment opened with the provider for a cart: what the order will hold.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PaymentSnapshot {
     pub provider: String,
     pub payment_id: String,
@@ -137,7 +137,7 @@ pub struct PaymentSnapshot {
 
 /// A payment that went through too late to be an order: what the checkout
 /// held had lapsed and gone to someone else, so the money went back.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ReturnedPayment {
     pub payment_id: String,
     pub refund_id: String,
@@ -148,7 +148,7 @@ pub struct ReturnedPayment {
 }
 
 /// How a request to pay was answered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PaymentAnswer {
     /// A payment is open: the shopper's browser confirms it.
     Requested(Box<PaymentSnapshot>),
@@ -160,7 +160,7 @@ pub enum PaymentAnswer {
 }
 
 /// A shopper's request to pay for the cart, and its answer once there is one.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CheckoutRequest {
     pub request_id: String,
     pub email: String,
@@ -195,7 +195,7 @@ impl CheckoutRequest {
 
 #[evento::projection(id = id, name = "timada-orders/CartState")]
 #[evento::snapshot(none)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CartState {
     pub id: String,
     /// In the order they were first added.
@@ -592,7 +592,7 @@ async fn on_shipping_granted(
 
 /// Where an order stands. An order exists once paid; the merchant fulfils it,
 /// or cancels it before it leaves (and the payment goes back).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderStatus {
     #[default]
     Paid,
@@ -636,7 +636,7 @@ impl fmt::Display for OrderStatus {
 
 #[evento::projection(id = id, name = "timada-orders/OrderState")]
 #[evento::snapshot(none)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OrderState {
     pub id: String,
     pub reference: String,
@@ -682,7 +682,7 @@ pub struct OrderState {
 }
 
 /// A refund asked for, under the key the provider is asked with.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PendingRefund {
     pub payment_id: String,
     pub amount_cents: u64,
@@ -959,7 +959,7 @@ async fn on_business_buyers_refused(
 // =============================================================================
 
 /// One way the shop ships, as the merchant last described it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ShippingMethod {
     pub id: String,
     pub name: String,

@@ -32,7 +32,17 @@ pub const REFERENCE_ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 pub const REFERENCE_LEN: usize = 8;
 
 /// Where an order goes. Frozen in `events.lock`: the fields never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct ShippingAddress {
     /// The person or company the parcel is for.
     pub name: String,
@@ -47,7 +57,17 @@ pub struct ShippingAddress {
 
 /// One line of an order, as it was sold. Frozen in `events.lock`: the fields
 /// never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct OrderLine {
     pub product_id: String,
     pub variant_id: Option<String>,
@@ -69,7 +89,17 @@ pub struct OrderLine {
 
 /// The payment that paid for an order. Frozen in `events.lock`: the fields
 /// never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Payment {
     /// `stripe`.
     pub provider: String,
@@ -108,39 +138,6 @@ impl OrderLine {
             &self.tax_category
         }
     }
-}
-
-/// Whether an event is one a shopper's storefront writes: filling a cart,
-/// entering a discount code and asking to pay for it. Everything else is the dashboard's: answering a
-/// request to pay, the orders (they exist once paid, which only the
-/// provider's word to the dashboard proves) and the catalog. A store
-/// connection allowed to sell but not to manage is held to these.
-pub fn is_shopper_event(aggregate_type: &str, name: &str) -> bool {
-    use evento::{Aggregate, AggregateEvent};
-
-    use crate::aggregator::{
-        BillingAddressGiven, BuyerIdentified, Cart, CheckoutRequested, Created, DiscountApplied,
-        DiscountRemoved, ItemAdded, ItemRemoved, LanguageGiven, NewsletterOptedIn, QuantitySet,
-        ShippingMethodChosen, TimeZoneGiven,
-    };
-
-    aggregate_type == Cart::aggregate_type()
-        && [
-            Created::event_name(),
-            ItemAdded::event_name(),
-            QuantitySet::event_name(),
-            ItemRemoved::event_name(),
-            CheckoutRequested::event_name(),
-            BuyerIdentified::event_name(),
-            BillingAddressGiven::event_name(),
-            DiscountApplied::event_name(),
-            DiscountRemoved::event_name(),
-            ShippingMethodChosen::event_name(),
-            LanguageGiven::event_name(),
-            NewsletterOptedIn::event_name(),
-            TimeZoneGiven::event_name(),
-        ]
-        .contains(&name)
 }
 
 /// The order a cart becomes: one per cart, so placing it twice lands on the
@@ -428,50 +425,6 @@ mod tests {
         assert!(matches!(
             normalize_shipping(bad_country),
             Err(OrderError::InvalidCountry)
-        ));
-    }
-
-    #[test]
-    fn shoppers_write_carts_and_place_orders_only() {
-        assert!(is_shopper_event("timada-orders/Cart", "ItemAdded"));
-        assert!(is_shopper_event("timada-orders/Cart", "CheckoutRequested"));
-        assert!(is_shopper_event("timada-orders/Cart", "DiscountApplied"));
-        assert!(is_shopper_event("timada-orders/Cart", "DiscountRemoved"));
-        assert!(is_shopper_event(
-            "timada-orders/Cart",
-            "BillingAddressGiven"
-        ));
-        assert!(!is_shopper_event(
-            "timada-orders/Order",
-            "BillingAddressSet"
-        ));
-        assert!(!is_shopper_event("timada-orders/Cart", "PaymentRequested"));
-        // Only the dashboard says what a payment is discounted by.
-        assert!(!is_shopper_event("timada-orders/Cart", "DiscountGranted"));
-        assert!(!is_shopper_event("timada-orders/Order", "Discounted"));
-        // The shopper picks a shipping method; only the dashboard prices it.
-        assert!(is_shopper_event(
-            "timada-orders/Cart",
-            "ShippingMethodChosen"
-        ));
-        assert!(!is_shopper_event("timada-orders/Cart", "ShippingGranted"));
-        assert!(!is_shopper_event("timada-orders/Order", "ShippingCharged"));
-        assert!(!is_shopper_event(
-            "timada-orders/ShippingMethods",
-            "MethodAdded"
-        ));
-        assert!(!is_shopper_event("timada-orders/Cart", "CheckedOut"));
-        assert!(!is_shopper_event("timada-orders/OrderReference", "Claimed"));
-        assert!(!is_shopper_event("timada-orders/Order", "Placed"));
-        assert!(!is_shopper_event("timada-orders/Order", "Cancelled"));
-        assert!(!is_shopper_event("timada-catalog/Product", "Priced"));
-        assert!(!is_shopper_event(
-            "timada-orders/Storefront",
-            "StorefrontAddressSet"
-        ));
-        assert!(!is_shopper_event(
-            "timada-orders/OrderConfirmation",
-            "ConfirmationMailed"
         ));
     }
 

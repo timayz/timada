@@ -1,7 +1,8 @@
 //! The store API end to end on one node: a storefront connects with a key
 //! and is served its tenant's store only; the connection leases the tenant;
-//! a revoked key is cut off; a suspended tenant and bad keys are refused;
-//! the same over TLS.
+//! a revoked key is cut off; a suspended tenant and bad keys are refused; a
+//! key without `store:write` reads what a storefront loads and never a cart
+//! or an order; the same over TLS.
 //!
 //! The dashboard is a binary crate, so the modules are reached through the
 //! binary's own test harness (`#[path]` includes), which drags in items this
@@ -559,7 +560,7 @@ async fn a_read_only_key_cannot_change_the_store() {
 }
 
 #[tokio::test]
-async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
+async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (writer_token, _) = h.key(&acme).await;
@@ -583,161 +584,86 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
         .await
         .unwrap();
     catalog.publish_product("alice", &mug.id).await.unwrap();
-
-    let shop = evento::Evento::new(h.connect(&token).await.unwrap());
-    let orders = timada_orders::Command::unscoped(shop.clone());
-    let cart_id = orders
+    // The dashboard fills the cart for the storefront (`/store/carts/*`),
+    // in the tenant, and says how the shop takes payment.
+    let dashboard = timada_orders::Command::new(merchant.clone(), &acme.id);
+    let cart_id = dashboard
         .create_cart(timada_orders::STOREFRONT_ACTOR)
         .await
         .unwrap();
-    orders
-        .add_to_cart(
-            timada_orders::STOREFRONT_ACTOR,
-            &cart_id,
-            timada_orders::CartItem {
-                product_id: mug.id.clone(),
-                variant_id: None,
-                quantity: 2,
-            },
-        )
+    let item = timada_orders::CartItem {
+        product_id: mug.id.clone(),
+        variant_id: None,
+        quantity: 2,
+    };
+    dashboard
+        .add_to_cart(timada_orders::STOREFRONT_ACTOR, &cart_id, item.clone())
         .await
         .unwrap();
-    // A shopper enters and takes off a discount code; making one is the
-    // merchant's.
-    timada_discounts::Command::new(merchant.clone(), &acme.id)
-        .create_discount(
+    dashboard
+        .set_payment_method(
             "alice",
-            timada_discounts::CreateDiscount {
-                code: "TEN".into(),
-                value: timada_discounts::DiscountValue::Percent(1000),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-    let cart = orders
-        .apply_discount(timada_orders::STOREFRONT_ACTOR, &cart_id, "TEN")
-        .await
-        .unwrap();
-    assert_eq!(cart.discount_code.as_deref(), Some("TEN"));
-    orders
-        .remove_discount(timada_orders::STOREFRONT_ACTOR, &cart_id)
-        .await
-        .unwrap();
-    let forged = timada_discounts::Command::unscoped(shop.clone())
-        .create_discount(
-            "storefront",
-            timada_discounts::CreateDiscount {
-                code: "FREE".into(),
-                value: timada_discounts::DiscountValue::Percent(10_000),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap_err();
-    assert!(format!("{forged}").contains("store:checkout"), "{forged}");
-    let request_id = orders
-        .request_checkout(
-            timada_orders::STOREFRONT_ACTOR,
-            &cart_id,
-            timada_orders::Checkout {
-                email: "ada@example.org".into(),
-                shipping: timada_orders::ShippingAddress {
-                    name: "Ada".into(),
-                    line1: "1 rue de la Paix".into(),
-                    postal_code: "75002".into(),
-                    city: "Paris".into(),
-                    country: "FR".into(),
-                    ..Default::default()
-                },
-                note: None,
-                expected_total_cents: Some(2500),
-                vat_number: None,
-                // Billed elsewhere: a shopper's event too.
-                billing: Some(timada_orders::ShippingAddress {
-                    name: "Ada Corp".into(),
-                    line1: "1 Main Street".into(),
-                    postal_code: "10001".into(),
-                    city: "New York".into(),
-                    country: "US".into(),
-                    ..Default::default()
-                }),
-                // The shipping method picked: a shopper's event too.
-                shipping_method: Some("tracked".into()),
-                // The shopper's language: a shopper's event too.
-                language: Some("fr-FR,fr;q=0.9".into()),
-                // Asking for the shop's news: a shopper's event too.
-                newsletter: true,
-                time_zone: None,
-            },
-        )
-        .await
-        .unwrap();
-
-    // Answering its own request, making itself an order or touching the
-    // catalog is the merchant's: refused, with the scope named.
-    let pending = orders
-        .pending_payment(&cart_id, &request_id)
-        .await
-        .unwrap()
-        .unwrap();
-    let answered = orders
-        .record_payment_request(
-            "storefront",
-            &cart_id,
-            pending,
-            timada_orders::OpenedPayment {
+            Some(timada_orders::PaymentSetup {
                 provider: "stripe".into(),
-                payment_id: "pi_forged".into(),
-                client_secret: "secret".into(),
                 publishable_key: "pk_test".into(),
-            },
+            }),
         )
         .await
-        .unwrap_err();
-    assert!(
-        format!("{answered}").contains("store:checkout"),
-        "{answered}"
-    );
-    let placed = orders
-        .place_paid_order(
-            "storefront",
-            &cart_id,
-            timada_orders::Payment {
-                provider: "stripe".into(),
-                payment_id: "pi_forged".into(),
-                amount_cents: 2500,
-                currency: "EUR".into(),
-            },
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(placed, timada_orders::OrderError::PaymentNotFound),
-        "no payment was recorded, so none can be claimed: {placed}"
-    );
-    let repriced = timada_catalog::Command::unscoped(shop.clone())
-        .price_product("storefront", &mug.id, 1, "EUR")
-        .await
-        .unwrap_err();
-    assert!(
-        format!("{repriced}").contains("store:checkout"),
-        "{repriced}"
-    );
-
-    // The merchant sees the request, still unanswered, and the price as set.
-    let cart = timada_orders::Command::new(merchant.clone(), &acme.id)
-        .load_cart(&cart_id)
-        .await
-        .unwrap()
         .unwrap();
-    assert!(cart.request(&request_id).unwrap().answer.is_none());
-    let product = catalog.load_product(&mug.id).await.unwrap().unwrap();
-    assert_eq!(product.price.unwrap().amount_cents, 1250);
 
-    // It reads what selling needs, the cart first; not the shop's
-    // shoppers' sign-in challenges, which the same store holds.
-    assert!(orders.load_cart(&cart_id).await.unwrap().is_some());
+    let shop = evento::Evento::new(h.connect(&token).await.unwrap());
+    let orders = timada_orders::Command::unscoped(shop.clone());
+    // It reads how the shop sells...
+    let setup = orders.payment_setup().await.unwrap().unwrap();
+    assert_eq!(setup.publishable_key, "pk_test");
+    assert!(orders.shipping_methods().await.unwrap().is_empty());
+    // ...and never a cart or an order, not even one whose id it holds: the
+    // dashboard answers for those, one at a time.
+    let cart_type = <timada_orders::aggregator::Cart as evento::Aggregate>::aggregate_type();
+    let order_type = <timada_orders::aggregator::Order as evento::Aggregate>::aggregate_type();
+    // Nor an invoice series: every buyer's name and address are in it.
+    let book_type = <timada_invoicing::aggregator::Book as evento::Aggregate>::aggregate_type();
+    let invoicing = timada_invoicing::Command::unscoped(shop.clone());
+    for refused in [
+        format!("{:#}", orders.load_cart(&cart_id).await.unwrap_err()),
+        format!(
+            "{:#}",
+            orders.load_order_of_cart(&cart_id).await.unwrap_err()
+        ),
+        format!("{:#}", read_type(&shop, cart_type).await.unwrap_err()),
+        format!("{:#}", read_type(&shop, order_type).await.unwrap_err()),
+        format!("{:#}", read_type(&shop, book_type).await.unwrap_err()),
+        format!(
+            "{:#}",
+            invoicing
+                .load_invoice_of_order("an-order")
+                .await
+                .unwrap_err()
+        ),
+    ] {
+        assert!(refused.contains("may not read"), "{refused}");
+    }
+    // Nor does it write: filling a cart and asking to pay are the
+    // dashboard's, which a storefront asks over HTTP.
+    let refused = orders
+        .create_cart(timada_orders::STOREFRONT_ACTOR)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("store:write"),
+        "{refused:#}"
+    );
+    let refused = orders
+        .add_to_cart(timada_orders::STOREFRONT_ACTOR, &cart_id, item)
+        .await
+        .unwrap_err();
+    let message = format!("{refused:#}");
+    assert!(
+        message.contains("may not read") || message.contains("store:write"),
+        "{message}"
+    );
+    // Not the shop's shoppers' sign-in challenges, which the same store
+    // holds.
     let refused = read_type(
         &shop,
         <timada_shoppers::aggregator::ShopperChallenge as evento::Aggregate>::aggregate_type(),
@@ -748,25 +674,28 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
         format!("{refused:#}").contains("may not read"),
         "{refused:#}"
     );
-    // A key without store:checkout reads the catalog, not the carts.
+    // A key without store:checkout reads the catalog, not how the shop
+    // sells, and no cart either.
     let (reader_token, _) = h.key_with(&acme, SCOPE_STORE_READ).await;
     let reader = evento::Evento::new(h.connect(&reader_token).await.unwrap());
-    let refused = timada_orders::Command::unscoped(reader.clone())
-        .load_cart(&cart_id)
-        .await
-        .unwrap_err();
+    let window = timada_orders::Command::unscoped(reader.clone());
+    let refused = window.payment_setup().await.unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("may not read"),
+        "{refused:#}"
+    );
+    let refused = window.load_cart(&cart_id).await.unwrap_err();
     assert!(
         format!("{refused:#}").contains("may not read"),
         "{refused:#}"
     );
     drop(reader);
 
-    // A key with write may do it all.
-    timada_orders::Command::new(merchant.clone(), &acme.id)
-        .refuse_payment_request("alice", &cart_id, &request_id, "payments_unavailable")
-        .await
-        .unwrap();
-    drop((shop, merchant, orders, catalog));
+    // The merchant sees the cart as the dashboard filled it, and nothing
+    // the storefront's key tried.
+    let cart = dashboard.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(cart.item_count(), 2);
+    drop((shop, merchant, orders, catalog, window));
     h.finish().await;
 }
 

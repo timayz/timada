@@ -20,8 +20,9 @@
 //! - `STORE_MEDIA_URL` — where the product pictures are loaded from, as the
 //!   tenant's API keys page shows it (optional)
 //! - `STORE_API_URL` — the dashboard address the tenant's API keys page
-//!   shows, where shoppers' reviews are handed in (optional; without it the
-//!   order page offers no review form)
+//!   shows, where the shop sells (carts, payments, orders), hands in
+//!   shoppers' reviews and signs shoppers in (without it the shop only
+//!   shows its catalogue)
 //! - `STORE_COOKIE_KEY` — at least 32 bytes the shopper cookies (cart, past
 //!   orders, last address) are encrypted with; every replica of the app shares
 //!   it. Unset, a random one is made at startup, so the cookies of a browser
