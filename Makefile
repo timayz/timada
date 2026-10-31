@@ -128,9 +128,9 @@ test:
 machete:
 	cargo machete --with-metadata
 
-# What CI runs (.github/workflows/check.yml): tests, lint, formatting, unused
-# dependencies. The browser suite (`make e2e`) needs the compose stack and
-# stays local.
+# The gate before a pull request: tests, lint, formatting, unused
+# dependencies. The browser suite (`make e2e`) needs the compose stack and is
+# run separately.
 check: test lint fmt-check machete
 	@echo "✓ All checks passed!"
 

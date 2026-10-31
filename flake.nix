@@ -62,8 +62,8 @@
             # Link with the LLD that already ships inside the Rust toolchain, so no
             # extra package is needed. A `cargo test --workspace` performs ~23 link
             # steps and GNU ld dominates them. Deliberately not in
-            # .cargo/config.toml: CI (.github/workflows/check.yml) has no lld on
-            # PATH and would fail to link. An existing RUSTFLAGS wins.
+            # .cargo/config.toml: a build outside this shell has no lld on PATH
+            # and would fail to link. An existing RUSTFLAGS wins.
             if [ "$(uname -s)" = "Linux" ] && [ -z "''${RUSTFLAGS:-}" ]; then
               _lld_dir="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/gcc-ld"
               if [ -x "$_lld_dir/ld.lld" ]; then

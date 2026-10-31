@@ -21,11 +21,12 @@ fn main() {
         .icon_set("lucide")
         .stage()
         .unwrap();
-    topcoat::tailwind::BuildConfig::new()
-        .input("styles.css")
-        // The Nix dev shell exports the packaged CLI; unset, topcoat downloads
-        // its pinned release.
-        .executable_env("TAILWIND_CLI")
-        .render()
-        .unwrap();
+    let mut tailwind = topcoat::tailwind::BuildConfig::new().input("styles.css");
+    // The Nix dev shell exports the packaged CLI. Unset (CI, a plain cargo
+    // build), topcoat downloads its pinned release into the target directory;
+    // naming the variable while it is unset would be an error.
+    if std::env::var_os("TAILWIND_CLI").is_some() {
+        tailwind = tailwind.executable_env("TAILWIND_CLI");
+    }
+    tailwind.render().unwrap();
 }
