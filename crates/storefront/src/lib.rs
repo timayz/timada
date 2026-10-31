@@ -8,7 +8,10 @@
 //! context. Pages then read the catalog with [`products`] and
 //! [`require_product`] inside their own markup; the one component shipped,
 //! [`price`], renders a formatted price and nothing else: every class and
-//! attribute comes from the merchant.
+//! attribute comes from the merchant. Every amount a person reads (a cart's
+//! totals, a shipping price, an offer's price) is written the way the host
+//! writes its own prices when it hands a [`MoneyFormat`] to
+//! [`StoreConfig::money`], and as `12.50 EUR` otherwise.
 //!
 //! Events stay on the store; only the subscription's cursor, the projection
 //! snapshots and the product rows live in the local database (one per replica
@@ -28,6 +31,7 @@ mod context;
 mod db;
 mod invoice;
 mod migrations;
+mod money;
 mod newsletter;
 mod pages;
 mod query;
@@ -46,6 +50,7 @@ pub use context::*;
 pub use db::*;
 pub use invoice::*;
 pub use migrations::*;
+pub use money::*;
 pub use newsletter::*;
 pub use pages::*;
 pub use query::*;

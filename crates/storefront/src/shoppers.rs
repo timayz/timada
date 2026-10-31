@@ -22,13 +22,13 @@ use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 use topcoat_router::request::{client_ip, headers};
 
-use timada_catalog::format_money;
 use timada_orders::OrderStatus;
 pub use timada_orders::ShippingAddress;
 use timada_shoppers::SHOPPER_CODES;
 pub use timada_shoppers::{MAX_ADDRESSES, SavedAddress, Shopper};
 
 use crate::context::store;
+use crate::money::MoneyFormat;
 use crate::store::Store;
 
 /// What the dashboard answers for a token that no longer signs anyone in:
@@ -86,6 +86,9 @@ pub struct ShopperOrder {
     pub currency: String,
     /// Unix seconds.
     pub placed_at: i64,
+    /// How the store writes an amount ([`Store::money`]).
+    #[serde(skip)]
+    pub money: MoneyFormat,
 }
 
 impl ShopperOrder {
@@ -93,9 +96,11 @@ impl ShopperOrder {
         OrderStatus::parse(&self.status).unwrap_or_default()
     }
 
-    /// The total as a person reads it (`24.00 EUR`).
+    /// The total as a person reads it (`24.00 EUR`, or as the host writes
+    /// prices).
     pub fn total_label(&self) -> String {
-        format_money(self.total_cents.max(0) as u64, &self.currency)
+        self.money
+            .format(self.total_cents.max(0) as u64, &self.currency)
     }
 }
 
@@ -336,8 +341,11 @@ impl Store {
             .send()
             .await;
         answer(response, reqwest::StatusCode::OK, |body| {
-            let history: History =
+            let mut history: History =
                 serde_json::from_slice(body).context("the dashboard's answer is not one")?;
+            for order in &mut history.orders {
+                order.money = self.money().clone();
+            }
             Ok(history.orders)
         })
         .await
