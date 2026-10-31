@@ -2020,6 +2020,7 @@ async fn dispatch(
         }
         ("GET", ["store", "carts", id, "order"]) => store_carts::order_of_cart(orders, id).await?,
         ("GET", ["store", "orders", id]) => store_carts::order(orders, id).await?,
+        ("GET", ["store", "orders", id, "documents"]) => store_carts::documents(orders, id).await?,
         _ => (StatusCode::NOT_FOUND, json!({ "error": "no_such_route" })),
     })
 }

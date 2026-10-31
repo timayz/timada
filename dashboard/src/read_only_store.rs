@@ -7,15 +7,18 @@
 //!   products, categories, stock, published reviews, pages. One holding
 //!   `store:checkout` too reads what selling needs on top: how the shop
 //!   takes payment, ships and sells to businesses, discounts and offers,
-//!   review links, invoices. Never a cart or an order: those streams are
-//!   every shopper's carts and every placed order with the addresses they
-//!   carry, so a storefront is answered about the one cart or order whose
-//!   id it holds through the `/store/carts/*` and `/store/orders/*`
-//!   endpoints (`crate::store_carts`), never the stream. Nothing else
-//!   either: a tenant's store also holds its shoppers' accounts and sign-in
-//!   challenges, its API keys, its mail settings, and a storefront's key
-//!   must not be the way to those. A read naming nothing is narrowed to the
-//!   list; one naming a type outside it fails with the reason.
+//!   review links. Never a cart, an order or an invoice: the cart and order
+//!   streams are every shopper's carts and every placed order with the
+//!   addresses they carry, and an invoice series (`Book`) holds every
+//!   invoice the shop issued with its buyer's name, address and e-mail, so a
+//!   storefront is answered about the one cart or order whose id it holds,
+//!   and about that order's documents, through the `/store/carts/*` and
+//!   `/store/orders/*` endpoints (`crate::store_carts`), never the stream.
+//!   Nothing else either: a tenant's store also holds its shoppers' accounts
+//!   and sign-in challenges, its API keys, its mail settings, and a
+//!   storefront's key must not be the way to those. A read naming nothing is
+//!   narrowed to the list; one naming a type outside it fails with the
+//!   reason.
 //! - Appends are refused: the client's commit fails with the reason. What a
 //!   shopper does (filling a cart, asking to pay) goes through the same
 //!   endpoints, where the dashboard writes it in the key's tenant.
@@ -52,9 +55,9 @@ pub fn catalog_reads() -> Vec<&'static str> {
 }
 
 /// The aggregate types a key holding `store:checkout` reads: the catalog,
-/// and what selling loads on top (`crates/storefront`'s checkout, invoice
-/// and review-link paths through the orders, discounts, invoicing and
-/// reviews gateways). Not the carts and orders: see the module docs.
+/// and what selling loads on top (`crates/storefront`'s checkout and
+/// review-link paths through the orders, discounts and reviews gateways).
+/// Not the carts, the orders or the invoices: see the module docs.
 pub fn checkout_reads() -> Vec<&'static str> {
     let mut reads = catalog_reads();
     reads.extend([
@@ -65,8 +68,6 @@ pub fn checkout_reads() -> Vec<&'static str> {
         timada_discounts::aggregator::DiscountCode::aggregate_type(),
         timada_discounts::aggregator::Offers::aggregate_type(),
         timada_reviews::aggregator::ReviewLink::aggregate_type(),
-        timada_invoicing::aggregator::Book::aggregate_type(),
-        timada_invoicing::aggregator::Document::aggregate_type(),
     ]);
     reads
 }
@@ -295,16 +296,20 @@ impl Executor for ReadOnly {
 mod tests {
     use super::*;
 
-    /// A checkout key reads how the shop sells, never a cart or an order:
-    /// those are answered one at a time by the `/store/carts/*` and
-    /// `/store/orders/*` endpoints.
+    /// A checkout key reads how the shop sells, never a cart, an order or
+    /// an invoice series: those are answered one at a time by the
+    /// `/store/carts/*` and `/store/orders/*` endpoints.
     #[test]
     fn a_checkout_key_reads_neither_carts_nor_orders() {
         let reads = checkout_reads();
         let cart = timada_orders::aggregator::Cart::aggregate_type();
         let order = timada_orders::aggregator::Order::aggregate_type();
+        let book = timada_invoicing::aggregator::Book::aggregate_type();
+        let document = timada_invoicing::aggregator::Document::aggregate_type();
         assert!(!reads.contains(&cart), "{reads:?}");
         assert!(!reads.contains(&order), "{reads:?}");
+        assert!(!reads.contains(&book), "{reads:?}");
+        assert!(!reads.contains(&document), "{reads:?}");
         assert!(reads.contains(&timada_orders::aggregator::PaymentMethod::aggregate_type()));
         for read in catalog_reads() {
             assert!(reads.contains(&read), "{read} is catalog");

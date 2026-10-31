@@ -174,17 +174,20 @@ by construction.
    appends refused, snapshot saves dropped, and reads confined to what a storefront
    loads (`store:read`: products, categories, stock, reviews, pages; `store:checkout`
    adds the payment method, shipping, business buyers, discounts, offers, review
-   links, invoices). Never the carts or the orders: those streams are every shopper's
-   cart and every placed order with the addresses they carry, so a storefront is
-   answered about one at a time, by the id it holds, through the dashboard's HTTP
-   side (`store_carts.rs` behind `/store/carts/*` and `/store/orders/{order_id}`,
-   authenticated with the same key, which must allow `store:checkout`): its cart
-   priced, the items it adds, the code it enters, its request to pay and the answer,
-   the order its cart became, an order it remembers. An id the tenant has no cart or
-   order under, another tenant's included, is 404. What a shopper does is therefore
-   written by the dashboard in the key's tenant, and a storefront's connection never
-   appends: a read naming any other stream of the tenant, a shopper's sign-in
-   challenge say, fails, and so does every write. Scopes are strings recorded with
+   links). Never the carts, the orders or the invoices: the cart and order streams
+   are every shopper's cart and every placed order with the addresses they carry, and
+   an invoice series (`timada-invoicing/Book`) is every invoice the shop issued with
+   its buyer's name, address and e-mail, so a storefront is answered about one at a
+   time, by the id it holds, through the dashboard's HTTP side (`store_carts.rs`
+   behind `/store/carts/*` and `/store/orders/{order_id}`, authenticated with the
+   same key, which must allow `store:checkout`): its cart priced, the items it adds,
+   the code it enters, its request to pay and the answer, the order its cart became,
+   an order it remembers, and that order's invoice and credit notes
+   (`/store/orders/{order_id}/documents`, which the storefront draws as PDF itself).
+   An id the tenant has no cart or order under, another tenant's included, is 404.
+   What a shopper does is therefore written by the dashboard in the key's tenant, and
+   a storefront's connection never appends: a read naming any other stream of the
+   tenant, a shopper's sign-in challenge say, fails, and so does every write. Scopes are strings recorded with
    `ApiKey::Created` and replaced whole by `ApiKey::Scoped`. Revoking the key or
    changing its scopes ends its connections; suspending the tenant ends every
    connection of the tenant, and reconnects are refused.
@@ -363,7 +366,8 @@ A storefront hands a review in over HTTP, not through the store API:
 pictures: it checks what the bytes are, stores and replicates them to a majority, and
 only then records the review, deleting the files when that fails. Recording on the
 dashboard's side also means no key can append a review, or describe photos that are
-not there, over the store API; the review events are not shopper events there. The
+not there, over the store API: a storefront's key appends nothing there
+(`read_only_store.rs`). The
 storefront vouches that the shopper holds the order: an order id is not guessable, and a
 storefront offers the form only on an order its own shopper placed. The media
 subscription keeps review photos on every node like product pictures, and deletes them
@@ -435,8 +439,9 @@ A storefront signs its shoppers in over HTTP, not through the store API, under
 `/store/shoppers/*` with its key as a bearer token (it must allow `store:checkout`):
 `code` mails the code from the shop's name, `session` checks it and answers the token,
 `sign-out`, `sign-out-everywhere`, `delete`, `addresses` and `addresses/remove` act for
-the shopper whose token is in `X-Shopper-Token`. None of the shopper events are shopper events on the store API, so a
-key cannot sign anyone in by appending them. A storefront resolves a token with
+the shopper whose token is in `X-Shopper-Token`. A storefront's key appends nothing
+over the store API (`read_only_store.rs`), so a key cannot sign anyone in by appending
+the shopper events. A storefront resolves a token with
 `GET /store/shoppers/me`, which answers the account opened with its key: the store API
 only ever hands out the sealed events.
 

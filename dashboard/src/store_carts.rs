@@ -2,11 +2,12 @@
 //! storefront, without the HTTP: each call acts in the key's tenant through
 //! the orders gateway and answers for the one cart or order whose id it was
 //! given. The store API lets a storefront's key read neither the carts nor
-//! the orders of its tenant ([`crate::read_only_store`]), so this is the only
-//! way a storefront learns about a cart (its own, by the id it keeps in the
-//! shopper's browser) or an order (the one its cart became, or one it
-//! remembers), and the only way it fills a cart and asks to pay: a cart's
-//! commands load the cart first, which its key may not.
+//! the orders of its tenant, nor the invoices ([`crate::read_only_store`]),
+//! so this is the only way a storefront learns about a cart (its own, by the
+//! id it keeps in the shopper's browser), an order (the one its cart became,
+//! or one it remembers) or the invoice and credit notes of that order, and
+//! the only way it fills a cart and asks to pay: a cart's commands load the
+//! cart first, which its key may not.
 //!
 //! An id the tenant has no cart or order under is 404 `{"error":
 //! "cart_not_found"}` (or `order_not_found`), another tenant's included: the
@@ -22,6 +23,7 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use timada_invoicing::IssuedDocument;
 use timada_orders::wire::{CartAnswer, Refusal, RequestAnswer, Started};
 use timada_orders::{CartItem, Checkout, Command, OrderError, STOREFRONT_ACTOR};
 use topcoat::router::StatusCode;
@@ -99,8 +101,10 @@ pub async fn cart(orders: &Command<Executor>, cart_id: &str) -> anyhow::Result<A
 }
 
 /// `POST /store/carts` with a [`CartItem`]: starts a cart holding it and
-/// answers 201 with its id ([`Started`]); a refusal of the item starts no
-/// cart.
+/// answers 201 with its id ([`Started`]). A refusal of the item is answered
+/// as such and the storefront learns no id: the cart started for it stays
+/// empty in the tenant's store, as it did when the storefront itself wrote
+/// the two events.
 pub async fn start(orders: &Command<Executor>, item: CartItem) -> anyhow::Result<Answer> {
     let cart_id = match orders.create_cart(STOREFRONT_ACTOR).await {
         Ok(id) => id,
@@ -237,4 +241,23 @@ pub async fn order(orders: &Command<Executor>, order_id: &str) -> anyhow::Result
         Some(order) => ok(&order),
         None => Ok(not_found("order_not_found")),
     }
+}
+
+/// `GET /store/orders/{order_id}/documents`: the invoice of the order, then
+/// the credit notes of its refunds, as far as the dashboard has issued them
+/// (a `Vec<IssuedDocument>`, empty for an order just placed); 404 for an
+/// order the tenant has not. The invoices live in the series' `Book`
+/// streams, every buyer's name and address in them, which is why a
+/// storefront's key reads none of those and is answered one order's here.
+pub async fn documents(orders: &Command<Executor>, order_id: &str) -> anyhow::Result<Answer> {
+    let Some(order) = orders.load_order(order_id).await? else {
+        return Ok(not_found("order_not_found"));
+    };
+    let invoicing = timada_invoicing::Command::new(orders.executor().clone(), orders.tenant());
+    let mut documents: Vec<IssuedDocument> = Vec::new();
+    documents.extend(invoicing.load_invoice_of_order(order_id).await?);
+    for refund_id in &order.refund_ids {
+        documents.extend(invoicing.load_credit_note_of_refund(refund_id).await?);
+    }
+    ok(&documents)
 }

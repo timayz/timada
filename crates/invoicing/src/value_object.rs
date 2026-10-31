@@ -76,7 +76,17 @@ pub fn document_label(series: &str, number: u64) -> String {
 
 /// A postal address as a document prints it. Frozen in `events.lock`: the
 /// fields never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Address {
     /// The person or company.
     pub name: String,
@@ -90,7 +100,17 @@ pub struct Address {
 
 /// The merchant as the law asks a document to name it, copied when it was
 /// issued. Frozen in `events.lock`: the fields never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Seller {
     /// The registered name and address.
     pub address: Address,
@@ -113,7 +133,17 @@ impl Seller {
 
 /// One line of an invoice, as it was sold. Frozen in `events.lock`: the
 /// fields never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct InvoiceLine {
     pub name: String,
     pub variant_label: Option<String>,
@@ -143,7 +173,17 @@ impl InvoiceLine {
 
 /// What a document says about one VAT rate: the base it applies to and the
 /// tax. Frozen in `events.lock`: the fields never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct VatSubtotal {
     /// In basis points.
     pub rate_bps: u32,

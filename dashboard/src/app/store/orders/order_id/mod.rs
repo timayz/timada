@@ -1,6 +1,9 @@
 //! `GET /store/orders/{order_id}`: the order (an `OrderState`), or 404
 //! `{"error": "order_not_found"}` for an id the tenant has no order under,
-//! another tenant's included.
+//! another tenant's included. `documents` answers its invoice and credit
+//! notes.
+
+pub mod documents;
 
 use topcoat::{
     Result,

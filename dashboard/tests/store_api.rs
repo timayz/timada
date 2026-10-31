@@ -621,6 +621,9 @@ async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
     // dashboard answers for those, one at a time.
     let cart_type = <timada_orders::aggregator::Cart as evento::Aggregate>::aggregate_type();
     let order_type = <timada_orders::aggregator::Order as evento::Aggregate>::aggregate_type();
+    // Nor an invoice series: every buyer's name and address are in it.
+    let book_type = <timada_invoicing::aggregator::Book as evento::Aggregate>::aggregate_type();
+    let invoicing = timada_invoicing::Command::unscoped(shop.clone());
     for refused in [
         format!("{:#}", orders.load_cart(&cart_id).await.unwrap_err()),
         format!(
@@ -629,6 +632,14 @@ async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
         ),
         format!("{:#}", read_type(&shop, cart_type).await.unwrap_err()),
         format!("{:#}", read_type(&shop, order_type).await.unwrap_err()),
+        format!("{:#}", read_type(&shop, book_type).await.unwrap_err()),
+        format!(
+            "{:#}",
+            invoicing
+                .load_invoice_of_order("an-order")
+                .await
+                .unwrap_err()
+        ),
     ] {
         assert!(refused.contains("may not read"), "{refused}");
     }

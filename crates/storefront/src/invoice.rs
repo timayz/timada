@@ -1,12 +1,18 @@
-//! The invoice and the credit notes of an order, read from the store, and
-//! the PDF a shopper downloads. The merchant's dashboard issues them a
-//! moment after the payment (or the refund): an order just placed may have
-//! none yet.
+//! The invoice and the credit notes of an order, and the PDF a shopper
+//! downloads. The merchant's dashboard issues them a moment after the
+//! payment (or the refund): an order just placed may have none yet.
+//!
+//! Like the order itself, they are not read from the store: an invoice
+//! series is every buyer's name, address and e-mail, so a storefront's key
+//! may not read it, and the dashboard answers one order's documents over
+//! HTTP (`GET /store/orders/{order_id}/documents`, see [`crate::cart`]).
+//! The storefront draws the PDF from what it was answered.
 
-use timada_invoicing::{Command as Invoicing, IssuedDocument};
+use timada_invoicing::IssuedDocument;
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
+use crate::cart::NO_BODY;
 use crate::context::store;
 use crate::store::Store;
 
@@ -20,22 +26,22 @@ pub struct DocumentPdf {
 }
 
 impl Store {
-    fn invoicing(&self) -> Invoicing<evento::Evento> {
-        Invoicing::unscoped(self.executor().clone())
-    }
-
     /// See [`documents`].
     pub async fn documents(&self, order_id: &str) -> anyhow::Result<Vec<IssuedDocument>> {
-        let Some(order) = self.order(order_id).await? else {
-            return Ok(Vec::new());
-        };
-        let invoicing = self.invoicing();
-        let mut documents = Vec::new();
-        documents.extend(invoicing.load_invoice_of_order(order_id).await?);
-        for refund_id in &order.refund_ids {
-            documents.extend(invoicing.load_credit_note_of_refund(refund_id).await?);
+        match self
+            .cart_call(
+                reqwest::Method::GET,
+                &format!("orders/{order_id}/documents"),
+                NO_BODY,
+            )
+            .await?
+            .parsed::<Vec<IssuedDocument>>()?
+        {
+            Some(Ok(documents)) => Ok(documents),
+            Some(Err(err)) => Err(err.into()),
+            // An order the shop has not has no documents.
+            None => Ok(Vec::new()),
         }
-        Ok(documents)
     }
 
     /// See [`document_pdf`].
@@ -44,14 +50,16 @@ impl Store {
         order_id: &str,
         document_id: &str,
     ) -> anyhow::Result<Option<DocumentPdf>> {
-        let Some(document) = self.invoicing().load_document(document_id).await? else {
+        // Only this order's documents are asked for, so a document id from
+        // another order is simply not among them.
+        let Some(document) = self
+            .documents(order_id)
+            .await?
+            .into_iter()
+            .find(|document| document.document_id == document_id)
+        else {
             return Ok(None);
         };
-        // A document id found under another order's address is not this
-        // order's to show.
-        if document.order_id != order_id {
-            return Ok(None);
-        }
         let file_name = timada_invoicing::pdf::file_name(&document);
         let bytes =
             tokio::task::spawn_blocking(move || timada_invoicing::pdf::render(&document)).await??;

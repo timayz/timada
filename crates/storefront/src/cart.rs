@@ -453,7 +453,7 @@ fn refusable<T>(outcome: std::result::Result<T, OrderError>) -> anyhow::Result<R
 }
 
 /// What the dashboard answered about a cart or an order.
-enum Fetched {
+pub(crate) enum Fetched {
     /// 200 or 201, with the body.
     Found(bytes::Bytes),
     /// 404: the shop has no cart, order or request under that id.
@@ -464,7 +464,9 @@ enum Fetched {
 
 impl Fetched {
     /// The body as the type the call answers; a refusal or a miss as it is.
-    fn parsed<T: serde::de::DeserializeOwned>(self) -> anyhow::Result<Option<Refusable<T>>> {
+    pub(crate) fn parsed<T: serde::de::DeserializeOwned>(
+        self,
+    ) -> anyhow::Result<Option<Refusable<T>>> {
         match self {
             Fetched::Found(body) => {
                 let value: T =
@@ -487,7 +489,7 @@ impl Fetched {
 }
 
 /// Nothing to send.
-const NO_BODY: Option<&()> = None;
+pub(crate) const NO_BODY: Option<&()> = None;
 
 impl Store {
     fn orders(&self) -> Command<evento::Evento> {
@@ -496,8 +498,9 @@ impl Store {
 
     /// One call about a cart or an order to the dashboard's `/store/{path}`,
     /// with the key: the store API lets the key read neither carts nor
-    /// orders, so the dashboard answers for the one the path names.
-    async fn cart_call(
+    /// orders (nor invoices), so the dashboard answers for the one the path
+    /// names.
+    pub(crate) async fn cart_call(
         &self,
         method: reqwest::Method,
         path: &str,

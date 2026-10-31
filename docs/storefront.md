@@ -24,14 +24,15 @@ store.shutdown().await;
   shown once. A key reaches its tenant's store and nothing else, as far as its scopes
   allow: `store:read` (read the catalog's streams: products, categories, stock,
   reviews, pages; run subscriptions over them) is all a storefront that only shows
-  the catalog needs; one that sells also needs `store:checkout`, which appends what a
-  shopper does (carts, placing an order) and nothing else, and reads what selling
-  needs on top (carts, orders, how the shop takes payment and ships, discounts,
-  offers, review links, invoices). Nothing else in the tenant's store is readable
-  through either; a read naming another stream fails. (A checkout key still reads
-  every cart and order of the shop, not only its visitor's: narrowing those is a
-  follow-up.) `store:write` appends and reads any event (it implies
-  `store:checkout`); a storefront should not hold it.
+  the catalog needs; one that sells also needs `store:checkout`, which reads what
+  selling needs on top (how the shop takes payment and ships, discounts, offers,
+  review links) and opens the dashboard's `/store/carts/*` and `/store/orders/*`
+  endpoints, where the one cart or order whose id the storefront holds is answered
+  and what the shopper does is written. Neither scope appends anything over the
+  store API, and neither reads a cart, an order or an invoice series: those streams
+  are every shopper's. Nothing else in the tenant's store is readable through either;
+  a read naming another stream fails. `store:write` appends and reads any event (it
+  implies `store:checkout`); a storefront should not hold it.
 - The **address** is one node's store API, or a `host:port` in front of several (a
   load balancer, a geo-routed name). A name is looked up again on every reconnect, so
   when a node goes away the storefront follows the name to one that answers; any
