@@ -12,7 +12,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 ulid.workspace = true
-deunicode.workspace = true
 rand.workspace = true
 base64.workspace = true
 sqlx = { workspace = true, features = ["derive"] }

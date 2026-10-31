@@ -1,6 +1,6 @@
 use std::fmt;
 
-use timada_catalog::{CURRENCIES, format_money};
+use timada_catalog::format_money;
 
 use crate::error::DiscountError;
 
@@ -110,12 +110,7 @@ pub fn normalize_code(code: &str) -> Result<String, DiscountError> {
 
 /// Checks a currency is one the shop prices in.
 pub fn normalize_currency(currency: &str) -> Result<String, DiscountError> {
-    let currency = currency.trim().to_ascii_uppercase();
-    if CURRENCIES.contains(&currency.as_str()) {
-        Ok(currency)
-    } else {
-        Err(DiscountError::InvalidCurrency)
-    }
+    timada_core::normalize_currency(currency).ok_or(DiscountError::InvalidCurrency)
 }
 
 /// The index stream of a code.
@@ -139,12 +134,7 @@ pub fn offers_id() -> String {
     evento::hash_ids(vec!["offers"])
 }
 
-/// Unix seconds now.
-pub fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs())
-}
+pub use timada_core::unix_now;
 
 #[cfg(test)]
 mod tests {

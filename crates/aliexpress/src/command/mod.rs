@@ -7,7 +7,6 @@ mod forward;
 pub use forward::*;
 
 use std::ops::Deref;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 use timada_tenancy::Pricing;
@@ -66,12 +65,7 @@ impl<E: Executor> Deref for Command<E> {
     }
 }
 
-pub(crate) fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default()
-}
+pub(crate) use timada_core::unix_now;
 
 /// What a read of a linked item recorded.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -404,57 +404,9 @@ pub fn describe_api_key_scope(scope: &str) -> &'static str {
     }
 }
 
-/// Unix seconds as an ISO-8601 UTC timestamp (no calendar crate needed).
-pub fn format_time(secs: u64) -> String {
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    // Civil-from-days (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC",
-        rem / 3600,
-        (rem % 3600) / 60,
-        rem % 60
-    )
-}
-
-/// A day as `YYYY-MM-DD` (UTC), the way a date input gives it.
-pub fn format_date(secs: u64) -> String {
-    format_time(secs)[..10].to_owned()
-}
-
-/// Midnight UTC of a `YYYY-MM-DD` day, as unix seconds; `None` for anything
-/// else (or a day before 1970).
-pub fn parse_date(value: &str) -> Option<u64> {
-    let mut parts = value.trim().splitn(3, '-');
-    let y: i64 = parts.next()?.parse().ok()?;
-    let m: i64 = parts.next()?.parse().ok()?;
-    let d: i64 = parts.next()?.parse().ok()?;
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    // Days-from-civil (Howard Hinnant's algorithm), the inverse of the one
-    // in `format_time`.
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y.rem_euclid(400);
-    let mp = if m > 2 { m - 3 } else { m + 9 };
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    let secs = u64::try_from(days).ok()? * 86_400;
-    // A day the month does not have (`2026-02-30`) rolls over: refuse it.
-    (format_date(secs) == value.trim()).then_some(secs)
-}
+/// Unix seconds as `YYYY-MM-DD HH:MM:SS UTC`, a day as `YYYY-MM-DD`, and
+/// back ([`timada_core::civil`]).
+pub use timada_core::civil::{format_date, format_time, parse_date};
 
 /// A row of a sessions list: when it started, from where, on what.
 #[component]

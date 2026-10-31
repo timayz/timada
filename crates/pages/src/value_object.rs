@@ -9,7 +9,7 @@ pub const MAX_BODY_LEN: usize = 100_000;
 pub const MAX_META_TITLE_LEN: usize = 70;
 /// What search engines show of a description before cutting it.
 pub const MAX_META_DESCRIPTION_LEN: usize = 160;
-pub const MIN_SLUG_LEN: usize = 2;
+pub use timada_core::MIN_SLUG_LEN;
 pub const MAX_SLUG_LEN: usize = 64;
 /// The slug of a title with no usable characters.
 pub const FALLBACK_SLUG: &str = "page";
@@ -81,40 +81,14 @@ pub fn normalize_seo(
 
 /// Lowercases and validates a slug: `[a-z0-9]`, `-` inside, 2 to 64 characters.
 pub fn normalize_slug(slug: &str) -> Result<String, PagesError> {
-    let slug = slug.trim().to_ascii_lowercase();
-    let len = slug.len();
-    let valid = (MIN_SLUG_LEN..=MAX_SLUG_LEN).contains(&len)
-        && slug
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        && !slug.starts_with('-')
-        && !slug.ends_with('-');
-    if valid {
-        Ok(slug)
-    } else {
-        Err(PagesError::InvalidSlug)
-    }
+    timada_core::normalize_slug(slug, MAX_SLUG_LEN).ok_or(PagesError::InvalidSlug)
 }
 
 /// The slug a title gives: ASCII-transliterated, lowercased, runs of anything
 /// else collapsed into one dash, cut to [`MAX_SLUG_LEN`]. A title with nothing
 /// usable gives [`FALLBACK_SLUG`].
 pub fn slugify(title: &str) -> String {
-    let ascii = deunicode::deunicode(title).to_ascii_lowercase();
-    let mut slug = String::with_capacity(ascii.len());
-    for c in ascii.chars() {
-        if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            slug.push(c);
-        } else if !slug.is_empty() && !slug.ends_with('-') {
-            slug.push('-');
-        }
-    }
-    let slug = slug[..slug.len().min(MAX_SLUG_LEN)].trim_matches('-');
-    if slug.len() < MIN_SLUG_LEN {
-        FALLBACK_SLUG.to_owned()
-    } else {
-        slug.to_owned()
-    }
+    timada_core::slugify(title, MAX_SLUG_LEN, FALLBACK_SLUG)
 }
 
 /// The type of a picture format the page takes, by extension.

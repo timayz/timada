@@ -11,7 +11,7 @@ pub const STOREFRONT_ACTOR: &str = "storefront";
 pub const MAX_LINE_QUANTITY: u32 = 99;
 /// The most different items a cart holds.
 pub const MAX_CART_LINES: usize = 50;
-pub const MAX_EMAIL_LEN: usize = 254;
+pub use timada_core::MAX_EMAIL_LEN;
 pub const MAX_SHIP_NAME_LEN: usize = 120;
 pub const MAX_ADDRESS_LINE_LEN: usize = 200;
 pub const MAX_POSTAL_CODE_LEN: usize = 20;
@@ -189,16 +189,7 @@ pub fn new_reference() -> String {
 /// tenancy contexts have the same rule; the crates do not depend on each
 /// other.)
 pub fn normalize_email(email: &str) -> Result<String, OrdersError> {
-    let email = email.trim().to_lowercase();
-    let valid = email.len() <= MAX_EMAIL_LEN
-        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
-        && matches!(email.split_once('@'), Some((local, domain))
-            if !local.is_empty() && !domain.is_empty() && !domain.contains('@'));
-    if valid {
-        Ok(email)
-    } else {
-        Err(OrdersError::InvalidEmail)
-    }
+    timada_core::normalize_email(email).ok_or(OrdersError::InvalidEmail)
 }
 
 /// Trims every field, drops empty optional ones, uppercases the country and

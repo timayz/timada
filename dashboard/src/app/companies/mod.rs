@@ -142,7 +142,7 @@ fn format_capital(cents: u64) -> String {
     if cents.is_multiple_of(100) {
         (cents / 100).to_string()
     } else {
-        format!("{}.{:02}", cents / 100, cents % 100)
+        timada_core::format_amount(cents)
     }
 }
 

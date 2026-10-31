@@ -6232,6 +6232,7 @@ dependencies = [
  "thiserror 2.0.21",
  "timada-catalog",
  "timada-catalog-import",
+ "timada-core",
  "timada-orders",
  "timada-tenancy",
  "tokio",
@@ -6264,7 +6265,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitcode",
- "deunicode",
  "evento",
  "sqlx",
  "sqlx_migrator",
@@ -6305,11 +6305,13 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "deunicode",
  "evento",
  "hmac 0.12.1",
  "jiff",
  "rand 0.9.5",
  "sha2 0.10.9",
+ "ulid",
 ]
 
 [[package]]
@@ -6417,6 +6419,7 @@ dependencies = [
  "sqlx",
  "sqlx_migrator",
  "thiserror 2.0.21",
+ "timada-core",
  "tokio",
  "tracing",
  "typst",
@@ -6495,7 +6498,6 @@ dependencies = [
  "ammonia",
  "anyhow",
  "bitcode",
- "deunicode",
  "evento",
  "pulldown-cmark",
  "sqlx",
@@ -6596,7 +6598,6 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "bitcode",
- "deunicode",
  "evento",
  "lol_html",
  "minijinja",
