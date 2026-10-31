@@ -17,6 +17,15 @@ Stripe has confirmed the payment to the dashboard. How it works is in
    reads the payment back from Stripe and creates the order.
 5. The browser, back on `/checkout/complete`, waits for the order and shows it.
 
+The goods and the discount's use are held from step 2 for thirty minutes. A payment
+confirmed after that (a card form left open, a slow bank, a webhook delivered late) has
+the dashboard take the holds again before it creates the order: nothing changes while
+they stand, and what is left is taken otherwise. When the last of it went to someone
+else in between, the payment is refunded in full, the cart records it
+(`Cart::PaymentReturned`) and the storefront tells the shopper (`payment_returned_*`
+codes) instead of waiting for an order that will not come. Stripe keeps its fee on such
+a refund; it is the price of never selling the same unit twice.
+
 Cancelling an order in the dashboard refunds it through Stripe first.
 
 ## Setting it up

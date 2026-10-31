@@ -33,7 +33,7 @@ use evento::migrator::Migrate;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
-use timada_catalog::CreateProduct;
+use timada_catalog::{CreateProduct, StockLine};
 use timada_orders::{CartItem, Checkout, PaymentAnswer, STOREFRONT_ACTOR, ShippingAddress};
 use timada_tenancy::{
     Command, ConfigurePayments, CreateTenant, LegalIdentity, TenantState, read_model_subscription,
@@ -41,7 +41,9 @@ use timada_tenancy::{
 
 use cluster::Cluster;
 use payments::webhook::{Outcome, receive};
-use payments::{NewPayment, OpenPayment, PaymentGateway, PaymentStatus, Payments, signature};
+use payments::{
+    DASHBOARD_ACTOR, NewPayment, OpenPayment, PaymentGateway, PaymentStatus, Payments, signature,
+};
 
 const WEBHOOK_SECRET: &str = "whsec_test";
 const SEAL_KEY: &str = "a-test-secret-of-thirty-two-chars!!";
@@ -217,6 +219,7 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
     for builder in [
         payments::subscription(subscribed.clone(), platform.clone()),
         timada_orders::discount_usage_subscription(platform.clone()),
+        timada_orders::stock_usage_subscription(platform.clone()),
         invoicing::subscription(
             invoicing_platform.clone(),
             Arc::new(FakeVies),
@@ -642,6 +645,213 @@ async fn requests_that_cannot_go_ahead_are_refused() {
         PaymentAnswer::Refused("price_changed".into())
     );
     assert_eq!(h.stripe.opened_count(), 0, "nothing was opened with Stripe");
+    h.finish().await;
+}
+
+/// The holds a checkout takes last thirty minutes; a payment confirmed
+/// after that finds them lapsed. The test gives them back by hand, as time
+/// would, then lets the late payment in.
+#[tokio::test]
+async fn a_late_payment_places_the_order_or_gives_the_money_back() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let store = h.store(&acme);
+    let catalog = timada_catalog::Command::new(store.clone(), &acme.id);
+    let orders = timada_orders::Command::new(store.clone(), &acme.id);
+    let discounts = timada_discounts::Command::new(store.clone(), &acme.id);
+    let mug = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &mug.id).await.unwrap();
+    // Two on the shelf.
+    catalog.set_stock("alice", &mug.id, None, 2).await.unwrap();
+    let once = async |code: &str| {
+        discounts
+            .create_discount(
+                "alice",
+                timada_discounts::CreateDiscount {
+                    code: code.into(),
+                    value: timada_discounts::DiscountValue::Percent(1000),
+                    max_uses: Some(1),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+    };
+    let ten = once("TEN").await;
+    let lines = |quantity: u32| {
+        vec![StockLine {
+            product_id: mug.id.clone(),
+            variant_id: None,
+            quantity,
+        }]
+    };
+    // A cart of one mug, with a code or not, asked to pay: the payment opened.
+    let cart_with = async |code: Option<&str>, email: &str| {
+        let cart_id = orders.create_cart(STOREFRONT_ACTOR).await.unwrap();
+        orders
+            .add_to_cart(
+                STOREFRONT_ACTOR,
+                &cart_id,
+                CartItem {
+                    product_id: mug.id.clone(),
+                    variant_id: None,
+                    quantity: 1,
+                },
+            )
+            .await
+            .unwrap();
+        if let Some(code) = code {
+            orders
+                .apply_discount(STOREFRONT_ACTOR, &cart_id, code)
+                .await
+                .unwrap();
+        }
+        let total = if code.is_some() { 1125 } else { 1250 };
+        let checkout = Checkout {
+            email: email.into(),
+            ..checkout(Some(total))
+        };
+        let PaymentAnswer::Requested(payment) = h.ask_with(&acme, &cart_id, checkout).await else {
+            panic!("a payment is opened");
+        };
+        (cart_id, *payment)
+    };
+    let pay = async |payment_id: &str| {
+        h.stripe.pay(payment_id);
+        let body = succeeded(payment_id);
+        h.webhook(&acme, &body, signed(&body)).await
+    };
+    let stock_consumed_by = async |cart_id: &str| {
+        eventually(async || {
+            catalog
+                .load_stock(&mug.id, None)
+                .await
+                .unwrap()
+                .filter(|stock| stock.consumed_by_cart(cart_id))
+        })
+        .await
+    };
+
+    // Ada holds a mug and the code; her holds lapse. Nobody takes them in
+    // between: her late payment takes them again and places the order.
+    let (ada_cart, ada_payment) = cart_with(Some("TEN"), "ada@example.org").await;
+    catalog
+        .release_stock(DASHBOARD_ACTOR, &ada_cart, &lines(1))
+        .await
+        .unwrap();
+    discounts
+        .release_use(DASHBOARD_ACTOR, &ten.id, &ada_cart, "ada@example.org")
+        .await
+        .unwrap();
+    assert!(
+        catalog
+            .load_stock(&mug.id, None)
+            .await
+            .unwrap()
+            .unwrap()
+            .holds
+            .is_empty()
+    );
+    let Outcome::Placed { order_id } = pay(&ada_payment.payment_id).await else {
+        panic!("placed");
+    };
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.total_cents, 1125);
+    assert_eq!(stock_consumed_by(&ada_cart).await.on_hand, 1);
+
+    // Bob holds the last mug; his hold lapses and Carol buys it. Bob's
+    // payment then finds the shelf empty: the money goes back, no order.
+    let (bob_cart, bob_payment) = cart_with(None, "bob@example.org").await;
+    catalog
+        .release_stock(DASHBOARD_ACTOR, &bob_cart, &lines(1))
+        .await
+        .unwrap();
+    let (carol_cart, carol_payment) = cart_with(None, "carol@example.org").await;
+    let Outcome::Placed { .. } = pay(&carol_payment.payment_id).await else {
+        panic!("placed");
+    };
+    assert_eq!(stock_consumed_by(&carol_cart).await.on_hand, 0);
+    let returned = pay(&bob_payment.payment_id).await;
+    assert_eq!(
+        returned,
+        Outcome::Returned {
+            refund_id: "re_1".into(),
+            code: "out_of_stock".into(),
+        }
+    );
+    assert_eq!(
+        *h.stripe.refunds.lock().unwrap(),
+        vec![(bob_payment.payment_id.clone(), 1250)]
+    );
+    assert!(
+        orders
+            .load_order_of_cart(&bob_cart)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let cart = orders.load_cart(&bob_cart).await.unwrap().unwrap();
+    let recorded = cart.returned_payment(&bob_payment.payment_id).unwrap();
+    assert_eq!(
+        (recorded.code.as_str(), recorded.amount_cents),
+        ("out_of_stock", 1250)
+    );
+    assert!(!cart.is_paying(), "nothing left to confirm");
+    assert_eq!(cart.status(), "open");
+    // Told twice: the same answer, one refund.
+    let body = succeeded(&bob_payment.payment_id);
+    assert_eq!(h.webhook(&acme, &body, signed(&body)).await, returned);
+    assert_eq!(h.stripe.refunds.lock().unwrap().len(), 1);
+
+    // The same with a code good once: Dave holds its use, lets it lapse, Erin
+    // spends it. Dave's payment is given back for the code; the shelf (filled
+    // again) is left as it was.
+    catalog.set_stock("alice", &mug.id, None, 10).await.unwrap();
+    let five = once("FIVE").await;
+    let (dave_cart, dave_payment) = cart_with(Some("FIVE"), "dave@example.org").await;
+    discounts
+        .release_use(DASHBOARD_ACTOR, &five.id, &dave_cart, "dave@example.org")
+        .await
+        .unwrap();
+    let (erin_cart, erin_payment) = cart_with(Some("FIVE"), "erin@example.org").await;
+    let Outcome::Placed { .. } = pay(&erin_payment.payment_id).await else {
+        panic!("placed");
+    };
+    stock_consumed_by(&erin_cart).await;
+    assert_eq!(
+        pay(&dave_payment.payment_id).await,
+        Outcome::Returned {
+            refund_id: "re_2".into(),
+            code: "discount_exhausted".into(),
+        }
+    );
+    assert!(
+        orders
+            .load_order_of_cart(&dave_cart)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let stock = catalog.load_stock(&mug.id, None).await.unwrap().unwrap();
+    assert!(
+        !stock.holds.contains_key(&dave_cart),
+        "a payment given back holds nothing: {:?}",
+        stock.holds
+    );
     h.finish().await;
 }
 

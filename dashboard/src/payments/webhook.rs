@@ -1,11 +1,28 @@
 //! What a Stripe webhook does once it reached a tenant: check the signature,
 //! ask Stripe about the payment, and turn the cart it paid for into the
 //! order. Kept apart from the HTTP route so it is tested without one.
+//!
+//! The goods and the discount's use were held when the payment was opened,
+//! for [`RESERVATION_SECS`]; a payment confirmed after that (a card form
+//! left open, a bank's slow 3-D Secure, a webhook delivered late) finds
+//! them lapsed, and someone else may have taken them. So before the order
+//! is placed the holds are taken again, which does nothing while they
+//! stand and takes what is left otherwise; when the last of it is gone the
+//! money goes back ([`Outcome::Returned`]) and the cart records it
+//! (`Cart::PaymentReturned`): an order is never placed for goods already
+//! sold or a code already spent.
 
-use timada_orders::{OrdersError, PROVIDER_STRIPE, Payment};
+use timada_catalog::CatalogError;
+use timada_discounts::{
+    DISCOUNT_ALREADY_USED, DISCOUNT_EXHAUSTED, DiscountError, RESERVATION_SECS,
+};
+use timada_orders::{CartState, OrdersError, PROVIDER_STRIPE, Payment, ReturnedPayment};
 
 use super::{Account, DASHBOARD_ACTOR, Payments, signature};
 use crate::cluster::Executor;
+
+/// The refusal of a checkout that wants more than is left.
+pub const OUT_OF_STOCK: &str = "out_of_stock";
 
 /// What the route answers Stripe.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +32,10 @@ pub enum Outcome {
     /// Taken for nothing to sell (a second payment of a cart, an amount that
     /// does not match): given back.
     Refunded { refund_id: String },
+    /// Paid too late: what the checkout held had lapsed and gone to someone
+    /// else, so the money went back and no order was placed (now, or
+    /// already). `code` says what was gone.
+    Returned { refund_id: String, code: String },
     /// Not ours to act on: another event type, a payment not made through
     /// timada, one that did not succeed.
     Ignored,
@@ -77,13 +98,56 @@ pub async fn receive(
     if !status.succeeded {
         return Ok(Outcome::Ignored);
     }
-    let orders = timada_orders::Command::new(store, tenant_id);
+    let orders = timada_orders::Command::new(store.clone(), tenant_id);
     let payment = Payment {
         provider: PROVIDER_STRIPE.to_owned(),
         payment_id: status.payment_id.clone(),
         amount_cents: status.amount_received,
         currency: status.currency.to_ascii_uppercase(),
     };
+    // Given back already: the same answer, no second refund.
+    let cart = orders.load_cart(cart_id).await?;
+    if let Some(returned) = cart
+        .as_ref()
+        .and_then(|cart| cart.returned_payment(&payment.payment_id))
+    {
+        return Ok(Outcome::Returned {
+            refund_id: returned.refund_id.clone(),
+            code: returned.code.clone(),
+        });
+    }
+    // Not an order yet: the holds its checkout took may have lapsed since,
+    // so they are taken again before the order is placed.
+    if let Some(cart) = cart.as_ref().filter(|cart| !cart.is_checked_out())
+        && let Some(gone) = retake_holds(&store, tenant_id, cart, &payment.payment_id).await?
+    {
+        tracing::warn!(%tenant_id, payment = %payment.payment_id, code = %gone, "a late payment finds what it held gone: given back");
+        let refund_id = payments
+            .gateway
+            .refund(
+                &account.secret_key,
+                &payment.payment_id,
+                payment.amount_cents,
+                &format!("timada-lapsed-{}", payment.payment_id),
+            )
+            .await?;
+        orders
+            .return_payment(
+                DASHBOARD_ACTOR,
+                cart_id,
+                ReturnedPayment {
+                    payment_id: payment.payment_id.clone(),
+                    refund_id: refund_id.clone(),
+                    amount_cents: payment.amount_cents,
+                    code: gone.to_owned(),
+                },
+            )
+            .await?;
+        return Ok(Outcome::Returned {
+            refund_id,
+            code: gone.to_owned(),
+        });
+    }
     match orders
         .place_paid_order(DASHBOARD_ACTOR, cart_id, payment)
         .await
@@ -109,4 +173,75 @@ pub async fn receive(
             Ok(Outcome::Retry)
         }
     }
+}
+
+/// Takes again what the checkout paid by `payment_id` held: nothing changes
+/// while the holds stand, what is left is taken otherwise. `Some(code)`
+/// when the last of it is gone: the cart then holds nothing any more (what
+/// it still held, or took here, is given back). `None` when the order can
+/// be placed. A cart that opened no such payment changes nothing:
+/// `place_paid_order` says what is wrong with it.
+async fn retake_holds(
+    store: &Executor,
+    tenant_id: &str,
+    cart: &CartState,
+    payment_id: &str,
+) -> anyhow::Result<Option<&'static str>> {
+    let Some(request) = cart.request_paid_by(payment_id) else {
+        return Ok(None);
+    };
+    let Some(snapshot) = request.payment() else {
+        return Ok(None);
+    };
+    let discounts = timada_discounts::Command::new(store.clone(), tenant_id);
+    let catalog = timada_catalog::Command::new(store.clone(), tenant_id);
+    let discount_id = snapshot.discount.as_ref().map(|d| d.discount_id.as_str());
+    let lines = timada_orders::stock_lines(&snapshot.lines);
+
+    let mut gone = None;
+    if let Some(discount_id) = discount_id {
+        let held = discounts
+            .reserve_use(
+                DASHBOARD_ACTOR,
+                discount_id,
+                &cart.id,
+                &request.email,
+                RESERVATION_SECS,
+            )
+            .await;
+        match held {
+            Ok(()) => {}
+            Err(DiscountError::Exhausted) => gone = Some(DISCOUNT_EXHAUSTED),
+            Err(DiscountError::AlreadyUsed) => gone = Some(DISCOUNT_ALREADY_USED),
+            // The code is gone from the shop: nothing left to hold, the
+            // order keeps the price it was paid at.
+            Err(DiscountError::NotFound) => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    if gone.is_none() {
+        match catalog
+            .reserve_stock(DASHBOARD_ACTOR, &cart.id, &lines, RESERVATION_SECS)
+            .await
+        {
+            Ok(()) => return Ok(None),
+            Err(CatalogError::OutOfStock { .. }) => gone = Some(OUT_OF_STOCK),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    // Given back: the cart keeps no hold, on the goods or on the code.
+    if let Err(err) = catalog
+        .release_stock(DASHBOARD_ACTOR, &cart.id, &lines)
+        .await
+    {
+        tracing::warn!(cart = %cart.id, %err, "cannot give back the stock a checkout held");
+    }
+    if let Some(discount_id) = discount_id
+        && let Err(err) = discounts
+            .release_use(DASHBOARD_ACTOR, discount_id, &cart.id, &request.email)
+            .await
+    {
+        tracing::warn!(cart = %cart.id, %err, "cannot give a discount's use back");
+    }
+    Ok(gone)
 }

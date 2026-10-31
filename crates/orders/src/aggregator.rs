@@ -86,6 +86,20 @@ pub enum Cart {
         code: String,
         refused_by: String,
     },
+    /// The payment of a request went through, but too late: what the
+    /// checkout held (the goods, the discount's use) had lapsed and was
+    /// taken by someone else in between, so the money went back to the
+    /// shopper (`refund_id`, `amount_cents`) and no order was placed. `code`
+    /// says what was gone (`out_of_stock`, `discount_exhausted`,
+    /// `discount_already_used`). Written by the dashboard, never a shopper.
+    PaymentReturned {
+        request_id: String,
+        payment_id: String,
+        refund_id: String,
+        amount_cents: u64,
+        code: String,
+        returned_by: String,
+    },
     /// The shopper enters a discount code (normalized), replacing any other:
     /// a cart takes one. Whether it takes anything off is decided each time
     /// the cart is priced.

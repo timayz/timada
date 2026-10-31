@@ -57,9 +57,10 @@ pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
     .await
     .map_err(topcoat::Error::from_anyhow)?;
     Ok(match outcome {
-        Outcome::Placed { .. } | Outcome::Refunded { .. } | Outcome::Ignored => {
-            StatusCode::NO_CONTENT
-        }
+        Outcome::Placed { .. }
+        | Outcome::Refunded { .. }
+        | Outcome::Returned { .. }
+        | Outcome::Ignored => StatusCode::NO_CONTENT,
         Outcome::Rejected => {
             tracing::warn!(tenant = %tenant.slug, "a Stripe webhook that does not check out");
             StatusCode::BAD_REQUEST

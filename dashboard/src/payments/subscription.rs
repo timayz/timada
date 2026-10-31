@@ -17,6 +17,7 @@ use timada_orders::{
     INVOICING_NOT_CONFIGURED, OpenedPayment, OrdersError, PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
 };
 
+use super::webhook::OUT_OF_STOCK;
 use super::{DASHBOARD_ACTOR, NewPayment, Payments};
 
 /// The cursor identity of the subscription, in the store.
@@ -25,9 +26,6 @@ pub const SUBSCRIPTION: &str = "timada-dashboard/payments";
 /// A request older than this is history being replayed (a node catching up)
 /// or one nobody waits for any more: it is refused, never charged.
 const ANSWER_WINDOW_SECS: u64 = 10 * 60;
-
-/// The refusal of a checkout that wants more than is left.
-const OUT_OF_STOCK: &str = "out_of_stock";
 
 /// The store, to write the answers with (a handler only
 /// borrows the one it runs on).
