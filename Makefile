@@ -1,10 +1,10 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed.chatounette seed.chatounette.save seed.chatounette.restore snapshot.chatounette storefront storefront.migrate chatounette chatounette.migrate e2e loadtest lint fmt-check fmt test machete check
+.PHONY: start cert cert.install up stop down dev reset migrate seed.chatounette seed.chatounette.save seed.chatounette.restore snapshot.chatounette chatounette chatounette.migrate e2e loadtest lint fmt-check fmt test machete check
 
 start: up dev
 
 cert:
 	mkdir -p .docker/traefik/certs
-	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost storefront.localhost chatounette.localhost store.timada.localhost
+	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost chatounette.localhost store.timada.localhost
 
 cert.install:
 		sudo mkcert -install
@@ -68,26 +68,18 @@ snapshot.chatounette:
 		--menu-order accessoires-pour-chat,couchage-chat,goodies-chat,jeux-pour-chat,transport-chat,toilette-chat,vetement-pour-chat \
 		--tab-stop-at "À propos"
 
-# The example storefront at https://storefront.localhost, listening on every
-# interface so the compose Traefik reaches it. STORE_TOKEN and STORE_MEDIA_URL
-# (where the product pictures load from) both come from a tenant's API keys
-# page; without the media URL the pictures don't show:
-#   STORE_TOKEN=... STORE_MEDIA_URL=https://timada.localhost/media/<tenant_id> make storefront
+# The Chatounette shop at https://chatounette.localhost, listening on every
+# interface so the compose Traefik reaches it, with the settings
+# `make seed.chatounette` printed: STORE_TOKEN and STORE_MEDIA_URL (where the
+# product pictures load from) both come from a tenant's API keys page; without
+# the media URL the pictures don't show.
+#   STORE_TOKEN=... STORE_MEDIA_URL=... make chatounette
 # It talks to one node's store API (127.0.0.1:4321) unless told otherwise; to
 # go through Traefik's balancer over the cluster nodes instead:
 #   STORE_ADDR=store.timada.localhost:4320 STORE_TLS_CA=/etc/ssl/certs/ca-certificates.crt ...
 # Traefik reaches it from the Docker bridge, so its X-Forwarded-For names the
 # shopper the dashboard limits sign-in codes for. STORE_API_URL is the dashboard
 # the reviews, sign-ins and contact messages go to; the dev one unless set.
-storefront:
-	HOST=0.0.0.0 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront-example
-
-storefront.migrate:
-	cargo run -p storefront-example -- migrate
-
-# The Chatounette clone at https://chatounette.localhost, with the settings
-# `make seed.chatounette` printed (STORE_API_URL defaults to the dev dashboard):
-#   STORE_TOKEN=... STORE_MEDIA_URL=... make chatounette
 chatounette:
 	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p chatounette-example
 

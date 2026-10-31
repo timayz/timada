@@ -33,8 +33,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/loadtest` | `timada-loadtest` | Crowds of random shoppers on a storefront over plain HTTP, paying through a stand-in for Stripe: latency, capacity and anomalies (see `docs/loadtest.md`) |
 | `crates/core` | `timada-core` | What every context shares and none owns: the paused-store refusal, languages and time zones, the personal-data keys (`keys`), the mailed-code MAC (`codes`), and the one form of an e-mail address, a slug, a currency, the clock, a calendar date, an amount and a `LIKE` pattern (`email`, `slug`, `currency`, `time`, `civil`, `money`, `sql`). Depends on evento only, never on a database driver or the web framework; every context depends on it |
 | `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
-| `examples/storefront` | `storefront-example` | A minimal merchant app on the library, driven by the browser suite |
-| `examples/chatounette` | `chatounette-example` | A French cat shop in chatounette.com's layout and colours on the library, fed by the `seeds/chatounette` snapshot |
+| `examples/chatounette` | `chatounette-example` | The merchant app on the library: a French cat shop in chatounette.com's layout and colours, fed by the `seeds/chatounette` snapshot and driven by the browser suite |
 | `tests/e2e` | | Playwright suite against the running dashboard |
 | `events.lock` | | Every persisted shape, frozen (see *Evolving events*) |
 
@@ -639,7 +638,7 @@ operators: it names what things do, not the libraries behind them.
   backlog refuses writes), `store_api` (TCP, keys, TLS),
   `storefront` (the library against a live store), `events_lock`. The review endpoint is
   covered over HTTP by the browser suite.
-- `make e2e`: `scripts/e2e.sh` builds the dashboard and the example storefront, resets
+- `make e2e`: `scripts/e2e.sh` builds the dashboard and the Chatounette example, resets
   the database, starts the server on `config/e2e.toml` and runs Playwright through the
   compose stack (`make up`: Traefik for HTTPS, dex as an OIDC provider, MailDev as the
   mailbox the tests read codes from). Pass a spec path or a title filter to run part of it.

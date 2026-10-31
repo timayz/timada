@@ -91,11 +91,11 @@ CLI and an internet connection.
    - the `whsec_…` printed by `stripe listen`, not one from an endpoint registered in
      the Stripe dashboard.
 
-4. **Give the storefront a key that can sell.** Tick `store:checkout` on its key on the
+4. **Give the shop a key that can sell.** Tick `store:checkout` on its key on the
    API keys page, or mint a new one. If the key changes, remove the replica first:
-   `rm storefront.db*`, then `make storefront.migrate`.
+   `rm chatounette.db*`, then `make chatounette.migrate`.
 
-5. **Buy something.** Run the storefront (`make storefront` with `STORE_TOKEN` and
+5. **Buy something.** Run the shop (`make chatounette` with `STORE_TOKEN` and
    `STORE_MEDIA_URL`), add a product, check out and pay with a test card. Use any
    future expiry date and any CVC.
 
