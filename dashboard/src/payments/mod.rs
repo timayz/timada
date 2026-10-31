@@ -8,7 +8,7 @@
 //! order gives the money back through Stripe first.
 //!
 //! The tenant's Stripe secrets are recorded sealed ([`Sealer`]) under the
-//! operator's `payments.secret_key` (or else `secrets.key`); without a
+//! operator's `secrets.key`; without a
 //! `[payments]` section no tenant takes payments.
 
 mod gateway;

@@ -779,7 +779,6 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
- "timada-core",
  "timada-storefront",
  "tokio",
  "topcoat",
@@ -5954,7 +5953,6 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
- "timada-core",
  "timada-storefront",
  "tokio",
  "topcoat",
@@ -6335,7 +6333,6 @@ dependencies = [
  "hmac 0.12.1",
  "imagesize",
  "jiff",
- "libc",
  "openidconnect",
  "rand 0.9.5",
  "rcgen",
@@ -6549,7 +6546,6 @@ name = "timada-storefront"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "deunicode",
  "evento",
  "reqwest",

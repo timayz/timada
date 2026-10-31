@@ -72,13 +72,9 @@ impl<E: Executor> super::Command<E> {
                 tenant_id: tenant.id,
                 label,
                 hint: api_key_hint(&token),
+                scopes: scopes.into_iter().collect(),
                 created_by: actor_user_id.to_owned(),
                 created_at: now,
-            })
-            .event(&Scoped {
-                scopes: scopes.into_iter().collect(),
-                scoped_by: actor_user_id.to_owned(),
-                scoped_at: now,
             })
             .commit(&self.0)
             .await

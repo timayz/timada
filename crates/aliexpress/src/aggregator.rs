@@ -55,16 +55,8 @@ pub enum AliexpressProduct {
     },
     /// The read failed; the product kept what it had.
     SyncFailed { reason: String, failed_by: String },
-    /// The first shape of [`PricingSetV2`](Product::PricingSetV2), with one
-    /// rule for every cost. Kept to decode what was stored; read as the
-    /// newer event.
-    #[evento(upcast_to = PricingSetV2)]
-    PricingSet {
-        pricing: Option<timada_tenancy::PricingRule>,
-        set_by: String,
-    },
     /// The product's own pricing, by cost band; `None` follows the shop's.
-    PricingSetV2 {
+    PricingSet {
         pricing: Option<timada_tenancy::Pricing>,
         set_by: String,
     },
@@ -82,15 +74,6 @@ pub enum AliexpressProduct {
     CombinationIgnored { sku_id: String, ignored_by: String },
     /// Offered again after being ignored.
     CombinationRestored { sku_id: String, restored_by: String },
-}
-
-impl From<PricingSet> for PricingSetV2 {
-    fn from(old: PricingSet) -> Self {
-        Self {
-            pricing: old.pricing.map(timada_tenancy::Pricing::flat),
-            set_by: old.set_by,
-        }
-    }
 }
 
 /// One renewal of an account's tokens: one stream per token, with the

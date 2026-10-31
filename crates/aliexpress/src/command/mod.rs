@@ -14,7 +14,7 @@ use timada_tenancy::Pricing;
 
 use crate::aggregator::{
     CombinationIgnored, CombinationRestored, CombinationsAdded, CombinationsFound, ImportFailed,
-    ImportRequested, ImportStarted, Imported, NewSku, PricingSetV2, SkuLink, SyncFailed, Synced,
+    ImportRequested, ImportStarted, Imported, NewSku, PricingSet, SkuLink, SyncFailed, Synced,
     Unlinked,
 };
 use crate::error::AliexpressError;
@@ -246,7 +246,7 @@ async fn on_sync_failed(event: Event<SyncFailed>, link: &mut LinkState) -> anyho
 }
 
 #[evento::handler]
-async fn on_pricing_set(event: Event<PricingSetV2>, link: &mut LinkState) -> anyhow::Result<()> {
+async fn on_pricing_set(event: Event<PricingSet>, link: &mut LinkState) -> anyhow::Result<()> {
     link.pricing = event.data.pricing.clone();
     link.updated_at = event.timestamp;
     Ok(())
@@ -580,7 +580,7 @@ impl<E: Executor> Command<E> {
         }
         link.write()?
             .routing_key_opt(routing_key)
-            .event(&PricingSetV2 {
+            .event(&PricingSet {
                 pricing,
                 set_by: actor.to_owned(),
             })

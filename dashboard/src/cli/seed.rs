@@ -24,7 +24,7 @@ use crate::media_images::MediaImages;
 #[derive(Args, Debug)]
 pub struct SeedArgs {
     /// The catalogue to load: a snapshot directory (catalog.json.gz and its
-    /// pictures), or a catalogue file alone
+    /// pictures)
     #[arg(long)]
     pub snapshot: PathBuf,
     /// The tenant's name; created when no tenant has its slug

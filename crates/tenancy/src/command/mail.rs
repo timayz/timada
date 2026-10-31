@@ -2,8 +2,8 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
     MailBrandingCleared, MailBrandingSet, MailLanguagesSet, MailServerAdded, MailServerChanged,
-    MailServerDeleted, MailServersPicked, MailTemplateResetIn, MailTemplateSavedIn,
-    MailTemplateTextSavedIn,
+    MailServerDeleted, MailServersPicked, MailTemplateReset, MailTemplateSaved,
+    MailTemplateTextSaved,
 };
 use crate::error::TenancyError;
 use crate::languages::{is_language, language_rank};
@@ -383,7 +383,7 @@ impl<E: Executor> super::Command<E> {
         let mut write = tenant.write()?;
         let write = write
             .routing_key_opt(routing_key)
-            .event(&MailTemplateSavedIn {
+            .event(&MailTemplateSaved {
                 mail: kind.key().to_owned(),
                 language: language.clone(),
                 subject: subject.to_owned(),
@@ -391,7 +391,7 @@ impl<E: Executor> super::Command<E> {
                 saved_by: actor_user_id.to_owned(),
             });
         if let Some(text) = text {
-            write.event(&MailTemplateTextSavedIn {
+            write.event(&MailTemplateTextSaved {
                 mail: kind.key().to_owned(),
                 language,
                 text: text.to_owned(),
@@ -427,7 +427,7 @@ impl<E: Executor> super::Command<E> {
         tenant
             .write()?
             .routing_key_opt(routing_key)
-            .event(&MailTemplateResetIn {
+            .event(&MailTemplateReset {
                 mail: kind.key().to_owned(),
                 language,
                 reset_by: actor_user_id.to_owned(),

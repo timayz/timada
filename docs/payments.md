@@ -12,7 +12,7 @@ Stripe has confirmed the payment to the dashboard. How it works is in
    hands back what the card form needs. It refuses instead when the price moved since
    the shopper saw it, an item is off sale or Stripe is not set up.
 3. The shopper's browser confirms the payment in Stripe's Payment Element
-   (`/checkout/pay` in the example app).
+   (`/checkout` in the example app).
 4. Stripe calls `POST /stripe/webhooks/{tenant_id}`. The dashboard checks the signature,
    reads the payment back from Stripe and creates the order.
 5. The browser, back on `/checkout/complete`, waits for the order and shows it.
@@ -116,7 +116,7 @@ CLI and an internet connection.
 Run this once with real test keys whenever the payment flow changes, and before
 turning payments on for a merchant. Follow the steps above, then tick each line.
 
-- [ ] **Payment Element.** The card form shows on `/checkout/pay`, and `4242 4242 4242
+- [ ] **Payment Element.** The card form shows on `/checkout`, and `4242 4242 4242
       4242` goes through. A declined card (`4000 0000 0000 9995`) shows its error under
       the form, and 3-D Secure (`4000 0025 0000 3155`) opens its popup.
 - [ ] **Webhook.** `stripe listen` logs a `204` for `payment_intent.succeeded`, and the
