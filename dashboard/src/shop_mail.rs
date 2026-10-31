@@ -15,9 +15,9 @@
 //!
 //! A server's host has to be on the internet, never this machine or a
 //! private network ([`ShopMail::check_host`]). The check looks the name up,
-//! and the transport then dials the address it found rather than the name
-//! (TLS still verifies the name), so a name that answers a private address
-//! later (DNS rebinding) gets nowhere; a transport is dialled for
+//! and the transport then dials the addresses it found, in turn, rather than
+//! the name (TLS still verifies the name), so a name that answers a private
+//! address later (DNS rebinding) gets nowhere; a transport is dialled for
 //! [`RESOLVE_TTL`] before its name is looked up and checked again.
 
 use std::collections::HashMap;
@@ -29,6 +29,7 @@ use lettre::{
     Address, AsyncSmtpTransport, AsyncTransport as _, Tokio1Executor,
     address::Envelope,
     transport::smtp::{
+        Error as SmtpError,
         authentication::Credentials,
         client::{Tls, TlsParameters},
     },
@@ -66,11 +67,11 @@ pub struct MailServer {
     pub security: String,
     pub username: Option<String>,
     pub password: Option<String>,
-    /// The address `host` was checked at ([`ShopMail::check_host`]): the
-    /// transport dials it rather than looking the name up again, so the
-    /// address dialled is the one checked. `None` dials the name (private
-    /// hosts allowed).
-    pub address: Option<SocketAddr>,
+    /// The addresses `host` was checked at ([`ShopMail::check_host`]), in the
+    /// order the name answered them: the transport dials them in turn rather
+    /// than looking the name up again, so the address dialled is one checked.
+    /// Empty dials the name (private hosts allowed).
+    pub addresses: Vec<SocketAddr>,
 }
 
 impl std::fmt::Debug for MailServer {
@@ -80,7 +81,7 @@ impl std::fmt::Debug for MailServer {
             .field("port", &self.port)
             .field("security", &self.security)
             .field("username", &self.username)
-            .field("address", &self.address)
+            .field("addresses", &self.addresses)
             .finish_non_exhaustive()
     }
 }
@@ -90,27 +91,33 @@ impl MailServer {
     /// [`SEND_TIMEOUT`] with [`NoAnswer`]. Its connections are pooled, so it
     /// is worth keeping.
     pub fn transport(&self) -> anyhow::Result<TimedTransport> {
+        let (client, fallbacks) = match self.addresses.split_first() {
+            None => (self.smtp(&self.host)?, Vec::new()),
+            Some((first, rest)) => (
+                self.smtp(&first.ip().to_string())?,
+                rest.iter()
+                    .map(|address| self.smtp(&address.ip().to_string()))
+                    .collect::<anyhow::Result<_>>()?,
+            ),
+        };
         Ok(TimedTransport {
-            inner: self.smtp()?,
+            client,
+            fallbacks,
             limit: SEND_TIMEOUT,
         })
     }
 
-    /// The SMTP client: TLS, when asked for, is for `host` whatever is
-    /// dialled, so the server has to hold a certificate for the name the
-    /// merchant gave.
-    fn smtp(&self) -> anyhow::Result<AsyncSmtpTransport<Tokio1Executor>> {
+    /// The SMTP client dialling `dialled` (an address of the host, or its
+    /// name): TLS, when asked for, is for `host` whatever is dialled, so the
+    /// server has to hold a certificate for the name the merchant gave.
+    fn smtp(&self, dialled: &str) -> anyhow::Result<AsyncSmtpTransport<Tokio1Executor>> {
         let tls = match self.security.as_str() {
             MAIL_SECURITY_TLS => Tls::Wrapper(TlsParameters::new(self.host.clone())?),
             MAIL_SECURITY_STARTTLS => Tls::Required(TlsParameters::new(self.host.clone())?),
             MAIL_SECURITY_NONE => Tls::None,
             other => anyhow::bail!("unknown mail server security {other:?}"),
         };
-        let dialled = match self.address {
-            Some(address) => address.ip().to_string(),
-            None => self.host.clone(),
-        };
-        let builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(dialled)
+        let builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(dialled.to_owned())
             .port(self.port)
             .tls(tls)
             .timeout(Some(TIMEOUT));
@@ -136,10 +143,67 @@ impl std::fmt::Display for NoAnswer {
 
 impl std::error::Error for NoAnswer {}
 
-/// A transport to a shop's server whose sends give up after `limit`.
+/// A transport to a shop's server whose sends give up after `limit`: one
+/// SMTP client per address the server's host was checked at (or one dialling
+/// its name), and a mail goes through the first that can be reached.
 pub struct TimedTransport {
-    inner: AsyncSmtpTransport<Tokio1Executor>,
+    /// Dials the first address the host answered, or its name.
+    client: AsyncSmtpTransport<Tokio1Executor>,
+    /// Dial the host's other addresses, in turn, when the first cannot
+    /// be reached.
+    fallbacks: Vec<AsyncSmtpTransport<Tokio1Executor>>,
     limit: Duration,
+}
+
+impl TimedTransport {
+    /// Sends the message through the first address that can be reached, as
+    /// a client dialling the name would try the name's addresses in turn: an
+    /// address that cannot be reached (down, or of a family this node has no
+    /// route for) is passed over for the next. Only a failure to connect
+    /// moves on; a server's answer, or a connection lost mid-way, is the
+    /// send's result, so a mail is never handed to a second address.
+    async fn send_raw(&self, envelope: &Envelope, message: &[u8]) -> Result<(), SmtpError> {
+        let mut err = match self.client.send_raw(envelope, message).await {
+            Ok(_) => return Ok(()),
+            Err(err) => err,
+        };
+        for fallback in &self.fallbacks {
+            if !is_unreachable(&err) {
+                break;
+            }
+            err = match fallback.send_raw(envelope, message).await {
+                Ok(_) => return Ok(()),
+                Err(err) => err,
+            };
+        }
+        Err(err)
+    }
+}
+
+/// Whether `err` is a failure to reach the server at all (the connection
+/// refused, no route to it, nothing taking it in time), rather than the
+/// server's answer or a connection lost once made: what sends a mail to the
+/// host's next address. The client dials one address at a time, so the
+/// error of a failed connection is the one address's.
+fn is_unreachable(err: &SmtpError) -> bool {
+    use std::io::ErrorKind::{
+        AddrNotAvailable, ConnectionRefused, HostUnreachable, NetworkUnreachable, TimedOut,
+    };
+    let mut source = std::error::Error::source(err);
+    while let Some(err) = source {
+        if let Some(io) = err.downcast_ref::<std::io::Error>() {
+            return matches!(
+                io.kind(),
+                ConnectionRefused
+                    | NetworkUnreachable
+                    | HostUnreachable
+                    | AddrNotAvailable
+                    | TimedOut
+            );
+        }
+        source = err.source();
+    }
+    false
 }
 
 impl Transport for TimedTransport {
@@ -148,8 +212,8 @@ impl Transport for TimedTransport {
             let envelope = envelope_of(&mail).map_err(topcoat::Error::from_anyhow)?;
             let message = mail.formatted(cx)?;
             let receipt = Receipt::new(message_id_of(&message));
-            match tokio::time::timeout(self.limit, self.inner.send_raw(&envelope, &message)).await {
-                Ok(Ok(_)) => Ok(receipt),
+            match tokio::time::timeout(self.limit, self.send_raw(&envelope, &message)).await {
+                Ok(Ok(())) => Ok(receipt),
                 Ok(Err(err)) => Err(SendError::delivery(err).into()),
                 Err(_) => Err(NoAnswer.into()),
             }
@@ -239,11 +303,12 @@ type Transports = HashMap<(String, String), Cached>;
 struct Cached {
     /// The settings it was built from.
     settings: MailServerSettings,
-    /// The address its host was checked at and it dials; `None` dials the
+    /// The addresses its host was checked at and it dials; empty dials the
     /// name.
-    address: Option<SocketAddr>,
-    /// When the host was last looked up and checked.
-    resolved_at: Instant,
+    addresses: Vec<SocketAddr>,
+    /// Until when it is dialled before its host is looked up and checked
+    /// again: [`RESOLVE_TTL`] after the last check.
+    checked_until: Instant,
     transport: Arc<dyn Transport>,
 }
 
@@ -281,12 +346,12 @@ impl ShopMail {
     }
 
     /// One of `tenant_id`'s servers, opened: its password in clear, dialling
-    /// `address` (what [`ShopMail::check_host`] gave for its host).
+    /// `addresses` (what [`ShopMail::check_host`] gave for its host).
     pub fn open(
         &self,
         tenant_id: &str,
         settings: &MailServerSettings,
-        address: Option<SocketAddr>,
+        addresses: Vec<SocketAddr>,
     ) -> anyhow::Result<MailServer> {
         let password = settings
             .password_sealed
@@ -299,20 +364,20 @@ impl ShopMail {
             security: settings.security.clone(),
             username: settings.username.clone(),
             password,
-            address,
+            addresses,
         })
     }
 
     /// Refuses a host on this machine or a private network, unless the
     /// operator allowed it (`mail.allow_private_hosts`): a merchant must not
-    /// make this server talk to internal services. Gives the address the
-    /// host was checked at, for the transport to dial; `None` when the check
-    /// is off.
-    pub async fn check_host(&self, host: &str, port: u16) -> anyhow::Result<Option<SocketAddr>> {
+    /// make this server talk to internal services. Gives the addresses the
+    /// host was checked at, for the transport to dial in turn; empty when
+    /// the check is off (the transport dials the name).
+    pub async fn check_host(&self, host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>> {
         if self.0.allow_private_hosts {
-            return Ok(None);
+            return Ok(Vec::new());
         }
-        Ok(Some(crate::net::public_address(host, port).await?))
+        crate::net::public_addresses(host, port).await
     }
 
     /// Whether `tenant`'s marketing has a server to go out through here.
@@ -362,7 +427,7 @@ impl ShopMail {
             transports
                 .get(&key)
                 .filter(|cached| {
-                    cached.settings == *settings && cached.resolved_at.elapsed() < RESOLVE_TTL
+                    cached.settings == *settings && Instant::now() < cached.checked_until
                 })
                 .map(|cached| cached.transport.clone())
         };
@@ -377,18 +442,18 @@ impl ShopMail {
     }
 
     /// Looks `settings`' host up and checks it, then the transport dialling
-    /// the address found: the one kept, when it dials that address already
-    /// (its pooled connections with it), else a new one. A host that now
-    /// answers a private address is refused and the transport kept for it
-    /// dropped.
+    /// the addresses found: the one kept, when it dials those addresses
+    /// already (its pooled connections with them), else a new one. A host
+    /// that now answers a private address is refused and the transport kept
+    /// for it dropped.
     async fn resolved_transport(
         &self,
         tenant: &TenantState,
         settings: &MailServerSettings,
         key: (String, String),
     ) -> anyhow::Result<Arc<dyn Transport>> {
-        let address = match self.check_host(&settings.host, settings.port).await {
-            Ok(address) => address,
+        let addresses = match self.check_host(&settings.host, settings.port).await {
+            Ok(addresses) => addresses,
             Err(err) => {
                 self.0
                     .transports
@@ -401,13 +466,15 @@ impl ShopMail {
         let mut transports = self.0.transports.lock().expect("transports lock");
         if let Some(cached) = transports.get_mut(&key)
             && cached.settings == *settings
-            && cached.address == address
+            && same_addresses(&cached.addresses, &addresses)
         {
-            cached.resolved_at = Instant::now();
+            cached.checked_until = Instant::now() + RESOLVE_TTL;
             return Ok(cached.transport.clone());
         }
-        let transport: Arc<dyn Transport> =
-            Arc::new(self.open(&tenant.id, settings, address)?.transport()?);
+        let transport: Arc<dyn Transport> = Arc::new(
+            self.open(&tenant.id, settings, addresses.clone())?
+                .transport()?,
+        );
         // The transports of the tenant's servers that are gone.
         transports.retain(|(tenant_id, server_id), _| {
             *tenant_id != tenant.id || tenant.mail_server(server_id).is_some()
@@ -416,8 +483,8 @@ impl ShopMail {
             key,
             Cached {
                 settings: settings.clone(),
-                address,
-                resolved_at: Instant::now(),
+                addresses,
+                checked_until: Instant::now() + RESOLVE_TTL,
                 transport: transport.clone(),
             },
         );
@@ -441,32 +508,34 @@ impl ShopMail {
             (tenant.id.clone(), server_id.to_owned()),
             Cached {
                 settings,
-                address: None,
-                resolved_at: Instant::now(),
+                addresses: Vec::new(),
+                checked_until: Instant::now() + RESOLVE_TTL,
                 transport,
             },
         );
     }
 
     /// Makes the transport kept for one of `tenant`'s servers look `by`
-    /// older, as if its host had been checked that long ago at `address`.
+    /// older, as if its host had been checked that long ago at `addresses`.
+    /// `by` is at most [`RESOLVE_TTL`], which lands no earlier than the
+    /// check itself (never before the clock began).
     #[cfg(test)]
     fn age_transport(
         &self,
         tenant: &TenantState,
         server_id: &str,
         by: Duration,
-        address: Option<SocketAddr>,
+        addresses: Vec<SocketAddr>,
     ) {
         let mut transports = self.0.transports.lock().expect("transports lock");
         let cached = transports
             .get_mut(&(tenant.id.clone(), server_id.to_owned()))
             .expect("a transport kept for the server");
-        cached.resolved_at = cached
-            .resolved_at
+        cached.checked_until = cached
+            .checked_until
             .checked_sub(by)
-            .expect("the clock has run that long");
-        cached.address = address;
+            .expect("no older than the window");
+        cached.addresses = addresses;
     }
 
     /// Whether a transport is kept for one of `tenant`'s servers.
@@ -478,6 +547,17 @@ impl ShopMail {
             .expect("transports lock")
             .contains_key(&(tenant.id.clone(), server_id.to_owned()))
     }
+}
+
+/// Whether two lookups of a host answered the same addresses: a name that
+/// rotates the order it answers them in (round-robin DNS) keeps its
+/// transport, and the pooled connections with it.
+fn same_addresses(kept: &[SocketAddr], found: &[SocketAddr]) -> bool {
+    let mut kept = kept.to_vec();
+    let mut found = found.to_vec();
+    kept.sort_unstable();
+    found.sort_unstable();
+    kept == found
 }
 
 /// `tenant`'s sender, from the context's [`ShopMail`] and [`MailSender`].
@@ -649,9 +729,12 @@ mod tests {
         assert!(sender.is_own_server());
         assert_eq!(sender.from.name(), Some("Acme Tea"));
         assert_eq!(sender.from.address(), "orders@acme.test");
-        let server = mail.open("t1", &tenant.mail_servers[0], None).unwrap();
+        let server = mail
+            .open("t1", &tenant.mail_servers[0], Vec::new())
+            .unwrap();
         assert!(
-            mail.open("t2", &tenant.mail_servers[0], None).is_err(),
+            mail.open("t2", &tenant.mail_servers[0], Vec::new())
+                .is_err(),
             "sealed for one shop, it opens for no other"
         );
         assert_eq!(server.password.as_deref(), Some("s3cret"));
@@ -741,16 +824,22 @@ mod tests {
         assert!(err.to_string().contains("not a public address"), "{err}");
         assert!(mail.check_host("127.0.0.1", 25).await.is_err());
         assert!(mail.check_host("10.1.2.3", 25).await.is_err());
-        // A public host passes, and the check gives the address it was
+        // A public host passes, and the check gives the addresses it was
         // checked at for the transport to dial.
         assert_eq!(
             mail.check_host("93.184.215.14", 25).await.unwrap(),
-            Some("93.184.215.14:25".parse().unwrap())
+            vec!["93.184.215.14:25".parse::<SocketAddr>().unwrap()]
         );
         // With private hosts allowed, nothing is checked and the name is
         // dialled.
         let allowed = ShopMail::new(Some(Sealer::new("mail", KEY)), true);
-        assert_eq!(allowed.check_host("127.0.0.1", 25).await.unwrap(), None);
+        assert!(
+            allowed
+                .check_host("127.0.0.1", 25)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -764,10 +853,10 @@ mod tests {
             security: MAIL_SECURITY_NONE.into(),
             username: None,
             password: None,
-            address: dialled,
+            addresses: dialled,
         };
         let cx = CxTestBuilder::new().build();
-        let receipt = server(Some(address))
+        let receipt = server(vec![address])
             .transport()
             .unwrap()
             .send(&cx, hello(&cx).await)
@@ -784,8 +873,139 @@ mod tests {
 
         // Dialled by name, the name is what counts, and this one answers
         // nothing.
-        let by_name = server(None).transport().unwrap();
+        let by_name = server(Vec::new()).transport().unwrap();
         assert!(by_name.send(&cx, hello(&cx).await).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn an_address_that_cannot_be_reached_is_passed_over_for_the_next() {
+        // A port nothing listens on any more: the connection is refused.
+        let dead = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap()
+        };
+        let (alive, received) = fake_smtp().await;
+        let server = |dialled| MailServer {
+            host: "mail.invalid".into(),
+            port: alive.port(),
+            security: MAIL_SECURITY_NONE.into(),
+            username: None,
+            password: None,
+            addresses: dialled,
+        };
+        let cx = CxTestBuilder::new().build();
+        // The name answered the dead address first, as a host with an AAAA
+        // record this node has no route for, or a server down, does.
+        server(vec![dead, alive])
+            .transport()
+            .unwrap()
+            .send(&cx, hello(&cx).await)
+            .await
+            .unwrap();
+        let wire = tokio::time::timeout(Duration::from_secs(5), received)
+            .await
+            .expect("the mail arrives through the next address")
+            .unwrap();
+        assert!(wire.contains("Subject: Hello"), "{wire}");
+
+        // Every address dead: the send fails with the connection error.
+        let err = server(vec![dead, dead])
+            .transport()
+            .unwrap()
+            .send(&cx, hello(&cx).await)
+            .await
+            .unwrap_err();
+        assert!(!err.is::<NoAnswer>(), "{err}");
+
+        // What moved on: the connection refused.
+        let refused = server(vec![dead]).smtp(&dead.ip().to_string()).unwrap();
+        let envelope = envelope_of(&hello(&cx).await).unwrap();
+        let err = refused.send_raw(&envelope, b"").await.unwrap_err();
+        assert!(is_unreachable(&err), "{err}");
+    }
+
+    #[tokio::test]
+    async fn tls_is_for_the_name_whatever_address_is_dialled() {
+        use tokio::io::AsyncReadExt as _;
+
+        // Takes one connection and gives back the server name the client's
+        // TLS hello asks for.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sent, received) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut hello = Vec::new();
+            // The TLS record header says how long the hello is.
+            while hello.len() < 5 || hello.len() < 5 + record_length(&hello) {
+                if socket.read_buf(&mut hello).await.unwrap() == 0 {
+                    break;
+                }
+            }
+            let _ = sent.send(server_name_of(&hello));
+        });
+        let server = MailServer {
+            host: "mail.example".into(),
+            port: address.port(),
+            security: MAIL_SECURITY_TLS.into(),
+            username: None,
+            password: None,
+            addresses: vec![address],
+        };
+        let cx = CxTestBuilder::new().build();
+        // A fake that says nothing back: the send fails, the hello was sent.
+        let err = server
+            .transport()
+            .unwrap()
+            .send(&cx, hello(&cx).await)
+            .await
+            .unwrap_err();
+        assert!(!err.is::<NoAnswer>(), "{err}");
+        let name = tokio::time::timeout(Duration::from_secs(5), received)
+            .await
+            .expect("the hello arrives")
+            .unwrap();
+        assert_eq!(name.as_deref(), Some("mail.example"));
+    }
+
+    /// The length a TLS record header announces.
+    fn record_length(record: &[u8]) -> usize {
+        usize::from(u16::from_be_bytes([record[3], record[4]]))
+    }
+
+    /// The server name a TLS client hello asks for (its SNI extension).
+    fn server_name_of(record: &[u8]) -> Option<String> {
+        let number = |at: usize, bytes: usize| -> Option<usize> {
+            record.get(at..at + bytes).map(|bytes| {
+                bytes
+                    .iter()
+                    .fold(0, |n, byte| (n << 8) | usize::from(*byte))
+            })
+        };
+        // Record header (type 22, version, length), handshake header (type 1,
+        // length), then the hello: version, random, session id, cipher
+        // suites, compression methods, extensions.
+        assert_eq!(record.first(), Some(&22), "a handshake record");
+        assert_eq!(record.get(5), Some(&1), "a client hello");
+        let mut at = 5 + 4 + 2 + 32;
+        at += 1 + number(at, 1)?;
+        at += 2 + number(at, 2)?;
+        at += 1 + number(at, 1)?;
+        let end = at + 2 + number(at, 2)?;
+        at += 2;
+        while at + 4 <= end {
+            let (kind, length) = (number(at, 2)?, number(at + 2, 2)?);
+            at += 4;
+            // server_name: list length, name type (0: host name), name
+            // length, the name.
+            if kind == 0 {
+                let length = number(at + 3, 2)?;
+                let name = record.get(at + 5..at + 5 + length)?;
+                return String::from_utf8(name.to_vec()).ok();
+            }
+            at += length;
+        }
+        None
     }
 
     #[tokio::test]
@@ -795,24 +1015,32 @@ mod tests {
         let first = transport_of(mail.sender_of(&tenant, &platform()).await.unwrap());
 
         // Within the window the kept transport is dialled, no lookup.
-        mail.age_transport(&tenant, "a", RESOLVE_TTL / 2, None);
+        mail.age_transport(&tenant, "a", RESOLVE_TTL / 2, Vec::new());
         let again = transport_of(mail.sender_of(&tenant, &platform()).await.unwrap());
         assert!(Arc::ptr_eq(&first, &again));
 
-        // Past it the host is looked up again: the same address keeps the
+        // Past it the host is looked up again: the same addresses keep the
         // transport, and its pooled connections, for another window.
-        mail.age_transport(&tenant, "a", RESOLVE_TTL, None);
+        mail.age_transport(&tenant, "a", RESOLVE_TTL, Vec::new());
         let again = transport_of(mail.sender_of(&tenant, &platform()).await.unwrap());
         assert!(Arc::ptr_eq(&first, &again));
-        mail.age_transport(&tenant, "a", RESOLVE_TTL / 2, None);
+        mail.age_transport(&tenant, "a", RESOLVE_TTL / 2, Vec::new());
         let again = transport_of(mail.marketing_sender_of(&tenant).await.unwrap());
         assert!(Arc::ptr_eq(&first, &again));
 
         // A host that moved to another address gets a new transport, which
         // dials the new one.
-        mail.age_transport(&tenant, "a", RESOLVE_TTL, Some(ELSEWHERE.parse().unwrap()));
+        mail.age_transport(&tenant, "a", RESOLVE_TTL, vec![ELSEWHERE.parse().unwrap()]);
         let moved = transport_of(mail.sender_of(&tenant, &platform()).await.unwrap());
         assert!(!Arc::ptr_eq(&first, &moved));
+
+        // The same addresses in another order (round-robin DNS) are the same
+        // host: the transport is kept.
+        let one: SocketAddr = ELSEWHERE.parse().unwrap();
+        let two: SocketAddr = "93.184.215.15:1025".parse().unwrap();
+        assert!(same_addresses(&[one, two], &[two, one]));
+        assert!(!same_addresses(&[one, two], &[one]));
+        assert!(!same_addresses(&[one], &[two]));
     }
 
     #[tokio::test]
@@ -826,7 +1054,7 @@ mod tests {
             &tenant,
             "a",
             Duration::ZERO,
-            Some(ELSEWHERE.parse().unwrap()),
+            vec![ELSEWHERE.parse().unwrap()],
         );
         assert!(
             mail.sender_of(&tenant, &platform())
@@ -837,7 +1065,7 @@ mod tests {
 
         // Past the window the name is looked up again and now answers a
         // private address: refused, and the transport to it dropped.
-        mail.age_transport(&tenant, "a", RESOLVE_TTL, Some(ELSEWHERE.parse().unwrap()));
+        mail.age_transport(&tenant, "a", RESOLVE_TTL, vec![ELSEWHERE.parse().unwrap()]);
         let err = mail.sender_of(&tenant, &platform()).await.err().unwrap();
         assert!(err.to_string().contains("not a public address"), "{err}");
         assert!(!mail.keeps_transport_for(&tenant, "a"));
@@ -864,11 +1092,12 @@ mod tests {
             security: MAIL_SECURITY_NONE.into(),
             username: None,
             password: None,
-            address: None,
+            addresses: Vec::new(),
         };
         assert_eq!(server.transport().unwrap().limit, SEND_TIMEOUT);
         let transport = TimedTransport {
-            inner: server.smtp().unwrap(),
+            client: server.smtp(&server.host).unwrap(),
+            fallbacks: Vec::new(),
             limit: Duration::from_millis(300),
         };
         let cx = CxTestBuilder::new().build();
