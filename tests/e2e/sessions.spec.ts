@@ -1,26 +1,9 @@
-import { expect, test, type BrowserContext, type CDPSession, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { registerWithEmail, signInWithEmail, uniqueEmail } from "./email";
+import { virtualAuthenticator } from "./webauthn";
 
 // Sessions across browsers: "sign out everywhere else" and switching accounts
 // by signing in with another user's passkey while signed in.
-
-type Authenticator = { cdp: CDPSession; id: string };
-
-async function virtualAuthenticator(page: Page, cdp?: CDPSession): Promise<Authenticator> {
-  cdp ??= await page.context().newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2",
-      transport: "internal",
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-      automaticPresenceSimulation: true,
-    },
-  });
-  return { cdp, id: authenticatorId };
-}
 
 /// Adds a passkey to the signed-in account from the account page.
 async function addPasskey(page: Page) {

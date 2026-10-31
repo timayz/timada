@@ -20,6 +20,7 @@ import {
   publishProduct,
   publishVariedProduct,
 } from "./storefront";
+import { selectByText } from "./forms";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // The Chatounette clone: the second example app, in French and in the
@@ -34,16 +35,6 @@ const app = new ExampleApp(
 );
 
 test.afterEach(() => app.stop());
-
-/// Picks the option of a `<select>` whose text contains `text`.
-async function selectByText(page: Page, label: string, text: string) {
-  const select = page.getByLabel(label);
-  const value = await select
-    .locator("option", { hasText: text })
-    .first()
-    .getAttribute("value");
-  await select.selectOption(value ?? "");
-}
 
 /// Creates a category, under `parent` (by menu text) when given, once the
 /// category list shows the parent.
