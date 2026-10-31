@@ -8,8 +8,8 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 use crate::aggregator::{Accepted, Revoked, Sent};
 use crate::error::TenancyError;
 use crate::value_object::{
-    INVITATION_TTL_SECS, PERMISSION_MEMBERS_MANAGE, ROLE_OWNER, generate_invitation_token,
-    invitation_id, normalize_email,
+    INVITATION_TTL_SECS, PERMISSION_MEMBERS_MANAGE, generate_invitation_token, invitation_id,
+    normalize_email,
 };
 
 use super::{InvitationState, TenantState};
@@ -48,8 +48,9 @@ pub struct AcceptInvitation {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Records an invitation and returns the token for the link. Needs
-    /// `members:manage`; inviting as `owner` needs an owner; the role must
-    /// exist. Mailing the link is the caller's job.
+    /// `members:manage`, and a role the actor may hand out (owners any,
+    /// others a role whose permissions they hold, never `owner`:
+    /// [`TenantState::may_hand_out`]). Mailing the link is the caller's job.
     pub async fn invite_member(
         &self,
         actor_user_id: &str,
@@ -62,11 +63,11 @@ impl<E: Executor> super::Command<E> {
         if !tenant.can(actor_user_id, PERMISSION_MEMBERS_MANAGE) {
             return Err(TenancyError::Forbidden);
         }
-        if cmd.role == ROLE_OWNER && !tenant.is_owner(actor_user_id) {
-            return Err(TenancyError::Forbidden);
-        }
         if !tenant.has_role(&cmd.role) {
             return Err(TenancyError::UnknownRole);
+        }
+        if !tenant.may_hand_out(actor_user_id, &cmd.role) {
+            return Err(TenancyError::Forbidden);
         }
 
         let token = generate_invitation_token();

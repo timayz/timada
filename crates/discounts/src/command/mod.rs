@@ -276,7 +276,6 @@ async fn on_code_released(
 /// A use held for a checkout until `expires_at` (unix seconds, excluded).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reservation {
-    pub email: String,
     pub expires_at: u64,
 }
 
@@ -326,7 +325,6 @@ async fn on_usage_reserved(event: Event<Reserved>, usage: &mut UsageState) -> an
     usage.reserved.insert(
         event.data.cart_id.to_owned(),
         Reservation {
-            email: event.data.email.to_owned(),
             expires_at: event.data.expires_at,
         },
     );

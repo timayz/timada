@@ -1,7 +1,10 @@
 mod common;
 
 use common::*;
-use timada_tenancy::{DefineRole, PERMISSION_MEMBERS_MANAGE, ROLE_OWNER, TenancyError};
+use timada_tenancy::{
+    DefineRole, PERMISSION_MEMBERS_MANAGE, PERMISSION_MEMBERS_READ, PERMISSION_TENANT_MANAGE,
+    ROLE_OWNER, TenancyError,
+};
 
 async fn tenant_with_roles(
     cmd: &timada_tenancy::Command<evento::Sqlite>,
@@ -10,7 +13,12 @@ async fn tenant_with_roles(
     let tenant = create_tenant(cmd, "Acme", owner).await;
     for (role, perms) in [
         ("manager", vec![PERMISSION_MEMBERS_MANAGE]),
-        ("support", vec![]),
+        ("support", vec![PERMISSION_MEMBERS_READ]),
+        // Wider than a manager: nothing a manager may hand out.
+        (
+            "admin",
+            vec![PERMISSION_MEMBERS_MANAGE, PERMISSION_TENANT_MANAGE],
+        ),
     ] {
         cmd.define_role(
             owner,
@@ -55,7 +63,9 @@ async fn members_are_granted_changed_and_revoked_under_members_manage() {
         .unwrap_err();
     assert!(matches!(err, TenancyError::AlreadyMember), "{err}");
 
-    // A manager grants and changes roles, but never hands out `owner`.
+    // A manager grants roles no wider than their own (support's one
+    // permission is implied by members:manage; a manager's own role too),
+    // never `owner`, never more than they hold.
     cmd.grant_member(&bob, &tenant.id, &carol, "support")
         .await
         .unwrap();
@@ -65,18 +75,36 @@ async fn members_are_granted_changed_and_revoked_under_members_manage() {
         .unwrap_err();
     assert!(matches!(err, TenancyError::Forbidden), "{err}");
     let err = cmd
-        .change_member_role(&bob, &tenant.id, &carol, ROLE_OWNER)
-        .await
-        .unwrap_err();
-    assert!(matches!(err, TenancyError::Forbidden), "{err}");
-    let err = cmd
-        .change_member_role(&bob, &tenant.id, &alice, "support")
+        .grant_member(&bob, &tenant.id, &new_id(), "admin")
         .await
         .unwrap_err();
     assert!(
         matches!(err, TenancyError::Forbidden),
-        "demoting an owner: {err}"
+        "a role wider than the manager's: {err}"
     );
+    let dave = new_id();
+    cmd.grant_member(&bob, &tenant.id, &dave, "manager")
+        .await
+        .unwrap();
+    // The owner hands out anything.
+    cmd.grant_member(&alice, &tenant.id, &new_id(), "admin")
+        .await
+        .unwrap();
+
+    // Moving members between roles is the owners' alone: a manager could
+    // otherwise move themselves, or a friend, up.
+    for (user, role) in [
+        (&carol, "manager"),
+        (&carol, ROLE_OWNER),
+        (&bob, "admin"),
+        (&alice, "support"),
+    ] {
+        let err = cmd
+            .change_member_role(&bob, &tenant.id, user, role)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TenancyError::Forbidden), "{role}: {err}");
+    }
     let err = cmd
         .revoke_member(&bob, &tenant.id, &alice)
         .await
@@ -86,21 +114,22 @@ async fn members_are_granted_changed_and_revoked_under_members_manage() {
         "removing an owner: {err}"
     );
 
-    cmd.change_member_role(&bob, &tenant.id, &carol, "manager")
+    cmd.change_member_role(&alice, &tenant.id, &carol, "manager")
         .await
         .unwrap();
     // Same role → no-op.
     let before = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    cmd.change_member_role(&bob, &tenant.id, &carol, "manager")
+    cmd.change_member_role(&alice, &tenant.id, &carol, "manager")
         .await
         .unwrap();
     assert_eq!(cmd.load_tenant(&tenant.id).await.unwrap().unwrap(), before);
     assert_eq!(before.role_of(&carol), Some("manager"));
     let err = cmd
-        .change_member_role(&bob, &tenant.id, &new_id(), "manager")
+        .change_member_role(&alice, &tenant.id, &new_id(), "manager")
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::NotMember), "{err}");
+    cmd.revoke_member(&bob, &tenant.id, &dave).await.unwrap();
 
     cmd.revoke_member(&bob, &tenant.id, &carol).await.unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();

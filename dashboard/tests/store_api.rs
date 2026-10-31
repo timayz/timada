@@ -280,6 +280,28 @@ async fn count(client: &Client) -> anyhow::Result<usize> {
         .len())
 }
 
+/// Reads the events of one aggregate type through `executor`.
+async fn read_type<E: evento::Executor>(
+    executor: &E,
+    aggregate_type: &str,
+) -> anyhow::Result<usize> {
+    Ok(executor
+        .read(
+            Some(Arc::from(vec![evento::EventFilter {
+                aggregate_type: aggregate_type.to_owned(),
+                aggregate_id: None,
+                name: None,
+            }])),
+            None,
+            evento::TenantFilter::All,
+            Args::forward(100, None),
+            None,
+        )
+        .await?
+        .edges
+        .len())
+}
+
 #[tokio::test]
 async fn a_store_connects_with_its_key_and_leases_its_tenant() {
     let h = harness(None).await;
@@ -418,7 +440,46 @@ async fn a_read_only_key_cannot_change_the_store() {
     assert_eq!(probe(&writer, "s1", 0).await, 1);
 
     let client = h.connect(&token).await.unwrap();
-    assert_eq!(count(&client).await.unwrap(), 1, "it reads");
+    // It reads the catalog and nothing else: the tenant's own stream, where
+    // the probe went, is not a storefront's business.
+    assert_eq!(count(&client).await.unwrap(), 0, "the probe is not catalog");
+    let merchant = evento::Evento::new(h.connect(&writer_token).await.unwrap());
+    let mug = timada_catalog::Command::new(merchant.clone(), &acme.id)
+        .create_product(
+            "alice",
+            timada_catalog::CreateProduct {
+                name: "Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    let product_type = <timada_catalog::aggregator::Product as evento::Aggregate>::aggregate_type();
+    assert_eq!(
+        count(&client).await.unwrap(),
+        read_type(&writer, product_type).await.unwrap(),
+        "it reads the catalog: every product event, nothing else"
+    );
+    assert!(count(&client).await.unwrap() >= 1);
+    let refused = read_type(
+        &client,
+        <timada_tenancy::aggregator::Tenant as evento::Aggregate>::aggregate_type(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("may not read"),
+        "{refused:#}"
+    );
+    let refused = timada_orders::Command::unscoped(evento::Evento::new(client.clone()))
+        .load_cart(&mug.id)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("may not read"),
+        "a cart is not catalog: {refused:#}"
+    );
+    let total = count(&writer).await.unwrap();
     let err = evento::append("s1")
         .original_version(1)
         .event(&Renamed {
@@ -427,8 +488,14 @@ async fn a_read_only_key_cannot_change_the_store() {
         .commit(&client)
         .await
         .unwrap_err();
-    assert!(format!("{err}").contains("store:write"), "{err}");
-    assert_eq!(count(&writer).await.unwrap(), 1, "nothing was written");
+    // Refused for the stream before the scope: a tenant's own stream is
+    // not one it reads, so the version lookup the append starts with fails.
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("may not read") || message.contains("store:write"),
+        "{message}"
+    );
+    assert_eq!(count(&writer).await.unwrap(), total, "nothing was written");
 
     // A snapshot it saves is dropped, not refused.
     client
@@ -486,8 +553,8 @@ async fn a_read_only_key_cannot_change_the_store() {
     assert_eq!(h.connections.close_key(&key_id), 1);
     drop(client);
     let client = h.connect(&token).await.unwrap();
-    assert_eq!(probe(&client, "s1", 1).await, 2);
-    drop((client, writer));
+    assert_eq!(probe(&client, "s1", 1).await, total + 1);
+    drop((client, writer, merchant));
     h.finish().await;
 }
 
@@ -667,6 +734,32 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
     assert!(cart.request(&request_id).unwrap().answer.is_none());
     let product = catalog.load_product(&mug.id).await.unwrap().unwrap();
     assert_eq!(product.price.unwrap().amount_cents, 1250);
+
+    // It reads what selling needs, the cart first; not the shop's
+    // shoppers' sign-in challenges, which the same store holds.
+    assert!(orders.load_cart(&cart_id).await.unwrap().is_some());
+    let refused = read_type(
+        &shop,
+        <timada_shoppers::aggregator::ShopperChallenge as evento::Aggregate>::aggregate_type(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("may not read"),
+        "{refused:#}"
+    );
+    // A key without store:checkout reads the catalog, not the carts.
+    let (reader_token, _) = h.key_with(&acme, SCOPE_STORE_READ).await;
+    let reader = evento::Evento::new(h.connect(&reader_token).await.unwrap());
+    let refused = timada_orders::Command::unscoped(reader.clone())
+        .load_cart(&cart_id)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("may not read"),
+        "{refused:#}"
+    );
+    drop(reader);
 
     // A key with write may do it all.
     timada_orders::Command::new(merchant.clone(), &acme.id)

@@ -16,7 +16,7 @@ fn role(name: &str, perms: &[&str]) -> DefineRole {
 }
 
 #[tokio::test]
-async fn roles_are_defined_updated_and_removed_by_roles_managers() {
+async fn roles_are_defined_updated_and_removed_by_owners_alone() {
     let cmd = command().await;
     let alice = new_id();
     let bob = new_id();
@@ -75,7 +75,9 @@ async fn roles_are_defined_updated_and_removed_by_roles_managers() {
         .unwrap_err();
     assert!(matches!(err, TenancyError::InvalidRoleLabel), "{err}");
 
-    // A role manager that is not an owner can manage roles.
+    // `roles:manage` lets a member see the roles; shaping them is the
+    // owners' alone, whatever a role grants: a member who could edit roles
+    // could widen their own.
     cmd.define_role(
         &alice,
         &tenant.id,
@@ -86,8 +88,36 @@ async fn roles_are_defined_updated_and_removed_by_roles_managers() {
     cmd.grant_member(&alice, &tenant.id, &bob, "admin")
         .await
         .unwrap();
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert!(state.can(&bob, PERMISSION_ROLES_MANAGE));
+    let err = cmd
+        .define_role(&bob, &tenant.id, role("sales", &[]))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::Forbidden), "defining: {err}");
+    let err = cmd
+        .update_role(
+            &bob,
+            &tenant.id,
+            "admin",
+            "Admin",
+            PERMISSIONS.iter().map(|p| (*p).to_owned()).collect(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, TenancyError::Forbidden),
+        "widening one's own role: {err}"
+    );
+    let err = cmd
+        .remove_role(&bob, &tenant.id, "support")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::Forbidden), "removing: {err}");
+    assert_eq!(cmd.load_tenant(&tenant.id).await.unwrap().unwrap(), state);
+
     cmd.update_role(
-        &bob,
+        &alice,
         &tenant.id,
         "support",
         "Support",
@@ -103,7 +133,7 @@ async fn roles_are_defined_updated_and_removed_by_roles_managers() {
     assert_eq!(state.roles["support"].label, "Support");
     // Unchanged → no-op (same version).
     cmd.update_role(
-        &bob,
+        &alice,
         &tenant.id,
         "support",
         "Support",
@@ -117,27 +147,29 @@ async fn roles_are_defined_updated_and_removed_by_roles_managers() {
     assert_eq!(cmd.load_tenant(&tenant.id).await.unwrap().unwrap(), state);
 
     let err = cmd
-        .update_role(&bob, &tenant.id, "ghost", "Ghost", vec![])
+        .update_role(&alice, &tenant.id, "ghost", "Ghost", vec![])
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::UnknownRole), "{err}");
     let err = cmd
-        .update_role(&bob, &tenant.id, "owner", "Owner", vec![])
+        .update_role(&alice, &tenant.id, "owner", "Owner", vec![])
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::ReservedRole), "{err}");
 
     // A held role cannot be removed; an unheld one can.
     let err = cmd
-        .remove_role(&bob, &tenant.id, "admin")
+        .remove_role(&alice, &tenant.id, "admin")
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::RoleInUse), "{err}");
-    cmd.remove_role(&bob, &tenant.id, "support").await.unwrap();
+    cmd.remove_role(&alice, &tenant.id, "support")
+        .await
+        .unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
     assert!(!state.roles.contains_key("support"));
     let err = cmd
-        .remove_role(&bob, &tenant.id, "support")
+        .remove_role(&alice, &tenant.id, "support")
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::UnknownRole), "{err}");
