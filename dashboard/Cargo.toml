@@ -16,9 +16,6 @@ sqlx_migrator.workspace = true
 evento.workspace = true
 timada-core = { path = "../crates/core" }
 jiff.workspace = true
-evento-sql.workspace = true
-evento-sql-migrator.workspace = true
-evento-accord.workspace = true
 serde.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
