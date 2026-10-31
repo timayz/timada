@@ -242,7 +242,9 @@ pub async fn identity_fields(legal: &LegalIdentity) -> Result<impl View> {
                 <span>"Registered for the EU One-Stop Shop (OSS): charge other EU countries' VAT to their consumers from the first euro"</span>
             </label>
             <p class="text-sm text-muted-foreground sm:col-span-2">
-                "Without it, other EU countries' VAT applies once your sales to their consumers pass €10,000 in the year."
+                "Without it, other EU countries' VAT applies once your sales to their consumers pass €10,000 in the year, "
+                "and your shops sell to those consumers in euros only: only euro sales count towards the threshold, and a sale "
+                "in another currency would owe their VAT, which only the One-Stop Shop lets you remit."
             </p>
         )
     })

@@ -88,7 +88,12 @@ async fn extra_units_pay_full_price() {
         .map(|line| (line.unit_amount_cents, line.quantity))
         .collect();
     assert_eq!(lines, vec![(2000, 1), (1200, 1), (3000, 2)]);
-    assert_eq!(quote.tax_categories.len(), 3);
+    assert!(
+        quote
+            .lines
+            .iter()
+            .all(|line| line.tax_category() == "standard")
+    );
     assert_eq!(quote.line_offers.len(), 3);
     assert!(quote.line_offers[1].is_some() && quote.line_offers[2].is_none());
     assert_eq!(quote.item_count(), 4);

@@ -299,8 +299,10 @@ mod tests {
             .await
             .unwrap();
         // Left open across the copy would be a server running; closed here,
-        // the log may still hold the rows the snapshot must carry.
-        drop(connection);
+        // the log may still hold the rows the snapshot must carry. Awaited:
+        // a connection dropped closes in the background, and its last
+        // checkpoint could land in a file the test has restored since.
+        sqlx::Connection::close(connection).await.unwrap();
     }
 
     async fn value(path: &Path) -> i64 {

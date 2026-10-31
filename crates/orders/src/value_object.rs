@@ -60,6 +60,11 @@ pub struct OrderLine {
     /// The price of one, in minor units of the order's currency.
     pub unit_amount_cents: u64,
     pub quantity: u32,
+    /// What kind of goods it is for VAT (`standard`, `books`, ...), as the
+    /// product said when it was sold: the invoice reads it here, not from
+    /// the product as it is now. Empty reads as `standard`
+    /// ([`tax_category`](Self::tax_category)).
+    pub tax_category: String,
 }
 
 /// The payment that paid for an order. Frozen in `events.lock`: the fields
@@ -83,11 +88,25 @@ pub const PAYMENTS_UNAVAILABLE: &str = "payments_unavailable";
 /// The refusal of a request to pay when the merchant has not said who it is
 /// in law yet: no sale goes ahead without an invoice that can name it.
 pub const INVOICING_NOT_CONFIGURED: &str = "invoicing_not_configured";
+/// The refusal of a request to pay for an EU distance sale in a currency
+/// other than the euro from a merchant not registered for the One-Stop
+/// Shop: the sale would owe the destination's VAT, which only the One-Stop
+/// Shop lets the merchant remit ([`timada_invoicing::tax::accepts`]).
+pub const OSS_REQUIRED_FOR_CURRENCY: &str = "oss_required_for_currency";
 
 impl OrderLine {
     /// The price of the whole line.
     pub fn amount_cents(&self) -> u64 {
         self.unit_amount_cents * u64::from(self.quantity)
+    }
+
+    /// The kind of goods for VAT; a line that says nothing is standard goods.
+    pub fn tax_category(&self) -> &str {
+        if self.tax_category.is_empty() {
+            timada_catalog::TAX_CATEGORY_STANDARD
+        } else {
+            &self.tax_category
+        }
     }
 }
 

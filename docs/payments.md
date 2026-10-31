@@ -51,7 +51,9 @@ not know yet, and the credit note follows.
 - **Merchant, first.** The tenant sells as a company: on `/t/<slug>/invoicing`
   (permission `tenant:manage`), link it to a company the member owns, or register
   one. See `docs/invoicing.md`. Until then, every request to pay is refused with
-  `invoicing_not_configured`.
+  `invoicing_not_configured`; a sale to a consumer in another EU country in a
+  currency other than the euro is refused with `oss_required_for_currency` unless
+  the company ticked the One-Stop Shop.
 
 - **Merchant.** On `/t/<slug>/payments` (permission `payments:manage`):
   1. Paste the publishable key and the secret key from Stripe (Developers › API keys).

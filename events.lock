@@ -295,7 +295,7 @@ type timada_invoicing::value_object::Address { name: String, line1: String, line
 type timada_invoicing::value_object::InvoiceLine { name: String, variant_label: Option<String>, sku: Option<String>, quantity: u32, unit_amount_cents: u64, vat_rate_bps: Option<u32> }
 type timada_invoicing::value_object::Seller { address: Address, legal_form: String, share_capital_cents: Option<u64>, siret: String, rcs_city: Option<String>, contact_email: String, vat_number: Option<String> }
 type timada_invoicing::value_object::VatSubtotal { rate_bps: u32, base_cents: u64, vat_cents: u64 }
-type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32 }
+type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32, tax_category: String }
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, country: String, phone: Option<String> }
 type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32> }
