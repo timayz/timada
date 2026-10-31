@@ -77,9 +77,11 @@ pub struct StoreConfig {
     /// Without it, a picture is only its file name and the host serves it.
     pub media_url: Option<String>,
     /// The dashboard's address, with no trailing slash: the "dashboard
-    /// address" shown on the tenant's API keys page. What a storefront hands
-    /// in with files (a review and its photos) goes there over HTTPS, with
-    /// the same key; without it a review cannot be handed in.
+    /// address" shown on the tenant's API keys page. Selling goes through it
+    /// (the cart, the request to pay, the order), as does what a storefront
+    /// hands in with files (a review and its photos) and its shoppers'
+    /// sign-ins, over HTTPS with the same key; without it the store shows
+    /// the catalog and sells nothing.
     pub api_url: Option<String>,
     /// The URL prefix of the library's own endpoints (`/store`).
     pub prefix: Cow<'static, str>,

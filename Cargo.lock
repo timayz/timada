@@ -6323,6 +6323,7 @@ dependencies = [
  "hmac 0.12.1",
  "imagesize",
  "jiff",
+ "lettre",
  "miniserde",
  "openidconnect",
  "rand 0.9.5",
@@ -6469,6 +6470,8 @@ dependencies = [
  "bitcode",
  "evento",
  "rand 0.9.5",
+ "serde",
+ "serde_json",
  "sqlx",
  "sqlx_migrator",
  "thiserror 2.0.21",
@@ -6538,6 +6541,7 @@ name = "timada-storefront"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "deunicode",
  "evento",
  "reqwest",

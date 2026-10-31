@@ -40,7 +40,7 @@ struct RateOverride {
 }
 
 /// How a sale is taxed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Regime {
     /// Sold in France, French VAT.
     #[default]

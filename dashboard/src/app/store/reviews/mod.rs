@@ -2,8 +2,8 @@
 //! product of their order, with its photos, as one multipart body. The key
 //! (`Authorization: Bearer tk_…`) names the tenant and must allow
 //! `store:checkout`; the storefront vouches that the shopper holds the order
-//! (the order id is not guessable, and the store API lets a checkout key read
-//! only what it may).
+//! (the order id is not guessable, and a checkout key learns of an order only
+//! by naming its id to `GET /store/orders/{order_id}`).
 //!
 //! Reviews go through here rather than the store API so the photos are
 //! checked and kept the way product pictures are (on a majority of nodes

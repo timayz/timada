@@ -1,21 +1,27 @@
 //! The executor a key without `store:write` is served: the store, with
-//! every way of changing it taken away, or all but one, and only the streams
-//! a storefront has business reading.
+//! every way of changing it taken away, and only the streams a storefront
+//! has business reading.
 //!
 //! - Reads are confined to an allow-list of aggregate types. A key holding
 //!   `store:read` alone reads what a page that shows the catalog needs:
 //!   products, categories, stock, published reviews, pages. One holding
-//!   `store:checkout` too reads what selling needs on top: carts, orders, how
-//!   the shop takes payment, ships and sells to businesses, discounts and
-//!   offers, review links, invoices. Nothing else: a tenant's store also
-//!   holds its shoppers' accounts and sign-in challenges, its API keys, its
-//!   mail settings, and a storefront's key must not be the way to those. A
-//!   read naming nothing is narrowed to the list; one naming a type outside
-//!   it fails with the reason.
-//! - Appends are refused: the client's commit fails with the reason. A key
-//!   holding `store:checkout` may append what a shopper does (carts, placing
-//!   an order: [`timada_orders::is_shopper_event`]) and nothing else; one
-//!   event outside that list refuses the whole append.
+//!   `store:checkout` too reads what selling needs on top: how the shop
+//!   takes payment, ships and sells to businesses, discounts and offers,
+//!   review links. Never a cart, an order or an invoice: the cart and order
+//!   streams are every shopper's carts and every placed order with the
+//!   addresses they carry, and an invoice series (`Book`) holds every
+//!   invoice the shop issued with its buyer's name, address and e-mail, so a
+//!   storefront is answered about the one cart or order whose id it holds,
+//!   and about that order's documents, through the `/store/carts/*` and
+//!   `/store/orders/*` endpoints (`crate::store_carts`), never the stream.
+//!   Nothing else either: a tenant's store also holds its shoppers' accounts
+//!   and sign-in challenges, its API keys, its mail settings, and a
+//!   storefront's key must not be the way to those. A read naming nothing is
+//!   narrowed to the list; one naming a type outside it fails with the
+//!   reason.
+//! - Appends are refused: the client's commit fails with the reason. What a
+//!   shopper does (filling a cart, asking to pay) goes through the same
+//!   endpoints, where the dashboard writes it in the key's tenant.
 //! - Snapshots the client saves or deletes are dropped. A snapshot is state
 //!   the dashboard trusts when it loads the same view, so letting a read-only
 //!   client write one would be a write; dropping (rather than refusing) keeps
@@ -35,13 +41,6 @@ use evento::{
 };
 use ulid::Ulid;
 
-/// What a guarded connection may append.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Appends {
-    Nothing,
-    ShopperEvents,
-}
-
 /// The aggregate types a key holding `store:read` alone reads: what a page
 /// that shows the catalog loads (`crates/storefront`'s catalog subscription
 /// and the product, stock, review and page views).
@@ -56,14 +55,12 @@ pub fn catalog_reads() -> Vec<&'static str> {
 }
 
 /// The aggregate types a key holding `store:checkout` reads: the catalog,
-/// and what selling loads on top (`crates/storefront`'s cart, checkout,
-/// invoice and review-link paths through the orders, discounts, invoicing
-/// and reviews gateways).
+/// and what selling loads on top (`crates/storefront`'s checkout and
+/// review-link paths through the orders, discounts and reviews gateways).
+/// Not the carts, the orders or the invoices: see the module docs.
 pub fn checkout_reads() -> Vec<&'static str> {
     let mut reads = catalog_reads();
     reads.extend([
-        timada_orders::aggregator::Cart::aggregate_type(),
-        timada_orders::aggregator::Order::aggregate_type(),
         timada_orders::aggregator::PaymentMethod::aggregate_type(),
         timada_orders::aggregator::BusinessBuyers::aggregate_type(),
         timada_orders::aggregator::ShippingMethods::aggregate_type(),
@@ -71,8 +68,6 @@ pub fn checkout_reads() -> Vec<&'static str> {
         timada_discounts::aggregator::DiscountCode::aggregate_type(),
         timada_discounts::aggregator::Offers::aggregate_type(),
         timada_reviews::aggregator::ReviewLink::aggregate_type(),
-        timada_invoicing::aggregator::Book::aggregate_type(),
-        timada_invoicing::aggregator::Document::aggregate_type(),
     ]);
     reads
 }
@@ -80,23 +75,18 @@ pub fn checkout_reads() -> Vec<&'static str> {
 /// Wraps `inner`, refusing every append and reading the catalog alone;
 /// keeps its default routing key.
 pub fn read_only(inner: Evento) -> Evento {
-    guarded(inner, Appends::Nothing, catalog_reads())
+    guarded(inner, catalog_reads())
 }
 
-/// Wraps `inner`, letting through only what a shopper writes (the
-/// `store:checkout` scope) and reading what selling needs; keeps its default
-/// routing key.
+/// Wraps `inner`, refusing every append and reading what selling needs (the
+/// `store:checkout` scope); keeps its default routing key.
 pub fn checkout_only(inner: Evento) -> Evento {
-    guarded(inner, Appends::ShopperEvents, checkout_reads())
+    guarded(inner, checkout_reads())
 }
 
-fn guarded(inner: Evento, appends: Appends, reads: Vec<&'static str>) -> Evento {
+fn guarded(inner: Evento, reads: Vec<&'static str>) -> Evento {
     let routing_key = Executor::default_routing_key(&inner).map(str::to_owned);
-    let executor = Evento::new(ReadOnly {
-        inner,
-        appends,
-        reads,
-    });
+    let executor = Evento::new(ReadOnly { inner, reads });
     match routing_key {
         Some(key) => executor.default_routing_key(key),
         None => executor,
@@ -105,7 +95,6 @@ fn guarded(inner: Evento, appends: Appends, reads: Vec<&'static str>) -> Evento 
 
 struct ReadOnly {
     inner: Evento,
-    appends: Appends,
     /// The aggregate types this connection reads.
     reads: Vec<&'static str>,
 }
@@ -153,24 +142,11 @@ impl ReadOnly {
         }
     }
 
-    /// Lets an append through when every event of it is allowed.
-    fn check(&self, events: &[Event]) -> Result<(), WriteError> {
-        match self.appends {
-            Appends::Nothing => Err(WriteError::Unknown(anyhow::anyhow!(
-                "this API key may not write events (it lacks the store:write scope)"
-            ))),
-            Appends::ShopperEvents => match events
-                .iter()
-                .find(|e| !timada_orders::is_shopper_event(&e.aggregate_type, &e.name))
-            {
-                None => Ok(()),
-                Some(event) => Err(WriteError::Unknown(anyhow::anyhow!(
-                    "this API key may only fill carts and place orders (store:checkout), not write {}::{}",
-                    event.aggregate_type,
-                    event.name
-                ))),
-            },
-        }
+    /// The refusal every append meets.
+    fn check(&self, _events: &[Event]) -> Result<(), WriteError> {
+        Err(WriteError::Unknown(anyhow::anyhow!(
+            "this API key may not write events (it lacks the store:write scope)"
+        )))
     }
 }
 
@@ -313,5 +289,31 @@ impl Executor for ReadOnly {
         _id: String,
     ) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A checkout key reads how the shop sells, never a cart, an order or
+    /// an invoice series: those are answered one at a time by the
+    /// `/store/carts/*` and `/store/orders/*` endpoints.
+    #[test]
+    fn a_checkout_key_reads_neither_carts_nor_orders() {
+        let reads = checkout_reads();
+        let cart = timada_orders::aggregator::Cart::aggregate_type();
+        let order = timada_orders::aggregator::Order::aggregate_type();
+        let book = timada_invoicing::aggregator::Book::aggregate_type();
+        let document = timada_invoicing::aggregator::Document::aggregate_type();
+        assert!(!reads.contains(&cart), "{reads:?}");
+        assert!(!reads.contains(&order), "{reads:?}");
+        assert!(!reads.contains(&book), "{reads:?}");
+        assert!(!reads.contains(&document), "{reads:?}");
+        assert!(reads.contains(&timada_orders::aggregator::PaymentMethod::aggregate_type()));
+        for read in catalog_reads() {
+            assert!(reads.contains(&read), "{read} is catalog");
+        }
+        assert!(!catalog_reads().contains(&cart));
     }
 }

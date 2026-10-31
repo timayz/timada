@@ -7,9 +7,12 @@
 //! request and refuse an address that is not public, and [`PublicResolver`]
 //! is the resolver the HTTP clients then connect through, so the address
 //! actually dialled is checked too. A literal IP address never reaches a
-//! resolver; the first check covers it.
+//! resolver; the first check covers it. The mail transports take the other
+//! way round: [`public_addresses`] gives the addresses a name was checked
+//! at, and the transport dials those, in turn, rather than the name
+//! (`shop_mail.rs`).
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -17,16 +20,26 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 /// Refuses a host that resolves to an address that is not public.
 pub async fn check_public_host(host: &str, port: u16) -> anyhow::Result<()> {
-    let addresses: Vec<IpAddr> = tokio::net::lookup_host((host, port))
+    public_addresses(host, port).await.map(drop)
+}
+
+/// The addresses `host` answers at `port`, in the order it answers them,
+/// when every one of them is public; refused otherwise (never empty). What a
+/// client dials, in turn, to reach the host as checked, rather than looking
+/// the name up again.
+pub async fn public_addresses(host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>> {
+    let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
         .await
         .with_context(|| format!("cannot resolve {host}"))?
-        .map(|address| address.ip())
         .collect();
     anyhow::ensure!(!addresses.is_empty(), "{host} has no address");
-    if let Some(address) = addresses.iter().find(|address| !is_public(**address)) {
-        anyhow::bail!("{host} resolves to {address}, which is not a public address");
+    if let Some(address) = addresses.iter().find(|address| !is_public(address.ip())) {
+        anyhow::bail!(
+            "{host} resolves to {}, which is not a public address",
+            address.ip()
+        );
     }
-    Ok(())
+    Ok(addresses)
 }
 
 /// Refuses an address whose host is not public (see [`check_public_host`]).
@@ -233,6 +246,17 @@ mod tests {
         ] {
             assert!(!is_public(private.parse().unwrap()), "{private}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_public_addresses_of_a_host_are_the_ones_checked() {
+        assert_eq!(
+            public_addresses("93.184.215.14", 587).await.unwrap(),
+            vec!["93.184.215.14:587".parse::<SocketAddr>().unwrap()]
+        );
+        let err = public_addresses("localhost", 25).await.unwrap_err();
+        assert!(err.to_string().contains("not a public address"), "{err}");
+        assert!(public_addresses("127.0.0.1", 25).await.is_err());
     }
 
     #[tokio::test]

@@ -173,14 +173,21 @@ by construction.
    key without the `store:write` scope gets the store wrapped by `read_only_store.rs`:
    appends refused, snapshot saves dropped, and reads confined to what a storefront
    loads (`store:read`: products, categories, stock, reviews, pages; `store:checkout`
-   adds carts, orders, the payment method, shipping, business buyers, discounts,
-   offers, review links, invoices). A read naming any other stream of the tenant, a
-   shopper's sign-in challenge say, fails. A key holding `store:checkout`
-   (what a storefront that sells needs) gets the same wrapper with one opening: it
-   may append what a shopper does, filling a cart and asking to pay for it
-   (`timada_orders::is_shopper_event`), and nothing that belongs to the merchant:
-   the catalog, the answer to a request to pay, an order (one exists only once
-   its payment is confirmed to the dashboard). Scopes are strings recorded with
+   adds the payment method, shipping, business buyers, discounts, offers, review
+   links). Never the carts, the orders or the invoices: the cart and order streams
+   are every shopper's cart and every placed order with the addresses they carry, and
+   an invoice series (`timada-invoicing/Book`) is every invoice the shop issued with
+   its buyer's name, address and e-mail, so a storefront is answered about one at a
+   time, by the id it holds, through the dashboard's HTTP side (`store_carts.rs`
+   behind `/store/carts/*` and `/store/orders/{order_id}`, authenticated with the
+   same key, which must allow `store:checkout`): its cart priced, the items it adds,
+   the code it enters, its request to pay and the answer, the order its cart became,
+   an order it remembers, and that order's invoice and credit notes
+   (`/store/orders/{order_id}/documents`, which the storefront draws as PDF itself).
+   An id the tenant has no cart or order under, another tenant's included, is 404.
+   What a shopper does is therefore written by the dashboard in the key's tenant, and
+   a storefront's connection never appends: a read naming any other stream of the
+   tenant, a shopper's sign-in challenge say, fails, and so does every write. Scopes are strings recorded with
    `ApiKey::Created` and replaced whole by `ApiKey::Scoped`. Revoking the key or
    changing its scopes ends its connections; suspending the tenant ends every
    connection of the tenant, and reconnects are refused.
@@ -190,8 +197,9 @@ by construction.
    operator's `[secrets] key` (no section, no payments), bound to the tenant: every
    sealed secret names its owner (the tenant, the company, the key's tenant and id,
    the webhook step) as authenticated data, so bytes copied into another owner's
-   events open nothing. A storefront asks to pay
-   (`Cart::CheckoutRequested`); the subscription `timada-dashboard/payments`
+   events open nothing. A storefront asks to pay through
+   `POST /store/carts/{cart_id}/checkout`, which writes `Cart::CheckoutRequested`
+   and waits for the answer; the subscription `timada-dashboard/payments`
    prices the cart from the store, opens a PaymentIntent with the tenant's key (the
    request id is the idempotency key, so every node answering opens one payment) and
    records it (`Cart::PaymentRequested`) or the refusal. The shopper confirms with
@@ -212,7 +220,10 @@ by construction.
    are recorded in the tenant's platform events (`MailServerAdded`/`Changed`)
    sealed under `[secrets] key`; secrets never enter the tenant store, which
    replicates to storefronts. Hosts on this machine or a private network are refused
-   unless `mail.allow_private_hosts` is set. Account codes and invitations always go
+   unless `mail.allow_private_hosts` is set, and the transport dials the addresses
+   that check resolved, in turn, rather than the name (TLS still verifies the name),
+   looking the name up again every few minutes, so a name that later answers a
+   private address (DNS rebinding) gets nowhere. Account codes and invitations always go
    through the platform's server; newsletter campaigns, automated mails and their
    test mails never do, they go through the server picked for marketing only
    (`ShopMail::marketing_sender_of`). Each shop mail may be worded per language: the
@@ -358,7 +369,8 @@ A storefront hands a review in over HTTP, not through the store API:
 pictures: it checks what the bytes are, stores and replicates them to a majority, and
 only then records the review, deleting the files when that fails. Recording on the
 dashboard's side also means no key can append a review, or describe photos that are
-not there, over the store API; the review events are not shopper events there. The
+not there, over the store API: a storefront's key appends nothing there
+(`read_only_store.rs`). The
 storefront vouches that the shopper holds the order: an order id is not guessable, and a
 storefront offers the form only on an order its own shopper placed. The media
 subscription keeps review photos on every node like product pictures, and deletes them
@@ -430,8 +442,9 @@ A storefront signs its shoppers in over HTTP, not through the store API, under
 `/store/shoppers/*` with its key as a bearer token (it must allow `store:checkout`):
 `code` mails the code from the shop's name, `session` checks it and answers the token,
 `sign-out`, `sign-out-everywhere`, `delete`, `addresses` and `addresses/remove` act for
-the shopper whose token is in `X-Shopper-Token`. None of the shopper events are shopper events on the store API, so a
-key cannot sign anyone in by appending them. A storefront resolves a token with
+the shopper whose token is in `X-Shopper-Token`. A storefront's key appends nothing
+over the store API (`read_only_store.rs`), so a key cannot sign anyone in by appending
+the shopper events. A storefront resolves a token with
 `GET /store/shoppers/me`, which answers the account opened with its key: the store API
 only ever hands out the sealed events.
 
@@ -512,7 +525,8 @@ A storefront hands a sign-up in with `POST /store/newsletter` (bearer key with
 answer is 202 whether the address was mailed, is subscribed already, or was mailed
 less than an hour ago (nothing more is mailed then), so it says nothing of who is on
 the list. At checkout, a ticked box writes the companion event `NewsletterOptedIn` on
-the cart with `CheckoutRequested` (a shopper event a checkout key may append), and
+the cart with `CheckoutRequested` (written by the dashboard for the storefront's
+`POST /store/carts/{cart_id}/checkout`), and
 `NewsletterOptInSet` on the order with `Placed`; a per-tenant subscription
 (`timada-dashboard/newsletter-opt-ins`) then records the request and mails the link.
 Every node with the tenant open runs it, and the node whose `Requested` commits first
@@ -618,7 +632,10 @@ that rendering in a sandboxed frame; the list is the `pages` read model.
 events go through the remote client to the store API, while the subscription cursor,
 the projection snapshots and the product rows live in the app's own SQLite file. One
 file per replica, so replicas never fence each other out of the subscription and
-nothing accumulates on the tenant's store. The library registers no page of its own
+nothing accumulates on the tenant's store. Carts and orders never come through that
+executor: the library asks the dashboard's `/store/carts/*` and `/store/orders/*`
+endpoints for the one its page holds the id of (`StoreConfig::api_url`), and the
+dashboard writes what the shopper does. The library registers no page of its own
 (route discovery belongs to the host); it offers queries, a guard, two components (a
 price, a picture) and `GET {prefix}/status`. Details and the example app are in
 `docs/storefront.md`.
