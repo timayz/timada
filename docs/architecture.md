@@ -525,8 +525,12 @@ Nothing in the event store fires later, so every node sweeps the campaigns going
 `newsletter_deliveries`). Each mail is claimed first: a `Delivery` stream per
 campaign and subscriber, written with `original_version(0)`, so a subscriber gets a
 campaign once however many nodes send it; a mail the server refuses is recorded
-(`Failed`) and not tried again. A sweep that finds fewer owed than a batch writes
-`Finished`. Every mail carries `List-Unsubscribe` and `List-Unsubscribe-Post:
+(`Failed`) and not tried again. A subscriber the read model still owes but who left
+the list (or was erased) since is recorded as `Skipped`, so the campaign stops owing
+them; one whose personal-data key is not on this node yet is left for a later sweep
+(or another node) and holds the campaign open. A sweep that finds fewer owed than a
+batch, none of them left for later, writes `Finished`. Every mail carries
+`List-Unsubscribe` and `List-Unsubscribe-Post:
 List-Unsubscribe=One-Click` (RFC 8058) pointing at the storefront's unsubscribe page,
 whose POST takes the subscriber off the list; a shop without a storefront address
 holds its campaign back until it has one. Marketing never borrows the platform's

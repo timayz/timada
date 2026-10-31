@@ -2,7 +2,7 @@ use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Ev
 
 use crate::aggregator::{
     Claimed, ClaimedForEdition, Drafted, Edited, Failed, Finished, ScheduleActivated,
-    ScheduleCleared, ScheduleSet, ScheduleStopped, SendRequested,
+    ScheduleCleared, ScheduleSet, ScheduleStopped, SendRequested, Skipped,
 };
 use crate::error::NewsletterError;
 use crate::schedule::{Cadence, Schedule, parse_day};
@@ -224,7 +224,10 @@ pub struct DeliveryState {
     pub edition_id: Option<String>,
     pub subscriber_id: String,
     pub failed: Option<String>,
-    /// Unix seconds of `Claimed`.
+    /// Why the mail was never sent, when the subscriber had left the list
+    /// before it went out.
+    pub skipped: Option<String>,
+    /// Unix seconds of `Claimed` (or `Skipped`).
     pub claimed_at: u64,
 }
 
@@ -233,7 +236,19 @@ pub fn delivery_projection<E: Executor>() -> Projection<E, DeliveryState> {
         .handler(on_claimed())
         .handler(on_claimed_for_edition())
         .handler(on_failed())
+        .handler(on_skipped())
         .strict()
+}
+
+#[evento::handler]
+async fn on_skipped(event: Event<Skipped>, state: &mut DeliveryState) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    state.campaign_id = event.data.campaign_id.to_owned();
+    state.edition_id = event.data.edition_id.to_owned();
+    state.subscriber_id = event.data.subscriber_id.to_owned();
+    state.skipped = Some(event.data.reason.to_owned());
+    state.claimed_at = event.timestamp;
+    Ok(())
 }
 
 #[evento::handler]
@@ -576,6 +591,44 @@ impl<E: Executor> super::Command<E> {
             .commit(&self.executor)
             .await;
         match claimed {
+            Ok(_) => Ok(true),
+            Err(WriteError::InvalidOriginalVersion) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Records that a subscriber the read model owed the mail is not to get
+    /// it: they left the list (or were erased) before it went out. Takes the
+    /// pair's stream as a claim would, so the campaign stops owing them;
+    /// `false` when the stream exists already (claimed, or skipped, by
+    /// another node). `edition_id` names the edition of a scheduled
+    /// campaign.
+    pub async fn skip_delivery(
+        &self,
+        actor: &str,
+        campaign_id: &str,
+        edition_id: Option<&str>,
+        subscriber_id: &str,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<bool, NewsletterError> {
+        let skipped = evento::append(delivery_id(
+            edition_id.unwrap_or(campaign_id),
+            subscriber_id,
+        ))
+        .original_version(0)
+        .routing_key_opt(routing_key)
+        .event(&Skipped {
+            campaign_id: campaign_id.to_owned(),
+            edition_id: edition_id.map(str::to_owned),
+            subscriber_id: subscriber_id.to_owned(),
+            reason: reason.chars().take(200).collect(),
+            skipped_by: actor.to_owned(),
+        })
+        .tenant(&self.tenant)
+        .commit(&self.executor)
+        .await;
+        match skipped {
             Ok(_) => Ok(true),
             Err(WriteError::InvalidOriginalVersion) => Ok(false),
             Err(err) => Err(err.into()),
