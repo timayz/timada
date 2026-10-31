@@ -966,7 +966,7 @@ test("a shopper pays less with a discount code, once", async ({
     }).toPass({ timeout: 15_000 });
     await row.getByRole("link", { name: reference }).click();
     await expect(page.locator("[data-order-discount=TEN]")).toContainText(
-      "-2,50€",
+      "-2.50 EUR",
     );
     await page.goto(`/t/${slug}/discounts`);
     await expect(
@@ -1085,7 +1085,7 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
     }).toPass({ timeout: 15_000 });
     await row.getByRole("link", { name: reference }).click();
     await expect(page.locator("[data-order-shipping=VIP]")).toContainText(
-      "6,90€",
+      "6.90 EUR",
     );
   } finally {
     await stripe.stop();
