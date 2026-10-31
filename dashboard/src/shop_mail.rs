@@ -12,17 +12,33 @@
 //! The servers' passwords are recorded sealed under `secrets.key` (see
 //! [`Sealer`]); without that setting no shop can set a server up, and the
 //! ones recorded are not used.
+//!
+//! A server's host has to be on the internet, never this machine or a
+//! private network ([`ShopMail::check_host`]). The check looks the name up,
+//! and the transport then dials the address it found rather than the name
+//! (TLS still verifies the name), so a name that answers a private address
+//! later (DNS rebinding) gets nowhere; a transport is dialled for
+//! [`RESOLVE_TTL`] before its name is looked up and checked again.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use lettre::{
+    Address, AsyncSmtpTransport, AsyncTransport as _, Tokio1Executor,
+    address::Envelope,
+    transport::smtp::{
+        authentication::Credentials,
+        client::{Tls, TlsParameters},
+    },
+};
 use timada_tenancy::{
     MAIL_SECURITY_NONE, MAIL_SECURITY_STARTTLS, MAIL_SECURITY_TLS, MailServerSettings, TenantState,
 };
 use topcoat::{
     context::{Cx, app_context},
-    mail::{Mail, Mailbox, SmtpTransport, Transport, TransportFuture, send},
+    mail::{Mail, Mailbox, Receipt, SendError, Transport, TransportFuture, send},
 };
 
 use crate::mail::MailSender;
@@ -38,6 +54,11 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// ever.
 const SEND_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long a transport is dialled before its server's name is looked up and
+/// checked again: a name that moved to a private address is caught within
+/// this, one that moved between public addresses is followed.
+const RESOLVE_TTL: Duration = Duration::from_secs(5 * 60);
+
 /// A shop's mail server, opened: the password in clear.
 pub struct MailServer {
     pub host: String,
@@ -45,6 +66,11 @@ pub struct MailServer {
     pub security: String,
     pub username: Option<String>,
     pub password: Option<String>,
+    /// The address `host` was checked at ([`ShopMail::check_host`]): the
+    /// transport dials it rather than looking the name up again, so the
+    /// address dialled is the one checked. `None` dials the name (private
+    /// hosts allowed).
+    pub address: Option<SocketAddr>,
 }
 
 impl std::fmt::Debug for MailServer {
@@ -54,6 +80,7 @@ impl std::fmt::Debug for MailServer {
             .field("port", &self.port)
             .field("security", &self.security)
             .field("username", &self.username)
+            .field("address", &self.address)
             .finish_non_exhaustive()
     }
 }
@@ -69,16 +96,28 @@ impl MailServer {
         })
     }
 
-    fn smtp(&self) -> anyhow::Result<SmtpTransport> {
-        let builder = match self.security.as_str() {
-            MAIL_SECURITY_TLS => SmtpTransport::relay(&self.host)?,
-            MAIL_SECURITY_STARTTLS => SmtpTransport::starttls(&self.host)?,
-            MAIL_SECURITY_NONE => SmtpTransport::unencrypted(&self.host),
+    /// The SMTP client: TLS, when asked for, is for `host` whatever is
+    /// dialled, so the server has to hold a certificate for the name the
+    /// merchant gave.
+    fn smtp(&self) -> anyhow::Result<AsyncSmtpTransport<Tokio1Executor>> {
+        let tls = match self.security.as_str() {
+            MAIL_SECURITY_TLS => Tls::Wrapper(TlsParameters::new(self.host.clone())?),
+            MAIL_SECURITY_STARTTLS => Tls::Required(TlsParameters::new(self.host.clone())?),
+            MAIL_SECURITY_NONE => Tls::None,
             other => anyhow::bail!("unknown mail server security {other:?}"),
         };
-        let builder = builder.port(self.port).timeout(TIMEOUT);
+        let dialled = match self.address {
+            Some(address) => address.ip().to_string(),
+            None => self.host.clone(),
+        };
+        let builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(dialled)
+            .port(self.port)
+            .tls(tls)
+            .timeout(Some(TIMEOUT));
         let builder = match (&self.username, &self.password) {
-            (Some(username), Some(password)) => builder.credentials(username, password),
+            (Some(username), Some(password)) => {
+                builder.credentials(Credentials::new(username.clone(), password.clone()))
+            }
             _ => builder,
         };
         Ok(builder.build())
@@ -99,18 +138,51 @@ impl std::error::Error for NoAnswer {}
 
 /// A transport to a shop's server whose sends give up after `limit`.
 pub struct TimedTransport {
-    inner: SmtpTransport,
+    inner: AsyncSmtpTransport<Tokio1Executor>,
     limit: Duration,
 }
 
 impl Transport for TimedTransport {
     fn send<'a>(&'a self, cx: &'a Cx, mail: Mail) -> TransportFuture<'a> {
         Box::pin(async move {
-            tokio::time::timeout(self.limit, self.inner.send(cx, mail))
-                .await
-                .unwrap_or_else(|_| Err(NoAnswer.into()))
+            let envelope = envelope_of(&mail).map_err(topcoat::Error::from_anyhow)?;
+            let message = mail.formatted(cx)?;
+            let receipt = Receipt::new(message_id_of(&message));
+            match tokio::time::timeout(self.limit, self.inner.send_raw(&envelope, &message)).await {
+                Ok(Ok(_)) => Ok(receipt),
+                Ok(Err(err)) => Err(SendError::delivery(err).into()),
+                Err(_) => Err(NoAnswer.into()),
+            }
         })
     }
+}
+
+/// The envelope of `mail`: its sender and every recipient, `Bcc` included.
+fn envelope_of(mail: &Mail) -> anyhow::Result<Envelope> {
+    let address = |mailbox: &Mailbox| mailbox.address().parse::<Address>();
+    let from = mail.from().map(address).transpose()?;
+    let to = mail
+        .to()
+        .iter()
+        .chain(mail.cc())
+        .chain(mail.bcc())
+        .map(address)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Envelope::new(from, to)?)
+}
+
+/// The `Message-ID` header of a formatted message, for its receipt.
+fn message_id_of(message: &[u8]) -> String {
+    message
+        .split(|byte| *byte == b'\n')
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
+        .take_while(|line| !line.is_empty())
+        .find_map(|line| {
+            let (name, value) = std::str::from_utf8(line).ok()?.split_once(':')?;
+            name.eq_ignore_ascii_case("Message-ID")
+                .then(|| value.trim().to_owned())
+        })
+        .unwrap_or_default()
 }
 
 /// A shop asked to send its marketing and picked no server for it, or shop
@@ -160,8 +232,20 @@ struct Inner {
     transports: Mutex<Transports>,
 }
 
-/// `(tenant id, server id) → (the settings it was built from, the transport)`.
-type Transports = HashMap<(String, String), (MailServerSettings, Arc<dyn Transport>)>;
+/// `(tenant id, server id) → the transport kept for that server`.
+type Transports = HashMap<(String, String), Cached>;
+
+/// A transport kept for a shop's server.
+struct Cached {
+    /// The settings it was built from.
+    settings: MailServerSettings,
+    /// The address its host was checked at and it dials; `None` dials the
+    /// name.
+    address: Option<SocketAddr>,
+    /// When the host was last looked up and checked.
+    resolved_at: Instant,
+    transport: Arc<dyn Transport>,
+}
 
 impl ShopMail {
     /// `sealer`: `None` keeps every shop on the platform's server.
@@ -196,11 +280,13 @@ impl ShopMail {
         self.sealer()?.open_for(tenant_id, sealed)
     }
 
-    /// One of `tenant_id`'s servers, opened: its password in clear.
+    /// One of `tenant_id`'s servers, opened: its password in clear, dialling
+    /// `address` (what [`ShopMail::check_host`] gave for its host).
     pub fn open(
         &self,
         tenant_id: &str,
         settings: &MailServerSettings,
+        address: Option<SocketAddr>,
     ) -> anyhow::Result<MailServer> {
         let password = settings
             .password_sealed
@@ -213,18 +299,20 @@ impl ShopMail {
             security: settings.security.clone(),
             username: settings.username.clone(),
             password,
+            address,
         })
     }
 
     /// Refuses a host on this machine or a private network, unless the
     /// operator allowed it (`mail.allow_private_hosts`): a merchant must not
-    /// make this server talk to internal services.
-    pub async fn check_host(&self, host: &str, port: u16) -> anyhow::Result<()> {
+    /// make this server talk to internal services. Gives the address the
+    /// host was checked at, for the transport to dial; `None` when the check
+    /// is off.
+    pub async fn check_host(&self, host: &str, port: u16) -> anyhow::Result<Option<SocketAddr>> {
         if self.0.allow_private_hosts {
-            return Ok(());
+            return Ok(None);
         }
-        crate::net::check_public_host(host, port).await?;
-        Ok(())
+        Ok(Some(crate::net::public_address(host, port).await?))
     }
 
     /// Whether `tenant`'s marketing has a server to go out through here.
@@ -259,7 +347,8 @@ impl ShopMail {
     }
 
     /// Mails from `settings`' address, through it. Its transport is kept
-    /// while its settings stay the same.
+    /// while its settings stay the same, its host looked up and checked
+    /// again every [`RESOLVE_TTL`].
     async fn sender_through(
         &self,
         tenant: &TenantState,
@@ -267,33 +356,72 @@ impl ShopMail {
     ) -> anyhow::Result<ShopSender> {
         let name = settings.from_name.as_deref().unwrap_or(&tenant.name);
         let from = Mailbox::named(name, &settings.from_address)?;
-        self.check_host(&settings.host, settings.port).await?;
         let key = (tenant.id.clone(), settings.id.clone());
-        let cached = {
+        let fresh = {
             let transports = self.0.transports.lock().expect("transports lock");
             transports
                 .get(&key)
-                .filter(|(built_from, _)| built_from == settings)
-                .map(|(_, transport)| transport.clone())
+                .filter(|cached| {
+                    cached.settings == *settings && cached.resolved_at.elapsed() < RESOLVE_TTL
+                })
+                .map(|cached| cached.transport.clone())
         };
-        let transport = match cached {
+        let transport = match fresh {
             Some(transport) => transport,
-            None => {
-                let transport: Arc<dyn Transport> =
-                    Arc::new(self.open(&tenant.id, settings)?.transport()?);
-                let mut transports = self.0.transports.lock().expect("transports lock");
-                // The transports of the tenant's servers that are gone.
-                transports.retain(|(tenant_id, server_id), _| {
-                    *tenant_id != tenant.id || tenant.mail_server(server_id).is_some()
-                });
-                transports.insert(key, (settings.clone(), transport.clone()));
-                transport
-            }
+            None => self.resolved_transport(tenant, settings, key).await?,
         };
         Ok(ShopSender {
             from,
             transport: Some(transport),
         })
+    }
+
+    /// Looks `settings`' host up and checks it, then the transport dialling
+    /// the address found: the one kept, when it dials that address already
+    /// (its pooled connections with it), else a new one. A host that now
+    /// answers a private address is refused and the transport kept for it
+    /// dropped.
+    async fn resolved_transport(
+        &self,
+        tenant: &TenantState,
+        settings: &MailServerSettings,
+        key: (String, String),
+    ) -> anyhow::Result<Arc<dyn Transport>> {
+        let address = match self.check_host(&settings.host, settings.port).await {
+            Ok(address) => address,
+            Err(err) => {
+                self.0
+                    .transports
+                    .lock()
+                    .expect("transports lock")
+                    .remove(&key);
+                return Err(err);
+            }
+        };
+        let mut transports = self.0.transports.lock().expect("transports lock");
+        if let Some(cached) = transports.get_mut(&key)
+            && cached.settings == *settings
+            && cached.address == address
+        {
+            cached.resolved_at = Instant::now();
+            return Ok(cached.transport.clone());
+        }
+        let transport: Arc<dyn Transport> =
+            Arc::new(self.open(&tenant.id, settings, address)?.transport()?);
+        // The transports of the tenant's servers that are gone.
+        transports.retain(|(tenant_id, server_id), _| {
+            *tenant_id != tenant.id || tenant.mail_server(server_id).is_some()
+        });
+        transports.insert(
+            key,
+            Cached {
+                settings: settings.clone(),
+                address,
+                resolved_at: Instant::now(),
+                transport: transport.clone(),
+            },
+        );
+        Ok(transport)
     }
 
     /// Stands `transport` in for one of `tenant`'s servers, so a test can
@@ -311,8 +439,44 @@ impl ShopMail {
             .expect("one of the tenant's servers");
         self.0.transports.lock().expect("transports lock").insert(
             (tenant.id.clone(), server_id.to_owned()),
-            (settings, transport),
+            Cached {
+                settings,
+                address: None,
+                resolved_at: Instant::now(),
+                transport,
+            },
         );
+    }
+
+    /// Makes the transport kept for one of `tenant`'s servers look `by`
+    /// older, as if its host had been checked that long ago at `address`.
+    #[cfg(test)]
+    fn age_transport(
+        &self,
+        tenant: &TenantState,
+        server_id: &str,
+        by: Duration,
+        address: Option<SocketAddr>,
+    ) {
+        let mut transports = self.0.transports.lock().expect("transports lock");
+        let cached = transports
+            .get_mut(&(tenant.id.clone(), server_id.to_owned()))
+            .expect("a transport kept for the server");
+        cached.resolved_at = cached
+            .resolved_at
+            .checked_sub(by)
+            .expect("the clock has run that long");
+        cached.address = address;
+    }
+
+    /// Whether a transport is kept for one of `tenant`'s servers.
+    #[cfg(test)]
+    fn keeps_transport_for(&self, tenant: &TenantState, server_id: &str) -> bool {
+        self.0
+            .transports
+            .lock()
+            .expect("transports lock")
+            .contains_key(&(tenant.id.clone(), server_id.to_owned()))
     }
 }
 
@@ -330,8 +494,15 @@ pub async fn shop_sender(cx: &Cx, tenant: &TenantState) -> topcoat::Result<ShopS
 mod tests {
     use super::*;
     use crate::net::is_public;
+    use topcoat::{
+        context::CxTestBuilder,
+        mail::{MemoryTransport, mail},
+    };
 
     const KEY: &str = "a-secrets-key-of-thirty-two-chars!!";
+
+    /// A public address, as a name a merchant gave may have answered.
+    const ELSEWHERE: &str = "93.184.215.14:1025";
 
     /// A shop with `servers`, the first picked for its mails to shoppers
     /// and the last for its marketing.
@@ -362,6 +533,69 @@ mod tests {
 
     fn platform() -> Mailbox {
         "Timada <no-reply@example.com>".parse().unwrap()
+    }
+
+    async fn hello(cx: &Cx) -> Mail {
+        mail! {
+            from: "Shop <shop@acme.test>".parse::<Mailbox>().unwrap(),
+            to: Mailbox::new("buyer@acme.test").unwrap(),
+            subject: "Hello",
+            html: { cx => <p>"Hello"</p> },
+        }
+        .unwrap()
+    }
+
+    fn transport_of(sender: ShopSender) -> Arc<dyn Transport> {
+        sender.transport.expect("the shop's own server")
+    }
+
+    /// A mail server on this machine that takes one mail: the address it
+    /// listens on, and the mail's wire form once it has it.
+    async fn fake_smtp() -> (SocketAddr, tokio::sync::oneshot::Receiver<String>) {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sent, received) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (read, mut write) = socket.into_split();
+            let mut lines = BufReader::new(read).lines();
+            write.write_all(b"220 fake ESMTP\r\n").await.unwrap();
+            let mut sent = Some(sent);
+            let mut data = String::new();
+            let mut in_data = false;
+            while let Ok(Some(line)) = lines.next_line().await {
+                if in_data {
+                    if line == "." {
+                        in_data = false;
+                        if let Some(sent) = sent.take() {
+                            let _ = sent.send(std::mem::take(&mut data));
+                        }
+                        write.write_all(b"250 OK\r\n").await.unwrap();
+                    } else {
+                        data.push_str(&line);
+                        data.push_str("\r\n");
+                    }
+                    continue;
+                }
+                let verb = line.split(' ').next().unwrap_or("").to_ascii_uppercase();
+                let reply: &[u8] = match verb.as_str() {
+                    "EHLO" | "HELO" => b"250 fake\r\n",
+                    "DATA" => {
+                        in_data = true;
+                        b"354 go ahead\r\n"
+                    }
+                    "QUIT" => b"221 bye\r\n",
+                    _ => b"250 OK\r\n",
+                };
+                write.write_all(reply).await.unwrap();
+                if verb == "QUIT" {
+                    break;
+                }
+            }
+        });
+        (address, received)
     }
 
     #[tokio::test]
@@ -415,9 +649,9 @@ mod tests {
         assert!(sender.is_own_server());
         assert_eq!(sender.from.name(), Some("Acme Tea"));
         assert_eq!(sender.from.address(), "orders@acme.test");
-        let server = mail.open("t1", &tenant.mail_servers[0]).unwrap();
+        let server = mail.open("t1", &tenant.mail_servers[0], None).unwrap();
         assert!(
-            mail.open("t2", &tenant.mail_servers[0]).is_err(),
+            mail.open("t2", &tenant.mail_servers[0], None).is_err(),
             "sealed for one shop, it opens for no other"
         );
         assert_eq!(server.password.as_deref(), Some("s3cret"));
@@ -507,7 +741,108 @@ mod tests {
         assert!(err.to_string().contains("not a public address"), "{err}");
         assert!(mail.check_host("127.0.0.1", 25).await.is_err());
         assert!(mail.check_host("10.1.2.3", 25).await.is_err());
-        assert!(mail.check_host("93.184.215.14", 25).await.is_ok());
+        // A public host passes, and the check gives the address it was
+        // checked at for the transport to dial.
+        assert_eq!(
+            mail.check_host("93.184.215.14", 25).await.unwrap(),
+            Some("93.184.215.14:25".parse().unwrap())
+        );
+        // With private hosts allowed, nothing is checked and the name is
+        // dialled.
+        let allowed = ShopMail::new(Some(Sealer::new("mail", KEY)), true);
+        assert_eq!(allowed.check_host("127.0.0.1", 25).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn the_transport_dials_the_address_the_check_gave() {
+        let (address, received) = fake_smtp().await;
+        // A name nothing answers for: the mail reaches the server only if
+        // the transport dials the checked address rather than the name.
+        let server = |dialled| MailServer {
+            host: "mail.invalid".into(),
+            port: address.port(),
+            security: MAIL_SECURITY_NONE.into(),
+            username: None,
+            password: None,
+            address: dialled,
+        };
+        let cx = CxTestBuilder::new().build();
+        let receipt = server(Some(address))
+            .transport()
+            .unwrap()
+            .send(&cx, hello(&cx).await)
+            .await
+            .unwrap();
+        let wire = tokio::time::timeout(Duration::from_secs(5), received)
+            .await
+            .expect("the mail arrives")
+            .unwrap();
+        assert!(wire.contains("Subject: Hello"), "{wire}");
+        assert!(wire.contains("To: buyer@acme.test"), "{wire}");
+        assert!(!receipt.message_id().is_empty());
+        assert!(wire.contains(receipt.message_id()), "{wire}");
+
+        // Dialled by name, the name is what counts, and this one answers
+        // nothing.
+        let by_name = server(None).transport().unwrap();
+        assert!(by_name.send(&cx, hello(&cx).await).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_kept_transport_is_looked_up_again_after_the_window() {
+        let mail = ShopMail::new(Some(Sealer::new("mail", KEY)), true);
+        let tenant = shop(vec![settings(&mail, "a", "orders@acme.test")]);
+        let first = transport_of(mail.sender_of(&tenant, &platform()).await.unwrap());
+
+        // Within the window the kept transport is dialled, no lookup.
+        mail.age_transport(&tenant, "a", RESOLVE_TTL / 2, None);
+        let again = transport_of(mail.sender_of(&tenant, &platform()).await.unwrap());
+        assert!(Arc::ptr_eq(&first, &again));
+
+        // Past it the host is looked up again: the same address keeps the
+        // transport, and its pooled connections, for another window.
+        mail.age_transport(&tenant, "a", RESOLVE_TTL, None);
+        let again = transport_of(mail.sender_of(&tenant, &platform()).await.unwrap());
+        assert!(Arc::ptr_eq(&first, &again));
+        mail.age_transport(&tenant, "a", RESOLVE_TTL / 2, None);
+        let again = transport_of(mail.marketing_sender_of(&tenant).await.unwrap());
+        assert!(Arc::ptr_eq(&first, &again));
+
+        // A host that moved to another address gets a new transport, which
+        // dials the new one.
+        mail.age_transport(&tenant, "a", RESOLVE_TTL, Some(ELSEWHERE.parse().unwrap()));
+        let moved = transport_of(mail.sender_of(&tenant, &platform()).await.unwrap());
+        assert!(!Arc::ptr_eq(&first, &moved));
+    }
+
+    #[tokio::test]
+    async fn a_host_that_turns_private_is_refused_when_looked_up_again() {
+        let mail = ShopMail::new(Some(Sealer::new("mail", KEY)), false);
+        let tenant = shop(vec![settings(&mail, "a", "orders@acme.test")]);
+        // As if the host (localhost here) had answered a public address when
+        // the transport was built.
+        mail.stand_in_for(&tenant, "a", Arc::new(MemoryTransport::new()));
+        mail.age_transport(
+            &tenant,
+            "a",
+            Duration::ZERO,
+            Some(ELSEWHERE.parse().unwrap()),
+        );
+        assert!(
+            mail.sender_of(&tenant, &platform())
+                .await
+                .unwrap()
+                .is_own_server()
+        );
+
+        // Past the window the name is looked up again and now answers a
+        // private address: refused, and the transport to it dropped.
+        mail.age_transport(&tenant, "a", RESOLVE_TTL, Some(ELSEWHERE.parse().unwrap()));
+        let err = mail.sender_of(&tenant, &platform()).await.err().unwrap();
+        assert!(err.to_string().contains("not a public address"), "{err}");
+        assert!(!mail.keeps_transport_for(&tenant, "a"));
+        let err = mail.marketing_sender_of(&tenant).await.err().unwrap();
+        assert!(err.to_string().contains("not a public address"), "{err}");
     }
 
     #[tokio::test]
@@ -529,25 +864,29 @@ mod tests {
             security: MAIL_SECURITY_NONE.into(),
             username: None,
             password: None,
+            address: None,
         };
         assert_eq!(server.transport().unwrap().limit, SEND_TIMEOUT);
         let transport = TimedTransport {
             inner: server.smtp().unwrap(),
             limit: Duration::from_millis(300),
         };
-        let cx = topcoat::context::CxTestBuilder::new().build();
-        let mail = topcoat::mail::mail! {
-            from: "Shop <shop@acme.test>".parse::<Mailbox>().unwrap(),
-            to: Mailbox::new("buyer@acme.test").unwrap(),
-            subject: "Hello",
-            html: { cx => <p>"Hello"</p> },
-        }
-        .unwrap();
-        let err = tokio::time::timeout(Duration::from_secs(5), transport.send(&cx, mail))
-            .await
-            .expect("given up within its limit")
-            .unwrap_err();
+        let cx = CxTestBuilder::new().build();
+        let err = tokio::time::timeout(
+            Duration::from_secs(5),
+            transport.send(&cx, hello(&cx).await),
+        )
+        .await
+        .expect("given up within its limit")
+        .unwrap_err();
         assert!(err.is::<NoAnswer>(), "{err}");
+    }
+
+    #[test]
+    fn the_receipt_carries_the_message_id() {
+        let wire = b"Date: Mon, 1 Jan 2026 00:00:00 +0000\r\nmessage-id: <abc@acme.test>\r\n\r\nMessage-ID: <in-the-body@acme.test>\r\n";
+        assert_eq!(message_id_of(wire), "<abc@acme.test>");
+        assert_eq!(message_id_of(b"Subject: Hello\r\n\r\nHello\r\n"), "");
     }
 
     #[test]

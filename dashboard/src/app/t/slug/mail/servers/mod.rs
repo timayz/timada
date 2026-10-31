@@ -133,16 +133,20 @@ pub async fn tested(
         },
         Password::None => (None, None),
     };
-    if let Err(err) = shop_mail.check_host(&host, port).await {
-        tracing::info!(tenant = %tenant.slug, %err, "a shop mail server was refused");
-        return Ok(Err("mail_server_not_public"));
-    }
+    let address = match shop_mail.check_host(&host, port).await {
+        Ok(address) => address,
+        Err(err) => {
+            tracing::info!(tenant = %tenant.slug, %err, "a shop mail server was refused");
+            return Ok(Err("mail_server_not_public"));
+        }
+    };
     let server = MailServer {
         host: host.clone(),
         port,
         security: form.security.clone(),
         username: username.clone(),
         password: password.clone(),
+        address,
     };
     let transport = server.transport().map_err(topcoat::Error::from_anyhow)?;
     // The body owns what it shows.
