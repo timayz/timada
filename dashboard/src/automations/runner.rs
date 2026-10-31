@@ -126,16 +126,15 @@ impl<E: Store> Runner<E> {
         allow_private_hosts: bool,
         abandoned_after: Duration,
         runs_per_look: u32,
-    ) -> Arc<Self> {
+    ) -> anyhow::Result<Arc<Self>> {
         // rustls needs a process-wide crypto provider; installing twice is fine.
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let http = reqwest::Client::builder()
-            .user_agent("timada")
+        // The webhooks' addresses are the merchants': no redirect, public
+        // hosts only (the resolver checks the address dialled).
+        let http = crate::net::public_client(allow_private_hosts)
             .timeout(webhook_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_default();
-        Arc::new(Self {
+            .build()?;
+        Ok(Arc::new(Self {
             read_pool,
             write_pool,
             store,
@@ -149,7 +148,7 @@ impl<E: Store> Runner<E> {
             abandoned_after: abandoned_after.as_secs(),
             runs_per_look: runs_per_look.max(1),
             definitions: Definitions::default(),
-        })
+        }))
     }
 
     /// Sweeps every `every`, the first time right away.
@@ -1025,6 +1024,7 @@ mod tests {
             Duration::from_secs(3600),
             10,
         )
+        .unwrap()
     }
 
     /// The shop, with no member to tell.

@@ -72,10 +72,10 @@ impl Aliexpress {
                 .timeout(Duration::from_secs(20))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
-            pictures: reqwest::Client::builder()
-                .user_agent("timada")
+            // The pictures' addresses are the supplier's, not the operator's:
+            // public hosts only, checked at the address dialled.
+            pictures: crate::net::public_client(allow_private_hosts)
                 .timeout(Duration::from_secs(30))
-                .redirect(reqwest::redirect::Policy::none())
                 .build()?,
             allow_private_hosts,
             platform,
