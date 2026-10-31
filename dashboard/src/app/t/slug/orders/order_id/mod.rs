@@ -191,7 +191,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         })
         .collect();
     let total = format_money(order.total_cents, &order.currency);
-    // The code it was paid with and what it took off, as `-2.50 EUR`.
+    // The code it was paid with and what it took off, as `-2.50 €`.
     let discount = order.discount.as_ref().map(|discount| {
         (
             discount.code.clone(),

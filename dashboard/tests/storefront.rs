@@ -342,7 +342,7 @@ async fn a_store_follows_its_tenant_catalog_locally() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(found.price().as_deref(), Some("12.50 EUR"));
+    assert_eq!(found.price().as_deref(), Some("12.50 €"));
     assert!(
         published_product_by_slug(&pool, "draft-plate")
             .await
@@ -1017,7 +1017,7 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
     );
     assert_eq!(harness.options[0].values, ["Beige", "Blue"]);
     // A listing shows what it may cost, not one of the amounts.
-    assert_eq!(harness.price().as_deref(), Some("22.90–24.90 EUR"));
+    assert_eq!(harness.price().as_deref(), Some("22.90–24.90 €"));
     let range = harness.price_range().unwrap();
     assert!(range.varies());
     assert_eq!((range.min_cents, range.max_cents), (2290, 2490));
@@ -1035,7 +1035,7 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
         (colour.clone(), "Beige".to_owned()),
     ];
     let variant = harness.variant(&picked).expect("that combination is sold");
-    assert_eq!(variant.price(), "24.90 EUR");
+    assert_eq!(variant.price(), "24.90 €");
     assert_eq!(variant.sku.as_deref(), Some("harness-beige-m"));
     assert_eq!(variant.value_of(&colour), Some("Beige"));
     assert!(
@@ -1072,7 +1072,7 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
             .await
             .unwrap()
             .and_then(|p| p.price())
-            == Some("22.90 EUR".to_owned())
+            == Some("22.90 €".to_owned())
     })
     .await;
 
@@ -1314,7 +1314,7 @@ async fn a_store_with_a_checkout_key_sells() {
     // Read back at once, priced from the store, illustrated from the copy.
     let cart = store.cart(&cart_id).await.unwrap().unwrap();
     assert_eq!(cart.item_count, 3);
-    assert_eq!(cart.total().as_deref(), Some("37.50 EUR"));
+    assert_eq!(cart.total().as_deref(), Some("37.50 €"));
     assert_eq!(cart.lines[0].slug.as_deref(), Some("blue-mug"));
     assert!(cart.can_check_out());
 
@@ -1364,7 +1364,7 @@ async fn a_store_with_a_checkout_key_sells() {
     });
     let payment = answer_as_dashboard(&merchant, &cart_id).await.unwrap();
     let session = asking.await.unwrap().unwrap().unwrap();
-    assert_eq!(session.total(), "39.00 EUR");
+    assert_eq!(session.total(), "39.00 €");
     assert_eq!(session.client_secret, "secret_for_test");
     assert_eq!(
         store
@@ -1411,7 +1411,7 @@ async fn a_store_with_a_checkout_key_sells() {
     .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].reference, placed.reference);
-    assert_eq!(rows[0].total_label(), "39.00 EUR");
+    assert_eq!(rows[0].total_label(), "39.00 €");
 
     // A read-only key shows the catalog but cannot sell.
     let read_pool = h.local_pool("window-shop").await;
@@ -1489,7 +1489,7 @@ async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
     let cart = store.cart(&cart_id).await.unwrap().unwrap();
     assert_eq!(cart.lines[0].tax_category, "standard");
     let fr = cart.vat_estimate("FR").unwrap();
-    assert_eq!((fr.vat_cents, fr.amount()), (208, "2.08 EUR".to_owned()));
+    assert_eq!((fr.vat_cents, fr.amount()), (208, "2.08 €".to_owned()));
     assert_eq!(fr.label(), "VAT FR 20%");
     assert_eq!(cart.vat_estimate("de").unwrap().label(), "VAT FR 20%");
     assert_eq!(cart.vat_estimate("US"), None);
@@ -1578,7 +1578,7 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
     assert_eq!(offer.heading(), "A tracker at 60% off");
     assert_eq!(
         (offer.price(), offer.offer_price(), offer.percent_off()),
-        ("30.00 EUR".to_owned(), "12.00 EUR".to_owned(), 60)
+        ("30.00 €".to_owned(), "12.00 €".to_owned(), 60)
     );
 
     // Two trackers added: one line, one unit of it at the offer.
@@ -1600,7 +1600,7 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
         (offer_id.as_str(), 1200)
     );
     assert_eq!(cart.item_count, 3);
-    assert_eq!(cart.total().as_deref(), Some("54.50 EUR"));
+    assert_eq!(cart.total().as_deref(), Some("54.50 €"));
     assert_eq!(cart.vat_estimate("FR").unwrap().vat_cents, 908);
 
     store.shutdown().await;

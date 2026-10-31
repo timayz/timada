@@ -46,7 +46,7 @@ pub struct Variant {
 }
 
 impl Variant {
-    /// The price as a person reads it (`22.90 EUR`).
+    /// The price as a person reads it (`22.90 €`).
     pub fn price(&self) -> String {
         self.price_with(&MoneyFormat::default())
     }
@@ -105,7 +105,7 @@ impl PriceRange {
         self.min_cents != self.max_cents
     }
 
-    /// `12.50 EUR`, or `12.00–18.00 EUR` when it varies.
+    /// `12.50 €`, or `12.00–18.00 €` when it varies.
     pub fn label(&self) -> String {
         self.label_with(&MoneyFormat::default())
     }
@@ -119,8 +119,11 @@ impl PriceRange {
         if !self.varies() {
             return max;
         }
-        let min = money.format(self.min_cents.max(0) as u64, &self.currency);
-        format!("{}–{max}", min.trim_end_matches(&self.currency).trim_end())
+        money.range(
+            self.min_cents.max(0) as u64,
+            self.max_cents.max(0) as u64,
+            &self.currency,
+        )
     }
 }
 
@@ -186,7 +189,7 @@ impl Product {
         (self.review_count > 0).then(|| ((self.rating_x100 + 50) / 100).clamp(1, 5) as u8)
     }
 
-    /// The price as a listing shows it: `12.50 EUR`, or `12.00–18.00 EUR`
+    /// The price as a listing shows it: `12.50 €`, or `12.00–18.00 €`
     /// when the variants differ. Empty when it has no price at all.
     pub fn price(&self) -> Option<String> {
         Some(self.price_range()?.label())

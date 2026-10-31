@@ -39,7 +39,7 @@ impl OrderRow {
         OrderStatus::parse(&self.status).unwrap_or_default()
     }
 
-    /// The total as a person reads it (`24.00 EUR`).
+    /// The total as a person reads it (`24.00 €`).
     pub fn total_label(&self) -> String {
         format_money(self.total_cents as u64, &self.currency)
     }

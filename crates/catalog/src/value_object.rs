@@ -318,9 +318,9 @@ pub fn parse_amount(input: &str) -> Result<u64, CatalogError> {
 }
 
 /// Minor units as a person reads them, locale-neutral: `1250`, `EUR` gives
-/// `12.50 EUR`.
+/// `12.50 €`: the amount with the sign of its currency, locale-neutral.
 pub fn format_money(amount_cents: u64, currency: &str) -> String {
-    format!("{} {currency}", timada_core::format_amount(amount_cents))
+    timada_core::format_money(amount_cents, currency)
 }
 
 #[cfg(test)]
@@ -350,8 +350,8 @@ mod tests {
         for bad in ["", "abc", "12.345", "-1", "1e3", ".", "99999999999"] {
             assert!(parse_amount(bad).is_err(), "{bad:?}");
         }
-        assert_eq!(format_money(1250, "EUR"), "12.50 EUR");
-        assert_eq!(format_money(5, "USD"), "0.05 USD");
+        assert_eq!(format_money(1250, "EUR"), "12.50 €");
+        assert_eq!(format_money(5, "USD"), "0.05 $");
         assert_eq!(normalize_currency(" eur ").unwrap(), "EUR");
         assert!(normalize_currency("XYZ").is_err());
     }

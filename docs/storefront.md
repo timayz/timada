@@ -165,7 +165,7 @@ keeps the hits it has a route for.
 
 ```rust
 let Some(range) = product.price_range() else { return };
-range.label();                      // "22.90 EUR", or "22.90–24.90 EUR"
+range.label();                      // "22.90 €", or "22.90–24.90 €"
 range.varies();                     // whether a shopper's choice changes the price
 
 for option in &product.options { /* option.name, option.values */ }
@@ -206,7 +206,7 @@ price(product: &product, attrs: attributes! { class="price" })
 product_image(image: &photo, attrs: attributes! { class="photo" })
 ```
 
-They render `<span data-price class="price">12.50 EUR</span>` and an `<img data-image
+They render `<span data-price class="price">12.50 €</span>` and an `<img data-image
 src alt width height loading="lazy" decoding="async">`. The library ships no other
 markup and no CSS classes (a host's Tailwind build does not scan a dependency anyway):
 everything a page shows is the merchant's own `view!` around `Product` values.
@@ -216,7 +216,7 @@ everything a page shows is the merchant's own `view!` around `Product` values.
 Every amount a person reads — the `price` component, a cart's totals and what a
 discount takes off, a shipping option's price, an offer's price, the VAT estimate, an
 order's total in a shopper's history — is written by one `MoneyFormat`. The default
-is the locale-neutral `12.50 EUR`, and `Free` for shipping that costs nothing. A host
+is the locale-neutral `12.50 €`, and `Free` for shipping that costs nothing. A host
 whose pages write prices their own way hands that way in once, and the library
 follows it everywhere:
 

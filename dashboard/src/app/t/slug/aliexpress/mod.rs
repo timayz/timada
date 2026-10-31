@@ -182,7 +182,7 @@ fn rule_text(rule: &PricingRule, currency: &str) -> String {
     label
 }
 
-/// `Cost ×2.50 + 1.00, up to .99` for one rule; `Up to 30.00 EUR: cost
+/// `Cost ×2.50 + 1.00, up to .99` for one rule; `Up to 30.00 €: cost
 /// ×2.50 · above: cost ×2.00` by band; `By hand` without a pricing.
 pub fn pricing_label(pricing: Option<&Pricing>, currency: &str) -> String {
     let Some(pricing) = pricing else {
