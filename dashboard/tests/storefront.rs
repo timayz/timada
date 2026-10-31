@@ -2,7 +2,9 @@
 //! `Store` follows its tenant's catalog into a local database, keeps its
 //! cursor there and nowhere else, resumes from it after a restart, is cut
 //! off with its key, connects over TLS, and carries the category tree the
-//! products are filed under.
+//! products are filed under. Selling goes through the dashboard's
+//! `/store/carts/*` side, stood in for here over a socket, since the key
+//! reads neither carts nor orders through the store API.
 //!
 //! The dashboard is a binary crate, so the modules are reached through the
 //! binary's own test harness (`#[path]` includes), which drags in items this
@@ -21,6 +23,8 @@ mod rate_limit;
 mod read_only_store;
 #[path = "../src/store_api.rs"]
 mod store_api;
+#[path = "../src/store_carts.rs"]
+mod store_carts;
 #[path = "../src/store_writer.rs"]
 mod store_writer;
 
@@ -31,6 +35,7 @@ use std::time::Duration;
 
 use evento::migrator::Migrate;
 use evento::remote::ServerHandle;
+use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
@@ -48,8 +53,10 @@ use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
     read_model_subscription,
 };
+use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use topcoat::router::StatusCode;
 
 use cluster::Cluster;
 use config::StoreApiConfig;
@@ -1281,8 +1288,9 @@ async fn a_store_with_a_checkout_key_sells() {
         .unwrap();
     catalog.publish_product("alice", &mug.id).await.unwrap();
 
+    let api = dashboard_endpoint(h.platform.0.clone()).await;
     let pool = h.local_pool("selling-shop").await;
-    let store = Store::connect(h.config(&token), pool.clone())
+    let store = Store::connect(h.config(&token).api_url(&api), pool.clone())
         .await
         .unwrap();
     eventually("the product is in the local copy", async || {
@@ -1413,16 +1421,19 @@ async fn a_store_with_a_checkout_key_sells() {
     assert_eq!(rows[0].reference, placed.reference);
     assert_eq!(rows[0].total_label(), "39.00 €");
 
-    // A read-only key shows the catalog but cannot sell.
+    // A read-only key shows the catalog but cannot sell: the dashboard
+    // refuses it (403), and the store API would its reads.
     let read_pool = h.local_pool("window-shop").await;
-    let window = Store::connect(h.config(&read_token), read_pool)
+    let window = Store::connect(h.config(&read_token).api_url(&api), read_pool)
         .await
         .unwrap();
     let err = window
         .add_to_cart(None, &mug.id, None, 1)
         .await
         .unwrap_err();
-    assert!(format!("{err:#}").contains("store:write"), "{err:#}");
+    assert!(format!("{err:#}").contains("store:checkout"), "{err:#}");
+    let err = window.order_of_cart(&cart_id).await.unwrap_err();
+    assert!(format!("{err:#}").contains("store:checkout"), "{err:#}");
 
     window.shutdown().await;
     store.shutdown().await;
@@ -1462,8 +1473,9 @@ async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
     let mug = sell("Blue Mug", 1250, None).await;
     let book = sell("Cat Book", 1000, Some("books")).await;
 
+    let api = dashboard_endpoint(h.platform.0.clone()).await;
     let pool = h.local_pool("vat-shop").await;
-    let store = Store::connect(h.config(&token), pool.clone())
+    let store = Store::connect(h.config(&token).api_url(api), pool.clone())
         .await
         .unwrap();
 
@@ -1554,8 +1566,9 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
         .await
         .unwrap();
 
+    let api = dashboard_endpoint(h.platform.0.clone()).await;
     let pool = h.local_pool("offer-shop").await;
-    let store = Store::connect(h.config(&token), pool.clone())
+    let store = Store::connect(h.config(&token).api_url(api), pool.clone())
         .await
         .unwrap();
     eventually("both products are in the local copy", async || {
@@ -1832,9 +1845,59 @@ async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
 /// key is checked against the platform, then the request is held to the
 /// same limits with the same inputs, and answered 202 or 429 as the
 /// dashboard does. No mail goes out. Returns the address to give the store.
-async fn code_endpoint(platform: cluster::Executor, limits: config::StoreConfig) -> String {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+/// One HTTP request off `socket`: its head (the request line and headers)
+/// and its body, read to `content-length`.
+async fn read_request(socket: &mut TcpStream) -> (String, Vec<u8>) {
+    use tokio::io::AsyncReadExt;
 
+    let mut request = Vec::new();
+    let mut buf = [0u8; 4096];
+    let head_end = loop {
+        let n = socket.read(&mut buf).await.unwrap();
+        assert!(n > 0, "the request ended before its headers did");
+        request.extend_from_slice(&buf[..n]);
+        if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+            break at + 4;
+        }
+    };
+    let head = String::from_utf8_lossy(&request[..head_end]).into_owned();
+    let length: usize = header(&head, "content-length")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    while request.len() < head_end + length {
+        let n = socket.read(&mut buf).await.unwrap();
+        assert!(n > 0, "the request ended before its body did");
+        request.extend_from_slice(&buf[..n]);
+    }
+    let body = request[head_end..].to_vec();
+    (head, body)
+}
+
+fn header(head: &str, name: &str) -> Option<String> {
+    head.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case(name)
+            .then(|| value.trim().to_owned())
+    })
+}
+
+/// Answers `status` with a JSON body and closes the connection.
+async fn respond(mut socket: TcpStream, status: StatusCode, body: &Value) {
+    use tokio::io::AsyncWriteExt;
+
+    let body = body.to_string();
+    let answer = format!(
+        "HTTP/1.1 {} {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        status.as_u16(),
+        status.canonical_reason().unwrap_or(""),
+        body.len()
+    );
+    socket.write_all(answer.as_bytes()).await.unwrap();
+    socket.shutdown().await.ok();
+}
+
+/// The dashboard's `POST /store/shoppers/code`, as far as the limits go.
+async fn code_endpoint(platform: cluster::Executor, limits: config::StoreConfig) -> String {
     let limiter = Arc::new(rate_limit::RateLimiter::new());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -1845,33 +1908,9 @@ async fn code_endpoint(platform: cluster::Executor, limits: config::StoreConfig)
             };
             let (platform, limits, limiter) = (platform.clone(), limits.clone(), limiter.clone());
             tokio::spawn(async move {
-                let mut request = Vec::new();
-                let mut buf = [0u8; 4096];
-                let head_end = loop {
-                    let n = socket.read(&mut buf).await.unwrap();
-                    assert!(n > 0, "the request ended before its headers did");
-                    request.extend_from_slice(&buf[..n]);
-                    if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                        break at + 4;
-                    }
-                };
-                let head = String::from_utf8_lossy(&request[..head_end]).into_owned();
-                let header = |name: &str| {
-                    head.lines().find_map(|line| {
-                        let (key, value) = line.split_once(':')?;
-                        key.eq_ignore_ascii_case(name)
-                            .then(|| value.trim().to_owned())
-                    })
-                };
-                let length: usize = header("content-length")
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(0);
-                while request.len() < head_end + length {
-                    let n = socket.read(&mut buf).await.unwrap();
-                    request.extend_from_slice(&buf[..n]);
-                }
+                let (head, _body) = read_request(&mut socket).await;
                 assert!(head.starts_with("POST /store/shoppers/code "), "{head}");
-                let token = header("authorization").unwrap();
+                let token = header(&head, "authorization").unwrap();
                 let access = Command(platform)
                     .authenticate_api_key(token.strip_prefix("Bearer ").unwrap())
                     .await
@@ -1881,24 +1920,211 @@ async fn code_endpoint(platform: cluster::Executor, limits: config::StoreConfig)
                     &limits,
                     &access.key.id,
                     &access.tenant.id,
-                    header("x-shopper-ip").as_deref(),
+                    header(&head, "x-shopper-ip").as_deref(),
                     Some(peer.ip()),
                 );
                 let (status, body) = if allowed {
-                    ("202 Accepted", "{}")
+                    (StatusCode::ACCEPTED, json!({}))
                 } else {
-                    ("429 Too Many Requests", r#"{"error":"too_many_requests"}"#)
+                    (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        json!({ "error": "too_many_requests" }),
+                    )
                 };
-                let answer = format!(
-                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                socket.write_all(answer.as_bytes()).await.unwrap();
-                socket.shutdown().await.ok();
+                respond(socket, status, &body).await;
             });
         }
     });
     url
+}
+
+/// The dashboard's `/store/carts/*` and `/store/orders/*` side, as the
+/// library sees it: the key authenticated (401 unknown, 403 without
+/// `store:checkout`) and the path handed to `store_carts` in the key's
+/// tenant, over a socket of its own.
+async fn dashboard_endpoint(platform: cluster::Executor) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let platform = platform.clone();
+            tokio::spawn(async move {
+                let (head, body) = read_request(&mut socket).await;
+                let mut request_line = head.lines().next().unwrap_or_default().split(' ');
+                let method = request_line.next().unwrap_or_default().to_owned();
+                let path = request_line.next().unwrap_or_default().to_owned();
+                let token = header(&head, "authorization")
+                    .and_then(|value| value.strip_prefix("Bearer ").map(str::to_owned));
+                let access = match token {
+                    Some(token) => Command(platform.clone()).authenticate_api_key(&token).await,
+                    None => Err(timada_tenancy::TenancyError::ApiKeyInvalid),
+                };
+                let (status, answer) = match access {
+                    Err(_) => (StatusCode::UNAUTHORIZED, json!({})),
+                    Ok(access) if !access.key.allows(SCOPE_STORE_CHECKOUT) => {
+                        (StatusCode::FORBIDDEN, json!({}))
+                    }
+                    Ok(access) => {
+                        let orders = store_carts::gateway(platform, &access.tenant.id);
+                        dispatch(&orders, &method, &path, &body).await.unwrap()
+                    }
+                };
+                respond(socket, status, &answer).await;
+            });
+        }
+    });
+    url
+}
+
+/// The routes under `/store/carts` and `/store/orders`, as
+/// `dashboard/src/app/store` lays them out.
+async fn dispatch(
+    orders: &timada_orders::Command<cluster::Executor>,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> anyhow::Result<store_carts::Answer> {
+    let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    Ok(match (method, segments.as_slice()) {
+        ("POST", ["store", "carts"]) => match store_carts::parse(body) {
+            Some(item) => store_carts::start(orders, item).await?,
+            None => store_carts::bad_request(),
+        },
+        ("GET", ["store", "carts", id]) => store_carts::cart(orders, id).await?,
+        ("POST", ["store", "carts", id, "items"]) => match store_carts::parse(body) {
+            Some(item) => store_carts::add_item(orders, id, item).await?,
+            None => store_carts::bad_request(),
+        },
+        ("POST", ["store", "carts", id, "quantity"]) => match store_carts::parse(body) {
+            Some(item) => store_carts::set_quantity(orders, id, item).await?,
+            None => store_carts::bad_request(),
+        },
+        ("POST", ["store", "carts", id, "discount"]) => {
+            match store_carts::parse::<timada_orders::wire::DiscountCode>(body) {
+                Some(code) => store_carts::apply_discount(orders, id, &code.code).await?,
+                None => store_carts::bad_request(),
+            }
+        }
+        ("POST", ["store", "carts", id, "discount", "remove"]) => {
+            store_carts::remove_discount(orders, id).await?
+        }
+        ("POST", ["store", "carts", id, "checkout"]) => match store_carts::parse(body) {
+            Some(checkout) => store_carts::checkout(orders, id, checkout).await?,
+            None => store_carts::bad_request(),
+        },
+        ("GET", ["store", "carts", id, "requests", request_id]) => {
+            store_carts::request(orders, id, request_id).await?
+        }
+        ("GET", ["store", "carts", id, "order"]) => store_carts::order_of_cart(orders, id).await?,
+        ("GET", ["store", "orders", id]) => store_carts::order(orders, id).await?,
+        _ => (StatusCode::NOT_FOUND, json!({ "error": "no_such_route" })),
+    })
+}
+
+#[tokio::test]
+async fn the_dashboard_answers_for_one_cart_or_order_of_the_key_tenant() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let globex = h.create("globex").await;
+    let catalog = h.catalog(&acme);
+    let mug = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Blue Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &mug.id).await.unwrap();
+    let acme_orders = store_carts::gateway(h.platform.0.clone(), &acme.id);
+    let globex_orders = store_carts::gateway(h.platform.0.clone(), &globex.id);
+    let item = timada_orders::CartItem {
+        product_id: mug.id.clone(),
+        variant_id: None,
+        quantity: 1,
+    };
+
+    // Acme's storefront starts a cart; Globex's, holding the same id, is
+    // told there is no such cart, as for any id the tenant has not.
+    let (status, started) = store_carts::start(&acme_orders, item.clone())
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::CREATED);
+    let cart_id = started["id"].as_str().unwrap().to_owned();
+    let (status, answer) = store_carts::cart(&acme_orders, &cart_id).await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(answer["cart"]["id"], json!(cart_id));
+    assert_eq!(answer["quote"]["total_cents"], json!(1250));
+    for (status, answer) in [
+        store_carts::cart(&globex_orders, &cart_id).await.unwrap(),
+        store_carts::cart(&acme_orders, "01J00000000000000000000000")
+            .await
+            .unwrap(),
+        store_carts::add_item(&globex_orders, &cart_id, item.clone())
+            .await
+            .unwrap(),
+        store_carts::request(&globex_orders, &cart_id, "req")
+            .await
+            .unwrap(),
+    ] {
+        assert_eq!(
+            (status, &answer),
+            (StatusCode::NOT_FOUND, &json!({ "error": "cart_not_found" }))
+        );
+    }
+    // The request to pay is Acme's cart's too: its request is not Globex's.
+    let (status, _) = store_carts::request(&acme_orders, &cart_id, "req")
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // A refusal travels with its code.
+    let (status, answer) = store_carts::add_item(
+        &acme_orders,
+        &cart_id,
+        timada_orders::CartItem {
+            quantity: 0,
+            ..item.clone()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(answer, json!({ "error": "invalid_quantity" }));
+
+    // An order Acme placed: Acme's storefront reads it by its id or its
+    // cart's, Globex's is told there is none.
+    paid_order(&h.platform.0, &acme.id, "order-1", &[(&mug.id, "Blue Mug")]).await;
+    let (status, answer) = store_carts::order(&acme_orders, "order-1").await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(answer["reference"], json!("ABCD-EFGH"));
+    for (status, answer) in [
+        store_carts::order(&globex_orders, "order-1").await.unwrap(),
+        store_carts::order(&acme_orders, "order-2").await.unwrap(),
+        store_carts::order_of_cart(&acme_orders, &cart_id)
+            .await
+            .unwrap(),
+        store_carts::order_of_cart(&globex_orders, "cart-order-1")
+            .await
+            .unwrap(),
+    ] {
+        assert_eq!(
+            (status, &answer),
+            (
+                StatusCode::NOT_FOUND,
+                &json!({ "error": "order_not_found" })
+            )
+        );
+    }
+    h.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -15,7 +15,7 @@ use crate::value_object::{MAX_CART_LINES, MAX_LINE_QUANTITY};
 use super::CartState;
 
 /// A product, or one variant of it, and how many.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CartItem {
     pub product_id: String,
     /// Required when the product sells variants, absent otherwise.

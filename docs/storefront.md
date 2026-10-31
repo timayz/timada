@@ -40,10 +40,13 @@ store.shutdown().await;
 - **TLS** is optional in the library and in the dashboard's `[store_api]` section; without
   it the token travels in clear text, so plain TCP is for trusted networks only.
 - The **dashboard address** (`StoreConfig::api_url`, shown on the API keys page) is
-  where a storefront hands in what comes with files (shoppers' reviews and their
-  photos) and signs its shoppers in, over HTTPS with the same key. Without it the store
-  shows reviews but takes none (`Store::takes_reviews`), and nobody signs in
-  (`Store::signs_shoppers_in`).
+  where a storefront sells: its cart, the request to pay and the order it becomes are
+  answered one at a time by their id under `/store/carts/*` and `/store/orders/*`,
+  since the key may read neither the carts nor the orders of the shop through the
+  store API. It is also where a storefront hands in what comes with files (shoppers'
+  reviews and their photos) and signs its shoppers in, over HTTPS with the same key.
+  Without it the store shows the catalog and sells nothing, shows reviews but takes
+  none (`Store::takes_reviews`), and nobody signs in (`Store::signs_shoppers_in`).
 - The **local database** is opened as the dashboard opens its own: `StoreDb::open`
   gives the pages a pool of read-only connections (the second argument: how many pages
   read at once, since each connection runs on a thread of its own) and every write

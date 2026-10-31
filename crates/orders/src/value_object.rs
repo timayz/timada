@@ -32,7 +32,17 @@ pub const REFERENCE_ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 pub const REFERENCE_LEN: usize = 8;
 
 /// Where an order goes. Frozen in `events.lock`: the fields never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct ShippingAddress {
     /// The person or company the parcel is for.
     pub name: String,
@@ -47,7 +57,17 @@ pub struct ShippingAddress {
 
 /// One line of an order, as it was sold. Frozen in `events.lock`: the fields
 /// never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct OrderLine {
     pub product_id: String,
     pub variant_id: Option<String>,
@@ -69,7 +89,17 @@ pub struct OrderLine {
 
 /// The payment that paid for an order. Frozen in `events.lock`: the fields
 /// never change.
-#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Payment {
     /// `stripe`.
     pub provider: String,

@@ -29,7 +29,7 @@ const REFERENCE_ATTEMPTS: usize = 5;
 const CART_WRITE_ATTEMPTS: usize = 3;
 
 /// What a shopper gives at checkout.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Checkout {
     pub email: String,
     pub shipping: ShippingAddress,
@@ -76,7 +76,7 @@ impl From<&OrderState> for PlacedOrder {
 
 /// A cart priced from the catalog as it stands: the lines an order would
 /// hold, and the ones that cannot be sold any more.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Quote {
     /// Each with the kind of goods it is for VAT ([`OrderLine::tax_category`]).
     pub lines: Vec<OrderLine>,
@@ -100,7 +100,8 @@ pub struct Quote {
     pub discount: Option<OrderDiscount>,
     /// Why the cart's discount code takes nothing off (one of
     /// [`timada_discounts::SHOPPER_CODES`]); the total is then full price.
-    pub discount_refused: Option<&'static str>,
+    #[serde(deserialize_with = "crate::wire::shopper_code")]
+    pub discount_refused: Option<crate::wire::ShopperCode>,
     /// What the goods cost: the subtotal, less the discount. Shipping, when
     /// the shop charges for it, comes on top (see [`Quote::shipping_for`]).
     pub total_cents: u64,
@@ -120,7 +121,7 @@ impl Quote {
 }
 
 /// The offer one unit of a line is priced at.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LineOffer {
     pub offer_id: String,
     /// What one costs without the offer.
@@ -128,7 +129,7 @@ pub struct LineOffer {
 }
 
 /// An offer a cart may take, priced from the catalog as it stands.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct QuotedOffer {
     pub offer_id: String,
     pub product_id: String,
