@@ -26,7 +26,14 @@ else in between, the payment is refunded in full, the cart records it
 codes) instead of waiting for an order that will not come. Stripe keeps its fee on such
 a refund; it is the price of never selling the same unit twice.
 
-Cancelling an order in the dashboard refunds it through Stripe first.
+Cancelling an order in the dashboard refunds it through Stripe first: the order
+records the request (`Order::RefundRequested`, which fixes the idempotency key),
+Stripe is asked, the refund is recorded (`Order::Refunded`), and only then is the order
+cancelled. If Stripe refuses, the order stays paid with the request pending and the
+page offers to retry under the same key, so Stripe never refunds twice. If Stripe took
+the refund but the recording failed here, or a refund was made by hand in Stripe's
+dashboard, the `charge.refunded` webhook records what Stripe holds and the order does
+not know yet, and the credit note follows.
 
 ## Setting it up
 

@@ -56,6 +56,10 @@ pub enum OrdersError {
     OrderCancelled,
     #[error("a fulfilled or cancelled order cannot be cancelled")]
     NotCancellable,
+    #[error("a refund is on its way: wait for it to be recorded")]
+    RefundPending,
+    #[error("the refund must be more than nothing and at most what is outstanding")]
+    InvalidRefund,
     #[error("the tracking number is at most 200 characters")]
     InvalidTracking,
     #[error("say why the order is cancelled (at most 500 characters)")]
@@ -154,6 +158,8 @@ impl OrdersError {
             Self::OrderNotFound => "order_not_found",
             Self::OrderCancelled => "order_cancelled",
             Self::NotCancellable => "not_cancellable",
+            Self::RefundPending => "refund_pending",
+            Self::InvalidRefund => "invalid_refund",
             Self::InvalidTracking => "invalid_tracking",
             Self::InvalidReason => "invalid_reason",
             Self::InvalidStorefrontUrl => "invalid_storefront_url",

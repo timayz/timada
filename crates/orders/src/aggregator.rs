@@ -215,6 +215,16 @@ pub enum Order {
         amount_cents: u64,
         discounted_by: String,
     },
+    /// The merchant asked for money to go back, before the provider is
+    /// asked: the refund is made under `idempotency_key`, so asking the
+    /// provider again (a retry after a failure, another node) gives the same
+    /// refund. Settled by the `Refunded` that follows.
+    RefundRequested {
+        payment_id: String,
+        amount_cents: u64,
+        idempotency_key: String,
+        requested_by: String,
+    },
     /// Money went back to the shopper through the provider.
     Refunded {
         payment_id: String,

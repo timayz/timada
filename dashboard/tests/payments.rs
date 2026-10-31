@@ -42,7 +42,8 @@ use timada_tenancy::{
 use cluster::Cluster;
 use payments::webhook::{Outcome, receive};
 use payments::{
-    DASHBOARD_ACTOR, NewPayment, OpenPayment, PaymentGateway, PaymentStatus, Payments, signature,
+    DASHBOARD_ACTOR, NewPayment, OpenPayment, PaymentGateway, PaymentStatus, Payments,
+    RefundRecord, signature,
 };
 
 const WEBHOOK_SECRET: &str = "whsec_test";
@@ -133,6 +134,26 @@ impl PaymentGateway for FakeStripe {
         let mut refunds = self.refunds.lock().unwrap();
         refunds.push((payment_id.to_owned(), amount_cents));
         Ok(format!("re_{}", refunds.len()))
+    }
+
+    async fn refunds_of(
+        &self,
+        _secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<Vec<RefundRecord>> {
+        Ok(self
+            .refunds
+            .lock()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .filter(|(_, (paid, _))| paid == payment_id)
+            .map(|(index, (_, amount_cents))| RefundRecord {
+                refund_id: format!("re_{}", index + 1),
+                amount_cents: *amount_cents,
+                succeeded: true,
+            })
+            .collect())
     }
 }
 
@@ -606,11 +627,18 @@ async fn webhooks_that_do_not_check_out_change_nothing() {
         now() - 3600,
     ));
     assert_eq!(h.webhook(&acme, &body, stale).await, Outcome::Rejected);
-    let other = r#"{"id":"evt_2","type":"charge.refunded","data":{"object":{"id":"ch_1"}}}"#;
-    assert_eq!(
-        h.webhook(&acme, other, signed(other)).await,
-        Outcome::Ignored
+    // A charge of a payment nobody refunded, and one without its payment.
+    let other = format!(
+        r#"{{"id":"evt_2","type":"charge.refunded","data":{{"object":{{"id":"ch_1","payment_intent":"{}"}}}}}}"#,
+        payment.payment_id
     );
+    assert_eq!(
+        h.webhook(&acme, &other, signed(&other)).await,
+        Outcome::Ignored,
+        "no order yet: nothing to reconcile"
+    );
+    let bare = r#"{"id":"evt_3","type":"charge.refunded","data":{"object":{"id":"ch_1"}}}"#;
+    assert_eq!(h.webhook(&acme, bare, signed(bare)).await, Outcome::Ignored);
 
     let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
     assert!(orders.load_order_of_cart(&cart_id).await.unwrap().is_none());
@@ -645,6 +673,47 @@ async fn requests_that_cannot_go_ahead_are_refused() {
         PaymentAnswer::Refused("price_changed".into())
     );
     assert_eq!(h.stripe.opened_count(), 0, "nothing was opened with Stripe");
+    h.finish().await;
+}
+
+/// A refund made in Stripe's own dashboard, or one Stripe took whose
+/// recording failed here, reaches the order through `charge.refunded`.
+#[tokio::test]
+async fn a_refund_made_in_stripe_is_recorded_from_its_webhook() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let order_id = h.buy(&acme, checkout(Some(2500))).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let payment_id = order.payment.payment_id.clone();
+
+    // Refunded by hand in Stripe: the order knows nothing of it.
+    h.stripe
+        .refunds
+        .lock()
+        .unwrap()
+        .push((payment_id.clone(), 1000));
+    let body = format!(
+        r#"{{"id":"evt_9","type":"charge.refunded","data":{{"object":{{"id":"ch_9","payment_intent":"{payment_id}"}}}}}}"#
+    );
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Reconciled { recorded: 1 }
+    );
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.refunded_cents, 1000);
+    assert_eq!(order.refund_ids, vec!["re_1".to_owned()]);
+    // Told again: known already.
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Reconciled { recorded: 0 }
+    );
+    // And the credit note follows, as for a refund made here.
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
+    let credit =
+        eventually(async || invoicing.load_credit_note_of_refund("re_1").await.unwrap()).await;
+    assert_eq!(credit.total_cents, 1000);
     h.finish().await;
 }
 

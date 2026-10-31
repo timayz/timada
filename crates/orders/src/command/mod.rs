@@ -29,9 +29,9 @@ use crate::aggregator::{
     Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded,
     ItemRemoved, LanguageGiven, LanguageSet, MethodAdded, MethodChanged, MethodRemoved,
     NewsletterOptInSet, NewsletterOptedIn, PaymentRefused, PaymentRequested, PaymentReturned,
-    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, Refunded, ShippingCharged,
-    ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet,
-    TimeZoneGiven, TimeZoneSet,
+    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
+    ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
+    StorefrontAddressSet, TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -667,6 +667,9 @@ pub struct OrderState {
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
     pub refund_ids: Vec<String>,
+    /// A refund asked for and not recorded yet: the provider may hold it
+    /// already. Nothing else happens to the order until it is settled.
+    pub pending_refund: Option<PendingRefund>,
     pub status: OrderStatus,
     pub tracking: Option<String>,
     pub cancel_reason: Option<String>,
@@ -678,7 +681,22 @@ pub struct OrderState {
     pub updated_at: u64,
 }
 
+/// A refund asked for, under the key the provider is asked with.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PendingRefund {
+    pub payment_id: String,
+    pub amount_cents: u64,
+    pub idempotency_key: String,
+    /// Unix seconds.
+    pub requested_at: u64,
+}
+
 impl OrderState {
+    /// What was paid and not given back yet.
+    pub fn outstanding_cents(&self) -> u64 {
+        self.total_cents.saturating_sub(self.refunded_cents)
+    }
+
     /// How many items, all lines together.
     pub fn item_count(&self) -> u32 {
         self.lines.iter().map(|line| line.quantity).sum()
@@ -700,6 +718,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_placed())
         .handler(on_fulfilled())
         .handler(on_cancelled())
+        .handler(on_refund_requested())
         .handler(on_refunded())
         .handler(on_discounted())
         .handler(on_billing_address_set())
@@ -786,6 +805,23 @@ async fn on_newsletter_opt_in_set(
 async fn on_refunded(event: Event<Refunded>, order: &mut OrderState) -> anyhow::Result<()> {
     order.refunded_cents += event.data.amount_cents;
     order.refund_ids.push(event.data.refund_id.to_owned());
+    // Whatever was asked for is settled by what the provider gave back.
+    order.pending_refund = None;
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_refund_requested(
+    event: Event<RefundRequested>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.pending_refund = Some(PendingRefund {
+        payment_id: event.data.payment_id.to_owned(),
+        amount_cents: event.data.amount_cents,
+        idempotency_key: event.data.idempotency_key.to_owned(),
+        requested_at: event.timestamp,
+    });
     order.updated_at = event.timestamp;
     Ok(())
 }
