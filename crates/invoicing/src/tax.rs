@@ -6,12 +6,14 @@
 //! regime only decides how that price splits into base and tax. The rate of
 //! a level (standard, reduced…) in each country comes from the `world-tax`
 //! crate; which level a kind of goods falls under in each country is ours
-//! (`data/tax_categories.json`), and so is the yearly threshold of EU
-//! distance sales (the crate checks a threshold per sale).
+//! (`data/tax_categories.json`), as are the few rates that table lacks (its
+//! `_overrides`, in basis points) and the yearly threshold of EU distance
+//! sales (the crate checks a threshold per sale).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use serde::Deserialize;
 use world_tax::TaxDatabase;
 
 use crate::value_object::vat_breakdown;
@@ -24,6 +26,27 @@ pub const EU_DISTANCE_THRESHOLD_CENTS: u64 = 1_000_000;
 /// The category of goods with no particular rate.
 const STANDARD: &str = "standard";
 const CATEGORIES_JSON: &str = include_str!("../data/tax_categories.json");
+/// The key of `tax_categories.json` that holds the rates the `world-tax`
+/// table lacks.
+const OVERRIDES_KEY: &str = "_overrides";
+/// The rate levels the `world-tax` table has.
+const LEVELS: [&str; 5] = [
+    "standard",
+    "reduced",
+    "reduced_alt",
+    "super_reduced",
+    "zero",
+];
+
+/// A rate the `world-tax` table lacks, kept in `tax_categories.json` under
+/// a name of its own that a category maps a country to instead of a level.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RateOverride {
+    /// The one country the rate holds in: a category of another country
+    /// pointing at it is a mistake, taxed at that country's standard rate.
+    country: String,
+    rate_bps: u32,
+}
 
 /// How a sale is taxed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -179,7 +202,7 @@ fn eu_members() -> &'static [String] {
         .map_or(&[], |eu| eu.members.as_slice())
 }
 
-/// `category → country → level`.
+/// `category → country → level (or override name)`.
 fn categories() -> &'static HashMap<String, HashMap<String, String>> {
     static CATEGORIES: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
     CATEGORIES.get_or_init(|| {
@@ -195,8 +218,23 @@ fn categories() -> &'static HashMap<String, HashMap<String, String>> {
     })
 }
 
+/// `override name → rate`, from the file's `_overrides`.
+fn overrides() -> &'static HashMap<String, RateOverride> {
+    static OVERRIDES: OnceLock<HashMap<String, RateOverride>> = OnceLock::new();
+    OVERRIDES.get_or_init(|| {
+        let mut raw: HashMap<String, serde_json::Value> =
+            serde_json::from_str(CATEGORIES_JSON).expect("tax_categories.json is valid");
+        raw.remove(OVERRIDES_KEY)
+            .map_or_else(HashMap::new, |value| {
+                serde_json::from_value(value).expect("_overrides is a map of name to rate")
+            })
+    })
+}
+
 /// The rate of a kind of goods in a country, in basis points. A level the
 /// country does not have, or a kind it does not list, is its standard rate.
+/// A kind mapped to one of the file's `_overrides` carries that rate, when
+/// the override is the country's own.
 pub fn rate_bps(country: &str, category: &str) -> u32 {
     let Ok(rates) = database().get_country(country) else {
         tracing::warn!(country, "no VAT rates for this country: 0 %");
@@ -206,6 +244,17 @@ pub fn rate_bps(country: &str, category: &str) -> u32 {
         .get(category)
         .and_then(|levels| levels.get(country))
         .map_or(STANDARD, String::as_str);
+    match overrides().get(level) {
+        Some(rate) if rate.country == country => return rate.rate_bps,
+        Some(rate) => tracing::warn!(
+            country,
+            category,
+            level,
+            holds_in = rate.country,
+            "rate override of another country: standard rate"
+        ),
+        None => {}
+    }
     let rate = match level {
         "zero" => Some(0.0),
         "reduced" => rates.reduced_rate,
@@ -416,6 +465,59 @@ mod tests {
         assert_eq!(rate_bps("CZ", "press"), 1200);
         // An unknown kind is standard.
         assert_eq!(rate_bps("DE", "cars"), 1900);
+    }
+
+    /// Latvia's 5 % on books and press (law of 2025-12-18) is a rate the
+    /// `world-tax` table lacks: it comes from the file's `_overrides`. The
+    /// other kinds keep the table's rates.
+    #[test]
+    fn a_rate_the_table_lacks_comes_from_an_override() {
+        assert_eq!(rate_bps("LV", "books"), 500);
+        assert_eq!(rate_bps("LV", "press"), 500);
+        assert_eq!(rate_bps("LV", "standard"), 2100);
+        assert_eq!(rate_bps("LV", "food"), 2100);
+        assert_eq!(rate_bps("LV", "medicines"), 1200);
+        // The override is Latvia's alone.
+        assert_eq!(overrides()["lv_publications"].country, "LV");
+    }
+
+    /// An override is named after no level, holds in an EU country, and some
+    /// category of that country uses it; no other country points at it, and
+    /// every entry of a category is a level or an override.
+    #[test]
+    fn overrides_are_well_formed_and_used() {
+        for (name, rate) in overrides() {
+            assert!(!LEVELS.contains(&name.as_str()), "{name} shadows a level");
+            assert!(
+                eu_members().contains(&rate.country),
+                "{name} holds in {}, not an EU country",
+                rate.country
+            );
+            let pointing: Vec<(&str, &str)> = categories()
+                .iter()
+                .flat_map(|(category, levels)| {
+                    levels
+                        .iter()
+                        .filter(|(_, level)| *level == name)
+                        .map(move |(country, _)| (category.as_str(), country.as_str()))
+                })
+                .collect();
+            assert!(!pointing.is_empty(), "{name} is used by no category");
+            for (category, country) in pointing {
+                assert_eq!(
+                    country, rate.country,
+                    "{category} points {country} at {name}"
+                );
+            }
+        }
+        for levels in categories().values() {
+            for level in levels.values() {
+                assert!(
+                    LEVELS.contains(&level.as_str()) || overrides().contains_key(level),
+                    "{level} is neither a level nor an override"
+                );
+            }
+        }
     }
 
     /// The table was last checked against the published rates on the date it
@@ -666,6 +768,17 @@ mod tests {
             decide(oss, &to("DE", "10115"), &lines, "EUR", below()).regime,
             Regime::Oss
         );
+        // A book and a lamp to Latvia: 5 % through the override, then 21 %.
+        let latvia = decide(
+            oss,
+            &to("LV", "LV-1050"),
+            &[("books", 1000), ("standard", 1000)],
+            "EUR",
+            below(),
+        );
+        assert_eq!(latvia.regime, Regime::Oss);
+        assert_eq!(latvia.tax_country, "LV");
+        assert_eq!(latvia.rates, vec![Some(500), Some(2100)]);
         // Another currency is taxed at destination and not counted (and
         // only taken from a seller registered for the One-Stop Shop, see
         // `accepts`).
