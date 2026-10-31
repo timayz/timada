@@ -6323,6 +6323,7 @@ dependencies = [
  "hmac 0.12.1",
  "imagesize",
  "jiff",
+ "miniserde",
  "openidconnect",
  "rand 0.9.5",
  "rcgen",
