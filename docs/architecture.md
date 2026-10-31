@@ -212,7 +212,10 @@ by construction.
    are recorded in the tenant's platform events (`MailServerAdded`/`Changed`)
    sealed under `[secrets] key`; secrets never enter the tenant store, which
    replicates to storefronts. Hosts on this machine or a private network are refused
-   unless `mail.allow_private_hosts` is set. Account codes and invitations always go
+   unless `mail.allow_private_hosts` is set, and the transport dials the addresses
+   that check resolved, in turn, rather than the name (TLS still verifies the name),
+   looking the name up again every few minutes, so a name that later answers a
+   private address (DNS rebinding) gets nowhere. Account codes and invitations always go
    through the platform's server; newsletter campaigns, automated mails and their
    test mails never do, they go through the server picked for marketing only
    (`ShopMail::marketing_sender_of`). Each shop mail may be worded per language: the
