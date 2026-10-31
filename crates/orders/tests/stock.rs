@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use timada_orders::{OrdersError, stock_usage_subscription};
+use timada_orders::{OrderError, stock_usage_subscription};
 
 #[tokio::test]
 async fn a_cart_takes_no_more_than_is_left() {
@@ -14,7 +14,7 @@ async fn a_cart_takes_no_more_than_is_left() {
         .add_to_cart(SHOPPER, &cart_id, item(&mug, None, 1))
         .await
         .unwrap_err();
-    assert!(matches!(err, OrdersError::OutOfStock { available: 2, .. }));
+    assert!(matches!(err, OrderError::OutOfStock { available: 2, .. }));
     assert_eq!(err.code(), Some("out_of_stock"));
 
     // Fewer is fine; more than is left is not.
@@ -26,7 +26,7 @@ async fn a_cart_takes_no_more_than_is_left() {
         orders
             .set_cart_quantity(SHOPPER, &cart_id, item(&mug, None, 3))
             .await,
-        Err(OrdersError::OutOfStock { .. })
+        Err(OrderError::OutOfStock { .. })
     ));
 }
 
@@ -69,7 +69,7 @@ async fn what_another_checkout_holds_is_not_for_sale() {
         .unwrap();
     assert!(matches!(
         orders.pending_payment(&second, &request_id).await,
-        Err(OrdersError::OutOfStock { .. })
+        Err(OrderError::OutOfStock { .. })
     ));
 }
 

@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use timada_orders::{OrderStatus, OrdersError};
+use timada_orders::{OrderError, OrderStatus};
 
 async fn paid(orders: &Orders, catalog: &Catalog) -> String {
     let mug = product(catalog, "Mug", 1250, "EUR").await;
@@ -28,7 +28,7 @@ async fn a_paid_order_is_fulfilled() {
     let late = orders
         .cancel_order(ALICE, &order_id, "changed my mind".into())
         .await;
-    assert!(matches!(late, Err(OrdersError::NotCancellable)), "{late:?}");
+    assert!(matches!(late, Err(OrderError::NotCancellable)), "{late:?}");
 }
 
 #[tokio::test]
@@ -37,7 +37,7 @@ async fn an_order_is_cancelled_with_a_reason_and_refunded() {
     let order_id = paid(&orders, &catalog).await;
 
     let bare = orders.cancel_order(ALICE, &order_id, "  ".into()).await;
-    assert!(matches!(bare, Err(OrdersError::InvalidReason)), "{bare:?}");
+    assert!(matches!(bare, Err(OrderError::InvalidReason)), "{bare:?}");
     orders
         .cancel_order(ALICE, &order_id, "Out of stock".into())
         .await
@@ -61,12 +61,12 @@ async fn an_order_is_cancelled_with_a_reason_and_refunded() {
     assert_eq!(order.refunded_cents, 1250, "the same refund counts once");
     let fulfilled = orders.fulfil_order(ALICE, &order_id, None).await;
     assert!(
-        matches!(fulfilled, Err(OrdersError::OrderCancelled)),
+        matches!(fulfilled, Err(OrderError::OrderCancelled)),
         "{fulfilled:?}"
     );
     let missing = orders.fulfil_order(ALICE, "no-such-order", None).await;
     assert!(
-        matches!(missing, Err(OrdersError::OrderNotFound)),
+        matches!(missing, Err(OrderError::OrderNotFound)),
         "{missing:?}"
     );
 }
@@ -80,10 +80,10 @@ async fn a_refund_is_requested_before_the_provider_and_settled_after() {
     let order_id = paid(&orders, &catalog).await;
 
     let none = orders.request_refund(ALICE, &order_id, 0).await;
-    assert!(matches!(none, Err(OrdersError::InvalidRefund)), "{none:?}");
+    assert!(matches!(none, Err(OrderError::InvalidRefund)), "{none:?}");
     let too_much = orders.request_refund(ALICE, &order_id, 1251).await;
     assert!(
-        matches!(too_much, Err(OrdersError::InvalidRefund)),
+        matches!(too_much, Err(OrderError::InvalidRefund)),
         "{too_much:?}"
     );
     let pending = orders.request_refund(ALICE, &order_id, 1250).await.unwrap();
@@ -103,10 +103,7 @@ async fn a_refund_is_requested_before_the_provider_and_settled_after() {
     let early = orders
         .cancel_order(ALICE, &order_id, "Out of stock".into())
         .await;
-    assert!(
-        matches!(early, Err(OrdersError::RefundPending)),
-        "{early:?}"
-    );
+    assert!(matches!(early, Err(OrderError::RefundPending)), "{early:?}");
 
     // The provider's word settles it; the order can then be cancelled.
     orders
@@ -122,14 +119,11 @@ async fn a_refund_is_requested_before_the_provider_and_settled_after() {
         .unwrap();
     // Nothing outstanding: nothing more to ask for.
     let spent = orders.request_refund(ALICE, &order_id, 1).await;
-    assert!(
-        matches!(spent, Err(OrdersError::InvalidRefund)),
-        "{spent:?}"
-    );
+    assert!(matches!(spent, Err(OrderError::InvalidRefund)), "{spent:?}");
 
     // An order that left is not refunded this way.
     let left = paid(&orders, &catalog).await;
     orders.fulfil_order(ALICE, &left, None).await.unwrap();
     let late = orders.request_refund(ALICE, &left, 100).await;
-    assert!(matches!(late, Err(OrdersError::NotCancellable)), "{late:?}");
+    assert!(matches!(late, Err(OrderError::NotCancellable)), "{late:?}");
 }

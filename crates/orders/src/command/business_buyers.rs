@@ -1,7 +1,7 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{BusinessBuyersAccepted, BusinessBuyersRefused};
-use crate::error::OrdersError;
+use crate::error::OrderError;
 use crate::value_object::business_buyers_id;
 
 #[evento::command]
@@ -22,7 +22,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         accepted: bool,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let state = self.load_business_buyers().await?;
         if state.as_ref().is_some_and(|state| state.accepted) == accepted {
             return Ok(());

@@ -1307,10 +1307,7 @@ async fn a_store_with_a_checkout_key_sells() {
         .await
         .unwrap();
     assert!(
-        matches!(
-            refused,
-            Err(timada_storefront::OrdersError::InvalidQuantity)
-        ),
+        matches!(refused, Err(timada_storefront::OrderError::InvalidQuantity)),
         "{refused:?}"
     );
 

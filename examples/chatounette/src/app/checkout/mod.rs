@@ -14,7 +14,7 @@ pub mod countries;
 pub mod start;
 
 use timada_storefront::{
-    CartView, Checkout, OfferView, OrdersError, VatEstimate, accepts_business_buyers, format_money,
+    CartView, Checkout, OfferView, OrderError, VatEstimate, accepts_business_buyers, format_money,
     menu, payment_setup, recent_reviews, request_language, request_time_zone, save_address,
     start_payment,
 };
@@ -841,7 +841,7 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         Err(err) => err,
     };
     let code = err.code();
-    let to_cart = matches!(err, OrdersError::EmptyCart | OrdersError::Unavailable { .. })
+    let to_cart = matches!(err, OrderError::EmptyCart | OrderError::Unavailable { .. })
         // The cart is where the code is changed or taken off.
         || code.is_some_and(|code| code.starts_with("discount_"));
     Ok(Asked::Refused { code, to_cart })

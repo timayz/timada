@@ -314,7 +314,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     })
 }
 
-/// How a refusal (an [`OrdersError`](timada_storefront::OrdersError) code
+/// How a refusal (an [`OrderError`](timada_storefront::OrderError) code
 /// carried in the URL) reads to a shopper.
 pub fn say(code: &str) -> &'static str {
     match code {

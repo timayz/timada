@@ -18,9 +18,9 @@ use timada_orders::aggregator::Placed;
 use timada_tenancy::TenantState;
 use topcoat::context::{AppContext, Cx};
 
-use crate::auth::mail::send_newsletter_confirmation;
 use crate::cluster::Executor as Store;
 use crate::key_vault::KeyVault;
+use crate::mail::send_newsletter_confirmation;
 
 /// The page of the shop's storefront that confirms `token`.
 pub fn confirm_link(storefront: &str, token: &str) -> String {

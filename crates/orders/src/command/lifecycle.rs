@@ -1,7 +1,7 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{Cancelled, Fulfilled, RefundRequested, Refunded};
-use crate::error::OrdersError;
+use crate::error::OrderError;
 use crate::value_object::{normalize_reason, normalize_tracking};
 
 use super::{OrderStatus, PendingRefund};
@@ -16,13 +16,13 @@ impl<E: Executor> super::Command<E> {
         order_id: &str,
         tracking: Option<String>,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let tracking = normalize_tracking(tracking.as_deref())?;
         let order = self.require_order(order_id).await?;
         match order.status {
             OrderStatus::Paid => {}
             OrderStatus::Fulfilled => return Ok(()),
-            OrderStatus::Cancelled => return Err(OrdersError::OrderCancelled),
+            OrderStatus::Cancelled => return Err(OrderError::OrderCancelled),
         }
         order
             .write()?
@@ -49,16 +49,16 @@ impl<E: Executor> super::Command<E> {
         order_id: &str,
         reason: String,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let reason = normalize_reason(&reason)?;
         let order = self.require_order(order_id).await?;
         match order.status {
             OrderStatus::Paid => {}
             OrderStatus::Cancelled => return Ok(()),
-            OrderStatus::Fulfilled => return Err(OrdersError::NotCancellable),
+            OrderStatus::Fulfilled => return Err(OrderError::NotCancellable),
         }
         if order.pending_refund.is_some() {
-            return Err(OrdersError::RefundPending);
+            return Err(OrderError::RefundPending);
         }
         order
             .write()?
@@ -86,16 +86,16 @@ impl<E: Executor> super::Command<E> {
         order_id: &str,
         amount_cents: u64,
         routing_key: Option<String>,
-    ) -> Result<PendingRefund, OrdersError> {
+    ) -> Result<PendingRefund, OrderError> {
         let order = self.require_order(order_id).await?;
         if let Some(pending) = &order.pending_refund {
             return Ok(pending.clone());
         }
         if order.status == OrderStatus::Fulfilled {
-            return Err(OrdersError::NotCancellable);
+            return Err(OrderError::NotCancellable);
         }
         if amount_cents == 0 || amount_cents > order.outstanding_cents() {
-            return Err(OrdersError::InvalidRefund);
+            return Err(OrderError::InvalidRefund);
         }
         let idempotency_key = format!("timada-refund-{order_id}-{}", order.refund_ids.len() + 1);
         let requested = RefundRequested {
@@ -132,7 +132,7 @@ impl<E: Executor> super::Command<E> {
         refund_id: &str,
         amount_cents: u64,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let order = self.require_order(order_id).await?;
         if order.refund_ids.iter().any(|id| id == refund_id) {
             return Ok(());

@@ -31,7 +31,6 @@ use topcoat::{
 use crate::app::auth::Flash;
 use crate::app::t::slug::mail::own_address;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
-use crate::auth::mail::{marketing_sender, send_rendered_via, shop_vars};
 use crate::auth::require_user;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
@@ -43,6 +42,7 @@ use crate::components::table::{
 };
 use crate::components::textarea::textarea;
 use crate::db::ReadPool;
+use crate::mail::{marketing_sender, send_rendered_via, shop_vars};
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, format_time, icons, notice, page_header, pager,
     section_card, status_badge,

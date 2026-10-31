@@ -22,7 +22,7 @@ use timada_catalog::CatalogError;
 use timada_discounts::{
     DISCOUNT_ALREADY_USED, DISCOUNT_EXHAUSTED, DiscountError, RESERVATION_SECS,
 };
-use timada_orders::{CartState, OrdersError, PROVIDER_STRIPE, Payment, ReturnedPayment};
+use timada_orders::{CartState, OrderError, PROVIDER_STRIPE, Payment, ReturnedPayment};
 
 use super::{Account, DASHBOARD_ACTOR, Payments, signature};
 use crate::cluster::Executor;
@@ -175,7 +175,7 @@ pub async fn receive(
         Ok(placed) => Ok(Outcome::Placed {
             order_id: placed.order_id,
         }),
-        Err(err @ (OrdersError::DuplicatePayment { .. } | OrdersError::AmountMismatch)) => {
+        Err(err @ (OrderError::DuplicatePayment { .. } | OrderError::AmountMismatch)) => {
             tracing::warn!(%tenant_id, payment = %status.payment_id, %err, "refunding a payment");
             let refund_id = payments
                 .gateway

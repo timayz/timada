@@ -1,6 +1,6 @@
 //! Identifiers, limits and the rules a page's fields follow.
 
-use crate::error::PagesError;
+use crate::error::PageError;
 
 pub const MAX_TITLE_LEN: usize = 120;
 /// The longest body, in characters: room for the longest terms of sale.
@@ -40,10 +40,10 @@ pub fn page_slug_id(slug: &str) -> String {
 }
 
 /// Trims a title and checks it is 1 to 120 characters.
-pub fn normalize_title(title: &str) -> Result<String, PagesError> {
+pub fn normalize_title(title: &str) -> Result<String, PageError> {
     let title = title.trim();
     if title.is_empty() || title.chars().count() > MAX_TITLE_LEN {
-        return Err(PagesError::InvalidTitle);
+        return Err(PageError::InvalidTitle);
     }
     Ok(title.to_owned())
 }
@@ -51,11 +51,11 @@ pub fn normalize_title(title: &str) -> Result<String, PagesError> {
 /// Checks a body is at most 100 000 characters, line breaks as `\n`
 /// (browsers send a textarea's as `\r\n`). Trailing blanks are dropped;
 /// empty is fine, for a page still to be written.
-pub fn normalize_body(body: &str) -> Result<String, PagesError> {
+pub fn normalize_body(body: &str) -> Result<String, PageError> {
     let body = body.replace("\r\n", "\n");
     let body = body.trim_end();
     if body.chars().count() > MAX_BODY_LEN {
-        return Err(PagesError::InvalidBody);
+        return Err(PageError::InvalidBody);
     }
     Ok(body.to_owned())
 }
@@ -65,7 +65,7 @@ pub fn normalize_body(body: &str) -> Result<String, PagesError> {
 pub fn normalize_seo(
     meta_title: &str,
     meta_description: &str,
-) -> Result<(String, String), PagesError> {
+) -> Result<(String, String), PageError> {
     let meta_title = meta_title.trim();
     let meta_description = meta_description
         .split_whitespace()
@@ -74,14 +74,14 @@ pub fn normalize_seo(
     if meta_title.chars().count() > MAX_META_TITLE_LEN
         || meta_description.chars().count() > MAX_META_DESCRIPTION_LEN
     {
-        return Err(PagesError::InvalidSeo);
+        return Err(PageError::InvalidSeo);
     }
     Ok((meta_title.to_owned(), meta_description))
 }
 
 /// Lowercases and validates a slug: `[a-z0-9]`, `-` inside, 2 to 64 characters.
-pub fn normalize_slug(slug: &str) -> Result<String, PagesError> {
-    timada_core::normalize_slug(slug, MAX_SLUG_LEN).ok_or(PagesError::InvalidSlug)
+pub fn normalize_slug(slug: &str) -> Result<String, PageError> {
+    timada_core::normalize_slug(slug, MAX_SLUG_LEN).ok_or(PageError::InvalidSlug)
 }
 
 /// The slug a title gives: ASCII-transliterated, lowercased, runs of anything

@@ -2,7 +2,7 @@ use evento::{Executor, ProjectionAggregate};
 use ulid::Ulid;
 
 use crate::aggregator::{MethodAdded, MethodChanged, MethodRemoved};
-use crate::error::OrdersError;
+use crate::error::OrderError;
 use crate::value_object::{
     MAX_SHIPPING_METHODS, NewShippingMethod, normalize_shipping_method, shipping_methods_id,
 };
@@ -25,14 +25,14 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         method: NewShippingMethod,
         routing_key: Option<String>,
-    ) -> Result<String, OrdersError> {
+    ) -> Result<String, OrderError> {
         let method = normalize_shipping_method(method)?;
         let state = self.load_shipping_methods().await?;
         if state
             .as_ref()
             .is_some_and(|state| state.methods.len() >= MAX_SHIPPING_METHODS)
         {
-            return Err(OrdersError::TooManyShippingMethods);
+            return Err(OrderError::TooManyShippingMethods);
         }
         let mut write = match &state {
             Some(state) => state.write()?,
@@ -63,15 +63,15 @@ impl<E: Executor> super::Command<E> {
         method_id: &str,
         method: NewShippingMethod,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let method = normalize_shipping_method(method)?;
         let state = self
             .load_shipping_methods()
             .await?
-            .ok_or(OrdersError::ShippingMethodNotFound)?;
+            .ok_or(OrderError::ShippingMethodNotFound)?;
         let current = state
             .method(method_id)
-            .ok_or(OrdersError::ShippingMethodNotFound)?;
+            .ok_or(OrderError::ShippingMethodNotFound)?;
         if current.name == method.name
             && current.price_cents == method.price_cents
             && current.currency == method.currency
@@ -101,13 +101,13 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         method_id: &str,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let state = self
             .load_shipping_methods()
             .await?
-            .ok_or(OrdersError::ShippingMethodNotFound)?;
+            .ok_or(OrderError::ShippingMethodNotFound)?;
         if state.method(method_id).is_none() {
-            return Err(OrdersError::ShippingMethodNotFound);
+            return Err(OrderError::ShippingMethodNotFound);
         }
         let mut write = state.write()?;
         write.routing_key_opt(routing_key).event(&MethodRemoved {

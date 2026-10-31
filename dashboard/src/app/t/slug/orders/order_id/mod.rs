@@ -11,7 +11,7 @@ use std::sync::Arc;
 use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
 use timada_invoicing::{DocumentKind, format_amount_fr};
-use timada_orders::{MAX_REASON_LEN, MAX_TRACKING_LEN, OrderState, OrderStatus, OrdersError};
+use timada_orders::{MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus};
 use timada_tenancy::{
     PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ,
 };
@@ -79,7 +79,7 @@ where
         &timada_orders::Command<crate::cluster::Executor>,
         &str,
         &str,
-    ) -> std::result::Result<(), OrdersError>,
+    ) -> std::result::Result<(), OrderError>,
 {
     let access = require_tenant(cx).await?;
     access

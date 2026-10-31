@@ -256,9 +256,9 @@ currency })`). On submit, call `elements.submit()`, then `start_payment`, then
 `confirmPayment` with the client secret it returned. The dashboard copies the key
 into the tenant's store whenever the merchant changes the Stripe settings.
 
-- Every call returns `Result<Result<T, OrdersError>>`: the outer error is the store
+- Every call returns `Result<Result<T, OrderError>>`: the outer error is the store
   failing (`?` makes it a 500), the inner one a refusal to word for the shopper;
-  `OrdersError::code()` gives a stable code for a URL. The same calls exist as `Store`
+  `OrderError::code()` gives a stable code for a URL. The same calls exist as `Store`
   methods for code outside a request.
 - `add_to_cart` starts a new cart when it is given none, or one already ordered.
   `set_cart_quantity` (0 removes the line) and `remove_from_cart` change a line.
@@ -267,7 +267,7 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   (`out_of_stock`), shows in `CartView::unavailable`, and checkout waits until it is
   changed.
 - `start_payment` waits up to fifteen seconds for the dashboard's answer. A refusal is
-  `OrdersError::PaymentRefused`: `price_changed` when the total moved since the page
+  `OrderError::PaymentRefused`: `price_changed` when the total moved since the page
   showed it, `product_unavailable`, or `payments_unavailable` when the merchant has set
   up no payments, the provider failed or nobody answered. `payment_session` reads an
   open payment back by its request id for the page after the redirect.

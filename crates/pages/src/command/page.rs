@@ -3,7 +3,7 @@ use evento::{Executor, ProjectionAggregate};
 use crate::aggregator::{
     Created, Deleted, Edited, ImageAdded, ImageRemoved, Published, Renamed, SeoSet, Unpublished,
 };
-use crate::error::PagesError;
+use crate::error::PageError;
 use crate::value_object::{
     MAX_IMAGES_PER_PAGE, image_mime, new_page_id, normalize_body, normalize_seo, normalize_slug,
     normalize_title, slugify,
@@ -39,7 +39,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         cmd: CreatePage,
         routing_key: Option<String>,
-    ) -> Result<String, PagesError> {
+    ) -> Result<String, PageError> {
         let title = normalize_title(&cmd.title)?;
         let body = normalize_body(&cmd.body)?;
         let slug = if cmd.slug.trim().is_empty() {
@@ -77,7 +77,7 @@ impl<E: Executor> super::Command<E> {
         title: &str,
         body: &str,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
+    ) -> Result<(), PageError> {
         let page = self.require_page(page_id).await?;
         let title = normalize_title(title)?;
         let body = normalize_body(body)?;
@@ -104,7 +104,7 @@ impl<E: Executor> super::Command<E> {
         meta_title: &str,
         meta_description: &str,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
+    ) -> Result<(), PageError> {
         let page = self.require_page(page_id).await?;
         let (meta_title, meta_description) = normalize_seo(meta_title, meta_description)?;
         if page.meta_title == meta_title && page.meta_description == meta_description {
@@ -130,7 +130,7 @@ impl<E: Executor> super::Command<E> {
         page_id: &str,
         slug: &str,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
+    ) -> Result<(), PageError> {
         let page = self.require_page(page_id).await?;
         let slug = normalize_slug(slug)?;
         if page.slug == slug {
@@ -162,7 +162,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         page_id: &str,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
+    ) -> Result<(), PageError> {
         let page = self.require_page(page_id).await?;
         if page.published {
             return Ok(());
@@ -183,7 +183,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         page_id: &str,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
+    ) -> Result<(), PageError> {
         let page = self.require_page(page_id).await?;
         if !page.published {
             return Ok(());
@@ -206,15 +206,15 @@ impl<E: Executor> super::Command<E> {
         page_id: &str,
         cmd: AddPageImage,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
+    ) -> Result<(), PageError> {
         let page = self.require_page(page_id).await?;
         if page.images.iter().any(|image| image.id == cmd.image_id) {
             return Ok(());
         }
         if page.images.len() >= MAX_IMAGES_PER_PAGE {
-            return Err(PagesError::TooManyImages);
+            return Err(PageError::TooManyImages);
         }
-        let mime = image_mime(&cmd.ext).ok_or(PagesError::UnsupportedImage)?;
+        let mime = image_mime(&cmd.ext).ok_or(PageError::UnsupportedImage)?;
         self.write_page(
             &page,
             &ImageAdded {
@@ -238,10 +238,10 @@ impl<E: Executor> super::Command<E> {
         page_id: &str,
         image_id: &str,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
+    ) -> Result<(), PageError> {
         let page = self.require_page(page_id).await?;
         if !page.images.iter().any(|image| image.id == image_id) {
-            return Err(PagesError::ImageNotFound);
+            return Err(PageError::ImageNotFound);
         }
         self.write_page(
             &page,
@@ -261,7 +261,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         page_id: &str,
         routing_key: Option<String>,
-    ) -> Result<PageState, PagesError> {
+    ) -> Result<PageState, PageError> {
         let page = self.require_page(page_id).await?;
         self.write_page(
             &page,
@@ -278,8 +278,8 @@ impl<E: Executor> super::Command<E> {
 }
 
 impl<E: Executor> super::Command<E> {
-    async fn require_page(&self, page_id: &str) -> Result<PageState, PagesError> {
-        self.load_page(page_id).await?.ok_or(PagesError::NotFound)
+    async fn require_page(&self, page_id: &str) -> Result<PageState, PageError> {
+        self.load_page(page_id).await?.ok_or(PageError::NotFound)
     }
 
     async fn write_page<D>(
@@ -287,7 +287,7 @@ impl<E: Executor> super::Command<E> {
         page: &PageState,
         event: &D,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError>
+    ) -> Result<(), PageError>
     where
         D: evento::AggregateEvent + bitcode::Encode,
     {

@@ -22,7 +22,7 @@ asks: the text below each category's products, and each product's "Description" 
 up to the shop's own "À propos" block (`--tab-stop-at`). Then it fetches the
 pictures. Run again into the same directory, it refreshes the catalogue
 and fetches only the pictures not there yet. A picture the fetch could not get is
-left to the seed, which fetches it from the shop (`--no-pictures` leaves them all).
+left to the seed, which fetches it from the shop (`--skip-images` leaves them all).
 
 The snapshot is here to try the storefront examples against a real-sized catalogue,
 nothing more.

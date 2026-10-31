@@ -14,7 +14,8 @@ use timada_identity::IdentityError;
 use topcoat::{Result, context::Cx};
 
 use crate::app::auth::error_code;
-use crate::auth::{cookies::EmailFlowKind, identity, mail::send_code, now};
+use crate::auth::{cookies::EmailFlowKind, identity, now};
+use crate::mail::send_code;
 
 /// What [`start_challenge`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
