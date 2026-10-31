@@ -29,15 +29,6 @@ const CATEGORIES_JSON: &str = include_str!("../data/tax_categories.json");
 /// The key of `tax_categories.json` that holds the rates the `world-tax`
 /// table lacks.
 const OVERRIDES_KEY: &str = "_overrides";
-/// The rate levels the `world-tax` table has.
-const LEVELS: [&str; 5] = [
-    "standard",
-    "reduced",
-    "reduced_alt",
-    "super_reduced",
-    "zero",
-];
-
 /// A rate the `world-tax` table lacks, kept in `tax_categories.json` under
 /// a name of its own that a category maps a country to instead of a level.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -428,6 +419,15 @@ pub fn decide(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rate levels the `world-tax` table has.
+    const LEVELS: [&str; 5] = [
+        "standard",
+        "reduced",
+        "reduced_alt",
+        "super_reduced",
+        "zero",
+    ];
 
     const REGISTERED: TaxProfile = TaxProfile {
         vat_registered: true,

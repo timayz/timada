@@ -598,19 +598,19 @@ async fn a_latvian_book_is_taxed_at_five_percent() {
     assert_eq!(issued.tax_country, "LV");
     assert_eq!(issued.lines[0].vat_rate_bps, Some(500));
     assert_eq!(issued.lines[1].vat_rate_bps, Some(2100));
-    // 21.00 at 5 %: 20.00 + 1.00; 12.10 at 21 %: 10.00 + 2.10.
+    // Highest rate first: 12.10 at 21 %: 10.00 + 2.10; 21.00 at 5 %: 20.00 + 1.00.
     assert_eq!(
         issued.vat,
         vec![
             VatSubtotal {
-                rate_bps: 500,
-                base_cents: 2000,
-                vat_cents: 100
-            },
-            VatSubtotal {
                 rate_bps: 2100,
                 base_cents: 1000,
                 vat_cents: 210
+            },
+            VatSubtotal {
+                rate_bps: 500,
+                base_cents: 2000,
+                vat_cents: 100
             },
         ]
     );
