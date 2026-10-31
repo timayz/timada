@@ -80,7 +80,7 @@ pub enum Cart {
         identified_by: String,
     },
     /// A request to pay that cannot go ahead; `code` says why
-    /// ([`OrdersError::code`](crate::OrdersError::code), or `payments_unavailable`).
+    /// ([`OrderError::code`](crate::OrderError::code), or `payments_unavailable`).
     PaymentRefused {
         request_id: String,
         code: String,

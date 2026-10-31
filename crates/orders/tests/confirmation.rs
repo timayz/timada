@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use timada_orders::OrdersError;
+use timada_orders::OrderError;
 
 #[tokio::test]
 async fn the_storefront_address_is_set_and_forgotten() {
@@ -12,7 +12,7 @@ async fn the_storefront_address_is_set_and_forgotten() {
         .set_storefront_address(ALICE, Some("shop.example"))
         .await
         .unwrap_err();
-    assert!(matches!(err, OrdersError::InvalidStorefrontUrl));
+    assert!(matches!(err, OrderError::InvalidStorefrontUrl));
 
     orders
         .set_storefront_address(ALICE, Some("https://shop.example/"))

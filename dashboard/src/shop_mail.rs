@@ -25,7 +25,7 @@ use topcoat::{
     mail::{Mail, Mailbox, SmtpTransport, Transport, TransportFuture, send},
 };
 
-use crate::auth::mail::MailSender;
+use crate::mail::MailSender;
 use crate::seal::Sealer;
 
 /// How long a shop's server has to take the connection.

@@ -36,11 +36,11 @@ use topcoat::context::{AppContext, Cx};
 
 use super::definitions::Definitions;
 use super::facts::facts_of;
-use crate::auth::mail::{
+use crate::cluster::Executor;
+use crate::mail::{
     CampaignCopy, automation_vars, marketing_sender, render_automated, send_automated,
     send_automation_notice,
 };
-use crate::cluster::Executor;
 use crate::seal::{OptOutKey, WebhookKeys};
 
 /// What the runner needs of a store.

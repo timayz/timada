@@ -1,4 +1,4 @@
-.PHONY: loadtest dev seed.chatounette.save seed.chatounette.restore storefront storefront.migrate chatounette chatounette.migrate seed.chatounette snapshot.chatounette lint fmt fmt-check test check machete e2e
+.PHONY: start cert cert.install up stop down dev reset migrate seed.chatounette seed.chatounette.save seed.chatounette.restore snapshot.chatounette storefront storefront.migrate chatounette chatounette.migrate e2e loadtest lint fmt-check fmt test machete check
 
 start: up dev
 
@@ -118,29 +118,19 @@ fmt-check:
 fmt:
 	cargo fmt --all
 
-# Run ALL tests (sequential - use test-parallel for faster execution)
+# Every test of the workspace. The cluster suite is sensitive to load: a
+# `preaccept quorum not reached` on a busy machine is the machine, not the
+# code; run it again alone.
 test:
 	cargo test --workspace
 
-# ============================================================================
-# Parallel Test Execution (optimized for speed)
-# ============================================================================
-# Analysis: 111.92s sequential → ~19.9s parallel (5.6x speedup with make -j)
-# Total: 476 tests across 46 test suites
-# Usage: make test-parallel -j
-#        make test-parallel -j10  (limit to 10 parallel jobs)
-# ============================================================================
-
-# Check for unused dependencies (optional: install with 'cargo install cargo-machete')
+# Unused dependencies (cargo-machete is in the dev shell).
 machete:
-	@if command -v cargo-machete >/dev/null 2>&1; then \
-		cargo machete --with-metadata; \
-	else \
-		echo "⚠ cargo-machete not installed. Skipping unused dependency check."; \
-		echo "  Install with: cargo install cargo-machete"; \
-	fi
+	cargo machete --with-metadata
 
-# Run all checks: format, lint, machete, and test (CI-ready)
+# What CI runs (.github/workflows/check.yml): tests, lint, formatting, unused
+# dependencies. The browser suite (`make e2e`) needs the compose stack and
+# stays local.
 check: test lint fmt-check machete
 	@echo "✓ All checks passed!"
 

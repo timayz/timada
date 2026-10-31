@@ -15,7 +15,7 @@ use timada_discounts::{
 use timada_invoicing::tax::{self, Destination, TaxProfile, TaxRefusal};
 use timada_orders::aggregator::CheckoutRequested;
 use timada_orders::{
-    INVOICING_NOT_CONFIGURED, OSS_REQUIRED_FOR_CURRENCY, OpenedPayment, OrdersError,
+    INVOICING_NOT_CONFIGURED, OSS_REQUIRED_FOR_CURRENCY, OpenedPayment, OrderError,
     PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
 };
 
@@ -231,7 +231,7 @@ async fn on_checkout_requested<E: Executor>(
         Ok(()) => Ok(()),
         // Retried: the payment opens again under the same idempotency key
         // and the reservation is held again for the same cart.
-        Err(err @ (OrdersError::Write(_) | OrdersError::Other(_))) => Err(err.into()),
+        Err(err @ (OrderError::Write(_) | OrderError::Other(_))) => Err(err.into()),
         Err(err) => {
             release().await;
             tracing::warn!(%cart_id, %err, "a payment opened for a cart that cannot record it");

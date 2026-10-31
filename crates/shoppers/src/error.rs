@@ -1,5 +1,5 @@
 use evento::WriteError;
-use timada_orders::OrdersError;
+use timada_orders::OrderError;
 
 use crate::value_object::MAX_ADDRESSES;
 
@@ -9,7 +9,7 @@ pub enum ShopperError {
     InvalidEmail,
     /// The address does not check out; the orders context says why.
     #[error(transparent)]
-    InvalidAddress(OrdersError),
+    InvalidAddress(OrderError),
     #[error("a code was mailed less than a minute ago")]
     CodeRecentlySent,
     /// Wrong, already used, or never mailed.

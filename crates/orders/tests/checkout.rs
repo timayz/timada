@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use timada_orders::{
-    Checkout, OrderStatus, OrdersError, Payment, PaymentAnswer, ShippingAddress, order_id,
+    Checkout, OrderError, OrderStatus, Payment, PaymentAnswer, ShippingAddress, order_id,
 };
 
 #[tokio::test]
@@ -112,7 +112,7 @@ async fn a_second_payment_of_an_ordered_cart_is_a_duplicate() {
         .unwrap();
     let duplicate = orders.place_paid_order(DASHBOARD, &cart_id, second).await;
     assert!(
-        matches!(&duplicate, Err(OrdersError::DuplicatePayment { order_id }) if *order_id == placed.order_id),
+        matches!(&duplicate, Err(OrderError::DuplicatePayment { order_id }) if *order_id == placed.order_id),
         "{duplicate:?}"
     );
 }
@@ -135,7 +135,7 @@ async fn a_payment_must_match_what_was_asked_for() {
         )
         .await;
     assert!(
-        matches!(short, Err(OrdersError::AmountMismatch)),
+        matches!(short, Err(OrderError::AmountMismatch)),
         "{short:?}"
     );
     let unknown = orders
@@ -149,7 +149,7 @@ async fn a_payment_must_match_what_was_asked_for() {
         )
         .await;
     assert!(
-        matches!(unknown, Err(OrdersError::PaymentNotFound)),
+        matches!(unknown, Err(OrderError::PaymentNotFound)),
         "{unknown:?}"
     );
     assert!(orders.load_order_of_cart(&cart_id).await.unwrap().is_none());
@@ -180,10 +180,7 @@ async fn a_request_is_priced_once_and_refused_when_it_cannot_go_ahead() {
         .unwrap();
     let pending = orders.pending_payment(&cart_id, &request_id).await;
     assert!(
-        matches!(
-            pending,
-            Err(OrdersError::PriceChanged { total_cents: 2600 })
-        ),
+        matches!(pending, Err(OrderError::PriceChanged { total_cents: 2600 })),
         "{pending:?}"
     );
     let code = pending.unwrap_err().code().unwrap();
@@ -218,7 +215,7 @@ async fn a_request_is_priced_once_and_refused_when_it_cannot_go_ahead() {
         .unwrap();
     let pending = orders.pending_payment(&cart_id, &request_id).await;
     assert!(
-        matches!(pending, Err(OrdersError::Unavailable { .. })),
+        matches!(pending, Err(OrderError::Unavailable { .. })),
         "{pending:?}"
     );
 }
@@ -228,10 +225,7 @@ async fn an_empty_cart_or_a_bad_address_cannot_ask_to_pay() {
     let (orders, catalog) = store().await;
     let empty = orders.create_cart(SHOPPER).await.unwrap();
     let refused = orders.request_checkout(SHOPPER, &empty, checkout()).await;
-    assert!(
-        matches!(refused, Err(OrdersError::EmptyCart)),
-        "{refused:?}"
-    );
+    assert!(matches!(refused, Err(OrderError::EmptyCart)), "{refused:?}");
 
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let cart_id = cart_with(&orders, &mug, 1).await;
@@ -246,7 +240,7 @@ async fn an_empty_cart_or_a_bad_address_cannot_ask_to_pay() {
         )
         .await;
     assert!(
-        matches!(refused, Err(OrdersError::InvalidEmail)),
+        matches!(refused, Err(OrderError::InvalidEmail)),
         "{refused:?}"
     );
     let refused = orders
@@ -263,14 +257,14 @@ async fn an_empty_cart_or_a_bad_address_cannot_ask_to_pay() {
         )
         .await;
     assert!(
-        matches!(refused, Err(OrdersError::InvalidAddress)),
+        matches!(refused, Err(OrderError::InvalidAddress)),
         "{refused:?}"
     );
     let refused = orders
         .request_checkout(SHOPPER, "no-such-cart", checkout())
         .await;
     assert!(
-        matches!(refused, Err(OrdersError::CartNotFound)),
+        matches!(refused, Err(OrderError::CartNotFound)),
         "{refused:?}"
     );
 }
@@ -534,7 +528,7 @@ async fn a_shop_sells_to_businesses_only_once_its_merchant_says_so() {
         .request_checkout(SHOPPER, &cart, as_business())
         .await
         .unwrap_err();
-    assert!(matches!(err, OrdersError::BusinessBuyersRefused));
+    assert!(matches!(err, OrderError::BusinessBuyersRefused));
     assert_eq!(err.code(), Some("business_buyers_refused"));
     // A blank number is still a consumer's checkout.
     orders

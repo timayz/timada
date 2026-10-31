@@ -7,7 +7,7 @@
 pub mod new;
 pub mod page_id;
 
-use timada_pages::{Command, PagesError, pages_of_tenant};
+use timada_pages::{Command, PageError, pages_of_tenant};
 use timada_tenancy::{PERMISSION_PAGES_MANAGE, PERMISSION_PAGES_READ};
 use topcoat::{
     Result,
@@ -48,7 +48,7 @@ pub fn pages(access: &TenantAccess) -> Result<Command<Executor>> {
 }
 
 /// The code of a refusal, for the flash.
-pub fn error_code(err: &PagesError) -> &'static str {
+pub fn error_code(err: &PageError) -> &'static str {
     err.code().unwrap_or("internal")
 }
 

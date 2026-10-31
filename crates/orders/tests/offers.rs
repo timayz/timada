@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use timada_discounts::{CreateDiscount, CreateOffer, DiscountValue};
-use timada_orders::{Checkout, OrdersError};
+use timada_orders::{Checkout, OrderError};
 
 type Discounts = timada_discounts::Command<evento::Sqlite>;
 
@@ -259,6 +259,6 @@ async fn a_total_shown_before_the_offer_ended_is_refused() {
     let pending = orders.pending_payment(&cart_id, &request_id).await;
     assert!(matches!(
         pending,
-        Err(OrdersError::PriceChanged { total_cents: 5000 })
+        Err(OrderError::PriceChanged { total_cents: 5000 })
     ));
 }

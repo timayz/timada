@@ -1,0 +1,35 @@
+# What `make check` runs: formatting, clippy, every test of the workspace and
+# the unused-dependency check. The browser suite (`make e2e`) needs the compose
+# stack (Traefik, dex, MailDev, stripe-mock) and stays local.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Unused dependencies
+        run: cargo machete --with-metadata

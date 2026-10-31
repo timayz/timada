@@ -20,7 +20,7 @@
 //!
 //! Each call returns two layers: the outer `Result` is a failure of the store
 //! (a topcoat error, so `?` turns it into a 500), the inner one a refusal to
-//! show the shopper ([`OrdersError::code`] names it). The same calls exist
+//! show the shopper ([`OrderError::code`] names it). The same calls exist
 //! as [`Store`] methods for code that runs outside a request.
 //!
 //! A cart takes one discount code ([`apply_discount`]). The cart page shows
@@ -54,7 +54,7 @@ pub use timada_catalog::format_money;
 use timada_invoicing::tax;
 use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
 pub use timada_orders::{
-    Checkout, OrderDiscount, OrderLine, OrderShipping, OrderState, OrderStatus, OrdersError,
+    Checkout, OrderDiscount, OrderError, OrderLine, OrderShipping, OrderState, OrderStatus,
     PAYMENTS_UNAVAILABLE, PaymentSetup, ReturnedPayment, ShippingAddress,
 };
 
@@ -107,7 +107,7 @@ impl PaymentSession {
 }
 
 /// A refusal to show the shopper, or the outcome.
-pub type Refusable<T> = std::result::Result<T, OrdersError>;
+pub type Refusable<T> = std::result::Result<T, OrderError>;
 
 /// One line of a cart, ready for a page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,7 +417,7 @@ impl VatEstimate {
 }
 
 /// Splits an outcome into a store failure and a refusal.
-fn refusable<T>(outcome: std::result::Result<T, OrdersError>) -> anyhow::Result<Refusable<T>> {
+fn refusable<T>(outcome: std::result::Result<T, OrderError>) -> anyhow::Result<Refusable<T>> {
     match outcome {
         Err(err) if !err.is_user_facing() => Err(err.into()),
         outcome => Ok(outcome),
@@ -605,7 +605,7 @@ impl Store {
                 .await
             {
                 Ok(_) => return Ok(Ok(cart_id.to_owned())),
-                Err(OrdersError::CartNotFound | OrdersError::CheckedOut) => {}
+                Err(OrderError::CartNotFound | OrderError::CheckedOut) => {}
                 Err(err) => return refusable(Err(err)),
             }
         }
@@ -659,7 +659,7 @@ impl Store {
                 Some(answer) => return Ok(answer),
                 None if tokio::time::Instant::now() >= deadline => {
                     tracing::warn!(cart_id, request_id, "no answer to a request to pay");
-                    return Ok(Err(OrdersError::PaymentRefused {
+                    return Ok(Err(OrderError::PaymentRefused {
                         code: PAYMENTS_UNAVAILABLE.to_owned(),
                     }));
                 }
@@ -713,10 +713,10 @@ impl Store {
         Ok(match &request.answer {
             None => None,
             Some(PaymentAnswer::Refused(code)) => {
-                Some(Err(OrdersError::PaymentRefused { code: code.clone() }))
+                Some(Err(OrderError::PaymentRefused { code: code.clone() }))
             }
             // Paid too late and given back: nothing to confirm any more.
-            Some(PaymentAnswer::Returned(returned)) => Some(Err(OrdersError::PaymentRefused {
+            Some(PaymentAnswer::Returned(returned)) => Some(Err(OrderError::PaymentRefused {
                 code: returned_code(&returned.code),
             })),
             Some(PaymentAnswer::Requested(payment)) => Some(Ok(PaymentSession {
@@ -842,7 +842,7 @@ pub async fn remove_discount(cx: &Cx, cart_id: &str) -> Result<Refusable<()>> {
 /// with. Pass the total the shopper was shown as
 /// [`Checkout::expected_total_cents`]: a price that moved since is refused
 /// (`price_changed`) rather than charged unseen. A refusal from the
-/// dashboard is [`OrdersError::PaymentRefused`], its code what to word
+/// dashboard is [`OrderError::PaymentRefused`], its code what to word
 /// (`payments_unavailable` when the merchant takes no payments, the provider
 /// failed or nobody answered).
 pub async fn start_payment(

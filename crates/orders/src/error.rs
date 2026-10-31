@@ -1,7 +1,7 @@
 use evento::WriteError;
 
 #[derive(Debug, thiserror::Error)]
-pub enum OrdersError {
+pub enum OrderError {
     #[error("cart not found")]
     CartNotFound,
     #[error("this cart has already been ordered")]
@@ -107,7 +107,7 @@ const KNOWN_CODES: &[&str] = &[
     crate::INVOICING_NOT_CONFIGURED,
 ];
 
-impl OrdersError {
+impl OrderError {
     /// Whether the message can be shown to the person who made the request
     /// (as opposed to an infrastructure failure).
     pub fn is_user_facing(&self) -> bool {
@@ -177,7 +177,7 @@ impl OrdersError {
     }
 }
 
-impl OrdersError {
+impl OrderError {
     /// A discount the cart cannot use, as the refusal a shopper reads.
     pub(crate) fn from_discount(err: timada_discounts::DiscountError) -> Self {
         use timada_discounts::DiscountError;

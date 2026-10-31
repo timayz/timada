@@ -13,7 +13,7 @@ use timada_tenancy::{
 };
 use topcoat::context::Cx;
 
-use crate::auth::mail::{automation_kind, shop_vars};
+use crate::mail::{automation_kind, shop_vars};
 
 /// The kind a scenario's mails are written as: about an order when its
 /// trigger is about one (or a review of one).

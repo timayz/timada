@@ -33,9 +33,9 @@ use timada_tenancy::NewProductVars;
 use tokio::task::JoinHandle;
 use topcoat::context::{AppContext, Cx};
 
-use crate::auth::mail::{CampaignCopy, marketing_sender, send_campaign};
 use crate::cluster::Executor;
 use crate::key_vault::KeyVault;
+use crate::mail::{CampaignCopy, marketing_sender, send_campaign};
 use crate::newsletter::unsubscribe_link;
 use crate::shop_mail::ShopSender;
 
@@ -633,7 +633,7 @@ mod tests {
     use topcoat::mail::{MailConfig, MemoryTransport};
 
     use super::*;
-    use crate::auth::mail::MailSender;
+    use crate::mail::MailSender;
 
     const SHOP: &str = "https://shop.example";
     const TENANT: &str = "t1";

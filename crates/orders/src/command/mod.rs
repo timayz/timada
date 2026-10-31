@@ -1200,22 +1200,19 @@ impl<E: Executor> Command<E> {
     }
 
     /// The cart, or `CartNotFound`.
-    pub(crate) async fn require_cart(
-        &self,
-        cart_id: &str,
-    ) -> Result<CartState, crate::OrdersError> {
+    pub(crate) async fn require_cart(&self, cart_id: &str) -> Result<CartState, crate::OrderError> {
         self.load_cart(cart_id)
             .await?
-            .ok_or(crate::OrdersError::CartNotFound)
+            .ok_or(crate::OrderError::CartNotFound)
     }
 
     /// The order, or `OrderNotFound`.
     pub(crate) async fn require_order(
         &self,
         order_id: &str,
-    ) -> Result<OrderState, crate::OrdersError> {
+    ) -> Result<OrderState, crate::OrderError> {
         self.load_order(order_id)
             .await?
-            .ok_or(crate::OrdersError::OrderNotFound)
+            .ok_or(crate::OrderError::OrderNotFound)
     }
 }

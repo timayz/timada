@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use timada_catalog::MAX_IMAGE_BYTES;
-use timada_pages::{AddPageImage, PagesError, new_page_image_id};
+use timada_pages::{AddPageImage, PageError, new_page_image_id};
 use timada_tenancy::PERMISSION_PAGES_MANAGE;
 use topcoat::{
     Result,
@@ -70,10 +70,10 @@ pub async fn upload(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
             media
                 .store(&tenant_id, &image_id, sniffed.ext, &bytes)
                 .await
-                .map_err(PagesError::Other)?;
+                .map_err(PageError::Other)?;
             if let Err(err) = media.replicate(&tenant_id, &file, bytes.clone()).await {
                 media.remove(&tenant_id, &file).await;
-                return Err(PagesError::Other(err));
+                return Err(PageError::Other(err));
             }
             let added = pages
                 .add_page_image(
