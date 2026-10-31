@@ -9,8 +9,8 @@ pub mod revise;
 
 use timada_storefront::{
     DocumentKind, MAX_BODY_LEN, MAX_PHOTOS, MAX_TITLE_LEN, OrderStatus, ReviewState, ReviewStatus,
-    documents as order_documents, format_amount_fr, format_money, menu, order, picture_url,
-    review_of, stars, store,
+    documents as order_documents, format_amount_fr, menu, order, picture_url, review_of, stars,
+    store,
 };
 use topcoat::{
     Result,
@@ -23,7 +23,7 @@ use topcoat::{
 };
 
 use crate::app::account::sign_in::sign_in_url;
-use crate::app::{document, say};
+use crate::app::{document, money, say};
 use crate::shopper::holds_order;
 
 module_param!(pub order_id);
@@ -159,20 +159,20 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 if let Some(label) = &line.variant_label { " · " (label) }
                             </td>
                             <td>"× " (line.quantity)</td>
-                            <td>(format_money(line.amount_cents(), &currency))</td>
+                            <td>(money(line.amount_cents() as i64, &currency))</td>
                         </tr>
                     }
                 </tbody>
             </table>
             if let Some(discount) = &order.discount {
-                <p data-order-discount=(&discount.code)>"Code promo " <code>(&discount.code)</code> " : -" (format_money(discount.amount_cents, &currency))</p>
+                <p data-order-discount=(&discount.code)>"Code promo " <code>(&discount.code)</code> " : -" (money(discount.amount_cents as i64, &currency))</p>
             }
             if let Some(shipping) = &order.shipping_charge {
                 <p data-order-shipping=(&shipping.name)>"Livraison (" (&shipping.name) ") : "
-                    if shipping.amount_cents == 0 { "Offerte" } else { (format_money(shipping.amount_cents, &currency)) }
+                    if shipping.amount_cents == 0 { "Offerte" } else { (money(shipping.amount_cents as i64, &currency)) }
                 </p>
             }
-            <p>"Total : " <strong class="price" data-order-total="">(format_money(order.total_cents, &currency))</strong></p>
+            <p>"Total : " <strong class="price" data-order-total="">(money(order.total_cents as i64, &currency))</strong></p>
             <h2>"Adresse de livraison"</h2>
             <address data-order-address="">
                 (&order.shipping.name) <br>

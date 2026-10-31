@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 
 use crate::config::StoreConfig;
 use crate::db::StoreDb;
+use crate::money::MoneyFormat;
 use crate::read_model::catalog_subscription;
 
 /// How long the supervisor waits before restarting a failed subscription,
@@ -31,6 +32,7 @@ struct Inner {
     db: StoreDb,
     prefix: String,
     media_url: Option<String>,
+    money: MoneyFormat,
     /// The dashboard's HTTP side, when the host gave its address.
     api: Option<crate::reviews::Api>,
     request_timeout: Duration,
@@ -110,6 +112,7 @@ impl Store {
             db,
             prefix: config.prefix.into_owned(),
             media_url: config.media_url,
+            money: config.money,
             api,
             request_timeout: config.request_timeout,
             subscription: Mutex::new(SubscriptionState::Running),
@@ -142,6 +145,13 @@ impl Store {
     /// Where this store's pictures are loaded from, when the host said so.
     pub fn media_url(&self) -> Option<&str> {
         self.inner.media_url.as_deref()
+    }
+
+    /// How every amount a person reads is written
+    /// ([`StoreConfig::money`](crate::StoreConfig::money)). The views the
+    /// library builds carry it; this is for code that formats on its own.
+    pub fn money(&self) -> &MoneyFormat {
+        &self.inner.money
     }
 
     /// Whether reviews can be handed in: the host gave the dashboard's

@@ -275,14 +275,14 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
   await page.getByLabel("Quantité").fill("2");
   await addToCart(page);
   await expect(page).toHaveURL(`${SHOP}/p/blue-mug`);
-  await expect(page.locator("[data-drawer-total]")).toHaveText("25.00 EUR");
+  await expect(page.locator("[data-drawer-total]")).toHaveText("25,00€");
   await page.goto(`${SHOP}/p/red-plate`);
   await addToCart(page);
-  await expect(page.locator("[data-drawer-total]")).toHaveText("33.00 EUR");
+  await expect(page.locator("[data-drawer-total]")).toHaveText("33,00€");
   await page.goto(`${SHOP}/cart`);
   // The header carries the total too; the page's is the one in `main`.
   const total = page.locator("main [data-cart-total]");
-  await expect(total).toHaveText("33.00 EUR");
+  await expect(total).toHaveText("33,00€");
 
   // Change a quantity, then take a line out.
   await page.getByLabel("Quantité de Blue Mug").fill("3");
@@ -290,10 +290,10 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
     .locator("[data-cart-line='Blue Mug']")
     .getByRole("button", { name: "Mettre à jour" })
     .click();
-  await expect(total).toHaveText("45.50 EUR");
+  await expect(total).toHaveText("45,50€");
   await page.getByRole("button", { name: "Retirer Red Plate" }).click();
   await expect(page.locator("[data-cart-line='Red Plate']")).toHaveCount(0);
-  await expect(total).toHaveText("37.50 EUR");
+  await expect(total).toHaveText("37,50€");
 
   // An open cart shows in the dashboard.
   await expect(async () => {
@@ -310,7 +310,7 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
   await expect(page.locator("ol.steps [aria-current=step]")).toHaveText(
     "Livraison & paiement",
   );
-  await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
+  await expect(page.locator("[data-checkout-total]")).toHaveText("37,50€");
   await expect(page.locator("[data-payments-off]")).toBeVisible();
   await fillCheckout(page, true);
 
@@ -322,7 +322,7 @@ test("a shopper fills a cart and checks out, refused while the shop takes no pay
     { timeout: 30_000 },
   );
   await expect(page.getByLabel("Nom complet")).toHaveValue("Ada Lovelace");
-  await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
+  await expect(page.locator("[data-checkout-total]")).toHaveText("37,50€");
 });
 
 test("a shopper pays with Stripe and the merchant fulfils or refunds the order", async ({
@@ -403,9 +403,9 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
         wallets: { link: "never" },
       },
     });
-    await expect(page.locator("[data-checkout-total]")).toHaveText("25.00 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("25,00€");
     await expect(page.locator("[data-checkout-vat]")).toHaveText(
-      "(dont 4.17 EUR VAT FR 20%)",
+      "(dont 4,17€ VAT FR 20%)",
     );
     await page.getByLabel("Pays", { exact: true }).selectOption("US");
     await expect(page.locator("[data-checkout-vat]")).toBeHidden();
@@ -415,9 +415,9 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     // The cart changes from the checkout and stays there.
     await page.getByRole("button", { name: "Un de plus : Blue Mug" }).click();
     await expect(page).toHaveURL(`${SHOP}/checkout`);
-    await expect(page.locator("[data-checkout-total]")).toHaveText("37.50 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("37,50€");
     await page.getByRole("button", { name: "Un de moins : Blue Mug" }).click();
-    await expect(page.locator("[data-checkout-total]")).toHaveText("25.00 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("25,00€");
 
     // Placing the order opens the payment and confirms it with Stripe.
     await fillCheckout(page, true);
@@ -478,7 +478,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
       "data-order-status",
       "paid",
     );
-    await expect(page.locator("[data-order-total]")).toHaveText("25.00 EUR");
+    await expect(page.locator("[data-order-total]")).toHaveText("25,00€");
     // The dashboard invoices it a moment later; the shopper downloads it.
     const year = new Date().getUTCFullYear();
     const invoiceLink = page.locator(`[data-document="F${year}-000001"]`);
@@ -729,11 +729,11 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
       drawer.locator("[data-summary-line='Blue Mug']"),
     ).toBeVisible();
     await expect(page.locator("[data-cart-count]")).toHaveText("1");
-    await expect(drawer.locator("[data-drawer-total]")).toHaveText("12.50 EUR");
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("12,50€");
 
     // The stepper changes it in place.
     await drawer.getByRole("button", { name: "Un de plus : Blue Mug" }).click();
-    await expect(drawer.locator("[data-drawer-total]")).toHaveText("25.00 EUR");
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("25,00€");
     await expect(page.locator("[data-cart-count]")).toHaveText("2");
     await expect(page).toHaveURL(`${SHOP}/p/blue-mug`);
 
@@ -745,7 +745,7 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
     await expect(
       drawer.locator("[data-summary-line='Red Plate']"),
     ).toBeVisible();
-    await expect(drawer.locator("[data-drawer-total]")).toHaveText("33.00 EUR");
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("33,00€");
     await expect(drawer.locator("[data-upsell]")).toHaveCount(0);
 
     // A code, from the drawer.
@@ -758,9 +758,9 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
     await drawer.getByLabel("Code promo").fill("ten");
     await drawer.getByRole("button", { name: "Appliquer" }).click();
     await expect(drawer.locator("[data-drawer-discount=TEN]")).toHaveText(
-      "-3.30 EUR",
+      "-3,30€",
     );
-    await expect(drawer.locator("[data-drawer-total]")).toHaveText("29.70 EUR");
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("29,70€");
 
     // Closed with Escape, opened again from the header.
     await page.keyboard.press("Escape");
@@ -774,7 +774,7 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
     await expect(drawer.locator("[data-summary-line='Red Plate']")).toHaveCount(
       0,
     );
-    await expect(drawer.locator("[data-drawer-total]")).toHaveText("22.50 EUR");
+    await expect(drawer.locator("[data-drawer-total]")).toHaveText("22,50€");
 
     // Express pay: Stripe's buttons for the drawer's total, paid with what
     // the wallet hands over.
@@ -849,13 +849,13 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
       await expect(noScript).toHaveURL(`${SHOP}/p/red-plate#cart`);
       const panel = noScript.locator("[data-cart-drawer] .drawer-panel");
       await expect(panel).toBeVisible();
-      await expect(panel.locator("[data-drawer-total]")).toHaveText("8.00 EUR");
+      await expect(panel.locator("[data-drawer-total]")).toHaveText("8,00€");
       await panel
         .getByRole("button", { name: "Un de plus : Red Plate" })
         .click();
       await expect(noScript).toHaveURL(`${SHOP}/p/red-plate#cart`);
       await expect(panel.locator("[data-drawer-total]")).toHaveText(
-        "16.00 EUR",
+        "16,00€",
       );
       await panel.getByRole("button", { name: "Retirer Red Plate" }).click();
       await expect(panel.locator("[data-cart-empty]")).toBeVisible();
@@ -902,27 +902,27 @@ test("a shopper pays less with a discount code, once", async ({
     );
     await page.getByLabel("Code promo").fill("ten");
     await page.getByRole("button", { name: "Appliquer" }).click();
-    await expect(page.locator("[data-cart-subtotal]")).toHaveText("25.00 EUR");
+    await expect(page.locator("[data-cart-subtotal]")).toHaveText("25,00€");
     await expect(
       page.locator("[data-cart-discount=TEN] [data-discount-amount]"),
-    ).toHaveText("-2.50 EUR");
+    ).toHaveText("-2,50€");
     await expect(page.locator("main [data-cart-total]")).toHaveText(
-      "22.50 EUR",
+      "22,50€",
     );
 
     // Charged the discounted total, and the order and its invoice say so.
     await page.getByRole("link", { name: "Commander" }).click();
     await expect(page.locator("[data-checkout-discount=TEN]")).toHaveText(
-      "-2.50 EUR",
+      "-2,50€",
     );
-    await expect(page.locator("[data-checkout-total]")).toHaveText("22.50 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("22,50€");
     await placeOrder(page, SHOP, true);
     expect(stripe.lastIntent()!.amount).toBe(2250);
     await confirmPayment(page, request, SHOP, stripe, webhookUrl);
     await expect(page.locator("[data-order-discount=TEN]")).toContainText(
-      "2.50 EUR",
+      "2,50€",
     );
-    await expect(page.locator("[data-order-total]")).toHaveText("22.50 EUR");
+    await expect(page.locator("[data-order-total]")).toHaveText("22,50€");
     const year = new Date().getUTCFullYear();
     const invoiceLink = page.locator(`[data-document="F${year}-000001"]`);
     await expect(async () => {
@@ -947,7 +947,7 @@ test("a shopper pays less with a discount code, once", async ({
     await page.getByRole("button", { name: "Appliquer" }).click();
     await expect(page).toHaveURL(`${SHOP}/checkout`);
     await expect(page.locator("[data-checkout-discount=TEN]")).toHaveText(
-      "-1.25 EUR",
+      "-1,25€",
     );
     await payButton(page).click();
     await expect(page).toHaveURL(
@@ -1021,9 +1021,9 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
     const vip = page.getByRole("radio", { name: /VIP/ });
     await expect(tracked).toBeChecked();
     await expect(page.locator("[data-checkout-shipping]")).toHaveText(
-      "4.90 EUR",
+      "4,90€",
     );
-    await expect(page.locator("[data-checkout-total]")).toHaveText("29.90 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("29,90€");
     await expect(page.locator("[data-checkout-vat]")).toContainText(
       "VAT FR 20%",
     );
@@ -1034,25 +1034,25 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
     // VIP costs more; Belgium has only the tracked parcel; the US nothing.
     await vip.check();
     await expect(page.locator("[data-checkout-shipping]")).toHaveText(
-      "6.90 EUR",
+      "6,90€",
     );
-    await expect(page.locator("[data-checkout-total]")).toHaveText("31.90 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("31,90€");
     expect(
       await page.evaluate(() => (window as any).__stripe.elements.amount),
     ).toBe(3190);
     await page.getByLabel("Pays", { exact: true }).selectOption("BE");
     await expect(vip).toBeHidden();
     await expect(tracked).toBeChecked();
-    await expect(page.locator("[data-checkout-total]")).toHaveText("29.90 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("29,90€");
     await page.getByLabel("Pays", { exact: true }).selectOption("US");
     await expect(tracked).toBeHidden();
     await expect(page.locator("[data-no-shipping]")).toBeVisible();
-    await expect(page.locator("[data-checkout-total]")).toHaveText("25.00 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("25,00€");
 
     // Back to France with VIP: charged on top, on the order and its invoice.
     await fillCheckout(page, true);
     await vip.check();
-    await expect(page.locator("[data-checkout-total]")).toHaveText("31.90 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("31,90€");
     await payButton(page).click();
     await expect(page).toHaveURL(
       /\/checkout\/complete\?.*redirect_status=succeeded/,
@@ -1061,9 +1061,9 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
     expect(stripe.lastIntent()!.amount).toBe(3190);
     await confirmPayment(page, request, SHOP, stripe, webhookUrl);
     await expect(page.locator("[data-order-shipping=VIP]")).toContainText(
-      "6.90 EUR",
+      "6,90€",
     );
-    await expect(page.locator("[data-order-total]")).toHaveText("31.90 EUR");
+    await expect(page.locator("[data-order-total]")).toHaveText("31,90€");
     const year = new Date().getUTCFullYear();
     const invoiceLink = page.locator(`[data-document="F${year}-000001"]`);
     await expect(async () => {
@@ -1176,31 +1176,31 @@ test("a shopper adds the merchant's exclusive offer at the checkout and pays its
     ).toBeVisible();
     const card = offers.locator('[data-checkout-offer="GPS Tracker"]');
     await expect(card).toContainText("Add a smart GPS tracker at 60% off");
-    await expect(card.locator("[data-offer-price]")).toHaveText("12.00 EUR");
-    await expect(page.locator("[data-checkout-total]")).toHaveText("20.00 EUR");
+    await expect(card.locator("[data-offer-price]")).toHaveText("12,00€");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("20,00€");
     await card
-      .getByRole("button", { name: "Ajouter GPS Tracker à 12.00 EUR" })
+      .getByRole("button", { name: "Ajouter GPS Tracker à 12,00€" })
       .click();
     await expect(page).toHaveURL(`${SHOP}/checkout`);
     await expect(page.locator("[data-checkout-offers]")).toHaveCount(0);
     const line = page.locator('[data-summary-line="GPS Tracker"]');
     await expect(line.locator("[data-line-offer]")).toContainText(
-      "1 à 12.00 EUR",
+      "1 à 12,00€",
     );
     await expect(page.locator("[data-checkout-subtotal]")).toHaveText(
-      "32.00 EUR",
+      "32,00€",
     );
-    await expect(page.locator("[data-checkout-total]")).toHaveText("32.00 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("32,00€");
 
     // A second tracker is at full price.
     await line
       .getByRole("button", { name: "Un de plus : GPS Tracker" })
       .click();
-    await expect(page.locator("[data-checkout-total]")).toHaveText("62.00 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("62,00€");
     await line
       .getByRole("button", { name: "Un de moins : GPS Tracker" })
       .click();
-    await expect(page.locator("[data-checkout-total]")).toHaveText("32.00 EUR");
+    await expect(page.locator("[data-checkout-total]")).toHaveText("32,00€");
 
     // Charged what the page showed; the order says what the tracker cost.
     await fillCheckout(page, true);
@@ -1211,7 +1211,7 @@ test("a shopper adds the merchant's exclusive offer at the checkout and pays its
     );
     expect(stripe.lastIntent()!.amount).toBe(3200);
     await confirmPayment(page, request, SHOP, stripe, webhookUrl);
-    await expect(page.locator("[data-order-total]")).toHaveText("32.00 EUR");
+    await expect(page.locator("[data-order-total]")).toHaveText("32,00€");
 
     // Deactivated, the offer is no longer shown.
     await page.goto(`/t/${slug}/offers`);
