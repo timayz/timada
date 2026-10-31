@@ -30,7 +30,6 @@ public_addr = "localhost:4321"
 # Card payments against a stand-in for Stripe's API that the payments spec
 # starts (tests/e2e/stripe.ts), itself in front of stripe-mock from compose.yml.
 [payments]
-secret_key = "e2e-only-payments-key-never-used-outside-the-test-suite"
 stripe_api_url = "http://127.0.0.1:12112"
 
 # VAT numbers are checked against a stand-in for VIES that the storefront

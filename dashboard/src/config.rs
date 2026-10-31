@@ -21,8 +21,6 @@ pub struct Config {
     #[serde(default)]
     pub cluster: Option<ClusterConfig>,
     pub media: MediaConfig,
-    /// `[data_keys]`; `[shopper_keys]`, its first name, still reads.
-    #[serde(alias = "shopper_keys")]
     pub data_keys: DataKeysConfig,
     /// Absent: this node does not expose the store API.
     #[serde(default)]
@@ -31,7 +29,7 @@ pub struct Config {
     #[serde(default)]
     pub payments: Option<PaymentsConfig>,
     /// Absent: no tenant secret can be stored (shop mail servers, shopper
-    /// accounts, and payments unless `payments.secret_key` is set).
+    /// accounts, payments).
     #[serde(default)]
     pub secrets: Option<SecretsConfig>,
     /// Invoices; every setting has a default.
@@ -558,15 +556,9 @@ pub struct InvoicingConfig {
 }
 
 /// Card payments: each tenant connects its own Stripe account; this node
-/// keeps the account's secrets encrypted under `secret_key`, or else under
-/// `secrets.key`.
+/// keeps the account's secrets encrypted under `secrets.key`.
 #[derive(Debug, Deserialize, Clone)]
 pub struct PaymentsConfig {
-    /// At least 32 characters, the same on every node. The tenants' Stripe
-    /// secrets are encrypted with it: changing it makes them unreadable, and
-    /// each merchant has to enter them again. Unset: `secrets.key` is used.
-    #[serde(default)]
-    pub secret_key: Option<String>,
     /// Where Stripe's API is reached; Stripe's own address when unset. Tests
     /// point it at a local stand-in.
     #[serde(default)]
@@ -575,17 +567,12 @@ pub struct PaymentsConfig {
 
 impl PaymentsConfig {
     fn validate(&self, secrets: Option<&SecretsConfig>) -> Result<(), ConfigError> {
-        match &self.secret_key {
-            Some(key) if key.len() < 32 => Err(ConfigError::Message(
-                "payments.secret_key must be at least 32 characters (set TIMADA__PAYMENTS__SECRET_KEY)"
-                    .into(),
-            )),
-            None if secrets.is_none() => Err(ConfigError::Message(
-                "payments needs payments.secret_key or secrets.key (set TIMADA__SECRETS__KEY)"
-                    .into(),
-            )),
-            _ => Ok(()),
+        if secrets.is_none() {
+            return Err(ConfigError::Message(
+                "payments needs secrets.key (set TIMADA__SECRETS__KEY)".into(),
+            ));
         }
+        Ok(())
     }
 }
 
@@ -892,22 +879,16 @@ mod tests {
     }
 
     #[test]
-    fn payments_seal_with_their_key_or_the_secrets_key() {
+    fn payments_need_the_secrets_key() {
         let secrets = SecretsConfig {
             key: "a-secrets-key-of-thirty-two-chars!!".into(),
         };
         let payments = PaymentsConfig {
-            secret_key: None,
             stripe_api_url: None,
         };
         assert!(payments.validate(Some(&secrets)).is_ok());
         let err = payments.validate(None).unwrap_err();
         assert!(err.to_string().contains("secrets.key"), "{err}");
-        let short = PaymentsConfig {
-            secret_key: Some("short".into()),
-            stripe_api_url: None,
-        };
-        assert!(short.validate(Some(&secrets)).is_err());
         assert!(
             SecretsConfig {
                 key: "short".into()

@@ -5,17 +5,21 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "aliexpress";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Products0001, Products0002, Forwards0003]
+    vec_box![Aliexpress0001]
 }
 
-pub struct Products0001;
+pub struct Aliexpress0001;
 sqlx_migrator::sqlite_migration!(
-    Products0001,
+    Aliexpress0001,
     "aliexpress",
     "0001_products",
     vec_box![],
     vec_box![
         (
+            // One row per AliExpress product a tenant imports, and the
+            // catalogue product it became. `new_combinations` counts the
+            // combinations the last read found that the shop does not sell,
+            // for the merchant to offer or ignore.
             "CREATE TABLE aliexpress_products (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
@@ -28,6 +32,7 @@ sqlx_migrator::sqlite_migration!(
                 last_error TEXT,
                 requested_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
+                new_combinations INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             )",
             "DROP TABLE aliexpress_products"
@@ -40,29 +45,9 @@ sqlx_migrator::sqlite_migration!(
             "CREATE INDEX aliexpress_products_due ON aliexpress_products (status, last_synced_at)",
             "DROP INDEX aliexpress_products_due"
         ),
-    ]
-);
-
-pub struct Products0002;
-sqlx_migrator::sqlite_migration!(
-    Products0002,
-    "aliexpress",
-    "0002_new_combinations",
-    vec_box![("aliexpress", "0001_products")],
-    vec_box![(
-        "ALTER TABLE aliexpress_products ADD COLUMN new_combinations INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE aliexpress_products DROP COLUMN new_combinations"
-    )]
-);
-
-pub struct Forwards0003;
-sqlx_migrator::sqlite_migration!(
-    Forwards0003,
-    "aliexpress",
-    "0003_forwards",
-    vec_box![("aliexpress", "0002_new_combinations")],
-    vec_box![
         (
+            // One row per order forwarded to AliExpress, with the orders it
+            // placed there and the tracking numbers they reported.
             "CREATE TABLE aliexpress_forwards (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,

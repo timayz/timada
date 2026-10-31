@@ -171,15 +171,14 @@ by construction.
    may append what a shopper does, filling a cart and asking to pay for it
    (`timada_orders::is_shopper_event`), and nothing that belongs to the merchant:
    the catalog, the answer to a request to pay, an order (one exists only once
-   its payment is confirmed to the dashboard). Scopes are strings recorded by the
-   `ApiKey::Scoped` event (keys older than it hold read + write). Revoking the key or
+   its payment is confirmed to the dashboard). Scopes are strings recorded with
+   `ApiKey::Created` and replaced whole by `ApiKey::Scoped`. Revoking the key or
    changing its scopes ends its connections; suspending the tenant ends every
    connection of the tenant, and reconnects are refused.
 4. **Payments** (`payments/`). Each tenant connects its own Stripe account on
    `/t/{slug}/payments`; the secret key and the webhook signing secret are recorded
    in the tenant's platform events sealed with AES-256-GCM (`seal.rs`) under the
-   operator's `[payments] secret_key`, or else `[secrets] key` (no section, no
-   payments). A storefront asks to pay
+   operator's `[secrets] key` (no section, no payments). A storefront asks to pay
    (`Cart::CheckoutRequested`); the subscription `timada-dashboard/payments`
    prices the cart from the store, opens a PaymentIntent with the tenant's key (the
    request id is the idempotency key, so every node answering opens one payment) and
@@ -195,9 +194,8 @@ by construction.
    review requests, sign-in codes) go out through the server picked for them, and
    through the platform's `[mail]` server under the shop's name when none is
    (`ShopMail::sender_of`). Saving a server sends a test mail first. The passwords
-   are recorded in the tenant's platform events (`MailServerAdded`/`Changed`; the
-   single server of before, `MailServerConfigured`, folds as the first, picked for
-   both) sealed under `[secrets] key`; secrets never enter the tenant store, which
+   are recorded in the tenant's platform events (`MailServerAdded`/`Changed`)
+   sealed under `[secrets] key`; secrets never enter the tenant store, which
    replicates to storefronts. Hosts on this machine or a private network are refused
    unless `mail.allow_private_hosts` is set. Account codes and invitations always go
    through the platform's server; newsletter campaigns, automated mails and their
@@ -575,17 +573,25 @@ nothing accumulates on the tenant's store. The library registers no page of its 
 ## Evolving events
 
 Events are encoded with bitcode, which is positional: a stored event's layout, and
-every type nested in it, is frozen. `events.lock` at the workspace root records every
-event, every encoded type and every snapshotted view; `dashboard/tests/events_lock.rs`
-fails when a frozen line changes. The rules:
+every type nested in it, is frozen once a deployment has written it. `events.lock` at
+the workspace root records every event, every encoded type and every snapshotted view;
+`dashboard/tests/events_lock.rs` fails when a line changes, so no shape changes by
+accident. Nothing has been deployed yet, so the rules today are:
 
-- Never edit or remove a persisted variant, field or enum. Add a variant, a companion
-  event, or a new event with `#[evento(upcast_to = New)]` on the old one.
-- After adding a shape: `EVENTO_LOCK=update cargo test -p timada-dashboard --test events_lock`
-  and commit the lock. A shape never deployed anywhere may still change in place:
-  `EVENTO_LOCK=force` rewrites the lock to the code.
-- A snapshotted view whose shape changes bumps `.revision(n)`; its name is pinned
-  with `name = "timada-<ctx>/<View>"` so a move does not orphan snapshots.
+- A shape changes in place: edit the variant, the field or the enum, run
+  `EVENTO_LOCK=force cargo test -p timada-dashboard --test events_lock` and commit the
+  lock. Local stores holding the old shape are made afresh (`make reset`).
+- Nothing is kept for data no deployment wrote: no old variant, no upcast, no
+  fallback. The code reads as if written in one go.
+- The read-model tables are one migration per crate (`0001`), edited in place the same
+  way; `make reset` recreates the local database.
+
+From the first production release on, a persisted variant, field or enum is never
+edited or removed: add a variant, a companion event, or a new event with
+`#[evento(upcast_to = New)]` on the old one, record it with `EVENTO_LOCK=update`, and
+add a new read-model migration rather than editing one. A snapshotted view whose shape
+changes bumps `.revision(n)`; its name is pinned with `name = "timada-<ctx>/<View>"` so
+a move does not orphan snapshots.
 
 ## Configuration
 

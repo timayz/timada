@@ -5,16 +5,17 @@ use sqlx_migrator::{Migration, vec_box};
 pub const MIGRATION_APP: &str = "automations";
 
 pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Automations0001, Automations0002, Automations0003]
+    vec_box![Automations0001]
 }
 
 pub struct Automations0001;
 sqlx_migrator::sqlite_migration!(
     Automations0001,
     "automations",
-    "0001_scenarios",
+    "0001_automations",
     vec_box![],
     vec_box![
+        // Scenarios as the editor lists them.
         (
             "CREATE TABLE automations_scenarios (
                 tenant_id TEXT NOT NULL,
@@ -36,16 +37,7 @@ sqlx_migrator::sqlite_migration!(
                 (tenant_id, updated_at DESC)",
             "DROP INDEX automations_scenarios_updated"
         ),
-    ]
-);
-
-pub struct Automations0002;
-sqlx_migrator::sqlite_migration!(
-    Automations0002,
-    "automations",
-    "0002_runs",
-    vec_box![Automations0001],
-    vec_box![
+        // Runs of a scenario; `next_at` is set while a run waits on a timer.
         (
             "CREATE TABLE automations_runs (
                 tenant_id TEXT NOT NULL,
@@ -79,6 +71,7 @@ sqlx_migrator::sqlite_migration!(
                 WHERE next_at IS NULL",
             "DROP INDEX automations_runs_ended"
         ),
+        // Which published scenario version listens to which trigger.
         (
             "CREATE TABLE automations_listeners (
                 tenant_id TEXT NOT NULL,
@@ -96,16 +89,8 @@ sqlx_migrator::sqlite_migration!(
                 (tenant_id, trigger, state)",
             "DROP INDEX automations_listeners_trigger"
         ),
-    ]
-);
-
-pub struct Automations0003;
-sqlx_migrator::sqlite_migration!(
-    Automations0003,
-    "automations",
-    "0003_checkouts",
-    vec_box![Automations0002],
-    vec_box![
+        // Payment requests watched for abandoned checkouts: open until the
+        // cart is ordered or the abandonment is detected.
         (
             "CREATE TABLE automations_checkouts (
                 tenant_id TEXT NOT NULL,

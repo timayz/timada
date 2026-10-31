@@ -150,29 +150,19 @@ pub struct AttributeSeed {
 }
 
 impl Snapshot {
-    /// Reads a snapshot: a directory holding [`CATALOG_FILE`], or a
-    /// catalogue file itself (gunzipped when its name ends in `.gz`), whose
-    /// pictures then resolve from its directory.
-    pub fn read(path: &Path) -> anyhow::Result<Self> {
-        let path = if path.is_dir() {
-            path.join(CATALOG_FILE)
-        } else {
-            path.to_path_buf()
-        };
+    /// Reads a snapshot: a directory holding [`CATALOG_FILE`] and the
+    /// pictures it names.
+    pub fn read(dir: &Path) -> anyhow::Result<Self> {
+        let path = dir.join(CATALOG_FILE);
         let bytes =
             std::fs::read(&path).with_context(|| format!("cannot read {}", path.display()))?;
-        let json = if is_gz(&path) {
-            let mut out = Vec::new();
-            flate2::read::GzDecoder::new(bytes.as_slice())
-                .read_to_end(&mut out)
-                .with_context(|| format!("{} is not gzip", path.display()))?;
-            out
-        } else {
-            bytes
-        };
+        let mut json = Vec::new();
+        flate2::read::GzDecoder::new(bytes.as_slice())
+            .read_to_end(&mut json)
+            .with_context(|| format!("{} is not gzip", path.display()))?;
         let mut snapshot: Self = serde_json::from_slice(&json)
             .with_context(|| format!("{} is not a snapshot", path.display()))?;
-        snapshot.dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        snapshot.dir = dir.to_path_buf();
         Ok(snapshot)
     }
 
@@ -205,7 +195,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trips_through_gzip_and_plain_json() {
+    fn round_trips_through_its_directory() {
         let snapshot = Snapshot {
             source: "test".into(),
             fetched_at: 1,
@@ -230,15 +220,10 @@ mod tests {
             dir: dir.clone(),
             ..snapshot.clone()
         };
-        for name in ["catalog.json", "catalog.json.gz"] {
-            let path = dir.join(name);
-            snapshot.write(&path).unwrap();
-            assert_eq!(Snapshot::read(&path).unwrap(), expected, "{name}");
-        }
-        // The directory itself names the snapshot.
-        assert_eq!(Snapshot::read(&dir).unwrap(), expected, "directory");
+        snapshot.write(&dir.join(CATALOG_FILE)).unwrap();
+        assert_eq!(Snapshot::read(&dir).unwrap(), expected);
         assert!(
-            std::fs::read(dir.join("catalog.json.gz"))
+            std::fs::read(dir.join(CATALOG_FILE))
                 .unwrap()
                 .starts_with(&[0x1f, 0x8b]),
             "gzip magic"

@@ -11,7 +11,6 @@
 
 pub mod complete;
 pub mod countries;
-pub mod pay;
 pub mod start;
 
 use timada_storefront::{

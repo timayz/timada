@@ -155,8 +155,7 @@ these calls too.
 - **Platform store (`timada-tenancy`).** On the company, the sealed tokens of its
   buyer account: `Company::AliexpressAuthorized`, `Company::AliexpressDisconnected`.
   On the tenant, the market, the shop's rule and how orders go:
-  `AliexpressConfiguredV2` (`AliexpressConfigured`, with one rule for every cost, is
-  kept to decode what was stored and read as the newer event), `AliexpressRemoved`,
+  `AliexpressConfigured`, `AliexpressRemoved`,
   `AliexpressForwardingSet`. The tokens
   are sealed under `secrets.key` with the purpose `aliexpress`; the app's key and
   secret are host configuration.

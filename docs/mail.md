@@ -139,9 +139,8 @@ derived from the HTML is sent with the merchant's HTML. The shopper always gets 
 
 A shop may word each mail in several languages. Under "Languages" on `/t/{slug}/mail`
 the merchant picks a default language and any others, from a fixed list of ISO 639-1
-codes with their English names. A shop that never picked any mails in English, and
-every wording saved before it could pick is an English wording. The built-in wording is
-English whatever the shop's languages.
+codes with their English names. A shop that never picked any mails in English. The
+built-in wording is English whatever the shop's languages.
 
 "Mails to shoppers" then lists each mail once per language, each with its own editor at
 `/t/{slug}/mail/templates/{kind}/{language}` (the address without a language opens the

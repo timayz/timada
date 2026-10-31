@@ -16,8 +16,7 @@ event timada-aliexpress/Product::ImportFailed { reason: String, failed_by: Strin
 event timada-aliexpress/Product::ImportRequested { ae_product_id: String, requested_by: String }
 event timada-aliexpress/Product::ImportStarted { started_by: String }
 event timada-aliexpress/Product::Imported { product_id: String, skus: Vec<SkuLink>, imported_by: String }
-event timada-aliexpress/Product::PricingSet { pricing: Option<timada_tenancy::PricingRule>, set_by: String }
-event timada-aliexpress/Product::PricingSetV2 { pricing: Option<timada_tenancy::Pricing>, set_by: String }
+event timada-aliexpress/Product::PricingSet { pricing: Option<timada_tenancy::Pricing>, set_by: String }
 event timada-aliexpress/Product::SyncFailed { reason: String, failed_by: String }
 event timada-aliexpress/Product::Synced { skus: Vec<SkuLink>, offline: bool, synced_by: String }
 event timada-aliexpress/Product::Unlinked { unlinked_by: String }
@@ -238,7 +237,7 @@ event timada-support/Message::Handled { handled_by: String }
 event timada-support/Message::Received { key_id: String, first_name: Vec<u8>, last_name: Vec<u8>, email: Vec<u8>, body: Vec<u8>, language: Option<String>, received_by: String }
 event timada-support/Message::Reopened { reopened_by: String }
 event timada-support/MessageNotification::Notified { message_id: String, mailed_by: String }
-event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, created_by: String, created_at: u64 }
+event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, scopes: Vec<String>, created_by: String, created_at: u64 }
 event timada-tenancy/ApiKey::Revoked { revoked_by: String, revoked_at: u64 }
 event timada-tenancy/ApiKey::Scoped { scopes: Vec<String>, scoped_by: String, scoped_at: u64 }
 event timada-tenancy/Company::AliexpressAuthorized { access_token_sealed: Vec<u8>, refresh_token_sealed: Vec<u8>, expires_at: u64, refresh_expires_at: u64, account: String, authorized_by: String }
@@ -253,8 +252,7 @@ event timada-tenancy/CompanySiren::Released { released_by: String }
 event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }
-event timada-tenancy/Tenant::AliexpressConfigured { ship_to_country: String, currency: String, language: String, pricing: Option<PricingRule>, configured_by: String }
-event timada-tenancy/Tenant::AliexpressConfiguredV2 { ship_to_country: String, currency: String, language: String, pricing: Option<Pricing>, configured_by: String }
+event timada-tenancy/Tenant::AliexpressConfigured { ship_to_country: String, currency: String, language: String, pricing: Option<Pricing>, configured_by: String }
 event timada-tenancy/Tenant::AliexpressForwardingSet { auto_forward: bool, try_to_pay: bool, set_by: String }
 event timada-tenancy/Tenant::AliexpressRemoved { removed_by: String }
 event timada-tenancy/Tenant::CompanyLinked { company_id: String, series_code: String, linked_by: String }
@@ -265,16 +263,11 @@ event timada-tenancy/Tenant::MailBrandingSet { logo_file: Option<String>, logo_s
 event timada-tenancy/Tenant::MailLanguagesSet { default: String, others: Vec<String>, set_by: String }
 event timada-tenancy/Tenant::MailServerAdded { server_id: String, name: Option<String>, host: String, port: u16, security: String, username: Option<String>, password_sealed: Option<Vec<u8>>, from_address: String, from_name: Option<String>, added_by: String }
 event timada-tenancy/Tenant::MailServerChanged { server_id: String, name: Option<String>, host: String, port: u16, security: String, username: Option<String>, password_sealed: Option<Vec<u8>>, from_address: String, from_name: Option<String>, changed_by: String }
-event timada-tenancy/Tenant::MailServerConfigured { host: String, port: u16, security: String, username: Option<String>, password_sealed: Option<Vec<u8>>, from_address: String, from_name: Option<String>, configured_by: String }
 event timada-tenancy/Tenant::MailServerDeleted { server_id: String, deleted_by: String }
-event timada-tenancy/Tenant::MailServerRemoved { removed_by: String }
 event timada-tenancy/Tenant::MailServersPicked { shop_mails: Option<String>, marketing: Option<String>, picked_by: String }
-event timada-tenancy/Tenant::MailTemplateReset { mail: String, reset_by: String }
-event timada-tenancy/Tenant::MailTemplateResetIn { mail: String, language: String, reset_by: String }
-event timada-tenancy/Tenant::MailTemplateSaved { mail: String, subject: String, html: String, saved_by: String }
-event timada-tenancy/Tenant::MailTemplateSavedIn { mail: String, language: String, subject: String, html: String, saved_by: String }
-event timada-tenancy/Tenant::MailTemplateTextSaved { mail: String, text: String }
-event timada-tenancy/Tenant::MailTemplateTextSavedIn { mail: String, language: String, text: String }
+event timada-tenancy/Tenant::MailTemplateReset { mail: String, language: String, reset_by: String }
+event timada-tenancy/Tenant::MailTemplateSaved { mail: String, language: String, subject: String, html: String, saved_by: String }
+event timada-tenancy/Tenant::MailTemplateTextSaved { mail: String, language: String, text: String }
 event timada-tenancy/Tenant::MemberGranted { user_id: String, role: String }
 event timada-tenancy/Tenant::MemberRevoked { user_id: String }
 event timada-tenancy/Tenant::MemberRoleChanged { user_id: String, role: String }

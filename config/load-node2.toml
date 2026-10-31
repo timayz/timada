@@ -26,7 +26,6 @@ public_addr = "store.timada.localhost:4320"
 # Payments go to the stand-in for Stripe the load test runs, itself in front
 # of stripe-mock from compose.yml.
 [payments]
-secret_key = "load-only-payments-key-never-used-outside-the-load-test"
 stripe_api_url = "http://127.0.0.1:12112"
 
 # Every shopper comes from this one machine, so the limits are far above

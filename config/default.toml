@@ -73,8 +73,8 @@ smtp_url = "smtp://localhost:1025"
 # allow_private_hosts = false
 
 # The key that seals the secrets merchants hand over (their mail server
-# passwords, and their payment keys unless payments.secret_key is set) before
-# they are stored, and the shopper keys below. At least 32 characters, the
+# passwords and their payment keys) before they are stored, and the shopper
+# keys below. At least 32 characters, the
 # same on every node; changing it makes the stored secrets unreadable, and
 # merchants then enter them again, and every shopper account loses its
 # addresses. Without it, shops cannot set up a mail server of their own and
@@ -107,11 +107,8 @@ dir = "data/shopper-keys"
 
 # Card payments. Each tenant connects its own Stripe account on
 # /t/<slug>/payments; the account's secrets are kept encrypted with
-# secret_key, which every node shares (changing it makes the stored secrets
-# unreadable: merchants then enter them again). Unset, secrets.key is used.
-# Without this section, tenants cannot take payments.
+# secrets.key. Without this section, tenants cannot take payments.
 # [payments]
-# secret_key = "at least 32 characters, the same on every node"
 # # Where Stripe's API is reached; Stripe's own address when unset.
 # stripe_api_url = "http://localhost:12111"
 

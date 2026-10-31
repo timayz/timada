@@ -1,10 +1,9 @@
 mod common;
 
 use common::*;
-use timada_tenancy::aggregator::{MailServerConfigured, MailServerRemoved};
 use timada_tenancy::{
-    DefineRole, LEGACY_MAIL_SERVER_ID, MAX_MAIL_SERVERS, PickMailServers, SaveMailServer,
-    SaveMailTemplate, SetMailBranding, SetMailLanguages, ShopMailKind, TenancyError,
+    DefineRole, MAX_MAIL_SERVERS, PickMailServers, SaveMailServer, SaveMailTemplate,
+    SetMailBranding, SetMailLanguages, ShopMailKind, TenancyError,
 };
 
 fn role(name: &str, permission: &str) -> DefineRole {
@@ -276,98 +275,6 @@ async fn a_member_needs_mail_manage() {
     cmd.pick_mail_servers(&bob, &tenant.id, picks(None, Some(&id)))
         .await
         .unwrap();
-}
-
-/// The one server a shop set up before it could have several.
-fn legacy_server(host: &str) -> MailServerConfigured {
-    MailServerConfigured {
-        host: host.into(),
-        port: 587,
-        security: "starttls".into(),
-        username: Some("shop@acme.test".into()),
-        password_sealed: Some(vec![1, 2, 3]),
-        from_address: "orders@acme.test".into(),
-        from_name: None,
-        configured_by: "alice".into(),
-    }
-}
-
-#[tokio::test]
-async fn a_server_set_up_before_shops_could_have_several_does_both() {
-    let (executor, _pool) = executor_with_pool().await;
-    let cmd = timada_tenancy::Command(executor.clone());
-    let alice = new_id();
-    let tenant = create_tenant(&cmd, "Acme", &alice).await;
-    // What the log holds from before: set up, then set up again.
-    evento::append(&tenant.id)
-        .original_version(tenant.aggregate_version)
-        .event(&legacy_server("smtp.acme.test"))
-        .event(&legacy_server("smtp2.acme.test"))
-        .commit(&executor)
-        .await
-        .unwrap();
-    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    assert_eq!(state.mail_servers.len(), 1);
-    let main = &state.mail_servers[0];
-    assert_eq!(main.id, LEGACY_MAIL_SERVER_ID);
-    assert_eq!(main.host, "smtp2.acme.test");
-    assert_eq!(main.label(), "orders@acme.test");
-    assert_eq!(state.shop_mails_server().unwrap().id, LEGACY_MAIL_SERVER_ID);
-    assert_eq!(state.marketing_server().unwrap().id, LEGACY_MAIL_SERVER_ID);
-
-    // The commands handle it like any other.
-    let news = cmd
-        .add_mail_server(&alice, &tenant.id, server("smtp.news.test", "tls"))
-        .await
-        .unwrap();
-    cmd.pick_mail_servers(
-        &alice,
-        &tenant.id,
-        picks(Some(LEGACY_MAIL_SERVER_ID), Some(&news)),
-    )
-    .await
-    .unwrap();
-    cmd.change_mail_server(
-        &alice,
-        &tenant.id,
-        LEGACY_MAIL_SERVER_ID,
-        SaveMailServer {
-            name: Some("Orders".into()),
-            ..server("smtp3.acme.test", "tls")
-        },
-    )
-    .await
-    .unwrap();
-    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    assert_eq!(state.mail_servers[0].label(), "Orders");
-    assert_eq!(state.shop_mails_server().unwrap().id, LEGACY_MAIL_SERVER_ID);
-    assert_eq!(state.marketing_server().unwrap().id, news);
-
-    // A late one, from a node not upgraded yet, takes no pick away.
-    evento::append(&tenant.id)
-        .original_version(state.aggregate_version)
-        .event(&legacy_server("smtp4.acme.test"))
-        .commit(&executor)
-        .await
-        .unwrap();
-    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    assert_eq!(state.mail_servers.len(), 2);
-    assert_eq!(state.mail_servers[0].host, "smtp4.acme.test");
-    assert_eq!(state.marketing_server().unwrap().id, news);
-
-    // Removed the old way, it takes its pick with it.
-    evento::append(&tenant.id)
-        .original_version(state.aggregate_version)
-        .event(&MailServerRemoved {
-            removed_by: alice.clone(),
-        })
-        .commit(&executor)
-        .await
-        .unwrap();
-    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
-    assert_eq!(state.mail_servers.len(), 1);
-    assert!(state.shop_mails_server().is_none());
-    assert_eq!(state.marketing_server().unwrap().id, news);
 }
 
 /// A mail's wording, as the editor sends it.

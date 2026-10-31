@@ -1,7 +1,7 @@
 //! Events. Every variant and every field is frozen once it ships (bitcode is
 //! positional); evolve by adding variants.
 
-use crate::value_object::{Pricing, PricingRule};
+use crate::value_object::Pricing;
 
 /// A merchant on the platform. Roles are free-form names a tenant defines
 /// for itself (`RoleDefined`); `owner` is built in and unrestricted (see
@@ -78,28 +78,10 @@ pub enum Tenant {
     CompanyUnlinked {
         unlinked_by: String,
     },
-    /// The merchant's own mail server, which the shop's mails to its
-    /// shoppers go out through, from `from_address`. The password is sealed
-    /// by the host, as the payment secrets are.
-    MailServerConfigured {
-        host: String,
-        port: u16,
-        /// `tls` (implicit TLS), `starttls` or `none`.
-        security: String,
-        username: Option<String>,
-        password_sealed: Option<Vec<u8>>,
-        from_address: String,
-        /// The display name; `None` is the tenant's name.
-        from_name: Option<String>,
-        configured_by: String,
-    },
-    /// The shop's mails go out through the platform's server again.
-    MailServerRemoved {
-        removed_by: String,
-    },
-    /// One more of the merchant's own mail servers, `server_id` among the
-    /// shop's (a ULID). The two events above are the one server a shop had
-    /// before it could have several. The password is sealed by the host.
+    /// One of the merchant's own mail servers, `server_id` among the
+    /// shop's (a ULID), which the shop's mails to its shoppers go out
+    /// through, from `from_address`. The password is sealed by the host, as
+    /// the payment secrets are.
     MailServerAdded {
         server_id: String,
         /// The merchant's name for it; `None` shows it by its address.
@@ -143,55 +125,36 @@ pub enum Tenant {
         marketing: Option<String>,
         picked_by: String,
     },
-    /// The merchant's own wording of one of the shop's mails to its
-    /// shoppers. `mail` is a [`ShopMailKind`](crate::ShopMailKind) key;
-    /// `subject` and `html` are templates over that mail's variables.
-    MailTemplateSaved {
-        mail: String,
-        subject: String,
-        html: String,
-        saved_by: String,
-    },
-    /// The merchant's own plain-text part of a mail, committed right after
-    /// the [`MailTemplateSaved`] it goes with. A save without it sends the
-    /// text derived from the HTML. `text` is a template over the same
-    /// variables, printed unescaped.
-    MailTemplateTextSaved {
-        mail: String,
-        text: String,
-    },
-    /// The mail goes back to the built-in wording.
-    MailTemplateReset {
-        mail: String,
-        reset_by: String,
-    },
     /// The languages the shop mails in, as ISO 639-1 codes: a shopper is
     /// mailed in theirs when it is one of `others` and worded, else in
-    /// `default`. A shop that never set them mails in English, and the
-    /// wordings saved before this (the three events above) are English.
+    /// `default`. A shop that never set them mails in English.
     MailLanguagesSet {
         default: String,
         others: Vec<String>,
         set_by: String,
     },
-    /// The merchant's wording of one mail in one of the shop's languages;
-    /// see [`MailTemplateSaved`].
-    MailTemplateSavedIn {
+    /// The merchant's own wording of one of the shop's mails to its
+    /// shoppers, in one of the shop's languages. `mail` is a
+    /// [`ShopMailKind`](crate::ShopMailKind) key; `subject` and `html` are
+    /// templates over that mail's variables.
+    MailTemplateSaved {
         mail: String,
         language: String,
         subject: String,
         html: String,
         saved_by: String,
     },
-    /// The plain-text part of a wording in one language, committed right
-    /// after its [`MailTemplateSavedIn`]; see [`MailTemplateTextSaved`].
-    MailTemplateTextSavedIn {
+    /// The merchant's own plain-text part of a wording, committed right
+    /// after the [`MailTemplateSaved`] it goes with. A save without it sends
+    /// the text derived from the HTML. `text` is a template over the same
+    /// variables, printed unescaped.
+    MailTemplateTextSaved {
         mail: String,
         language: String,
         text: String,
     },
     /// The mail, in that language, goes back to the built-in wording.
-    MailTemplateResetIn {
+    MailTemplateReset {
         mail: String,
         language: String,
         reset_by: String,
@@ -212,22 +175,11 @@ pub enum Tenant {
     },
     /// The shop imports products from AliExpress through the platform's
     /// app, acting for the AliExpress account of the company it sells as.
-    /// The first shape of [`AliexpressConfiguredV2`](Tenant::AliexpressConfiguredV2),
-    /// with one rule for every cost. Kept to decode what was stored; read
-    /// as the newer event.
-    #[evento(upcast_to = AliexpressConfiguredV2)]
-    AliexpressConfigured {
-        ship_to_country: String,
-        currency: String,
-        language: String,
-        pricing: Option<PricingRule>,
-        configured_by: String,
-    },
     /// Products are fetched as shipped to `ship_to_country`, priced in
     /// `currency` and worded in `language`; `pricing` turns what AliExpress
     /// charges into the shop's price, by cost band (`None`: the merchant
     /// prices by hand).
-    AliexpressConfiguredV2 {
+    AliexpressConfigured {
         ship_to_country: String,
         currency: String,
         language: String,
@@ -257,18 +209,6 @@ pub enum Tenant {
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).
-impl From<AliexpressConfigured> for AliexpressConfiguredV2 {
-    fn from(old: AliexpressConfigured) -> Self {
-        Self {
-            ship_to_country: old.ship_to_country,
-            currency: old.currency,
-            language: old.language,
-            pricing: old.pricing.map(Pricing::flat),
-            configured_by: old.configured_by,
-        }
-    }
-}
-
 #[evento::aggregate(name = "timada-tenancy/TenantSlug")]
 pub enum TenantSlug {
     Claimed { tenant_id: String },
@@ -309,9 +249,9 @@ pub mod api_key {
     /// storefront connects. One stream per token, id =
     /// [`api_key_id`](crate::api_key_id): the token is shown once at creation,
     /// the stream knows its hash and a short hint to tell keys apart. What a
-    /// key may do is its scopes (`Scoped`); a key created before scopes
-    /// existed has none recorded and keeps the full access it was issued
-    /// with (see [`LEGACY_API_KEY_SCOPES`](crate::LEGACY_API_KEY_SCOPES)).
+    /// key may do is its scopes: `resource:action` strings from
+    /// [`API_KEY_SCOPES`](crate::API_KEY_SCOPES), never an enum, so the
+    /// vocabulary can grow without a new event.
     #[evento::aggregate(name = "timada-tenancy/ApiKey")]
     pub enum ApiKey {
         Created {
@@ -319,6 +259,7 @@ pub mod api_key {
             label: String,
             /// The token's first characters (`tk_` and eight more), for the pages.
             hint: String,
+            scopes: Vec<String>,
             created_by: String,
             /// Unix seconds.
             created_at: u64,
@@ -327,10 +268,7 @@ pub mod api_key {
             revoked_by: String,
             revoked_at: u64,
         },
-        /// The whole scope set of a key, replaced: recorded with `Created`
-        /// and again on every change. Scopes are `resource:action` strings
-        /// from [`API_KEY_SCOPES`](crate::API_KEY_SCOPES), never an enum, so
-        /// the vocabulary can grow without a new event.
+        /// The whole scope set of a key, replaced.
         Scoped {
             scopes: Vec<String>,
             scoped_by: String,

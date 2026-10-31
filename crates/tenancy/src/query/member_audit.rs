@@ -3,10 +3,10 @@
 //!
 //! One row per event, unique by the event id, so a repeated delivery inserts
 //! nothing; rows are numbered in the order the log delivers them, which is
-//! the order the page lists them in. The subscription has its own cursor: started on an existing log,
-//! it writes the whole history. The account behind a member change is the
-//! commit's `requested_by`, which older events lack (their `actor` is
-//! `NULL`); invitation events name it themselves.
+//! the order the page lists them in. The subscription has its own cursor:
+//! started on an existing log, it writes the whole history. The account
+//! behind a member change is the commit's `requested_by`; invitation events
+//! name it themselves.
 
 use evento::{
     Executor,
@@ -56,8 +56,8 @@ pub struct MemberAuditRow {
     pub at: i64,
     /// One of the `AUDIT_*` constants.
     pub action: String,
-    /// The account that did it; `None` when the event did not record it.
-    pub actor: Option<String>,
+    /// The account that did it.
+    pub actor: String,
     /// The member concerned (member changes, accepted invitations).
     pub user_id: Option<String>,
     /// The invited address (invitations).
@@ -90,7 +90,7 @@ pub async fn member_audit_of_tenant(
 struct Entry<'a> {
     tenant_id: &'a str,
     action: &'static str,
-    actor: Option<&'a str>,
+    actor: &'a str,
     user_id: Option<&'a str>,
     email: Option<&'a str>,
     role: Option<&'a str>,
@@ -122,11 +122,11 @@ async fn on_member_granted<E: Executor>(
     event: Event<MemberGranted>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let actor = event.metadata.requested_by().ok();
+    let actor = event.metadata.requested_by()?;
     let entry = Entry {
         tenant_id: &event.aggregate_id,
         action: AUDIT_GRANTED,
-        actor: actor.as_deref(),
+        actor: &actor,
         user_id: Some(&event.data.user_id),
         email: None,
         role: Some(&event.data.role),
@@ -140,11 +140,11 @@ async fn on_member_role_changed<E: Executor>(
     event: Event<MemberRoleChanged>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let actor = event.metadata.requested_by().ok();
+    let actor = event.metadata.requested_by()?;
     let entry = Entry {
         tenant_id: &event.aggregate_id,
         action: AUDIT_ROLE_CHANGED,
-        actor: actor.as_deref(),
+        actor: &actor,
         user_id: Some(&event.data.user_id),
         email: None,
         role: Some(&event.data.role),
@@ -158,11 +158,11 @@ async fn on_member_revoked<E: Executor>(
     event: Event<MemberRevoked>,
 ) -> anyhow::Result<()> {
     let pool: SqlitePool = context.extract();
-    let actor = event.metadata.requested_by().ok();
+    let actor = event.metadata.requested_by()?;
     let entry = Entry {
         tenant_id: &event.aggregate_id,
         action: AUDIT_REVOKED,
-        actor: actor.as_deref(),
+        actor: &actor,
         user_id: Some(&event.data.user_id),
         email: None,
         role: None,
@@ -179,7 +179,7 @@ async fn on_invitation_sent<E: Executor>(
     let entry = Entry {
         tenant_id: &event.data.tenant_id,
         action: AUDIT_INVITED,
-        actor: Some(&event.data.invited_by),
+        actor: &event.data.invited_by,
         user_id: None,
         email: Some(&event.data.email),
         role: Some(&event.data.role),
@@ -203,7 +203,7 @@ async fn on_invitation_accepted<E: Executor>(
     let entry = Entry {
         tenant_id: &invitation.tenant_id,
         action: AUDIT_INVITATION_ACCEPTED,
-        actor: Some(&event.data.user_id),
+        actor: &event.data.user_id,
         user_id: Some(&event.data.user_id),
         email: Some(&invitation.email),
         role: Some(&invitation.role),
@@ -227,7 +227,7 @@ async fn on_invitation_revoked<E: Executor>(
     let entry = Entry {
         tenant_id: &invitation.tenant_id,
         action: AUDIT_INVITATION_REVOKED,
-        actor: Some(&event.data.revoked_by),
+        actor: &event.data.revoked_by,
         user_id: None,
         email: Some(&invitation.email),
         role: Some(&invitation.role),
