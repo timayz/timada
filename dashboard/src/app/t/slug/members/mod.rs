@@ -1,7 +1,8 @@
 //! `/t/{slug}/members`: who belongs to the tenant, the invitations still
-//! waiting, and (with `members:manage`) inviting, moving members between
-//! roles or removing them. Every member sees "Leave" on their own row;
-//! [`history`] lists who did what.
+//! waiting, and (with `members:manage`) inviting and removing them, with a
+//! role no wider than one's own; owners alone move members between roles.
+//! Every member sees "Leave" on their own row; [`history`] lists who did
+//! what.
 
 pub mod change;
 pub mod history;
@@ -69,7 +70,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     ids.extend(invitations.iter().map(|i| i.invited_by.clone()));
     let labels = user_labels(cx, &ids).await?;
     let slug = tenant.slug.clone();
-    // The roles a manager can move someone to: owner only for owners.
+    // The roles the member may hand out: owners any, a manager those no
+    // wider than their own (`TenantState::may_hand_out`).
     let choices: Vec<(String, String)> = std::iter::once(ROLE_OWNER)
         .filter(|_| is_owner)
         .map(|r| (r.to_owned(), r.to_owned()))
@@ -77,6 +79,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             tenant
                 .roles
                 .iter()
+                .filter(|(name, _)| tenant.may_hand_out(&me, name))
                 .map(|(name, def)| (name.clone(), def.label.clone())),
         )
         .collect();
@@ -114,8 +117,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     if user_id == &me { " " <span class="text-muted-foreground">"(you)"</span> }
                                 )
                                 table_cell(
-                                    // Only owners touch owner seats; a manager sees them read-only.
-                                    if can_manage && (is_owner || role != ROLE_OWNER) {
+                                    // Owners alone move members between roles.
+                                    if is_owner {
                                         <form method="post" action=(href!(change::change, Slug(slug.clone()))) class="flex items-center gap-2">
                                             <input type="hidden" name="user_id" value=(user_id)>
                                             select(

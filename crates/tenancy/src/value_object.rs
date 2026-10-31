@@ -12,9 +12,11 @@ pub const ROLE_OWNER: &str = "owner";
 ///
 /// - `tenant:manage` — rename the tenant (its settings).
 /// - `members:read` — see the members and the pending invitations.
-/// - `members:manage` — invite, change roles and remove members (never to or
-///   from `owner`: that stays with owners).
-/// - `roles:manage` — define, edit and remove custom roles.
+/// - `members:manage` — invite and remove members, with a role no wider than
+///   one's own (never `owner`). Moving a member between roles, and the roles
+///   themselves, are for owners alone.
+/// - `roles:manage` — see the custom roles and what each allows. Defining,
+///   editing and removing them is for owners alone.
 /// - `api-keys:manage` — create and revoke the store API keys.
 /// - `products:read` — see the products of the catalog.
 /// - `products:manage` — create, edit, publish and archive products.

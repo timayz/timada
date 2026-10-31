@@ -354,9 +354,9 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "tenant:manage" => "Rename the tenant",
         "members:read" => "See members and pending invitations",
         "members:manage" => {
-            "Invite, change roles and remove members (owners excepted; includes seeing them)"
+            "Invite and remove members, with a role no wider than their own (includes seeing them)"
         }
-        "roles:manage" => "Define, edit and remove roles",
+        "roles:manage" => "See the roles and what each allows",
         "api-keys:manage" => "Create and revoke the store API keys",
         "products:read" => "See the products and categories",
         "products:manage" => "Create, edit, publish and archive products; organise the categories",

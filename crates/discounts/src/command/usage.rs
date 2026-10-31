@@ -53,15 +53,7 @@ impl<E: Executor> super::Command<E> {
         }
         if let Some(max_uses) = discount.max_uses {
             let reserved = self
-                .reserve_usage(
-                    actor,
-                    &discount,
-                    max_uses,
-                    cart_id,
-                    email,
-                    ttl_secs,
-                    &routing_key,
-                )
+                .reserve_usage(actor, &discount, max_uses, cart_id, ttl_secs, &routing_key)
                 .await;
             if let Err(err) = reserved {
                 if discount.once_per_email
@@ -329,14 +321,12 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn reserve_usage(
         &self,
         actor: &str,
         discount: &DiscountState,
         max_uses: u32,
         cart_id: &str,
-        email: &str,
         ttl_secs: u64,
         routing_key: &Option<String>,
     ) -> Result<(), DiscountError> {
@@ -354,7 +344,6 @@ impl<E: Executor> super::Command<E> {
             }
             let reserved = Reserved {
                 cart_id: cart_id.to_owned(),
-                email: email.to_owned(),
                 expires_at: now + ttl_secs,
                 reserved_by: actor.to_owned(),
             };

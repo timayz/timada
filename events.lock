@@ -99,7 +99,7 @@ event timada-discounts/DiscountCode::Claimed { discount_id: String }
 event timada-discounts/DiscountCode::Released unit
 event timada-discounts/DiscountUsage::Consumed { cart_id: String, order_id: String, consumed_by: String }
 event timada-discounts/DiscountUsage::Released { cart_id: String, released_by: String }
-event timada-discounts/DiscountUsage::Reserved { cart_id: String, email: String, expires_at: u64, reserved_by: String }
+event timada-discounts/DiscountUsage::Reserved { cart_id: String, expires_at: u64, reserved_by: String }
 event timada-discounts/Offers::OfferArchived { offer_id: String, archived_by: String }
 event timada-discounts/Offers::OfferCreated { offer_id: String, product_id: String, variant_id: Option<String>, price_cents: u64, currency: String, title: Option<String>, requires_product_id: Option<String>, min_subtotal_cents: Option<u64>, starts_at: Option<u64>, ends_at: Option<u64>, created_by: String }
 event timada-discounts/Offers::OfferDeactivated { offer_id: String, deactivated_by: String }

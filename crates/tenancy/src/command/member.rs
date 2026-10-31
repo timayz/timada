@@ -1,6 +1,9 @@
-//! Membership: who belongs to a tenant and as what. Owners are special in two
-//! ways: only an owner hands the `owner` role out or takes it back, and a
-//! tenant never loses its last owner.
+//! Membership: who belongs to a tenant and as what. `members:manage` invites
+//! and removes members; what it hands out is bounded by what its holder has
+//! ([`TenantState::may_hand_out`]): a role no wider than their own, never
+//! `owner`. Moving a member between roles is for owners alone (a manager
+//! could otherwise move themselves up), and a tenant never loses its last
+//! owner.
 
 use evento::{Executor, ProjectionAggregate};
 
@@ -12,8 +15,9 @@ use super::{Command, TenantState};
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Adds a user with a role. Needs `members:manage`; granting `owner`
-    /// needs an owner; the role must exist.
+    /// Adds a user with a role. Needs `members:manage`, and the role must be
+    /// one the actor may hand out: owners hand out any, others a role whose
+    /// permissions they hold themselves, never `owner`.
     pub async fn grant_member(
         &self,
         actor_user_id: &str,
@@ -26,15 +30,18 @@ impl<E: Executor> super::Command<E> {
         if !tenant.can(actor_user_id, PERMISSION_MEMBERS_MANAGE) {
             return Err(TenancyError::Forbidden);
         }
-        if role == ROLE_OWNER && !tenant.is_owner(actor_user_id) {
+        if !tenant.has_role(role) {
+            return Err(TenancyError::UnknownRole);
+        }
+        if !tenant.may_hand_out(actor_user_id, role) {
             return Err(TenancyError::Forbidden);
         }
         self.grant(actor_user_id, tenant, user_id, role, routing_key)
             .await
     }
 
-    /// Moves a member to another role. Needs `members:manage`; to or from
-    /// `owner` needs an owner; the last owner stays. The same role is a no-op.
+    /// Moves a member to another role. Owners only; the last owner stays.
+    /// The same role is a no-op.
     pub async fn change_member_role(
         &self,
         actor_user_id: &str,
@@ -44,7 +51,7 @@ impl<E: Executor> super::Command<E> {
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
         let tenant = self.require_active(tenant_id).await?;
-        if !tenant.can(actor_user_id, PERMISSION_MEMBERS_MANAGE) {
+        if !tenant.is_owner(actor_user_id) {
             return Err(TenancyError::Forbidden);
         }
         let Some(current) = tenant.role_of(user_id) else {
@@ -55,10 +62,6 @@ impl<E: Executor> super::Command<E> {
         }
         if current == role {
             return Ok(());
-        }
-        let touches_owner = current == ROLE_OWNER || role == ROLE_OWNER;
-        if touches_owner && !tenant.is_owner(actor_user_id) {
-            return Err(TenancyError::Forbidden);
         }
         if current == ROLE_OWNER && tenant.owners() == 1 {
             return Err(TenancyError::LastOwner);
