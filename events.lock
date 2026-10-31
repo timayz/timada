@@ -153,6 +153,7 @@ event timada-newsletter/Campaign::SendRequested { requested_by: String }
 event timada-newsletter/Delivery::Claimed { campaign_id: String, subscriber_id: String, claimed_by: String }
 event timada-newsletter/Delivery::ClaimedForEdition { campaign_id: String, edition_id: String, subscriber_id: String, claimed_by: String }
 event timada-newsletter/Delivery::Failed { reason: String }
+event timada-newsletter/Delivery::Skipped { campaign_id: String, edition_id: Option<String>, subscriber_id: String, reason: String, skipped_by: String }
 event timada-newsletter/Edition::EditionClosed { closed_by: String }
 event timada-newsletter/Edition::EditionOpened { campaign_id: String, cycle: String, subject: String, html: String, text: Option<String>, language: Option<String>, opened_by: String }
 event timada-newsletter/Edition::EditionRolled { cycle: String, rolled_by: String }
