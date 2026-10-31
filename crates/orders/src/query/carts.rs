@@ -51,3 +51,24 @@ pub async fn count_open_carts(pool: &SqlitePool, tenant_id: &str) -> sqlx::Resul
     .fetch_one(pool)
     .await
 }
+
+/// The carts of every tenant with a payment open, last touched at `before`
+/// (unix seconds) or earlier, by tenant: the checkouts whose holds may have
+/// lapsed. The write model says which payments did; a cart touched since
+/// (an item added while the card form was open) waits for a later look.
+pub async fn paying_carts_before(
+    pool: &SqlitePool,
+    before: i64,
+    limit: i64,
+) -> sqlx::Result<Vec<CartRow>> {
+    sqlx::query_as(
+        "SELECT tenant_id, id, order_id, status, line_count, item_count, created_at, updated_at
+         FROM orders_carts
+         WHERE status = 'paying' AND order_id IS NULL AND updated_at <= ?1
+         ORDER BY tenant_id, updated_at, id LIMIT ?2",
+    )
+    .bind(before)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}

@@ -7,8 +7,8 @@ use super::ReturnedPayment;
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
     Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet, NewsletterOptInSet,
-    NewsletterOptedIn, PaymentRefused, PaymentRequested, PaymentReturned, Placed, ShippingCharged,
-    ShippingGranted, ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
+    NewsletterOptedIn, PaymentCancelled, PaymentRefused, PaymentRequested, PaymentReturned, Placed,
+    ShippingCharged, ShippingGranted, ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
 };
 use crate::error::OrderError;
 use crate::value_object::{
@@ -738,6 +738,47 @@ impl<E: Executor> super::Command<E> {
                     amount_cents: returned.amount_cents,
                     code: returned.code.clone(),
                     returned_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < CART_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Records that the payment of a request was cancelled with the provider
+    /// before the shopper confirmed it, what its checkout held having lapsed.
+    /// Told twice, the second time is a no-op; a payment the cart never
+    /// opened, or that already made an order or was given back, is
+    /// `PaymentNotFound`.
+    pub async fn cancel_payment(
+        &self,
+        actor: &str,
+        cart_id: &str,
+        payment_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        for attempt in 1..=CART_WRITE_ATTEMPTS {
+            let cart = self.require_cart(cart_id).await?;
+            if cart.is_payment_cancelled(payment_id) {
+                return Ok(());
+            }
+            let request = cart
+                .request_paid_by(payment_id)
+                .filter(|_| !cart.is_checked_out())
+                .ok_or(OrderError::PaymentNotFound)?;
+            let written = cart
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&PaymentCancelled {
+                    request_id: request.request_id.clone(),
+                    payment_id: payment_id.to_owned(),
+                    cancelled_by: actor.to_owned(),
                 })
                 .tenant(&self.tenant)
                 .commit(&self.executor)

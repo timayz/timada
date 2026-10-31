@@ -35,6 +35,7 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx_migrator::Info;
 use timada_catalog::{CreateProduct, StockLine};
+use timada_discounts::RESERVATION_SECS;
 use timada_orders::{CartItem, Checkout, PaymentAnswer, STOREFRONT_ACTOR, ShippingAddress};
 use timada_tenancy::{
     Command, ConfigurePayments, CreateTenant, LegalIdentity, TenantState, read_model_subscription,
@@ -43,8 +44,8 @@ use timada_tenancy::{
 use cluster::Cluster;
 use payments::webhook::{Outcome, receive};
 use payments::{
-    DASHBOARD_ACTOR, NewPayment, OpenPayment, PaymentGateway, PaymentStatus, Payments,
-    RefundRecord, signature,
+    Cancellation, DASHBOARD_ACTOR, LapsedCheckouts, NewPayment, OpenPayment, PaymentGateway,
+    PaymentStatus, Payments, RefundRecord, signature,
 };
 
 const WEBHOOK_SECRET: &str = "whsec_test";
@@ -57,6 +58,10 @@ struct FakeStripe {
     opened: Mutex<HashMap<String, (OpenPayment, NewPayment)>>,
     /// Payments the shopper paid.
     paid: Mutex<Vec<String>>,
+    /// Payments the shopper is confirming (a bank's challenge open).
+    confirming: Mutex<Vec<String>>,
+    /// Payments cancelled, by this server or in Stripe's own dashboard.
+    cancelled: Mutex<Vec<String>>,
     refunds: Mutex<Vec<(String, u64)>>,
     /// Stripe is down: opening a payment fails.
     down: std::sync::atomic::AtomicBool,
@@ -156,6 +161,36 @@ impl PaymentGateway for FakeStripe {
             })
             .collect())
     }
+
+    async fn cancel_payment(
+        &self,
+        _secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<Cancellation> {
+        if self
+            .paid
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|paid| paid == payment_id)
+        {
+            return Ok(Cancellation::Paid);
+        }
+        if self
+            .confirming
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|confirming| confirming == payment_id)
+        {
+            return Ok(Cancellation::Confirming);
+        }
+        let mut cancelled = self.cancelled.lock().unwrap();
+        if !cancelled.iter().any(|cancelled| cancelled == payment_id) {
+            cancelled.push(payment_id.to_owned());
+        }
+        Ok(Cancellation::Cancelled)
+    }
 }
 
 /// VIES, as far as these tests need it: numbers starting `DE1` exist.
@@ -211,6 +246,9 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
         let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
         migrator
             .add_migrations(timada_tenancy::migrations())
+            .unwrap();
+        migrator
+            .add_migrations(timada_orders::migrations())
             .unwrap();
         migrator
             .run(&mut *conn, &evento::migrator::Plan::apply_all())
@@ -1023,6 +1061,107 @@ async fn a_late_payment_places_the_order_or_gives_the_money_back() {
         "a payment given back holds nothing: {:?}",
         stock.holds
     );
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let sweep = LapsedCheckouts::new(h.pool.clone(), h.store(&acme), h.payments.clone());
+    let open = async || {
+        let (cart_id, _) = h.cart(&acme).await;
+        let PaymentAnswer::Requested(payment) = h.ask(&acme, &cart_id, Some(2500)).await else {
+            panic!("a payment is opened");
+        };
+        (cart_id, *payment)
+    };
+    // Ada walks away from her card form; Bob is in his bank's challenge;
+    // Carol paid, her webhook still to come; Dave's was cancelled in
+    // Stripe's own dashboard.
+    let (ada_cart, ada) = open().await;
+    let (bob_cart, bob) = open().await;
+    let (carol_cart, carol) = open().await;
+    let (dave_cart, dave) = open().await;
+    h.stripe
+        .confirming
+        .lock()
+        .unwrap()
+        .push(bob.payment_id.clone());
+    h.stripe.pay(&carol.payment_id);
+    h.stripe
+        .cancelled
+        .lock()
+        .unwrap()
+        .push(dave.payment_id.clone());
+    // The carts the sweep looks at come from the read model.
+    timada_orders::read_model_subscription::<cluster::Executor>(h.pool.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    assert_eq!(
+        timada_orders::paying_carts_before(&h.pool, i64::MAX, 10)
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
+    let now = now() as u64;
+
+    // The holds stand: nothing is touched.
+    assert_eq!(sweep.sweep(now).await.unwrap(), 0);
+    assert_eq!(h.stripe.cancelled.lock().unwrap().len(), 1);
+
+    // They lapsed: Ada's payment is cancelled with Stripe and Dave's, found
+    // cancelled there, is recorded as such; Bob's and Carol's are left to
+    // the webhook.
+    let later = now + RESERVATION_SECS;
+    assert_eq!(sweep.sweep(later).await.unwrap(), 2);
+    assert_eq!(
+        *h.stripe.cancelled.lock().unwrap(),
+        vec![dave.payment_id.clone(), ada.payment_id.clone()]
+    );
+    let cart = orders.load_cart(&ada_cart).await.unwrap().unwrap();
+    assert_eq!(
+        cart.requests[0].answer,
+        Some(PaymentAnswer::Cancelled(ada.payment_id.clone()))
+    );
+    assert!(!cart.is_paying());
+    assert_eq!(cart.status(), "open");
+    let cart = orders.load_cart(&dave_cart).await.unwrap().unwrap();
+    assert!(cart.is_payment_cancelled(&dave.payment_id));
+    for cart_id in [&bob_cart, &carol_cart] {
+        let cart = orders.load_cart(cart_id).await.unwrap().unwrap();
+        assert!(cart.is_paying(), "left to the shopper");
+    }
+    // Looked at again: nothing more, and Stripe is not asked to cancel twice.
+    assert_eq!(sweep.sweep(later).await.unwrap(), 0);
+    assert_eq!(h.stripe.cancelled.lock().unwrap().len(), 2);
+
+    // Carol's webhook lands: her order is placed as before.
+    let body = succeeded(&carol.payment_id);
+    let Outcome::Placed { .. } = h.webhook(&acme, &body, signed(&body)).await else {
+        panic!("the order is placed");
+    };
+    // Bob's challenge fails and his form is open again: the next look
+    // closes it.
+    h.stripe.confirming.lock().unwrap().clear();
+    assert_eq!(sweep.sweep(later).await.unwrap(), 1);
+    assert!(
+        orders
+            .load_cart(&bob_cart)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_payment_cancelled(&bob.payment_id)
+    );
+    // Ada comes back and asks to pay again: a new payment opens.
+    let PaymentAnswer::Requested(again) = h.ask(&acme, &ada_cart, Some(2500)).await else {
+        panic!("a payment is opened");
+    };
+    assert_ne!(again.payment_id, ada.payment_id);
     h.finish().await;
 }
 

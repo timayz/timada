@@ -146,6 +146,21 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.reviews.request_check_secs.max(1),
     ));
 
+    // A card form left open past the time its goods were held for is closed
+    // with Stripe before it can charge.
+    let lapsed_checkouts = crate::payments::LapsedCheckouts::new(
+        read_pool.clone(),
+        executor.clone(),
+        payments.clone(),
+    )
+    .start(std::time::Duration::from_secs(
+        config
+            .payments
+            .as_ref()
+            .map_or(60, |payments| payments.cancel_check_secs)
+            .max(1),
+    ));
+
     // A campaign a merchant sent goes out a batch at a time.
     let newsletter_sends = crate::newsletter_sends::NewsletterSends::new(
         read_pool.clone(),
@@ -222,6 +237,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     cluster_watch.abort();
     review_requests.abort();
+    lapsed_checkouts.abort();
     newsletter_sends.abort();
     automation_runs.abort();
     aliexpress_sync.abort();

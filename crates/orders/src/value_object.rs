@@ -88,6 +88,9 @@ pub const PAYMENTS_UNAVAILABLE: &str = "payments_unavailable";
 /// The refusal of a request to pay when the merchant has not said who it is
 /// in law yet: no sale goes ahead without an invoice that can name it.
 pub const INVOICING_NOT_CONFIGURED: &str = "invoicing_not_configured";
+/// The refusal a storefront reads for a payment the dashboard cancelled
+/// once what its checkout held had lapsed: the shopper asks to pay again.
+pub const PAYMENT_EXPIRED: &str = "payment_expired";
 /// The refusal of a request to pay for an EU distance sale in a currency
 /// other than the euro from a merchant not registered for the One-Stop
 /// Shop: the sale would owe the destination's VAT, which only the One-Stop

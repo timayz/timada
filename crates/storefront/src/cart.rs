@@ -51,7 +51,9 @@ use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
 use timada_invoicing::tax;
-use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
+use timada_orders::{
+    CartItem, CartLine, Command, PAYMENT_EXPIRED, PaymentAnswer, STOREFRONT_ACTOR,
+};
 pub use timada_orders::{
     Checkout, OrderDiscount, OrderError, OrderLine, OrderShipping, OrderState, OrderStatus,
     PAYMENTS_UNAVAILABLE, PaymentSetup, ReturnedPayment, ShippingAddress,
@@ -747,6 +749,11 @@ impl Store {
             // Paid too late and given back: nothing to confirm any more.
             Some(PaymentAnswer::Returned(returned)) => Some(Err(OrderError::PaymentRefused {
                 code: returned_code(&returned.code),
+            })),
+            // Cancelled once what the checkout held had lapsed: the shopper
+            // asks to pay again.
+            Some(PaymentAnswer::Cancelled(_)) => Some(Err(OrderError::PaymentRefused {
+                code: PAYMENT_EXPIRED.to_owned(),
             })),
             Some(PaymentAnswer::Requested(payment)) => Some(Ok(PaymentSession {
                 request_id: request.request_id.clone(),

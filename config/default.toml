@@ -117,6 +117,10 @@ dir = "data/shopper-keys"
 # [payments]
 # # Where Stripe's API is reached; Stripe's own address when unset.
 # stripe_api_url = "http://localhost:12111"
+# # How often, in seconds, this node looks for card forms left open past
+# # the half hour their goods were held for, and closes them with Stripe so
+# # nothing is charged for goods that may be gone.
+# cancel_check_secs = 60
 
 # Invoices. A business buyer's EU VAT number is checked with VIES, the
 # European Commission's service, before an invoice goes without VAT.
