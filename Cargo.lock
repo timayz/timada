@@ -6401,6 +6401,7 @@ dependencies = [
  "anyhow",
  "bitcode",
  "evento",
+ "serde",
  "serde_json",
  "sqlx",
  "sqlx_migrator",
