@@ -25,7 +25,7 @@ test("an owner defines, edits and removes roles", async ({ page }) => {
   const support = page.locator("[data-role=support]");
   await expect(support.getByRole("heading")).toContainText("Support team");
   await expect(support.getByLabel(/See members and pending invitations/)).toBeChecked();
-  await expect(support.getByLabel(/Define, edit and remove roles/)).not.toBeChecked();
+  await expect(support.getByLabel(/See the roles and what each allows/)).not.toBeChecked();
 
   // The same name again is refused; so is the reserved one.
   await define.getByLabel("Role name").fill("support");
@@ -40,11 +40,11 @@ test("an owner defines, edits and removes roles", async ({ page }) => {
 
   // Edit: new label, one more permission.
   await support.getByLabel("Label").fill("Support desk");
-  await support.getByLabel(/Invite, change roles and remove members/).check();
+  await support.getByLabel(/Invite and remove members/).check();
   await support.getByRole("button", { name: "Save role" }).click();
   await expect(page.getByRole("status")).toContainText("Role saved.");
   await expect(support.getByRole("heading")).toContainText("Support desk");
-  await expect(support.getByLabel(/Invite, change roles and remove members/)).toBeChecked();
+  await expect(support.getByLabel(/Invite and remove members/)).toBeChecked();
 
   // The members page shows the owner alone, who cannot leave.
   await page.getByRole("link", { name: "Members", exact: true }).click();

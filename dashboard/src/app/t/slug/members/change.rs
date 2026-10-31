@@ -19,8 +19,8 @@ struct ChangeForm {
     role: String,
 }
 
-/// Moves a member to another role; the domain checks `members:manage`, the
-/// owner rules and the last owner.
+/// Moves a member to another role; the domain lets owners alone do it and
+/// keeps the last owner.
 #[route(POST)]
 pub async fn change(cx: &Cx, Form(form): Form<ChangeForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;

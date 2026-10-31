@@ -39,7 +39,7 @@ test("an invited address joins through registration and gets its role", async ({
   const { name, slug } = uniqueTenant("Invite Shop");
   await createTenant(owner, name);
   await defineRole(owner, slug, "support", "Support", [/See members and pending invitations/]);
-  await defineRole(owner, slug, "manager", "Manager", [/Invite, change roles and remove members/]);
+  await defineRole(owner, slug, "manager", "Manager", [/Invite and remove members/]);
 
   const guestEmail = uniqueEmail("guest");
   await owner.goto(`/t/${slug}/members`);

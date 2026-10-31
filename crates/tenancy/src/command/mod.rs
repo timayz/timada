@@ -295,6 +295,21 @@ impl TenantState {
         }
     }
 
+    /// Whether `user_id` may invite or add someone as `role`: owners hand
+    /// out any role, other members a defined role whose every permission
+    /// they hold themselves (so nobody hands out more than they have), and
+    /// nobody but an owner hands out `owner`.
+    pub fn may_hand_out(&self, user_id: &str, role: &str) -> bool {
+        if self.is_owner(user_id) {
+            return true;
+        }
+        self.roles.get(role).is_some_and(|def| {
+            def.permissions
+                .iter()
+                .all(|permission| self.can(user_id, permission))
+        })
+    }
+
     pub fn owners(&self) -> usize {
         self.members_with_role(ROLE_OWNER)
     }

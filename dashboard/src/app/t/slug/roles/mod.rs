@@ -1,5 +1,6 @@
 //! `/t/{slug}/roles`: the tenant's custom roles and what each one may do,
-//! for members with `roles:manage`. `owner` is listed read-only.
+//! for members with `roles:manage`. Owners alone define, edit and remove
+//! them; the others see them read-only. `owner` is listed read-only for all.
 
 pub mod define;
 pub mod remove;
@@ -54,15 +55,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let query = query_params::<RolesQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
+    let is_owner = access.is_owner();
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let title = format!("Roles · {}", tenant.name);
+    let subtitle = if is_owner {
+        "What each kind of member may do."
+    } else {
+        "What each kind of member may do. Only the owners change the roles."
+    };
 
     Ok(view! {
         document(
             title: &title,
             shell: Shell::tenant(&tenant, &nav, "roles"),
-            page_header(title: "Roles", subtitle: Some("What each kind of member may do."))
+            page_header(title: "Roles", subtitle: Some(subtitle))
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             section_card(
@@ -77,6 +84,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             for (name, def) in &tenant.roles {
                 section_card(
                     attrs: attributes! { data-role=(name) },
+                    if !is_owner {
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <h2 class="text-base font-semibold">(&def.label) <code class="ml-2 text-sm font-normal text-muted-foreground">(name)</code></h2>
+                            <span class="text-sm text-muted-foreground">(tenant.members_with_role(name)) " member(s)"</span>
+                        </div>
+                        <ul class="mt-3 flex flex-col gap-1.5 text-sm">
+                            for permission in &def.permissions {
+                                <li>(describe_permission(permission)) " " <code class="text-muted-foreground">(permission)</code></li>
+                            }
+                        </ul>
+                    } else {
                     <form method="post" action=(href!(update::update, Slug(slug.clone()))) class="flex flex-col gap-4">
                         <input type="hidden" name="role" value=(name)>
                         <div class="flex flex-wrap items-center justify-between gap-2">
@@ -108,9 +126,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <input type="hidden" name="role" value=(name)>
                         button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Remove role")
                     </form>
+                    }
                 )
             }
 
+            if is_owner {
             section_card(
                 title: Some("Define a role"),
                 <form method="post" action=(href!(define::define, Slug(slug.clone()))) class="flex flex-col gap-4">
@@ -145,6 +165,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </div>
                 </form>
             )
+            }
         )
     })
 }

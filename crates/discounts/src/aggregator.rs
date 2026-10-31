@@ -52,10 +52,11 @@ pub mod usage {
     pub enum DiscountUsage {
         /// Held for a checkout until `expires_at` (unix seconds, excluded),
         /// unless the order consumes it first. Reserving again moves the
-        /// expiry.
+        /// expiry. The buyer is not named here: the once-per-e-mail rule has
+        /// its own stream (`DiscountBuyer`), and this one is read by every
+        /// storefront key that sells.
         Reserved {
             cart_id: String,
-            email: String,
             expires_at: u64,
             reserved_by: String,
         },

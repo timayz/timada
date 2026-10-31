@@ -166,7 +166,11 @@ by construction.
    tenant whatever it names, the events it reads come back as from a store of its own,
    and the subscriber calls are refused (a storefront keeps its cursors locally). A
    key without the `store:write` scope gets the store wrapped by `read_only_store.rs`:
-   appends refused, snapshot saves dropped. A key holding `store:checkout`
+   appends refused, snapshot saves dropped, and reads confined to what a storefront
+   loads (`store:read`: products, categories, stock, reviews, pages; `store:checkout`
+   adds carts, orders, the payment method, shipping, business buyers, discounts,
+   offers, review links, invoices). A read naming any other stream of the tenant, a
+   shopper's sign-in challenge say, fails. A key holding `store:checkout`
    (what a storefront that sells needs) gets the same wrapper with one opening: it
    may append what a shopper does, filling a cart and asking to pay for it
    (`timada_orders::is_shopper_event`), and nothing that belongs to the merchant:
@@ -207,7 +211,10 @@ by construction.
    roles as roles. Policies are not loaded at startup: every tenant-scoped request loads
    the tenant's strict state, whose version says which events it reflects, and the
    enforcer re-syncs a tenant's rules when a newer state comes along. Owners bypass.
-   `manage` on a resource implies `read`.
+   `manage` on a resource implies `read`. Shaping the roles and moving members between
+   them is for owners alone, whatever a role grants (a member who could edit roles
+   could widen their own); `members:manage` invites and removes members, with a role
+   no wider than its holder's.
 7. **Auth glue** (`auth/`). The web side of the identity context: OIDC discovery and
    token exchange, WebAuthn ceremonies, mailed one-time codes, the private cookies that
    carry a sign-in attempt between steps, and the session cookie.

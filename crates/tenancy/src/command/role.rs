@@ -1,5 +1,8 @@
 //! Custom roles: a name, a label and the permissions it grants. `owner` is
-//! not a defined role; it is implicit and cannot be edited.
+//! not a defined role; it is implicit and cannot be edited. Only owners
+//! define, edit and remove roles: a role is what its holders may do, so
+//! whoever shapes roles shapes everyone's permissions, their own included,
+//! and no permission short of owning the tenant should grant that.
 
 use std::collections::BTreeSet;
 
@@ -7,9 +10,7 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{RoleDefined, RoleRemoved, RoleUpdated};
 use crate::error::TenancyError;
-use crate::value_object::{
-    PERMISSION_ROLES_MANAGE, normalize_permissions, normalize_role, normalize_role_label,
-};
+use crate::value_object::{normalize_permissions, normalize_role, normalize_role_label};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefineRole {
@@ -22,7 +23,7 @@ pub struct DefineRole {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Defines a new custom role. Needs `roles:manage`.
+    /// Defines a new custom role. Owners only.
     pub async fn define_role(
         &self,
         actor_user_id: &str,
@@ -34,7 +35,7 @@ impl<E: Executor> super::Command<E> {
         let label = normalize_role_label(&cmd.label)?;
         let permissions = normalize_permissions(&cmd.permissions)?;
         let tenant = self.require_active(tenant_id).await?;
-        if !tenant.can(actor_user_id, PERMISSION_ROLES_MANAGE) {
+        if !tenant.is_owner(actor_user_id) {
             return Err(TenancyError::Forbidden);
         }
         if tenant.roles.contains_key(&role) {
@@ -53,8 +54,8 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Replaces the label and the permission set of a custom role. Needs
-    /// `roles:manage`; an unchanged role is a no-op.
+    /// Replaces the label and the permission set of a custom role. Owners
+    /// only; an unchanged role is a no-op.
     pub async fn update_role(
         &self,
         actor_user_id: &str,
@@ -68,7 +69,7 @@ impl<E: Executor> super::Command<E> {
         let label = normalize_role_label(label)?;
         let permissions: BTreeSet<String> = normalize_permissions(&permissions)?;
         let tenant = self.require_active(tenant_id).await?;
-        if !tenant.can(actor_user_id, PERMISSION_ROLES_MANAGE) {
+        if !tenant.is_owner(actor_user_id) {
             return Err(TenancyError::Forbidden);
         }
         let Some(current) = tenant.roles.get(&role) else {
@@ -90,7 +91,7 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Removes a custom role nobody holds. Needs `roles:manage`.
+    /// Removes a custom role nobody holds. Owners only.
     pub async fn remove_role(
         &self,
         actor_user_id: &str,
@@ -100,7 +101,7 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<(), TenancyError> {
         let role = normalize_role(role)?;
         let tenant = self.require_active(tenant_id).await?;
-        if !tenant.can(actor_user_id, PERMISSION_ROLES_MANAGE) {
+        if !tenant.is_owner(actor_user_id) {
             return Err(TenancyError::Forbidden);
         }
         if !tenant.roles.contains_key(&role) {
