@@ -356,8 +356,8 @@ impl<G: PaymentGateway + 'static> Harness<G> {
                 ConfigurePayments {
                     provider: "stripe".into(),
                     publishable_key: "pk_test_123".into(),
-                    secret_key_sealed: self.payments.seal(&self.secret_key).unwrap(),
-                    webhook_secret_sealed: self.payments.seal(WEBHOOK_SECRET).unwrap(),
+                    secret_key_sealed: self.payments.seal(&tenant.id, &self.secret_key).unwrap(),
+                    webhook_secret_sealed: self.payments.seal(&tenant.id, WEBHOOK_SECRET).unwrap(),
                 },
             )
             .await

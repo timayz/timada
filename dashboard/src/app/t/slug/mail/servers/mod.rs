@@ -122,7 +122,7 @@ pub async fn tested(
     };
     let (password, kept) = match kept_password(&form.password, &host, username.as_deref(), saved) {
         Password::Typed(password) => (Some(password), None),
-        Password::Kept(sealed) => match shop_mail.unseal(&sealed) {
+        Password::Kept(sealed) => match shop_mail.unseal(&tenant.id, &sealed) {
             Ok(password) => (Some(password), Some(sealed)),
             Err(err) => {
                 // Sealed under a key the platform no longer has: the
@@ -169,7 +169,7 @@ pub async fn tested(
         (Some(sealed), _) => Some(sealed),
         (None, Some(password)) => Some(
             shop_mail
-                .seal(&password)
+                .seal(&tenant.id, &password)
                 .map_err(topcoat::Error::from_anyhow)?,
         ),
         (None, None) => None,
