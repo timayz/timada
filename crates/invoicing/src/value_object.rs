@@ -256,12 +256,7 @@ pub fn format_amount_fr(cents: u64, currency: &str) -> String {
         }
         grouped.push(digit);
     }
-    let symbol = match currency {
-        "EUR" => "€",
-        "USD" => "$",
-        "GBP" => "£",
-        other => other,
-    };
+    let symbol = timada_core::currency_symbol(currency);
     format!("{grouped},{:02}\u{a0}{symbol}", cents % 100)
 }
 

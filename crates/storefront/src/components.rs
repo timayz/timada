@@ -10,7 +10,7 @@ use crate::context::money;
 use crate::query::{Image, Product};
 
 /// The price of a product in a `<span data-price>`, written as the store
-/// writes amounts (`12.50 EUR`, or the host's own way:
+/// writes amounts (`12.50 €`, or the host's own way:
 /// [`StoreConfig::money`](crate::StoreConfig::money)), or nothing when it
 /// has none. Every class and attribute comes from the caller:
 /// `price(product: &p, attrs: attributes! { class="price" })`.

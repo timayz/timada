@@ -93,13 +93,13 @@ pub struct PaymentSession {
 }
 
 impl PaymentSession {
-    /// The total as a person reads it (`24.00 EUR`, or as the host writes
+    /// The total as a person reads it (`24.00 €`, or as the host writes
     /// prices).
     pub fn total(&self) -> String {
         self.money.format(self.total_cents, &self.currency)
     }
 
-    /// What the discount takes off, as a person reads it (`-2.50 EUR`).
+    /// What the discount takes off, as a person reads it (`-2.50 €`).
     pub fn discount_amount(&self) -> Option<String> {
         let discount = self.discount.as_ref()?;
         Some(format!(
@@ -182,13 +182,13 @@ impl OfferView {
         self.title.as_deref().unwrap_or(&self.name)
     }
 
-    /// The full price as a person reads it (`30.00 EUR`, or as the host
+    /// The full price as a person reads it (`30.00 €`, or as the host
     /// writes prices).
     pub fn price(&self) -> String {
         self.money.format(self.unit_amount_cents, &self.currency)
     }
 
-    /// The offer's price as a person reads it (`12.00 EUR`).
+    /// The offer's price as a person reads it (`12.00 €`).
     pub fn offer_price(&self) -> String {
         self.money.format(self.offer_amount_cents, &self.currency)
     }
@@ -251,7 +251,7 @@ impl CartView {
         self.lines.is_empty() && self.unavailable.is_empty()
     }
 
-    /// The total as a person reads it (`24.00 EUR`, or as the host writes
+    /// The total as a person reads it (`24.00 €`, or as the host writes
     /// prices).
     pub fn total(&self) -> Option<String> {
         let currency = self.currency.as_deref()?;
@@ -264,7 +264,7 @@ impl CartView {
         Some(self.money.format(self.subtotal_cents, currency))
     }
 
-    /// What the discount takes off, as a person reads it (`-2.50 EUR`).
+    /// What the discount takes off, as a person reads it (`-2.50 €`).
     pub fn discount_amount(&self) -> Option<String> {
         let currency = self.currency.as_deref()?;
         let discount = self.discount.as_ref()?;
@@ -397,7 +397,7 @@ impl ShippingOption {
         self.countries.is_empty() || self.countries.iter().any(|c| c == country)
     }
 
-    /// The price as a person reads it: `4.90 EUR` (or as the host writes
+    /// The price as a person reads it: `4.90 €` (or as the host writes
     /// prices), or the host's word for free shipping (`Free`,
     /// [`MoneyFormat::free`]).
     pub fn price(&self) -> String {
@@ -422,7 +422,7 @@ pub struct VatEstimate {
 }
 
 impl VatEstimate {
-    /// The VAT as a person reads it (`9.97 EUR`, or as the host writes
+    /// The VAT as a person reads it (`9.97 €`, or as the host writes
     /// prices).
     pub fn amount(&self) -> String {
         self.money.format(self.vat_cents, &self.currency)

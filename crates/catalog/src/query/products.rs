@@ -47,19 +47,15 @@ impl ProductRow {
     }
 
     /// The price as a listing shows it: one amount, or a range when the
-    /// variants differ (`12.00–18.00 EUR`).
+    /// variants differ (`12.00–18.00 €`).
     pub fn price_label(&self) -> Option<String> {
         let currency = self.currency.as_deref()?;
         let (min, max) = (self.min_amount_cents?, self.max_amount_cents?);
         if min == max {
             return Some(format_money(min as u64, currency));
         }
-        Some(format!(
-            "{}–{}",
-            format_money(min as u64, currency)
-                .trim_end_matches(currency)
-                .trim_end(),
-            format_money(max as u64, currency)
+        Some(timada_core::format_money_range(
+            min as u64, max as u64, currency,
         ))
     }
 }

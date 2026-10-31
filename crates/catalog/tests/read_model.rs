@@ -44,7 +44,7 @@ async fn products_are_listed_searched_counted_and_stay_idempotent() {
     assert_eq!(mug_row.name, "Blue Mug");
     assert_eq!(mug_row.slug, "blue-mug");
     assert_eq!(mug_row.description, "Holds 50 cl.");
-    assert_eq!(mug_row.price().unwrap().to_string(), "12.50 EUR");
+    assert_eq!(mug_row.price().unwrap().to_string(), "12.50 €");
     assert_eq!(mug_row.status(), ProductStatus::Published);
     assert_eq!(mug_row.created_by, ALICE);
     let plate_row = rows.iter().find(|r| r.id == plate.id).unwrap();

@@ -11,7 +11,7 @@
 //! attribute comes from the merchant. Every amount a person reads (a cart's
 //! totals, a shipping price, an offer's price) is written the way the host
 //! writes its own prices when it hands a [`MoneyFormat`] to
-//! [`StoreConfig::money`], and as `12.50 EUR` otherwise.
+//! [`StoreConfig::money`], and as `12.50 €` otherwise.
 //!
 //! Events stay on the store; only the subscription's cursor, the projection
 //! snapshots and the product rows live in the local database (one per replica

@@ -551,7 +551,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(page.getByRole("status")).toContainText(
       "Order cancelled and refunded.",
     );
-    await expect(page.locator("[data-order-refunded]")).toHaveText("8.00 EUR");
+    await expect(page.locator("[data-order-refunded]")).toHaveText("8.00 €");
     await expect(page.locator("[data-order-cancel-reason]")).toHaveText(
       "Out of stock",
     );
@@ -966,7 +966,7 @@ test("a shopper pays less with a discount code, once", async ({
     }).toPass({ timeout: 15_000 });
     await row.getByRole("link", { name: reference }).click();
     await expect(page.locator("[data-order-discount=TEN]")).toContainText(
-      "-2.50 EUR",
+      "-2.50 €",
     );
     await page.goto(`/t/${slug}/discounts`);
     await expect(
@@ -1085,7 +1085,7 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
     }).toPass({ timeout: 15_000 });
     await row.getByRole("link", { name: reference }).click();
     await expect(page.locator("[data-order-shipping=VIP]")).toContainText(
-      "6.90 EUR",
+      "6.90 €",
     );
   } finally {
     await stripe.stop();
@@ -1126,7 +1126,7 @@ test("a shopper adds the merchant's exclusive offer at the checkout and pays its
     await expect(page.getByText("No offer yet.")).toBeVisible();
     await page
       .getByLabel("Item")
-      .selectOption({ label: "GPS Tracker (30.00 EUR)" });
+      .selectOption({ label: "GPS Tracker (30.00 €)" });
     await page.getByLabel("Offer price").fill("30.00");
     await page.getByRole("button", { name: "Create offer" }).click();
     await expect(page.getByRole("alert").first()).toContainText(
@@ -1136,7 +1136,7 @@ test("a shopper adds the merchant's exclusive offer at the checkout and pays its
     // One tracker at 12.00 while the cart holds a collar.
     await page
       .getByLabel("Item")
-      .selectOption({ label: "GPS Tracker (30.00 EUR)" });
+      .selectOption({ label: "GPS Tracker (30.00 €)" });
     await page.getByLabel("Offer price").fill("12.00");
     await page
       .getByLabel("Title (optional)")
@@ -1147,7 +1147,7 @@ test("a shopper adds the merchant's exclusive offer at the checkout and pays its
     await page.getByRole("button", { name: "Create offer" }).click();
     await expect(page.getByRole("status")).toContainText("Offer created.");
     const row = page.locator('[data-offer="GPS Tracker"]');
-    await expect(row.locator("[data-offer-price]")).toHaveText("12.00 EUR");
+    await expect(row.locator("[data-offer-price]")).toHaveText("12.00 €");
     await expect(row.locator("[data-offer-conditions]")).toContainText(
       "Cart holds Leather Collar",
     );
