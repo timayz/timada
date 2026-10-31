@@ -68,6 +68,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_code" => "That code is not right. Check the latest e-mail and try again.",
         "code_expired" => "That code has expired. Please start again.",
         "too_many_attempts" => "Too many wrong codes. Please start again to get a new one.",
+        "too_many_logins" => "Too many sign-in attempts. Wait a few minutes and try again.",
         "code_recently_sent" => {
             "A code was sent a moment ago. Wait a minute before asking for another."
         }

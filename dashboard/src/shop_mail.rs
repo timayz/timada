@@ -185,21 +185,27 @@ impl ShopMail {
             .ok_or_else(|| anyhow::anyhow!("shop mail servers are off (no [secrets] section)"))
     }
 
-    pub fn seal(&self, plain: &str) -> anyhow::Result<Vec<u8>> {
-        self.sealer()?.seal(plain)
+    /// Seals a password of one of `tenant_id`'s servers: it opens for that
+    /// tenant alone.
+    pub fn seal(&self, tenant_id: &str, plain: &str) -> anyhow::Result<Vec<u8>> {
+        self.sealer()?.seal_for(tenant_id, plain)
     }
 
-    /// A password [`ShopMail::seal`] sealed, in clear.
-    pub fn unseal(&self, sealed: &[u8]) -> anyhow::Result<String> {
-        self.sealer()?.open(sealed)
+    /// A password [`ShopMail::seal`] sealed for `tenant_id`, in clear.
+    pub fn unseal(&self, tenant_id: &str, sealed: &[u8]) -> anyhow::Result<String> {
+        self.sealer()?.open_for(tenant_id, sealed)
     }
 
-    /// One of the tenant's servers, opened: its password in clear.
-    pub fn open(&self, settings: &MailServerSettings) -> anyhow::Result<MailServer> {
+    /// One of `tenant_id`'s servers, opened: its password in clear.
+    pub fn open(
+        &self,
+        tenant_id: &str,
+        settings: &MailServerSettings,
+    ) -> anyhow::Result<MailServer> {
         let password = settings
             .password_sealed
             .as_deref()
-            .map(|sealed| self.unseal(sealed))
+            .map(|sealed| self.unseal(tenant_id, sealed))
             .transpose()?;
         Ok(MailServer {
             host: settings.host.clone(),
@@ -273,7 +279,8 @@ impl ShopMail {
         let transport = match cached {
             Some(transport) => transport,
             None => {
-                let transport: Arc<dyn Transport> = Arc::new(self.open(settings)?.transport()?);
+                let transport: Arc<dyn Transport> =
+                    Arc::new(self.open(&tenant.id, settings)?.transport()?);
                 let mut transports = self.0.transports.lock().expect("transports lock");
                 // The transports of the tenant's servers that are gone.
                 transports.retain(|(tenant_id, server_id), _| {
@@ -346,7 +353,7 @@ mod tests {
             port: 1025,
             security: MAIL_SECURITY_NONE.into(),
             username: Some("shop".into()),
-            password_sealed: Some(mail.seal("s3cret").unwrap()),
+            password_sealed: Some(mail.seal("t1", "s3cret").unwrap()),
             from_address: from_address.into(),
             from_name: None,
             ..Default::default()
@@ -408,7 +415,11 @@ mod tests {
         assert!(sender.is_own_server());
         assert_eq!(sender.from.name(), Some("Acme Tea"));
         assert_eq!(sender.from.address(), "orders@acme.test");
-        let server = mail.open(&tenant.mail_servers[0]).unwrap();
+        let server = mail.open("t1", &tenant.mail_servers[0]).unwrap();
+        assert!(
+            mail.open("t2", &tenant.mail_servers[0]).is_err(),
+            "sealed for one shop, it opens for no other"
+        );
         assert_eq!(server.password.as_deref(), Some("s3cret"));
         assert!(!format!("{server:?}").contains("s3cret"));
 

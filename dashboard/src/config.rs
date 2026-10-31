@@ -76,6 +76,29 @@ pub struct AuthConfig {
     /// (`/auth/oauth2/<name>`). Sorted so the login page is stable.
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
+    /// Password sign-in attempts one address (the browser's) may make within
+    /// the window, right or wrong, before it is told to wait.
+    #[serde(default = "default_login_attempts_per_ip")]
+    pub login_attempts_per_ip: u32,
+    /// Password sign-in attempts one e-mail address may be the target of
+    /// within the window, from anywhere, before it is told to wait.
+    #[serde(default = "default_login_attempts_per_email")]
+    pub login_attempts_per_email: u32,
+    /// The window both limits count over, in seconds.
+    #[serde(default = "default_login_window_secs")]
+    pub login_window_secs: u64,
+}
+
+fn default_login_attempts_per_ip() -> u32 {
+    30
+}
+
+fn default_login_attempts_per_email() -> u32 {
+    10
+}
+
+fn default_login_window_secs() -> u64 {
+    15 * 60
 }
 
 /// One OpenID Connect provider. Endpoints come from the issuer's discovery
@@ -758,6 +781,23 @@ impl AuthConfig {
             return Err(ConfigError::Message(
                 "auth.session_lifetime_secs must be greater than 0".into(),
             ));
+        }
+        for (name, value) in [
+            (
+                "auth.login_attempts_per_ip",
+                u64::from(self.login_attempts_per_ip),
+            ),
+            (
+                "auth.login_attempts_per_email",
+                u64::from(self.login_attempts_per_email),
+            ),
+            ("auth.login_window_secs", self.login_window_secs),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::Message(format!(
+                    "{name} must be greater than 0"
+                )));
+            }
         }
         for name in self.providers.keys() {
             let valid = !name.is_empty()

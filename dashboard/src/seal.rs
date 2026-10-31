@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -161,27 +161,38 @@ impl Sealer {
         }
     }
 
-    pub fn seal(&self, plain: &str) -> anyhow::Result<Vec<u8>> {
-        self.seal_bytes(plain.as_bytes())
+    /// Seals `plain` for `owner`: the tenant, company or key the secret
+    /// belongs to, bound into the ciphertext as authenticated data, so bytes
+    /// copied from one owner's events into another's do not open there.
+    pub fn seal_for(&self, owner: &str, plain: &str) -> anyhow::Result<Vec<u8>> {
+        self.seal_bytes_for(owner, plain.as_bytes())
     }
 
-    pub fn seal_bytes(&self, plain: &[u8]) -> anyhow::Result<Vec<u8>> {
+    /// See [`seal_for`](Self::seal_for).
+    pub fn seal_bytes_for(&self, owner: &str, plain: &[u8]) -> anyhow::Result<Vec<u8>> {
         let mut nonce = [0u8; NONCE_LEN];
         rand::rng().fill_bytes(&mut nonce);
         let sealed = self
             .cipher
-            .encrypt(Nonce::from_slice(&nonce), plain)
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: plain,
+                    aad: owner.as_bytes(),
+                },
+            )
             .map_err(|_| anyhow::anyhow!("cannot seal a {} secret", self.purpose))?;
         Ok([nonce.as_slice(), &sealed].concat())
     }
 
-    /// Fails when the bytes were sealed under another key or tampered with.
-    pub fn open(&self, sealed: &[u8]) -> anyhow::Result<String> {
-        Ok(String::from_utf8(self.open_bytes(sealed)?)?)
+    /// Fails when the bytes were sealed under another key, for another
+    /// owner, or tampered with.
+    pub fn open_for(&self, owner: &str, sealed: &[u8]) -> anyhow::Result<String> {
+        Ok(String::from_utf8(self.open_bytes_for(owner, sealed)?)?)
     }
 
-    /// Fails when the bytes were sealed under another key or tampered with.
-    pub fn open_bytes(&self, sealed: &[u8]) -> anyhow::Result<Vec<u8>> {
+    /// See [`open_for`](Self::open_for).
+    pub fn open_bytes_for(&self, owner: &str, sealed: &[u8]) -> anyhow::Result<Vec<u8>> {
         anyhow::ensure!(
             sealed.len() > NONCE_LEN,
             "a sealed {} secret is too short",
@@ -189,10 +200,16 @@ impl Sealer {
         );
         let (nonce, body) = sealed.split_at(NONCE_LEN);
         self.cipher
-            .decrypt(Nonce::from_slice(nonce), body)
+            .decrypt(
+                Nonce::from_slice(nonce),
+                Payload {
+                    msg: body,
+                    aad: owner.as_bytes(),
+                },
+            )
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "a {} secret cannot be opened (was the sealing key changed?)",
+                    "a {} secret cannot be opened (sealed for another owner, or was the sealing key changed?)",
                     self.purpose
                 )
             })
@@ -204,35 +221,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_secret_opens_under_its_key_only() {
+    fn a_secret_opens_under_its_key_for_its_owner_only() {
         let sealer = Sealer::new("payments", "a-test-secret-of-thirty-two-chars!!");
-        let sealed = sealer.seal("sk_test_123").unwrap();
+        let sealed = sealer.seal_for("tenant-1", "sk_test_123").unwrap();
         assert!(!sealed.windows(11).any(|w| w == b"sk_test_123"));
-        assert_eq!(sealer.open(&sealed).unwrap(), "sk_test_123");
+        assert!(
+            !sealed.windows(8).any(|w| w == b"tenant-1"),
+            "the owner is not written"
+        );
+        assert_eq!(sealer.open_for("tenant-1", &sealed).unwrap(), "sk_test_123");
         assert_ne!(
-            sealer.seal("sk_test_123").unwrap(),
+            sealer.seal_for("tenant-1", "sk_test_123").unwrap(),
             sealed,
             "a fresh nonce each time"
         );
+        // Copied into another tenant's events, the bytes open nothing.
+        assert!(sealer.open_for("tenant-2", &sealed).is_err());
+        assert!(sealer.open_for("", &sealed).is_err());
 
         let other = Sealer::new("payments", "another-secret-of-thirty-two-chars!");
-        assert!(other.open(&sealed).is_err());
+        assert!(other.open_for("tenant-1", &sealed).is_err());
         let mail = Sealer::new("mail", "a-test-secret-of-thirty-two-chars!!");
-        assert!(mail.open(&sealed).is_err(), "another purpose, another key");
-        let shoppers = Sealer::new("shoppers", "a-test-secret-of-thirty-two-chars!!");
         assert!(
-            shoppers.open(&sealed).is_err(),
+            mail.open_for("tenant-1", &sealed).is_err(),
             "another purpose, another key"
         );
+        let shoppers = Sealer::new("shoppers", "a-test-secret-of-thirty-two-chars!!");
         let key = [7u8; 32];
         assert_eq!(
             shoppers
-                .open_bytes(&shoppers.seal_bytes(&key).unwrap())
+                .open_bytes_for("t1/k1", &shoppers.seal_bytes_for("t1/k1", &key).unwrap())
                 .unwrap(),
             key
         );
         let mut tampered = sealed.clone();
         *tampered.last_mut().unwrap() ^= 1;
-        assert!(sealer.open(&tampered).is_err());
+        assert!(sealer.open_for("tenant-1", &tampered).is_err());
     }
 }

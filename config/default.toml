@@ -40,6 +40,12 @@ max_connections = 3
 session_lifetime_secs = 1209600
 # Name the browser shows when someone creates a passkey for this site.
 rp_name = "Timada"
+# How many times a password may be tried within the window, from one browser
+# address and against one e-mail address, right or wrong, before the form says
+# to wait. Each node counts on its own (see [store] below).
+# login_attempts_per_ip = 30
+# login_attempts_per_email = 10
+# login_window_secs = 900
 
 # Sign-in providers (OpenID Connect). One table per provider; the table key is
 # the name used in URLs (/auth/oauth2/<name>): lowercase letters, digits, - and _.

@@ -243,16 +243,19 @@ impl Store {
         }
     }
 
-    /// Ends the session `token` opened.
+    /// Ends the session `token` opened. A session ended already is nothing
+    /// to report; any other refusal is an error, so a page that signs out
+    /// does not forget a cookie the dashboard still honours.
     pub async fn sign_out(&self, token: &str) -> anyhow::Result<()> {
         let response = self
             .shopper_call(reqwest::Method::POST, "sign-out", Some(token))?
             .send()
             .await;
-        answer(response, reqwest::StatusCode::NO_CONTENT, |_| Ok(()))
-            .await?
-            .ok();
-        Ok(())
+        match answer(response, reqwest::StatusCode::NO_CONTENT, |_| Ok(())).await? {
+            Ok(()) => Ok(()),
+            Err(refusal) if refusal.is_signed_out() => Ok(()),
+            Err(refusal) => anyhow::bail!("the dashboard refused a sign-out: {}", refusal.code()),
+        }
     }
 
     /// Ends every other session of the account `token` signs in; this one

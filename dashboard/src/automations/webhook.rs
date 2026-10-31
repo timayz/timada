@@ -28,8 +28,10 @@ pub fn seal_url(
     step_id: &str,
     url: &str,
 ) -> anyhow::Result<String> {
-    let plain = format!("{}{url}", binding(tenant_id, scenario_id, step_id));
-    Ok(base64::engine::general_purpose::STANDARD.encode(keys.sealer.seal(&plain)?))
+    let sealed = keys
+        .sealer
+        .seal_for(&binding(tenant_id, scenario_id, step_id), url)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(sealed))
 }
 
 /// The address a definition holds, opened; `None` for one sealed for
@@ -44,10 +46,9 @@ pub fn open_url(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(sealed)
         .ok()?;
-    let plain = keys.sealer.open(&bytes).ok()?;
-    plain
-        .strip_prefix(&binding(tenant_id, scenario_id, step_id))
-        .map(str::to_owned)
+    keys.sealer
+        .open_for(&binding(tenant_id, scenario_id, step_id), &bytes)
+        .ok()
 }
 
 /// The step's signing secret, as the merchant's app checks it with.

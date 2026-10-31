@@ -182,7 +182,10 @@ by construction.
 4. **Payments** (`payments/`). Each tenant connects its own Stripe account on
    `/t/{slug}/payments`; the secret key and the webhook signing secret are recorded
    in the tenant's platform events sealed with AES-256-GCM (`seal.rs`) under the
-   operator's `[secrets] key` (no section, no payments). A storefront asks to pay
+   operator's `[secrets] key` (no section, no payments), bound to the tenant: every
+   sealed secret names its owner (the tenant, the company, the key's tenant and id,
+   the webhook step) as authenticated data, so bytes copied into another owner's
+   events open nothing. A storefront asks to pay
    (`Cart::CheckoutRequested`); the subscription `timada-dashboard/payments`
    prices the cart from the store, opens a PaymentIntent with the tenant's key (the
    request id is the idempotency key, so every node answering opens one payment) and
@@ -220,7 +223,12 @@ by construction.
    no wider than its holder's.
 7. **Auth glue** (`auth/`). The web side of the identity context: OIDC discovery and
    token exchange, WebAuthn ceremonies, mailed one-time codes, the private cookies that
-   carry a sign-in attempt between steps, and the session cookie.
+   carry a sign-in attempt between steps, and the session cookie. A password sign-in
+   is counted before the password is looked at, per browser address and per account
+   (`[auth] login_attempts_per_ip`, `login_attempts_per_email`, `login_window_secs`;
+   `too_many_logins` past them), so a password cannot be guessed by trying. Like every
+   limit here (`rate_limit.rs`), it is counted in each node's memory: behind a balancer
+   over N nodes a client may get up to N times the limit.
 8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
