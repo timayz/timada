@@ -12,9 +12,11 @@ use timada_catalog::CatalogError;
 use timada_discounts::{
     DISCOUNT_ALREADY_USED, DISCOUNT_EXHAUSTED, DISCOUNT_UNKNOWN, DiscountError, RESERVATION_SECS,
 };
+use timada_invoicing::tax::{self, Destination, TaxProfile, TaxRefusal};
 use timada_orders::aggregator::CheckoutRequested;
 use timada_orders::{
-    INVOICING_NOT_CONFIGURED, OpenedPayment, OrdersError, PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
+    INVOICING_NOT_CONFIGURED, OSS_REQUIRED_FOR_CURRENCY, OpenedPayment, OrdersError,
+    PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
 };
 
 use super::webhook::OUT_OF_STOCK;
@@ -83,8 +85,30 @@ async fn on_checkout_requested<E: Executor>(
         return Ok(());
     };
     // No sale without an invoice that can name the merchant.
-    if payments.company_of(&merchant).await?.is_none() {
+    let Some(legal) = payments
+        .company_of(&merchant)
+        .await?
+        .and_then(|company| company.identity)
+    else {
         refuse(INVOICING_NOT_CONFIGURED).await?;
+        return Ok(());
+    };
+    // Nor one whose VAT the merchant could not remit: an EU distance sale
+    // in another currency than the euro needs the One-Stop Shop. The buyer's
+    // VAT number is taken at its word here; invoicing checks it with VIES.
+    let profile = TaxProfile {
+        vat_registered: legal.is_vat_registered(),
+        oss_registered: legal.oss_registered,
+    };
+    let destination = Destination {
+        country: pending.request.shipping.country.clone(),
+        postal_code: pending.request.shipping.postal_code.clone(),
+        vat_number: pending.request.vat_number.clone(),
+    };
+    if let Err(TaxRefusal::OssRequiredForCurrency) =
+        tax::accepts(profile, &destination, &pending.currency)
+    {
+        refuse(OSS_REQUIRED_FOR_CURRENCY).await?;
         return Ok(());
     }
     let Some(account) = payments.account_of(&merchant)? else {

@@ -230,6 +230,37 @@ pub fn rate_bps(country: &str, category: &str) -> u32 {
     (rate * 10_000.0).round() as u32
 }
 
+/// Why a sale cannot be taken at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaxRefusal {
+    /// An EU distance sale in a currency other than the euro from a seller
+    /// not registered for the One-Stop Shop. Only euro sales count towards
+    /// the yearly threshold (nothing here converts a currency), so the sale
+    /// would have to be taxed at destination, which only the One-Stop Shop
+    /// lets a French seller remit.
+    OssRequiredForCurrency,
+}
+
+/// Whether a sale may go ahead at all, before anything is charged: a
+/// VAT-registered seller without the One-Stop Shop sells to consumers in
+/// other EU countries in euros only ([`TaxRefusal::OssRequiredForCurrency`]).
+/// Everything else is taxed one way or another by [`decide`].
+pub fn accepts(
+    profile: TaxProfile,
+    destination: &Destination,
+    currency: &str,
+) -> Result<(), TaxRefusal> {
+    let refused = profile.vat_registered
+        && !profile.oss_registered
+        && !currency.eq_ignore_ascii_case("EUR")
+        && is_distance_sale(profile, destination);
+    if refused {
+        Err(TaxRefusal::OssRequiredForCurrency)
+    } else {
+        Ok(())
+    }
+}
+
 /// Whether a sale is an EU distance sale (to a consumer in another EU
 /// country): the only kind that counts towards the yearly threshold, and so
 /// the only kind whose decision needs the company's total.
@@ -243,7 +274,8 @@ pub fn is_distance_sale(profile: TaxProfile, destination: &Destination) -> bool 
 /// The tax of a sale whose lines are `(tax category, price VAT included)`,
 /// in `currency`, given the year's distance sales before it. Only sales in
 /// euros count towards the threshold; a distance sale in another currency
-/// is taxed at destination, the safe side.
+/// is taxed at destination, which [`accepts`] lets through for a seller
+/// registered for the One-Stop Shop alone.
 pub fn decide(
     profile: TaxProfile,
     destination: &Destination,
@@ -634,10 +666,42 @@ mod tests {
             decide(oss, &to("DE", "10115"), &lines, "EUR", below()).regime,
             Regime::Oss
         );
-        // Another currency is taxed at destination and not counted.
-        let usd = decide(REGISTERED, &to("DE", "10115"), &lines, "USD", below());
+        // Another currency is taxed at destination and not counted (and
+        // only taken from a seller registered for the One-Stop Shop, see
+        // `accepts`).
+        let usd = decide(oss, &to("DE", "10115"), &lines, "USD", below());
         assert_eq!(usd.regime, Regime::Oss);
         assert_eq!(usd.distance, below());
+    }
+
+    #[test]
+    fn a_distance_sale_in_another_currency_needs_the_one_stop_shop() {
+        let oss = TaxProfile {
+            vat_registered: true,
+            oss_registered: true,
+        };
+        let germany = to("DE", "10115");
+        assert_eq!(
+            accepts(REGISTERED, &germany, "USD"),
+            Err(TaxRefusal::OssRequiredForCurrency)
+        );
+        assert_eq!(
+            accepts(REGISTERED, &germany, "eur"),
+            Ok(()),
+            "case apart, euros"
+        );
+        assert_eq!(accepts(REGISTERED, &germany, "EUR"), Ok(()));
+        assert_eq!(accepts(oss, &germany, "USD"), Ok(()));
+        // Not distance sales: France, outside the EU, a business buyer, a
+        // seller under the exemption.
+        assert_eq!(accepts(REGISTERED, &to("FR", "75002"), "USD"), Ok(()));
+        assert_eq!(accepts(REGISTERED, &to("US", "10001"), "USD"), Ok(()));
+        let business = Destination {
+            vat_number: Some("DE123456789".to_owned()),
+            ..to("DE", "10115")
+        };
+        assert_eq!(accepts(REGISTERED, &business, "USD"), Ok(()));
+        assert_eq!(accepts(TaxProfile::default(), &germany, "USD"), Ok(()));
     }
 
     #[test]

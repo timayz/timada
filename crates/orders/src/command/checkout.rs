@@ -78,9 +78,8 @@ impl From<&OrderState> for PlacedOrder {
 /// hold, and the ones that cannot be sold any more.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Quote {
+    /// Each with the kind of goods it is for VAT ([`OrderLine::tax_category`]).
     pub lines: Vec<OrderLine>,
-    /// What kind of goods each of `lines` is for VAT, in the same order.
-    pub tax_categories: Vec<String>,
     /// The offer each of `lines` is priced at, in the same order: `Some` on
     /// the line of the one unit an offer prices, which comes right before
     /// the line of the cart's other units at full price (if any).
@@ -172,7 +171,7 @@ impl<E: Executor> super::Command<E> {
     /// what that adds up to.
     pub(crate) async fn quote(&self, cart: &CartState) -> Result<Quote, OrdersError> {
         let mut quote = Quote::default();
-        let mut priced: Vec<(OrderLine, String)> = Vec::new();
+        let mut priced: Vec<OrderLine> = Vec::new();
         for line in &cart.lines {
             let item = CartItem {
                 product_id: line.product_id.clone(),
@@ -227,7 +226,7 @@ impl<E: Executor> super::Command<E> {
                 Some(_) => {}
                 None => quote.currency = Some(price.currency.clone()),
             }
-            let order_line = OrderLine {
+            priced.push(OrderLine {
                 product_id: product.id.clone(),
                 variant_id: line.variant_id.clone(),
                 name: product.name.clone(),
@@ -235,8 +234,8 @@ impl<E: Executor> super::Command<E> {
                 sku: variant.and_then(|variant| variant.sku.clone()),
                 unit_amount_cents: price.amount_cents,
                 quantity: line.quantity,
-            };
-            priced.push((order_line, product.tax_category().to_owned()));
+                tax_category: product.tax_category().to_owned(),
+            });
         }
         self.price_offers(&mut quote, priced).await?;
         quote.total_cents = quote.subtotal_cents;
@@ -286,7 +285,7 @@ impl<E: Executor> super::Command<E> {
     async fn price_offers(
         &self,
         quote: &mut Quote,
-        priced: Vec<(OrderLine, String)>,
+        priced: Vec<OrderLine>,
     ) -> Result<(), OrdersError> {
         let offers = match &quote.currency {
             Some(_) => offers_projection()
@@ -301,7 +300,7 @@ impl<E: Executor> super::Command<E> {
         let now = timada_discounts::unix_now();
         let items: Vec<OfferItem<'_>> = priced
             .iter()
-            .map(|(line, _)| OfferItem {
+            .map(|line| OfferItem {
                 product_id: &line.product_id,
                 variant_id: line.variant_id.as_deref(),
                 quantity: line.quantity,
@@ -312,7 +311,7 @@ impl<E: Executor> super::Command<E> {
             .applied(&items, &currency, now)
             .into_iter()
             .zip(&priced)
-            .map(|(offer, (line, _))| {
+            .map(|(offer, line)| {
                 offer.map(|offer| LineOffer {
                     offer_id: offer.id.clone(),
                     full_unit_amount_cents: line.unit_amount_cents,
@@ -326,10 +325,9 @@ impl<E: Executor> super::Command<E> {
             .collect();
         drop(items);
 
-        for ((line, tax_category), line_offer) in priced.into_iter().zip(applied) {
+        for (line, line_offer) in priced.into_iter().zip(applied) {
             let Some(line_offer) = line_offer else {
                 quote.lines.push(line);
-                quote.tax_categories.push(tax_category);
                 quote.line_offers.push(None);
                 continue;
             };
@@ -341,14 +339,12 @@ impl<E: Executor> super::Command<E> {
                 quantity: 1,
                 ..line.clone()
             });
-            quote.tax_categories.push(tax_category.clone());
             quote.line_offers.push(Some(line_offer));
             if line.quantity > 1 {
                 quote.lines.push(OrderLine {
                     quantity: line.quantity - 1,
                     ..line
                 });
-                quote.tax_categories.push(tax_category);
                 quote.line_offers.push(None);
             }
         }

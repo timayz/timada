@@ -537,6 +537,9 @@ pub fn say(code: &str) -> &'static str {
         "invoicing_not_configured" => {
             "Cette boutique ne peut pas encore prendre de commandes : sa configuration n'est pas terminée. Réessayez plus tard."
         }
+        "oss_required_for_currency" => {
+            "Cette boutique ne peut pas livrer dans votre pays dans cette devise. Choisissez une livraison en France ou contactez la boutique."
+        }
         "payment_failed" => "Le paiement n'a pas abouti. Réessayez ou utilisez une autre carte.",
         "payment_expired" => "Ce paiement n'est plus ouvert. Veuillez recommencer votre commande.",
         "payment_returned_out_of_stock" => {

@@ -468,12 +468,8 @@ impl Store {
         // the others): joined back here, the page shows the cart's line.
         let mut lines: Vec<CartLineView> = Vec::new();
         let mut join_next = false;
-        for ((line, tax_category), line_offer) in quote
-            .lines
-            .iter()
-            .zip(&quote.tax_categories)
-            .zip(&quote.line_offers)
-        {
+        for (line, line_offer) in quote.lines.iter().zip(&quote.line_offers) {
+            let tax_category = line.tax_category();
             if let Some(last) = lines.last_mut().filter(|last| {
                 join_next
                     && line_offer.is_none()
@@ -496,7 +492,7 @@ impl Store {
                 slug: local.map(|p| p.slug.clone()),
                 image_url: local.and_then(|p| picture(p, line.variant_id.as_deref())),
                 quantity: line.quantity,
-                tax_category: tax_category.clone(),
+                tax_category: tax_category.to_owned(),
                 unit_amount_cents: Some(
                     line_offer
                         .as_ref()

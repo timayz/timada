@@ -676,6 +676,107 @@ async fn requests_that_cannot_go_ahead_are_refused() {
     h.finish().await;
 }
 
+/// A VAT-registered merchant without the One-Stop Shop sells to consumers
+/// elsewhere in the EU in euros only; with it, in any currency.
+#[tokio::test]
+async fn a_distance_sale_in_another_currency_needs_the_one_stop_shop() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let store = h.store(&acme);
+    let catalog = timada_catalog::Command::new(store.clone(), &acme.id);
+    let orders = timada_orders::Command::new(store.clone(), &acme.id);
+    let hat = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Hat".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product("alice", &hat.id, 3000, "USD")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &hat.id).await.unwrap();
+    let cart_in_usd = async || {
+        let cart_id = orders.create_cart(STOREFRONT_ACTOR).await.unwrap();
+        orders
+            .add_to_cart(
+                STOREFRONT_ACTOR,
+                &cart_id,
+                CartItem {
+                    product_id: hat.id.clone(),
+                    variant_id: None,
+                    quantity: 1,
+                },
+            )
+            .await
+            .unwrap();
+        cart_id
+    };
+    let to_germany = Checkout {
+        shipping: ShippingAddress {
+            name: "Ada".into(),
+            line1: "Unter den Linden 1".into(),
+            postal_code: "10117".into(),
+            city: "Berlin".into(),
+            country: "DE".into(),
+            ..Default::default()
+        },
+        ..checkout(Some(3000))
+    };
+
+    // Refused: the sale would owe German VAT the merchant cannot remit.
+    let cart_id = cart_in_usd().await;
+    assert_eq!(
+        h.ask_with(&acme, &cart_id, to_germany.clone()).await,
+        PaymentAnswer::Refused("oss_required_for_currency".into())
+    );
+    // To France, or to a business, the currency is no concern.
+    let cart_id = cart_in_usd().await;
+    assert!(matches!(
+        h.ask(&acme, &cart_id, Some(3000)).await,
+        PaymentAnswer::Requested(_)
+    ));
+    orders.set_business_buyers("alice", true).await.unwrap();
+    let cart_id = cart_in_usd().await;
+    let business = Checkout {
+        vat_number: Some("DE123456789".into()),
+        ..to_germany.clone()
+    };
+    assert!(matches!(
+        h.ask_with(&acme, &cart_id, business).await,
+        PaymentAnswer::Requested(_)
+    ));
+
+    // Registered for the One-Stop Shop: the sale goes ahead.
+    let company_id = h
+        .platform
+        .load_company_siren("120027016")
+        .await
+        .unwrap()
+        .unwrap()
+        .company_id;
+    let company = h.platform.load_company(&company_id).await.unwrap().unwrap();
+    let identity = LegalIdentity {
+        oss_registered: true,
+        ..company.identity.unwrap()
+    };
+    h.platform
+        .set_company_identity("alice", &company_id, identity)
+        .await
+        .unwrap();
+    let cart_id = cart_in_usd().await;
+    let PaymentAnswer::Requested(payment) = h.ask_with(&acme, &cart_id, to_germany).await else {
+        panic!("a payment is opened");
+    };
+    assert_eq!(payment.lines[0].tax_category(), "standard");
+    h.finish().await;
+}
+
 /// A refund made in Stripe's own dashboard, or one Stripe took whose
 /// recording failed here, reaches the order through `charge.refunded`.
 #[tokio::test]
