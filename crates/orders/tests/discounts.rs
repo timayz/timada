@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use timada_discounts::{CreateDiscount, DiscountValue};
 use timada_orders::{
-    OrdersError, discount_usage_subscription, order_by_id, read_model_subscription,
+    OrderError, discount_usage_subscription, order_by_id, read_model_subscription,
 };
 
 type Discounts = timada_discounts::Command<evento::Sqlite>;
@@ -31,7 +31,7 @@ async fn a_code_on_the_cart_takes_its_share_off_the_quote() {
     let unknown = orders.apply_discount(SHOPPER, &cart_id, "NOPE").await;
     assert!(matches!(
         unknown,
-        Err(OrdersError::DiscountRefused {
+        Err(OrderError::DiscountRefused {
             code: "discount_unknown"
         })
     ));
@@ -159,7 +159,7 @@ async fn a_code_that_no_longer_works_is_never_dropped_silently() {
     assert!(
         matches!(
             refused,
-            Err(OrdersError::DiscountRefused {
+            Err(OrderError::DiscountRefused {
                 code: "discount_inactive"
             })
         ),
@@ -170,7 +170,7 @@ async fn a_code_that_no_longer_works_is_never_dropped_silently() {
         .refuse_payment_request(DASHBOARD, &cart_id, &request_id, "discount_inactive")
         .await
         .unwrap();
-    let err = OrdersError::PaymentRefused {
+    let err = OrderError::PaymentRefused {
         code: "discount_inactive".into(),
     };
     assert_eq!(err.code(), Some("discount_inactive"));

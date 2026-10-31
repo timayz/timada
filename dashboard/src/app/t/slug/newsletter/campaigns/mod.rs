@@ -17,8 +17,8 @@ use serde::Deserialize;
 use timada_newsletter::{CampaignDraft, CampaignStatus, campaigns_of_tenant, count_campaigns};
 use timada_tenancy::{
     MAX_MAIL_SUBJECT_LEN, MailTemplateError, PERMISSION_NEWSLETTER_MANAGE,
-    PERMISSION_NEWSLETTER_READ, RenderedMail, ShopMailKind, TenantState, language_name, render,
-    validate, validate_text,
+    PERMISSION_NEWSLETTER_READ, RenderedMail, ShopMailKind, TenantState, language_name, links_to,
+    render, render_text, validate, validate_text,
 };
 use topcoat::{
     Result,
@@ -31,7 +31,6 @@ use topcoat::{
 use crate::app::auth::Flash;
 use crate::app::t::slug::mail::own_address;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
-use crate::auth::mail::{marketing_sender, send_rendered_via, shop_vars};
 use crate::auth::require_user;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
@@ -43,6 +42,7 @@ use crate::components::table::{
 };
 use crate::components::textarea::textarea;
 use crate::db::ReadPool;
+use crate::mail::{marketing_sender, send_rendered_via, shop_vars};
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, format_time, icons, notice, page_header, pager,
     section_card, status_badge,
@@ -226,27 +226,27 @@ impl CampaignForm {
 }
 
 /// The draft rendered with made-up data, or why it can't be. A campaign
-/// must link to the unsubscribe page.
+/// must link to the unsubscribe page: the rendered mail is looked at, so a
+/// mention in a comment does not count and `<a href="{{ unsubscribe_url
+/// }}">` does.
 pub fn preview(
     cx: &Cx,
     tenant: &TenantState,
     draft: &CampaignDraft,
 ) -> std::result::Result<RenderedMail, MailTemplateError> {
     validate(KIND, &draft.subject, &draft.html)?;
-    if !draft.html.contains("unsubscribe_url") {
+    if let Some(text) = &draft.text {
+        validate_text(KIND, text)?;
+    }
+    let vars = KIND.sample(shop_vars(cx, tenant));
+    let rendered = render(&draft.subject, &draft.html, draft.text.as_deref(), &vars)?;
+    let unsubscribe = render_text("{{ unsubscribe_url }}", &vars)?;
+    if !links_to(&rendered.html, &unsubscribe) {
         return Err(MailTemplateError(
             "Body: link to {{ unsubscribe_url }}, so the reader can leave the list.".to_owned(),
         ));
     }
-    if let Some(text) = &draft.text {
-        validate_text(KIND, text)?;
-    }
-    render(
-        &draft.subject,
-        &draft.html,
-        draft.text.as_deref(),
-        &KIND.sample(shop_vars(cx, tenant)),
-    )
+    Ok(rendered)
 }
 
 /// Mails the preview to the signed-in member: their address, or the error

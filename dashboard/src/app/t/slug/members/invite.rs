@@ -14,9 +14,10 @@ use super::members_url;
 use crate::app::invitations::token::{Token, index as invitation_page};
 use crate::app::t::slug::{require_tenant, role_label};
 use crate::app::tenants::{error_code, tenancy};
-use crate::auth::{mail::send_invitation, now, require_user};
+use crate::auth::{now, require_user};
 use crate::config::Config;
 use crate::db::ReadPool;
+use crate::mail::send_invitation;
 
 #[derive(Deserialize)]
 struct InviteForm {

@@ -1,10 +1,10 @@
-.PHONY: loadtest dev seed.chatounette.save seed.chatounette.restore storefront storefront.migrate chatounette chatounette.migrate seed.chatounette snapshot.chatounette lint fmt fmt-check test check machete e2e
+.PHONY: start cert cert.install up stop down dev reset migrate seed.chatounette seed.chatounette.save seed.chatounette.restore snapshot.chatounette chatounette chatounette.migrate e2e loadtest lint fmt-check fmt test machete check
 
 start: up dev
 
 cert:
 	mkdir -p .docker/traefik/certs
-	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost storefront.localhost chatounette.localhost store.timada.localhost
+	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost chatounette.localhost store.timada.localhost
 
 cert.install:
 		sudo mkcert -install
@@ -68,26 +68,18 @@ snapshot.chatounette:
 		--menu-order accessoires-pour-chat,couchage-chat,goodies-chat,jeux-pour-chat,transport-chat,toilette-chat,vetement-pour-chat \
 		--tab-stop-at "À propos"
 
-# The example storefront at https://storefront.localhost, listening on every
-# interface so the compose Traefik reaches it. STORE_TOKEN and STORE_MEDIA_URL
-# (where the product pictures load from) both come from a tenant's API keys
-# page; without the media URL the pictures don't show:
-#   STORE_TOKEN=... STORE_MEDIA_URL=https://timada.localhost/media/<tenant_id> make storefront
+# The Chatounette shop at https://chatounette.localhost, listening on every
+# interface so the compose Traefik reaches it, with the settings
+# `make seed.chatounette` printed: STORE_TOKEN and STORE_MEDIA_URL (where the
+# product pictures load from) both come from a tenant's API keys page; without
+# the media URL the pictures don't show.
+#   STORE_TOKEN=... STORE_MEDIA_URL=... make chatounette
 # It talks to one node's store API (127.0.0.1:4321) unless told otherwise; to
 # go through Traefik's balancer over the cluster nodes instead:
 #   STORE_ADDR=store.timada.localhost:4320 STORE_TLS_CA=/etc/ssl/certs/ca-certificates.crt ...
 # Traefik reaches it from the Docker bridge, so its X-Forwarded-For names the
 # shopper the dashboard limits sign-in codes for. STORE_API_URL is the dashboard
 # the reviews, sign-ins and contact messages go to; the dev one unless set.
-storefront:
-	HOST=0.0.0.0 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront-example
-
-storefront.migrate:
-	cargo run -p storefront-example -- migrate
-
-# The Chatounette clone at https://chatounette.localhost, with the settings
-# `make seed.chatounette` printed (STORE_API_URL defaults to the dev dashboard):
-#   STORE_TOKEN=... STORE_MEDIA_URL=... make chatounette
 chatounette:
 	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p chatounette-example
 
@@ -118,29 +110,19 @@ fmt-check:
 fmt:
 	cargo fmt --all
 
-# Run ALL tests (sequential - use test-parallel for faster execution)
+# Every test of the workspace. The cluster suite is sensitive to load: a
+# `preaccept quorum not reached` on a busy machine is the machine, not the
+# code; run it again alone.
 test:
 	cargo test --workspace
 
-# ============================================================================
-# Parallel Test Execution (optimized for speed)
-# ============================================================================
-# Analysis: 111.92s sequential → ~19.9s parallel (5.6x speedup with make -j)
-# Total: 476 tests across 46 test suites
-# Usage: make test-parallel -j
-#        make test-parallel -j10  (limit to 10 parallel jobs)
-# ============================================================================
-
-# Check for unused dependencies (optional: install with 'cargo install cargo-machete')
+# Unused dependencies (cargo-machete is in the dev shell).
 machete:
-	@if command -v cargo-machete >/dev/null 2>&1; then \
-		cargo machete --with-metadata; \
-	else \
-		echo "⚠ cargo-machete not installed. Skipping unused dependency check."; \
-		echo "  Install with: cargo install cargo-machete"; \
-	fi
+	cargo machete --with-metadata
 
-# Run all checks: format, lint, machete, and test (CI-ready)
+# The gate before a pull request: tests, lint, formatting, unused
+# dependencies. The browser suite (`make e2e`) needs the compose stack and is
+# run separately.
 check: test lint fmt-check machete
 	@echo "✓ All checks passed!"
 

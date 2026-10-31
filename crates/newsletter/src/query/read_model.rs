@@ -115,10 +115,10 @@ async fn on_delivery_event<E: Executor>(
     };
     sqlx::query(
         "INSERT INTO newsletter_deliveries
-            (tenant_id, campaign_id, edition_id, subscriber_id, failed)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+            (tenant_id, campaign_id, edition_id, subscriber_id, failed, skipped)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT (tenant_id, edition_id, subscriber_id) DO UPDATE SET
-            failed = excluded.failed",
+            failed = excluded.failed, skipped = excluded.skipped",
     )
     .bind(&event.tenant)
     .bind(&state.campaign_id)
@@ -126,6 +126,7 @@ async fn on_delivery_event<E: Executor>(
     .bind(state.edition_id.as_ref().unwrap_or(&state.campaign_id))
     .bind(&state.subscriber_id)
     .bind(state.failed.is_some())
+    .bind(state.skipped.is_some())
     .execute(&pool)
     .await?;
     Ok(())

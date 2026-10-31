@@ -93,6 +93,7 @@ sqlx_migrator::sqlite_migration!(
                 edition_id TEXT NOT NULL,
                 subscriber_id TEXT NOT NULL,
                 failed INTEGER NOT NULL,
+                skipped INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, edition_id, subscriber_id)
             )",
             "DROP TABLE newsletter_deliveries"

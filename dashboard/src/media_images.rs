@@ -20,7 +20,10 @@ pub struct MediaImages {
 
 impl MediaImages {
     /// Fetches with `client`; `public_only` refuses a picture whose host is
-    /// this machine or a private network.
+    /// this machine or a private network. The check here covers literal
+    /// addresses and the name's answer at the time; `client` should connect
+    /// through [`crate::net::PublicResolver`] too (`net::public_client`), so
+    /// the address dialled is checked as well.
     pub fn new(
         client: reqwest::Client,
         media: Arc<Media>,

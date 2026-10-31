@@ -116,23 +116,21 @@ async fn on_placed<E: Executor>(
         return Ok(());
     };
     let vies: Arc<dyn Vies> = context.extract();
-    let catalog = timada_catalog::Command::new(store.0.clone(), &event.tenant);
-    let mut lines = Vec::with_capacity(event.data.lines.len());
-    for line in &event.data.lines {
-        let tax_category = catalog
-            .load_product(&line.product_id)
-            .await?
-            .map(|product| product.tax_category().to_owned())
-            .unwrap_or_else(|| timada_catalog::TAX_CATEGORY_STANDARD.to_owned());
-        lines.push(NewInvoiceLine {
+    // The kind of goods as it was sold, carried on the line: a product
+    // re-filed since (or gone) changes nothing about this invoice.
+    let lines: Vec<NewInvoiceLine> = event
+        .data
+        .lines
+        .iter()
+        .map(|line| NewInvoiceLine {
             name: line.name.clone(),
             variant_label: line.variant_label.clone(),
             sku: line.sku.clone(),
             quantity: line.quantity,
             unit_amount_cents: line.unit_amount_cents,
-            tax_category,
-        });
-    }
+            tax_category: line.tax_category().to_owned(),
+        })
+        .collect();
     // A business buyer's number, from the request this payment answered,
     // counts once VIES says it is valid; otherwise the sale is to a consumer
     // (VAT charged: the safe side).

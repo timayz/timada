@@ -256,9 +256,9 @@ currency })`). On submit, call `elements.submit()`, then `start_payment`, then
 `confirmPayment` with the client secret it returned. The dashboard copies the key
 into the tenant's store whenever the merchant changes the Stripe settings.
 
-- Every call returns `Result<Result<T, OrdersError>>`: the outer error is the store
+- Every call returns `Result<Result<T, OrderError>>`: the outer error is the store
   failing (`?` makes it a 500), the inner one a refusal to word for the shopper;
-  `OrdersError::code()` gives a stable code for a URL. The same calls exist as `Store`
+  `OrderError::code()` gives a stable code for a URL. The same calls exist as `Store`
   methods for code outside a request.
 - `add_to_cart` starts a new cart when it is given none, or one already ordered.
   `set_cart_quantity` (0 removes the line) and `remove_from_cart` change a line.
@@ -267,7 +267,7 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   (`out_of_stock`), shows in `CartView::unavailable`, and checkout waits until it is
   changed.
 - `start_payment` waits up to fifteen seconds for the dashboard's answer. A refusal is
-  `OrdersError::PaymentRefused`: `price_changed` when the total moved since the page
+  `OrderError::PaymentRefused`: `price_changed` when the total moved since the page
   showed it, `product_unavailable`, or `payments_unavailable` when the merchant has set
   up no payments, the provider failed or nobody answered. `payment_session` reads an
   open payment back by its request id for the page after the redirect.
@@ -508,46 +508,22 @@ be started again. The read models of the back office catch up when the server ne
 starts. `make seed.chatounette` wraps the command for the dev config; `seeds/README.md`
 says where each snapshot comes from and how to take it.
 
-## The examples
+## The example
 
-`examples/storefront` is a complete app on the library: a catalog page, a category
-page, a product page with an add-to-cart form and its reviews, a cart, a one-page
-checkout (steps, details, address and Stripe's Payment and Express Checkout elements
-beside an editable cart with its VAT, reassurance and recent reviews), an order
-confirmation where the shopper reviews what they bought, shopper accounts (sign-in
-from the checkout's "Already a customer?" or the header, `/account` with the orders
-and saved addresses, the checkout prefilled from them), inline styles, no asset
-bundle. Against a dashboard whose
-`[store_api]` listens on `127.0.0.1:4321`:
-
-```sh
-STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
-    STORE_API_URL=https://timada.localhost cargo run -p storefront-example
-open http://127.0.0.1:3456/
-```
-
-All three values are on the tenant's API keys page. `STORE_ADDR`, `STORE_DB`,
-`STORE_DB_READ_CONNECTIONS` (the read pool, 8 by default), `HOST`,
-`PORT`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by
-default) are the other knobs, `TRUSTED_PROXIES` (comma-separated addresses or CIDR
-networks) names the reverse proxies whose `X-Forwarded-For` gives the shopper's
-address, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the
-shopper cookies; unset, a random key is made at startup and the cookies do not survive
-a restart. To sell, tick `store:checkout` on the key. The browser suite
-(`tests/e2e/storefront.spec.ts`) boots it with a key minted in the dashboard, checks the
-catalog follows live, then fills a cart, checks out, reviews what it bought, and signs
-a returning shopper in on a second browser.
-
-`examples/chatounette` is a second app on the same library and the same routes, in
-French and in the layout and colours of chatounette.com: a top bar with the promo code,
-a masthead with the search, the category bar, a home with the newest products, the
-category tiles, the latest reviews and the four promises, listings with the shop's
-sort labels and, on a category's first page, its longer text below the products, a
-product page with its gallery, option menus, reassurance block and
-folding description and facts, the shop's own pages under `/pages/{slug}`, and the
-cart, checkout, orders and account pages of the first example translated. It is meant
-to run against a tenant filled by `make seed.chatounette` (see "Seeding a catalogue"),
-which prints the three settings:
+`examples/chatounette` is a complete app on the library, in French and in the layout
+and colours of chatounette.com: a top bar with the promo code, a masthead with the
+search, the category bar, a home with the newest products, the category tiles, the
+latest reviews and the four promises, listings with the shop's sort labels and, on a
+category's first page, its longer text below the products, a product page with its
+gallery, option menus, reassurance block, folding description and facts and its
+reviews, the shop's own pages on routes of their own, a cart with its drawer, a
+one-page checkout (steps, details, address and Stripe's Payment and Express Checkout
+elements beside an editable cart with its VAT, reassurance and recent reviews), an
+order confirmation where the shopper reviews what they bought, and shopper accounts
+(sign-in from the checkout's "Déjà client ?" or the header, `/account` with the
+orders and saved addresses, the checkout prefilled from them). It is meant to run
+against a tenant filled by `make seed.chatounette` (see "Seeding a catalogue"), which
+prints the three settings:
 
 ```sh
 STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
@@ -555,7 +531,20 @@ STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
 open https://chatounette.localhost/
 ```
 
-It listens on 3457 (`PORT`), keeps its copy of the catalog in `chatounette.db`
-(`STORE_DB`) and takes the same other knobs. `tests/e2e/chatounette.spec.ts` boots it
-on a small catalogue made in the dashboard and walks the home, a category, a product,
-the cart and a shop page.
+All three values are on the tenant's API keys page; to sell, tick `store:checkout` on
+the key. It listens on 3457 (`PORT`) and keeps its copy of the catalog in
+`chatounette.db` (`STORE_DB`). `STORE_ADDR`, `STORE_DB_READ_CONNECTIONS` (the read
+pool, 8 by default), `HOST`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of
+`STORE_ADDR` by default) are the other knobs, `TRUSTED_PROXIES` (comma-separated
+addresses or CIDR networks) names the reverse proxies whose `X-Forwarded-For` gives
+the shopper's address, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the
+shopper cookies; unset, a random key is made at startup and the cookies do not survive
+a restart.
+
+The browser suite boots it with a key minted in the dashboard on a small catalogue
+made there: `tests/e2e/chatounette.spec.ts` walks the home, a category, a product, the
+cart, the search and a shop page; `chatounette-shop.spec.ts` checks the catalogue
+follows live, then fills a cart, checks out, pays, and uses stock, discount codes,
+delivery methods and checkout offers; `chatounette-accounts.spec.ts` reviews what it
+bought, is invoiced at the VAT of where the goods go, and signs a returning shopper in
+on a second browser.

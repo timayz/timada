@@ -72,10 +72,10 @@ impl Aliexpress {
                 .timeout(Duration::from_secs(20))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
-            pictures: reqwest::Client::builder()
-                .user_agent("timada")
+            // The pictures' addresses are the supplier's, not the operator's:
+            // public hosts only, checked at the address dialled.
+            pictures: crate::net::public_client(allow_private_hosts)
                 .timeout(Duration::from_secs(30))
-                .redirect(reqwest::redirect::Policy::none())
                 .build()?,
             allow_private_hosts,
             platform,
@@ -100,8 +100,10 @@ impl Aliexpress {
             .ok_or_else(|| anyhow::anyhow!("no secret can be kept here (no [secrets] key)"))
     }
 
-    pub fn seal(&self, plain: &str) -> anyhow::Result<Vec<u8>> {
-        self.sealer()?.seal(plain)
+    /// Seals a token of `company_id`'s account: it opens for that company
+    /// alone.
+    pub fn seal(&self, company_id: &str, plain: &str) -> anyhow::Result<Vec<u8>> {
+        self.sealer()?.seal_for(company_id, plain)
     }
 
     /// The platform's app key, for the address a company says yes on.
@@ -128,7 +130,9 @@ impl Aliexpress {
         let Some(authorization) = &company.aliexpress else {
             return Ok(None);
         };
-        let token = self.sealer()?.open(&authorization.access_token_sealed)?;
+        let token = self
+            .sealer()?
+            .open_for(&company.id, &authorization.access_token_sealed)?;
         Ok(Some(self.app_client()?.with_session(token)))
     }
 
@@ -184,7 +188,9 @@ impl Aliexpress {
         {
             return Ok(company);
         }
-        let refresh_token = self.sealer()?.open(&authorization.refresh_token_sealed)?;
+        let refresh_token = self
+            .sealer()?
+            .open_for(&company.id, &authorization.refresh_token_sealed)?;
         let tokens = match self.app_client()?.refresh_token(&refresh_token).await {
             Ok(tokens) => tokens,
             Err(err) => {
@@ -203,8 +209,8 @@ impl Aliexpress {
                 ALIEXPRESS_ACTOR,
                 &company.id,
                 timada_tenancy::AuthorizeAliexpress {
-                    access_token_sealed: self.seal(&tokens.access_token)?,
-                    refresh_token_sealed: self.seal(&tokens.refresh_token)?,
+                    access_token_sealed: self.seal(&company.id, &tokens.access_token)?,
+                    refresh_token_sealed: self.seal(&company.id, &tokens.refresh_token)?,
                     expires_at: now + tokens.expires_in,
                     refresh_expires_at: if tokens.refresh_expires_in == 0 {
                         0

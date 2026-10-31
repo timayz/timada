@@ -33,9 +33,9 @@ use timada_tenancy::NewProductVars;
 use tokio::task::JoinHandle;
 use topcoat::context::{AppContext, Cx};
 
-use crate::auth::mail::{CampaignCopy, marketing_sender, send_campaign};
 use crate::cluster::Executor;
 use crate::key_vault::KeyVault;
+use crate::mail::{CampaignCopy, marketing_sender, send_campaign};
 use crate::newsletter::unsubscribe_link;
 use crate::shop_mail::ShopSender;
 
@@ -249,11 +249,24 @@ pub async fn send_batch<E: evento::Executor + Clone>(
         claim: Claim::Campaign(&campaign.id),
     };
     let mailed = out.mail(&owed).await?;
-    if owed.len() < batch as usize {
+    // Finished once nobody is owed any more: fewer than a batch were, and
+    // none of them was left for a later sweep (a key not on this node yet).
+    if owed.len() < batch as usize && mailed.left_for_later == 0 {
         newsletter.finish_campaign(MAILER, &campaign.id).await?;
         tracing::info!(tenant = %tenant.id, campaign = %campaign.id, "newsletter sent");
     }
-    Ok(mailed)
+    Ok(mailed.sent)
+}
+
+/// What one pass over the owed subscribers did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Mailed {
+    /// Handed to the mail server.
+    pub sent: usize,
+    /// Still owed: their key is not on this node yet, so the mail waits for
+    /// a later sweep (or another node) rather than being claimed and never
+    /// sent. A campaign is not finished while any is left.
+    pub left_for_later: usize,
 }
 
 /// What a delivery is claimed for.
@@ -276,6 +289,20 @@ impl Claim<'_> {
             Self::Edition { edition_id, .. } => edition_id,
         }
     }
+
+    fn campaign_id(&self) -> &str {
+        match self {
+            Self::Campaign(id) => id,
+            Self::Edition { campaign_id, .. } => campaign_id,
+        }
+    }
+
+    fn edition_id(&self) -> Option<&str> {
+        match self {
+            Self::Campaign(_) => None,
+            Self::Edition { edition_id, .. } => Some(edition_id),
+        }
+    }
 }
 
 /// One copy going out to some of a shop's subscribers.
@@ -292,26 +319,43 @@ struct Outgoing<'a, E: evento::Executor> {
 }
 
 impl<E: evento::Executor> Outgoing<'_, E> {
-    /// Claims and mails each of `rows` still on the list; how many were
-    /// handed to the mail server.
-    async fn mail(&self, rows: &[SubscriberRow]) -> anyhow::Result<usize> {
+    /// Claims and mails each of `rows` still on the list. One who left the
+    /// list since the read model was written is recorded as skipped, so
+    /// they are not owed again; one whose key is not here yet is left for
+    /// a later sweep and counted as such.
+    async fn mail(&self, rows: &[SubscriberRow]) -> anyhow::Result<Mailed> {
         let newsletter = self.newsletter;
-        let mut mailed = 0;
+        let mut mailed = Mailed::default();
         for row in rows {
             // The read model is a moment behind: the write model says whether
             // they are still on the list.
+            let gone = match newsletter.load_subscriber(&row.id).await? {
+                None => Some("no such subscriber"),
+                Some(state) if !state.is_confirmed() => Some("left the list"),
+                Some(_) => None,
+            };
+            if let Some(reason) = gone {
+                newsletter
+                    .skip_delivery(
+                        MAILER,
+                        self.claim.campaign_id(),
+                        self.claim.edition_id(),
+                        &row.id,
+                        reason,
+                    )
+                    .await?;
+                continue;
+            }
             let Some(state) = newsletter.load_subscriber(&row.id).await? else {
                 continue;
             };
-            if !state.is_confirmed() {
-                continue;
-            }
             // Opened before the claim: a key not here yet leaves the mail for a
             // later sweep rather than claimed and never sent.
             let (Some(subscriber), Some(token)) = (
                 state.open_with(self.keys).await?,
                 state.unsubscribe_token(self.keys).await?,
             ) else {
+                mailed.left_for_later += 1;
                 continue;
             };
             let claimed = match self.claim {
@@ -346,7 +390,7 @@ impl<E: evento::Executor> Outgoing<'_, E> {
             )
             .await
             {
-                Ok(()) => mailed += 1,
+                Ok(()) => mailed.sent += 1,
                 Err(err) => {
                     tracing::error!(tenant = %self.tenant.id, campaign = %self.claim.key(), subscriber = %state.id, error = %err, "newsletter not delivered");
                     newsletter
@@ -570,7 +614,7 @@ pub async fn send_edition_batch<E: evento::Executor + Clone>(
             due as u32,
         )
         .await?;
-        mailed += out.mail(&rows).await?;
+        mailed += out.mail(&rows).await?.sent;
     }
     Ok(mailed)
 }
@@ -589,7 +633,7 @@ mod tests {
     use topcoat::mail::{MailConfig, MemoryTransport};
 
     use super::*;
-    use crate::auth::mail::MailSender;
+    use crate::mail::MailSender;
 
     const SHOP: &str = "https://shop.example";
     const TENANT: &str = "t1";
@@ -860,6 +904,103 @@ mod tests {
         assert!(wire.contains("Subject: News from Acme Tea"));
         assert!(wire.contains("List-Unsubscribe: <https://shop.example/newsletter/unsubscribe/"));
         assert!(wire.contains("List-Unsubscribe-Post: List-Unsubscribe=One-Click"));
+    }
+
+    /// A subscriber who left the list after the read model was written is
+    /// skipped for good; one whose key is not on this node yet holds the
+    /// campaign open until a sweep can mail them.
+    #[tokio::test]
+    async fn a_campaign_waits_for_a_missing_key_and_skips_who_left() {
+        let (store, pool) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        for email in ["ada@example.com", "grace@example.com", "alan@example.com"] {
+            subscribe(&store, &keys, email).await;
+        }
+        let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);
+        let campaign = newsletter
+            .draft_campaign(
+                "user-alice",
+                CampaignDraft {
+                    subject: "News".to_owned(),
+                    html: r#"<p>New mugs.</p><a href="{{ unsubscribe_url }}">Leave</a>"#.to_owned(),
+                    text: None,
+                    language: None,
+                },
+            )
+            .await
+            .unwrap();
+        newsletter
+            .send_campaign("user-alice", &campaign)
+            .await
+            .unwrap();
+        timada_orders::Command::new(store.clone(), TENANT)
+            .set_storefront_address("user-alice", Some(SHOP))
+            .await
+            .unwrap();
+        catch_up(&store, &pool, keys.clone()).await;
+        let shop = shop();
+        let (cx, _platform, _orders, transport) = mail(&shop);
+
+        // The read model owes all three. Ada leaves (the read model does not
+        // know yet); Grace's key is not on this node.
+        let owed = undelivered_subscribers(&pool, TENANT, &campaign, None, 10)
+            .await
+            .unwrap();
+        assert_eq!(owed.len(), 3);
+        let by_email = |email: &str| {
+            owed.iter()
+                .find(|row| row.email == email)
+                .unwrap()
+                .id
+                .clone()
+        };
+        let ada = by_email("ada@example.com");
+        let grace = newsletter
+            .load_subscriber(&by_email("grace@example.com"))
+            .await
+            .unwrap()
+            .unwrap();
+        newsletter.unsubscribe("storefront", &ada).await.unwrap();
+        let grace_key = keys.get(&grace.key_id).await.unwrap().unwrap();
+        keys.delete(&grace.key_id).await.unwrap();
+
+        // Alan is mailed, Ada is skipped for good, Grace waits: not finished.
+        assert_eq!(
+            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 10)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(recipients(&transport), ["alan@example.com"]);
+        let state = newsletter.load_campaign(&campaign).await.unwrap().unwrap();
+        assert_eq!(state.status, CampaignStatus::Sending, "Grace is still owed");
+        catch_up(&store, &pool, keys.clone()).await;
+        let owed = undelivered_subscribers(&pool, TENANT, &campaign, None, 10)
+            .await
+            .unwrap();
+        assert_eq!(owed.len(), 1, "Ada is not owed any more: {owed:?}");
+        assert_eq!(owed[0].email, "grace@example.com");
+
+        // The key arrives: Grace is mailed and the campaign is finished.
+        keys.put(&grace.key_id, &grace_key).await.unwrap();
+        assert_eq!(
+            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 10)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            recipients(&transport),
+            ["alan@example.com", "grace@example.com"]
+        );
+        let state = newsletter.load_campaign(&campaign).await.unwrap().unwrap();
+        assert_eq!(state.status, CampaignStatus::Sent);
+        catch_up(&store, &pool, keys.clone()).await;
+        let row = timada_newsletter::campaign_row(&pool, TENANT, &campaign)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((row.delivered, row.failed, row.skipped), (2, 0, 1));
     }
 
     /// Unix seconds of a UTC moment.

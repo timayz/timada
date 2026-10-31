@@ -113,7 +113,14 @@ On save, a template is refused with the reason, and nothing is recorded, when:
   Raster `data:image/…` pictures are allowed;
 - it fails to render with sample data, both with every optional part filled in and
   with every optional part empty. This catches a `{{ order.discount.code }}` that is
-  not inside an `{% if order.discount %}`.
+  not inside an `{% if order.discount %}`;
+- what it renders to fails the markup check above. The check reads the template as
+  written and then every mail rendered from it (the samples on save, the real one on
+  every send), with character references decoded as a mail app decodes them: a tag
+  spelt out of pieces (`<{% if true %}script{% endif %}>`) or a `javascript&#58;`
+  address is refused all the same. A campaign or an automated mail must also carry a
+  real link to its unsubscribe page in the rendered mail, not merely mention the
+  variable.
 
 A plain-text version goes through the same checks, except the markup one: it must
 parse, name only the mail's variables, render with both samples, and stay under
@@ -184,8 +191,12 @@ allow_private_hosts = true
   enters theirs again.
 
 A shop's server must resolve to public addresses only. Loopback, private, link-local,
-shared (CGNAT) and unspecified addresses are refused, both on save and before every
-send, so a merchant cannot make the dashboard reach internal services. The check runs
-on the name's resolution at that moment, and the SMTP client resolves the name again
-when it connects. It narrows the attack, but a name that changes its answer between
-the two lookups (DNS rebinding) can still get through.
+shared (CGNAT), unspecified, reserved, documentation and benchmarking addresses are
+refused, and the IPv6 transition blocks (NAT64, 6to4, Teredo) with them, both on save
+and before every send, so a merchant cannot make the dashboard reach internal
+services. The check runs on the name's resolution at that moment, and the SMTP client
+resolves the name again when it connects. It narrows the attack, but a name that
+changes its answer between the two lookups (DNS rebinding) can still get through:
+pinning the SMTP connection to the checked address is a follow-up (the HTTP clients
+for webhooks and imported pictures already connect through a resolver that checks
+the address dialled).

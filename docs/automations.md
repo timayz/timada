@@ -38,7 +38,16 @@ the scenario's name and its `Definition`, kept whole as JSON in the events:
   names the triggers and the steps this build knows, what each trigger is about
   (its *subject*: an order, a customer, a subscriber, a review, a message) and
   what a condition may look at for each subject. No enum is frozen in
-  `events.lock`, so the catalog grows freely.
+  `events.lock`, so the catalog grows freely. Today's triggers: `order.placed`
+  (paid: an order exists only once paid), `order.fulfilled`, `order.cancelled`,
+  `order.refunded` (once per refund), `shopper.registered`,
+  `subscriber.confirmed`, `review.submitted`, `review.published`,
+  `message.received` and `checkout.abandoned` (a shopper asked to pay and no
+  order followed within `[automations]`'s delay). Today's steps: `wait`,
+  `condition` (two lanes), `notify` (a note to the shop's members), `email`
+  (a message the merchant wrote, to the customer the run is about), `discount`
+  (a single-use code a later mail may quote) and `webhook` (what started the
+  run, posted signed to an address of the merchant's).
 - **Settings are kept as typed.** A step's settings are strings by key, read
   into typed settings by the catalog's `parse_*` functions. A draft never loses
   what was written, even when it does not read yet; the editor shows it next to
@@ -246,7 +255,9 @@ secret of the step's own (`whsec_…`, derived from `[secrets] key`, shown in th
 step's settings, stored nowhere), and `Idempotency-Key: {run}:{step}`, the same
 on every try. Calls take at most `[automations] webhook_timeout_secs` and follow
 no redirect; a host that is not public is refused (unless
-`mail.allow_private_hosts`, for development). A 2xx is done; no answer, 408, 429
+`mail.allow_private_hosts`, for development), both before the call and at the
+address the call dials, so a name that changes its answer in between gets nowhere.
+A 2xx is done; no answer, 408, 429
 or a 5xx is tried again (as for the codes); another answer fails the step.
 Publishing a scenario that calls webhooks needs `api-keys:manage`: like a key, it
 hands the shop's events to another system.

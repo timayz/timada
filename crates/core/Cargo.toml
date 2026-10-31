@@ -14,3 +14,5 @@ async-trait.workspace = true
 jiff.workspace = true
 hmac.workspace = true
 sha2.workspace = true
+deunicode.workspace = true
+ulid.workspace = true

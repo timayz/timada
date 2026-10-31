@@ -20,7 +20,7 @@
 //!
 //! Each call returns two layers: the outer `Result` is a failure of the store
 //! (a topcoat error, so `?` turns it into a 500), the inner one a refusal to
-//! show the shopper ([`OrdersError::code`] names it). The same calls exist
+//! show the shopper ([`OrderError::code`] names it). The same calls exist
 //! as [`Store`] methods for code that runs outside a request.
 //!
 //! A cart takes one discount code ([`apply_discount`]). The cart page shows
@@ -54,8 +54,8 @@ pub use timada_catalog::format_money;
 use timada_invoicing::tax;
 use timada_orders::{CartItem, CartLine, Command, PaymentAnswer, STOREFRONT_ACTOR};
 pub use timada_orders::{
-    Checkout, OrderDiscount, OrderLine, OrderShipping, OrderState, OrderStatus, OrdersError,
-    PAYMENTS_UNAVAILABLE, PaymentSetup, ShippingAddress,
+    Checkout, OrderDiscount, OrderError, OrderLine, OrderShipping, OrderState, OrderStatus,
+    PAYMENTS_UNAVAILABLE, PaymentSetup, ReturnedPayment, ShippingAddress,
 };
 
 use crate::context::store;
@@ -107,7 +107,7 @@ impl PaymentSession {
 }
 
 /// A refusal to show the shopper, or the outcome.
-pub type Refusable<T> = std::result::Result<T, OrdersError>;
+pub type Refusable<T> = std::result::Result<T, OrderError>;
 
 /// One line of a cart, ready for a page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,7 +417,7 @@ impl VatEstimate {
 }
 
 /// Splits an outcome into a store failure and a refusal.
-fn refusable<T>(outcome: std::result::Result<T, OrdersError>) -> anyhow::Result<Refusable<T>> {
+fn refusable<T>(outcome: std::result::Result<T, OrderError>) -> anyhow::Result<Refusable<T>> {
     match outcome {
         Err(err) if !err.is_user_facing() => Err(err.into()),
         outcome => Ok(outcome),
@@ -468,12 +468,8 @@ impl Store {
         // the others): joined back here, the page shows the cart's line.
         let mut lines: Vec<CartLineView> = Vec::new();
         let mut join_next = false;
-        for ((line, tax_category), line_offer) in quote
-            .lines
-            .iter()
-            .zip(&quote.tax_categories)
-            .zip(&quote.line_offers)
-        {
+        for (line, line_offer) in quote.lines.iter().zip(&quote.line_offers) {
+            let tax_category = line.tax_category();
             if let Some(last) = lines.last_mut().filter(|last| {
                 join_next
                     && line_offer.is_none()
@@ -496,7 +492,7 @@ impl Store {
                 slug: local.map(|p| p.slug.clone()),
                 image_url: local.and_then(|p| picture(p, line.variant_id.as_deref())),
                 quantity: line.quantity,
-                tax_category: tax_category.clone(),
+                tax_category: tax_category.to_owned(),
                 unit_amount_cents: Some(
                     line_offer
                         .as_ref()
@@ -609,7 +605,7 @@ impl Store {
                 .await
             {
                 Ok(_) => return Ok(Ok(cart_id.to_owned())),
-                Err(OrdersError::CartNotFound | OrdersError::CheckedOut) => {}
+                Err(OrderError::CartNotFound | OrderError::CheckedOut) => {}
                 Err(err) => return refusable(Err(err)),
             }
         }
@@ -663,7 +659,7 @@ impl Store {
                 Some(answer) => return Ok(answer),
                 None if tokio::time::Instant::now() >= deadline => {
                     tracing::warn!(cart_id, request_id, "no answer to a request to pay");
-                    return Ok(Err(OrdersError::PaymentRefused {
+                    return Ok(Err(OrderError::PaymentRefused {
                         code: PAYMENTS_UNAVAILABLE.to_owned(),
                     }));
                 }
@@ -717,8 +713,12 @@ impl Store {
         Ok(match &request.answer {
             None => None,
             Some(PaymentAnswer::Refused(code)) => {
-                Some(Err(OrdersError::PaymentRefused { code: code.clone() }))
+                Some(Err(OrderError::PaymentRefused { code: code.clone() }))
             }
+            // Paid too late and given back: nothing to confirm any more.
+            Some(PaymentAnswer::Returned(returned)) => Some(Err(OrderError::PaymentRefused {
+                code: returned_code(&returned.code),
+            })),
             Some(PaymentAnswer::Requested(payment)) => Some(Ok(PaymentSession {
                 request_id: request.request_id.clone(),
                 provider: payment.provider.clone(),
@@ -737,6 +737,23 @@ impl Store {
     /// See [`order_of_cart`].
     pub async fn order_of_cart(&self, cart_id: &str) -> anyhow::Result<Option<OrderState>> {
         self.orders().load_order_of_cart(cart_id).await
+    }
+
+    /// See [`payment_returned`].
+    pub async fn payment_returned(
+        &self,
+        cart_id: &str,
+        request_id: &str,
+    ) -> anyhow::Result<Option<ReturnedPayment>> {
+        let Some(cart) = self.orders().load_cart(cart_id).await? else {
+            return Ok(None);
+        };
+        Ok(cart
+            .request(request_id)
+            .and_then(|request| match &request.answer {
+                Some(PaymentAnswer::Returned(returned)) => Some(returned.as_ref().clone()),
+                _ => None,
+            }))
     }
 
     /// See [`order`].
@@ -825,7 +842,7 @@ pub async fn remove_discount(cx: &Cx, cart_id: &str) -> Result<Refusable<()>> {
 /// with. Pass the total the shopper was shown as
 /// [`Checkout::expected_total_cents`]: a price that moved since is refused
 /// (`price_changed`) rather than charged unseen. A refusal from the
-/// dashboard is [`OrdersError::PaymentRefused`], its code what to word
+/// dashboard is [`OrderError::PaymentRefused`], its code what to word
 /// (`payments_unavailable` when the merchant takes no payments, the provider
 /// failed or nobody answered).
 pub async fn start_payment(
@@ -861,6 +878,30 @@ pub async fn order_of_cart(cx: &Cx, cart_id: &str) -> Result<Option<OrderState>>
         .order_of_cart(cart_id)
         .await
         .map_err(Error::from_anyhow)
+}
+
+/// The payment of a request that went through too late and was given back:
+/// what the checkout held (the goods, the discount's use) had lapsed and
+/// gone to someone else, so there is no order and the money is on its way
+/// back. A page waiting for the order checks this too, and words
+/// [`returned_code`] (`payment_returned_out_of_stock`, ...) to the shopper.
+pub async fn payment_returned(
+    cx: &Cx,
+    cart_id: &str,
+    request_id: &str,
+) -> Result<Option<ReturnedPayment>> {
+    store(cx)
+        .payment_returned(cart_id, request_id)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// The refusal code a page words for a payment given back: the reason the
+/// store recorded (`out_of_stock`, `discount_exhausted`,
+/// `discount_already_used`) under the `payment_returned_` prefix, so the
+/// wording can say the money is on its way back.
+pub fn returned_code(code: &str) -> String {
+    format!("payment_returned_{code}")
 }
 
 /// An order, read from the store. Anyone holding its id can read it: the

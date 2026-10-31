@@ -2,7 +2,7 @@ use evento::ProjectionAggregate;
 use evento::{Executor, WriteError};
 
 use crate::aggregator::{Claimed, Released};
-use crate::error::PagesError;
+use crate::error::PageError;
 use crate::value_object::page_slug_id;
 
 use super::Command;
@@ -15,7 +15,7 @@ impl<E: Executor> Command<E> {
         slug: &str,
         page_id: &str,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
+    ) -> Result<(), PageError> {
         let claimed = Claimed {
             page_id: page_id.to_owned(),
         };
@@ -30,7 +30,7 @@ impl<E: Executor> Command<E> {
             Ok(_) => Ok(()),
             Err(WriteError::InvalidOriginalVersion) => {
                 let Some(existing) = self.load_page_slug_index_any(slug).await? else {
-                    return Err(PagesError::SlugTaken);
+                    return Err(PageError::SlugTaken);
                 };
                 if existing.released {
                     existing
@@ -44,7 +44,7 @@ impl<E: Executor> Command<E> {
                 } else if existing.page_id == page_id {
                     Ok(())
                 } else {
-                    Err(PagesError::SlugTaken)
+                    Err(PageError::SlugTaken)
                 }
             }
             Err(err) => Err(err.into()),
@@ -58,7 +58,7 @@ impl<E: Executor> Command<E> {
         slug: &str,
         page_id: &str,
         routing_key: Option<String>,
-    ) -> Result<(), PagesError> {
+    ) -> Result<(), PageError> {
         if let Some(index) = self.load_page_slug_index(slug).await?
             && index.page_id == page_id
         {

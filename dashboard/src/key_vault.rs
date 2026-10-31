@@ -43,6 +43,12 @@ pub const MAX_SEALED_LEN: usize = 256;
 /// What a destroyed key's file is followed by.
 const TOMBSTONE: &str = ".gone";
 
+/// What a key is sealed for: its tenant and its id, so a sealed file copied
+/// under another tenant or name opens nothing.
+fn owner(tenant_id: &str, key_id: &str) -> String {
+    format!("{tenant_id}/{key_id}")
+}
+
 pub struct KeyVault {
     dir: PathBuf,
     /// `None` without `secrets.key`: nothing sealed can be recorded.
@@ -91,7 +97,9 @@ impl KeyVault {
         let valid = is_id(tenant_id)
             && is_id(key_id)
             && sealed.len() <= MAX_SEALED_LEN
-            && self.open(sealed).is_ok_and(|key| key.is_some());
+            && self
+                .open(tenant_id, key_id, sealed)
+                .is_ok_and(|key| key.is_some());
         if !valid {
             return Ok(false);
         }
@@ -140,12 +148,16 @@ impl KeyVault {
         Ok(tokio::fs::try_exists(self.tombstone(tenant_id, key_id)).await?)
     }
 
-    /// The key a sealed file holds; `None` when it is not one.
-    fn open(&self, sealed: &[u8]) -> anyhow::Result<Option<Key>> {
+    /// The key a sealed file holds; `None` when it is not one. A key is
+    /// sealed for its tenant and id ([`owner`]): a file copied under another
+    /// name opens nothing.
+    fn open(&self, tenant_id: &str, key_id: &str, sealed: &[u8]) -> anyhow::Result<Option<Key>> {
         let Some(sealer) = &self.sealer else {
             anyhow::bail!("keys cannot be read without secrets.key");
         };
-        Ok(Key::from_bytes(&sealer.open_bytes(sealed)?))
+        Ok(Key::from_bytes(
+            &sealer.open_bytes_for(&owner(tenant_id, key_id), sealed)?,
+        ))
     }
 
     /// Writes a sealed key, unless it was destroyed. The bytes land in a
@@ -190,7 +202,7 @@ impl KeyVault {
                 let sealed = response.error_for_status()?.bytes().await?;
                 anyhow::ensure!(sealed.len() <= MAX_SEALED_LEN, "not a sealed key");
                 let key = self
-                    .open(&sealed)?
+                    .open(tenant_id, key_id, &sealed)?
                     .ok_or_else(|| anyhow::anyhow!("not a key"))?;
                 Ok(Some((key, sealed)))
             }
@@ -232,7 +244,7 @@ impl Keys for TenantKeys {
             anyhow::bail!("recording personal data needs secrets.key");
         };
         anyhow::ensure!(is_id(&self.tenant_id) && is_id(key_id), "not a key id");
-        let sealed = sealer.seal_bytes(key.as_bytes())?;
+        let sealed = sealer.seal_bytes_for(&owner(&self.tenant_id, key_id), key.as_bytes())?;
         anyhow::ensure!(
             vault.store(&self.tenant_id, key_id, &sealed).await?,
             "key {key_id} was destroyed"
@@ -255,7 +267,7 @@ impl Keys for TenantKeys {
             return Ok(None);
         }
         if let Some(sealed) = vault.sealed(&self.tenant_id, key_id).await? {
-            return vault.open(&sealed);
+            return vault.open(&self.tenant_id, key_id, &sealed);
         }
         if vault.is_destroyed(&self.tenant_id, key_id).await? {
             return Ok(None);
@@ -357,7 +369,10 @@ mod tests {
     #[tokio::test]
     async fn a_missing_key_is_fetched_from_a_peer() {
         let key = Key::generate();
-        let sealed: &'static [u8] = sealer().seal_bytes(key.as_bytes()).unwrap().leak();
+        let sealed: &'static [u8] = sealer()
+            .seal_bytes_for("t1/k1", key.as_bytes())
+            .unwrap()
+            .leak();
         let vault = vault(Some(Peers::for_test(
             vec![peer(404, b"").await, peer(200, sealed).await],
             3,
@@ -394,7 +409,9 @@ mod tests {
         assert!(!vault.authorizes(None));
         assert!(!super::tests::vault(None).authorizes(Some(SECRET.as_bytes())));
 
-        let sealed = sealer().seal_bytes(Key::generate().as_bytes()).unwrap();
+        let sealed = sealer()
+            .seal_bytes_for("t1/k1", Key::generate().as_bytes())
+            .unwrap();
         for (tenant, key_id) in [
             ("..", "k1"),
             ("t1", "../k1"),
@@ -408,11 +425,18 @@ mod tests {
         }
         assert!(!vault.accept("t1", "k1", b"garbage").await.unwrap());
         let other = Sealer::new("mail", OPERATOR_SECRET)
-            .seal_bytes(Key::generate().as_bytes())
+            .seal_bytes_for("t1/k1", Key::generate().as_bytes())
             .unwrap();
         assert!(
             !vault.accept("t1", "k1", &other).await.unwrap(),
             "another key"
+        );
+        let elsewhere = sealer()
+            .seal_bytes_for("t1/k2", Key::generate().as_bytes())
+            .unwrap();
+        assert!(
+            !vault.accept("t1", "k1", &elsewhere).await.unwrap(),
+            "sealed for another key id"
         );
         assert!(vault.accept("t1", "k1", &sealed).await.unwrap());
         assert_eq!(vault.sealed("t1", "k1").await.unwrap(), Some(sealed));

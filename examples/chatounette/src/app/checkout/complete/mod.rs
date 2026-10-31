@@ -1,9 +1,10 @@
 //! `/checkout/complete`: where Stripe sends the browser back. The order
 //! exists once Stripe told the dashboard the payment went through, which may
 //! take a moment longer than the browser's way back: until then the page
-//! says so and looks again.
+//! says so and looks again. A payment that came too late for what the
+//! checkout held is given back, and the page says so instead of waiting.
 
-use timada_storefront::{menu, order_of_cart};
+use timada_storefront::{menu, order_of_cart, payment_returned, returned_code};
 use topcoat::{
     Result,
     context::Cx,
@@ -53,6 +54,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         )
         .resolve(cx);
         return Err(redirect(to).into());
+    }
+    if let Some(returned) = payment_returned(cx, &progress.cart_id, &progress.request_id).await? {
+        forget_payment(cx);
+        return Err(redirect(checkout_url(cx, Some(&returned_code(&returned.code)))).into());
     }
     let nav = menu(cx).await?;
 

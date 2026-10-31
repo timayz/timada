@@ -312,7 +312,7 @@ async fn publish_blocked(
     if storefront.is_none() {
         return Ok(Some("automation_storefront_required"));
     }
-    let sender = crate::auth::mail::marketing_sender(cx, &access.tenant)
+    let sender = crate::mail::marketing_sender(cx, &access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     if sender.is_none() {

@@ -3,13 +3,14 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 use timada_discounts::{Offer, OfferItem, OffersState, offers_id, offers_projection};
 use ulid::Ulid;
 
+use super::ReturnedPayment;
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
     Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet, NewsletterOptInSet,
-    NewsletterOptedIn, PaymentRefused, PaymentRequested, Placed, ShippingCharged, ShippingGranted,
-    ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
+    NewsletterOptedIn, PaymentRefused, PaymentRequested, PaymentReturned, Placed, ShippingCharged,
+    ShippingGranted, ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
 };
-use crate::error::OrdersError;
+use crate::error::OrderError;
 use crate::value_object::{
     OrderLine, Payment, ShippingAddress, new_reference, normalize_billing,
     normalize_buyer_vat_number, normalize_email, normalize_note, normalize_shipping, order_id,
@@ -77,9 +78,8 @@ impl From<&OrderState> for PlacedOrder {
 /// hold, and the ones that cannot be sold any more.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Quote {
+    /// Each with the kind of goods it is for VAT ([`OrderLine::tax_category`]).
     pub lines: Vec<OrderLine>,
-    /// What kind of goods each of `lines` is for VAT, in the same order.
-    pub tax_categories: Vec<String>,
     /// The offer each of `lines` is priced at, in the same order: `Some` on
     /// the line of the one unit an offer prices, which comes right before
     /// the line of the cart's other units at full price (if any).
@@ -159,7 +159,7 @@ impl<E: Executor> super::Command<E> {
     /// Prices a cart from the catalog as it stands now, reading every product
     /// from the store (never from a replica), so what it says is what a
     /// payment asked for now would charge.
-    pub async fn quote_cart(&self, cart_id: &str) -> Result<Quote, OrdersError> {
+    pub async fn quote_cart(&self, cart_id: &str) -> Result<Quote, OrderError> {
         let cart = self.require_cart(cart_id).await?;
         self.quote(&cart).await
     }
@@ -169,9 +169,9 @@ impl<E: Executor> super::Command<E> {
     /// conditions: that unit becomes a line of its own, so the order, its
     /// invoice and its mail say what it cost. The discount code comes off
     /// what that adds up to.
-    pub(crate) async fn quote(&self, cart: &CartState) -> Result<Quote, OrdersError> {
+    pub(crate) async fn quote(&self, cart: &CartState) -> Result<Quote, OrderError> {
         let mut quote = Quote::default();
-        let mut priced: Vec<(OrderLine, String)> = Vec::new();
+        let mut priced: Vec<OrderLine> = Vec::new();
         for line in &cart.lines {
             let item = CartItem {
                 product_id: line.product_id.clone(),
@@ -181,9 +181,9 @@ impl<E: Executor> super::Command<E> {
             let product = match self.require_sellable(&item).await {
                 Ok(product) => product,
                 Err(
-                    OrdersError::Unavailable { .. }
-                    | OrdersError::VariantRequired
-                    | OrdersError::VariantNotFound,
+                    OrderError::Unavailable { .. }
+                    | OrderError::VariantRequired
+                    | OrderError::VariantNotFound,
                 ) => {
                     quote.unavailable.push(line.clone());
                     continue;
@@ -200,7 +200,7 @@ impl<E: Executor> super::Command<E> {
                 .await
             {
                 Ok(()) => {}
-                Err(OrdersError::OutOfStock { .. }) => {
+                Err(OrderError::OutOfStock { .. }) => {
                     quote.unavailable.push(line.clone());
                     quote.out_of_stock.push(line.clone());
                     continue;
@@ -215,18 +215,18 @@ impl<E: Executor> super::Command<E> {
                 Some(variant) => &variant.price,
                 // `require_sellable` let a line without a variant through
                 // only for a product priced on its own.
-                None => product.price.as_ref().ok_or(OrdersError::Unavailable {
+                None => product.price.as_ref().ok_or(OrderError::Unavailable {
                     product_id: product.id.clone(),
                 })?,
             };
             match &quote.currency {
                 Some(currency) if *currency != price.currency => {
-                    return Err(OrdersError::MixedCurrencies);
+                    return Err(OrderError::MixedCurrencies);
                 }
                 Some(_) => {}
                 None => quote.currency = Some(price.currency.clone()),
             }
-            let order_line = OrderLine {
+            priced.push(OrderLine {
                 product_id: product.id.clone(),
                 variant_id: line.variant_id.clone(),
                 name: product.name.clone(),
@@ -234,8 +234,8 @@ impl<E: Executor> super::Command<E> {
                 sku: variant.and_then(|variant| variant.sku.clone()),
                 unit_amount_cents: price.amount_cents,
                 quantity: line.quantity,
-            };
-            priced.push((order_line, product.tax_category().to_owned()));
+                tax_category: product.tax_category().to_owned(),
+            });
         }
         self.price_offers(&mut quote, priced).await?;
         quote.total_cents = quote.subtotal_cents;
@@ -248,7 +248,7 @@ impl<E: Executor> super::Command<E> {
                     quote.total_cents -= discount.amount_cents;
                     quote.discount = Some(discount);
                 }
-                Err(OrdersError::DiscountRefused { code }) => quote.discount_refused = Some(code),
+                Err(OrderError::DiscountRefused { code }) => quote.discount_refused = Some(code),
                 Err(err) => return Err(err),
             }
         }
@@ -261,16 +261,16 @@ impl<E: Executor> super::Command<E> {
         code: &str,
         subtotal_cents: u64,
         currency: &str,
-    ) -> Result<OrderDiscount, OrdersError> {
+    ) -> Result<OrderDiscount, OrderError> {
         let discount =
             self.load_discount_by_code(code)
                 .await?
-                .ok_or(OrdersError::DiscountRefused {
+                .ok_or(OrderError::DiscountRefused {
                     code: timada_discounts::DISCOUNT_UNKNOWN,
                 })?;
         let amount_cents = discount
             .amount_off(subtotal_cents, currency, timada_discounts::unix_now())
-            .map_err(OrdersError::from_discount)?;
+            .map_err(OrderError::from_discount)?;
         Ok(OrderDiscount {
             discount_id: discount.id,
             code: discount.code,
@@ -285,8 +285,8 @@ impl<E: Executor> super::Command<E> {
     async fn price_offers(
         &self,
         quote: &mut Quote,
-        priced: Vec<(OrderLine, String)>,
-    ) -> Result<(), OrdersError> {
+        priced: Vec<OrderLine>,
+    ) -> Result<(), OrderError> {
         let offers = match &quote.currency {
             Some(_) => offers_projection()
                 .load(offers_id())
@@ -300,7 +300,7 @@ impl<E: Executor> super::Command<E> {
         let now = timada_discounts::unix_now();
         let items: Vec<OfferItem<'_>> = priced
             .iter()
-            .map(|(line, _)| OfferItem {
+            .map(|line| OfferItem {
                 product_id: &line.product_id,
                 variant_id: line.variant_id.as_deref(),
                 quantity: line.quantity,
@@ -311,7 +311,7 @@ impl<E: Executor> super::Command<E> {
             .applied(&items, &currency, now)
             .into_iter()
             .zip(&priced)
-            .map(|(offer, (line, _))| {
+            .map(|(offer, line)| {
                 offer.map(|offer| LineOffer {
                     offer_id: offer.id.clone(),
                     full_unit_amount_cents: line.unit_amount_cents,
@@ -325,10 +325,9 @@ impl<E: Executor> super::Command<E> {
             .collect();
         drop(items);
 
-        for ((line, tax_category), line_offer) in priced.into_iter().zip(applied) {
+        for (line, line_offer) in priced.into_iter().zip(applied) {
             let Some(line_offer) = line_offer else {
                 quote.lines.push(line);
-                quote.tax_categories.push(tax_category);
                 quote.line_offers.push(None);
                 continue;
             };
@@ -340,14 +339,12 @@ impl<E: Executor> super::Command<E> {
                 quantity: 1,
                 ..line.clone()
             });
-            quote.tax_categories.push(tax_category.clone());
             quote.line_offers.push(Some(line_offer));
             if line.quantity > 1 {
                 quote.lines.push(OrderLine {
                     quantity: line.quantity - 1,
                     ..line
                 });
-                quote.tax_categories.push(tax_category);
                 quote.line_offers.push(None);
             }
         }
@@ -362,9 +359,9 @@ impl<E: Executor> super::Command<E> {
             let product = match self.require_sellable(&item).await {
                 Ok(product) => product,
                 Err(
-                    OrdersError::Unavailable { .. }
-                    | OrdersError::VariantRequired
-                    | OrdersError::VariantNotFound,
+                    OrderError::Unavailable { .. }
+                    | OrderError::VariantRequired
+                    | OrderError::VariantNotFound,
                 ) => continue,
                 Err(err) => return Err(err),
             };
@@ -429,7 +426,7 @@ impl<E: Executor> super::Command<E> {
         &self,
         cart_id: &str,
         request_id: &str,
-    ) -> Result<Option<PendingPayment>, OrdersError> {
+    ) -> Result<Option<PendingPayment>, OrderError> {
         let cart = self.require_cart(cart_id).await?;
         let Some(request) = cart.request(request_id) else {
             return Ok(None);
@@ -438,23 +435,23 @@ impl<E: Executor> super::Command<E> {
             return Ok(None);
         }
         if cart.lines.is_empty() {
-            return Err(OrdersError::EmptyCart);
+            return Err(OrderError::EmptyCart);
         }
         let quote = self.quote(&cart).await?;
         if let Some(line) = quote.out_of_stock.first() {
-            return Err(OrdersError::OutOfStock {
+            return Err(OrderError::OutOfStock {
                 product_id: line.product_id.clone(),
                 available: 0,
             });
         }
         if let Some(line) = quote.unavailable.first() {
-            return Err(OrdersError::Unavailable {
+            return Err(OrderError::Unavailable {
                 product_id: line.product_id.clone(),
             });
         }
         // A code the shopper counted on is never dropped silently.
         if let Some(code) = quote.discount_refused {
-            return Err(OrdersError::DiscountRefused { code });
+            return Err(OrderError::DiscountRefused { code });
         }
         let shipping = self.price_shipping(&quote, request).await?;
         let total_cents = quote.total_cents
@@ -464,9 +461,9 @@ impl<E: Executor> super::Command<E> {
         if let Some(expected) = request.expected_total_cents
             && expected != total_cents
         {
-            return Err(OrdersError::PriceChanged { total_cents });
+            return Err(OrderError::PriceChanged { total_cents });
         }
-        let currency = quote.currency.ok_or(OrdersError::EmptyCart)?;
+        let currency = quote.currency.ok_or(OrderError::EmptyCart)?;
         Ok(Some(PendingPayment {
             request: request.clone(),
             lines: quote.lines,
@@ -485,7 +482,7 @@ impl<E: Executor> super::Command<E> {
         &self,
         quote: &Quote,
         request: &CheckoutRequest,
-    ) -> Result<Option<OrderShipping>, OrdersError> {
+    ) -> Result<Option<OrderShipping>, OrderError> {
         let methods = self.shipping_methods().await?;
         if methods.is_empty() {
             return Ok(None);
@@ -495,10 +492,10 @@ impl<E: Executor> super::Command<E> {
             .as_deref()
             .and_then(|id| methods.iter().find(|method| method.id == id))
             .filter(|method| method.covers(&request.shipping.country))
-            .ok_or(OrdersError::ShippingUnavailable)?;
+            .ok_or(OrderError::ShippingUnavailable)?;
         let amount_cents = quote
             .shipping_for(method)
-            .ok_or(OrdersError::ShippingUnavailable)?;
+            .ok_or(OrderError::ShippingUnavailable)?;
         Ok(Some(OrderShipping {
             method_id: method.id.clone(),
             name: method.name.clone(),
@@ -534,7 +531,7 @@ impl<E: Executor> super::Command<E> {
         cart_id: &str,
         checkout: Checkout,
         routing_key: Option<String>,
-    ) -> Result<String, OrdersError> {
+    ) -> Result<String, OrderError> {
         let email = normalize_email(&checkout.email)?;
         let shipping = normalize_shipping(checkout.shipping)?;
         let billing = checkout.billing.map(normalize_billing).transpose()?;
@@ -549,11 +546,11 @@ impl<E: Executor> super::Command<E> {
             .as_deref()
             .and_then(timada_core::primary_language);
         if vat_number.is_some() && !self.accepts_business_buyers().await? {
-            return Err(OrdersError::BusinessBuyersRefused);
+            return Err(OrderError::BusinessBuyersRefused);
         }
         let cart = self.require_open_cart(cart_id).await?;
         if cart.lines.is_empty() {
-            return Err(OrdersError::EmptyCart);
+            return Err(OrderError::EmptyCart);
         }
         let request_id = Ulid::generate().to_string();
         let mut write = cart.write()?;
@@ -625,7 +622,7 @@ impl<E: Executor> super::Command<E> {
         pending: PendingPayment,
         opened: OpenedPayment,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let request_id = pending.request.request_id.clone();
         for attempt in 1..=CART_WRITE_ATTEMPTS {
             let cart = self.require_cart(cart_id).await?;
@@ -684,7 +681,7 @@ impl<E: Executor> super::Command<E> {
         request_id: &str,
         code: &str,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         for attempt in 1..=CART_WRITE_ATTEMPTS {
             let cart = self.require_cart(cart_id).await?;
             if cart.request(request_id).is_none_or(|r| r.answer.is_some()) {
@@ -710,6 +707,50 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
+    /// Records that the payment of a request went through too late (what
+    /// its checkout held had lapsed and gone) and was given back:
+    /// `returned` names the payment, the refund and what was gone. Told
+    /// twice, the second time is a no-op; a payment the cart never opened,
+    /// or that already made an order, is `PaymentNotFound`.
+    pub async fn return_payment(
+        &self,
+        actor: &str,
+        cart_id: &str,
+        returned: ReturnedPayment,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        for attempt in 1..=CART_WRITE_ATTEMPTS {
+            let cart = self.require_cart(cart_id).await?;
+            if cart.returned_payment(&returned.payment_id).is_some() {
+                return Ok(());
+            }
+            let request = cart
+                .request_paid_by(&returned.payment_id)
+                .filter(|_| !cart.is_checked_out())
+                .ok_or(OrderError::PaymentNotFound)?;
+            let written = cart
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&PaymentReturned {
+                    request_id: request.request_id.clone(),
+                    payment_id: returned.payment_id.clone(),
+                    refund_id: returned.refund_id.clone(),
+                    amount_cents: returned.amount_cents,
+                    code: returned.code.clone(),
+                    returned_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < CART_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(())
+    }
+
     /// The provider says `payment` went through: the cart becomes the order,
     /// with the lines, address and note of the request it paid for. Told
     /// twice, the same order comes back. A second payment of a cart already
@@ -721,7 +762,7 @@ impl<E: Executor> super::Command<E> {
         cart_id: &str,
         payment: Payment,
         routing_key: Option<String>,
-    ) -> Result<PlacedOrder, OrdersError> {
+    ) -> Result<PlacedOrder, OrderError> {
         let cart = self.require_cart(cart_id).await?;
         let order_id = order_id(cart_id);
         if let Some(order) = self.load_order(&order_id).await? {
@@ -731,15 +772,15 @@ impl<E: Executor> super::Command<E> {
         }
         let request = cart
             .request_paid_by(&payment.payment_id)
-            .ok_or(OrdersError::PaymentNotFound)?
+            .ok_or(OrderError::PaymentNotFound)?
             .clone();
         let Some(snapshot) = request.payment() else {
-            return Err(OrdersError::PaymentNotFound);
+            return Err(OrderError::PaymentNotFound);
         };
         if snapshot.total_cents != payment.amount_cents
             || !snapshot.currency.eq_ignore_ascii_case(&payment.currency)
         {
-            return Err(OrdersError::AmountMismatch);
+            return Err(OrderError::AmountMismatch);
         }
 
         let reference = self.claim_reference(&order_id, routing_key.clone()).await?;
@@ -831,9 +872,9 @@ impl<E: Executor> super::Command<E> {
         payment: &Payment,
         actor: &str,
         routing_key: Option<String>,
-    ) -> Result<PlacedOrder, OrdersError> {
+    ) -> Result<PlacedOrder, OrderError> {
         if order.payment.payment_id != payment.payment_id {
-            return Err(OrdersError::DuplicatePayment {
+            return Err(OrderError::DuplicatePayment {
                 order_id: order.id.clone(),
             });
         }
@@ -846,7 +887,7 @@ impl<E: Executor> super::Command<E> {
         &self,
         order_id: &str,
         routing_key: Option<String>,
-    ) -> Result<String, OrdersError> {
+    ) -> Result<String, OrderError> {
         for _ in 0..REFERENCE_ATTEMPTS {
             let reference = new_reference();
             let claimed = evento::append(order_reference_id(&reference))
@@ -876,7 +917,7 @@ impl<E: Executor> super::Command<E> {
         order: &OrderState,
         actor: &str,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         for attempt in 1..=CART_WRITE_ATTEMPTS {
             if cart.is_checked_out() {
                 return Ok(());

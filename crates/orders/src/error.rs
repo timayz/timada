@@ -1,7 +1,7 @@
 use evento::WriteError;
 
 #[derive(Debug, thiserror::Error)]
-pub enum OrdersError {
+pub enum OrderError {
     #[error("cart not found")]
     CartNotFound,
     #[error("this cart has already been ordered")]
@@ -56,6 +56,10 @@ pub enum OrdersError {
     OrderCancelled,
     #[error("a fulfilled or cancelled order cannot be cancelled")]
     NotCancellable,
+    #[error("a refund is on its way: wait for it to be recorded")]
+    RefundPending,
+    #[error("the refund must be more than nothing and at most what is outstanding")]
+    InvalidRefund,
     #[error("the tracking number is at most 200 characters")]
     InvalidTracking,
     #[error("say why the order is cancelled (at most 500 characters)")]
@@ -103,7 +107,7 @@ const KNOWN_CODES: &[&str] = &[
     crate::INVOICING_NOT_CONFIGURED,
 ];
 
-impl OrdersError {
+impl OrderError {
     /// Whether the message can be shown to the person who made the request
     /// (as opposed to an infrastructure failure).
     pub fn is_user_facing(&self) -> bool {
@@ -154,6 +158,8 @@ impl OrdersError {
             Self::OrderNotFound => "order_not_found",
             Self::OrderCancelled => "order_cancelled",
             Self::NotCancellable => "not_cancellable",
+            Self::RefundPending => "refund_pending",
+            Self::InvalidRefund => "invalid_refund",
             Self::InvalidTracking => "invalid_tracking",
             Self::InvalidReason => "invalid_reason",
             Self::InvalidStorefrontUrl => "invalid_storefront_url",
@@ -171,7 +177,7 @@ impl OrdersError {
     }
 }
 
-impl OrdersError {
+impl OrderError {
     /// A discount the cart cannot use, as the refusal a shopper reads.
     pub(crate) fn from_discount(err: timada_discounts::DiscountError) -> Self {
         use timada_discounts::DiscountError;

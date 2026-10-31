@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use timada_orders::{Checkout, NewShippingMethod, OrdersError, split_countries};
+use timada_orders::{Checkout, NewShippingMethod, OrderError, split_countries};
 
 fn tracked() -> NewShippingMethod {
     NewShippingMethod {
@@ -78,7 +78,7 @@ async fn a_shop_ships_however_its_merchant_says() {
         .remove_shipping_method(ALICE, &tracked_id)
         .await
         .unwrap_err();
-    assert!(matches!(err, OrdersError::ShippingMethodNotFound));
+    assert!(matches!(err, OrderError::ShippingMethodNotFound));
 }
 
 #[tokio::test]

@@ -1,29 +1,9 @@
-import { expect, test, type CDPSession, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
+import { virtualAuthenticator } from "./webauthn";
 
 // Passkeys are added to an existing account (here one registered with an
 // address) and then sign in on their own, without a mailed code.
-
-// A CTAP2 platform authenticator with resident keys and user verification,
-// as a phone or laptop with biometrics would behave. Chrome's WebAuthn
-// virtual authenticator answers every ceremony without a prompt.
-type Authenticator = { cdp: CDPSession; id: string };
-
-async function virtualAuthenticator(page: Page, cdp?: CDPSession): Promise<Authenticator> {
-  cdp ??= await page.context().newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2",
-      transport: "internal",
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-      automaticPresenceSimulation: true,
-    },
-  });
-  return { cdp, id: authenticatorId };
-}
 
 test("add passkeys to an account, sign out, sign in without a username", async ({ page }) => {
   const email = uniqueEmail("alice");

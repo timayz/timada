@@ -17,7 +17,23 @@ Stripe has confirmed the payment to the dashboard. How it works is in
    reads the payment back from Stripe and creates the order.
 5. The browser, back on `/checkout/complete`, waits for the order and shows it.
 
-Cancelling an order in the dashboard refunds it through Stripe first.
+The goods and the discount's use are held from step 2 for thirty minutes. A payment
+confirmed after that (a card form left open, a slow bank, a webhook delivered late) has
+the dashboard take the holds again before it creates the order: nothing changes while
+they stand, and what is left is taken otherwise. When the last of it went to someone
+else in between, the payment is refunded in full, the cart records it
+(`Cart::PaymentReturned`) and the storefront tells the shopper (`payment_returned_*`
+codes) instead of waiting for an order that will not come. Stripe keeps its fee on such
+a refund; it is the price of never selling the same unit twice.
+
+Cancelling an order in the dashboard refunds it through Stripe first: the order
+records the request (`Order::RefundRequested`, which fixes the idempotency key),
+Stripe is asked, the refund is recorded (`Order::Refunded`), and only then is the order
+cancelled. If Stripe refuses, the order stays paid with the request pending and the
+page offers to retry under the same key, so Stripe never refunds twice. If Stripe took
+the refund but the recording failed here, or a refund was made by hand in Stripe's
+dashboard, the `charge.refunded` webhook records what Stripe holds and the order does
+not know yet, and the credit note follows.
 
 ## Setting it up
 
@@ -35,7 +51,9 @@ Cancelling an order in the dashboard refunds it through Stripe first.
 - **Merchant, first.** The tenant sells as a company: on `/t/<slug>/invoicing`
   (permission `tenant:manage`), link it to a company the member owns, or register
   one. See `docs/invoicing.md`. Until then, every request to pay is refused with
-  `invoicing_not_configured`.
+  `invoicing_not_configured`; a sale to a consumer in another EU country in a
+  currency other than the euro is refused with `oss_required_for_currency` unless
+  the company ticked the One-Stop Shop.
 
 - **Merchant.** On `/t/<slug>/payments` (permission `payments:manage`):
   1. Paste the publishable key and the secret key from Stripe (Developers › API keys).
@@ -73,11 +91,11 @@ CLI and an internet connection.
    - the `whsec_…` printed by `stripe listen`, not one from an endpoint registered in
      the Stripe dashboard.
 
-4. **Give the storefront a key that can sell.** Tick `store:checkout` on its key on the
+4. **Give the shop a key that can sell.** Tick `store:checkout` on its key on the
    API keys page, or mint a new one. If the key changes, remove the replica first:
-   `rm storefront.db*`, then `make storefront.migrate`.
+   `rm chatounette.db*`, then `make chatounette.migrate`.
 
-5. **Buy something.** Run the storefront (`make storefront` with `STORE_TOKEN` and
+5. **Buy something.** Run the shop (`make chatounette` with `STORE_TOKEN` and
    `STORE_MEDIA_URL`), add a product, check out and pay with a test card. Use any
    future expiry date and any CVC.
 

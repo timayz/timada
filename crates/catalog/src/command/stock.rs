@@ -8,7 +8,6 @@
 //! never scheduled) and a cancelled order puts its quantity back.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
@@ -25,12 +24,7 @@ fn is_conflict(err: &CatalogError) -> bool {
     matches!(err, CatalogError::Write(WriteError::InvalidOriginalVersion))
 }
 
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default()
-}
+use timada_core::unix_now;
 
 /// Some of a thing a checkout or an order names: a product without variants
 /// (`variant_id` `None`) or one variant.

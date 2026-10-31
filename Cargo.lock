@@ -5947,20 +5947,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
-name = "storefront-example"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "timada-storefront",
- "tokio",
- "topcoat",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6232,6 +6218,7 @@ dependencies = [
  "thiserror 2.0.21",
  "timada-catalog",
  "timada-catalog-import",
+ "timada-core",
  "timada-orders",
  "timada-tenancy",
  "tokio",
@@ -6264,7 +6251,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitcode",
- "deunicode",
  "evento",
  "sqlx",
  "sqlx_migrator",
@@ -6305,11 +6291,13 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "deunicode",
  "evento",
  "hmac 0.12.1",
  "jiff",
  "rand 0.9.5",
  "sha2 0.10.9",
+ "ulid",
 ]
 
 [[package]]
@@ -6417,6 +6405,7 @@ dependencies = [
  "sqlx",
  "sqlx_migrator",
  "thiserror 2.0.21",
+ "timada-core",
  "tokio",
  "tracing",
  "typst",
@@ -6495,7 +6484,6 @@ dependencies = [
  "ammonia",
  "anyhow",
  "bitcode",
- "deunicode",
  "evento",
  "pulldown-cmark",
  "sqlx",
@@ -6596,7 +6584,6 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "bitcode",
- "deunicode",
  "evento",
  "lol_html",
  "minijinja",
