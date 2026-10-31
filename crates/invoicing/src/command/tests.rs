@@ -556,6 +556,68 @@ async fn a_valid_business_number_reverse_charges_and_its_credit_note_too() {
     assert!(export.vat.is_empty());
 }
 
+/// A seller registered for the One-Stop Shop invoices a Latvian shopper for
+/// a book and a mug: the book at Latvia's 5 %, a rate the `world-tax` table
+/// lacks and `tax_categories.json` overrides, the mug at its 21 %.
+#[tokio::test]
+async fn a_latvian_book_is_taxed_at_five_percent() {
+    let cmd = command().await;
+    let base = invoice("o1");
+    let latvia = NewInvoice {
+        delivery: Address {
+            country: "LV".into(),
+            postal_code: "LV-1050".into(),
+            city: "Riga".into(),
+            ..base.delivery.clone()
+        },
+        tax: TaxProfile {
+            vat_registered: true,
+            oss_registered: true,
+        },
+        lines: vec![
+            NewInvoiceLine {
+                name: "Book".into(),
+                quantity: 1,
+                unit_amount_cents: 2100,
+                tax_category: "books".into(),
+                ..Default::default()
+            },
+            NewInvoiceLine {
+                name: "Mug".into(),
+                quantity: 1,
+                unit_amount_cents: 1210,
+                tax_category: "standard".into(),
+                ..Default::default()
+            },
+        ],
+        total_cents: 3310,
+        ..base
+    };
+    let issued = cmd.issue_invoice_here(latvia, NOW).await.unwrap();
+    assert_eq!(issued.regime, Regime::Oss);
+    assert_eq!(issued.tax_country, "LV");
+    assert_eq!(issued.lines[0].vat_rate_bps, Some(500));
+    assert_eq!(issued.lines[1].vat_rate_bps, Some(2100));
+    // Highest rate first: 12.10 at 21 %: 10.00 + 2.10; 21.00 at 5 %: 20.00 + 1.00.
+    assert_eq!(
+        issued.vat,
+        vec![
+            VatSubtotal {
+                rate_bps: 2100,
+                base_cents: 1000,
+                vat_cents: 210
+            },
+            VatSubtotal {
+                rate_bps: 500,
+                base_cents: 2000,
+                vat_cents: 100
+            },
+        ]
+    );
+    assert_eq!(issued.total_excl_vat_cents, 3000);
+    assert_eq!(issued.total_vat_cents, 310);
+}
+
 fn invoice_for_export() -> NewInvoice {
     invoice("o2")
 }

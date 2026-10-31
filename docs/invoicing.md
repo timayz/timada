@@ -119,7 +119,10 @@ invoice decides it when it is issued, seconds after the payment.
   - The `[invoicing] vies_url` setting points elsewhere (tests use a stand-in).
 - **Rates.** A product's kind (standard, books, food, medicines, press) maps to a
   rate level in each EU country through `crates/invoicing/data/tax_categories.json`.
-  The rate of each level comes from the `world-tax` crate, pinned exactly.
+  The rate of each level comes from the `world-tax` crate, pinned exactly. A rate
+  that crate lacks (Latvia's 5 % on books and press) is an entry of the file's
+  `_overrides`, in basis points and for one country; a category points a country
+  at it instead of a level.
   - The table was reviewed on 2026-10-17 against the Commission's "VAT rates
     applied in the Member States" (January 2025) and the national changes of 2025
     and 2026. That review is not a professional opinion: what counts as a
@@ -159,7 +162,7 @@ fails when it differs from the data; its message holds the replacement.
 | IT | 22 % | 4 % | 10 % | 10 % | 4 % |
 | LT | 21 % | 5 % | 21 % | 5 % | 5 % |
 | LU | 17 % | 3 % | 3 % | 3 % | 3 % |
-| LV | 21 % | 12 % | 21 % | 12 % | 12 % |
+| LV | 21 % | 5 % | 21 % | 12 % | 5 % |
 | MT | 18 % | 5 % | 0 % | 0 % | 5 % |
 | NL | 21 % | 9 % | 9 % | 9 % | 9 % |
 | PL | 23 % | 5 % | 5 % | 8 % | 8 % |
@@ -172,8 +175,10 @@ fails when it differs from the data; its message holds the replacement.
 
 Known gaps, waiting on an accountant or on `world-tax`:
 
-- Latvia taxes books and press at 5 % (law of 18 December 2025). The `world-tax`
-  table has no 5 % level for Latvia, so they carry 12 % here.
+- Latvia's 5 % on books and press (law of 18 December 2025) is applied to every
+  book or periodical; the law's language condition (5 % only for publications in
+  Latvian and the other listed languages) is not, so a merchant selling
+  other-language publications to Latvia should check.
 - Lithuania abolished its 9 % band on 1 January 2026; books moved to 5 %, but
   periodicals are not named in that band, so their rate is unconfirmed.
 - Belgium zero-rates daily and weekly newspapers; other periodicals are 6 %.
@@ -233,5 +238,5 @@ ten years the law asks.
 - Northern Ireland (goods follow EU VAT rules there) and other special territories
   beyond the ones listed above.
 - Shipping costs, which orders do not have yet.
-- A rate the `world-tax` table lacks (Latvia's 5 % on books and press) cannot be
-  expressed; it needs a local override or an upstream fix.
+- The `_overrides` of `tax_categories.json` stand in for rates the `world-tax`
+  table lacks; once the crate carries them, the entries can go.
