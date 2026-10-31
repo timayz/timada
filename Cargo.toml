@@ -78,6 +78,10 @@ ammonia = "4.1"
 # The storefront library's one HTTP call (handing in a review with its
 # photos). The crypto provider is the process-wide one rustls already uses.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider", "multipart", "json"] }
+# The shops' own mail servers are dialled at the address their host was
+# checked at, which the mail facade's transport cannot do: the same client
+# and TLS backend it uses, driven directly.
+lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls-tls", "pool"] }
 # Reads and writes the gzipped catalogue snapshots a shop is seeded from.
 flate2 = "1"
 # Calendar and time zones: the shops' and subscribers' local hours. The zone

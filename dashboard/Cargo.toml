@@ -60,6 +60,7 @@ aes-gcm.workspace = true
 rand.workspace = true
 rust_iso3166.workspace = true
 reqwest.workspace = true
+lettre.workspace = true
 
 [build-dependencies]
 topcoat = { version = "=0.11.0", default-features = false, features = ["tailwind", "icon-iconify"] }
