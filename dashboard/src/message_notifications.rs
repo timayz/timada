@@ -17,8 +17,8 @@ use timada_support::aggregator::Received;
 use timada_tenancy::{PERMISSION_SUPPORT_READ, TenantState};
 use topcoat::context::{AppContext, Cx};
 
-use crate::auth::mail::send_message_notification;
 use crate::cluster::Executor as Store;
+use crate::mail::send_message_notification;
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/message-notifications";

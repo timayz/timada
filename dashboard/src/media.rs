@@ -27,6 +27,11 @@
 //!
 //! So are the pictures of the shop's pages (`timada_pages`): a picture taken
 //! off a page, or a page deleted, takes its files with it.
+//!
+//! Every file name is checked before it touches the disk ([`Media::path_of`]):
+//! the ids and extensions come from events, and a key with `store:write` can
+//! put anything in a tenant's stream, so a name is never trusted to stay
+//! inside the tenant's directory.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -105,6 +110,29 @@ impl Media {
         format!("{}/{tenant_id}/{file}", self.public_url)
     }
 
+    /// Where a picture's file is, once its names are checked: the tenant and
+    /// the picture are ids ([`is_id`]: one directory entry each, nothing
+    /// above) and the extension one of the kinds the shop takes. Everything
+    /// that touches the disk goes through here, because the names come from
+    /// events and a key with `store:write` writes what it likes there.
+    pub fn path_of(&self, tenant_id: &str, image_id: &str, ext: &str) -> anyhow::Result<PathBuf> {
+        anyhow::ensure!(is_id(tenant_id), "{tenant_id:?} is not a tenant id");
+        anyhow::ensure!(is_id(image_id), "{image_id:?} is not a picture id");
+        anyhow::ensure!(
+            EXTENSIONS.contains(&ext),
+            "{ext:?} is not a kind of picture the shop takes"
+        );
+        Ok(self.dir.join(tenant_id).join(format!("{image_id}.{ext}")))
+    }
+
+    /// Where the file named `file` (`<id>.<ext>`) is, checked the same way.
+    fn path_of_file(&self, tenant_id: &str, file: &str) -> anyhow::Result<PathBuf> {
+        let Some((image_id, ext)) = file.split_once('.') else {
+            anyhow::bail!("{file:?} is not a picture file name");
+        };
+        self.path_of(tenant_id, image_id, ext)
+    }
+
     /// What the bytes are, or `None` when they are not a picture of a kind
     /// the shop accepts. Only the header is read, so an enormous file costs
     /// nothing to reject.
@@ -134,11 +162,12 @@ impl Media {
         ext: &str,
         bytes: &[u8],
     ) -> anyhow::Result<()> {
-        let dir = self.dir.join(tenant_id);
-        tokio::fs::create_dir_all(&dir).await?;
-        let partial = dir.join(format!("{image_id}.{ext}.part"));
+        let path = self.path_of(tenant_id, image_id, ext)?;
+        let dir = path.parent().expect("a tenant directory");
+        tokio::fs::create_dir_all(dir).await?;
+        let partial = path.with_extension(format!("{ext}.part"));
         tokio::fs::write(&partial, bytes).await?;
-        tokio::fs::rename(&partial, dir.join(format!("{image_id}.{ext}"))).await?;
+        tokio::fs::rename(&partial, &path).await?;
         Ok(())
     }
 
@@ -175,8 +204,8 @@ impl Media {
         ext: &str,
         size: u64,
     ) -> anyhow::Result<()> {
+        let path = self.path_of(tenant_id, image_id, ext)?;
         let file = format!("{image_id}.{ext}");
-        let path = self.dir.join(tenant_id).join(&file);
         if tokio::fs::metadata(&path)
             .await
             .is_ok_and(|meta| meta.len() == size)
@@ -229,15 +258,13 @@ impl Media {
     }
 
     /// Takes a copy a peer sends: checks the names cannot leave the media
-    /// directory and that the bytes are the picture the name says, then
-    /// stores it. `false` when it is refused.
+    /// directory ([`Self::path_of`]) and that the bytes are the picture the
+    /// name says, then stores it. `false` when it is refused.
     pub async fn accept(&self, tenant_id: &str, file: &str, bytes: &[u8]) -> anyhow::Result<bool> {
         let Some((image_id, ext)) = file.split_once('.') else {
             return Ok(false);
         };
-        let valid = is_id(tenant_id)
-            && is_id(image_id)
-            && EXTENSIONS.contains(&ext)
+        let valid = self.path_of(tenant_id, image_id, ext).is_ok()
             && bytes.len() as u64 <= MAX_IMAGE_BYTES
             && Self::sniff(bytes).is_some_and(|sniffed| sniffed.ext == ext);
         if !valid {
@@ -247,18 +274,30 @@ impl Media {
         Ok(true)
     }
 
-    /// Deletes a picture known only by its id, whatever its kind.
+    /// Deletes a picture known only by its id, whatever its kind. A name
+    /// that is not an id names nothing of ours: logged, nothing touched.
     pub async fn remove_image(&self, tenant_id: &str, image_id: &str) {
+        if !is_id(tenant_id) || !is_id(image_id) {
+            tracing::warn!(tenant = %tenant_id, image = %image_id, "not a picture of ours: not deleted");
+            return;
+        }
         for ext in EXTENSIONS {
             self.remove(tenant_id, &format!("{image_id}.{ext}")).await;
         }
     }
 
-    /// Deletes a picture. A failure is logged and otherwise ignored: the
-    /// product has already stopped pointing at it, and a file nobody
-    /// references is a waste of disk, not a fault.
+    /// Deletes a picture (`file` is `<id>.<ext>`). A failure is logged and
+    /// otherwise ignored: the product has already stopped pointing at it,
+    /// and a file nobody references is a waste of disk, not a fault. A name
+    /// that is not a picture of ours is logged and touches nothing.
     pub async fn remove(&self, tenant_id: &str, file: &str) {
-        let path = self.dir.join(tenant_id).join(file);
+        let path = match self.path_of_file(tenant_id, file) {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::warn!(tenant = %tenant_id, %file, %err, "not a picture of ours: not deleted");
+                return;
+            }
+        };
         if let Err(err) = tokio::fs::remove_file(&path).await
             && err.kind() != std::io::ErrorKind::NotFound
         {
@@ -684,6 +723,62 @@ mod tests {
         assert!(media.accept("t1", "i1.png", PNG).await.unwrap());
         assert!(media.dir.join("t1/i1.png").is_file());
         media.remove_image("t1", "i1").await;
+        assert!(!media.dir.join("t1/i1.png").exists());
+    }
+
+    /// The names come from events, which a key with `store:write` fills as
+    /// it likes: none of them gets a file written, read or deleted outside
+    /// the tenant's directory.
+    #[tokio::test]
+    async fn a_name_from_the_store_cannot_leave_the_tenant_directory() {
+        let media = media(vec![peer(200, PNG).await], 3);
+        let bad_names = [
+            ("..", "i1", "png"),
+            ("t1", "../../etc/passwd", "png"),
+            ("t1", "i1", "png/../../x"),
+            ("t1", "i1", "exe"),
+            ("t/1", "i1", "png"),
+            ("", "i1", "png"),
+            ("t1", "", "png"),
+            ("t1", "i1", ""),
+        ];
+        for (tenant, image, ext) in bad_names {
+            assert!(
+                media.path_of(tenant, image, ext).is_err(),
+                "{tenant}/{image}.{ext}"
+            );
+            assert!(
+                media.store(tenant, image, ext, PNG).await.is_err(),
+                "stored {tenant}/{image}.{ext}"
+            );
+            assert!(
+                media
+                    .fetch(tenant, image, ext, PNG.len() as u64)
+                    .await
+                    .is_err(),
+                "fetched {tenant}/{image}.{ext}"
+            );
+        }
+        assert_eq!(
+            media.path_of("t1", "i1", "png").unwrap(),
+            media.dir.join("t1/i1.png")
+        );
+
+        // A file above the tenant's directory survives every way of asking
+        // for its deletion.
+        tokio::fs::create_dir_all(media.dir.join("t1"))
+            .await
+            .unwrap();
+        let above = media.dir.join("i1.png");
+        tokio::fs::write(&above, PNG).await.unwrap();
+        media.remove("t1", "../i1.png").await;
+        media.remove("..", "i1.png").await;
+        media.remove_image("t1", "..").await;
+        media.remove_image("t1", "../i1").await;
+        assert!(above.is_file());
+        // While a picture of ours goes.
+        media.store("t1", "i1", "png", PNG).await.unwrap();
+        media.remove("t1", "i1.png").await;
         assert!(!media.dir.join("t1/i1.png").exists());
     }
 }

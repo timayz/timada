@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use timada_orders::{MAX_CART_LINES, MAX_LINE_QUANTITY, OrdersError};
+use timada_orders::{MAX_CART_LINES, MAX_LINE_QUANTITY, OrderError};
 
 #[tokio::test]
 async fn adding_twice_adds_to_the_same_line() {
@@ -34,21 +34,21 @@ async fn variants_are_required_exactly_when_the_product_sells_them() {
         .add_to_cart(SHOPPER, &cart_id, item(&mat, None, 1))
         .await;
     assert!(
-        matches!(missing, Err(OrdersError::VariantRequired)),
+        matches!(missing, Err(OrderError::VariantRequired)),
         "{missing:?}"
     );
     let unknown = orders
         .add_to_cart(SHOPPER, &cart_id, item(&mat, Some("nope"), 1))
         .await;
     assert!(
-        matches!(unknown, Err(OrdersError::VariantNotFound)),
+        matches!(unknown, Err(OrderError::VariantNotFound)),
         "{unknown:?}"
     );
     let extra = orders
         .add_to_cart(SHOPPER, &cart_id, item(&mug, Some(&beige), 1))
         .await;
     assert!(
-        matches!(extra, Err(OrdersError::VariantNotFound)),
+        matches!(extra, Err(OrderError::VariantNotFound)),
         "{extra:?}"
     );
 
@@ -74,14 +74,14 @@ async fn only_products_on_sale_go_in() {
         .add_to_cart(SHOPPER, &cart_id, item(&mug, None, 1))
         .await;
     assert!(
-        matches!(draft, Err(OrdersError::Unavailable { .. })),
+        matches!(draft, Err(OrderError::Unavailable { .. })),
         "{draft:?}"
     );
     let missing = orders
         .add_to_cart(SHOPPER, &cart_id, item("no-such-product", None, 1))
         .await;
     assert!(
-        matches!(missing, Err(OrdersError::Unavailable { .. })),
+        matches!(missing, Err(OrderError::Unavailable { .. })),
         "{missing:?}"
     );
 }
@@ -97,7 +97,7 @@ async fn quantities_and_lines_are_bounded() {
             .add_to_cart(SHOPPER, &cart_id, item(&mug, None, quantity))
             .await;
         assert!(
-            matches!(refused, Err(OrdersError::InvalidQuantity)),
+            matches!(refused, Err(OrderError::InvalidQuantity)),
             "{refused:?}"
         );
     }
@@ -108,10 +108,7 @@ async fn quantities_and_lines_are_bounded() {
     let past = orders
         .add_to_cart(SHOPPER, &cart_id, item(&mug, None, 1))
         .await;
-    assert!(
-        matches!(past, Err(OrdersError::InvalidQuantity)),
-        "{past:?}"
-    );
+    assert!(matches!(past, Err(OrderError::InvalidQuantity)), "{past:?}");
 
     let full = orders.create_cart(SHOPPER).await.unwrap();
     for n in 0..MAX_CART_LINES {
@@ -125,7 +122,7 @@ async fn quantities_and_lines_are_bounded() {
         .add_to_cart(SHOPPER, &full, item(&mug, None, 1))
         .await;
     assert!(
-        matches!(one_more, Err(OrdersError::TooManyLines)),
+        matches!(one_more, Err(OrderError::TooManyLines)),
         "{one_more:?}"
     );
 }
@@ -141,7 +138,7 @@ async fn one_cart_one_currency() {
         .add_to_cart(SHOPPER, &cart_id, item(&cup, None, 1))
         .await;
     assert!(
-        matches!(mixed, Err(OrdersError::MixedCurrencies)),
+        matches!(mixed, Err(OrderError::MixedCurrencies)),
         "{mixed:?}"
     );
 }
@@ -189,17 +186,17 @@ async fn a_checked_out_cart_takes_no_more_changes() {
     let added = orders
         .add_to_cart(SHOPPER, &cart_id, item(&mug, None, 1))
         .await;
-    assert!(matches!(added, Err(OrdersError::CheckedOut)), "{added:?}");
+    assert!(matches!(added, Err(OrderError::CheckedOut)), "{added:?}");
     let removed = orders.remove_from_cart(SHOPPER, &cart_id, &mug, None).await;
     assert!(
-        matches!(removed, Err(OrdersError::CheckedOut)),
+        matches!(removed, Err(OrderError::CheckedOut)),
         "{removed:?}"
     );
     let unknown = orders
         .add_to_cart(SHOPPER, "no-such-cart", item(&mug, None, 1))
         .await;
     assert!(
-        matches!(unknown, Err(OrdersError::CartNotFound)),
+        matches!(unknown, Err(OrderError::CartNotFound)),
         "{unknown:?}"
     );
 }

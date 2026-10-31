@@ -11,7 +11,6 @@ bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 ulid.workspace = true
-deunicode.workspace = true
 pulldown-cmark.workspace = true
 ammonia.workspace = true
 sqlx = { workspace = true, features = ["derive"] }

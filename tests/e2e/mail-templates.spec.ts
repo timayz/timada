@@ -1,26 +1,11 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { MAILDEV, registerWithEmail, uniqueEmail } from "./email";
+import { expect, test, type Page } from "@playwright/test";
+import { mailTo, registerWithEmail, uniqueEmail } from "./email";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // A shop words its own mails: the sign-in code here, sent through the
 // platform's server and read back from the development mailbox.
 
-type Sent = { to: { address: string }[]; subject: string; html: string; text: string };
-
-async function mailTo(request: APIRequestContext, email: string, subject: string): Promise<Sent> {
-  let found: Sent | undefined;
-  await expect(async () => {
-    const all = (await (await request.get(`${MAILDEV}/email`)).json()) as Sent[];
-    found = all.filter((m) => m.to.some((to) => to.address === email) && m.subject.startsWith(subject)).at(-1);
-    expect(found, `no "${subject}" mail to ${email}`).toBeDefined();
-  }).toPass({ timeout: 15_000 });
-  return found!;
-}
-
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-  "base64",
-);
+import { PNG } from "./storefront";
 
 // A storefront key for the shop, and a way to ask it for a shopper's
 // sign-in code, in the shopper's language when one is given.

@@ -405,14 +405,7 @@ impl ProductPage {
     }
 }
 
-/// A `LIKE` pattern matching `q` anywhere, with its wildcards escaped.
-fn contains(q: &str) -> String {
-    let escaped = q
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    format!("%{escaped}%")
-}
+use timada_core::like_contains as contains;
 
 /// The full-text phrase matching `q` anywhere in a word, when `q` is long
 /// enough for the index (it is cut in runs of three characters); `None`

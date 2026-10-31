@@ -1,24 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { enterCode, latestCode, mailCount, registerWithEmail, uniqueEmail, PASSWORD } from "./email";
 import { invite, inviteLink } from "./invitations";
+import { createTenant, uniqueTenant } from "./tenants";
 
 // Invitations: a manager mails a link, the recipient joins with the carried
 // role, signed out (through registration) or signed in; used and withdrawn
 // links are refused; members change roles, are removed, or leave.
-
-function uniqueTenant(prefix: string): { name: string; slug: string } {
-  const id = `${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`;
-  return { name: `${prefix} ${id}`, slug: `${prefix.toLowerCase().replace(/\s+/g, "-")}-${id}` };
-}
-
-type Page = import("@playwright/test").Page;
-
-async function createTenant(page: Page, name: string) {
-  await page.goto("/tenants/new");
-  await page.getByLabel("Name").fill(name);
-  await page.getByRole("button", { name: "Create tenant" }).click();
-  await expect(page).toHaveURL(/\/t\/[a-z0-9-]+\?/);
-}
 
 async function defineRole(page: Page, slug: string, role: string, label: string, permissions: RegExp[]) {
   await page.goto(`/t/${slug}/roles`);

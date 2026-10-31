@@ -14,7 +14,7 @@ fi
 
 export TIMADA_CONFIG=config/e2e.toml
 topcoat asset bundle -p timada-dashboard
-cargo build -q -p timada-dashboard -p storefront-example -p chatounette-example   # the storefront specs spawn the examples
+cargo build -q -p timada-dashboard -p chatounette-example   # the shop specs spawn the example
 ./target/debug/timada-dashboard reset   # both databases, the pictures and the keys
 ./target/debug/timada-dashboard serve &
 server=$!

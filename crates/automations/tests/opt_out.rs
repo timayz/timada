@@ -29,7 +29,11 @@ fn addresses_are_kept_trimmed_and_lowercased() {
         Some("ada@example.com".into())
     );
     assert_eq!(normalize_email("ada"), None);
-    assert_eq!(normalize_email("ada@example"), None);
+    // The one rule every context shares: a domain needs no dot.
+    assert_eq!(
+        normalize_email("ada@example").as_deref(),
+        Some("ada@example")
+    );
     assert_eq!(normalize_email("a da@example.com"), None);
 }
 

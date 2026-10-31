@@ -11,7 +11,7 @@ use std::sync::Arc;
 use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
 use timada_invoicing::{DocumentKind, format_amount_fr};
-use timada_orders::{MAX_REASON_LEN, MAX_TRACKING_LEN, OrderState, OrderStatus, OrdersError};
+use timada_orders::{MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus};
 use timada_tenancy::{
     PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ,
 };
@@ -79,7 +79,7 @@ where
         &timada_orders::Command<crate::cluster::Executor>,
         &str,
         &str,
-    ) -> std::result::Result<(), OrdersError>,
+    ) -> std::result::Result<(), OrderError>,
 {
     let access = require_tenant(cx).await?;
     access
@@ -220,6 +220,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     );
     let refunded =
         (order.refunded_cents > 0).then(|| format_money(order.refunded_cents, &order.currency));
+    let pending_refund = order
+        .pending_refund
+        .as_ref()
+        .map(|pending| format_money(pending.amount_cents, &order.currency));
+    let cancel_label = if pending_refund.is_some() {
+        "Retry the refund and cancel"
+    } else {
+        "Cancel and refund"
+    };
     let can_cancel = can_manage && status == OrderStatus::Paid;
     let title = format!("Order {} · {}", order.reference, tenant.name);
     let heading = format!("Order {}", order.reference);
@@ -248,6 +257,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     fact(term: "Payment", attrs: attributes! { data-order-payment="" }, (&payment))
                     if let Some(refunded) = &refunded {
                         fact(term: "Refunded", attrs: attributes! { data-order-refunded="" }, (refunded))
+                    }
+                    if let Some(pending) = &pending_refund {
+                        fact(term: "Refund pending", attrs: attributes! { data-order-refund-pending="" }, (pending) " · asked for, not confirmed by Stripe yet")
                     }
                     if let Some(at) = order.fulfilled_at {
                         fact(term: "Fulfilled", <time datetime=(at)>(format_time(at))</time>)
@@ -459,7 +471,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     input(attrs: attributes! { id="order-cancel-reason" name="reason" type="text" required="" maxlength=(MAX_REASON_LEN) })
                                 )
                                 <div>
-                                    button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" }, "Cancel and refund")
+                                    button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" }, (cancel_label))
                                 </div>
                             </form>
                         }

@@ -328,29 +328,29 @@ test("a connected shop with nothing imported still has its access renewed", asyn
 
 // Order forwarding: the shop's paid orders are bought on AliExpress for the
 // shopper, delivered free by AliExpress itself, and fulfilled with the parcel
-// number once it ships. The example storefront runs on a port of its own.
-const app = new ExampleApp("storefront", Number(process.env.E2E_ALIEXPRESS_STOREFRONT_PORT ?? 3458));
+// number once it ships. The Chatounette example runs on a port of its own.
+const app = new ExampleApp("chatounette", Number(process.env.E2E_ALIEXPRESS_SHOP_PORT ?? 3458));
 
 test.afterEach(() => app.stop());
 
-/// A shopper buys `quantity` roses on the example storefront and pays: the
+/// A shopper buys `quantity` roses on the Chatounette example and pays: the
 /// order's id.
 async function buyRoses(page: Page, request: APIRequestContext, stripe: FakeStripe, webhookUrl: string, quantity: number) {
   await page.goto(`${app.url}/p/cat-tunnel-deluxe`);
   await page.getByLabel("Colour").selectOption("Rose");
-  await page.getByLabel("Quantity").fill(String(quantity));
-  await page.getByRole("button", { name: "Add to cart" }).click();
+  await page.getByLabel("Quantité").fill(String(quantity));
+  await page.getByRole("button", { name: "Ajouter au panier" }).click();
   await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toBeVisible();
   await page.goto(`${app.url}/cart`);
-  await page.getByRole("link", { name: "Check out" }).click();
-  await page.getByLabel("E-mail").fill("ada@example.org");
-  await page.getByLabel("Full name").fill("Ada Lovelace");
-  await page.getByLabel("Street address", { exact: true }).fill("1 rue de la Paix");
-  await page.getByLabel("Postal code", { exact: true }).fill("75002");
-  await page.getByLabel("City", { exact: true }).fill("Paris");
-  await page.getByLabel("Country", { exact: true }).selectOption("FR");
-  await page.getByLabel("Phone (optional)").fill("06 12 34 56 78");
-  await page.getByRole("button", { name: "Place order" }).click();
+  await page.getByRole("link", { name: "Commander" }).click();
+  await page.getByLabel("E-mail", { exact: true }).fill("ada@example.org");
+  await page.getByLabel("Nom complet").fill("Ada Lovelace");
+  await page.getByLabel("Adresse", { exact: true }).fill("1 rue de la Paix");
+  await page.getByLabel("Code postal", { exact: true }).fill("75002");
+  await page.getByLabel("Ville", { exact: true }).fill("Paris");
+  await page.getByLabel("Pays", { exact: true }).selectOption("FR");
+  await page.getByLabel("Téléphone (facultatif)").fill("06 12 34 56 78");
+  await page.getByRole("button", { name: /^Payer ma commande/ }).click();
   await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
   const intent = stripe.lastIntent()!;
   stripe.pay(intent.id);
@@ -364,7 +364,11 @@ async function buyRoses(page: Page, request: APIRequestContext, stripe: FakeStri
     headers: { "content-type": "application/json", "stripe-signature": stripeSignature(body, "whsec_e2e") },
   });
   expect(paid.status()).toBe(204);
-  await page.goto(`${app.url}/checkout/complete?redirect_status=succeeded`);
+  // The return page looks again on its own; only sent there when the
+  // browser left it (see shop.ts).
+  if (!page.url().includes("/checkout/complete")) {
+    await page.goto(`${app.url}/checkout/complete?redirect_status=succeeded`);
+  }
   await expect(page).toHaveURL(new RegExp(`${app.url}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
   return page.url().split("/").at(-1)!;
 }

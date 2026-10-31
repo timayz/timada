@@ -3,7 +3,6 @@
 //! cookies that carry a sign-in attempt between its steps.
 
 pub mod cookies;
-pub mod mail;
 pub mod oidc;
 pub mod webauthn;
 

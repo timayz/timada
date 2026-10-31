@@ -228,7 +228,7 @@ impl RuleFields {
                 plus: if rule.plus_cents == 0 {
                     String::new()
                 } else {
-                    format!("{}.{:02}", rule.plus_cents / 100, rule.plus_cents % 100)
+                    timada_core::format_amount(rule.plus_cents)
                 },
                 rounding: rule.rounding.as_str(),
             },
@@ -260,7 +260,7 @@ impl BandFields {
             .enumerate()
             .map(|(i, band)| Self {
                 n: i + 1,
-                up_to: format!("{}.{:02}", band.up_to_cents / 100, band.up_to_cents % 100),
+                up_to: timada_core::format_amount(band.up_to_cents),
                 rule: RuleFields::of(Some(&band.rule)),
             })
             .collect();

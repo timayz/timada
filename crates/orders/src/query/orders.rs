@@ -66,14 +66,7 @@ impl<'a> OrderFilter<'a> {
     }
 }
 
-/// A `LIKE` pattern matching `q` anywhere, with its wildcards escaped.
-fn contains(q: &str) -> String {
-    let escaped = q
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    format!("%{escaped}%")
-}
+use timada_core::like_contains as contains;
 
 /// The orders of a tenant the filter matches, newest first.
 pub async fn orders_of_tenant(

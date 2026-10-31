@@ -479,7 +479,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let current_amount = product
         .price
         .as_ref()
-        .map(|p| format!("{}.{:02}", p.amount_cents / 100, p.amount_cents % 100))
+        .map(|p| timada_core::format_amount(p.amount_cents))
         .unwrap_or_default();
     let title = format!("{} · Products · {}", product.name, tenant.name);
     Ok(view! {

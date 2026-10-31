@@ -14,8 +14,8 @@ use timada_reviews::{MAX_REQUEST_DELAY_DAYS, review_id};
 use tokio::task::JoinHandle;
 use topcoat::context::{AppContext, Cx};
 
-use crate::auth::mail::send_review_request;
 use crate::cluster::Executor;
+use crate::mail::send_review_request;
 
 /// Who the requests say mailed them.
 pub const MAILER: &str = "timada-dashboard";
@@ -199,7 +199,7 @@ mod tests {
     use topcoat::mail::{MailConfig, MemoryTransport};
 
     use super::*;
-    use crate::auth::mail::MailSender;
+    use crate::mail::MailSender;
 
     const SHOP: &str = "https://shop.example";
 

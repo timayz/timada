@@ -81,7 +81,3 @@ services:
 networks:
   timada-network:
     driver: bridge
-
-volumes:
-  timada-data:
-    driver: local

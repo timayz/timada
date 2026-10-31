@@ -516,7 +516,7 @@ pub async fn reassurance() -> Result<impl View> {
     })
 }
 
-/// How a refusal (an [`OrdersError`](timada_storefront::OrdersError) code
+/// How a refusal (an [`OrderError`](timada_storefront::OrderError) code
 /// carried in the URL) reads to a shopper.
 pub fn say(code: &str) -> &'static str {
     match code {
@@ -537,8 +537,20 @@ pub fn say(code: &str) -> &'static str {
         "invoicing_not_configured" => {
             "Cette boutique ne peut pas encore prendre de commandes : sa configuration n'est pas terminée. Réessayez plus tard."
         }
+        "oss_required_for_currency" => {
+            "Cette boutique ne peut pas livrer dans votre pays dans cette devise. Choisissez une livraison en France ou contactez la boutique."
+        }
         "payment_failed" => "Le paiement n'a pas abouti. Réessayez ou utilisez une autre carte.",
         "payment_expired" => "Ce paiement n'est plus ouvert. Veuillez recommencer votre commande.",
+        "payment_returned_out_of_stock" => {
+            "Le dernier exemplaire est parti pendant votre paiement : il vous est remboursé en entier. Votre panier est inchangé."
+        }
+        "payment_returned_discount_exhausted" => {
+            "Ce code promo a été épuisé pendant votre paiement : il vous est remboursé en entier. Retirez le code et réessayez."
+        }
+        "payment_returned_discount_already_used" => {
+            "Ce code promo a déjà servi pour votre adresse : votre paiement vous est remboursé en entier. Retirez le code et réessayez."
+        }
         "invalid_email" => "Saisissez une adresse e-mail valide.",
         "invalid_vat_number" => {
             "Saisissez un numéro de TVA intracommunautaire : le préfixe du pays, puis lettres et chiffres."

@@ -34,7 +34,6 @@ use topcoat::{
 };
 use webauthn_rs::prelude::Webauthn;
 
-use crate::auth::mail::Mailer;
 use crate::auth::oidc::Providers;
 use crate::authz::Authorizer;
 use crate::cluster::Cluster;
@@ -46,6 +45,7 @@ use crate::components::card::CARD;
 use crate::config::Config;
 use crate::db::{ReadPool, WritePool};
 use crate::key_vault::{self, KeyVault};
+use crate::mail::Mailer;
 use crate::media::{MEDIA_ROUTE, Media, MediaCache, PEER_ROUTE};
 use crate::rate_limit::RateLimiter;
 use crate::store_api::StoreConnections;

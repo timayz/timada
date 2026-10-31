@@ -1,5 +1,5 @@
 {
-  description = "A very basic flake";
+  description = "Timada's development shell: the Rust toolchain, Playwright, the Stripe CLI, Tailwind and mkcert";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -14,12 +14,6 @@
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
           inherit system overlays;
-          config = {
-            # androidenv is unfree and needs the SDK license accepted here;
-            # /etc/nixos settings do not apply to a flake's own nixpkgs import.
-            allowUnfree = true;
-            android_sdk.accept_license = true;
-          };
         };
         pkgs-unstable = import nixpkgs-unstable {
           inherit system;
@@ -39,29 +33,6 @@
           withFirefox = false;
           withWebkit = false;
         };
-
-        # Android SDK for the Sparkling (Lynx) native mobile app in ./mobile
-        # (Android shell in ./mobile/android).
-        # Platform 37 is what compileSdk 37 (androidx.core 1.19) needs; the
-        # emulator image stays on API 34 (targetSdk). build-tools 37.0.0 provides
-        # the aapt2 AGP 9 is pointed at (see GRADLE_OPTS below). No NDK/CMake:
-        # Lynx and the Sparkling methods ship prebuilt AARs.
-        androidComposition = pkgs.androidenv.composeAndroidPackages {
-          platformVersions = [ "34" "37.0" ];
-          buildToolsVersions = [ "37.0.0" ];
-          platformToolsVersion = "latest";
-          includeEmulator = true;
-          includeSystemImages = true;
-          systemImageTypes = [ "google_apis" ];
-          abiVersions = [ "x86_64" ];
-          includeNDK = false;
-          includeCmake = false;
-          includeSources = false;
-        };
-        androidSdk = androidComposition.androidsdk;
-        androidHome = "${androidSdk}/libexec/android-sdk";
-        androidAapt2BuildTools = "37.0.0";
-        avdName = "timada-api34";
       in
       {
         devShells.default = with pkgs; mkShell {
@@ -73,11 +44,9 @@
             pkg-config
             cargo-watch
             cargo-machete
-            cargo-tarpaulin
-            cargo-edit
             stripe-cli
             tailwindcss_4
-            imagemagick # mobile/scripts/icons.mjs
+            nodejs_24 # `npx prettier` on the Playwright specs
             pkgs-unstable.playwright-test
             (writeShellScriptBin "mcp-server-playwright" ''
               export PWMCP_PROFILES_DIR_FOR_TEST="$PWD/.pwmcp-profiles"
@@ -88,31 +57,13 @@
             (rust-bin.stable.latest.default.override {
               extensions = [ "rust-src" "rust-analyzer" ];
             })
-
-            # Sparkling / Lynx toolchain. Node ^22 || ^24 is required by
-            # sparkling-app-cli; AGP 9 / Gradle 9 need JDK 17. Gradle itself comes
-            # from the template's wrapper (android/gradlew), not nixpkgs.
-            nodejs_24
-            jdk17
-            androidSdk
-            (writeShellScriptBin "android-avd-create" ''
-              exec avdmanager create avd -n "${avdName}" \
-                -k "system-images;android-34;google_apis;x86_64" -d pixel_6 --force "$@"
-            '')
-            (writeShellScriptBin "android-emulator" ''
-              # `-gpu host` is required here: with the default (auto) and
-              # swiftshader_indirect backends the emulator segfaults a few
-              # seconds after the Lynx app starts rendering. Flags passed on
-              # the command line come after and override these defaults.
-              exec emulator -avd "${avdName}" -gpu host -no-boot-anim "$@"
-            '')
           ];
           shellHook = ''
             # Link with the LLD that already ships inside the Rust toolchain, so no
             # extra package is needed. A `cargo test --workspace` performs ~23 link
             # steps and GNU ld dominates them. Deliberately not in
-            # .cargo/config.toml: CI runs timayz/.github's rust-test.yml, which has
-            # no lld on PATH and would fail to link. An existing RUSTFLAGS wins.
+            # .cargo/config.toml: a build outside this shell has no lld on PATH
+            # and would fail to link. An existing RUSTFLAGS wins.
             if [ "$(uname -s)" = "Linux" ] && [ -z "''${RUSTFLAGS:-}" ]; then
               _lld_dir="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/gcc-ld"
               if [ -x "$_lld_dir/ld.lld" ]; then
@@ -121,7 +72,7 @@
               unset _lld_dir
             fi
 
-            # timada-admin's build.rs runs Tailwind; use the packaged CLI instead of downloading it.
+            # timada-dashboard's build.rs runs Tailwind; use the packaged CLI instead of downloading it.
             export TAILWIND_CLI="$(command -v tailwindcss)"
 
             # Playwright browsers come from the Nix store, not `npx playwright install`.
@@ -135,14 +86,6 @@
             if ! cargo install --list 2>/dev/null | grep -q "^topcoat-cli v$TOPCOAT_CLI_VERSION:"; then
               cargo install topcoat-cli --version "$TOPCOAT_CLI_VERSION" --locked
             fi
-
-            # Android SDK for `sparkling doctor` / `sparkling run:android` / android/gradlew.
-            export ANDROID_HOME="${androidHome}"
-            export ANDROID_SDK_ROOT="$ANDROID_HOME"
-            export JAVA_HOME="${pkgs.jdk17.home}"
-            # The Nix store is read-only and Maven's prebuilt aapt2 is not patched
-            # for NixOS, so point AGP at the SDK's build-tools copy instead.
-            export GRADLE_OPTS="-Dorg.gradle.project.android.aapt2FromMavenOverride=$ANDROID_HOME/build-tools/${androidAapt2BuildTools}/aapt2"
           '';
         };
       }

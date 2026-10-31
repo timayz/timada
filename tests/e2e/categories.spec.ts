@@ -1,15 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
+import { selectByText } from "./forms";
 import { invite, inviteLink } from "./invitations";
 import { createTenant, uniqueTenant } from "./tenants";
-
-/// Picks the option of a `<select>` whose text contains `text`: the category
-/// menus prefix a sub-category with its indent, so the label is not the name.
-async function selectByText(page: Page, label: string, text: string) {
-  const select = page.getByLabel(label);
-  const value = await select.locator("option", { hasText: text }).first().getAttribute("value");
-  await select.selectOption(value ?? "");
-}
 
 /// Opens the category list and waits for `slug` to be in the tree: the list
 /// and the parent menu come from a read model, a moment behind the write.

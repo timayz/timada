@@ -80,48 +80,7 @@ pub fn stock_label(state: &str) -> &'static str {
 
 /// The query-string code of a user-facing catalog error.
 pub fn error_code(err: &CatalogError) -> &'static str {
-    match err {
-        CatalogError::InvalidName => "invalid_product_name",
-        CatalogError::InvalidSlug => "invalid_product_slug",
-        CatalogError::SlugTaken => "product_slug_taken",
-        CatalogError::InvalidDescription => "invalid_description",
-        CatalogError::InvalidAmount => "invalid_amount",
-        CatalogError::InvalidCurrency => "invalid_currency",
-        CatalogError::NotFound => "product_not_found",
-        CatalogError::Archived => "product_archived",
-        CatalogError::NotPriced => "product_not_priced",
-        CatalogError::CategoryNotFound => "category_not_found",
-        CatalogError::CategoryArchived => "category_archived",
-        CatalogError::CategoryCycle => "category_cycle",
-        CatalogError::CategoryTooDeep => "category_too_deep",
-        CatalogError::TooManyCategories => "too_many_categories",
-        CatalogError::TooManyImages => "too_many_images",
-        CatalogError::InvalidImage => "unsupported_image",
-        CatalogError::InvalidAlt => "invalid_alt",
-        CatalogError::ImageNotFound => "image_not_found",
-        CatalogError::InvalidImageOrder => "invalid_image_order",
-        CatalogError::TooManyOptions => "too_many_options",
-        CatalogError::InvalidOptionName => "invalid_option_name",
-        CatalogError::OptionExists => "option_exists",
-        CatalogError::InvalidOptionValues => "invalid_option_values",
-        CatalogError::OptionNotFound => "option_not_found",
-        CatalogError::OptionInUse => "option_in_use",
-        CatalogError::OptionValueInUse => "option_value_in_use",
-        CatalogError::TooManyVariants => "too_many_variants",
-        CatalogError::InvalidSelection => "invalid_selection",
-        CatalogError::VariantExists => "variant_exists",
-        CatalogError::VariantNotFound => "variant_not_found",
-        CatalogError::CurrencyMismatch => "currency_mismatch",
-        CatalogError::InvalidTaxCategory => "invalid_tax_category",
-        CatalogError::InvalidSku => "invalid_sku",
-        CatalogError::SkuTaken => "sku_taken",
-        CatalogError::InvalidAttribute => "invalid_attribute",
-        CatalogError::TooManyAttributes => "too_many_attributes",
-        CatalogError::InvalidStock => "invalid_stock",
-        CatalogError::OutOfStock { .. } => "out_of_stock",
-        CatalogError::Write(err) => timada_core::write_refusal(err).unwrap_or("failed"),
-        CatalogError::Other(_) => "failed",
-    }
+    err.code().unwrap_or("failed")
 }
 
 /// The word for a product's state on the pages.

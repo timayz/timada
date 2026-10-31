@@ -4,10 +4,10 @@ use crate::CatalogError;
 
 pub const MAX_NAME_LEN: usize = 120;
 pub const MAX_DESCRIPTION_LEN: usize = 4000;
-pub const MIN_SLUG_LEN: usize = 2;
+pub use timada_core::MIN_SLUG_LEN;
 pub const MAX_SLUG_LEN: usize = 64;
 /// Length of the random suffix added when a derived slug is already taken.
-pub const SLUG_SUFFIX_LEN: usize = 5;
+pub use timada_core::SLUG_SUFFIX_LEN;
 /// The slug of a name with no usable characters.
 pub const FALLBACK_SLUG: &str = "product";
 /// The largest price, in minor units: a thousand million.
@@ -35,7 +35,7 @@ pub fn tax_category_label(category: &str) -> &str {
         .map_or(category, |(_, label)| label)
 }
 
-pub const CURRENCIES: &[&str] = &["EUR", "USD", "GBP", "CHF"];
+pub use timada_core::CURRENCIES;
 pub const MAX_CATEGORY_NAME_LEN: usize = 80;
 pub const MAX_CATEGORY_DESCRIPTION_LEN: usize = 2000;
 /// The longest text below a category's products.
@@ -252,19 +252,7 @@ pub fn normalize_description(description: &str) -> Result<String, CatalogError> 
 
 /// Lowercases and validates a slug: `[a-z0-9]`, `-` inside, 2 to 64 characters.
 pub fn normalize_slug(slug: &str) -> Result<String, CatalogError> {
-    let slug = slug.trim().to_ascii_lowercase();
-    let len = slug.len();
-    let valid = (MIN_SLUG_LEN..=MAX_SLUG_LEN).contains(&len)
-        && slug
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        && !slug.starts_with('-')
-        && !slug.ends_with('-');
-    if valid {
-        Ok(slug)
-    } else {
-        Err(CatalogError::InvalidSlug)
-    }
+    timada_core::normalize_slug(slug, MAX_SLUG_LEN).ok_or(CatalogError::InvalidSlug)
 }
 
 /// The slug a name gives: ASCII-transliterated, lowercased, runs of anything
@@ -276,47 +264,18 @@ pub fn slugify(name: &str) -> String {
 
 /// [`slugify`] with the fallback of the caller's kind of thing.
 pub fn slugify_or(name: &str, fallback: &str) -> String {
-    let ascii = deunicode::deunicode(name).to_ascii_lowercase();
-    let mut slug = String::with_capacity(ascii.len());
-    for c in ascii.chars() {
-        if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            slug.push(c);
-        } else if !slug.is_empty() && !slug.ends_with('-') {
-            slug.push('-');
-        }
-    }
-    let slug = truncate_slug(&slug, MAX_SLUG_LEN);
-    if slug.len() < MIN_SLUG_LEN {
-        fallback.to_owned()
-    } else {
-        slug
-    }
+    timada_core::slugify(name, MAX_SLUG_LEN, fallback)
 }
 
 /// `slug` with a short random suffix (`blue-mug-k3x9p`), kept within
 /// [`MAX_SLUG_LEN`]. Used when the plain slug is taken.
 pub fn suffixed_slug(slug: &str) -> String {
-    let id = ulid::Ulid::generate().to_string().to_ascii_lowercase();
-    let suffix = &id[id.len() - SLUG_SUFFIX_LEN..];
-    let base = truncate_slug(slug, MAX_SLUG_LEN - SLUG_SUFFIX_LEN - 1);
-    format!("{base}-{suffix}")
-}
-
-/// Cuts a slug to `max` bytes without leaving a dangling dash.
-fn truncate_slug(slug: &str, max: usize) -> String {
-    let mut slug: &str = &slug[..slug.len().min(max)];
-    slug = slug.trim_matches('-');
-    slug.to_owned()
+    timada_core::suffixed_slug(slug, MAX_SLUG_LEN)
 }
 
 /// Uppercases a currency code and checks it is one of [`CURRENCIES`].
 pub fn normalize_currency(currency: &str) -> Result<String, CatalogError> {
-    let currency = currency.trim().to_ascii_uppercase();
-    if CURRENCIES.contains(&currency.as_str()) {
-        Ok(currency)
-    } else {
-        Err(CatalogError::InvalidCurrency)
-    }
+    timada_core::normalize_currency(currency).ok_or(CatalogError::InvalidCurrency)
 }
 
 /// Parses an amount typed by a person into minor units: `12.50` and `12,5`
@@ -361,11 +320,7 @@ pub fn parse_amount(input: &str) -> Result<u64, CatalogError> {
 /// Minor units as a person reads them, locale-neutral: `1250`, `EUR` gives
 /// `12.50 EUR`.
 pub fn format_money(amount_cents: u64, currency: &str) -> String {
-    format!(
-        "{}.{:02} {currency}",
-        amount_cents / 100,
-        amount_cents % 100
-    )
+    format!("{} {currency}", timada_core::format_amount(amount_cents))
 }
 
 #[cfg(test)]

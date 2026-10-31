@@ -120,13 +120,13 @@ pub const API_KEY_PREFIX: &str = "tk_";
 pub const API_KEY_HINT_LEN: usize = 8;
 /// How long an invitation link stays valid: seven days.
 pub const INVITATION_TTL_SECS: u64 = 7 * 24 * 3600;
-pub const MAX_EMAIL_LEN: usize = 254;
+pub use timada_core::MAX_EMAIL_LEN;
 
 pub const MAX_NAME_LEN: usize = 80;
-pub const MIN_SLUG_LEN: usize = 2;
+pub use timada_core::MIN_SLUG_LEN;
 pub const MAX_SLUG_LEN: usize = 32;
 /// Length of the random suffix added when a derived slug is already taken.
-pub const SLUG_SUFFIX_LEN: usize = 5;
+pub use timada_core::SLUG_SUFFIX_LEN;
 /// The slug of a name with no usable characters.
 pub const FALLBACK_SLUG: &str = "tenant";
 
@@ -137,56 +137,20 @@ pub fn tenant_slug_id(slug: &str) -> String {
 
 /// Lowercases and validates a slug: `[a-z0-9]`, `-` inside, 2 to 32 characters.
 pub fn normalize_slug(slug: &str) -> Result<String, crate::TenancyError> {
-    let slug = slug.trim().to_ascii_lowercase();
-    let len = slug.len();
-    let valid = (MIN_SLUG_LEN..=MAX_SLUG_LEN).contains(&len)
-        && slug
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        && !slug.starts_with('-')
-        && !slug.ends_with('-');
-    if valid {
-        Ok(slug)
-    } else {
-        Err(crate::TenancyError::InvalidSlug)
-    }
+    timada_core::normalize_slug(slug, MAX_SLUG_LEN).ok_or(crate::TenancyError::InvalidSlug)
 }
 
 /// The slug a name gives: ASCII-transliterated, lowercased, runs of anything
 /// else collapsed into one dash, cut to [`MAX_SLUG_LEN`]. A name with nothing
 /// usable gives [`FALLBACK_SLUG`].
 pub fn slugify(name: &str) -> String {
-    let ascii = deunicode::deunicode(name).to_ascii_lowercase();
-    let mut slug = String::with_capacity(ascii.len());
-    for c in ascii.chars() {
-        if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            slug.push(c);
-        } else if !slug.is_empty() && !slug.ends_with('-') {
-            slug.push('-');
-        }
-    }
-    let slug = truncate_slug(&slug, MAX_SLUG_LEN);
-    if slug.len() < MIN_SLUG_LEN {
-        FALLBACK_SLUG.to_owned()
-    } else {
-        slug
-    }
+    timada_core::slugify(name, MAX_SLUG_LEN, FALLBACK_SLUG)
 }
 
 /// `slug` with a short random suffix (`acme-k3x9p`), kept within
 /// [`MAX_SLUG_LEN`]. Used when the plain slug is taken.
 pub fn suffixed_slug(slug: &str) -> String {
-    let id = ulid::Ulid::generate().to_string().to_ascii_lowercase();
-    let suffix = &id[id.len() - SLUG_SUFFIX_LEN..];
-    let base = truncate_slug(slug, MAX_SLUG_LEN - SLUG_SUFFIX_LEN - 1);
-    format!("{base}-{suffix}")
-}
-
-/// Cuts a slug to `max` bytes without leaving a dangling dash.
-fn truncate_slug(slug: &str, max: usize) -> String {
-    let mut slug: &str = &slug[..slug.len().min(max)];
-    slug = slug.trim_matches('-');
-    slug.to_owned()
+    timada_core::suffixed_slug(slug, MAX_SLUG_LEN)
 }
 
 /// Trims a display name and checks it is 1 to 80 characters.
@@ -267,16 +231,7 @@ pub fn normalize_role_label(label: &str) -> Result<String, crate::TenancyError> 
 /// something on both sides, nothing that is not printable. (The identity
 /// context has the same rule; the two crates do not depend on each other.)
 pub fn normalize_email(email: &str) -> Result<String, crate::TenancyError> {
-    let email = email.trim().to_lowercase();
-    let valid = email.len() <= MAX_EMAIL_LEN
-        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
-        && matches!(email.split_once('@'), Some((local, domain))
-            if !local.is_empty() && !domain.is_empty() && !domain.contains('@'));
-    if valid {
-        Ok(email)
-    } else {
-        Err(crate::TenancyError::InvalidEmail)
-    }
+    timada_core::normalize_email(email).ok_or(crate::TenancyError::InvalidEmail)
 }
 
 /// The stream of the invitation a link token opens.

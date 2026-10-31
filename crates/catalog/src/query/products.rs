@@ -64,14 +64,7 @@ impl ProductRow {
     }
 }
 
-/// A `LIKE` pattern matching `q` anywhere, with its wildcards escaped.
-fn contains(q: &str) -> String {
-    let escaped = q
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    format!("%{escaped}%")
-}
+use timada_core::like_contains as contains;
 
 /// Which products a page lists: a search over slug and name, and one
 /// category they must belong to. Both are optional; the default matches

@@ -26,9 +26,9 @@ use topcoat::{
 };
 
 use super::{Answer, answer_error, refused, status};
-use crate::auth::mail::send_shopper_code;
 use crate::auth::now;
 use crate::config::Config;
+use crate::mail::send_shopper_code;
 use crate::rate_limit::{RateLimiter, allow_shopper_code};
 
 /// The header a storefront reports its shopper's address in.

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use timada_pages::{
     MAX_BODY_LEN, MAX_IMAGES_PER_PAGE, MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_SLUG_LEN,
-    MAX_TITLE_LEN, PageState, PagesError, render_markdown,
+    MAX_TITLE_LEN, PageError, PageState, render_markdown,
 };
 use timada_tenancy::{PERMISSION_PAGES_MANAGE, PERMISSION_PAGES_READ};
 use topcoat::{
@@ -84,7 +84,7 @@ where
         &timada_pages::Command<crate::cluster::Executor>,
         &str,
         &str,
-    ) -> std::result::Result<(), PagesError>,
+    ) -> std::result::Result<(), PageError>,
 {
     let access = require_tenant(cx).await?;
     access

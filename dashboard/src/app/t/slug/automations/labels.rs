@@ -288,7 +288,7 @@ fn op_symbol(op: Op) -> &'static str {
 }
 
 fn cents(amount: u64) -> String {
-    format!("{}.{:02}", amount / 100, amount % 100)
+    timada_core::format_amount(amount)
 }
 
 /// One line saying what a step does, for its card.

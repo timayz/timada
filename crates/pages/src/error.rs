@@ -5,7 +5,7 @@ use crate::value_object::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub enum PagesError {
+pub enum PageError {
     #[error("a title is 1 to {MAX_TITLE_LEN} characters")]
     InvalidTitle,
     #[error("a page is at most {MAX_BODY_LEN} characters")]
@@ -33,7 +33,7 @@ pub enum PagesError {
     Other(#[from] anyhow::Error),
 }
 
-impl PagesError {
+impl PageError {
     /// Whether the message can be shown to the person who made the request
     /// (as opposed to an infrastructure failure).
     pub fn is_user_facing(&self) -> bool {

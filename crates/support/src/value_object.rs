@@ -6,7 +6,7 @@ use crate::error::SupportError;
 pub const MAX_NAME_LEN: usize = 80;
 pub const MIN_MESSAGE_LEN: usize = 10;
 pub const MAX_MESSAGE_LEN: usize = 4000;
-pub const MAX_EMAIL_LEN: usize = 254;
+pub use timada_core::MAX_EMAIL_LEN;
 
 /// Where a message stands.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -60,16 +60,7 @@ pub fn message_notification_id(message_id: &str) -> String {
 /// identity and tenancy contexts have the same rule; the crates do not
 /// depend on each other.)
 pub fn normalize_email(email: &str) -> Result<String, SupportError> {
-    let email = email.trim().to_lowercase();
-    let valid = email.len() <= MAX_EMAIL_LEN
-        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
-        && matches!(email.split_once('@'), Some((local, domain))
-            if !local.is_empty() && !domain.is_empty() && !domain.contains('@'));
-    if valid {
-        Ok(email)
-    } else {
-        Err(SupportError::InvalidEmail)
-    }
+    timada_core::normalize_email(email).ok_or(SupportError::InvalidEmail)
 }
 
 /// A name as signed: trimmed, not blank, at most [`MAX_NAME_LEN`] characters,

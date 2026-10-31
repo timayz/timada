@@ -80,8 +80,10 @@ impl Payments {
             .ok_or_else(|| anyhow::anyhow!("payments are not enabled (no [payments] section)"))
     }
 
-    pub fn seal(&self, plain: &str) -> anyhow::Result<Vec<u8>> {
-        self.sealer()?.seal(plain)
+    /// Seals a secret of `tenant_id`'s account: it opens for that tenant
+    /// alone.
+    pub fn seal(&self, tenant_id: &str, plain: &str) -> anyhow::Result<Vec<u8>> {
+        self.sealer()?.seal_for(tenant_id, plain)
     }
 
     /// The tenant's Stripe account, opened; `None` when it set up none or
@@ -92,8 +94,8 @@ impl Payments {
         };
         Ok(Some(Account {
             publishable_key: settings.publishable_key.clone(),
-            secret_key: sealer.open(&settings.secret_key_sealed)?,
-            webhook_secret: sealer.open(&settings.webhook_secret_sealed)?,
+            secret_key: sealer.open_for(&tenant.id, &settings.secret_key_sealed)?,
+            webhook_secret: sealer.open_for(&tenant.id, &settings.webhook_secret_sealed)?,
         }))
     }
 

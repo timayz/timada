@@ -17,13 +17,6 @@ http:
       priority: 25
       entryPoints:
         - https
-    storefront-dev:
-      rule: "Host(`storefront.localhost`)"
-      tls: true
-      service: storefront-dev
-      priority: 25
-      entryPoints:
-        - https
     chatounette-dev:
       rule: "Host(`chatounette.localhost`)"
       tls: true
@@ -46,18 +39,13 @@ http:
           path: /auth/login
           interval: 2s
           timeout: 1s
-    # The example storefront (`make storefront`).
-    storefront-dev:
-      loadBalancer:
-        servers:
-          - url: "http://host.docker.internal:3456"
     # The Chatounette clone (`make chatounette`).
     chatounette-dev:
       loadBalancer:
         servers:
           - url: "http://host.docker.internal:3457"
 
-# The store API, for storefronts: STORE_ADDR=store.timada.localhost:4320 with
+# The store API, for the shops: STORE_ADDR=store.timada.localhost:4320 with
 # STORE_TLS_CA=/etc/ssl/certs/ca-certificates.crt. Traefik ends TLS here and
 # hands plain TCP to whichever node answers (each node's `store_api.listen`
 # on 0.0.0.0:4321, 4322 and 4323). A storefront whose node goes away

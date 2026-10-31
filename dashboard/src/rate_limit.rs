@@ -3,15 +3,17 @@
 //! its own, so a client spread over N of them gets up to N times the limit.
 //!
 //! The policies built on it are how often a storefront may have a sign-in
-//! code mailed ([`allow_shopper_code`]) and how often it may hand in a
-//! message from its contact form ([`allow_contact_message`]).
+//! code mailed ([`allow_shopper_code`]), how often it may hand in a message
+//! from its contact form ([`allow_contact_message`]) or a sign-up to the
+//! shop's news ([`allow_newsletter_signup`]), and how often a password may
+//! be tried ([`allow_password_login`]).
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::config::StoreConfig;
+use crate::config::{AuthConfig, StoreConfig};
 
 /// Past this many keys, a call also forgets the keys nobody used within
 /// their window, so the map does not grow with every client ever seen. The
@@ -195,6 +197,36 @@ pub fn allow_newsletter_signup(
     )
 }
 
+/// Whether one more password may be tried for `email` from `peer`: under
+/// `[auth]`'s limit for the browser's address and for the e-mail address
+/// (counted from anywhere, so a password cannot be guessed from many
+/// addresses either). Every attempt let through counts, right or wrong: the
+/// check runs before the password is looked at, so a wrong guess costs the
+/// same as a right one and the answer says nothing more. Without the
+/// browser's address, only the e-mail's limit applies.
+pub fn allow_password_login(
+    limiter: &RateLimiter,
+    limits: &AuthConfig,
+    email: &str,
+    peer: Option<IpAddr>,
+) -> bool {
+    let window = Duration::from_secs(limits.login_window_secs);
+    let email = format!("login:email:{}", email.trim().to_ascii_lowercase());
+    match peer {
+        Some(ip) => {
+            let ip = format!("login:ip:{ip}");
+            limiter.check_all(
+                &[
+                    (email.as_str(), limits.login_attempts_per_email),
+                    (ip.as_str(), limits.login_attempts_per_ip),
+                ],
+                window,
+            )
+        }
+        None => limiter.check(&email, limits.login_attempts_per_email, window),
+    }
+}
+
 /// The limits of one storefront policy.
 struct StorefrontLimits {
     per_key: u32,
@@ -289,6 +321,85 @@ mod tests {
             newsletter_signups_per_key: per_key,
             newsletter_signups_window_secs: 3600,
         }
+    }
+
+    fn auth(per_ip: u32, per_email: u32) -> AuthConfig {
+        AuthConfig {
+            secret_key: "0123456789abcdef0123456789abcdef".into(),
+            session_lifetime_secs: 3600,
+            rp_name: "Timada".into(),
+            providers: Default::default(),
+            login_attempts_per_ip: per_ip,
+            login_attempts_per_email: per_email,
+            login_window_secs: 900,
+        }
+    }
+
+    #[test]
+    fn a_password_is_tried_so_many_times_per_address_and_per_account() {
+        let limiter = RateLimiter::new();
+        let limits = auth(5, 2);
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+        let other: IpAddr = "203.0.113.8".parse().unwrap();
+        // The account's limit: two tries, from anywhere, however spelt.
+        assert!(allow_password_login(
+            &limiter,
+            &limits,
+            "Ada@Example.org",
+            Some(ip)
+        ));
+        assert!(allow_password_login(
+            &limiter,
+            &limits,
+            "ada@example.org ",
+            Some(other)
+        ));
+        assert!(!allow_password_login(
+            &limiter,
+            &limits,
+            "ada@example.org",
+            Some(ip)
+        ));
+        assert!(!allow_password_login(
+            &limiter,
+            &limits,
+            "ada@example.org",
+            None
+        ));
+        // Other accounts from the same address still go, up to the address's
+        // limit: one pass was spent on Ada from it, the refusal cost nothing.
+        assert!(allow_password_login(
+            &limiter,
+            &limits,
+            "bob@example.org",
+            Some(ip)
+        ));
+        assert!(allow_password_login(
+            &limiter,
+            &limits,
+            "carol@example.org",
+            Some(ip)
+        ));
+        assert!(allow_password_login(
+            &limiter,
+            &limits,
+            "dave@example.org",
+            Some(ip)
+        ));
+        assert!(allow_password_login(
+            &limiter,
+            &limits,
+            "erin@example.org",
+            Some(ip)
+        ));
+        assert!(
+            !allow_password_login(&limiter, &limits, "frank@example.org", Some(ip)),
+            "the fifth account from one address: the address is held"
+        );
+        assert!(
+            allow_password_login(&limiter, &limits, "frank@example.org", Some(other)),
+            "from another address it goes"
+        );
     }
 
     #[test]

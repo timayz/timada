@@ -36,6 +36,9 @@ its VAT obligations.
     a company ever number the same way.
 - **No company, no sale.** Until the tenant is linked to a company with an
   identity, checkout refuses to take a payment (`invoicing_not_configured`).
+- **Kind of goods, as sold.** Each order line carries the product's tax category at
+  the time of the sale (`OrderLine.tax_category`); the invoice reads it there, so a
+  product re-filed or deleted later changes nothing about an invoice already owed.
 - **Kind of goods.** A VAT-registered company's tenants say on each product page
   what kind of goods it is: standard, books, food, medicines or press. In France
   that is 20, 5.5, 5.5, 10 and 2.1 %. Catalog prices always include VAT.
@@ -95,8 +98,13 @@ invoice decides it when it is issued, seconds after the payment.
     That count is an append at the version the ledger was read at, so two tenants
     selling at once never both count against a stale total. A retry finds its
     sale counted and gets the same decision back.
-  - Only sales in euros count. An EU distance sale in another currency is taxed at
-    destination, which is the safe side.
+  - Only sales in euros count: nothing here converts a currency. A VAT-registered
+    company without the One-Stop Shop therefore sells to consumers in other EU
+    countries in euros only; a request to pay for such a sale in another currency
+    is refused (`oss_required_for_currency`) rather than taxed at destination
+    without the registration that lets the company remit it. With the One-Stop
+    Shop ticked, the sale goes ahead, taxed at destination, and is not counted
+    (daily exchange rates for the count are a follow-up).
 - **One-Stop Shop.** The merchant ticks "One-Stop Shop" on the invoicing page to
   apply destination VAT from the first euro.
   - The company's page shows the year's total.

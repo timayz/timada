@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use timada_catalog::{CURRENCIES, format_money, parse_amount};
 use timada_orders::{
-    Command, MAX_SHIPPING_NAME_LEN, NewShippingMethod, OrdersError, ShippingMethod,
+    Command, MAX_SHIPPING_NAME_LEN, NewShippingMethod, OrderError, ShippingMethod,
 };
 use timada_tenancy::PERMISSION_SHIPPING_MANAGE;
 use topcoat::{
@@ -52,7 +52,7 @@ pub fn orders(access: &TenantAccess) -> Result<Command<Executor>> {
 }
 
 /// The query-string code of a user-facing error.
-pub fn error_code(err: &OrdersError) -> &'static str {
+pub fn error_code(err: &OrderError) -> &'static str {
     err.code().unwrap_or("unexpected")
 }
 
@@ -72,8 +72,8 @@ pub struct MethodForm {
 impl MethodForm {
     /// The method the form describes, or `InvalidShippingPrice` for an
     /// amount that is not one.
-    pub fn method(self) -> std::result::Result<NewShippingMethod, OrdersError> {
-        let amount = |text: &str| parse_amount(text).map_err(|_| OrdersError::InvalidShippingPrice);
+    pub fn method(self) -> std::result::Result<NewShippingMethod, OrderError> {
+        let amount = |text: &str| parse_amount(text).map_err(|_| OrderError::InvalidShippingPrice);
         let free_above_cents = match self.free_above.trim() {
             "" => None,
             text => Some(amount(text)?),
@@ -175,7 +175,7 @@ pub fn describe_free_above(method: &ShippingMethod) -> String {
 
 /// Minor units as the price field shows them: `490` gives `4.90`.
 pub fn amount_field(cents: u64) -> String {
-    format!("{}.{:02}", cents / 100, cents % 100)
+    timada_core::format_amount(cents)
 }
 
 #[page]

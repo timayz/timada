@@ -98,7 +98,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let row = campaign_row(pool, &access.tenant.id, &campaign.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let (delivered, failed) = row.map_or((0, 0), |row| (row.delivered, row.failed));
+    let (delivered, failed, skipped) =
+        row.map_or((0, 0, 0), |row| (row.delivered, row.failed, row.skipped));
     let editions = editions_of_campaign(pool, &access.tenant.id, &campaign.id, 50)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -229,6 +230,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         fact(term: "Mailed", <span data-campaign-delivered=(delivered)>(delivered)</span>)
                         if failed > 0 {
                             fact(term: "Not delivered", <span data-campaign-failed=(failed)>(failed)</span>)
+                        }
+                        if skipped > 0 {
+                            fact(term: "Left the list before it went out", <span data-campaign-skipped=(skipped)>(skipped)</span>)
                         }
                     )
                 )

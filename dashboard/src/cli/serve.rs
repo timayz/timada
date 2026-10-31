@@ -87,7 +87,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // mailed from the subscriptions, outside any request: they get their
     // own transport.
     let background_mail = {
-        let mailer = auth::mail::build(&config.mail)?;
+        let mailer = crate::mail::build(&config.mail)?;
         let mut app = topcoat::context::AppContext::new();
         app.insert(mailer.transport);
         app.insert(mailer.sender);
@@ -110,7 +110,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // failing a sign-in later.
     let providers = auth::oidc::Providers::discover(&config.auth, &config.server.url).await?;
     let webauthn = auth::webauthn::build(&config.auth, &config.server.url)?;
-    let mailer = auth::mail::build(&config.mail)?;
+    let mailer = crate::mail::build(&config.mail)?;
 
     // Read models catch up from their saved cursor before the router takes
     // requests, then follow the stream. A failed worker is logged and the
@@ -172,7 +172,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.mail.allow_private_hosts,
         std::time::Duration::from_secs(config.automations.abandoned_after_secs.max(60)),
         config.automations.runs_per_check,
-    )
+    )?
     .start(std::time::Duration::from_secs(
         config.automations.check_secs.max(1),
     ));

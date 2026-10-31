@@ -20,7 +20,7 @@ use timada_aliexpress::{
     AeError, AliexpressError, ForwardStatus, LinkState, PlaceItem, PlaceOrder, Placement,
     choose_service, forward_items, link_of_product, logistics_address,
 };
-use timada_orders::{OrderState, OrderStatus, OrdersError};
+use timada_orders::{OrderError, OrderState, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
 
 use super::{ALIEXPRESS_ACTOR, Aliexpress};
@@ -357,7 +357,7 @@ impl Aliexpress {
                 .await
             {
                 Ok(()) => finished = Some(done(true, Some(tracking))),
-                Err(OrdersError::OrderCancelled | OrdersError::OrderNotFound) => {
+                Err(OrderError::OrderCancelled | OrderError::OrderNotFound) => {
                     finished = Some(done(false, None))
                 }
                 Err(err) => return Err(err.into()),

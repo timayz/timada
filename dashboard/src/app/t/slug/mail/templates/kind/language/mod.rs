@@ -35,7 +35,6 @@ use super::{Kind, require_kind};
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::tenants::{error_code, tenancy};
-use crate::auth::mail::{send_rendered, shop_vars};
 use crate::auth::{require_user, user_labels};
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::badge::{BadgeVariant, badge_variants};
@@ -43,6 +42,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button, button_varian
 use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
 use crate::components::textarea::textarea;
+use crate::mail::{send_rendered, shop_vars};
 use crate::ui::{Shell, document, format_time, icons, notice, page_header, section_card};
 
 module_param!(pub language);

@@ -1,7 +1,7 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{PaymentsDisabled, PaymentsEnabled};
-use crate::error::OrdersError;
+use crate::error::OrderError;
 use crate::value_object::payment_method_id;
 
 /// What a shopper's browser needs to show the payment form before a payment
@@ -30,7 +30,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         setup: Option<PaymentSetup>,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let state = self.load_payment_method().await?;
         let current = state.as_ref().and_then(|state| state.setup.clone());
         if current == setup {

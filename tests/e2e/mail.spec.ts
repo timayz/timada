@@ -1,22 +1,10 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { MAILDEV, registerWithEmail, uniqueEmail } from "./email";
+import { expect, test, type Page } from "@playwright/test";
+import { mailTo, registerWithEmail, uniqueEmail } from "./email";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // A shop's own mail servers. The development mailbox of compose.yml stands in
 // for each of them (config/e2e.toml lets a shop's server be on this machine),
 // so the mails they relay are told apart by their sender's address.
-
-type Sent = { to: { address: string }[]; from: { name: string; address: string }[]; subject: string };
-
-async function mailTo(request: APIRequestContext, email: string, subject: string): Promise<Sent> {
-  let found: Sent | undefined;
-  await expect(async () => {
-    const all = (await (await request.get(`${MAILDEV}/email`)).json()) as Sent[];
-    found = all.filter((m) => m.to.some((to) => to.address === email) && m.subject.startsWith(subject)).at(-1);
-    expect(found, `no "${subject}" mail to ${email}`).toBeDefined();
-  }).toPass({ timeout: 15_000 });
-  return found!;
-}
 
 test("a shop sends its mails through its own server, and back through the platform's", async ({ page }) => {
   const merchant = uniqueEmail("merchant");

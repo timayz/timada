@@ -77,7 +77,11 @@ pub async fn callback(cx: &Cx) -> Result<SeeOther> {
         }
     };
     let now = crate::auth::now();
-    let seal = |plain: &str| aliexpress.seal(plain).map_err(topcoat::Error::from_anyhow);
+    let seal = |plain: &str| {
+        aliexpress
+            .seal(&flow.company_id, plain)
+            .map_err(topcoat::Error::from_anyhow)
+    };
     let authorized = tenancy(cx)
         .authorize_aliexpress(
             &user.id,

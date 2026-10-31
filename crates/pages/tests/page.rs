@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use timada_pages::{AddPageImage, CreatePage, PagesError, new_page_image_id};
+use timada_pages::{AddPageImage, CreatePage, PageError, new_page_image_id};
 
 #[tokio::test]
 async fn a_page_starts_as_a_draft_under_a_slug_of_its_title() {
@@ -31,7 +31,7 @@ async fn a_slug_belongs_to_one_page() {
         .await
         .unwrap();
     let again = pages.create_page(ALICE, draft("Mentions légales")).await;
-    assert!(matches!(again, Err(PagesError::SlugTaken)), "{again:?}");
+    assert!(matches!(again, Err(PageError::SlugTaken)), "{again:?}");
     let invalid = pages
         .create_page(
             ALICE,
@@ -42,7 +42,7 @@ async fn a_slug_belongs_to_one_page() {
         )
         .await;
     assert!(
-        matches!(invalid, Err(PagesError::InvalidSlug)),
+        matches!(invalid, Err(PageError::InvalidSlug)),
         "{invalid:?}"
     );
 }
@@ -53,7 +53,7 @@ async fn renaming_frees_the_old_slug() {
     let id = pages.create_page(ALICE, draft("About us")).await.unwrap();
     let other = pages.create_page(ALICE, draft("Contact")).await.unwrap();
     let taken = pages.rename_page(ALICE, &id, "contact").await;
-    assert!(matches!(taken, Err(PagesError::SlugTaken)), "{taken:?}");
+    assert!(matches!(taken, Err(PageError::SlugTaken)), "{taken:?}");
 
     pages
         .rename_page(ALICE, &id, "qui-sommes-nous")
@@ -91,7 +91,7 @@ async fn edit_seo_and_publish() {
         .unwrap();
     let too_long = pages.set_page_seo(ALICE, &id, &"x".repeat(71), "").await;
     assert!(
-        matches!(too_long, Err(PagesError::InvalidSeo)),
+        matches!(too_long, Err(PageError::InvalidSeo)),
         "{too_long:?}"
     );
     let page = pages.load_page(&id).await.unwrap().unwrap();
@@ -140,7 +140,7 @@ async fn pictures_are_added_and_removed() {
             },
         )
         .await;
-    assert!(matches!(bmp, Err(PagesError::UnsupportedImage)), "{bmp:?}");
+    assert!(matches!(bmp, Err(PageError::UnsupportedImage)), "{bmp:?}");
 
     pages
         .remove_page_image(ALICE, &id, &image_id)
@@ -156,7 +156,7 @@ async fn pictures_are_added_and_removed() {
             .is_empty()
     );
     let gone = pages.remove_page_image(ALICE, &id, &image_id).await;
-    assert!(matches!(gone, Err(PagesError::ImageNotFound)), "{gone:?}");
+    assert!(matches!(gone, Err(PageError::ImageNotFound)), "{gone:?}");
 }
 
 #[tokio::test]
@@ -175,7 +175,7 @@ async fn a_deleted_page_frees_its_slug() {
             .is_none()
     );
     let gone = pages.publish_page(ALICE, &id).await;
-    assert!(matches!(gone, Err(PagesError::NotFound)), "{gone:?}");
+    assert!(matches!(gone, Err(PageError::NotFound)), "{gone:?}");
     // The slug is taken again by a new page.
     let new = pages.create_page(ALICE, draft("Old terms")).await.unwrap();
     assert_eq!(

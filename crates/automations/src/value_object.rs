@@ -167,21 +167,12 @@ impl ListenerState {
 }
 
 /// The longest address, in characters.
-pub const MAX_EMAIL_LEN: usize = 254;
+pub use timada_core::MAX_EMAIL_LEN;
 
-/// An address as the lists keep it: trimmed and lowercased; `None` when it
-/// does not look like one.
-pub fn normalize_email(email: &str) -> Option<String> {
-    let email = email.trim().to_lowercase();
-    let (local, domain) = email.split_once('@')?;
-    (!local.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.')
-        && email.len() <= MAX_EMAIL_LEN
-        && !email.chars().any(|c| c.is_whitespace() || c.is_control()))
-    .then_some(email)
-}
+/// An address as the lists keep it: the one canonical form every context
+/// uses ([`timada_core::normalize_email`]), so an address that placed an
+/// order is the address on the opt-out list.
+pub use timada_core::normalize_email;
 
 /// The id of an address on the shop's opt-out list
 /// ([`OptOut`](crate::aggregator::opt_out::OptOut)), of the normalized

@@ -150,4 +150,16 @@ pub enum Delivery {
         subscriber_id: String,
         claimed_by: String,
     },
+    /// Not mailed, for good: the read model owed the subscriber the mail but
+    /// the stream says they left the list (or were erased) before it went
+    /// out. Recorded as the first event of the pair's stream, so the
+    /// campaign stops owing it; `edition_id` names the edition of a
+    /// scheduled campaign, `None` for one sent at once.
+    Skipped {
+        campaign_id: String,
+        edition_id: Option<String>,
+        subscriber_id: String,
+        reason: String,
+        skipped_by: String,
+    },
 }

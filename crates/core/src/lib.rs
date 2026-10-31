@@ -1,15 +1,36 @@
 //! What every bounded context shares: the refusal code of a write the
 //! store is not taking right now, the reading of a shopper's language and
-//! time zone, the keys personal data is sealed under ([`keys`]) and what a
-//! stream keeps of a mailed code ([`codes`]).
+//! time zone, the keys personal data is sealed under ([`keys`]), what a
+//! stream keeps of a mailed code ([`codes`]), and the small rules every
+//! context would otherwise write for itself: the canonical form of an
+//! e-mail address ([`email`]), of a slug ([`slug`]) and of a currency
+//! ([`currency`]), the clock ([`time`]), calendar dates ([`civil`]), an
+//! amount for a person to read ([`money`]) and a `LIKE` pattern ([`sql`]).
+//! No SQL driver, no web framework: contexts depend on this crate and on
+//! evento, nothing more between them.
 
+pub mod civil;
 pub mod codes;
+pub mod currency;
+pub mod email;
 pub mod keys;
+pub mod money;
+pub mod slug;
+pub mod sql;
+pub mod time;
 
 use evento::WriteError;
 
 pub use codes::{CodeVerifier, HmacCodeVerifier};
+pub use currency::{CURRENCIES, normalize_currency};
+pub use email::{MAX_EMAIL_LEN, normalize_email};
 pub use keys::{Key, Keys};
+pub use money::format_amount;
+pub use slug::{
+    MIN_SLUG_LEN, SLUG_SUFFIX_LEN, normalize_slug, slugify, suffixed_slug, truncate_slug,
+};
+pub use sql::like_contains;
+pub use time::unix_now;
 
 /// The refusal code pages and the store API carry when a tenant is not
 /// taking writes for the moment: a node of the cluster is away and the

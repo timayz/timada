@@ -1,7 +1,7 @@
 use evento::{Executor, WriteError};
 
 use crate::aggregator::ConfirmationMailed;
-use crate::error::OrdersError;
+use crate::error::OrderError;
 use crate::value_object::order_confirmation_id;
 
 #[evento::command]
@@ -15,7 +15,7 @@ impl<E: Executor> super::Command<E> {
         email: &str,
         actor: &str,
         routing_key: Option<String>,
-    ) -> Result<bool, OrdersError> {
+    ) -> Result<bool, OrderError> {
         let claimed = evento::append(order_confirmation_id(order_id))
             .original_version(0)
             .routing_key_opt(routing_key)

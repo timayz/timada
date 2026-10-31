@@ -6,6 +6,7 @@ authors.workspace = true
 
 [dependencies]
 evento.workspace = true
+timada-core = { path = "../core" }
 timada-catalog = { path = "../catalog" }
 timada-catalog-import = { path = "../catalog-import" }
 timada-tenancy = { path = "../tenancy" }

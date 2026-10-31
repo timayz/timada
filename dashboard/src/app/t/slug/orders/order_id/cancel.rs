@@ -17,9 +17,13 @@ use crate::app::t::slug::orders::orders;
 use crate::app::t::slug::require_tenant;
 use crate::payments::Payments;
 
-/// Calls off a paid order: the payment goes back through Stripe first (in
-/// full, what is not refunded yet), then the order is cancelled. A refund
-/// Stripe refuses leaves the order as it was.
+/// Calls off a paid order: the refund is asked for on the order first
+/// (`request_refund`, which fixes the idempotency key), then made through
+/// Stripe (in full, what is not refunded yet), recorded, and only then is
+/// the order cancelled. A refund Stripe refuses leaves the order paid with
+/// the request pending; posting again retries under the same key, so Stripe
+/// never refunds twice, and `charge.refunded` records a refund Stripe took
+/// whose recording failed here.
 #[route(POST)]
 pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -46,13 +50,17 @@ pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
         else {
             return Ok(back(Some("payments_unavailable"), None));
         };
+        let pending = gateway
+            .request_refund(&access.user_id, &order_id, outstanding)
+            .await
+            .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
         let refund = payments
             .gateway
             .refund(
                 &account.secret_key,
-                &order.payment.payment_id,
-                outstanding,
-                &format!("timada-cancel-{order_id}"),
+                &pending.payment_id,
+                pending.amount_cents,
+                &pending.idempotency_key,
             )
             .await;
         let refund_id = match refund {
@@ -63,7 +71,7 @@ pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
             }
         };
         gateway
-            .record_refund(&access.user_id, &order_id, &refund_id, outstanding)
+            .record_refund(&access.user_id, &order_id, &refund_id, pending.amount_cents)
             .await
             .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
     }

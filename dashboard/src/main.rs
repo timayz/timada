@@ -11,6 +11,7 @@ mod confirmations;
 mod db;
 mod invoicing;
 mod key_vault;
+mod mail;
 mod media;
 mod media_images;
 mod message_keys;

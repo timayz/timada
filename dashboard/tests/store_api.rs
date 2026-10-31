@@ -713,7 +713,7 @@ async fn a_checkout_key_asks_to_pay_and_does_nothing_else() {
         .await
         .unwrap_err();
     assert!(
-        matches!(placed, timada_orders::OrdersError::PaymentNotFound),
+        matches!(placed, timada_orders::OrderError::PaymentNotFound),
         "no payment was recorded, so none can be claimed: {placed}"
     );
     let repriced = timada_catalog::Command::unscoped(shop.clone())

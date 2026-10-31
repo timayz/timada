@@ -392,8 +392,8 @@ async fn test_payments(
             timada_tenancy::ConfigurePayments {
                 provider: timada_orders::PROVIDER_STRIPE.into(),
                 publishable_key: TEST_PUBLISHABLE_KEY.into(),
-                secret_key_sealed: sealer.seal(TEST_SECRET_KEY)?,
-                webhook_secret_sealed: sealer.seal(TEST_WEBHOOK_SECRET)?,
+                secret_key_sealed: sealer.seal_for(tenant_id, TEST_SECRET_KEY)?,
+                webhook_secret_sealed: sealer.seal_for(tenant_id, TEST_WEBHOOK_SECRET)?,
             },
         )
         .await?;

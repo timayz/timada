@@ -9,7 +9,7 @@ use ulid::Ulid;
 use crate::aggregator::{
     Created, DiscountApplied, DiscountRemoved, ItemAdded, ItemRemoved, QuantitySet,
 };
-use crate::error::OrdersError;
+use crate::error::OrderError;
 use crate::value_object::{MAX_CART_LINES, MAX_LINE_QUANTITY};
 
 use super::CartState;
@@ -30,7 +30,7 @@ impl<E: Executor> super::Command<E> {
         &self,
         actor: &str,
         routing_key: Option<String>,
-    ) -> Result<String, OrdersError> {
+    ) -> Result<String, OrderError> {
         let cart_id = Ulid::generate().to_string();
         evento::append(&cart_id)
             .original_version(0)
@@ -53,17 +53,17 @@ impl<E: Executor> super::Command<E> {
         cart_id: &str,
         item: CartItem,
         routing_key: Option<String>,
-    ) -> Result<CartState, OrdersError> {
+    ) -> Result<CartState, OrderError> {
         let cart = self.require_open_cart(cart_id).await?;
         if !(1..=MAX_LINE_QUANTITY).contains(&item.quantity) {
-            return Err(OrdersError::InvalidQuantity);
+            return Err(OrderError::InvalidQuantity);
         }
         let existing = cart.line(&item.product_id, item.variant_id.as_deref());
         match existing {
             Some(line) if line.quantity + item.quantity > MAX_LINE_QUANTITY => {
-                return Err(OrdersError::InvalidQuantity);
+                return Err(OrderError::InvalidQuantity);
             }
-            None if cart.lines.len() >= MAX_CART_LINES => return Err(OrdersError::TooManyLines),
+            None if cart.lines.len() >= MAX_CART_LINES => return Err(OrderError::TooManyLines),
             _ => {}
         }
         let product = self.require_sellable(&item).await?;
@@ -81,7 +81,7 @@ impl<E: Executor> super::Command<E> {
             let other = self.load_product(&first.product_id).await?;
             let other_currency = other.as_ref().and_then(|p| p.currency());
             if other_currency.is_some_and(|currency| Some(currency) != product.currency()) {
-                return Err(OrdersError::MixedCurrencies);
+                return Err(OrderError::MixedCurrencies);
             }
         }
         cart.write()?
@@ -106,10 +106,10 @@ impl<E: Executor> super::Command<E> {
         cart_id: &str,
         item: CartItem,
         routing_key: Option<String>,
-    ) -> Result<CartState, OrdersError> {
+    ) -> Result<CartState, OrderError> {
         let cart = self.require_open_cart(cart_id).await?;
         if item.quantity > MAX_LINE_QUANTITY {
-            return Err(OrdersError::InvalidQuantity);
+            return Err(OrderError::InvalidQuantity);
         }
         let Some(line) = cart.line(&item.product_id, item.variant_id.as_deref()) else {
             return Ok(cart);
@@ -155,7 +155,7 @@ impl<E: Executor> super::Command<E> {
         product_id: &str,
         variant_id: Option<&str>,
         routing_key: Option<String>,
-    ) -> Result<CartState, OrdersError> {
+    ) -> Result<CartState, OrderError> {
         self.set_cart_quantity_opt(
             actor,
             cart_id,
@@ -179,8 +179,8 @@ impl<E: Executor> super::Command<E> {
         cart_id: &str,
         code: &str,
         routing_key: Option<String>,
-    ) -> Result<CartState, OrdersError> {
-        let unknown = || OrdersError::DiscountRefused {
+    ) -> Result<CartState, OrderError> {
+        let unknown = || OrderError::DiscountRefused {
             code: DISCOUNT_UNKNOWN,
         };
         let code = normalize_code(code).map_err(|_| unknown())?;
@@ -209,7 +209,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         cart_id: &str,
         routing_key: Option<String>,
-    ) -> Result<CartState, OrdersError> {
+    ) -> Result<CartState, OrderError> {
         let cart = self.require_open_cart(cart_id).await?;
         if cart.discount_code.is_none() {
             return Ok(cart);
@@ -262,10 +262,10 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// The cart, refused once it became an order.
-    pub(crate) async fn require_open_cart(&self, cart_id: &str) -> Result<CartState, OrdersError> {
+    pub(crate) async fn require_open_cart(&self, cart_id: &str) -> Result<CartState, OrderError> {
         let cart = self.require_cart(cart_id).await?;
         if cart.is_checked_out() {
-            return Err(OrdersError::CheckedOut);
+            return Err(OrderError::CheckedOut);
         }
         Ok(cart)
     }
@@ -279,7 +279,7 @@ impl<E: Executor> super::Command<E> {
         product_id: &str,
         variant_id: Option<&str>,
         quantity: u32,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let Some(stock) = stock_projection()
             .load(stock_item_id(product_id, variant_id))
             .tenant(&self.tenant)
@@ -289,7 +289,7 @@ impl<E: Executor> super::Command<E> {
             return Ok(());
         };
         match stock.available_for(Some(cart_id), timada_discounts::unix_now()) {
-            Some(available) if available < quantity => Err(OrdersError::OutOfStock {
+            Some(available) if available < quantity => Err(OrderError::OutOfStock {
                 product_id: product_id.to_owned(),
                 available,
             }),
@@ -302,8 +302,8 @@ impl<E: Executor> super::Command<E> {
     pub(crate) async fn require_sellable(
         &self,
         item: &CartItem,
-    ) -> Result<ProductState, OrdersError> {
-        let unavailable = || OrdersError::Unavailable {
+    ) -> Result<ProductState, OrderError> {
+        let unavailable = || OrderError::Unavailable {
             product_id: item.product_id.clone(),
         };
         let product = self
@@ -315,12 +315,12 @@ impl<E: Executor> super::Command<E> {
         }
         match (&item.variant_id, product.variants.is_empty()) {
             (None, true) => {}
-            (None, false) => return Err(OrdersError::VariantRequired),
-            (Some(_), true) => return Err(OrdersError::VariantNotFound),
+            (None, false) => return Err(OrderError::VariantRequired),
+            (Some(_), true) => return Err(OrderError::VariantNotFound),
             (Some(variant_id), false) => {
                 product
                     .variant(variant_id)
-                    .ok_or(OrdersError::VariantNotFound)?;
+                    .ok_or(OrderError::VariantNotFound)?;
             }
         }
         Ok(product)

@@ -73,10 +73,10 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
         provider: PROVIDER_STRIPE.to_owned(),
         publishable_key: form.publishable_key,
         secret_key_sealed: payments
-            .seal(secret_key)
+            .seal(&access.tenant.id, secret_key)
             .map_err(topcoat::Error::from_anyhow)?,
         webhook_secret_sealed: payments
-            .seal(webhook_secret)
+            .seal(&access.tenant.id, webhook_secret)
             .map_err(topcoat::Error::from_anyhow)?,
     };
     match tenancy(cx)

@@ -5,7 +5,7 @@ pub mod change;
 pub mod remove;
 
 use timada_catalog::CURRENCIES;
-use timada_orders::{MAX_SHIPPING_NAME_LEN, OrdersError, ShippingMethod};
+use timada_orders::{MAX_SHIPPING_NAME_LEN, OrderError, ShippingMethod};
 use timada_tenancy::PERMISSION_SHIPPING_MANAGE;
 use topcoat::{
     Result,
@@ -66,7 +66,7 @@ where
         &timada_orders::Command<crate::cluster::Executor>,
         &str,
         &str,
-    ) -> std::result::Result<(), OrdersError>,
+    ) -> std::result::Result<(), OrderError>,
 {
     let access = require_tenant(cx).await?;
     access
@@ -77,7 +77,7 @@ where
     let gateway = orders(&access)?;
     match run(&gateway, &access.user_id, &method_id).await {
         Ok(()) => Ok(see_other(shipping_url(cx, &slug, None, Some(message)))),
-        Err(OrdersError::ShippingMethodNotFound) => Ok(see_other(shipping_url(
+        Err(OrderError::ShippingMethodNotFound) => Ok(see_other(shipping_url(
             cx,
             &slug,
             Some("shipping_method_not_found"),

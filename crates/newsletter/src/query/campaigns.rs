@@ -25,6 +25,8 @@ pub struct CampaignRow {
     pub delivered: i64,
     /// Mails the mail server did not take.
     pub failed: i64,
+    /// Subscribers who left the list before their mail went out.
+    pub skipped: i64,
     /// The cadence of its schedule, when it has one.
     pub cadence: Option<String>,
 }
@@ -36,11 +38,15 @@ macro_rules! select_campaigns {
         concat!(
             "SELECT c.*,
                 (SELECT COUNT(*) FROM newsletter_deliveries d
-                 WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id AND d.failed = 0)
+                 WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id
+                   AND d.failed = 0 AND d.skipped = 0)
                  AS delivered,
                 (SELECT COUNT(*) FROM newsletter_deliveries d
                  WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id AND d.failed = 1)
-                 AS failed
+                 AS failed,
+                (SELECT COUNT(*) FROM newsletter_deliveries d
+                 WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id AND d.skipped = 1)
+                 AS skipped
              FROM newsletter_campaigns c ",
             $tail
         )
@@ -188,6 +194,8 @@ pub struct EditionRow {
     pub closed_at: Option<i64>,
     pub delivered: i64,
     pub failed: i64,
+    /// Subscribers who left the list before their mail went out.
+    pub skipped: i64,
 }
 
 /// A campaign's editions, newest first.
@@ -200,11 +208,15 @@ pub async fn editions_of_campaign(
     Ok(sqlx::query_as(
         "SELECT e.*,
             (SELECT COUNT(*) FROM newsletter_deliveries d
-             WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.failed = 0)
+             WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id
+               AND d.failed = 0 AND d.skipped = 0)
              AS delivered,
             (SELECT COUNT(*) FROM newsletter_deliveries d
              WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.failed = 1)
-             AS failed
+             AS failed,
+            (SELECT COUNT(*) FROM newsletter_deliveries d
+             WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.skipped = 1)
+             AS skipped
          FROM newsletter_editions e
          WHERE e.tenant_id = ?1 AND e.campaign_id = ?2
          ORDER BY e.opened_at DESC, e.id DESC
@@ -240,7 +252,8 @@ pub async fn edition_progress(
     Ok(sqlx::query_as(
         "SELECT zone, SUM(delivered) AS delivered, SUM(owed) AS owed FROM (
             SELECT COALESCE(s.time_zone, ?4) AS zone,
-                CASE WHEN d.subscriber_id IS NOT NULL THEN 1 ELSE 0 END AS delivered,
+                CASE WHEN d.subscriber_id IS NOT NULL AND d.skipped = 0 THEN 1 ELSE 0 END
+                    AS delivered,
                 CASE WHEN d.subscriber_id IS NULL AND s.status = 'confirmed'
                      AND (?3 IS NULL OR s.language = ?3) THEN 1 ELSE 0 END AS owed
             FROM newsletter_subscribers s

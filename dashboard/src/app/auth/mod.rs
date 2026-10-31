@@ -20,28 +20,7 @@ use crate::auth::now;
 
 /// The query-string code the pages show for a domain error.
 pub fn error_code(err: &IdentityError) -> &'static str {
-    match err {
-        IdentityError::NotRegistered => "not_registered",
-        IdentityError::AlreadyRegistered => "already_registered",
-        IdentityError::AlreadyLinkedToOtherUser => "already_linked",
-        IdentityError::SessionMismatch => "session_changed",
-        IdentityError::UnexpectedlyAuthorized => "signed_in",
-        IdentityError::Unauthorized => "sign_in_required",
-        IdentityError::LastSignInMethod => "last_method",
-        IdentityError::TooManyPasskeys => "too_many_passkeys",
-        IdentityError::UnknownCredential | IdentityError::UserNotFound => "not_registered",
-        IdentityError::Forbidden => "not_allowed",
-        IdentityError::InvalidCredentials => "invalid_credentials",
-        IdentityError::InvalidCode => "invalid_code",
-        IdentityError::CodeExpired => "code_expired",
-        IdentityError::TooManyAttempts => "too_many_attempts",
-        IdentityError::CodeRecentlySent => "code_recently_sent",
-        IdentityError::InvalidEmail => "invalid_email",
-        IdentityError::WeakPassword => "weak_password",
-        IdentityError::WrongPassword => "wrong_password",
-        IdentityError::Write(err) => timada_core::write_refusal(err).unwrap_or("failed"),
-        IdentityError::InvalidState | IdentityError::Other(_) => "failed",
-    }
+    err.code().unwrap_or("failed")
 }
 
 #[derive(serde::Serialize)]

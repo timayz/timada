@@ -12,11 +12,14 @@ use timada_catalog::CatalogError;
 use timada_discounts::{
     DISCOUNT_ALREADY_USED, DISCOUNT_EXHAUSTED, DISCOUNT_UNKNOWN, DiscountError, RESERVATION_SECS,
 };
+use timada_invoicing::tax::{self, Destination, TaxProfile, TaxRefusal};
 use timada_orders::aggregator::CheckoutRequested;
 use timada_orders::{
-    INVOICING_NOT_CONFIGURED, OpenedPayment, OrdersError, PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
+    INVOICING_NOT_CONFIGURED, OSS_REQUIRED_FOR_CURRENCY, OpenedPayment, OrderError,
+    PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
 };
 
+use super::webhook::OUT_OF_STOCK;
 use super::{DASHBOARD_ACTOR, NewPayment, Payments};
 
 /// The cursor identity of the subscription, in the store.
@@ -25,9 +28,6 @@ pub const SUBSCRIPTION: &str = "timada-dashboard/payments";
 /// A request older than this is history being replayed (a node catching up)
 /// or one nobody waits for any more: it is refused, never charged.
 const ANSWER_WINDOW_SECS: u64 = 10 * 60;
-
-/// The refusal of a checkout that wants more than is left.
-const OUT_OF_STOCK: &str = "out_of_stock";
 
 /// The store, to write the answers with (a handler only
 /// borrows the one it runs on).
@@ -85,8 +85,30 @@ async fn on_checkout_requested<E: Executor>(
         return Ok(());
     };
     // No sale without an invoice that can name the merchant.
-    if payments.company_of(&merchant).await?.is_none() {
+    let Some(legal) = payments
+        .company_of(&merchant)
+        .await?
+        .and_then(|company| company.identity)
+    else {
         refuse(INVOICING_NOT_CONFIGURED).await?;
+        return Ok(());
+    };
+    // Nor one whose VAT the merchant could not remit: an EU distance sale
+    // in another currency than the euro needs the One-Stop Shop. The buyer's
+    // VAT number is taken at its word here; invoicing checks it with VIES.
+    let profile = TaxProfile {
+        vat_registered: legal.is_vat_registered(),
+        oss_registered: legal.oss_registered,
+    };
+    let destination = Destination {
+        country: pending.request.shipping.country.clone(),
+        postal_code: pending.request.shipping.postal_code.clone(),
+        vat_number: pending.request.vat_number.clone(),
+    };
+    if let Err(TaxRefusal::OssRequiredForCurrency) =
+        tax::accepts(profile, &destination, &pending.currency)
+    {
+        refuse(OSS_REQUIRED_FOR_CURRENCY).await?;
         return Ok(());
     }
     let Some(account) = payments.account_of(&merchant)? else {
@@ -209,7 +231,7 @@ async fn on_checkout_requested<E: Executor>(
         Ok(()) => Ok(()),
         // Retried: the payment opens again under the same idempotency key
         // and the reservation is held again for the same cart.
-        Err(err @ (OrdersError::Write(_) | OrdersError::Other(_))) => Err(err.into()),
+        Err(err @ (OrderError::Write(_) | OrderError::Other(_))) => Err(err.into()),
         Err(err) => {
             release().await;
             tracing::warn!(%cart_id, %err, "a payment opened for a cart that cannot record it");

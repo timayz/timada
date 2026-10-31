@@ -27,14 +27,7 @@ pub struct MembershipRow {
     pub role: String,
 }
 
-/// A `LIKE` pattern matching `q` anywhere, with its wildcards escaped.
-fn contains(q: &str) -> String {
-    let escaped = q
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    format!("%{escaped}%")
-}
+use timada_core::like_contains as contains;
 
 /// The tenants `user_id` is a member of, by name.
 pub async fn tenants_of_user(pool: &SqlitePool, user_id: &str) -> sqlx::Result<Vec<MembershipRow>> {

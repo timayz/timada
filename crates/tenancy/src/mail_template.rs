@@ -5,7 +5,11 @@
 //! %}`). Each mail has its documented set of variables; a template naming any
 //! other is refused when saved. Variables are HTML-escaped, so what a shopper
 //! typed (a note, an address) can never add markup, and the template itself
-//! may not carry scripts, frames, forms or event handlers.
+//! may not carry scripts, frames, forms or event handlers. That last check
+//! runs on the template as written and again on every mail it renders: the
+//! template language can spell a tag out of pieces (`<{% if true
+//! %}script{% endif %}>`), and only the output shows what a mail client
+//! will read.
 //!
 //! The merchant may also write the mail's plain-text part, a template over
 //! the same variables printed as they are. Without it, the text is derived
@@ -515,6 +519,21 @@ pub enum MailVars {
     AutomationCustomer(AutomationCustomerVars),
 }
 
+impl MailVars {
+    /// The mail these are the variables of.
+    pub fn kind(&self) -> ShopMailKind {
+        match self {
+            Self::ShopperCode(_) => ShopMailKind::ShopperCode,
+            Self::OrderConfirmation(_) => ShopMailKind::OrderConfirmation,
+            Self::ReviewRequest(_) => ShopMailKind::ReviewRequest,
+            Self::NewsletterConfirmation(_) => ShopMailKind::NewsletterConfirmation,
+            Self::Newsletter(_) => ShopMailKind::Newsletter,
+            Self::AutomationOrder(_) => ShopMailKind::AutomationOrder,
+            Self::AutomationCustomer(_) => ShopMailKind::AutomationCustomer,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ShopVars {
     pub name: String,
@@ -741,6 +760,8 @@ pub fn render(
         .template_from_named_str("body.html", html)
         .and_then(|template| template.render(&ctx))
         .map_err(|err| describe("Body", &err))?;
+    // What the mail client will read, not what the merchant wrote.
+    check_markup(vars.kind(), &html, Markup::Rendered)?;
     let text = text.map(|text| render_text(text, vars)).transpose()?;
     Ok(RenderedMail {
         subject: subject.split_whitespace().collect::<Vec<_>>().join(" "),
@@ -758,10 +779,68 @@ pub fn render_text(text: &str, vars: &MailVars) -> Result<String, MailTemplateEr
         .map_err(|err| describe("Plain text", &err))
 }
 
+/// What a markup check looks at: the template as the merchant wrote it, or
+/// a mail rendered from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Markup {
+    /// Variables are still `{{ name }}`; a URL variable counts as a safe
+    /// address.
+    Source,
+    /// Variables are printed; an address left empty (an optional URL
+    /// variable with nothing in it) is nothing to follow.
+    Rendered,
+}
+
+/// Decodes the character references HTML allows in an attribute (`&#x2f;`,
+/// `&#47;`, `&amp;`, ...): a mail client reads `javascript&#58;` as
+/// `javascript:`, so the check must too. Minijinja's escaping writes `/` as
+/// `&#x2f;`, so a rendered address needs it to read as one.
+fn decode_entities(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let Some(end) = rest.find(';').filter(|end| *end <= 12) else {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
+        let entity = &rest[1..end];
+        let decoded = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix('#')
+                .and_then(|number| match number.strip_prefix(['x', 'X']) {
+                    Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                    None => number.parse().ok(),
+                })
+                .and_then(char::from_u32),
+        };
+        match decoded {
+            Some(character) => {
+                out.push(character);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Whether a link or picture address is one a mail may carry: a web or
-/// mail address written out, an anchor, a picture's bytes, or a whole URL
-/// variable of the mail.
-fn safe_url(kind: ShopMailKind, attribute: &str, value: &str) -> bool {
+/// mail address written out, an anchor, a picture's bytes, or (in the
+/// source) a whole URL variable of the mail. Entities are decoded first.
+fn safe_url(kind: ShopMailKind, attribute: &str, value: &str, markup: Markup) -> bool {
+    let value = decode_entities(value);
     let value = value.trim();
     let lower = value.to_ascii_lowercase();
     if ["https://", "http://", "mailto:", "tel:", "#"]
@@ -776,15 +855,33 @@ fn safe_url(kind: ShopMailKind, attribute: &str, value: &str) -> bool {
     {
         return true;
     }
-    value
-        .strip_prefix("{{")
-        .and_then(|rest| rest.strip_suffix("}}"))
-        .is_some_and(|name| kind.url_variables().contains(&name.trim()))
+    match markup {
+        Markup::Source => value
+            .strip_prefix("{{")
+            .and_then(|rest| rest.strip_suffix("}}"))
+            .is_some_and(|name| kind.url_variables().contains(&name.trim())),
+        Markup::Rendered => value.is_empty(),
+    }
+}
+
+/// Whether `html` carries a link (`<a href>`) to `url`, entities decoded.
+pub fn links_to(html: &str, url: &str) -> bool {
+    let found = RefCell::new(false);
+    let settings =
+        RewriteStrSettings::new().append_element_content_handler(element!("a[href]", |el| {
+            if let Some(href) = el.get_attribute("href")
+                && decode_entities(&href).trim() == url
+            {
+                *found.borrow_mut() = true;
+            }
+            Ok(())
+        }));
+    rewrite_str(html, settings).is_ok() && found.into_inner()
 }
 
 /// Refuses markup a mail must not carry: scripts, frames, plug-ins, forms,
 /// event handlers and links that run code.
-fn check_markup(kind: ShopMailKind, html: &str) -> Result<(), MailTemplateError> {
+fn check_markup(kind: ShopMailKind, html: &str, markup: Markup) -> Result<(), MailTemplateError> {
     const FORBIDDEN: [&str; 10] = [
         "script", "iframe", "frame", "frameset", "object", "embed", "applet", "form", "base",
         "link",
@@ -807,7 +904,7 @@ fn check_markup(kind: ShopMailKind, html: &str) -> Result<(), MailTemplateError>
                 } else if matches!(
                     name.as_str(),
                     "href" | "src" | "action" | "formaction" | "background" | "poster"
-                ) && !safe_url(kind, &name, &attribute.value())
+                ) && !safe_url(kind, &name, &attribute.value(), markup)
                 {
                     Some(format!(
                         "<{tag} {name}=\"…\"> must start with https:// (or http://, mailto:, \
@@ -899,7 +996,8 @@ pub fn validate(kind: ShopMailKind, subject: &str, html: &str) -> Result<(), Mai
     let env = environment();
     check_variables(kind, &env, "Subject", "subject.txt", subject)?;
     check_variables(kind, &env, "Body", "body.html", html)?;
-    check_markup(kind, html)?;
+    check_markup(kind, html, Markup::Source)?;
+    // The renders below check the output's markup too.
     render(subject, html, None, &kind.check_sample(true))?;
     render(subject, html, None, &kind.check_sample(false)).map_err(optional_parts)?;
     Ok(())
@@ -1187,6 +1285,20 @@ mod tests {
             ("<iframe src=\"https://example.com\"></iframe>", "<iframe>"),
             ("<form><input></form>", "<form>"),
             ("<meta http-equiv=\"refresh\" content=\"0\">", "http-equiv"),
+            // Spelt with entities: a mail client decodes them, so does the check.
+            ("<a href=\"javascript&#58;alert(1)\">x</a>", "href"),
+            ("<a href=\"&#x6a;avascript:alert(1)\">x</a>", "href"),
+            // Spelt by the template language: only the rendered mail shows it.
+            (
+                "<{% if true %}script{% endif %}>alert(1)</script>",
+                "<script>",
+            ),
+            ("<p {{ 'onclick' }}=\"x()\">hi</p>", "onclick"),
+            ("<a href=\"{{ 'java' ~ 'script:x' }}\">x</a>", "href"),
+            (
+                "{% set tag = 'iframe' %}<{{ tag }} src=\"https://x\"></{{ tag }}>",
+                "<iframe>",
+            ),
         ] {
             let err = validate(ShopMailKind::ReviewRequest, "Review", html).unwrap_err();
             assert!(err.0.contains(expected), "{html}: {err}");
@@ -1198,6 +1310,67 @@ mod tests {
              <img src=\"https://shop.example.com/logo.png\" alt=\"\">",
         )
         .unwrap();
+        // An optional address left empty renders nothing to follow.
+        validate(
+            ShopMailKind::ReviewRequest,
+            "Review",
+            "<img src=\"{{ shop.logo_url }}\" alt=\"\"><a href=\"{{ link }}\">Review</a>",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_rendered_mail_is_checked_as_the_client_reads_it() {
+        let kind = ShopMailKind::ShopperCode;
+        // A variable cannot add markup (escaped), but the template can spell
+        // some: refused at render, whatever the source check said.
+        let err = render(
+            "Code",
+            "<{% if shop.name %}script{% endif %}>alert(1)</script>",
+            None,
+            &kind.sample(ShopVars::named("Acme")),
+        )
+        .unwrap_err();
+        assert!(err.0.contains("<script>"), "{err}");
+        // Rendered addresses come out with `/` escaped and still read as
+        // addresses.
+        let mail = render(
+            "Code",
+            "<img src=\"{{ shop.logo_url }}\" alt=\"\">",
+            None,
+            &kind.sample(ShopVars {
+                logo_url: Some("https://media.example.com/t1/LOGO.png".to_owned()),
+                ..ShopVars::named("Acme")
+            }),
+        )
+        .unwrap();
+        assert!(mail.html.contains("&#x2f;"), "{}", mail.html);
+    }
+
+    #[test]
+    fn a_link_is_found_once_entities_are_decoded() {
+        let url = "https://shop.example.com/u?t=1&b=2";
+        assert!(links_to(
+            "<p><a href=\"https:&#x2f;&#x2f;shop.example.com&#x2f;u?t=1&amp;b=2\">leave</a></p>",
+            url
+        ));
+        assert!(links_to(
+            "<a href='https://shop.example.com/u?t=1&b=2'>x</a>",
+            url
+        ));
+        assert!(!links_to(
+            "<p>https://shop.example.com/u?t=1&amp;b=2</p>",
+            url
+        ));
+        assert!(!links_to(
+            "<a href=\"https://shop.example.com/\">x</a>",
+            url
+        ));
+        assert!(!links_to("<!-- unsubscribe_url -->", url));
+        assert_eq!(
+            decode_entities("a&#x2f;b&amp;c&#58;d&unknown;e&"),
+            "a/b&c:d&unknown;e&"
+        );
     }
 
     #[test]

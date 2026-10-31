@@ -12,8 +12,8 @@ use evento::{
 use timada_orders::aggregator::Placed;
 use topcoat::context::{AppContext, Cx};
 
-use crate::auth::mail::send_order_confirmation;
 use crate::cluster::Executor as Store;
+use crate::mail::send_order_confirmation;
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/order-confirmations";

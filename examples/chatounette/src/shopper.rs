@@ -108,18 +108,30 @@ pub struct CheckoutDraft {
     pub country: String,
     pub phone: String,
     pub note: String,
-    /// A business buyer's EU VAT number.
+    /// A business buyer's EU VAT number. The form has no such field in a
+    /// shop that does not sell to businesses.
+    #[serde(default)]
     pub vat_number: String,
     /// Not empty when the shopper is billed at another address than the
-    /// delivery one; that address follows.
+    /// delivery one; that address follows. Unticked, the billing fieldset is
+    /// disabled and the browser sends none of it.
+    #[serde(default)]
     pub billing_different: String,
+    #[serde(default)]
     pub billing_name: String,
+    #[serde(default)]
     pub billing_line1: String,
+    #[serde(default)]
     pub billing_line2: String,
+    #[serde(default)]
     pub billing_postal_code: String,
+    #[serde(default)]
     pub billing_city: String,
+    #[serde(default)]
     pub billing_country: String,
-    /// The shipping method picked; empty in a shop that ships for free.
+    /// The shipping method picked; the form has no methods in a shop that
+    /// ships for free.
+    #[serde(default)]
     pub shipping_method: String,
 }
 

@@ -59,4 +59,31 @@ impl IdentityError {
             _ => true,
         }
     }
+
+    /// A stable code for the refusal, for a page to word in its own
+    /// language; `None` for an infrastructure failure or a state no page
+    /// should reach.
+    pub fn code(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::NotRegistered | Self::UnknownCredential | Self::UserNotFound => "not_registered",
+            Self::AlreadyRegistered => "already_registered",
+            Self::AlreadyLinkedToOtherUser => "already_linked",
+            Self::SessionMismatch => "session_changed",
+            Self::UnexpectedlyAuthorized => "signed_in",
+            Self::Unauthorized => "sign_in_required",
+            Self::LastSignInMethod => "last_method",
+            Self::TooManyPasskeys => "too_many_passkeys",
+            Self::Forbidden => "not_allowed",
+            Self::InvalidCredentials => "invalid_credentials",
+            Self::InvalidCode => "invalid_code",
+            Self::CodeExpired => "code_expired",
+            Self::TooManyAttempts => "too_many_attempts",
+            Self::CodeRecentlySent => "code_recently_sent",
+            Self::InvalidEmail => "invalid_email",
+            Self::WeakPassword => "weak_password",
+            Self::WrongPassword => "wrong_password",
+            Self::Write(err) => return timada_core::write_refusal(err),
+            Self::InvalidState | Self::Other(_) => return None,
+        })
+    }
 }

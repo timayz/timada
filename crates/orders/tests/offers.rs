@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use timada_discounts::{CreateDiscount, CreateOffer, DiscountValue};
-use timada_orders::{Checkout, OrdersError};
+use timada_orders::{Checkout, OrderError};
 
 type Discounts = timada_discounts::Command<evento::Sqlite>;
 
@@ -88,7 +88,12 @@ async fn extra_units_pay_full_price() {
         .map(|line| (line.unit_amount_cents, line.quantity))
         .collect();
     assert_eq!(lines, vec![(2000, 1), (1200, 1), (3000, 2)]);
-    assert_eq!(quote.tax_categories.len(), 3);
+    assert!(
+        quote
+            .lines
+            .iter()
+            .all(|line| line.tax_category() == "standard")
+    );
     assert_eq!(quote.line_offers.len(), 3);
     assert!(quote.line_offers[1].is_some() && quote.line_offers[2].is_none());
     assert_eq!(quote.item_count(), 4);
@@ -254,6 +259,6 @@ async fn a_total_shown_before_the_offer_ended_is_refused() {
     let pending = orders.pending_payment(&cart_id, &request_id).await;
     assert!(matches!(
         pending,
-        Err(OrdersError::PriceChanged { total_cents: 5000 })
+        Err(OrderError::PriceChanged { total_cents: 5000 })
     ));
 }

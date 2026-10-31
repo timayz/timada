@@ -1,7 +1,7 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{StorefrontAddressCleared, StorefrontAddressSet};
-use crate::error::OrdersError;
+use crate::error::OrderError;
 use crate::value_object::{normalize_storefront_url, storefront_id};
 
 #[evento::command]
@@ -19,7 +19,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         url: Option<&str>,
         routing_key: Option<String>,
-    ) -> Result<(), OrdersError> {
+    ) -> Result<(), OrderError> {
         let url = url.map(normalize_storefront_url).transpose()?;
         let state = self.load_storefront().await?;
         if state.as_ref().and_then(|state| state.url.as_ref()) == url.as_ref() {

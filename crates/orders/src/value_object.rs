@@ -3,7 +3,7 @@
 
 use rand::Rng;
 
-use crate::OrdersError;
+use crate::OrderError;
 
 /// Who a shopper's events say did them: a guest has no account to name.
 pub const STOREFRONT_ACTOR: &str = "storefront";
@@ -11,7 +11,7 @@ pub const STOREFRONT_ACTOR: &str = "storefront";
 pub const MAX_LINE_QUANTITY: u32 = 99;
 /// The most different items a cart holds.
 pub const MAX_CART_LINES: usize = 50;
-pub const MAX_EMAIL_LEN: usize = 254;
+pub use timada_core::MAX_EMAIL_LEN;
 pub const MAX_SHIP_NAME_LEN: usize = 120;
 pub const MAX_ADDRESS_LINE_LEN: usize = 200;
 pub const MAX_POSTAL_CODE_LEN: usize = 20;
@@ -60,6 +60,11 @@ pub struct OrderLine {
     /// The price of one, in minor units of the order's currency.
     pub unit_amount_cents: u64,
     pub quantity: u32,
+    /// What kind of goods it is for VAT (`standard`, `books`, ...), as the
+    /// product said when it was sold: the invoice reads it here, not from
+    /// the product as it is now. Empty reads as `standard`
+    /// ([`tax_category`](Self::tax_category)).
+    pub tax_category: String,
 }
 
 /// The payment that paid for an order. Frozen in `events.lock`: the fields
@@ -83,11 +88,25 @@ pub const PAYMENTS_UNAVAILABLE: &str = "payments_unavailable";
 /// The refusal of a request to pay when the merchant has not said who it is
 /// in law yet: no sale goes ahead without an invoice that can name it.
 pub const INVOICING_NOT_CONFIGURED: &str = "invoicing_not_configured";
+/// The refusal of a request to pay for an EU distance sale in a currency
+/// other than the euro from a merchant not registered for the One-Stop
+/// Shop: the sale would owe the destination's VAT, which only the One-Stop
+/// Shop lets the merchant remit ([`timada_invoicing::tax::accepts`]).
+pub const OSS_REQUIRED_FOR_CURRENCY: &str = "oss_required_for_currency";
 
 impl OrderLine {
     /// The price of the whole line.
     pub fn amount_cents(&self) -> u64 {
         self.unit_amount_cents * u64::from(self.quantity)
+    }
+
+    /// The kind of goods for VAT; a line that says nothing is standard goods.
+    pub fn tax_category(&self) -> &str {
+        if self.tax_category.is_empty() {
+            timada_catalog::TAX_CATEGORY_STANDARD
+        } else {
+            &self.tax_category
+        }
     }
 }
 
@@ -157,14 +176,14 @@ pub fn order_confirmation_id(order_id: &str) -> String {
 
 /// The address of a storefront as the merchant typed it, absolute and
 /// without a trailing `/`.
-pub fn normalize_storefront_url(url: &str) -> Result<String, OrdersError> {
+pub fn normalize_storefront_url(url: &str) -> Result<String, OrderError> {
     let url = url.trim().trim_end_matches('/');
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
-        .ok_or(OrdersError::InvalidStorefrontUrl)?;
+        .ok_or(OrderError::InvalidStorefrontUrl)?;
     if rest.is_empty() || url.len() > 200 || url.chars().any(char::is_whitespace) {
-        return Err(OrdersError::InvalidStorefrontUrl);
+        return Err(OrderError::InvalidStorefrontUrl);
     }
     Ok(url.to_owned())
 }
@@ -188,23 +207,14 @@ pub fn new_reference() -> String {
 /// something on both sides, nothing that is not printable. (The identity and
 /// tenancy contexts have the same rule; the crates do not depend on each
 /// other.)
-pub fn normalize_email(email: &str) -> Result<String, OrdersError> {
-    let email = email.trim().to_lowercase();
-    let valid = email.len() <= MAX_EMAIL_LEN
-        && !email.chars().any(|c| c.is_whitespace() || c.is_control())
-        && matches!(email.split_once('@'), Some((local, domain))
-            if !local.is_empty() && !domain.is_empty() && !domain.contains('@'));
-    if valid {
-        Ok(email)
-    } else {
-        Err(OrdersError::InvalidEmail)
-    }
+pub fn normalize_email(email: &str) -> Result<String, OrderError> {
+    timada_core::normalize_email(email).ok_or(OrderError::InvalidEmail)
 }
 
 /// Trims every field, drops empty optional ones, uppercases the country and
 /// checks the lengths.
-pub fn normalize_shipping(address: ShippingAddress) -> Result<ShippingAddress, OrdersError> {
-    let text = |value: &str, max: usize, err: fn() -> OrdersError| {
+pub fn normalize_shipping(address: ShippingAddress) -> Result<ShippingAddress, OrderError> {
+    let text = |value: &str, max: usize, err: fn() -> OrderError| {
         let value = value.trim();
         if value.is_empty() || value.chars().count() > max || value.chars().any(char::is_control) {
             Err(err())
@@ -212,7 +222,7 @@ pub fn normalize_shipping(address: ShippingAddress) -> Result<ShippingAddress, O
             Ok(value.to_owned())
         }
     };
-    let optional = |value: Option<String>, max: usize, err: fn() -> OrdersError| match value
+    let optional = |value: Option<String>, max: usize, err: fn() -> OrderError| match value
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
@@ -222,24 +232,22 @@ pub fn normalize_shipping(address: ShippingAddress) -> Result<ShippingAddress, O
     };
     let country = address.country.trim().to_ascii_uppercase();
     if country.len() != 2 || !country.bytes().all(|b| b.is_ascii_uppercase()) {
-        return Err(OrdersError::InvalidCountry);
+        return Err(OrderError::InvalidCountry);
     }
     Ok(ShippingAddress {
-        name: text(&address.name, MAX_SHIP_NAME_LEN, || {
-            OrdersError::InvalidName
-        })?,
+        name: text(&address.name, MAX_SHIP_NAME_LEN, || OrderError::InvalidName)?,
         line1: text(&address.line1, MAX_ADDRESS_LINE_LEN, || {
-            OrdersError::InvalidAddress
+            OrderError::InvalidAddress
         })?,
         line2: optional(address.line2, MAX_ADDRESS_LINE_LEN, || {
-            OrdersError::InvalidAddress
+            OrderError::InvalidAddress
         })?,
         postal_code: text(&address.postal_code, MAX_POSTAL_CODE_LEN, || {
-            OrdersError::InvalidAddress
+            OrderError::InvalidAddress
         })?,
-        city: text(&address.city, MAX_CITY_LEN, || OrdersError::InvalidAddress)?,
+        city: text(&address.city, MAX_CITY_LEN, || OrderError::InvalidAddress)?,
         country,
-        phone: optional(address.phone, MAX_PHONE_LEN, || OrdersError::InvalidPhone)?,
+        phone: optional(address.phone, MAX_PHONE_LEN, || OrderError::InvalidPhone)?,
     })
 }
 
@@ -258,32 +266,32 @@ pub struct NewShippingMethod {
 /// once) and checks the amounts.
 pub fn normalize_shipping_method(
     method: NewShippingMethod,
-) -> Result<NewShippingMethod, OrdersError> {
+) -> Result<NewShippingMethod, OrderError> {
     let name = method.name.trim();
     if name.is_empty()
         || name.chars().count() > MAX_SHIPPING_NAME_LEN
         || name.chars().any(char::is_control)
     {
-        return Err(OrdersError::InvalidShippingName);
+        return Err(OrderError::InvalidShippingName);
     }
     let currency = timada_catalog::normalize_currency(&method.currency)
-        .map_err(|_| OrdersError::InvalidShippingCurrency)?;
+        .map_err(|_| OrderError::InvalidShippingCurrency)?;
     let max = timada_catalog::MAX_AMOUNT_CENTS;
     if method.price_cents > max || method.free_above_cents.is_some_and(|cents| cents > max) {
-        return Err(OrdersError::InvalidShippingPrice);
+        return Err(OrderError::InvalidShippingPrice);
     }
     let mut countries = Vec::with_capacity(method.countries.len());
     for country in &method.countries {
         let country = country.trim().to_ascii_uppercase();
         if country.len() != 2 || !country.bytes().all(|b| b.is_ascii_uppercase()) {
-            return Err(OrdersError::InvalidShippingCountries);
+            return Err(OrderError::InvalidShippingCountries);
         }
         countries.push(country);
     }
     countries.sort();
     countries.dedup();
     if countries.len() > MAX_SHIPPING_COUNTRIES {
-        return Err(OrdersError::InvalidShippingCountries);
+        return Err(OrderError::InvalidShippingCountries);
     }
     Ok(NewShippingMethod {
         name: name.to_owned(),
@@ -304,7 +312,7 @@ pub fn split_countries(text: &str) -> Vec<String> {
 }
 
 /// A billing address: checked like a shipping address, without its phone.
-pub fn normalize_billing(address: ShippingAddress) -> Result<ShippingAddress, OrdersError> {
+pub fn normalize_billing(address: ShippingAddress) -> Result<ShippingAddress, OrderError> {
     Ok(ShippingAddress {
         phone: None,
         ..normalize_shipping(address)?
@@ -315,8 +323,8 @@ pub fn normalize_billing(address: ShippingAddress) -> Result<ShippingAddress, Or
 fn optional_text(
     value: Option<&str>,
     max: usize,
-    err: OrdersError,
-) -> Result<Option<String>, OrdersError> {
+    err: OrderError,
+) -> Result<Option<String>, OrderError> {
     match value.map(str::trim).filter(|v| !v.is_empty()) {
         None => Ok(None),
         Some(value) if value.chars().count() <= max => Ok(Some(value.to_owned())),
@@ -333,7 +341,7 @@ pub const EU_VAT_PREFIXES: &[&str] = &[
 /// An EU VAT number without its spaces, dots and dashes, uppercased: a
 /// country prefix of [`EU_VAT_PREFIXES`] and 2 to 12 letters or digits.
 /// Blank is `None`. Whether the number exists is VIES's to say.
-pub fn normalize_buyer_vat_number(vat_number: Option<&str>) -> Result<Option<String>, OrdersError> {
+pub fn normalize_buyer_vat_number(vat_number: Option<&str>) -> Result<Option<String>, OrderError> {
     let Some(raw) = vat_number else {
         return Ok(None);
     };
@@ -352,22 +360,22 @@ pub fn normalize_buyer_vat_number(vat_number: Option<&str>) -> Result<Option<Str
     if valid {
         Ok(Some(number))
     } else {
-        Err(OrdersError::InvalidVatNumber)
+        Err(OrderError::InvalidVatNumber)
     }
 }
 
-pub fn normalize_note(note: Option<&str>) -> Result<Option<String>, OrdersError> {
-    optional_text(note, MAX_NOTE_LEN, OrdersError::InvalidNote)
+pub fn normalize_note(note: Option<&str>) -> Result<Option<String>, OrderError> {
+    optional_text(note, MAX_NOTE_LEN, OrderError::InvalidNote)
 }
 
-pub fn normalize_tracking(tracking: Option<&str>) -> Result<Option<String>, OrdersError> {
-    optional_text(tracking, MAX_TRACKING_LEN, OrdersError::InvalidTracking)
+pub fn normalize_tracking(tracking: Option<&str>) -> Result<Option<String>, OrderError> {
+    optional_text(tracking, MAX_TRACKING_LEN, OrderError::InvalidTracking)
 }
 
 /// A cancellation needs a reason.
-pub fn normalize_reason(reason: &str) -> Result<String, OrdersError> {
-    optional_text(Some(reason), MAX_REASON_LEN, OrdersError::InvalidReason)?
-        .ok_or(OrdersError::InvalidReason)
+pub fn normalize_reason(reason: &str) -> Result<String, OrderError> {
+    optional_text(Some(reason), MAX_REASON_LEN, OrderError::InvalidReason)?
+        .ok_or(OrderError::InvalidReason)
 }
 
 #[cfg(test)]
@@ -411,7 +419,7 @@ mod tests {
         };
         assert!(matches!(
             normalize_shipping(no_city),
-            Err(OrdersError::InvalidAddress)
+            Err(OrderError::InvalidAddress)
         ));
         let bad_country = ShippingAddress {
             country: "FRA".into(),
@@ -419,7 +427,7 @@ mod tests {
         };
         assert!(matches!(
             normalize_shipping(bad_country),
-            Err(OrdersError::InvalidCountry)
+            Err(OrderError::InvalidCountry)
         ));
     }
 
@@ -486,7 +494,7 @@ mod tests {
             assert!(
                 matches!(
                     normalize_storefront_url(bad),
-                    Err(OrdersError::InvalidStorefrontUrl)
+                    Err(OrderError::InvalidStorefrontUrl)
                 ),
                 "{bad}"
             );

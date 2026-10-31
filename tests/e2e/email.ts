@@ -70,6 +70,12 @@ export async function mailTo(
   return found!;
 }
 
+/// A shop mail's HTML escapes "/" in its links as "&#x2f;"; undo it so a
+/// link can be matched as the shopper's mail client reads it.
+export function unescapeSlashes(html: string | undefined): string {
+  return (html ?? "").replaceAll("&#x2f;", "/");
+}
+
 /// How many messages to `email` whose subject starts with `subject` arrived.
 export async function mailCountOf(request: APIRequestContext, email: string, subject: string): Promise<number> {
   return (await messagesTo(request, email)).filter((m) => m.subject.startsWith(subject)).length;
