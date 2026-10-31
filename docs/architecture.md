@@ -355,7 +355,9 @@ A shopper account belongs to one shop: it lives in the tenant's store
 users (`timada-identity`) are only the merchants' staff. There is no sign-up: a shopper
 asks for a six-digit code, and the first code they hand back creates the account. The
 `Shopper` stream's id derives from the normalized address, so it is its own uniqueness
-index; `ShopperChallenge` keeps only the code's hash and counts the wrong guesses (five
+index; `ShopperChallenge` keeps only a MAC of the code under a key derived from
+`[secrets] key` (`timada_core::CodeVerifier`; the store never holds it, so a storefront's key
+reading the stream cannot try the million codes offline) and counts the wrong guesses (five
 kill it, it lives ten minutes, another may be mailed a minute later); a
 `ShopperSession`'s id derives from a random token the shopper's browser keeps, so
 reading the store reveals no token. An account also keeps up to ten addresses.

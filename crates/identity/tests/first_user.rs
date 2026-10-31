@@ -50,7 +50,7 @@ async fn a_missing_admin_grant_is_repaired_on_sign_in() {
         .event(&FirstUserClaimed {
             user_id: user_id.clone(),
         })
-        .commit(&cmd.0)
+        .commit(&(*cmd))
         .await
         .unwrap();
     evento::append(&user_id)
@@ -67,7 +67,7 @@ async fn a_missing_admin_grant_is_repaired_on_sign_in() {
             email: None,
             picture: None,
         })
-        .commit(&cmd.0)
+        .commit(&(*cmd))
         .await
         .unwrap();
     evento::append(oauth2_account_id("google", "1"))
@@ -77,7 +77,7 @@ async fn a_missing_admin_grant_is_repaired_on_sign_in() {
             provider: "google".to_owned(),
             provider_user_id: "1".to_owned(),
         })
-        .commit(&cmd.0)
+        .commit(&(*cmd))
         .await
         .unwrap();
     assert!(!cmd.load_user(&user_id).await.unwrap().unwrap().is_admin);

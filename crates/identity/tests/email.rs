@@ -549,3 +549,50 @@ async fn a_provider_user_adds_an_address_once() {
         1
     );
 }
+
+#[tokio::test]
+async fn a_code_checks_only_under_the_key_it_was_issued_with() {
+    let executor = executor().await;
+    let cmd = timada_identity::Command::new(executor.clone(), codes());
+    let other = timada_identity::Command::new(
+        executor,
+        std::sync::Arc::new(timada_identity::HmacCodeVerifier::new([9; 32])),
+    );
+    let hash = hash_password(PASSWORD).await.unwrap();
+    let issued = cmd
+        .issue_email_code("alice@example.com", ChallengePurpose::Register, NOW)
+        .await
+        .unwrap();
+    let challenge = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    // Neither the code nor a plain hash of it is in the stream.
+    assert!(
+        !challenge
+            .code_tag
+            .windows(issued.code.len())
+            .any(|window| window == issued.code.as_bytes())
+    );
+    assert_ne!(
+        challenge.code_tag,
+        evento::hash_ids(vec!["email-code", &challenge.id, &issued.code]).into_bytes()
+    );
+    // Without the key, the right code is a wrong guess, and counts as one.
+    assert!(matches!(
+        other
+            .register_with_password(registration("alice@example.com", &issued.code, &hash), NOW)
+            .await,
+        Err(IdentityError::InvalidCode)
+    ));
+    let challenge = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(challenge.failed_attempts, 1);
+    cmd.register_with_password(registration("alice@example.com", &issued.code, &hash), NOW)
+        .await
+        .unwrap();
+}

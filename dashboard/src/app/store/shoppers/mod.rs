@@ -23,7 +23,7 @@ pub mod sign_out_everywhere;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use timada_core::Keys;
+use timada_core::{CodeVerifier, Keys};
 use timada_shoppers::{Shopper, ShopperError, ShopperState};
 use topcoat::{
     Result,
@@ -39,6 +39,9 @@ pub const SHOPPER_TOKEN: &str = "x-shopper-token";
 
 /// What a token answered for no longer signs anyone in.
 pub const SIGNED_OUT: &str = "signed_out";
+
+/// This node holds no `secrets.key`, so no shopper can sign in through it.
+pub const SHOPPER_ACCOUNTS_UNAVAILABLE: &str = "shopper_accounts_unavailable";
 
 pub type Answer = (StatusCode, Json<Value>);
 
@@ -101,6 +104,18 @@ pub async fn signed_in(cx: &Cx, store: &super::TenantStore) -> Result<Option<Sho
 /// The keys of the tenant's personal data (its shoppers', its messages').
 pub fn keys(cx: &Cx, tenant_id: &str) -> Arc<dyn Keys> {
     app_context::<Arc<KeyVault>>(cx).for_tenant(tenant_id)
+}
+
+/// What checks the shoppers' sign-in codes; `Err` is the answer to give when
+/// this node holds no `secrets.key`.
+pub fn codes(cx: &Cx) -> std::result::Result<Arc<dyn CodeVerifier>, Result<Answer>> {
+    match &app_context::<crate::seal::ShopperCodes>(cx).0 {
+        Some(codes) => Ok(codes.clone()),
+        None => Err(refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            SHOPPER_ACCOUNTS_UNAVAILABLE,
+        )),
+    }
 }
 
 /// The shopper's personal data, opened with their key: `None` once the key

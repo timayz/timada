@@ -198,6 +198,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         authorizer,
         media,
         keys,
+        email_codes: crate::seal::email_codes(&config),
+        shopper_codes: crate::seal::shopper_codes(&config),
         payments,
         shop_mail,
         aliexpress,

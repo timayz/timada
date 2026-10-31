@@ -135,7 +135,8 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     cluster.until_confirmed(PEERS_WAIT).await?;
 
     // The owner, by the address they registered with.
-    let identity = timada_identity::Command(platform.clone());
+    let identity =
+        timada_identity::Command::new(platform.clone(), crate::seal::email_codes(&config).0);
     let email = timada_identity::normalize_email(&args.owner)
         .map_err(|_| anyhow::anyhow!("{:?} is not an e-mail address", args.owner))?;
     // The first read waits for a quorum, which a node just opened may not

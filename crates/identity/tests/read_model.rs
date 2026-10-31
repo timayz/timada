@@ -16,7 +16,7 @@ async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
 #[tokio::test]
 async fn users_and_sessions_are_listed_and_stay_idempotent() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), codes());
     let root = register_via_oauth2(&cmd, "google", "root").await;
     let alice = register_via_oauth2(&cmd, "google", "alice").await;
     cmd.add_passkey(add_passkey(Some(&alice), &alice, "cred-alice"))
@@ -95,7 +95,7 @@ async fn users_and_sessions_are_listed_and_stay_idempotent() {
 #[tokio::test]
 async fn revocations_deletions_and_sign_outs_show_up() {
     let (executor, pool) = executor_with_pool().await;
-    let cmd = Command(executor.clone());
+    let cmd = Command::new(executor.clone(), codes());
     let root = register_via_oauth2(&cmd, "google", "root").await;
     let alice = register_via_oauth2(&cmd, "google", "alice").await;
     let laptop = [1u8; 32];

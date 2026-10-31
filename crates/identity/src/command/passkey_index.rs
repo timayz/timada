@@ -39,7 +39,7 @@ impl<E: Executor> Command<E> {
             .original_version(0)
             .routing_key_opt(routing_key)
             .event(&created)
-            .commit(&self.0)
+            .commit(&self.executor)
             .await;
         match result {
             Ok(_) => Ok(()),
@@ -48,7 +48,11 @@ impl<E: Executor> Command<E> {
                     return Err(IdentityError::InvalidState);
                 };
                 if existing.removed {
-                    existing.write()?.event(&created).commit(&self.0).await?;
+                    existing
+                        .write()?
+                        .event(&created)
+                        .commit(&self.executor)
+                        .await?;
                     Ok(())
                 } else if existing.user_id == user_id {
                     Ok(())

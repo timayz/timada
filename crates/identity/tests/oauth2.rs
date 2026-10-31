@@ -279,8 +279,9 @@ async fn concurrent_registrations_of_one_identity_create_one_user() {
 
 #[tokio::test]
 async fn deterministic_ids_ignore_the_default_routing_key() {
-    let cmd = timada_identity::Command(
+    let cmd = timada_identity::Command::new(
         evento::Evento::new(executor().await).default_routing_key("eu-west-1"),
+        codes(),
     );
     let user_id = register_via_oauth2(&cmd, "google", "1").await;
     let outcome = cmd

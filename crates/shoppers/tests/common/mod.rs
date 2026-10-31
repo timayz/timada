@@ -68,3 +68,8 @@ impl ShopperKeyRing for MemoryRing {
 pub fn ring(keys: &Arc<MemoryKeys>) -> Arc<dyn ShopperKeyRing> {
     Arc::new(MemoryRing(keys.clone()))
 }
+
+/// The verifier the tests' codes are tagged under.
+pub fn codes() -> timada_shoppers::HmacCodeVerifier {
+    timada_shoppers::HmacCodeVerifier::new([7; 32])
+}

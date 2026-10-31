@@ -141,7 +141,7 @@ impl<E: Executor> super::Command<E> {
                 user_agent: context.user_agent.clone(),
                 ip: context.ip.clone(),
             })
-            .commit(&self.0)
+            .commit(&self.executor)
             .await?;
 
         match self

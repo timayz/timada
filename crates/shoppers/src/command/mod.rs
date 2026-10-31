@@ -288,7 +288,8 @@ async fn on_forgotten(event: Event<Forgotten>, state: &mut ShopperState) -> anyh
 #[derive(Debug, PartialEq, Eq)]
 pub struct ChallengeState {
     pub id: String,
-    pub code_hash: String,
+    /// The code's MAC under the host's key; see `CodeIssued`.
+    pub code_tag: Vec<u8>,
     /// Unix seconds.
     pub issued_at: u64,
     /// Unix seconds.
@@ -313,7 +314,7 @@ async fn on_code_issued(
     state: &mut ChallengeState,
 ) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
-    state.code_hash = event.data.code_hash.to_owned();
+    state.code_tag = event.data.code_tag.to_owned();
     state.issued_at = event.data.issued_at;
     state.expires_at = event.data.expires_at;
     state.failed_attempts = 0;
@@ -414,10 +415,7 @@ impl<E: Executor> Command<E> {
             .await
     }
 
-    pub(crate) async fn load_challenge(
-        &self,
-        email: &str,
-    ) -> anyhow::Result<Option<ChallengeState>> {
+    pub async fn load_challenge(&self, email: &str) -> anyhow::Result<Option<ChallengeState>> {
         challenge_projection()
             .load(challenge_id(email))
             .tenant(&self.tenant)

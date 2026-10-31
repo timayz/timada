@@ -47,9 +47,12 @@ pub enum Shopper {
 /// code is kept; guesses are counted here so no client can reset them.
 #[evento::aggregate(name = "timada-shoppers/ShopperChallenge")]
 pub enum ShopperChallenge {
-    /// A fresh code, replacing any earlier one. Times are unix seconds.
+    /// A fresh code, replacing any earlier one. `code_tag` is the code's MAC
+    /// under a key the host holds ([`timada_core::CodeVerifier`]): the code
+    /// itself never enters the store, and whoever reads the stream cannot
+    /// try the million codes against it. Times are unix seconds.
     CodeIssued {
-        code_hash: String,
+        code_tag: Vec<u8>,
         issued_at: u64,
         expires_at: u64,
     },

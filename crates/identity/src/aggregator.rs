@@ -145,9 +145,11 @@ pub enum EmailAccount {
 /// can reset them. Times are unix seconds.
 #[evento::aggregate(name = "timada-identity/EmailChallenge")]
 pub enum EmailChallenge {
+    /// `code_tag` is the code's MAC under a key the host holds
+    /// ([`timada_core::CodeVerifier`]): the code never enters the store.
     CodeIssued {
         purpose: ChallengePurpose,
-        code_hash: String,
+        code_tag: Vec<u8>,
         issued_at: u64,
         expires_at: u64,
     },

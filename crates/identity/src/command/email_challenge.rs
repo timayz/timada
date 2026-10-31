@@ -1,6 +1,8 @@
 //! The one-time codes mailed to prove an address. The domain issues a code
-//! and remembers only its hash; the web layer mails the plaintext. Guesses
-//! are counted on the stream, so nothing a client holds can reset them.
+//! and remembers only its MAC under the host's key ([`CodeVerifier`]); the
+//! web layer mails the plaintext. Guesses are counted on the stream, so
+//! nothing a client holds can reset them, and the stream alone gives the
+//! code away to nobody.
 
 use evento::ProjectionAggregate;
 use evento::{Executor, WriteError};
@@ -10,7 +12,7 @@ use crate::error::IdentityError;
 use crate::password::generate_code;
 use crate::value_object::{
     CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, ChallengePurpose, email_challenge_id,
-    email_code_hash, normalize_email,
+    normalize_email,
 };
 
 /// A code to mail. The plaintext exists only in this value.
@@ -71,7 +73,7 @@ impl<E: Executor> super::Command<E> {
         let code = generate_code();
         let issued = CodeIssued {
             purpose,
-            code_hash: email_code_hash(&challenge_id, &code),
+            code_tag: self.codes.tag("", &challenge_id, &code),
             issued_at: now,
             expires_at: now + CODE_TTL_SECS,
         };
@@ -81,7 +83,7 @@ impl<E: Executor> super::Command<E> {
                     .write()?
                     .routing_key_opt(routing_key)
                     .event(&issued)
-                    .commit(&self.0)
+                    .commit(&self.executor)
                     .await?;
             }
             None => {
@@ -89,7 +91,7 @@ impl<E: Executor> super::Command<E> {
                     .original_version(0)
                     .routing_key_opt(routing_key)
                     .event(&issued)
-                    .commit(&self.0)
+                    .commit(&self.executor)
                     .await;
                 match created {
                     Ok(_) => {}
@@ -130,20 +132,22 @@ impl<E: Executor> super::Command<E> {
         if now >= challenge.expires_at {
             return Err(IdentityError::CodeExpired);
         }
-        let matches = email_code_hash(&challenge.id, code.trim()) == challenge.code_hash;
+        let matches = self
+            .codes
+            .verify("", &challenge.id, code, &challenge.code_tag);
         let outcome = if matches {
             challenge
                 .write()?
                 .routing_key_opt(routing_key)
                 .event(&Consumed)
-                .commit(&self.0)
+                .commit(&self.executor)
                 .await
         } else {
             challenge
                 .write()?
                 .routing_key_opt(routing_key)
                 .event(&AttemptFailed)
-                .commit(&self.0)
+                .commit(&self.executor)
                 .await
         };
         match outcome {

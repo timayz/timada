@@ -1,11 +1,14 @@
 //! What every bounded context shares: the refusal code of a write the
 //! store is not taking right now, the reading of a shopper's language and
-//! time zone, and the keys personal data is sealed under ([`keys`]).
+//! time zone, the keys personal data is sealed under ([`keys`]) and what a
+//! stream keeps of a mailed code ([`codes`]).
 
+pub mod codes;
 pub mod keys;
 
 use evento::WriteError;
 
+pub use codes::{CodeVerifier, HmacCodeVerifier};
 pub use keys::{Key, Keys};
 
 /// The refusal code pages and the store API carry when a tenant is not
