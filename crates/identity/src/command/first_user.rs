@@ -23,7 +23,7 @@ impl<E: Executor> Command<E> {
             .event(&FirstUserClaimed {
                 user_id: user_id.to_owned(),
             })
-            .commit(&self.0)
+            .commit(&self.executor)
             .await;
         match claimed {
             Ok(_) => {

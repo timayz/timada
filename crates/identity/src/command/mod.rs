@@ -31,6 +31,7 @@ mod unlink_oauth2;
 mod update_profile;
 
 use std::ops::Deref;
+use std::sync::Arc;
 
 pub use add_email::*;
 pub use add_passkey::*;
@@ -47,6 +48,7 @@ pub use sign_in_with_password::*;
 use evento::{
     Executor, Projection, ProjectionAggregate, WriteBuilder, WriteError, metadata::Event,
 };
+use timada_core::CodeVerifier;
 
 use crate::aggregator::{
     AdminGranted, AdminRevoked, AttemptFailed, Claimed, CodeIssued, Consumed, Created, Deleted,
@@ -61,15 +63,25 @@ use crate::value_object::{
     oauth2_account_id, passkey_credential_id, session_id,
 };
 
-/// The command gateway. Cheap to clone when `E` is (the dashboard's executor
-/// is an `Arc` wrapper).
-pub struct Command<E: Executor>(pub E);
+/// The command gateway: the executor, and what checks the mailed codes
+/// against what their streams keep (a key the host holds, see
+/// [`CodeVerifier`]).
+pub struct Command<E: Executor> {
+    executor: E,
+    codes: Arc<dyn CodeVerifier>,
+}
+
+impl<E: Executor> Command<E> {
+    pub fn new(executor: E, codes: Arc<dyn CodeVerifier>) -> Self {
+        Self { executor, codes }
+    }
+}
 
 impl<E: Executor> Deref for Command<E> {
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.executor
     }
 }
 
@@ -574,7 +586,8 @@ async fn on_email_released(
 pub struct EmailChallengeState {
     pub id: String,
     pub purpose: ChallengePurpose,
-    pub code_hash: String,
+    /// The code's MAC under the host's key; see `CodeIssued`.
+    pub code_tag: Vec<u8>,
     /// Unix seconds.
     pub issued_at: u64,
     /// Unix seconds.
@@ -609,7 +622,7 @@ async fn on_code_issued(
 ) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
     state.purpose = event.data.purpose;
-    state.code_hash = event.data.code_hash.to_owned();
+    state.code_tag = event.data.code_tag.to_owned();
     state.issued_at = event.data.issued_at;
     state.expires_at = event.data.expires_at;
     state.failed_attempts = 0;
@@ -741,7 +754,7 @@ impl<E: Executor> Command<E> {
 
     /// The user including a deleted one (administration pages show those).
     pub async fn load_user_any(&self, id: impl Into<String>) -> anyhow::Result<Option<UserState>> {
-        user_projection().load(id).execute(&self.0).await
+        user_projection().load(id).execute(&self.executor).await
     }
 
     /// The currently linked index entry for a provider identity.
@@ -764,7 +777,7 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<OAuth2AccountState>> {
         oauth2_account_projection()
             .load(oauth2_account_id(provider, provider_user_id))
-            .execute(&self.0)
+            .execute(&self.executor)
             .await
     }
 
@@ -785,7 +798,7 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<PasskeyCredentialState>> {
         passkey_credential_projection()
             .load(passkey_credential_id(credential_id))
-            .execute(&self.0)
+            .execute(&self.executor)
             .await
     }
 
@@ -807,7 +820,7 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<EmailAccountState>> {
         email_account_projection()
             .load(email_account_id(email))
-            .execute(&self.0)
+            .execute(&self.executor)
             .await
     }
 
@@ -818,7 +831,7 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<EmailChallengeState>> {
         email_challenge_projection()
             .load(email_challenge_id(email))
-            .execute(&self.0)
+            .execute(&self.executor)
             .await
     }
 
@@ -828,14 +841,14 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<SessionState>> {
         session_projection()
             .load(session_id(token_hash))
-            .execute(&self.0)
+            .execute(&self.executor)
             .await
     }
 
     pub async fn load_registry(&self) -> anyhow::Result<Option<RegistryState>> {
         registry_projection()
             .load(REGISTRY_ID)
-            .execute(&self.0)
+            .execute(&self.executor)
             .await
     }
 
@@ -861,7 +874,7 @@ impl<E: Executor> Command<E> {
             let mut builder = user.write()?;
             builder.routing_key_opt(routing_key.clone());
             build(&user, &mut builder)?;
-            match builder.commit(&self.0).await {
+            match builder.commit(&self.executor).await {
                 Ok(_) => return Ok(user),
                 Err(WriteError::InvalidOriginalVersion) if attempt < USER_APPEND_ATTEMPTS => {
                     tracing::debug!(user_id, attempt, "user stream raced, retrying");

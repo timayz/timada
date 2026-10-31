@@ -70,7 +70,7 @@ impl<E: Executor> super::Command<E> {
                 user_agent: cmd.context.user_agent,
                 ip: cmd.context.ip,
             })
-            .commit(&self.0)
+            .commit(&self.executor)
             .await?;
 
         match self

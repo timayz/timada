@@ -28,7 +28,7 @@ impl<E: Executor> super::Command<E> {
                 user_agent: context.user_agent,
                 ip: context.ip,
             })
-            .commit(&self.0)
+            .commit(&self.executor)
             .await;
         match started {
             Ok(_) => Ok(()),

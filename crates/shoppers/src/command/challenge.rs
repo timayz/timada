@@ -1,14 +1,16 @@
 //! The one-time codes mailed to prove an address. The domain issues a code
-//! and remembers only its hash; the caller mails the plaintext. Guesses are
-//! counted on the stream, so nothing a client holds can reset them.
+//! and remembers only its MAC under the host's key ([`CodeVerifier`]); the
+//! caller mails the plaintext. Guesses are counted on the stream, so nothing
+//! a client holds can reset them, and the stream alone gives the code away
+//! to nobody.
 
 use evento::{Executor, ProjectionAggregate, WriteError};
+use timada_core::CodeVerifier;
 
 use crate::aggregator::{AttemptFailed, CodeConsumed, CodeIssued};
 use crate::error::ShopperError;
 use crate::value_object::{
-    CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, challenge_id, code_hash,
-    generate_code,
+    CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, challenge_id, generate_code,
 };
 
 /// A code to mail. The plaintext exists only in this value.
@@ -42,6 +44,7 @@ impl<E: Executor> super::Command<E> {
     /// is refused.
     pub async fn issue_code(
         &self,
+        codes: &dyn CodeVerifier,
         email: &str,
         now: u64,
         routing_key: Option<String>,
@@ -58,7 +61,7 @@ impl<E: Executor> super::Command<E> {
 
         let code = generate_code();
         let issued = CodeIssued {
-            code_hash: code_hash(&challenge_id, &code),
+            code_tag: codes.tag(&self.tenant, &challenge_id, &code),
             issued_at: now,
             expires_at: now + CODE_TTL_SECS,
         };
@@ -101,6 +104,7 @@ impl<E: Executor> super::Command<E> {
     /// *after* this returns, so a code is never reusable.
     pub(crate) async fn consume_code(
         &self,
+        codes: &dyn CodeVerifier,
         email: &str,
         code: &str,
         now: u64,
@@ -118,7 +122,7 @@ impl<E: Executor> super::Command<E> {
         if now >= challenge.expires_at {
             return Err(ShopperError::CodeExpired);
         }
-        let matches = code_hash(&challenge.id, code.trim()) == challenge.code_hash;
+        let matches = codes.verify(&self.tenant, &challenge.id, code, &challenge.code_tag);
         let outcome = if matches {
             challenge
                 .write()?

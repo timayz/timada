@@ -6306,8 +6306,10 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "evento",
+ "hmac 0.12.1",
  "jiff",
  "rand 0.9.5",
+ "sha2 0.10.9",
 ]
 
 [[package]]

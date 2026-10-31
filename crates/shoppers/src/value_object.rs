@@ -30,13 +30,6 @@ pub fn challenge_id(email: &str) -> String {
     evento::hash_ids(vec!["shopper-challenge", email])
 }
 
-/// What the challenge stream stores instead of a code. A six-digit code is
-/// guessable under any hash; the attempt cap and the expiry protect it, the
-/// hash only keeps the plaintext out of the store.
-pub fn code_hash(challenge_id: &str, code: &str) -> String {
-    evento::hash_ids(vec!["shopper-code", challenge_id, code])
-}
-
 /// Aggregate id of the session a token opens. Anyone reading the store sees
 /// only this, never the token.
 pub fn session_id(token: &str) -> String {
