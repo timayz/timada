@@ -44,12 +44,28 @@ pub enum DiscountCode {
     Released,
 }
 
-/// The uses of a code with a cap: one stream per discount, with the
-/// deterministic id [`discount_usage_id`](crate::discount_usage_id). A cart
-/// holds at most one use.
+/// The uses of a code with a cap, written in generations: one stream per
+/// discount and generation, with the deterministic id
+/// [`discount_usage_id`](crate::discount_usage_id), each holding at most
+/// [`USAGE_CHUNK`](crate::USAGE_CHUNK) events so a popular code never runs
+/// out of stream versions; [`DiscountUsagePointer`] names the current one.
+/// A cart holds at most one use.
 pub mod usage {
+    use crate::value_object::{CarriedReservation, CarriedUse};
+
     #[evento::aggregate(name = "timada-discounts/DiscountUsage")]
     pub enum DiscountUsage {
+        /// The first event of every generation after the first: what the
+        /// full generation before it ended with. `reserved` are the
+        /// reservations not lapsed when it was opened, `consumed_count` the
+        /// uses orders spent over every generation, `recent` the last orders
+        /// (so one delivered again is still told apart).
+        Opened {
+            reserved: Vec<CarriedReservation>,
+            consumed_count: u32,
+            recent: Vec<CarriedUse>,
+            opened_by: String,
+        },
         /// Held for a checkout until `expires_at` (unix seconds, excluded),
         /// unless the order consumes it first. Reserving again moves the
         /// expiry. The buyer is not named here: the once-per-e-mail rule has
@@ -70,6 +86,16 @@ pub mod usage {
             order_id: String,
             consumed_by: String,
         },
+    }
+
+    /// Which generation of a code's uses is current: one stream per
+    /// discount, with the deterministic id
+    /// [`discount_usage_pointer_id`](crate::discount_usage_pointer_id). No
+    /// stream means generation 0. The writer that finds a generation full
+    /// opens the next one, then rolls the pointer.
+    #[evento::aggregate(name = "timada-discounts/DiscountUsagePointer")]
+    pub enum DiscountUsagePointer {
+        Rolled { generation: u32, rolled_by: String },
     }
 }
 

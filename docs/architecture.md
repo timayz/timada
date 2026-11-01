@@ -304,10 +304,29 @@ and an archived product, give their codes back.
 ## Stock
 
 A shop may count what it holds of a product without variants, or of each variant.
-Each counted thing is its own stream (`timada-catalog/StockItem`, deterministic id
-from the product and variant), so a product's stream stays short however often it
-sells. A thing without a stream, or untracked, sells without limit: counting is
-opt-in.
+Each counted thing has streams of its own (`timada-catalog/StockItem`, deterministic
+id from the product, the variant and a generation number), so a product's stream
+stays short however often it sells. A thing without a stream, or untracked, sells
+without limit: counting is opt-in.
+
+A thing's stock is written in generations of at most `STOCK_CHUNK` (1000) events,
+because every checkout writes to it and a stream has 65 535 versions: a thing that
+sold well would otherwise stop selling after some thirty thousand checkouts.
+`timada-catalog/StockPointer` (one stream per thing) names the current generation.
+The writer that finds a generation full opens the next one with `Opened`, carrying
+what is on hand, the holds not lapsed and the last `RECENT_ORDERS` (256) orders,
+then rolls the pointer and tries its write again. Nothing is ever appended to a full
+generation (every writer checks the version it read against the cap), so every
+writer that opens the next one carries the same state and the first to write it
+wins; the pointer's own stream grows by one event per roll. What a paid order took
+is also written to a stream of the order's own (`timada-catalog/StockTake`), once
+the stock streams are: that is what makes taking, and giving back on cancellation,
+happen once however often the order is delivered, long after the generations forgot
+it. The read models key stock by product and variant, never by stream id, so a roll
+changes nothing they show. Capped discount codes keep their uses the same way
+(`timada-discounts/DiscountUsage` in generations of `USAGE_CHUNK` events, with a
+`DiscountUsagePointer`; `Opened` carries the live reservations, the count of spent
+uses and the last `RECENT_USES` orders).
 
 Stock is held the way a capped discount code is:
 

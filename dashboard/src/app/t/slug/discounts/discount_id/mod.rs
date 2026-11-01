@@ -130,7 +130,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             .await
             .map_err(topcoat::Error::from_anyhow)?
             .map(|usage| {
-                let spent = usage.consumed.len();
+                let spent = usage.consumed_count as usize;
                 (spent, usage.taken_at(now) - spent)
             }),
         None => None,

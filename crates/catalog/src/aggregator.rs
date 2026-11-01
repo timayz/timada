@@ -243,13 +243,32 @@ pub mod category {
 /// The stock events, in their own module: the macro names an event struct
 /// after its variant, and `Released` already belongs to the indexes above.
 pub mod stock {
+    use crate::value_object::{CarriedHold, CarriedTake};
+
     /// How many of one thing the shop holds: a product without variants, or
-    /// one variant of a product. One stream per thing, with the deterministic
-    /// id [`stock_item_id`](crate::stock_item_id), so a product stream stays
-    /// short however often it sells. A thing without a stream (or untracked)
-    /// sells without limit.
+    /// one variant of a product. A thing is counted in generations: one
+    /// stream per generation, with the deterministic id
+    /// [`stock_item_id`](crate::stock_item_id) of the thing and the
+    /// generation, each holding at most [`STOCK_CHUNK`](crate::STOCK_CHUNK)
+    /// events, so a thing that sells for years never runs out of stream
+    /// versions. [`StockPointer`] names the current generation. A thing
+    /// without a stream (or untracked) sells without limit.
     #[evento::aggregate(name = "timada-catalog/StockItem")]
     pub enum StockItem {
+        /// The first event of every generation after the first: what the
+        /// full generation before it ended with. `holds` are the ones not
+        /// lapsed when it was opened, `recent` the last orders that took or
+        /// gave back some of it (so a repeated delivery is still told
+        /// apart).
+        Opened {
+            product_id: String,
+            variant_id: Option<String>,
+            tracked: bool,
+            on_hand: u32,
+            holds: Vec<CarriedHold>,
+            recent: Vec<CarriedTake>,
+            opened_by: String,
+        },
         /// The shop counts it from now on, starting at `on_hand`.
         Tracked {
             product_id: String,
@@ -287,5 +306,38 @@ pub mod stock {
             quantity: u32,
             restored_by: String,
         },
+    }
+
+    /// Which generation of a thing's stock is current: one stream per thing,
+    /// with the deterministic id
+    /// [`stock_pointer_id`](crate::stock_pointer_id). No stream means
+    /// generation 0. The writer that finds a generation full opens the next
+    /// one, then rolls the pointer; a roll is one event per
+    /// [`STOCK_CHUNK`](crate::STOCK_CHUNK) stock events.
+    #[evento::aggregate(name = "timada-catalog/StockPointer")]
+    pub enum StockPointer {
+        Rolled { generation: u32, rolled_by: String },
+    }
+}
+
+pub mod stock_take {
+    use crate::value_object::TakenLine;
+
+    /// What one paid order took off the shelves: one stream per order, with
+    /// the deterministic id [`stock_take_id`](crate::stock_take_id), written
+    /// once the stock streams are. It is what makes taking, and giving back
+    /// on cancellation, happen once however often the order is delivered,
+    /// long after the stock generations forgot the order.
+    #[evento::aggregate(name = "timada-catalog/StockTake")]
+    pub enum StockTake {
+        /// `lines` are the counted things only: an untracked one took
+        /// nothing.
+        Taken {
+            cart_id: String,
+            lines: Vec<TakenLine>,
+            taken_by: String,
+        },
+        /// Everything it took is back on the shelves.
+        Restored { restored_by: String },
     }
 }

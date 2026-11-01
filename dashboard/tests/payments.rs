@@ -1338,7 +1338,7 @@ async fn a_discount_code_is_charged_held_and_invoiced() {
             .load_usage(&ten.id)
             .await
             .unwrap()
-            .filter(|usage| usage.consumed.contains_key(&cart_id))
+            .filter(|usage| usage.consumed_by_cart(&cart_id).is_some())
     })
     .await;
     assert!(usage.reserved.is_empty());

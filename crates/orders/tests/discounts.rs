@@ -130,7 +130,11 @@ async fn a_discounted_payment_makes_a_discounted_order_and_spends_the_use() {
             .unwrap();
     }
     let usage = discounts.load_usage(&id).await.unwrap().unwrap();
-    assert_eq!(usage.consumed.get(&cart_id), Some(&placed.order_id));
+    assert_eq!(usage.consumed_count, 1);
+    assert_eq!(
+        usage.consumed_by_cart(&cart_id),
+        Some(placed.order_id.as_str())
+    );
 }
 
 #[tokio::test]

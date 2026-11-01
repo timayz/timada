@@ -6,8 +6,7 @@ use crate::error::DiscountError;
 
 pub const MIN_CODE_LEN: usize = 3;
 pub const MAX_CODE_LEN: usize = 32;
-/// The most orders a capped code serves: its usage stream holds a few events
-/// per use and has to stay well inside a stream's versions.
+/// The most orders a capped code serves.
 pub const MAX_USES: u32 = 10_000;
 /// 100 %, in basis points.
 pub const MAX_PERCENT_BPS: u32 = 10_000;
@@ -118,9 +117,39 @@ pub fn discount_code_id(code: &str) -> String {
     evento::hash_ids(vec!["discount-code", code])
 }
 
-/// The usage stream of a capped discount.
-pub fn discount_usage_id(discount_id: &str) -> String {
-    evento::hash_ids(vec!["discount-usage", discount_id])
+/// The usage stream of generation `generation` of a capped discount.
+pub fn discount_usage_id(discount_id: &str, generation: u32) -> String {
+    let generation = generation.to_string();
+    evento::hash_ids(vec!["discount-usage", discount_id, generation.as_str()])
+}
+
+/// The stream naming the current usage generation of a capped discount.
+pub fn discount_usage_pointer_id(discount_id: &str) -> String {
+    evento::hash_ids(vec!["discount-usage-pointer", discount_id])
+}
+
+/// How many events a usage generation holds before the next one is opened:
+/// well inside a stream's 65 535 versions, and short enough that loading a
+/// code's uses stays cheap.
+pub const USAGE_CHUNK: u16 = 1000;
+
+/// How many of the last orders a usage generation remembers, so an order
+/// delivered again is told apart from a new one.
+pub const RECENT_USES: usize = 256;
+
+/// A reservation carried into a new usage generation: the checkout of
+/// `cart_id` holds a use until `expires_at` (unix seconds, excluded).
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct CarriedReservation {
+    pub cart_id: String,
+    pub expires_at: u64,
+}
+
+/// A spent use a usage generation remembers: the order made from `cart_id`.
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct CarriedUse {
+    pub cart_id: String,
+    pub order_id: String,
 }
 
 /// The stream of one shopper's use of a discount good once per e-mail. The
