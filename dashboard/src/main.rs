@@ -30,7 +30,6 @@ mod shop_mail;
 mod shopper_keys;
 mod store_api;
 mod store_carts;
-mod store_writer;
 mod ui;
 mod vies;
 

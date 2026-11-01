@@ -9,7 +9,7 @@ port = 3002
 trusted_proxies = ["172.16.0.0/12"]
 
 [database]
-store = "sqlite:data/load/node2/store.db"
+path = "data/load/node2/timada.db"
 read_models = "sqlite:data/load/node2/read-models.db"
 
 [media]

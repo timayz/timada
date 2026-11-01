@@ -172,15 +172,17 @@ pub struct ServerConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
-    /// The store, as a sqlx DSN, e.g. `sqlite:data/store.db`: every tenant's
-    /// events, the snapshots, the subscription cursors and the consensus
-    /// journal.
-    pub store: String,
-    /// The read models, e.g. `sqlite:data/read-models.db`: the tables the
-    /// pages read, derived from the store by the subscriptions.
+    /// The database file, e.g. `data/timada.db`: every tenant's events, the
+    /// snapshots, the subscription cursors and the consensus journal, and
+    /// (as the read models move into it) the tables the pages read. Opened
+    /// for several writers at once.
+    pub path: PathBuf,
+    /// The read models not yet in `path`, as a DSN, e.g.
+    /// `sqlite:data/read-models.db`: tables the pages read, derived from the
+    /// store by the subscriptions.
     pub read_models: String,
-    /// Read pool size for `serve`, for each file. sqlx-sqlite runs one OS
-    /// thread per open connection, so keep it small.
+    /// Read pool size for `serve`, for the read-model file. Its driver runs
+    /// one OS thread per open connection, so keep it small.
     pub max_connections: u32,
 }
 
@@ -710,7 +712,7 @@ impl Config {
             // is not the loopback interface.
             .set_default("server.host", "0.0.0.0")?
             .set_default("server.port", 3000)?
-            .set_default("database.store", "sqlite:data/store.db")?
+            .set_default("database.path", "data/timada.db")?
             .set_default("database.read_models", "sqlite:data/read-models.db")?
             .set_default("database.max_connections", 3)?
             .set_default("media.dir", "data/media")?

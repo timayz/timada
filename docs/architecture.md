@@ -90,11 +90,13 @@ Recurring patterns:
 ## Where data lives
 
 ```
-data/store.db             the store: every tenant's events (the platform's own in the
+data/timada.db            the store: every tenant's events (the platform's own in the
                           default tenant ""), the snapshots, the subscription cursors
-                          and the consensus journal; what the cluster replicates
-data/read-models.db       every read-model table (tenancy_tenants, catalog_products,
-                          orders_orders, reviews_reviews, ...), each row carrying its
+                          and the consensus journal — what the cluster replicates —
+                          and, as they move in, the read-model tables; `-wal` and
+                          `-log` next to it belong with it
+data/read-models.db       the read-model tables not yet in the store (tenancy_tenants,
+                          catalog_products, orders_orders, ...), each row carrying its
                           tenant id; derived from the store, rebuilt from it when lost
 data/media/<id>/          one per tenant: the product pictures and the review photos,
                           named <image id>.<ext>
@@ -104,16 +106,15 @@ data/shopper-keys/<id>/   one per tenant: each shopper account's and each contac
                           snapshots, product and category rows
 ```
 
-Each file is opened with a read pool and single-connection write pools
-(`dashboard/src/db.rs`), so writes serialize up front instead of failing with
-`SQLITE_BUSY`. The store has two write connections with different promises
-(`store_writer.rs`): the events the node applies and the consensus journal share a
-`synchronous = FULL` one, so an apply is on disk before the journal records it; the
-subscription cursors and the snapshots go through a `synchronous = NORMAL` one, since
-a cursor lost to a power cut only makes its subscription redo a few events and a
-snapshot is a cache. Twenty-odd subscriptions acknowledge every event they take: with
-an fsync apiece on the connection the journal flushes on, the node fell behind its
-own timeouts under load and answered writes with spurious version conflicts.
+The store is a Turso database (SQLite's format in a pure-Rust, in-process engine)
+opened for several writers at once (`dashboard/src/db.rs`, `open_store`): the node
+applies events on the store's own connection, the consensus journal writes on its own,
+and a read model in the file is written by its subscription through
+`Turso::transaction`. Every write is a `BEGIN CONCURRENT` transaction that runs
+alongside the others and is run again should two of them change the same rows, so an
+acknowledgement from one of the twenty-odd subscriptions never waits on the journal's
+fsync. The read-model file still of its own keeps a read pool and a single-connection
+write pool, so its writes serialize up front instead of failing with `SQLITE_BUSY`.
 
 A stream is identified by its tenant, its aggregate type and its id: the same product
 id in two tenants is two streams. Tenant-scoped contexts carry the tenant in their
@@ -276,7 +277,7 @@ A member renames a product on `/t/{slug}/products/{id}`:
    tenant's streams.
 3. `rename_product` loads the product's write-side state in that tenant, checks the
    invariants and commits `Renamed { name, renamed_by }` at the observed version.
-4. The commit goes through the Accord node and lands in `data/store.db`, in the
+4. The commit goes through the Accord node and lands in `data/timada.db`, in the
    tenant's stream of that product.
 5. The `catalog` subscription writes the new name into `catalog_products` in the
    read-model database, under the event's tenant; the next page load shows it. The

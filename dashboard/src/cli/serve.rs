@@ -5,7 +5,7 @@ use evento::subscription::{Subscription, SubscriptionBuilder};
 
 use crate::app::{self, Services};
 use crate::auth;
-use crate::cluster::{Cluster, Executor, Files, StorePools};
+use crate::cluster::{Cluster, Executor, Files};
 use crate::config::Config;
 use crate::db::{self, ReadPool, WritePool};
 use crate::store_api::{self, StoreConnections};
@@ -15,32 +15,22 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let port = port.unwrap_or(config.server.port);
     let url = config.server.url.clone();
     let files = Files {
-        store_url: config.database.store.clone(),
+        path: config.database.path.clone(),
         read_models_url: config.database.read_models.clone(),
     };
 
     // The store first: its node may have to copy it from a peer, which
     // recreates the read models, so their pools open afterwards. Write pool
     // before read pool: it creates the file a read-only connection cannot.
-    let store_write =
-        db::create_write_pool(&config.database.store, db::Durability::Durable).await?;
-    let store_cursors =
-        db::create_write_pool(&config.database.store, db::Durability::Relaxed).await?;
-    let store_read =
-        db::create_read_pool(&config.database.store, config.database.max_connections).await?;
+    let store = db::open_store(&config.database.path).await?;
     let (cluster, executor) = Cluster::open(
         config.cluster.as_ref(),
         config.server.region.as_deref(),
         &files,
-        StorePools {
-            read: store_read.clone(),
-            write: store_write.clone(),
-            cursors: store_cursors.clone(),
-        },
+        store.clone(),
     )
     .await?;
-    let write_pool =
-        db::create_write_pool(&config.database.read_models, db::Durability::Durable).await?;
+    let write_pool = db::create_write_pool(&config.database.read_models).await?;
     let read_pool = db::create_read_pool(
         &config.database.read_models,
         config.database.max_connections,
@@ -250,9 +240,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     cluster.shutdown().await;
     read_pool.close().await;
     write_pool.close().await;
-    store_read.close().await;
-    store_cursors.close().await;
-    store_write.close().await;
+    drop(store);
     Ok(())
 }
 

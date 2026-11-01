@@ -1,7 +1,9 @@
 //! The consensus node: the one Accord node this process runs, over the store.
 //!
 //! The store (every tenant's events, the snapshots, the subscription cursors
-//! and the consensus journal) is the two pools of `database.store`. Writes
+//! and the consensus journal) is the one file of `database.path`, opened for
+//! several writers (`db::open_store`): the node and the journal each write on
+//! a connection of their own, the read models in the file on theirs. Writes
 //! are coordinated through the cluster (strictly serializable, leaderless; a
 //! quorum of `N = 2f+1` nodes must agree); reads, snapshots and subscriptions
 //! are served from this node's own file. Without a `[cluster]` section the
@@ -18,59 +20,27 @@
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use evento::Evento;
-use evento::Rw;
 use evento::accord::{
     AccordExecutor, DataStore, ExecutorDataStore, HybridLogicalClock, InMemoryNetwork, Journal,
     MessageSink, Node, NodeConfig, NodeId, PartialSnapshot, StaticTopology, TcpTransport, Topology,
     serve,
 };
-use evento::sql::{Sql, SqlJournal, Sqlite};
-use sqlx::SqlitePool;
-use sqlx::sqlite::SqliteConnectOptions;
+use evento::turso::TursoJournal;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::config::ClusterConfig;
-use crate::store_writer::StoreWriter;
+use crate::db::Store;
 
-/// The store: Accord over the read pool, the durable write connection
-/// (events and the consensus journal) and the relaxed one (subscription
-/// cursors and snapshots), see [`StorePools`]. Type-erased by [`Evento`],
-/// which also carries the node's default routing key.
+/// The store: Accord over this node's file (see [`Store`]). Type-erased by
+/// [`Evento`], which also carries the node's default routing key.
 pub type Executor = Evento;
-
-/// The store's local executor: reads on the read pool, writes split by what
-/// they must promise.
-type Local = Rw<Sqlite, StoreWriter>;
-
-/// The store's pools, all on `database.store`.
-#[derive(Clone)]
-pub struct StorePools {
-    /// Read-only, sized by `database.max_connections`.
-    pub read: SqlitePool,
-    /// One connection, `synchronous = FULL`: the events the node applies
-    /// and the consensus journal, which share it so an apply is on disk
-    /// before the journal records it.
-    pub write: SqlitePool,
-    /// One connection, `synchronous = NORMAL`: the subscription cursors and
-    /// the snapshots. Every subscription acknowledges each event it takes;
-    /// an fsync apiece on the write connection starved the node's journal
-    /// flushes under load.
-    pub cursors: SqlitePool,
-}
-
-/// Stability margin subtracted from DB time to form the subscription watermark
-/// (default 1s). Single-host SQLite, so it only needs to exceed the worst-case
-/// duration of one event INSERT commit; subscription latency grows by about
-/// this much.
-pub const STABLE_MARGIN: Duration = Duration::from_millis(100);
 
 /// Frames waiting for this node's inbox loop.
 const INBOX_FRAMES: usize = 1024;
@@ -79,23 +49,16 @@ const INBOX_FRAMES: usize = 1024;
 /// node: where the files are, so a copy from a peer can empty them first.
 #[derive(Debug, Clone)]
 pub struct Files {
-    /// `database.store`, a sqlx DSN.
-    pub store_url: String,
-    /// `database.read_models`, a sqlx DSN.
+    /// `database.path`: the store.
+    pub path: PathBuf,
+    /// `database.read_models`, a DSN: the read models not in the store yet.
     pub read_models_url: String,
 }
 
 impl Files {
-    /// The file behind the store DSN.
-    pub fn store_path(&self) -> Result<PathBuf> {
-        Ok(SqliteConnectOptions::from_str(&self.store_url)?
-            .get_filename()
-            .to_path_buf())
-    }
-
     /// The mark that makes the next open copy the store from a peer.
     pub fn marker(&self) -> Result<PathBuf> {
-        Ok(joining_marker(&self.store_path()?))
+        Ok(joining_marker(&self.path))
     }
 }
 
@@ -134,7 +97,7 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    /// Opens the node over the store pools and starts it. Single node when
+    /// Opens the node over the store and starts it. Single node when
     /// `cluster` is `None`. `region`, when set, is the default routing key
     /// stamped on every new aggregate this node writes.
     ///
@@ -147,13 +110,8 @@ impl Cluster {
         cluster: Option<&ClusterConfig>,
         region: Option<&str>,
         files: &Files,
-        pools: StorePools,
+        store: Store,
     ) -> Result<(Arc<Self>, Executor)> {
-        let StorePools {
-            read: read_pool,
-            write: write_pool,
-            cursors: cursor_pool,
-        } = pools;
         let (id, ids, peers, listener) = match cluster {
             None => {
                 let id = NodeId(0);
@@ -193,7 +151,7 @@ impl Cluster {
         }
         if joining {
             tracing::warn!(marker = %marker.display(), "the store is to be copied from a peer");
-            crate::db::empty_store(&write_pool)
+            crate::db::empty_store(&store)
                 .await
                 .context("cannot empty the store before copying it")?;
             crate::db::recreate_read_models(&files.read_models_url)
@@ -201,20 +159,17 @@ impl Cluster {
                 .context("cannot recreate the read models before copying the store")?;
         }
 
-        // One `Rw` instance, cloned, for both the Accord data store and the
-        // executor: a second `Sql` built from the same pool would not share the
-        // write-wake channel that subscriptions rely on.
-        let rw: Local = (
-            Sql::from(read_pool).stable_margin(STABLE_MARGIN),
-            StoreWriter::new(
-                Sql::from(write_pool.clone()).stable_margin(STABLE_MARGIN),
-                Sql::from(cursor_pool).stable_margin(STABLE_MARGIN),
-            ),
-        )
-            .into();
-        let store = Arc::new(ExecutorDataStore::new(rw.clone())) as Arc<dyn DataStore>;
-        // The consensus journal shares the single writer connection.
-        let journal = Arc::new(SqlJournal::<sqlx::Sqlite>::new(write_pool)) as Arc<dyn Journal>;
+        // One store handle, cloned, for both the Accord data store and the
+        // executor: clones share the write-wake channel that subscriptions
+        // rely on, as a second handle over the same file would not.
+        let data_store = Arc::new(ExecutorDataStore::new(store.clone())) as Arc<dyn DataStore>;
+        // The consensus journal in the same file, on a connection of its own;
+        // its tables were migrated when the store opened.
+        let journal = Arc::new(
+            TursoJournal::new(store.database().clone())
+                .await
+                .context("cannot open the consensus journal")?,
+        ) as Arc<dyn Journal>;
         let topology = Arc::new(StaticTopology::new(id, ids.clone())) as Arc<dyn Topology>;
 
         // Pages load an aggregate right after writing it, possibly on another
@@ -262,7 +217,7 @@ impl Cluster {
             topology,
             Arc::new(HybridLogicalClock::new(id)),
             sink,
-            store,
+            data_store,
             journal,
         )
         .with_config(config);
@@ -304,7 +259,7 @@ impl Cluster {
             copy_pending.clone(),
         ));
 
-        let mut executor = Evento::new(AccordExecutor::<Local>::new(node.clone(), rw));
+        let mut executor = Evento::new(AccordExecutor::<Store>::new(node.clone(), store));
         if let Some(region) = region {
             tracing::info!(region, "default routing key");
             executor = executor.default_routing_key(region);
