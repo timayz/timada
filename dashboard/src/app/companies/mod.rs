@@ -25,7 +25,7 @@ use crate::components::input::input;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{LINK, Shell, document, empty_state, icons, notice, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -42,7 +42,9 @@ pub fn companies_url(cx: &Cx, error: Option<&str>, message: Option<&str>) -> Str
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let user = require_user(cx).await?;
     let query = query_params::<CompaniesQuery>(cx)?;
-    let mine = companies_of_user(app_context::<ReadPool>(cx), &user.id).await?;
+    let mine = companies_of_user(app_context::<Db>(cx), &user.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     Ok(view! {
         document(
             title: "Companies",

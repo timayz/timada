@@ -65,7 +65,7 @@ use crate::components::button::button;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
-use crate::db::ReadPool;
+use crate::db::{Db, ReadPool};
 use crate::store_api::StoreConnections;
 use crate::ui::{
     Shell, Tone, chrome::section_url, document, fact, facts, format_time, icons, notice,
@@ -337,7 +337,9 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
         });
     }
     if nav.members {
-        let invitations = count_open_invitations_of_tenant(pool, id, now()).await?;
+        let invitations = count_open_invitations_of_tenant(app_context::<Db>(cx), id, now())
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
             label: "Members",
             value: tenant.members.len().to_string(),

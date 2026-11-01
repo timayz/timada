@@ -1,15 +1,16 @@
-//! The subscription that keeps the SQL read models current.
+//! The subscription that keeps the read models current.
 //!
 //! Each handler reloads the strict write model of the stream the event belongs
 //! to and rewrites its rows, so delivery may repeat (the subscription is
-//! at-least-once) without the rows drifting.
+//! at-least-once) without the rows drifting. The rows live in the store's own
+//! database and are written through it ([`Db::write`]).
 
 use evento::{
     Executor,
     metadata::RawEvent,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
+use timada_core::db::{Db, execute, fetch_optional, search_key};
 
 use super::api_keys::join_scopes;
 use crate::aggregator::api_key::ApiKey;
@@ -24,11 +25,11 @@ use crate::command::{
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-tenancy/read-models";
 
 /// Builds the subscription over every routing key (the catalog is
-/// platform-wide). `pool` must be allowed to write; start it with
-/// `.start(&executor)` and keep the handle for shutdown.
-pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
+/// platform-wide). Start it with `.start(&executor)` and keep the handle for
+/// shutdown.
+pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
-        .data(pool)
+        .data(db)
         .handler(on_tenant_event())
         .handler(on_invitation_event())
         .handler(on_api_key_event())
@@ -41,7 +42,7 @@ async fn on_tenant_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<Tenant>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(tenant) = tenant_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -49,7 +50,7 @@ async fn on_tenant_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_tenant(&pool, &tenant).await
+    upsert_tenant(&db, &tenant).await
 }
 
 #[evento::subscription_all]
@@ -57,7 +58,7 @@ async fn on_company_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<Company>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(company) = company_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -65,119 +66,115 @@ async fn on_company_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_company(&pool, &company).await
+    upsert_company(&db, &company).await
 }
 
-async fn upsert_company(pool: &SqlitePool, company: &CompanyState) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO tenancy_companies (id, siren, legal_name, created_at)
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (id) DO UPDATE SET legal_name = excluded.legal_name",
-    )
-    .bind(&company.id)
-    .bind(&company.siren)
-    .bind(company.name())
-    .bind(company.created_at as i64)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("DELETE FROM tenancy_company_owners WHERE company_id = ?1")
-        .bind(&company.id)
-        .execute(&mut *tx)
-        .await?;
-    for owner in &company.owners {
-        sqlx::query("INSERT INTO tenancy_company_owners (company_id, user_id) VALUES (?1, ?2)")
-            .bind(&company.id)
-            .bind(owner)
-            .execute(&mut *tx)
+async fn upsert_company(db: &Db, company: &CompanyState) -> anyhow::Result<()> {
+    db.write(company, |tx, company| {
+        Box::pin(async move {
+            execute(
+                tx,
+                "INSERT INTO tenancy_companies (id, siren, legal_name, created_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (id) DO UPDATE SET legal_name = excluded.legal_name",
+                (
+                    company.id.as_str(),
+                    company.siren.as_str(),
+                    company.name(),
+                    company.created_at as i64,
+                ),
+            )
             .await?;
-    }
-    tx.commit().await?;
-    Ok(())
+            execute(
+                tx,
+                "DELETE FROM tenancy_company_owners WHERE company_id = ?1",
+                (company.id.as_str(),),
+            )
+            .await?;
+            for owner in &company.owners {
+                execute(
+                    tx,
+                    "INSERT INTO tenancy_company_owners (company_id, user_id) VALUES (?1, ?2)",
+                    (company.id.as_str(), owner.as_str()),
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
-async fn upsert_tenant(pool: &SqlitePool, tenant: &TenantState) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
-    let was: Option<(String, String)> =
-        sqlx::query_as("SELECT slug, name FROM tenancy_tenants WHERE id = ?1")
-            .bind(&tenant.id)
-            .fetch_optional(&mut *tx)
+async fn upsert_tenant(db: &Db, tenant: &TenantState) -> anyhow::Result<()> {
+    db.write(tenant, |tx, tenant| {
+        Box::pin(async move {
+            let was: Option<(String,)> = fetch_optional(
+                tx,
+                "SELECT id FROM tenancy_tenants WHERE id = ?1",
+                (tenant.id.as_str(),),
+            )
             .await?;
-    sqlx::query(
-        "INSERT INTO tenancy_tenants (id, slug, name, created_by, created_at, suspended,
-            suspended_reason, member_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-         ON CONFLICT (id) DO UPDATE SET
-            slug = excluded.slug, name = excluded.name,
-            suspended = excluded.suspended, suspended_reason = excluded.suspended_reason,
-            member_count = excluded.member_count",
-    )
-    .bind(&tenant.id)
-    .bind(&tenant.slug)
-    .bind(&tenant.name)
-    .bind(&tenant.created_by)
-    .bind(tenant.created_at as i64)
-    .bind(tenant.is_suspended())
-    .bind(tenant.suspended.as_deref())
-    .bind(tenant.members.len() as i64)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("UPDATE tenancy_tenants SET company_id = ?2, series_code = ?3 WHERE id = ?1")
-        .bind(&tenant.id)
-        .bind(tenant.company.as_ref().map(|link| link.company_id.as_str()))
-        .bind(
-            tenant
-                .company
-                .as_ref()
-                .map(|link| link.series_code.as_str()),
-        )
-        .execute(&mut *tx)
-        .await?;
-    // A new row is one more tenant to the administrator's list; a repeated
-    // delivery finds the row there and counts nothing.
-    if was.is_none() {
-        sqlx::query("UPDATE tenancy_totals SET tenants = tenants + 1 WHERE id = 1")
-            .execute(&mut *tx)
+            execute(
+                tx,
+                "INSERT INTO tenancy_tenants (id, slug, name, created_by, created_at, suspended,
+                    suspended_reason, member_count, company_id, series_code, slug_search,
+                    name_search)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT (id) DO UPDATE SET
+                    slug = excluded.slug, name = excluded.name,
+                    suspended = excluded.suspended, suspended_reason = excluded.suspended_reason,
+                    member_count = excluded.member_count, company_id = excluded.company_id,
+                    series_code = excluded.series_code, slug_search = excluded.slug_search,
+                    name_search = excluded.name_search",
+                (
+                    tenant.id.as_str(),
+                    tenant.slug.as_str(),
+                    tenant.name.as_str(),
+                    tenant.created_by.as_str(),
+                    tenant.created_at as i64,
+                    tenant.is_suspended(),
+                    tenant.suspended.as_deref(),
+                    tenant.members.len() as i64,
+                    tenant.company.as_ref().map(|link| link.company_id.as_str()),
+                    tenant
+                        .company
+                        .as_ref()
+                        .map(|link| link.series_code.as_str()),
+                    search_key(&tenant.slug),
+                    search_key(&tenant.name),
+                ),
+            )
             .await?;
-    }
-    // What the administrator's search finds it by, rewritten only when that
-    // changed.
-    if was
-        .as_ref()
-        .is_none_or(|(slug, name)| *slug != tenant.slug || *name != tenant.name)
-    {
-        sqlx::query(
-            "DELETE FROM tenancy_tenants_fts
-             WHERE rowid = (SELECT rowid FROM tenancy_tenants WHERE id = ?1)",
-        )
-        .bind(&tenant.id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "INSERT INTO tenancy_tenants_fts (rowid, slug, name)
-             SELECT rowid, slug, name FROM tenancy_tenants WHERE id = ?1",
-        )
-        .bind(&tenant.id)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    // The member rows are rewritten from the state: a revoked member goes
-    // away, a changed role is replaced.
-    sqlx::query("DELETE FROM tenancy_members WHERE tenant_id = ?1")
-        .bind(&tenant.id)
-        .execute(&mut *tx)
-        .await?;
-    for (user_id, role) in &tenant.members {
-        sqlx::query("INSERT INTO tenancy_members (tenant_id, user_id, role) VALUES (?1, ?2, ?3)")
-            .bind(&tenant.id)
-            .bind(user_id)
-            .bind(role)
-            .execute(&mut *tx)
+            // A new row is one more tenant to the administrator's list; a
+            // repeated delivery finds the row there and counts nothing.
+            if was.is_none() {
+                execute(
+                    tx,
+                    "UPDATE tenancy_totals SET tenants = tenants + 1 WHERE id = 1",
+                    (),
+                )
+                .await?;
+            }
+            // The member rows are rewritten from the state: a revoked member
+            // goes away, a changed role is replaced.
+            execute(
+                tx,
+                "DELETE FROM tenancy_members WHERE tenant_id = ?1",
+                (tenant.id.as_str(),),
+            )
             .await?;
-    }
-    tx.commit().await?;
-    Ok(())
+            for (user_id, role) in &tenant.members {
+                execute(
+                    tx,
+                    "INSERT INTO tenancy_members (tenant_id, user_id, role) VALUES (?1, ?2, ?3)",
+                    (tenant.id.as_str(), user_id.as_str(), role.as_str()),
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[evento::subscription_all]
@@ -185,7 +182,7 @@ async fn on_invitation_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<Invitation>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(invitation) = invitation_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -193,29 +190,30 @@ async fn on_invitation_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_invitation(&pool, &invitation).await
+    upsert_invitation(&db, &invitation).await
 }
 
-async fn upsert_invitation(pool: &SqlitePool, invitation: &InvitationState) -> anyhow::Result<()> {
-    sqlx::query(
+async fn upsert_invitation(db: &Db, invitation: &InvitationState) -> anyhow::Result<()> {
+    db.execute(
         "INSERT INTO tenancy_invitations (id, tenant_id, email, role, invited_by, sent_at,
             expires_at, accepted_by, accepted_at, revoked)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT (id) DO UPDATE SET
             accepted_by = excluded.accepted_by, accepted_at = excluded.accepted_at,
             revoked = excluded.revoked",
+        (
+            invitation.id.as_str(),
+            invitation.tenant_id.as_str(),
+            invitation.email.as_str(),
+            invitation.role.as_str(),
+            invitation.invited_by.as_str(),
+            invitation.sent_at as i64,
+            invitation.expires_at as i64,
+            invitation.accepted_by.as_deref(),
+            invitation.accepted_at.map(|at| at as i64),
+            invitation.revoked,
+        ),
     )
-    .bind(&invitation.id)
-    .bind(&invitation.tenant_id)
-    .bind(&invitation.email)
-    .bind(&invitation.role)
-    .bind(&invitation.invited_by)
-    .bind(invitation.sent_at as i64)
-    .bind(invitation.expires_at as i64)
-    .bind(invitation.accepted_by.as_deref())
-    .bind(invitation.accepted_at.map(|at| at as i64))
-    .bind(invitation.revoked)
-    .execute(pool)
     .await?;
     Ok(())
 }
@@ -225,7 +223,7 @@ async fn on_api_key_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<ApiKey>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(key) = api_key_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -233,28 +231,29 @@ async fn on_api_key_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_api_key(&pool, &key).await
+    upsert_api_key(&db, &key).await
 }
 
-async fn upsert_api_key(pool: &SqlitePool, key: &ApiKeyState) -> anyhow::Result<()> {
-    sqlx::query(
+async fn upsert_api_key(db: &Db, key: &ApiKeyState) -> anyhow::Result<()> {
+    db.execute(
         "INSERT INTO tenancy_api_keys (id, tenant_id, label, hint, created_by, created_at,
             revoked_by, revoked_at, scopes)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT (id) DO UPDATE SET
             revoked_by = excluded.revoked_by, revoked_at = excluded.revoked_at,
             scopes = excluded.scopes",
+        (
+            key.id.as_str(),
+            key.tenant_id.as_str(),
+            key.label.as_str(),
+            key.hint.as_str(),
+            key.created_by.as_str(),
+            key.created_at as i64,
+            key.revoked_by.as_deref(),
+            key.revoked_at.map(|at| at as i64),
+            join_scopes(&key.scopes),
+        ),
     )
-    .bind(&key.id)
-    .bind(&key.tenant_id)
-    .bind(&key.label)
-    .bind(&key.hint)
-    .bind(&key.created_by)
-    .bind(key.created_at as i64)
-    .bind(key.revoked_by.as_deref())
-    .bind(key.revoked_at.map(|at| at as i64))
-    .bind(join_scopes(&key.scopes))
-    .execute(pool)
     .await?;
     Ok(())
 }

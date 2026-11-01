@@ -30,6 +30,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         store.clone(),
     )
     .await?;
+    // The read models in the store's database.
+    let db = db::Db::from(store.clone());
     let write_pool = db::create_write_pool(&config.database.read_models).await?;
     let read_pool = db::create_read_pool(
         &config.database.read_models,
@@ -107,8 +109,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // pages fall back to stale rows; the node keeps serving.
     let mut read_models = Vec::new();
     for (name, builder) in subscriptions(
+        db.clone(),
         write_pool.clone(),
-        read_pool.clone(),
         executor.clone(),
         media.clone(),
         keys.clone(),
@@ -167,6 +169,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let automation_runs = crate::automations::runner::Runner::new(
         read_pool.clone(),
         write_pool.clone(),
+        db.clone(),
         executor.clone(),
         background_mail.clone(),
         url.clone(),
@@ -185,6 +188,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // The products imported from AliExpress are read again on a timer.
     let aliexpress_sync = crate::aliexpress::sync::AliexpressSync::new(
         read_pool.clone(),
+        db.clone(),
         executor.clone(),
         aliexpress.clone(),
     )
@@ -194,6 +198,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
     let router = app::router(Services {
         executor,
+        db,
         read_pool: ReadPool(read_pool.clone()),
         write_pool: WritePool(write_pool.clone()),
         providers,
@@ -255,8 +260,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 /// bounded context registers its subscription here.
 #[allow(clippy::too_many_arguments)]
 fn subscriptions(
+    db: db::Db,
     write_pool: sqlx::SqlitePool,
-    read_pool: sqlx::SqlitePool,
     store: Executor,
     media: Arc<crate::media::Media>,
     keys: Arc<crate::key_vault::KeyVault>,
@@ -270,19 +275,19 @@ fn subscriptions(
     vec![
         (
             "identity",
-            timada_identity::read_model_subscription(write_pool.clone()),
+            timada_identity::read_model_subscription(db.clone()),
         ),
         (
             "tenancy",
-            timada_tenancy::read_model_subscription(write_pool.clone()),
+            timada_tenancy::read_model_subscription(db.clone()),
         ),
         (
             "members history",
-            timada_tenancy::member_audit_subscription(write_pool.clone()),
+            timada_tenancy::member_audit_subscription(db.clone()),
         ),
         (
             "AliExpress access",
-            timada_tenancy::aliexpress_accounts_subscription(write_pool.clone()),
+            timada_tenancy::aliexpress_accounts_subscription(db.clone()),
         ),
         // Not a read model, but the same lifecycle: it copies how each
         // tenant's shoppers pay into the tenant's streams, for the
@@ -403,7 +408,7 @@ fn subscriptions(
             "message notices",
             crate::message_notifications::subscription(
                 store.clone(),
-                read_pool,
+                db,
                 background_mail,
                 base_url,
                 ring,

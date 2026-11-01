@@ -5,12 +5,12 @@
 
 use std::sync::Arc;
 
+use crate::db::Db;
 use evento::{
     Evento, Executor,
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
 use timada_core::keys::KeyRing;
 use timada_identity::UserRow;
 use timada_support::aggregator::Received;
@@ -36,7 +36,7 @@ struct Platform(Store);
 
 /// The shared read models, where the members' addresses are.
 #[derive(Clone)]
-struct ReadModels(SqlitePool);
+struct ReadModels(Db);
 
 /// The store, to open the message and claim its notice.
 #[derive(Clone)]
@@ -59,7 +59,7 @@ struct TenantKeys(Arc<dyn KeyRing>);
 #[allow(clippy::too_many_arguments)]
 pub fn subscription<E: Executor>(
     platform: Store,
-    read_pool: SqlitePool,
+    db: Db,
     mail: Arc<AppContext>,
     base_url: String,
     keys: Arc<dyn KeyRing>,
@@ -67,7 +67,7 @@ pub fn subscription<E: Executor>(
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(Platform(platform))
-        .data(ReadModels(read_pool))
+        .data(ReadModels(db))
         .data(Mail(mail))
         .data(BaseUrl(base_url))
         .data(TenantKeys(keys))

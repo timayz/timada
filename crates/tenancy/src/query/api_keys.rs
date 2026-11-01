@@ -2,7 +2,8 @@
 
 use std::collections::BTreeSet;
 
-use sqlx::{FromRow, SqlitePool};
+use anyhow::Result;
+use timada_core::db::{Db, FromRow};
 
 /// One row of `tenancy_api_keys`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -18,7 +19,7 @@ pub struct ApiKeyRow {
     /// Unix seconds.
     pub revoked_at: Option<i64>,
     /// Space-separated, sorted; see [`ApiKeyRow::scopes`].
-    #[sqlx(rename = "scopes")]
+    #[turso(rename = "scopes")]
     pub scope_list: String,
 }
 
@@ -46,17 +47,13 @@ pub(crate) fn join_scopes(scopes: &BTreeSet<String>) -> String {
 }
 
 /// Every key of a tenant, revoked ones included, newest first.
-pub async fn api_keys_of_tenant(
-    pool: &SqlitePool,
-    tenant_id: &str,
-) -> sqlx::Result<Vec<ApiKeyRow>> {
-    sqlx::query_as(
+pub async fn api_keys_of_tenant(db: &Db, tenant_id: &str) -> Result<Vec<ApiKeyRow>> {
+    db.fetch_all(
         "SELECT id, tenant_id, label, hint, created_by, created_at, revoked_by, revoked_at,
             scopes
          FROM tenancy_api_keys WHERE tenant_id = ?1
          ORDER BY created_at DESC, id",
+        (tenant_id,),
     )
-    .bind(tenant_id)
-    .fetch_all(pool)
     .await
 }

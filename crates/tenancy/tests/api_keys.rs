@@ -194,7 +194,7 @@ async fn keys_are_listed_newest_first_with_their_status() {
         .unwrap();
 
     let catch_up = || async {
-        read_model_subscription::<evento::Sqlite>(pool.clone())
+        read_model_subscription::<evento::Turso>(pool.clone())
             .run_once(&executor)
             .await
             .unwrap();

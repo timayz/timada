@@ -7,7 +7,7 @@ use timada_tenancy::{
 };
 
 async fn tenant_with_roles(
-    cmd: &timada_tenancy::Command<evento::Sqlite>,
+    cmd: &timada_tenancy::Command<evento::Turso>,
     owner: &str,
 ) -> timada_tenancy::TenantState {
     let tenant = create_tenant(cmd, "Acme", owner).await;

@@ -23,10 +23,12 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use evento::Turso;
 use evento::turso::TursoJournal;
+use evento::turso::migrate::Migrations;
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
 use sqlx_migrator::{Info, Migrator};
+pub use timada_core::db::Db;
 
 /// The store: the one database file, as the node and the read models in it
 /// write it.
@@ -61,9 +63,9 @@ const SERVE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 pub const MAINTENANCE_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Opens the store at `path`, creating the file and its directory if needed,
-/// and applies the pending migrations of its schema (the events', then the
-/// consensus journal's). The file is opened for several writers at once;
-/// one opened before that way stays so.
+/// and applies the pending migrations of its schema (the events', the
+/// consensus journal's, then the read models' that live in it). The file is
+/// opened for several writers at once; one opened before that way stays so.
 pub async fn open_store(path: &Path) -> Result<Store> {
     prepare_dir(path)?;
     let store = Turso::open_concurrent(path)
@@ -74,8 +76,66 @@ pub async fn open_store(path: &Path) -> Result<Store> {
     TursoJournal::new(store.database().clone())
         .await
         .with_context(|| format!("cannot migrate the consensus journal in {}", path.display()))?;
+    migrate_store_read_models(&store)
+        .await
+        .with_context(|| format!("cannot migrate the read models in {}", path.display()))?;
     tracing::info!(path = %path.display(), "store ready");
     Ok(store)
+}
+
+/// The read models that live in the store's database, one crate each: its
+/// migrations, and the tables they create with what an emptied table must
+/// hold again. The crates still on `database.read_models` join this list as
+/// they move.
+struct StoreReadModel {
+    migrations: &'static Migrations<'static>,
+    tables: &'static [&'static str],
+    reset_rows: &'static str,
+}
+
+const STORE_READ_MODELS: &[StoreReadModel] = &[
+    StoreReadModel {
+        migrations: &timada_identity::MIGRATIONS,
+        tables: timada_identity::TABLES,
+        reset_rows: timada_identity::RESET_ROWS,
+    },
+    StoreReadModel {
+        migrations: &timada_tenancy::MIGRATIONS,
+        tables: timada_tenancy::TABLES,
+        reset_rows: timada_tenancy::RESET_ROWS,
+    },
+];
+
+/// Applies the pending migrations of the read models in the store (what
+/// [`open_store`] does; for a store a test built in memory).
+pub async fn migrate_store_read_models(store: &Store) -> Result<()> {
+    let mut conn = store.connect()?;
+    for read_model in STORE_READ_MODELS {
+        read_model
+            .migrations
+            .to_latest(&mut conn)
+            .await
+            .map_err(|(applied, err)| {
+                anyhow::anyhow!(
+                    "{}: migration failed after {applied} applied: {err}",
+                    read_model.migrations.app()
+                )
+            })?;
+    }
+    Ok(())
+}
+
+/// Empties the read models in the store: they are derived data, which the
+/// subscriptions fill again from the store once it is copied from a peer.
+pub async fn reset_store_read_models(store: &Store) -> Result<()> {
+    let db = Db::from(store.clone());
+    for read_model in STORE_READ_MODELS {
+        for table in read_model.tables {
+            db.execute(&format!("DELETE FROM {table}"), ()).await?;
+        }
+        db.execute(read_model.reset_rows, ()).await?;
+    }
+    Ok(())
 }
 
 /// The files that make up the store at `path`: the file itself, its
@@ -208,11 +268,9 @@ pub fn prepare_database_dir(database_url: &str) -> Result<()> {
     prepare_dir(options.get_filename())
 }
 
-/// The bounded contexts' read models.
+/// The bounded contexts' read models still in their own file.
 pub fn read_model_migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
     let mut migrator = Migrator::default();
-    migrator.add_migrations(timada_identity::migrations())?;
-    migrator.add_migrations(timada_tenancy::migrations())?;
     migrator.add_migrations(timada_catalog::migrations())?;
     migrator.add_migrations(timada_orders::migrations())?;
     migrator.add_migrations(timada_shoppers::migrations())?;

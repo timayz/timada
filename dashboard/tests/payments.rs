@@ -220,6 +220,8 @@ struct Harness<G = FakeStripe> {
     stripe: Arc<G>,
     /// What [`Harness::connect_stripe`] saves as the tenant's secret key.
     secret_key: String,
+    /// The read models in the store's database.
+    db: db::Db,
     pool: SqlitePool,
     dir: PathBuf,
 }
@@ -245,9 +247,6 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
         let mut conn = pool.acquire().await.unwrap();
         let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
         migrator
-            .add_migrations(timada_tenancy::migrations())
-            .unwrap();
-        migrator
             .add_migrations(timada_orders::migrations())
             .unwrap();
         migrator
@@ -262,6 +261,8 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
         read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
     };
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    db::migrate_store_read_models(&store).await.unwrap();
+    let store_db = db::Db::from(store.clone());
     let (cluster, platform) = Cluster::open(None, None, &files, store).await.unwrap();
     let payments = Arc::new(Payments::new(
         Some(seal::Sealer::new("payments", SEAL_KEY)),
@@ -292,6 +293,7 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
         payments,
         stripe,
         secret_key: secret_key.to_owned(),
+        db: store_db,
         pool,
         dir,
     }
@@ -329,7 +331,7 @@ impl<G: PaymentGateway + 'static> Harness<G> {
             })
             .await
             .unwrap();
-        read_model_subscription::<cluster::Executor>(self.pool.clone())
+        read_model_subscription::<cluster::Executor>(self.db.clone())
             .run_once(&self.platform.0)
             .await
             .unwrap();

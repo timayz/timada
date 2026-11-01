@@ -1,9 +1,7 @@
 #![allow(dead_code)]
 
 use evento::Executor;
-use evento::migrator::Migrate;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
+use timada_core::db::Db;
 use timada_identity::{
     AddPasskey, ChallengePurpose, Command, CompleteOAuth2, LoginContext, OAuth2Mode,
     RegisterWithPassword, SignInPasskey, VerifiedPasskey, hash_password,
@@ -15,36 +13,25 @@ pub const NOW: u64 = 1_700_000_000;
 /// A password that passes the policy.
 pub const PASSWORD: &str = "correct horse battery";
 
-/// A fresh in-memory event store, as in evento's `bank-axum-sqlite` example.
-pub async fn executor() -> evento::Sqlite {
+/// A fresh in-memory event store.
+pub async fn executor() -> evento::Turso {
     executor_with_pool().await.0
 }
 
-/// The store plus the pool it runs on, with the read-model schema applied,
-/// for tests that drive the subscription.
-pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
-    let options = SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
+/// The store plus the read-model database in it, with the read-model schema
+/// applied, for tests that drive the subscription.
+pub async fn executor_with_pool() -> (evento::Turso, Db) {
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let mut conn = store.connect().unwrap();
+    timada_identity::MIGRATIONS
+        .to_latest(&mut conn)
         .await
+        .map_err(|(_, err)| err)
         .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .add_migrations(timada_identity::migrations())
-        .unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
-    (pool.clone().into(), pool)
+    (store.clone(), Db::from(store))
 }
 
-pub async fn command() -> Command<evento::Sqlite> {
+pub async fn command() -> Command<evento::Turso> {
     Command::new(executor().await, codes())
 }
 

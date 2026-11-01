@@ -27,11 +27,9 @@ use std::time::Duration;
 
 use evento::Executor as _;
 use evento::cursor::{Args, Value};
-use evento::migrator::Migrate;
 use evento::remote::{Client, ServerHandle};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
 use timada_tenancy::aggregator::Renamed;
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, SCOPE_STORE_WRITE,
@@ -50,6 +48,8 @@ const NOW: u64 = 1_800_000_000;
 struct Harness {
     cluster: Arc<Cluster>,
     platform: Command<cluster::Executor>,
+    /// The read models in the store's database.
+    db: db::Db,
     pool: SqlitePool,
     dir: PathBuf,
     connections: Arc<StoreConnections>,
@@ -95,17 +95,6 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         .connect_with(options)
         .await
         .unwrap();
-    {
-        let mut conn = pool.acquire().await.unwrap();
-        let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
-        migrator
-            .add_migrations(timada_tenancy::migrations())
-            .unwrap();
-        migrator
-            .run(&mut *conn, &evento::migrator::Plan::apply_all())
-            .await
-            .unwrap();
-    }
     // The store in memory (a file would fsync every commit of the thirty-odd
     // tests running at once), the read models in the test's own pool.
     let files = cluster::Files {
@@ -113,6 +102,8 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
     };
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    db::migrate_store_read_models(&store).await.unwrap();
+    let store_db = db::Db::from(store.clone());
     let (cluster, platform) = Cluster::open(None, None, &files, store).await.unwrap();
     let connections = StoreConnections::new();
     let (tls_cert, tls_key) = match tls {
@@ -141,6 +132,7 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
     Harness {
         cluster,
         platform: Command(platform),
+        db: store_db,
         pool,
         dir,
         connections,
@@ -159,7 +151,7 @@ impl Harness {
             })
             .await
             .unwrap();
-        read_model_subscription::<cluster::Executor>(self.pool.clone())
+        read_model_subscription::<cluster::Executor>(self.db.clone())
             .run_once(&self.platform.0)
             .await
             .unwrap();

@@ -16,7 +16,7 @@ use crate::components::input::input;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
     section_card, status_badge,
@@ -64,9 +64,13 @@ pub async fn tenants(cx: &Cx) -> Result<impl View> {
     let query = query_params::<TenantsQuery>(cx)?;
     let q = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let page_number = query.page.unwrap_or(1).max(1);
-    let pool = app_context::<ReadPool>(cx);
-    let total = count_tenants(pool, q).await?;
-    let rows = list_tenants(pool, q, (page_number - 1) * PAGE_SIZE, PAGE_SIZE).await?;
+    let db = app_context::<Db>(cx);
+    let total = count_tenants(db, q)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let rows = list_tenants(db, q, (page_number - 1) * PAGE_SIZE, PAGE_SIZE)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
     let page_link = move |page: i64| {
         href!(tenants)

@@ -37,7 +37,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::config::Config;
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::media::Media;
 use crate::ui::{
     Shell, Tone, describe_api_key_scope, document, empty_row, fact, facts, format_time, icons,
@@ -86,7 +86,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let reveal = take_reveal(cx);
     let store_api = app_context::<Config>(cx).store_api.clone();
-    let keys = api_keys_of_tenant(app_context::<ReadPool>(cx), &access.tenant.id).await?;
+    let keys = api_keys_of_tenant(app_context::<Db>(cx), &access.tenant.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let media_url = app_context::<std::sync::Arc<Media>>(cx).tenant_url(&access.tenant.id);
     let api_url = app_context::<Config>(cx)
         .server

@@ -32,7 +32,7 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     Shell, document, empty_state, format_time, icons, notice, page_header, section_card,
 };
@@ -64,8 +64,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         user_id: me,
         ..
     } = access;
-    let invitations =
-        open_invitations_of_tenant(app_context::<ReadPool>(cx), &tenant.id, now()).await?;
+    let invitations = open_invitations_of_tenant(app_context::<Db>(cx), &tenant.id, now())
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let mut ids: Vec<String> = tenant.members.keys().cloned().collect();
     ids.extend(invitations.iter().map(|i| i.invited_by.clone()));
     let labels = user_labels(cx, &ids).await?;

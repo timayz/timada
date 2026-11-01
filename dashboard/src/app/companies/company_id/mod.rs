@@ -31,7 +31,7 @@ use crate::auth::{require_user, user_labels};
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::input::input;
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, Tone, document, fact, facts, format_time, icons, notice, page_header,
     section_card, status_badge,
@@ -81,7 +81,9 @@ pub(crate) fn now() -> u64 {
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let (company, _) = require_owned(cx).await?;
     let query = query_params::<CompanyQuery>(cx)?;
-    let tenants = tenants_of_company(app_context::<ReadPool>(cx), &company.id).await?;
+    let tenants = tenants_of_company(app_context::<Db>(cx), &company.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let owners: Vec<String> = company.owners.iter().cloned().collect();
     let labels = user_labels(cx, &owners).await?;
     let year = civil_date(now()).0;

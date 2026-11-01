@@ -5,13 +5,15 @@
 //! context would otherwise write for itself: the canonical form of an
 //! e-mail address ([`email`]), of a slug ([`slug`]) and of a currency
 //! ([`currency`]), the clock ([`time`]), calendar dates ([`civil`]), an
-//! amount for a person to read ([`money`]) and a `LIKE` pattern ([`sql`]).
-//! No SQL driver, no web framework: contexts depend on this crate and on
-//! evento, nothing more between them.
+//! amount for a person to read ([`money`]) and a `LIKE` pattern ([`sql`]),
+//! and the database the read models share with the store ([`db`]). No web
+//! framework: contexts depend on this crate and on evento, nothing more
+//! between them.
 
 pub mod civil;
 pub mod codes;
 pub mod currency;
+pub mod db;
 pub mod email;
 pub mod keys;
 pub mod money;
