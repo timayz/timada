@@ -29,7 +29,7 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::{Db, ReadPool};
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, format_date, notice, page_header, section_card,
     status_badge,
@@ -108,7 +108,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<ReadPool>(cx);
-    let rows = discounts_of_tenant(pool, &tenant.id, false)
+    let rows = discounts_of_tenant(app_context::<Db>(cx), &tenant.id, false)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     // How many paid orders used each code, from the orders' read model.

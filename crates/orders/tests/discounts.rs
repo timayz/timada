@@ -6,7 +6,7 @@ use timada_orders::{
     OrderError, discount_usage_subscription, order_by_id, read_model_subscription,
 };
 
-type Discounts = timada_discounts::Command<evento::Sqlite>;
+type Discounts = timada_discounts::Command<evento::Turso>;
 
 async fn discount(discounts: &Discounts, create: CreateDiscount) -> String {
     discounts.create_discount(ALICE, create).await.unwrap().id
@@ -107,7 +107,7 @@ async fn a_discounted_payment_makes_a_discounted_order_and_spends_the_use() {
         (id.as_str(), 250)
     );
 
-    read_model_subscription::<evento::Sqlite>(pool.clone())
+    read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(&executor)
         .await
         .unwrap();
@@ -124,7 +124,7 @@ async fn a_discounted_payment_makes_a_discounted_order_and_spends_the_use() {
 
     // The order spends the use (told twice, it counts once).
     for _ in 0..2 {
-        discount_usage_subscription::<evento::Sqlite>(evento::Evento::new(executor.clone()))
+        discount_usage_subscription::<evento::Turso>(evento::Evento::new(executor.clone()))
             .run_once(&executor)
             .await
             .unwrap();

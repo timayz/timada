@@ -1,7 +1,4 @@
-use evento::migrator::Migrate;
 use serde_json::json;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
 use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem};
 use timada_aliexpress::{
@@ -15,26 +12,8 @@ const ALICE: &str = "user-alice";
 /// The tenant the tests act in.
 const TENANT: &str = "acme";
 
-async fn executor() -> evento::Sqlite {
-    let options = SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .add_migrations(timada_aliexpress::migrations())
-        .unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
-    pool.into()
+async fn executor() -> evento::Turso {
+    evento::Turso::in_memory_concurrent().await.unwrap()
 }
 
 #[test]
@@ -288,7 +267,7 @@ fn an_order_is_sent_with_its_items_and_how_it_is_paid() {
 
 /// A linked item: two variants of `product-1`, and `product-2` that does
 /// not vary.
-async fn links(executor: &evento::Sqlite) -> Vec<LinkState> {
+async fn links(executor: &evento::Turso) -> Vec<LinkState> {
     let gateway = timada_aliexpress::Command::new(executor.clone(), TENANT);
     let sku = |sku_id: &str, variant_id: Option<&str>| SkuLink {
         sku_id: sku_id.into(),

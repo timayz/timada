@@ -11,7 +11,7 @@ use topcoat::{
 
 use super::{CategoryId, act, category_url};
 use crate::app::t::slug::require_tenant;
-use crate::db::ReadPool;
+use crate::db::Db;
 
 /// Archives the category. One with live sub-categories is refused here
 /// rather than in the domain: the tree is the back office's view of the
@@ -23,8 +23,9 @@ pub async fn archive(cx: &Cx) -> Result<SeeOther> {
         .require_permission(cx, PERMISSION_PRODUCTS_MANAGE)
         .await?;
     let category_id = path_param::<CategoryId>(cx);
-    let children =
-        live_child_count(app_context::<ReadPool>(cx), &access.tenant.id, category_id).await?;
+    let children = live_child_count(app_context::<Db>(cx), &access.tenant.id, category_id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     if children > 0 {
         return Ok(see_other(category_url(
             cx,

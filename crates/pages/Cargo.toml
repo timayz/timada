@@ -13,8 +13,6 @@ thiserror.workspace = true
 ulid.workspace = true
 pulldown-cmark.workspace = true
 ammonia.workspace = true
-sqlx = { workspace = true, features = ["derive"] }
-sqlx_migrator.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

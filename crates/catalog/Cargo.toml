@@ -12,8 +12,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 ulid.workspace = true
-sqlx = { workspace = true, features = ["derive"] }
-sqlx_migrator.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

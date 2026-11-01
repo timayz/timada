@@ -26,7 +26,7 @@ async fn orders_and_carts_are_listed() {
 
     // Twice: delivery may repeat without the rows drifting.
     for _ in 0..2 {
-        read_model_subscription::<evento::Sqlite>(pool.clone())
+        read_model_subscription::<evento::Turso>(pool.clone())
             .run_once(&executor)
             .await
             .unwrap();
@@ -93,7 +93,7 @@ async fn fulfilled_orders_are_found_by_when_they_left() {
         .fulfil_order(ALICE, &left.order_id, None)
         .await
         .unwrap();
-    read_model_subscription::<evento::Sqlite>(pool.clone())
+    read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(&executor)
         .await
         .unwrap();

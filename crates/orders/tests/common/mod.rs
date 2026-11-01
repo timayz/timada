@@ -9,11 +9,21 @@ use timada_orders::{
     STOREFRONT_ACTOR, ShippingAddress,
 };
 
-pub type Orders = Command<evento::Sqlite>;
-pub type Catalog = timada_catalog::Command<evento::Sqlite>;
+pub type Orders = Command<evento::Turso>;
+pub type Catalog = timada_catalog::Command<evento::Turso>;
 
-/// A fresh in-memory event store with the read-model schemas applied.
-pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
+/// A fresh in-memory event store with the catalog's and the discounts' read
+/// models in it, and the orders' read-model database (still of its own).
+pub async fn executor_with_pool() -> (evento::Turso, sqlx::SqlitePool) {
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let mut conn = store.connect().unwrap();
+    for migrations in [&timada_catalog::MIGRATIONS, &timada_discounts::MIGRATIONS] {
+        migrations
+            .to_latest(&mut conn)
+            .await
+            .map_err(|(_, err)| err)
+            .unwrap();
+    }
     let options = SqliteConnectOptions::new()
         .filename(":memory:")
         .create_if_missing(true);
@@ -23,22 +33,16 @@ pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
         .await
         .unwrap();
     let mut conn = pool.acquire().await.unwrap();
-    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .add_migrations(timada_catalog::migrations())
-        .unwrap();
+    let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
     migrator
         .add_migrations(timada_orders::migrations())
-        .unwrap();
-    migrator
-        .add_migrations(timada_discounts::migrations())
         .unwrap();
     migrator
         .run(&mut *conn, &evento::migrator::Plan::apply_all())
         .await
         .unwrap();
     drop(conn);
-    (pool.clone().into(), pool)
+    (store, pool)
 }
 
 /// The two gateways over one store.

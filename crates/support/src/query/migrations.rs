@@ -1,41 +1,35 @@
-use sqlx_migrator::{Migration, vec_box};
+//! Schema of the read model: one migration, applied by the composition root
+//! in the store's database next to evento's own.
 
-/// The app name under which these migrations are recorded (the macro needs
-/// the literal, so it is repeated there).
+use evento::turso::migrate::{Migration, Migrations};
+
+/// The app name under which these migrations are recorded.
 pub const MIGRATION_APP: &str = "support";
 
-pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Support0001]
-}
-
-pub struct Support0001;
-sqlx_migrator::sqlite_migration!(
-    Support0001,
-    "support",
-    "0001_messages",
-    vec_box![],
-    vec_box![
-        (
-            "CREATE TABLE support_messages (
-                tenant_id TEXT NOT NULL,
-                id TEXT NOT NULL,
-                first_name TEXT NOT NULL,
-                last_name TEXT NOT NULL,
-                email TEXT NOT NULL,
-                body TEXT NOT NULL,
-                language TEXT,
-                status TEXT NOT NULL,
-                received_at INTEGER NOT NULL,
-                handled_at INTEGER,
-                updated_at INTEGER NOT NULL,
-                PRIMARY KEY (tenant_id, id)
-            )",
-            "DROP TABLE support_messages"
-        ),
-        (
-            "CREATE INDEX support_messages_status ON support_messages
-                (tenant_id, status, received_at DESC)",
-            "DROP INDEX support_messages_status"
-        ),
-    ]
+/// `support_messages`: one row per message of a tenant, opened.
+pub const MIGRATIONS: Migrations<'static> = Migrations::new(
+    MIGRATION_APP,
+    &[Migration::up(
+        "0001_messages",
+        "CREATE TABLE support_messages (
+            tenant_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            body TEXT NOT NULL,
+            language TEXT,
+            status TEXT NOT NULL,
+            received_at INTEGER NOT NULL,
+            handled_at INTEGER,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE INDEX support_messages_status ON support_messages
+            (tenant_id, status, received_at DESC);",
+    )],
 );
+
+/// The tables the migration creates: what a node empties before copying its
+/// store from a peer, so the subscription fills them again.
+pub const TABLES: &[&str] = &["support_messages"];

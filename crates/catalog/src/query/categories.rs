@@ -6,7 +6,8 @@
 //! ([`category_counts`], called by the read-model subscription) and stored on
 //! the row, so reading a category costs one plain `SELECT`.
 
-use sqlx::{FromRow, SqlitePool};
+use anyhow::Result;
+use timada_core::db::{Connection, Db, FromRow, execute, fetch_all};
 
 /// One row of `catalog_categories`, with how many products are in it.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -266,36 +267,35 @@ pub fn category_counts(
 
 /// Works out and stores the counts of every category of a tenant, inside the
 /// transaction that changed what they count.
-pub async fn refresh_category_counts(
-    conn: &mut sqlx::SqliteConnection,
-    tenant_id: &str,
-) -> sqlx::Result<()> {
-    let links: Vec<CategoryLink> = sqlx::query_as(
+pub async fn refresh_category_counts(conn: &Connection, tenant_id: &str) -> Result<()> {
+    let links: Vec<CategoryLink> = fetch_all(
+        conn,
         "SELECT id, parent_id, archived FROM catalog_categories WHERE tenant_id = ?1",
+        (tenant_id,),
     )
-    .bind(tenant_id)
-    .fetch_all(&mut *conn)
     .await?;
-    let memberships: Vec<(String, String)> = sqlx::query_as(
+    let memberships: Vec<(String, String)> = fetch_all(
+        conn,
         "SELECT pc.category_id, pc.product_id
          FROM catalog_product_categories pc
          JOIN catalog_products p ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
          WHERE pc.tenant_id = ?1 AND p.status <> 'archived'",
+        (tenant_id,),
     )
-    .bind(tenant_id)
-    .fetch_all(&mut *conn)
     .await?;
     for (id, counts) in category_counts(links, &memberships) {
-        sqlx::query(
+        execute(
+            conn,
             "UPDATE catalog_categories SET product_count = ?3, subtree_count = ?4
              WHERE tenant_id = ?1 AND id = ?2
                AND (product_count <> ?3 OR subtree_count <> ?4)",
+            (
+                tenant_id,
+                id.as_str(),
+                counts.product_count,
+                counts.subtree_count,
+            ),
         )
-        .bind(tenant_id)
-        .bind(&id)
-        .bind(counts.product_count)
-        .bind(counts.subtree_count)
-        .execute(&mut *conn)
         .await?;
     }
     Ok(())
@@ -303,71 +303,58 @@ pub async fn refresh_category_counts(
 
 /// The live categories of a tenant, each level in its own order, with their
 /// stored counts.
-pub async fn categories_of_tenant(
-    pool: &SqlitePool,
-    tenant_id: &str,
-) -> sqlx::Result<Vec<CategoryRow>> {
-    sqlx::query_as(
+pub async fn categories_of_tenant(db: &Db, tenant_id: &str) -> Result<Vec<CategoryRow>> {
+    db.fetch_all(
         "SELECT tenant_id, id, slug, name, description, parent_id, position, archived, in_menu,
             created_by, created_at, updated_at, product_count, subtree_count
          FROM catalog_categories c
          WHERE tenant_id = ?1 AND archived = 0
          ORDER BY position, name, id",
+        (tenant_id,),
     )
-    .bind(tenant_id)
-    .fetch_all(pool)
     .await
 }
 
 /// One category of a tenant, by id, archived or not.
-pub async fn category_by_id(
-    pool: &SqlitePool,
-    tenant_id: &str,
-    id: &str,
-) -> sqlx::Result<Option<CategoryRow>> {
-    sqlx::query_as(
+pub async fn category_by_id(db: &Db, tenant_id: &str, id: &str) -> Result<Option<CategoryRow>> {
+    db.fetch_optional(
         "SELECT tenant_id, id, slug, name, description, parent_id, position, archived, in_menu,
             created_by, created_at, updated_at, product_count, subtree_count
          FROM catalog_categories c
          WHERE tenant_id = ?1 AND id = ?2",
+        (tenant_id, id),
     )
-    .bind(tenant_id)
-    .bind(id)
-    .fetch_optional(pool)
     .await
 }
 
 /// How many live categories sit directly under this one.
-pub async fn live_child_count(pool: &SqlitePool, tenant_id: &str, id: &str) -> sqlx::Result<i64> {
-    sqlx::query_scalar(
+pub async fn live_child_count(db: &Db, tenant_id: &str, id: &str) -> Result<i64> {
+    db.fetch_scalar(
         "SELECT count(*) FROM catalog_categories
          WHERE tenant_id = ?1 AND parent_id = ?2 AND archived = 0",
+        (tenant_id, id),
     )
-    .bind(tenant_id)
-    .bind(id)
-    .fetch_one(pool)
     .await
 }
 
 /// The categories a product is in. Live ones come first, in tree order;
 /// archived memberships come last, so a page can show them as such.
 pub async fn categories_of_product(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     product_id: &str,
-) -> sqlx::Result<Vec<CategoryRow>> {
-    sqlx::query_as(
+) -> Result<Vec<CategoryRow>> {
+    db.fetch_all(
         "SELECT c.tenant_id, c.id, c.slug, c.name, c.description, c.parent_id, c.position,
-            c.archived, c.in_menu, c.created_by, c.created_at, c.updated_at, c.product_count, c.subtree_count
+            c.archived, c.in_menu, c.created_by, c.created_at, c.updated_at, c.product_count,
+            c.subtree_count
          FROM catalog_categories c
          JOIN catalog_product_categories pc
             ON pc.tenant_id = c.tenant_id AND pc.category_id = c.id
          WHERE c.tenant_id = ?1 AND pc.product_id = ?2
          ORDER BY c.archived, c.position, c.name, c.id",
+        (tenant_id, product_id),
     )
-    .bind(tenant_id)
-    .bind(product_id)
-    .fetch_all(pool)
     .await
 }
 

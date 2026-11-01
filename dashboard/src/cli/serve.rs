@@ -156,6 +156,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // A campaign a merchant sent goes out a batch at a time.
     let newsletter_sends = crate::newsletter_sends::NewsletterSends::new(
         read_pool.clone(),
+        db.clone(),
         executor.clone(),
         background_mail.clone(),
         keys.clone(),
@@ -300,7 +301,7 @@ fn subscriptions(
         ("mail logos", crate::media::logo_subscription(media.clone())),
         (
             "catalog",
-            timada_catalog::read_model_subscription(write_pool.clone()),
+            timada_catalog::read_model_subscription(db.clone()),
         ),
         (
             "orders",
@@ -312,15 +313,15 @@ fn subscriptions(
         ),
         (
             "discounts",
-            timada_discounts::read_model_subscription(write_pool.clone()),
+            timada_discounts::read_model_subscription(db.clone()),
         ),
         (
             "reviews",
-            timada_reviews::read_model_subscription(write_pool.clone()),
+            timada_reviews::read_model_subscription(db.clone()),
         ),
         (
             "support",
-            timada_support::read_model_subscription(write_pool.clone(), ring.clone()),
+            timada_support::read_model_subscription(db.clone(), ring.clone()),
         ),
         (
             "newsletter",
@@ -330,10 +331,7 @@ fn subscriptions(
             "automations",
             timada_automations::read_model_subscription(write_pool.clone()),
         ),
-        (
-            "pages",
-            timada_pages::read_model_subscription(write_pool.clone()),
-        ),
+        ("pages", timada_pages::read_model_subscription(db.clone())),
         (
             "invoicing",
             timada_invoicing::read_model_subscription(write_pool.clone()),

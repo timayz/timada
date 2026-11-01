@@ -1,12 +1,14 @@
 mod common;
 
+use timada_core::db::Db;
+
 use common::*;
 use timada_discounts::{
     Command, CreateDiscount, DiscountValue, discounts_of_tenant, read_model_subscription,
 };
 
-async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    read_model_subscription::<evento::Sqlite>(pool.clone())
+async fn catch_up(executor: &evento::Turso, pool: &Db) {
+    read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();

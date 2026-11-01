@@ -111,9 +111,6 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         let mut conn = pool.acquire().await.unwrap();
         let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
         migrator
-            .add_migrations(timada_catalog::migrations())
-            .unwrap();
-        migrator
             .add_migrations(timada_orders::migrations())
             .unwrap();
         migrator
@@ -1158,11 +1155,11 @@ async fn dashboard_counts(h: &Harness, tenant: &TenantState) -> Vec<(String, i64
     // The dashboard's read model is fed by the tenant's own subscription; in
     // this test nothing runs it, so catch it up by hand.
     let catalog = h.catalog(tenant);
-    timada_catalog::read_model_subscription::<cluster::Executor>(h.pool.clone())
+    timada_catalog::read_model_subscription::<cluster::Executor>(h.db.clone())
         .run_once(catalog.executor())
         .await
         .unwrap();
-    let mut out: Vec<(String, i64)> = categories_of_tenant(&h.pool, &tenant.id)
+    let mut out: Vec<(String, i64)> = categories_of_tenant(&h.db, &tenant.id)
         .await
         .unwrap()
         .into_iter()

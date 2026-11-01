@@ -4,16 +4,16 @@
 //! The handler reloads the strict write model of the review and rewrites its
 //! row, then counts the product's published reviews again, in one
 //! transaction, so delivery may repeat (the subscription is at-least-once)
-//! without the numbers drifting. One subscription follows every tenant's streams:
-//! each row carries the tenant of the event that made it, and it writes into
-//! the read-model database it is given.
+//! without the numbers drifting. One subscription follows every tenant's
+//! streams: each row carries the tenant of the event that made it, and the
+//! rows live in the store's own database ([`Db`]).
 
 use evento::{
     Executor,
     metadata::RawEvent,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
+use timada_core::db::{Db, execute};
 use timada_orders::order_projection;
 
 use crate::aggregator::Review;
@@ -22,12 +22,11 @@ use crate::command::{ReviewState, review_projection};
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-reviews/read-models";
 
-/// Builds the subscription over every tenant and routing key. `pool` is the
-/// read-model database and must be allowed to write; start it with
+/// Builds the subscription over every tenant and routing key. Start it with
 /// `.start(&store)` and keep the handle for shutdown.
-pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
+pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
-        .data(pool)
+        .data(db)
         .handler(on_review_event())
         .any_routing_key()
 }
@@ -37,7 +36,7 @@ async fn on_review_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<Review>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(review) = review_projection()
         .load(&event.aggregate_id)
         .tenant(&event.tenant)
@@ -63,57 +62,66 @@ async fn on_review_event<E: Executor>(
             (order.reference, name)
         })
         .unwrap_or_default();
-    upsert_review(&pool, &event.tenant, &review, &reference, &product_name).await
+    upsert_review(&db, &event.tenant, &review, &reference, &product_name).await
 }
 
 /// Writes the row of a review as the write model sees it, and the rating of
-/// its product.
+/// its product, in one transaction.
 pub async fn upsert_review(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     review: &ReviewState,
     order_reference: &str,
     product_name: &str,
 ) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO reviews_reviews (tenant_id, id, order_id, order_reference, product_id,
-            product_name, variant_label, rating, title, body, author_name, photo_count, status,
-            submitted_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-         ON CONFLICT (tenant_id, id) DO UPDATE SET
-            rating = excluded.rating, title = excluded.title, body = excluded.body,
-            photo_count = excluded.photo_count, status = excluded.status,
-            updated_at = excluded.updated_at",
+    let env = (tenant_id, review, order_reference, product_name);
+    db.write(
+        &env,
+        |tx, (tenant_id, review, order_reference, product_name)| {
+            Box::pin(async move {
+                execute(
+                tx,
+                "INSERT INTO reviews_reviews (tenant_id, id, order_id, order_reference, product_id,
+                    product_name, variant_label, rating, title, body, author_name, photo_count,
+                    status, submitted_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                 ON CONFLICT (tenant_id, id) DO UPDATE SET
+                    rating = excluded.rating, title = excluded.title, body = excluded.body,
+                    photo_count = excluded.photo_count, status = excluded.status,
+                    updated_at = excluded.updated_at",
+                (
+                    *tenant_id,
+                    review.id.as_str(),
+                    review.order_id.as_str(),
+                    *order_reference,
+                    review.product_id.as_str(),
+                    *product_name,
+                    review.variant_label.as_deref(),
+                    i64::from(review.rating),
+                    review.title.as_deref(),
+                    review.body.as_str(),
+                    review.author_name.as_str(),
+                    review.photos.len() as i64,
+                    review.status.as_str(),
+                    review.submitted_at as i64,
+                    review.updated_at as i64,
+                ),
+            )
+            .await?;
+                execute(
+                    tx,
+                    "INSERT INTO reviews_product_ratings (tenant_id, product_id, review_count,
+                    rating_sum)
+                 SELECT ?1, ?2, COUNT(*), COALESCE(SUM(rating), 0) FROM reviews_reviews
+                 WHERE tenant_id = ?1 AND product_id = ?2 AND status = 'published'
+                 ON CONFLICT (tenant_id, product_id) DO UPDATE SET
+                    review_count = excluded.review_count, rating_sum = excluded.rating_sum",
+                    (*tenant_id, review.product_id.as_str()),
+                )
+                .await?;
+                Ok(())
+            })
+        },
     )
-    .bind(tenant_id)
-    .bind(&review.id)
-    .bind(&review.order_id)
-    .bind(order_reference)
-    .bind(&review.product_id)
-    .bind(product_name)
-    .bind(&review.variant_label)
-    .bind(i64::from(review.rating))
-    .bind(&review.title)
-    .bind(&review.body)
-    .bind(&review.author_name)
-    .bind(review.photos.len() as i64)
-    .bind(review.status.as_str())
-    .bind(review.submitted_at as i64)
-    .bind(review.updated_at as i64)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO reviews_product_ratings (tenant_id, product_id, review_count, rating_sum)
-         SELECT ?1, ?2, COUNT(*), COALESCE(SUM(rating), 0) FROM reviews_reviews
-         WHERE tenant_id = ?1 AND product_id = ?2 AND status = 'published'
-         ON CONFLICT (tenant_id, product_id) DO UPDATE SET
-            review_count = excluded.review_count, rating_sum = excluded.rating_sum",
-    )
-    .bind(tenant_id)
-    .bind(&review.product_id)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(())
+    .await
 }

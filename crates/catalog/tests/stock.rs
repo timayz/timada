@@ -1,5 +1,7 @@
 mod common;
 
+use timada_core::db::Db;
+
 use common::*;
 use timada_catalog::{CatalogError, DefineVariant, OptionSelection, StockLine, StockSummary};
 
@@ -14,7 +16,7 @@ fn line(product_id: &str, variant_id: Option<&str>, quantity: u32) -> StockLine 
 }
 
 /// A product with two sizes, with its variant ids.
-async fn sized(cmd: &timada_catalog::Command<evento::Sqlite>) -> (String, String, String) {
+async fn sized(cmd: &timada_catalog::Command<evento::Turso>) -> (String, String, String) {
     let product = create_product(cmd, "Cat Tree").await;
     let size = cmd
         .define_option(ALICE, &product.id, "Size", vec!["S".into(), "L".into()])
@@ -211,7 +213,7 @@ async fn the_read_model_sums_a_product_up() {
     timada_catalog::upsert_product(&pool, "t1", &product)
         .await
         .unwrap();
-    let state = async |pool: sqlx::SqlitePool| {
+    let state = async |pool: Db| {
         timada_catalog::product_by_id(&pool, "t1", &product_id)
             .await
             .unwrap()

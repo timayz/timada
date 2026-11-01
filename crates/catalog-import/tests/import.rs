@@ -4,9 +4,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use evento::migrator::Migrate;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
 use timada_catalog::{Command, ProductStatus};
 use timada_catalog_import::{
     AttributeSeed, BoxFuture, CategorySeed, ImageSeed, Images, ImportOptions, NoImages, OptionSeed,
@@ -15,27 +12,15 @@ use timada_catalog_import::{
 
 const ALICE: &str = "user-alice";
 
-async fn catalog() -> Command<evento::Sqlite> {
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(":memory:")
-                .create_if_missing(true),
-        )
+async fn catalog() -> Command<evento::Turso> {
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let mut conn = store.connect().unwrap();
+    timada_catalog::MIGRATIONS
+        .to_latest(&mut conn)
         .await
+        .map_err(|(_, err)| err)
         .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .add_migrations(timada_catalog::migrations())
-        .unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
-    Command::new(pool.into(), "acme")
+    Command::new(store, "acme")
 }
 
 /// Hands out a picture for every URL but the one that says "missing",

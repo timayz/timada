@@ -1,20 +1,16 @@
-use sqlx_migrator::{Migration, vec_box};
+//! Schema of the read model: one migration, applied by the composition root
+//! in the store's database next to evento's own.
 
-/// The app name under which these migrations are recorded (the macro needs
-/// the literal, so it is repeated there).
+use evento::turso::migrate::{Migration, Migrations};
+
+/// The app name under which these migrations are recorded.
 pub const MIGRATION_APP: &str = "pages";
 
-pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Pages0001]
-}
-
-pub struct Pages0001;
-sqlx_migrator::sqlite_migration!(
-    Pages0001,
-    "pages",
-    "0001_pages",
-    vec_box![],
-    vec_box![(
+/// `pages`: one row per page of a tenant.
+pub const MIGRATIONS: Migrations<'static> = Migrations::new(
+    MIGRATION_APP,
+    &[Migration::up(
+        "0001_pages",
         "CREATE TABLE pages (
             tenant_id TEXT NOT NULL,
             id TEXT NOT NULL,
@@ -24,7 +20,10 @@ sqlx_migrator::sqlite_migration!(
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             PRIMARY KEY (tenant_id, id)
-        )",
-        "DROP TABLE pages"
-    )]
+        );",
+    )],
 );
+
+/// The tables the migration creates: what a node empties before copying its
+/// store from a peer, so the subscription fills them again.
+pub const TABLES: &[&str] = &["pages"];

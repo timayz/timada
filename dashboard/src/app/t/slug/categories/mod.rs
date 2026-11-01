@@ -27,7 +27,7 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{LINK, Shell, document, empty_row, notice, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -71,7 +71,7 @@ impl Row {
 }
 
 /// The live categories of a tenant in tree order, each with its depth.
-pub async fn rows_of(pool: &sqlx::SqlitePool, tenant_id: &str) -> Result<Vec<Row>> {
+pub async fn rows_of(pool: &Db, tenant_id: &str) -> Result<Vec<Row>> {
     fn walk(nodes: Vec<timada_catalog::TreeOf<CategoryRow>>, depth: usize, out: &mut Vec<Row>) {
         for node in nodes {
             out.push(Row {
@@ -83,7 +83,11 @@ pub async fn rows_of(pool: &sqlx::SqlitePool, tenant_id: &str) -> Result<Vec<Row
     }
     let mut out = Vec::new();
     walk(
-        tree_of(categories_of_tenant(pool, tenant_id).await?),
+        tree_of(
+            categories_of_tenant(pool, tenant_id)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?,
+        ),
         0,
         &mut out,
     );
@@ -126,7 +130,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<CategoriesQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let rows = rows_of(pool, &tenant.id).await?;
     let slug = tenant.slug.clone();
     let title = format!("Categories · {}", tenant.name);

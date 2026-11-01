@@ -29,7 +29,7 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     Shell, Tone, document, empty_row, notice, page_header, section_card, status_badge,
 };
@@ -69,7 +69,7 @@ async fn catalog_items(
     cx: &Cx,
     access: &TenantAccess,
 ) -> Result<(Vec<Item>, Vec<(String, String)>, HashMap<String, String>)> {
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let rows = products_of_tenant(
         pool,
         &access.tenant.id,
@@ -78,7 +78,7 @@ async fn catalog_items(
         PICKER_PRODUCTS,
     )
     .await
-    .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
+    .map_err(topcoat::Error::from_anyhow)?;
     let catalog = timada_catalog::Command::new(access.executor()?.clone(), access.tenant_id());
     let mut items = Vec::new();
     let mut products = Vec::new();

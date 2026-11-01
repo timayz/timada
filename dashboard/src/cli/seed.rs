@@ -245,7 +245,7 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     )
     .await?;
     // So the catalogue pages show the products without waiting for `serve`.
-    timada_catalog::read_model_subscription::<Executor>(write_pool.clone())
+    timada_catalog::read_model_subscription::<Executor>(store_db.clone())
         .run_once(&platform)
         .await?;
 
@@ -257,7 +257,7 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         let pages = timada_pages::Command::new(executor.clone(), &tenant.id);
         let (created, skipped) = seed_pages(&pages, &owner.id, dir).await?;
         tracing::info!(created, skipped, "pages loaded");
-        timada_pages::read_model_subscription::<Executor>(write_pool.clone())
+        timada_pages::read_model_subscription::<Executor>(store_db.clone())
             .run_once(&platform)
             .await?;
     }

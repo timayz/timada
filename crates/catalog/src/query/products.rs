@@ -1,6 +1,7 @@
 //! Queries over `catalog_products`, for the products pages of a tenant.
 
-use sqlx::{FromRow, SqlitePool};
+use anyhow::Result;
+use timada_core::db::{Db, FromRow};
 
 use crate::command::{Price, ProductStatus};
 use crate::value_object::format_money;
@@ -85,30 +86,17 @@ impl<'a> ProductFilter<'a> {
     }
 }
 
-/// The full-text query for `q` among one tenant's products, when `q` is long
-/// enough for the index (it is cut in runs of three characters); `None`
-/// otherwise, and the search falls back to [`contains`]. The tenant is part
-/// of the query, so the index itself narrows to its products.
-fn phrase(tenant_id: &str, q: &str) -> Option<String> {
-    let quote = |text: &str| format!("\"{}\"", text.replace('"', "\"\""));
-    (q.chars().count() >= 3).then(|| {
-        format!(
-            "tenant_id: {} AND {{slug name}}: {}",
-            quote(tenant_id),
-            quote(q)
-        )
-    })
-}
+use timada_core::db::fts_query as phrase;
 
 /// Where a page of products comes from, `?2` being what was searched for.
-/// With a phrase the full-text index leads, so a search costs what it
-/// matches; `CROSS JOIN` keeps the planner from walking every product in
-/// order instead. Without one, `?2` is a `LIKE` pattern or `NULL`.
+/// With a phrase the full-text index narrows the tenant's products first;
+/// without one, `?2` is a `LIKE` pattern or `NULL`.
 macro_rules! products_from {
     (phrase) => {
-        "FROM catalog_products_fts f
-         CROSS JOIN catalog_products p ON p.rowid = f.rowid
-         WHERE catalog_products_fts MATCH ?2 AND p.tenant_id = ?1 "
+        "FROM catalog_products p
+         WHERE p.tenant_id = ?1
+           AND p.id IN (SELECT id FROM catalog_products
+                        WHERE tenant_id = ?1 AND fts_match(slug_search, name_search, ?2)) "
     };
     (pattern) => {
         "FROM catalog_products p
@@ -147,8 +135,8 @@ macro_rules! products_count {
 
 /// What `?2` is and which statements read it: the index for a phrase, the
 /// rows for a short search or none.
-fn search_of(tenant_id: &str, filter: &ProductFilter<'_>) -> (Option<String>, bool) {
-    match filter.q.and_then(|q| phrase(tenant_id, q)) {
+fn search_of(filter: &ProductFilter<'_>) -> (Option<String>, bool) {
+    match filter.q.and_then(phrase) {
         Some(phrase) => (Some(phrase), true),
         None => (filter.q.map(contains), false),
     }
@@ -156,75 +144,58 @@ fn search_of(tenant_id: &str, filter: &ProductFilter<'_>) -> (Option<String>, bo
 
 /// The products of a tenant the filter matches, most recently changed first.
 pub async fn products_of_tenant(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     filter: &ProductFilter<'_>,
     offset: i64,
     limit: i64,
-) -> sqlx::Result<Vec<ProductRow>> {
-    let (search, indexed) = search_of(tenant_id, filter);
+) -> Result<Vec<ProductRow>> {
+    let (search, indexed) = search_of(filter);
     let statement = if indexed {
         products_page!(phrase)
     } else {
         products_page!(pattern)
     };
-    sqlx::query_as(statement)
-        .bind(tenant_id)
-        .bind(search)
-        .bind(filter.category)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await
+    db.fetch_all(
+        statement,
+        (tenant_id, search, filter.category, limit, offset),
+    )
+    .await
 }
 
 /// How many products [`products_of_tenant`] would list.
-pub async fn count_products(
-    pool: &SqlitePool,
-    tenant_id: &str,
-    filter: &ProductFilter<'_>,
-) -> sqlx::Result<i64> {
-    let (search, indexed) = search_of(tenant_id, filter);
+pub async fn count_products(db: &Db, tenant_id: &str, filter: &ProductFilter<'_>) -> Result<i64> {
+    let (search, indexed) = search_of(filter);
     let statement = if indexed {
         products_count!(phrase)
     } else {
         products_count!(pattern)
     };
-    sqlx::query_scalar(statement)
-        .bind(tenant_id)
-        .bind(search)
-        .bind(filter.category)
-        .fetch_one(pool)
+    db.fetch_scalar(statement, (tenant_id, search, filter.category))
         .await
 }
 
 /// One product of a tenant, by id.
-pub async fn product_by_id(
-    pool: &SqlitePool,
-    tenant_id: &str,
-    id: &str,
-) -> sqlx::Result<Option<ProductRow>> {
-    sqlx::query_as(
+pub async fn product_by_id(db: &Db, tenant_id: &str, id: &str) -> Result<Option<ProductRow>> {
+    db.fetch_optional(
         "SELECT tenant_id, id, slug, name, description, amount_cents, currency, status,
             created_by, created_at, updated_at, thumbnail, image_count,
             min_amount_cents, max_amount_cents, variant_count, stock_state
          FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
+        (tenant_id, id),
     )
-    .bind(tenant_id)
-    .bind(id)
-    .fetch_optional(pool)
     .await
 }
 
 /// A tenant's published products made after `since` (unix seconds), newest
 /// first: what a newsletter shows as just in.
 pub async fn new_products(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     since: i64,
     limit: i64,
-) -> sqlx::Result<Vec<ProductRow>> {
-    sqlx::query_as(
+) -> Result<Vec<ProductRow>> {
+    db.fetch_all(
         "SELECT tenant_id, id, slug, name, description, amount_cents, currency, status,
             created_by, created_at, updated_at, thumbnail, image_count,
             min_amount_cents, max_amount_cents, variant_count, stock_state
@@ -232,10 +203,7 @@ pub async fn new_products(
          WHERE tenant_id = ?1 AND status = 'published' AND created_at > ?2
          ORDER BY created_at DESC, id DESC
          LIMIT ?3",
+        (tenant_id, since, limit),
     )
-    .bind(tenant_id)
-    .bind(since)
-    .bind(limit)
-    .fetch_all(pool)
     .await
 }

@@ -1,5 +1,7 @@
 mod common;
 
+use timada_core::db::Db;
+
 use std::sync::Arc;
 
 use common::*;
@@ -9,11 +11,11 @@ use timada_support::{
 };
 
 async fn catch_up(
-    executor: &evento::Sqlite,
-    pool: &sqlx::SqlitePool,
+    executor: &evento::Turso,
+    pool: &Db,
     keys: &Arc<MemoryKeys>,
 ) -> anyhow::Result<()> {
-    read_model_subscription::<evento::Sqlite>(pool.clone(), ring(keys))
+    read_model_subscription::<evento::Turso>(pool.clone(), ring(keys))
         .run_once(executor)
         .await
 }
@@ -115,7 +117,7 @@ async fn a_message_whose_key_is_not_here_yet_is_retried() {
     // The key has not reached this node: the handler fails, the row waits.
     // (The subscription retries that for a long while; one pass shows it.)
     keys.lose_all();
-    let one_pass = read_model_subscription::<evento::Sqlite>(pool.clone(), ring(&keys))
+    let one_pass = read_model_subscription::<evento::Turso>(pool.clone(), ring(&keys))
         .no_retry()
         .run_once(&executor)
         .await;

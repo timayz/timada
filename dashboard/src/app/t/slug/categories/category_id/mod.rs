@@ -41,7 +41,7 @@ use crate::components::input::input;
 use crate::components::label::label;
 use crate::components::select::select;
 use crate::components::textarea::textarea;
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, document, fact, facts, format_time, notice, page_header, section_card,
 };
@@ -132,7 +132,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .cloned()
         .unwrap_or_else(|| category.created_by.clone());
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     // The whole tree: it carries the counts, and it says where this category
     // may move to (anything live that is not itself or one of its
     // descendants, with room for it below).
@@ -140,7 +140,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // Filed directly under it, and what its page in the shop lists, as the
     // subscription stored them (the same numbers the tree shows).
     let (filed_here, on_its_page) = category_by_id(pool, &tenant.id, &category.id)
-        .await?
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .map(|row| (row.product_count, row.subtree_count))
         .unwrap_or_default();
     // The breadcrumb, read off the tree already loaded. The parent comes
@@ -164,7 +165,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         chain.reverse();
         chain
     };
-    let children = live_child_count(pool, &tenant.id, &category.id).await?;
+    let children = live_child_count(pool, &tenant.id, &category.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let descendants: Vec<&str> = {
         let mut ids = vec![category.id.as_str()];
         for row in &rows {

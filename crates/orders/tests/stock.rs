@@ -86,7 +86,7 @@ async fn a_paid_order_takes_its_share_and_a_cancelled_one_gives_it_back() {
     let run = async || {
         // Told twice, it counts once.
         for _ in 0..2 {
-            stock_usage_subscription::<evento::Sqlite>(evento::Evento::new(executor.clone()))
+            stock_usage_subscription::<evento::Turso>(evento::Evento::new(executor.clone()))
                 .run_once(&executor)
                 .await
                 .unwrap();
