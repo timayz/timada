@@ -32,6 +32,8 @@ use config::ClusterConfig;
 struct Node {
     cluster: Arc<Cluster>,
     store: Executor,
+    /// The read models in the store's database.
+    db: db::Db,
     pool: SqlitePool,
     files: Files,
     dir: PathBuf,
@@ -72,6 +74,7 @@ impl Node {
             read_models_url: format!("sqlite:{}", dir.join("read-models.db").display()),
         };
         let store = db::open_store(&path).await.unwrap();
+        let store_db = db::Db::from(store.clone());
         db::migrate(&files.read_models_url, db::read_model_migrator().unwrap())
             .await
             .unwrap();
@@ -101,13 +104,14 @@ impl Node {
         .await
         .unwrap();
         // The platform's catalog of tenants, in this node's read models.
-        let catalog = read_model_subscription::<Executor>(read_models.clone())
+        let catalog = read_model_subscription::<Executor>(store_db.clone())
             .start(&store)
             .await
             .unwrap();
         Self {
             cluster,
             store,
+            db: store_db,
             pool: read_models,
             files,
             dir,
@@ -223,7 +227,7 @@ async fn create_everywhere(nodes: &[Node; 3], name: &str) -> timada_tenancy::Ten
     for node in nodes {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                if timada_tenancy::active_tenant_ids(&node.pool)
+                if timada_tenancy::active_tenant_ids(&node.db)
                     .await
                     .unwrap()
                     .contains(&tenant.id)

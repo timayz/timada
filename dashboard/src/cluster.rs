@@ -154,6 +154,9 @@ impl Cluster {
             crate::db::empty_store(&store)
                 .await
                 .context("cannot empty the store before copying it")?;
+            crate::db::reset_store_read_models(&store)
+                .await
+                .context("cannot empty the read models before copying the store")?;
             crate::db::recreate_read_models(&files.read_models_url)
                 .await
                 .context("cannot recreate the read models before copying the store")?;

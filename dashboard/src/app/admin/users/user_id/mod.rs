@@ -17,7 +17,7 @@ use crate::app::admin::require_admin;
 use crate::app::auth::Flash;
 use crate::auth::{identity, now, oidc::Providers, webauthn::authenticator_name};
 use crate::components::button::{ButtonVariant, button};
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     Shell, Tone, document, fact, facts, format_time, notice, page_header, section_card,
     session_row, settings_layout, sign_in_row, status_badge,
@@ -59,8 +59,9 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
         return Err(not_found().into());
     };
     let now = now() as i64;
-    let active: Vec<_> = user_sessions(app_context::<ReadPool>(cx), &user.id)
-        .await?
+    let active: Vec<_> = user_sessions(app_context::<Db>(cx), &user.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
         .into_iter()
         .filter(|s| s.is_active_at(now))
         .collect();

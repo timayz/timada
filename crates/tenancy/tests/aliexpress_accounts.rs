@@ -1,5 +1,7 @@
 mod common;
 
+use timada_core::db::Db;
+
 use common::*;
 use timada_tenancy::{
     AuthorizeAliexpress, Command, ConfigureAliexpress, LegalIdentity, TenancyError,
@@ -9,15 +11,15 @@ use timada_tenancy::{
 const NOW: i64 = 1_800_000_000;
 const DAY: i64 = 86_400;
 
-async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    aliexpress_accounts_subscription::<evento::Sqlite>(pool.clone())
+async fn catch_up(executor: &evento::Turso, pool: &Db) {
+    aliexpress_accounts_subscription::<evento::Turso>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
 }
 
 /// A company registered by `owner`, with a SIRET of its own.
-async fn company(cmd: &Command<evento::Sqlite>, owner: &str, siret: &str) -> String {
+async fn company(cmd: &Command<evento::Turso>, owner: &str, siret: &str) -> String {
     let identity = LegalIdentity {
         legal_name: "Ali Company".to_owned(),
         legal_form: "SAS".to_owned(),
@@ -55,7 +57,7 @@ fn tokens(expires_at: i64, refresh_expires_at: i64) -> AuthorizeAliexpress {
     }
 }
 
-async fn due(pool: &sqlx::SqlitePool, before: i64) -> Vec<String> {
+async fn due(pool: &Db, before: i64) -> Vec<String> {
     aliexpress_accounts_due(pool, before, NOW, 100)
         .await
         .unwrap()

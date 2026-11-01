@@ -1,5 +1,7 @@
 mod common;
 
+use timada_core::db::Db;
+
 use common::*;
 use timada_tenancy::{
     AUDIT_GRANTED, AUDIT_INVITATION_ACCEPTED, AUDIT_INVITATION_REVOKED, AUDIT_INVITED,
@@ -16,8 +18,8 @@ async fn tick() {
     tokio::time::sleep(std::time::Duration::from_millis(2)).await;
 }
 
-async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    member_audit_subscription::<evento::Sqlite>(pool.clone())
+async fn catch_up(executor: &evento::Turso, pool: &Db) {
+    member_audit_subscription::<evento::Turso>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
@@ -241,10 +243,7 @@ async fn a_repeated_delivery_records_nothing_twice() {
     catch_up(&executor, &pool).await;
 
     // A fresh cursor replays the whole log over the rows already there.
-    sqlx::query("DELETE FROM subscriber")
-        .execute(&pool)
-        .await
-        .unwrap();
+    pool.execute("DELETE FROM subscriber", ()).await.unwrap();
     catch_up(&executor, &pool).await;
     let rows = member_audit_of_tenant(&pool, &tenant.id, None, 50)
         .await

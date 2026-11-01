@@ -16,7 +16,7 @@ use crate::auth::{now, oidc::Providers, require_user, webauthn::authenticator_na
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     Shell, document, fact, facts, format_time, icons, notice, page_header, section_card,
     session_row, settings_layout, sign_in_row,
@@ -45,7 +45,9 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
     let providers = app_context::<Providers>(cx);
     let user_id = user.id.as_str();
     let current_session = session::token_hash(cx).await?.map(|hash| session_id(&hash));
-    let sessions = active_sessions(app_context::<ReadPool>(cx), user_id, now() as i64).await?;
+    let sessions = active_sessions(app_context::<Db>(cx), user_id, now() as i64)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
 
     Ok(view! {
         document(

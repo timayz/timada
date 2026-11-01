@@ -26,7 +26,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, Tone, document, fact, facts, icons, notice, page_header, section_card,
     status_badge,
@@ -72,7 +72,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(|link| link.series_code.clone())
         .unwrap_or_default();
     let owns = company.as_ref().is_some_and(|c| c.is_owner(&user_id));
-    let mine = companies_of_user(app_context::<ReadPool>(cx), &user_id).await?;
+    let mine = companies_of_user(app_context::<Db>(cx), &user_id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let create = new_company_url(cx, None, Some(&slug));
     let year = timada_invoicing::civil_date(crate::app::companies::company_id::now()).0;
     let first_number = if code.is_empty() {

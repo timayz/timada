@@ -13,7 +13,7 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 use crate::aggregator::{Accepted, MemberGranted, MemberRevoked, MemberRoleChanged, Revoked, Sent};
 use crate::command::invitation_projection;
@@ -31,11 +31,11 @@ pub const AUDIT_INVITED: &str = "invited";
 pub const AUDIT_INVITATION_ACCEPTED: &str = "invitation_accepted";
 pub const AUDIT_INVITATION_REVOKED: &str = "invitation_revoked";
 
-/// Builds the subscription over every routing key. `pool` must be allowed to
-/// write; start it with `.start(&executor)` and keep the handle for shutdown.
-pub fn member_audit_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
+/// Builds the subscription over every routing key. Start it with
+/// `.start(&executor)` and keep the handle for shutdown.
+pub fn member_audit_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(MEMBER_AUDIT_SUBSCRIPTION)
-        .data(pool)
+        .data(db)
         .handler(on_member_granted())
         .handler(on_member_role_changed())
         .handler(on_member_revoked())
@@ -68,22 +68,19 @@ pub struct MemberAuditRow {
 /// The history of a tenant, newest first: `limit` rows older than the row
 /// numbered `before` (its [`MemberAuditRow::seq`]), or from the newest.
 pub async fn member_audit_of_tenant(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     before: Option<i64>,
     limit: i64,
-) -> sqlx::Result<Vec<MemberAuditRow>> {
-    sqlx::query_as(
+) -> anyhow::Result<Vec<MemberAuditRow>> {
+    db.fetch_all(
         "SELECT seq, event_id, tenant_id, at, action, actor, user_id, email, role
          FROM tenancy_member_audit
          WHERE tenant_id = ?1 AND (?2 IS NULL OR seq < ?2)
          ORDER BY seq DESC
          LIMIT ?3",
+        (tenant_id, before, limit),
     )
-    .bind(tenant_id)
-    .bind(before)
-    .bind(limit)
-    .fetch_all(pool)
     .await
 }
 
@@ -96,22 +93,23 @@ struct Entry<'a> {
     role: Option<&'a str>,
 }
 
-async fn record(pool: &SqlitePool, event: &evento::Event, entry: Entry<'_>) -> anyhow::Result<()> {
-    sqlx::query(
+async fn record(db: &Db, event: &evento::Event, entry: Entry<'_>) -> anyhow::Result<()> {
+    db.execute(
         "INSERT INTO tenancy_member_audit (event_id, tenant_id, at, action, actor, user_id,
             email, role)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (event_id) DO NOTHING",
+        (
+            event.id.to_string(),
+            entry.tenant_id,
+            event.timestamp as i64,
+            entry.action,
+            entry.actor,
+            entry.user_id,
+            entry.email,
+            entry.role,
+        ),
     )
-    .bind(event.id.to_string())
-    .bind(entry.tenant_id)
-    .bind(event.timestamp as i64)
-    .bind(entry.action)
-    .bind(entry.actor)
-    .bind(entry.user_id)
-    .bind(entry.email)
-    .bind(entry.role)
-    .execute(pool)
     .await?;
     Ok(())
 }
@@ -121,7 +119,7 @@ async fn on_member_granted<E: Executor>(
     context: &Context<'_, E>,
     event: Event<MemberGranted>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let actor = event.metadata.requested_by()?;
     let entry = Entry {
         tenant_id: &event.aggregate_id,
@@ -131,7 +129,7 @@ async fn on_member_granted<E: Executor>(
         email: None,
         role: Some(&event.data.role),
     };
-    record(&pool, &event, entry).await
+    record(&db, &event, entry).await
 }
 
 #[evento::subscription]
@@ -139,7 +137,7 @@ async fn on_member_role_changed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<MemberRoleChanged>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let actor = event.metadata.requested_by()?;
     let entry = Entry {
         tenant_id: &event.aggregate_id,
@@ -149,7 +147,7 @@ async fn on_member_role_changed<E: Executor>(
         email: None,
         role: Some(&event.data.role),
     };
-    record(&pool, &event, entry).await
+    record(&db, &event, entry).await
 }
 
 #[evento::subscription]
@@ -157,7 +155,7 @@ async fn on_member_revoked<E: Executor>(
     context: &Context<'_, E>,
     event: Event<MemberRevoked>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let actor = event.metadata.requested_by()?;
     let entry = Entry {
         tenant_id: &event.aggregate_id,
@@ -167,7 +165,7 @@ async fn on_member_revoked<E: Executor>(
         email: None,
         role: None,
     };
-    record(&pool, &event, entry).await
+    record(&db, &event, entry).await
 }
 
 #[evento::subscription]
@@ -175,7 +173,7 @@ async fn on_invitation_sent<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Sent>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let entry = Entry {
         tenant_id: &event.data.tenant_id,
         action: AUDIT_INVITED,
@@ -184,7 +182,7 @@ async fn on_invitation_sent<E: Executor>(
         email: Some(&event.data.email),
         role: Some(&event.data.role),
     };
-    record(&pool, &event, entry).await
+    record(&db, &event, entry).await
 }
 
 #[evento::subscription]
@@ -192,7 +190,7 @@ async fn on_invitation_accepted<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Accepted>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(invitation) = invitation_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -208,7 +206,7 @@ async fn on_invitation_accepted<E: Executor>(
         email: Some(&invitation.email),
         role: Some(&invitation.role),
     };
-    record(&pool, &event, entry).await
+    record(&db, &event, entry).await
 }
 
 #[evento::subscription]
@@ -216,7 +214,7 @@ async fn on_invitation_revoked<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Revoked>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(invitation) = invitation_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -232,5 +230,5 @@ async fn on_invitation_revoked<E: Executor>(
         email: Some(&invitation.email),
         role: Some(&invitation.role),
     };
-    record(&pool, &event, entry).await
+    record(&db, &event, entry).await
 }

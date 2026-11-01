@@ -2,8 +2,8 @@
 //! creation never waits on a projection). Listing a user's tenants, every
 //! tenant for the administration, or the invitations of a tenant (one stream
 //! each) needs an index a relational store is good at:
-//! [`read_model_subscription`] keeps the SQLite tables current from the event
-//! stream, and [`tenants`] / [`invitations`] / [`api_keys`] query them.
+//! [`read_model_subscription`] keeps the tables of the store's database current
+//! from the event stream, and [`tenants`] / [`invitations`] / [`api_keys`] query them.
 //! [`member_audit_subscription`] keeps the members history of each tenant;
 //! [`aliexpress_accounts_subscription`] which companies have an AliExpress
 //! account connected, until when.

@@ -1,7 +1,8 @@
 //! Queries over the read models, for the home page (a user's tenants) and
 //! the administration pages.
 
-use sqlx::{FromRow, SqlitePool};
+use anyhow::Result;
+use timada_core::db::{Db, FromRow};
 
 /// One row of `tenancy_tenants`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -27,36 +28,29 @@ pub struct MembershipRow {
     pub role: String,
 }
 
+use timada_core::db::fts_query as phrase;
 use timada_core::like_contains as contains;
 
 /// The tenants `user_id` is a member of, by name.
-pub async fn tenants_of_user(pool: &SqlitePool, user_id: &str) -> sqlx::Result<Vec<MembershipRow>> {
-    sqlx::query_as(
+pub async fn tenants_of_user(db: &Db, user_id: &str) -> Result<Vec<MembershipRow>> {
+    db.fetch_all(
         "SELECT t.id AS tenant_id, t.slug, t.name, t.suspended, m.role
          FROM tenancy_members m JOIN tenancy_tenants t ON t.id = m.tenant_id
          WHERE m.user_id = ?1
          ORDER BY t.name COLLATE NOCASE, t.id",
+        (user_id,),
     )
-    .bind(user_id)
-    .fetch_all(pool)
     .await
 }
 
-/// The full-text phrase matching `q` anywhere in a word, when `q` is long
-/// enough for the index (it is cut in runs of three characters); `None`
-/// otherwise, and the search falls back to [`contains`].
-fn phrase(q: &str) -> Option<String> {
-    (q.chars().count() >= 3).then(|| format!("\"{}\"", q.replace('"', "\"\"")))
-}
-
 /// Where the tenants come from, `?1` being what was searched for. With a
-/// phrase the full-text index leads (`CROSS JOIN` keeps the planner from
-/// walking every tenant in order instead); without one `?1` is a `LIKE`
-/// pattern or `NULL`.
+/// phrase the full-text index narrows the rows first; without one `?1` is a
+/// `LIKE` pattern or `NULL`.
 macro_rules! tenants_from {
     (phrase) => {
-        "FROM tenancy_tenants_fts f CROSS JOIN tenancy_tenants t ON t.rowid = f.rowid
-         WHERE tenancy_tenants_fts MATCH ?1 "
+        "FROM tenancy_tenants t
+         WHERE t.id IN (SELECT id FROM tenancy_tenants
+                        WHERE fts_match(slug_search, name_search, ?1)) "
     };
     (pattern) => {
         "FROM tenancy_tenants t
@@ -85,31 +79,26 @@ fn search_of(q: Option<&str>) -> (Option<String>, bool) {
 
 /// Tenants whose slug or name contains `q` (every tenant when `None`), by name.
 pub async fn list_tenants(
-    pool: &SqlitePool,
+    db: &Db,
     q: Option<&str>,
     offset: i64,
     limit: i64,
-) -> sqlx::Result<Vec<TenantRow>> {
+) -> Result<Vec<TenantRow>> {
     let (search, indexed) = search_of(q);
     let statement = if indexed {
         tenants_page!(phrase)
     } else {
         tenants_page!(pattern)
     };
-    sqlx::query_as(statement)
-        .bind(search)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await
+    db.fetch_all(statement, (search, limit, offset)).await
 }
 
 /// How many tenants [`list_tenants`] would list: with no search, the total
 /// the subscription keeps; with one, the matches counted.
-pub async fn count_tenants(pool: &SqlitePool, q: Option<&str>) -> sqlx::Result<i64> {
+pub async fn count_tenants(db: &Db, q: Option<&str>) -> Result<i64> {
     if q.is_none() {
-        return sqlx::query_scalar("SELECT tenants FROM tenancy_totals WHERE id = 1")
-            .fetch_one(pool)
+        return db
+            .fetch_scalar("SELECT tenants FROM tenancy_totals WHERE id = 1", ())
             .await;
     }
     let (search, indexed) = search_of(q);
@@ -118,18 +107,19 @@ pub async fn count_tenants(pool: &SqlitePool, q: Option<&str>) -> sqlx::Result<i
     } else {
         concat!("SELECT COUNT(*) ", tenants_from!(pattern))
     };
-    sqlx::query_scalar(statement)
-        .bind(search)
-        .fetch_one(pool)
-        .await
+    db.fetch_scalar(statement, (search,)).await
 }
 
 /// The ids of every tenant not suspended, oldest first: the tenants a node
 /// keeps a copy of.
-pub async fn active_tenant_ids(pool: &SqlitePool) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar("SELECT id FROM tenancy_tenants WHERE suspended = 0 ORDER BY created_at, id")
-        .fetch_all(pool)
-        .await
+pub async fn active_tenant_ids(db: &Db) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> = db
+        .fetch_all(
+            "SELECT id FROM tenancy_tenants WHERE suspended = 0 ORDER BY created_at, id",
+            (),
+        )
+        .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
 #[cfg(test)]
