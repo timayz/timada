@@ -48,7 +48,7 @@ smtp_url = "smtp://localhost:1025"
 key = "load-only-secrets-key-never-used-outside-the-load-test"
 
 [monitoring]
-log_level = "info"
+log_level = "info,tantivy=warn,turso_core::mvcc=warn"
 
 [cluster]
 node_id = 0
