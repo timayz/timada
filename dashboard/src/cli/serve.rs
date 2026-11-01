@@ -43,8 +43,11 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let keys = Arc::new(crate::key_vault::KeyVault::new(
         &config.data_keys,
         keys_sealer,
-        peers,
+        peers.clone(),
     ));
+    // The sign-in, code, contact and sign-up limits, held with the other
+    // nodes.
+    let limits = Arc::new(crate::rate_limit::RateLimiter::new(peers));
     let gateway = Arc::new(crate::payments::StripeGateway::new(
         config
             .payments
@@ -195,6 +198,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         authorizer,
         media,
         keys,
+        limits,
         email_codes: crate::seal::email_codes(&config),
         shopper_codes: crate::seal::shopper_codes(&config),
         payments,

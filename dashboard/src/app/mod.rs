@@ -77,6 +77,9 @@ pub struct Services {
     pub media: Arc<Media>,
     /// Where the keys personal data is sealed under are kept.
     pub keys: Arc<KeyVault>,
+    /// How often each client has been let through the limits, here and on
+    /// the other nodes.
+    pub limits: Arc<RateLimiter>,
     /// What checks the mailed codes of the platform's users and of the shops'
     /// shoppers.
     pub email_codes: crate::seal::EmailCodes,
@@ -103,6 +106,7 @@ pub fn router(services: Services) -> Router {
         authorizer,
         media,
         keys,
+        limits,
         email_codes,
         shopper_codes,
         payments,
@@ -161,9 +165,7 @@ pub fn router(services: Services) -> Router {
         .app_context(payments)
         .app_context(aliexpress)
         .app_context(store)
-        // How often each storefront and shopper has had a sign-in code mailed
-        // from this node.
-        .app_context(Arc::new(RateLimiter::new()))
+        .app_context(limits)
         // The transport behind `topcoat::mail::send`, and who the codes come from.
         .mail(mailer.transport)
         .app_context(mailer.sender)

@@ -56,7 +56,8 @@ pub async fn code(cx: &Cx, Form(form): Form<CodeForm>) -> Result<Answer> {
             .get(SHOPPER_IP)
             .and_then(|value| value.to_str().ok()),
         client_ip(cx),
-    );
+    )
+    .await;
     if !allowed {
         tracing::info!(
             tenant = %access.tenant.slug,
