@@ -65,7 +65,7 @@ use crate::components::button::button;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
-use crate::db::{Db, ReadPool};
+use crate::db::Db;
 use crate::store_api::StoreConnections;
 use crate::ui::{
     Shell, Tone, chrome::section_url, document, fact, facts, format_time, icons, notice,
@@ -243,7 +243,7 @@ struct Tile {
 /// asks for attention (reviews or messages waiting) is drawn in the warning
 /// colour while it is above zero.
 async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Tile>> {
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let id = tenant.id.as_str();
     let link = |key: &str| section_url(cx, &tenant.slug, key);
     let attention = |n: u64| if n > 0 { Tone::Warning } else { Tone::Neutral };
@@ -262,7 +262,9 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
         });
     }
     if nav.orders {
-        let n = count_orders(pool, id, &OrderFilter::default()).await?;
+        let n = count_orders(pool, id, &OrderFilter::default())
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
             label: "Orders",
             value: n.to_string(),
@@ -271,7 +273,9 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
             tone: Tone::Info,
             hint: None,
         });
-        let n = count_open_carts(pool, id).await?;
+        let n = count_open_carts(pool, id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
             label: "Open carts",
             value: n.to_string(),
@@ -328,7 +332,9 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
         });
     }
     if nav.invoices {
-        let n = count_documents(pool, id).await?;
+        let n = count_documents(pool, id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
             label: "Invoices",
             value: n.to_string(),

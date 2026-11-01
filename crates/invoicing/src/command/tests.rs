@@ -1,6 +1,3 @@
-use evento::migrator::Migrate;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-
 use super::*;
 use crate::tax::{Regime, TaxProfile};
 use crate::value_object::{PAYMENT_METHOD_CARD, book_id};
@@ -8,28 +5,13 @@ use crate::value_object::{PAYMENT_METHOD_CARD, book_id};
 /// The tenant the tests act in, unless they say otherwise.
 const TENANT: &str = "tenant-1";
 
-async fn command() -> Command<evento::Sqlite> {
+async fn command() -> Command<evento::Turso> {
     command_in(TENANT).await
 }
 
 /// A gateway of `tenant` over a fresh store.
-async fn command_in(tenant: &str) -> Command<evento::Sqlite> {
-    let options = SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
-    Command::new(pool.into(), tenant)
+async fn command_in(tenant: &str) -> Command<evento::Turso> {
+    Command::new(evento::Turso::in_memory_concurrent().await.unwrap(), tenant)
 }
 
 /// 2026-10-14T21:00:00Z.
@@ -45,7 +27,7 @@ trait IssueHere {
     ) -> Result<IssuedDocument, InvoicingError>;
 }
 
-impl IssueHere for Command<evento::Sqlite> {
+impl IssueHere for Command<evento::Turso> {
     async fn issue_invoice_here(
         &self,
         invoice: NewInvoice,

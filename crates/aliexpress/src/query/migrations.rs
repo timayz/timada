@@ -1,26 +1,17 @@
-use sqlx_migrator::{Migration, vec_box};
+//! Schema of the read models: one migration, applied by the composition root
+//! in the store's database next to evento's own.
 
-/// The app name under which these migrations are recorded (the macro needs
-/// the literal, so it is repeated there).
+use evento::turso::migrate::{Migration, Migrations};
+
+/// The app name under which these migrations are recorded.
 pub const MIGRATION_APP: &str = "aliexpress";
 
-pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Aliexpress0001]
-}
-
-pub struct Aliexpress0001;
-sqlx_migrator::sqlite_migration!(
-    Aliexpress0001,
-    "aliexpress",
-    "0001_products",
-    vec_box![],
-    vec_box![
-        (
-            // One row per AliExpress product a tenant imports, and the
-            // catalogue product it became. `new_combinations` counts the
-            // combinations the last read found that the shop does not sell,
-            // for the merchant to offer or ignore.
-            "CREATE TABLE aliexpress_products (
+/// The read models of this context, one table each (see the columns).
+pub const MIGRATIONS: Migrations<'static> = Migrations::new(
+    MIGRATION_APP,
+    &[Migration::up(
+        "0001_products",
+        "CREATE TABLE aliexpress_products (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
                 ae_product_id TEXT NOT NULL,
@@ -34,21 +25,10 @@ sqlx_migrator::sqlite_migration!(
                 updated_at INTEGER NOT NULL,
                 new_combinations INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
-            )",
-            "DROP TABLE aliexpress_products"
-        ),
-        (
-            "CREATE INDEX aliexpress_products_product ON aliexpress_products (tenant_id, product_id)",
-            "DROP INDEX aliexpress_products_product"
-        ),
-        (
-            "CREATE INDEX aliexpress_products_due ON aliexpress_products (status, last_synced_at)",
-            "DROP INDEX aliexpress_products_due"
-        ),
-        (
-            // One row per order forwarded to AliExpress, with the orders it
-            // placed there and the tracking numbers they reported.
-            "CREATE TABLE aliexpress_forwards (
+            );
+        CREATE INDEX aliexpress_products_product ON aliexpress_products (tenant_id, product_id);
+        CREATE INDEX aliexpress_products_due ON aliexpress_products (status, last_synced_at);
+        CREATE TABLE aliexpress_forwards (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
                 order_id TEXT NOT NULL,
@@ -59,12 +39,11 @@ sqlx_migrator::sqlite_migration!(
                 placed_at INTEGER,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
-            )",
-            "DROP TABLE aliexpress_forwards"
-        ),
-        (
-            "CREATE INDEX aliexpress_forwards_due ON aliexpress_forwards (status, updated_at)",
-            "DROP INDEX aliexpress_forwards_due"
-        ),
-    ]
+            );
+        CREATE INDEX aliexpress_forwards_due ON aliexpress_forwards (status, updated_at);",
+    )],
 );
+
+/// The tables the migration creates: what a node empties before copying its
+/// store from a peer, so the subscriptions fill them again.
+pub const TABLES: &[&str] = &["aliexpress_products", "aliexpress_forwards"];

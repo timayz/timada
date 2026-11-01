@@ -37,7 +37,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `tests/e2e` | | Playwright suite against the running dashboard |
 | `events.lock` | | Every persisted shape, frozen (see *Evolving events*) |
 
-Dependencies point one way. Every context crate depends on evento, sqlx and
+Dependencies point one way. Every context crate depends on evento and
 `timada-core`, and a few on another context whose values they share:
 `timada-discounts` on the catalog (currencies and amounts), `timada-orders` on the
 catalog (it prices an order from the products it loads) and on the discounts,
@@ -93,11 +93,10 @@ Recurring patterns:
 data/timada.db            the store: every tenant's events (the platform's own in the
                           default tenant ""), the snapshots, the subscription cursors
                           and the consensus journal — what the cluster replicates —
-                          and, as they move in, the read-model tables; `-wal` and
-                          `-log` next to it belong with it
-data/read-models.db       the read-model tables not yet in the store (tenancy_tenants,
-                          catalog_products, orders_orders, ...), each row carrying its
-                          tenant id; derived from the store, rebuilt from it when lost
+                          and the read-model tables (tenancy_tenants, catalog_products,
+                          orders_orders, ...), each row carrying its tenant id, derived
+                          from the events and rebuilt from them when emptied; `-wal`
+                          and `-log` next to it belong with it
 data/media/<id>/          one per tenant: the product pictures and the review photos,
                           named <image id>.<ext>
 data/shopper-keys/<id>/   one per tenant: each shopper account's and each contact message's
@@ -113,8 +112,8 @@ and a read model in the file is written by its subscription through
 `Turso::transaction`. Every write is a `BEGIN CONCURRENT` transaction that runs
 alongside the others and is run again should two of them change the same rows, so an
 acknowledgement from one of the twenty-odd subscriptions never waits on the journal's
-fsync. The read-model file still of its own keeps a read pool and a single-connection
-write pool, so its writes serialize up front instead of failing with `SQLITE_BUSY`.
+fsync. The pages read the same file through `timada_core::db::Db`, a thin layer over
+the store's connections (`fetch_*`, `execute`, `write` for a handler's transaction).
 
 A stream is identified by its tenant, its aggregate type and its id: the same product
 id in two tenants is two streams. Tenant-scoped contexts carry the tenant in their
@@ -148,8 +147,8 @@ by construction.
    tidy up without it, and when it returns they tell it it fell behind. It then
    refuses writes, logs the procedure and marks the store for a copy
    (`<store file>.joining`); the next `serve` empties the store (events, snapshots,
-   cursors; the journal stays), recreates the read-model database and opens the node
-   by joining, which installs a peer's store page by page (4 MiB at a time) before
+   cursors and the read-model tables; the journal stays) and opens the node by
+   joining, which installs a peer's store page by page (4 MiB at a time) before
    anything is served, then the subscriptions rebuild the read models from it. The
    `rejoin` command sets the same mark by hand, for a lost store file (delete the
    file first: an empty journal comes back under the node's own id through evento's
@@ -160,7 +159,7 @@ by construction.
 2. **Subscriptions** (`serve.rs`, `subscriptions()`). Every subscription the node runs
    is started once on the store and follows every tenant's streams: the platform's
    read models (users, the tenant catalog, the members' history), the tenants' read
-   models into the read-model database, this node's copies of the pictures and the
+   models, this node's copies of the pictures and the
    personal-data keys, the answers the dashboard writes back (payments, invoices),
    the mails it sends (order confirmations, message notices, newsletter opt-ins),
    the automation runs it starts.
@@ -279,8 +278,8 @@ A member renames a product on `/t/{slug}/products/{id}`:
    invariants and commits `Renamed { name, renamed_by }` at the observed version.
 4. The commit goes through the Accord node and lands in `data/timada.db`, in the
    tenant's stream of that product.
-5. The `catalog` subscription writes the new name into `catalog_products` in the
-   read-model database, under the event's tenant; the next page load shows it. The
+5. The `catalog` subscription writes the new name into `catalog_products`, under the
+   event's tenant; the next page load shows it. The
    same subscription follows the `Category` streams into `catalog_categories`, and
    rewrites a product's rows in `catalog_product_categories` whenever it is filed
    under a category or leaves one.
@@ -669,7 +668,7 @@ a move does not orphan snapshots.
 `config/default.toml` is the full shape with its defaults; a file given with
 `--config` (or `TIMADA_CONFIG`) overrides it, and `TIMADA__<SECTION>__<KEY>`
 environment variables override both. Sections: `server` (URL, bind, region, trusted
-proxies), `database` (the store and the read models), `auth` (secret, session
+proxies), `database` (the one file), `auth` (secret, session
 lifetime, sign-in limits, OIDC providers), `mail` (the platform's server), `secrets`
 (the one key the shops' secrets are sealed under; omit it and no shop can connect
 payments, mail servers or shopper accounts), `media` (the pictures' directory and
@@ -685,12 +684,12 @@ operators: it names what things do, not the libraries behind them.
 
 ## The command line
 
-`timada-dashboard serve` runs a node; `migrate` creates the databases and applies
-what is pending; `reset` (debug builds) drops and recreates them; `rejoin` marks the
+`timada-dashboard serve` runs a node; `migrate` creates the database and applies
+what is pending; `reset` (debug builds) drops and recreates it; `rejoin` marks the
 store for a copy from a peer at the next start (see *The runtime*); `seed` loads a
 catalogue snapshot into a tenant and prints a storefront's settings for it (see
-`docs/storefront.md`); `snapshot save` keeps the platform (store, read models,
-pictures, keys, and with `--also` a storefront's own file) in a directory, and
+`docs/storefront.md`); `snapshot save` keeps the platform (the database, pictures,
+keys, and with `--also` a storefront's own file) in a directory, and
 `snapshot restore` puts one back, every node of a cluster from copies taken together.
 Everything but `serve` runs with the server stopped.
 

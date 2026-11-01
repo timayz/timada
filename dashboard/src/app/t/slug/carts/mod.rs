@@ -15,7 +15,7 @@ use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     Shell, Tone, document, empty_row, format_time, page_header, pager, section_card, status_badge,
 };
@@ -43,9 +43,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_number = query.page.unwrap_or(1).max(1);
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<ReadPool>(cx);
-    let total = count_open_carts(pool, &tenant.id).await?;
-    let rows = open_carts(pool, &tenant.id, (page_number - 1) * PAGE_SIZE, PAGE_SIZE).await?;
+    let pool = app_context::<Db>(cx);
+    let total = count_open_carts(pool, &tenant.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let rows = open_carts(pool, &tenant.id, (page_number - 1) * PAGE_SIZE, PAGE_SIZE)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
     let page_link = {
         let slug = tenant.slug.clone();

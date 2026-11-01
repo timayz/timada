@@ -23,7 +23,7 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, document, empty_row, filter_bar, format_time, notice, page_header, pager,
     section_card, status_badge,
@@ -70,7 +70,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_number = query.page.unwrap_or(1).max(1);
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let filter = RunFilter { status };
     let total = count_runs(pool, &tenant.id, &scenario.id, &filter)
         .await

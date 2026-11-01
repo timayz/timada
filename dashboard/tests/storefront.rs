@@ -31,12 +31,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use evento::migrator::Migrate;
 use evento::remote::ServerHandle;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
 use timada_catalog::{
     AddImage, CreateCategory, CreateProduct, DefineVariant, OptionSelection, categories_of_tenant,
 };
@@ -69,7 +67,6 @@ struct Harness {
     store: db::Store,
     /// The read models in the store's database.
     db: db::Db,
-    pool: SqlitePool,
     dir: PathBuf,
     connections: Arc<StoreConnections>,
     addr: SocketAddr,
@@ -98,31 +95,10 @@ fn tls_files(dir: &std::path::Path) -> (PathBuf, PathBuf, TlsConnector) {
 async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
     let dir = std::env::temp_dir().join(format!("timada-storefront-{}", ulid::Ulid::generate()));
     std::fs::create_dir_all(&dir).unwrap();
-    let options = SqliteConnectOptions::new()
-        .filename(dir.join("platform.db"))
-        .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(3)
-        .connect_with(options)
-        .await
-        .unwrap();
-    {
-        let mut conn = pool.acquire().await.unwrap();
-        let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
-        migrator
-            .add_migrations(timada_orders::migrations())
-            .unwrap();
-        migrator
-            .run(&mut *conn, &evento::migrator::Plan::apply_all())
-            .await
-            .unwrap();
-    }
     // The store in memory (a file would fsync every commit of the thirty-odd
-    // tests running at once), the read models in the test's own pool.
+    // tests running at once), the read models in it.
     let files = cluster::Files {
         path: PathBuf::from(":memory:"),
-        read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
     };
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
     db::migrate_store_read_models(&store).await.unwrap();
@@ -159,7 +135,6 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         platform: Command(platform),
         store,
         db: store_db,
-        pool,
         dir,
         connections,
         addr,
@@ -1409,12 +1384,12 @@ async fn a_store_with_a_checkout_key_sells() {
     assert_ne!(next, cart_id);
 
     // The back office lists it.
-    timada_orders::read_model_subscription::<cluster::Executor>(h.pool.clone())
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
         .run_once(catalog.executor())
         .await
         .unwrap();
     let rows = timada_orders::orders_of_tenant(
-        &h.pool,
+        &h.db,
         &acme.id,
         &timada_orders::OrderFilter::default(),
         0,

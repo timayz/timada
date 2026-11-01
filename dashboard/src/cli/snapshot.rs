@@ -5,10 +5,10 @@
 //! run from the same files.
 //!
 //! The store is saved as its files (the database, its write-ahead log and
-//! its commit log: a consistent set while nothing writes). The read-model
-//! database still of its own is saved with `VACUUM INTO`: one whole file
-//! holding what its write-ahead log held. A restore replaces the files (and
-//! drops their logs and a pending rejoin mark), and the directories.
+//! its commit log: a consistent set while nothing writes). A SQLite file kept
+//! with `--also` (a storefront's) is saved with `VACUUM INTO`: one whole
+//! file holding what its write-ahead log held. A restore replaces the files
+//! (and drops their logs and a pending rejoin mark), and the directories.
 //!
 //! A cluster node's store holds its consensus journal: brought back alone to
 //! an older state, it is an older copy of itself among peers that went on,
@@ -17,7 +17,6 @@
 //! all of them stopped.
 
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
@@ -62,7 +61,6 @@ pub enum SnapshotAction {
 /// What a snapshot holds, where this node keeps it.
 struct Paths {
     store: PathBuf,
-    read_models: PathBuf,
     media: PathBuf,
     data_keys: PathBuf,
 }
@@ -71,7 +69,6 @@ impl Paths {
     fn of(config: &Config) -> Result<Self> {
         Ok(Self {
             store: config.database.path.clone(),
-            read_models: database_file(&config.database.read_models)?,
             media: config.media.dir.clone(),
             data_keys: config.data_keys.dir.clone(),
         })
@@ -80,7 +77,6 @@ impl Paths {
 
 /// The names inside a snapshot directory.
 const STORE: &str = "store.db";
-const READ_MODELS: &str = "read-models.db";
 const MEDIA: &str = "media";
 const DATA_KEYS: &str = "shopper-keys";
 const ALSO: &str = "also";
@@ -132,7 +128,6 @@ async fn save(paths: &Paths, dir: &Path, replace: bool, also: &[PathBuf]) -> Res
         .with_context(|| format!("cannot create {}", partial.display()))?;
 
     copy_store(&paths.store, &partial.join(STORE))?;
-    vacuum_into(&paths.read_models, &partial.join(READ_MODELS)).await?;
     copy_dir(&paths.media, &partial.join(MEDIA))?;
     copy_dir(&paths.data_keys, &partial.join(DATA_KEYS))?;
     for file in also {
@@ -154,13 +149,11 @@ async fn save(paths: &Paths, dir: &Path, replace: bool, also: &[PathBuf]) -> Res
 }
 
 async fn restore(paths: &Paths, dir: &Path, also: &[PathBuf]) -> Result<()> {
-    for name in [STORE, READ_MODELS] {
-        ensure!(
-            dir.join(name).is_file(),
-            "{} holds no {name}: not a snapshot",
-            dir.display()
-        );
-    }
+    ensure!(
+        dir.join(STORE).is_file(),
+        "{} holds no {STORE}: not a snapshot",
+        dir.display()
+    );
     for file in also {
         let kept = dir.join(ALSO).join(file_name(file)?);
         ensure!(
@@ -172,20 +165,12 @@ async fn restore(paths: &Paths, dir: &Path, also: &[PathBuf]) -> Result<()> {
 
     put_store(&dir.join(STORE), &paths.store)?;
     let _ = std::fs::remove_file(joining_marker(&paths.store));
-    put_database(&dir.join(READ_MODELS), &paths.read_models)?;
     replace_dir(&dir.join(MEDIA), &paths.media)?;
     replace_dir(&dir.join(DATA_KEYS), &paths.data_keys)?;
     for file in also {
         put_database(&dir.join(ALSO).join(file_name(file)?), file)?;
     }
     Ok(())
-}
-
-/// The file a `sqlite:` address names.
-fn database_file(url: &str) -> Result<PathBuf> {
-    Ok(SqliteConnectOptions::from_str(url)?
-        .get_filename()
-        .to_path_buf())
 }
 
 /// Copies the store's files (`db::store_files`) to `to` and the same
@@ -382,14 +367,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths {
             store: root.join("data/store.db"),
-            read_models: root.join("data/read-models.db"),
             media: root.join("data/media"),
             data_keys: root.join("data/keys"),
         };
         std::fs::create_dir_all(root.join("data/media/t1")).unwrap();
         std::fs::create_dir_all(&paths.data_keys).unwrap();
         store_database(&paths.store, 1).await;
-        database(&paths.read_models, 10).await;
         std::fs::write(root.join("data/media/t1/a.jpg"), b"picture").unwrap();
         std::fs::write(paths.data_keys.join("k1"), b"key").unwrap();
         let storefront = root.join("storefront.db");
@@ -407,7 +390,6 @@ mod tests {
 
         // The platform moves on: more rows, a new picture, a lost key.
         store_database(&paths.store, 2).await;
-        database(&paths.read_models, 20).await;
         database(&storefront, 200).await;
         std::fs::write(root.join("data/media/t1/b.jpg"), b"new").unwrap();
         std::fs::remove_file(paths.data_keys.join("k1")).unwrap();
@@ -416,7 +398,6 @@ mod tests {
 
         restore(&paths, &kept, &also).await.unwrap();
         assert_eq!(store_value(&paths.store).await, 1);
-        assert_eq!(value(&paths.read_models).await, 10);
         assert_eq!(value(&storefront).await, 100);
         assert!(root.join("data/media/t1/a.jpg").is_file());
         assert!(

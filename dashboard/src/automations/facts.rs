@@ -2,7 +2,7 @@
 //! run gets to the condition, so a condition after a wait sees the order
 //! as it is then (refunded meanwhile, say).
 
-use sqlx::SqlitePool;
+use crate::db::Db;
 use timada_automations::catalog::{Fact, Facts, Subject};
 use timada_core::Keys;
 use timada_orders::{OrderStatus, orders_of_email};
@@ -13,7 +13,7 @@ use timada_support::MessageStatus;
 /// every rule on it is false.
 pub async fn facts_of<E: evento::Executor + Clone>(
     store: &E,
-    read_pool: &SqlitePool,
+    db: &Db,
     keys: &dyn Keys,
     tenant_id: &str,
     subject: Subject,
@@ -26,7 +26,7 @@ pub async fn facts_of<E: evento::Executor + Clone>(
             let Some(order) = orders.load_order(subject_id).await? else {
                 return Ok(facts);
             };
-            let earlier = orders_of_email(read_pool, tenant_id, &order.email, 50)
+            let earlier = orders_of_email(db, tenant_id, &order.email, 50)
                 .await?
                 .iter()
                 .any(|row| row.id != order.id && (row.placed_at as u64) < order.placed_at);
@@ -62,7 +62,7 @@ pub async fn facts_of<E: evento::Executor + Clone>(
             if let Some(shopper) = state.open_with(keys).await? {
                 facts.insert(
                     "shopper.has_ordered",
-                    Fact::Bool(has_ordered(read_pool, tenant_id, &shopper.email).await?),
+                    Fact::Bool(has_ordered(db, tenant_id, &shopper.email).await?),
                 );
             }
         }
@@ -78,7 +78,7 @@ pub async fn facts_of<E: evento::Executor + Clone>(
             if let Some(subscriber) = state.open_with(keys).await? {
                 facts.insert(
                     "subscriber.has_ordered",
-                    Fact::Bool(has_ordered(read_pool, tenant_id, &subscriber.email).await?),
+                    Fact::Bool(has_ordered(db, tenant_id, &subscriber.email).await?),
                 );
             }
         }
@@ -129,8 +129,6 @@ pub async fn facts_of<E: evento::Executor + Clone>(
     Ok(facts)
 }
 
-async fn has_ordered(read_pool: &SqlitePool, tenant_id: &str, email: &str) -> anyhow::Result<bool> {
-    Ok(!orders_of_email(read_pool, tenant_id, email, 1)
-        .await?
-        .is_empty())
+async fn has_ordered(db: &Db, tenant_id: &str, email: &str) -> anyhow::Result<bool> {
+    Ok(!orders_of_email(db, tenant_id, email, 1).await?.is_empty())
 }

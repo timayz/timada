@@ -1,7 +1,7 @@
 //! Queries over `newsletter_subscribers`, for the newsletter page of a
 //! tenant.
 
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 use crate::value_object::SubscriberStatus;
 
@@ -40,39 +40,39 @@ pub struct SubscriberFilter {
 
 /// The tenant's subscribers matching `filter`, most recently asked first.
 pub async fn subscribers_of_tenant(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     filter: &SubscriberFilter,
     limit: u32,
     offset: u32,
 ) -> anyhow::Result<Vec<SubscriberRow>> {
-    Ok(sqlx::query_as(
+    db.fetch_all(
         "SELECT * FROM newsletter_subscribers
          WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)
          ORDER BY requested_at DESC, id DESC
          LIMIT ?3 OFFSET ?4",
+        (
+            tenant_id,
+            filter.status.map(SubscriberStatus::as_str),
+            i64::from(limit),
+            i64::from(offset),
+        ),
     )
-    .bind(tenant_id)
-    .bind(filter.status.map(SubscriberStatus::as_str))
-    .bind(i64::from(limit))
-    .bind(i64::from(offset))
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// How many of the tenant's subscribers match `filter`.
 pub async fn count_subscribers(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     filter: &SubscriberFilter,
 ) -> anyhow::Result<u64> {
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM newsletter_subscribers
+    let (count,): (i64,) = db
+        .fetch_one(
+            "SELECT COUNT(*) FROM newsletter_subscribers
          WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)",
-    )
-    .bind(tenant_id)
-    .bind(filter.status.map(SubscriberStatus::as_str))
-    .fetch_one(pool)
-    .await?;
+            (tenant_id, filter.status.map(SubscriberStatus::as_str)),
+        )
+        .await?;
     Ok(count as u64)
 }

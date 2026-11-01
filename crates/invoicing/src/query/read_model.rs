@@ -9,7 +9,7 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
+use timada_core::db::{Db, Value, execute, params_from_iter};
 
 use crate::aggregator::{CreditNoteIssued, InvoiceIssued};
 use crate::command::DocumentKind;
@@ -18,11 +18,11 @@ use crate::value_object::{VatSubtotal, document_label};
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-invoicing/read-models";
 
-/// Builds the subscription over every tenant and routing key. `pool` is the
+/// Builds the subscription over every tenant and routing key. `db` is the
 /// read-model database and must be allowed to write.
-pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
+pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
-        .data(pool)
+        .data(db)
         .handler(on_invoice_issued())
         .handler(on_credit_note_issued())
         .any_routing_key()
@@ -33,10 +33,10 @@ async fn on_invoice_issued<E: Executor>(
     context: &Context<'_, E>,
     event: Event<InvoiceIssued>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let data = &event.data;
     upsert(
-        &pool,
+        &db,
         &event.tenant,
         Row {
             id: &data.document_id,
@@ -65,10 +65,10 @@ async fn on_credit_note_issued<E: Executor>(
     context: &Context<'_, E>,
     event: Event<CreditNoteIssued>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let data = &event.data;
     upsert(
-        &pool,
+        &db,
         &event.tenant,
         Row {
             id: &data.document_id,
@@ -113,55 +113,66 @@ struct Row<'a> {
 
 /// Writes the row of a document and one row per VAT rate of it (what the
 /// One-Stop Shop return sums), in one transaction.
-async fn upsert(pool: &SqlitePool, tenant_id: &str, row: Row<'_>) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
-    for subtotal in row.vat {
-        sqlx::query(
-            "INSERT INTO invoicing_vat_lines (tenant_id, document_id, kind, regime, country,
-                rate_bps, base_cents, vat_cents, currency, issued_at, company_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-             ON CONFLICT (tenant_id, document_id, rate_bps) DO NOTHING",
-        )
-        .bind(tenant_id)
-        .bind(row.id)
-        .bind(row.kind.as_str())
-        .bind(row.regime)
-        .bind(row.tax_country)
-        .bind(i64::from(subtotal.rate_bps))
-        .bind(subtotal.base_cents as i64)
-        .bind(subtotal.vat_cents as i64)
-        .bind(row.currency)
-        .bind(row.issued_at as i64)
-        .bind(row.company_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    sqlx::query(
-        "INSERT INTO invoicing_documents (tenant_id, id, kind, series, number, label, order_id,
-            order_reference, buyer_name, total_cents, currency, issued_at, regime, tax_country,
-            eu_distance_sales_cents, eu_threshold_passed, company_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-         ON CONFLICT (tenant_id, id) DO NOTHING",
-    )
-    .bind(tenant_id)
-    .bind(row.id)
-    .bind(row.kind.as_str())
-    .bind(row.series)
-    .bind(row.number as i64)
-    .bind(document_label(row.series, row.number))
-    .bind(row.order_id)
-    .bind(row.order_reference)
-    .bind(row.buyer_name)
-    .bind(row.total_cents as i64)
-    .bind(row.currency)
-    .bind(row.issued_at as i64)
-    .bind(row.regime)
-    .bind(row.tax_country)
-    .bind(row.eu_distance_sales_cents as i64)
-    .bind(row.eu_threshold_passed)
-    .bind(row.company_id)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(())
+async fn upsert(db: &Db, tenant_id: &str, row: Row<'_>) -> anyhow::Result<()> {
+    let env = (tenant_id, row);
+    db.write(&env, |tx, (tenant_id, row)| {
+        Box::pin(async move {
+            for subtotal in row.vat {
+                execute(
+                    tx,
+                    "INSERT INTO invoicing_vat_lines (tenant_id, document_id, kind, regime, country,
+                        rate_bps, base_cents, vat_cents, currency, issued_at, company_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                     ON CONFLICT (tenant_id, document_id, rate_bps) DO NOTHING",
+                    (
+                        *tenant_id,
+                        row.id,
+                        row.kind.as_str(),
+                        row.regime,
+                        row.tax_country,
+                        i64::from(subtotal.rate_bps),
+                        subtotal.base_cents as i64,
+                        subtotal.vat_cents as i64,
+                        row.currency,
+                        row.issued_at as i64,
+                        row.company_id,
+                    ),
+                )
+                .await?;
+            }
+            execute(
+                tx,
+                "INSERT INTO invoicing_documents (tenant_id, id, kind, series, number, label,
+                    order_id, order_reference, buyer_name, total_cents, currency, issued_at,
+                    regime, tax_country, eu_distance_sales_cents, eu_threshold_passed,
+                    company_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                    ?17)
+                 ON CONFLICT (tenant_id, id) DO NOTHING",
+                // Seventeen values: more than a tuple of parameters holds.
+                params_from_iter([
+                    Value::from(*tenant_id),
+                    Value::from(row.id),
+                    Value::from(row.kind.as_str()),
+                    Value::from(row.series),
+                    Value::from(row.number as i64),
+                    Value::from(document_label(row.series, row.number)),
+                    Value::from(row.order_id),
+                    Value::from(row.order_reference),
+                    Value::from(row.buyer_name),
+                    Value::from(row.total_cents as i64),
+                    Value::from(row.currency),
+                    Value::from(row.issued_at as i64),
+                    Value::from(row.regime),
+                    Value::from(row.tax_country),
+                    Value::from(row.eu_distance_sales_cents as i64),
+                    Value::from(row.eu_threshold_passed),
+                    Value::from(row.company_id),
+                ]),
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await
 }

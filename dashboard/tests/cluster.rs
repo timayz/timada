@@ -21,8 +21,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use timada_catalog::{CreateProduct, ProductState};
 use timada_tenancy::{Command, CreateTenant, read_model_subscription};
 
@@ -34,7 +32,6 @@ struct Node {
     store: Executor,
     /// The read models in the store's database.
     db: db::Db,
-    pool: SqlitePool,
     files: Files,
     dir: PathBuf,
     /// The tenant catalog's worker; dropping the handle would stop it.
@@ -69,24 +66,9 @@ impl Node {
         let dir = root.join(format!("node{id}"));
         std::fs::create_dir_all(&dir).unwrap();
         let path = Self::store_path(root, id);
-        let files = Files {
-            path: path.clone(),
-            read_models_url: format!("sqlite:{}", dir.join("read-models.db").display()),
-        };
+        let files = Files { path: path.clone() };
         let store = db::open_store(&path).await.unwrap();
         let store_db = db::Db::from(store.clone());
-        db::migrate(&files.read_models_url, db::read_model_migrator().unwrap())
-            .await
-            .unwrap();
-        let read_models = SqlitePoolOptions::new()
-            .max_connections(2)
-            .connect_with(
-                SqliteConnectOptions::new()
-                    .filename(dir.join("read-models.db"))
-                    .busy_timeout(Duration::from_secs(5)),
-            )
-            .await
-            .unwrap();
         let (cluster, store) = Cluster::open(
             Some(&ClusterConfig {
                 node_id: id,
@@ -112,7 +94,6 @@ impl Node {
             cluster,
             store,
             db: store_db,
-            pool: read_models,
             files,
             dir,
             catalog,
@@ -124,7 +105,6 @@ impl Node {
         self.catalog.stop();
         self.catalog.stopped().await;
         self.cluster.shutdown().await;
-        self.pool.close().await;
     }
 
     fn catalog(&self, tenant: &timada_tenancy::TenantState) -> timada_catalog::Command<Executor> {
@@ -455,12 +435,8 @@ async fn concurrent_writers_never_see_stale_versions() {
     let root = temp_root("stress");
     let files = Files {
         path: root.join("timada.db"),
-        read_models_url: format!("sqlite:{}", root.join("read-models.db").display()),
     };
     let store = db::open_store(&files.path).await.unwrap();
-    db::migrate(&files.read_models_url, db::read_model_migrator().unwrap())
-        .await
-        .unwrap();
     let (cluster, store) = Cluster::open(None, None, &files, store).await.unwrap();
     let mut tasks = tokio::task::JoinSet::new();
     for t in 0..64 {

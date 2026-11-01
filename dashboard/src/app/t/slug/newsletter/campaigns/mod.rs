@@ -41,7 +41,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::components::textarea::textarea;
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::mail::{marketing_sender, send_rendered_via, shop_vars};
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, format_time, icons, notice, page_header, pager,
@@ -115,7 +115,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let can_manage = access.can(cx, PERMISSION_NEWSLETTER_MANAGE).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let total = count_campaigns(pool, &tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;

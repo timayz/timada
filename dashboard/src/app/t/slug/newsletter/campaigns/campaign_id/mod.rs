@@ -33,7 +33,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button, button_varian
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     Shell, Tone, document, fact, facts, format_time, notice, page_header, section_card,
     status_badge,
@@ -94,7 +94,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let draft = draft_of(&campaign);
     let checked = preview(cx, &access.tenant, &draft);
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let row = campaign_row(pool, &access.tenant.id, &campaign.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;

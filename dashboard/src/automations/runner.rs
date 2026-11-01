@@ -14,8 +14,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::SqlitePool;
-
 use crate::db::Db;
 use timada_automations::{
     AUTOMATION_ACTOR, ListenerState, RUN_HISTORY_SECS, RunState, Step, Transition,
@@ -86,10 +84,8 @@ fn retry_at(now: u64, attempt: u32) -> Option<u64> {
 
 /// The sweep, with what it needs outside any request.
 pub struct Runner<E = Executor> {
-    read_pool: SqlitePool,
-    /// The read-model database, writable: ended runs leave the list.
-    write_pool: SqlitePool,
-    /// The read models in the store's database: the members to tell.
+    /// The read models: the runs, the listeners, the checkouts, the members
+    /// to tell.
     db: Db,
     /// The store, every tenant's.
     store: E,
@@ -118,8 +114,6 @@ pub struct Runner<E = Executor> {
 impl<E: Store> Runner<E> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        read_pool: SqlitePool,
-        write_pool: SqlitePool,
         db: Db,
         store: E,
         mail: Arc<AppContext>,
@@ -140,8 +134,6 @@ impl<E: Store> Runner<E> {
             .timeout(webhook_timeout)
             .build()?;
         Ok(Arc::new(Self {
-            read_pool,
-            write_pool,
             db,
             store,
             mail,
@@ -174,12 +166,12 @@ impl<E: Store> Runner<E> {
     /// Moves every run due by `now`. A run that fails to move is logged and
     /// the others still go.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
-        prune_runs(&self.write_pool, now.saturating_sub(RUN_HISTORY_SECS)).await?;
+        prune_runs(&self.db, now.saturating_sub(RUN_HISTORY_SECS)).await?;
         if let Err(err) = self.find_left_checkouts(now).await {
             tracing::error!(error = %err, "checkouts left unpaid not looked for");
         }
         let mut tenants: HashMap<String, Option<TenantState>> = HashMap::new();
-        for (tenant_id, run_id) in due_runs(&self.read_pool, now, self.runs_per_look).await? {
+        for (tenant_id, run_id) in due_runs(&self.db, now, self.runs_per_look).await? {
             if !tenants.contains_key(&tenant_id) {
                 let tenant = timada_tenancy::Command(self.store.clone())
                     .load_tenant(&tenant_id)
@@ -215,7 +207,7 @@ impl<E: Store> Runner<E> {
             if run.status.is_done() {
                 return Ok(());
             }
-            match listener_of(&self.read_pool, &tenant.id, &run.scenario_id)
+            match listener_of(&self.db, &tenant.id, &run.scenario_id)
                 .await?
                 .map(|listener| listener.state())
             {
@@ -375,7 +367,7 @@ impl<E: Store> Runner<E> {
         let keys = self.keys.for_tenant(&tenant.id);
         let facts = facts_of(
             &self.store,
-            &self.read_pool,
+            &self.db,
             &*keys,
             &tenant.id,
             subject,
@@ -430,7 +422,7 @@ impl<E: Store> Runner<E> {
         if recipients.is_empty() {
             return Ok(Acted::Skipped("No member to tell.".into()));
         }
-        let scenario = scenario_name(&self.read_pool, &tenant.id, &run.scenario_id)
+        let scenario = scenario_name(&self.db, &tenant.id, &run.scenario_id)
             .await?
             .unwrap_or_else(|| "A scenario".into());
         let link = subject_link(&self.base_url, &tenant.slug, subject, &run.subject_id);
@@ -750,7 +742,7 @@ impl<E: Store> Runner<E> {
         ) else {
             return Ok(Acted::Failed("The webhook's address does not open.".into()));
         };
-        let scenario = scenario_name(&self.read_pool, &tenant.id, &run.scenario_id)
+        let scenario = scenario_name(&self.db, &tenant.id, &run.scenario_id)
             .await?
             .unwrap_or_default();
         let subject = catalog::trigger_kind(&run.trigger).map(|kind| kind.subject.as_str());
@@ -798,9 +790,9 @@ impl<E: Store> Runner<E> {
     async fn find_left_checkouts(&self, now: u64) -> anyhow::Result<()> {
         let to = now.saturating_sub(self.abandoned_after);
         let from = to.saturating_sub(LEFT_WINDOW_SECS);
-        prune_checkouts(&self.write_pool, from).await?;
+        prune_checkouts(&self.db, from).await?;
         for (tenant_id, cart_id, request_id) in
-            left_checkouts(&self.read_pool, from, to, self.runs_per_look).await?
+            left_checkouts(&self.db, from, to, self.runs_per_look).await?
         {
             let orders = timada_orders::Command::new(self.store.clone(), &tenant_id);
             let Some(cart) = orders.load_cart(&cart_id).await? else {
@@ -890,9 +882,6 @@ mod tests {
     use std::sync::Mutex;
 
     use evento::Evento;
-    use evento::migrator::Migrate;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-    use sqlx_migrator::Info;
     use timada_automations::{
         Command, Definition, Lane, Outcome, RunStatus, Slot,
         catalog::{CONDITION, SUBSCRIBER_CONFIRMED, WAIT},
@@ -939,41 +928,17 @@ mod tests {
 
     /// One in-memory database holding the store and the read models, the
     /// store wrapped as the cluster's is.
-    async fn store() -> (Evento, SqlitePool, Db) {
+    async fn store() -> (Evento, Db) {
         let turso = evento::Turso::in_memory_concurrent().await.unwrap();
         crate::db::migrate_store_read_models(&turso).await.unwrap();
         let db = Db::from(turso.clone());
-        let options = SqliteConnectOptions::new()
-            .filename(":memory:")
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        let mut conn = pool.acquire().await.unwrap();
-        let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
-        migrator
-            .add_migrations(timada_orders::migrations())
-            .unwrap();
-        migrator
-            .add_migrations(timada_newsletter::migrations())
-            .unwrap();
-        migrator
-            .add_migrations(timada_automations::migrations())
-            .unwrap();
-        migrator
-            .run(&mut *conn, &evento::migrator::Plan::apply_all())
-            .await
-            .unwrap();
-        drop(conn);
-        (Evento::new(turso), pool, db)
+        (Evento::new(turso), db)
     }
 
     /// The trigger subscription, caught up: the listeners, then the runs
     /// the events start.
-    async fn follow(store: &Evento, pool: &SqlitePool) {
-        super::super::triggers::subscription(pool.clone(), store.clone())
+    async fn follow(store: &Evento, db: &Db) {
+        super::super::triggers::subscription(db.clone(), store.clone())
             .no_retry()
             .run_once(store)
             .await
@@ -981,8 +946,8 @@ mod tests {
     }
 
     /// The runs' read model, caught up.
-    async fn catch_up(store: &Evento, pool: &SqlitePool) {
-        read_model_subscription::<Evento>(pool.clone())
+    async fn catch_up(store: &Evento, db: &Db) {
+        read_model_subscription::<Evento>(db.clone())
             .no_retry()
             .run_once(store)
             .await
@@ -1014,15 +979,8 @@ mod tests {
             .unwrap();
     }
 
-    fn runner(
-        store: &Evento,
-        pool: &SqlitePool,
-        db: &Db,
-        keys: &Arc<MemoryKeys>,
-    ) -> Arc<Runner<Evento>> {
+    fn runner(store: &Evento, db: &Db, keys: &Arc<MemoryKeys>) -> Arc<Runner<Evento>> {
         Runner::new(
-            pool.clone(),
-            pool.clone(),
             db.clone(),
             store.clone(),
             Arc::new(AppContext::new()),
@@ -1101,9 +1059,9 @@ mod tests {
         id
     }
 
-    async fn the_run(store: &Evento, pool: &SqlitePool) -> Option<RunState> {
-        catch_up(store, pool).await;
-        let due = due_runs(pool, crate::auth::now() + 10_000_000, 10)
+    async fn the_run(store: &Evento, db: &Db) -> Option<RunState> {
+        catch_up(store, db).await;
+        let due = due_runs(db, crate::auth::now() + 10_000_000, 10)
             .await
             .unwrap();
         let (_, id) = due.first()?;
@@ -1115,20 +1073,20 @@ mod tests {
 
     #[tokio::test]
     async fn an_event_starts_one_run_that_goes_through_its_steps() {
-        let (store, pool, db) = store().await;
+        let (store, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         publish(&store, &welcome()).await;
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
         subscribe(&store, &keys, "ada@example.com").await;
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
         // Seen again (a redelivery, another node): still one run.
-        follow(&store, &pool).await;
-        catch_up(&store, &pool).await;
-        let due = due_runs(&pool, crate::auth::now() + 1, 10).await.unwrap();
+        follow(&store, &db).await;
+        catch_up(&store, &db).await;
+        let due = due_runs(&db, crate::auth::now() + 1, 10).await.unwrap();
         assert_eq!(due.len(), 1);
 
         let run_id = &due[0].1;
-        runner(&store, &pool, &db, &keys)
+        runner(&store, &db, &keys)
             .advance(&shop(), run_id, crate::auth::now())
             .await
             .unwrap();
@@ -1149,28 +1107,28 @@ mod tests {
 
     #[tokio::test]
     async fn an_event_before_the_publication_starts_nothing() {
-        let (store, pool, _db) = store().await;
+        let (store, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         subscribe(&store, &keys, "ada@example.com").await;
         publish(&store, &welcome()).await;
-        follow(&store, &pool).await;
-        assert!(the_run(&store, &pool).await.is_none());
+        follow(&store, &db).await;
+        assert!(the_run(&store, &db).await.is_none());
     }
 
     #[tokio::test]
     async fn a_paused_scenario_holds_its_runs_until_resumed() {
-        let (store, pool, db) = store().await;
+        let (store, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         let id = publish(&store, &welcome()).await;
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
         subscribe(&store, &keys, "ada@example.com").await;
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
         let automations = Command::new(store.clone(), TENANT);
         automations.pause_scenario(MEMBER, &id).await.unwrap();
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
 
-        let run = the_run(&store, &pool).await.unwrap();
-        let runner = runner(&store, &pool, &db, &keys);
+        let run = the_run(&store, &db).await.unwrap();
+        let runner = runner(&store, &db, &keys);
         runner
             .advance(&shop(), &run.id, crate::auth::now())
             .await
@@ -1180,7 +1138,7 @@ mod tests {
         assert_eq!(held.status, RunStatus::Running);
 
         automations.resume_scenario(MEMBER, &id).await.unwrap();
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
         runner
             .advance(&shop(), &run.id, crate::auth::now())
             .await
@@ -1191,7 +1149,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_wait_holds_the_run_until_its_time() {
-        let (store, pool, db) = store().await;
+        let (store, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         let mut definition = Definition::default();
         definition.set_trigger(SUBSCRIBER_CONFIRMED).unwrap();
@@ -1206,12 +1164,12 @@ mod tests {
             .configure(&notify, settings(&[("subject", "An hour later")]))
             .unwrap();
         publish(&store, &definition).await;
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
         subscribe(&store, &keys, "ada@example.com").await;
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
 
-        let run = the_run(&store, &pool).await.unwrap();
-        let runner = runner(&store, &pool, &db, &keys);
+        let run = the_run(&store, &db).await.unwrap();
+        let runner = runner(&store, &db, &keys);
         let automations = Command::new(store.clone(), TENANT);
         let now = crate::auth::now();
         runner.advance(&shop(), &run.id, now).await.unwrap();
@@ -1300,7 +1258,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_checkout_left_unpaid_starts_a_run_once_its_delay_is_over() {
-        let (store, pool, db) = store().await;
+        let (store, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         let mut definition = Definition::default();
         definition
@@ -1313,28 +1271,25 @@ mod tests {
             .configure(&notify, settings(&[("subject", "A cart was left")]))
             .unwrap();
         publish(&store, &definition).await;
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
         let cart = checkout_left(&store).await;
-        follow(&store, &pool).await;
+        follow(&store, &db).await;
 
-        let runner = runner(&store, &pool, &db, &keys);
+        let runner = runner(&store, &db, &keys);
         let now = crate::auth::now();
         // Within the hour: not left yet.
         runner.sweep(now).await.unwrap();
-        follow(&store, &pool).await;
-        assert!(the_run(&store, &pool).await.is_none());
+        follow(&store, &db).await;
+        assert!(the_run(&store, &db).await.is_none());
         // The hour is over: found left once, whatever the looks.
         runner.sweep(now + 3601).await.unwrap();
         runner.sweep(now + 3602).await.unwrap();
-        follow(&store, &pool).await;
-        let run = the_run(&store, &pool).await.unwrap();
+        follow(&store, &db).await;
+        let run = the_run(&store, &db).await.unwrap();
         assert_eq!(run.trigger, timada_automations::catalog::CHECKOUT_ABANDONED);
         assert_eq!(run.subject_id, cart);
-        catch_up(&store, &pool).await;
-        assert_eq!(
-            due_runs(&pool, now + 10_000_000, 10).await.unwrap().len(),
-            1
-        );
+        catch_up(&store, &db).await;
+        assert_eq!(due_runs(&db, now + 10_000_000, 10).await.unwrap().len(), 1);
     }
 
     #[test]

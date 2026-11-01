@@ -28,10 +28,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use evento::ProjectionAggregate;
-use evento::migrator::Migrate;
-use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
 use timada_catalog::{CreateProduct, StockLine};
 use timada_discounts::RESERVATION_SECS;
 use timada_orders::{
@@ -222,7 +218,6 @@ struct Harness<G = FakeStripe> {
     secret_key: String,
     /// The read models in the store's database.
     db: db::Db,
-    pool: SqlitePool,
     dir: PathBuf,
 }
 
@@ -234,31 +229,10 @@ async fn harness() -> Harness {
 async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &str) -> Harness<G> {
     let dir = std::env::temp_dir().join(format!("timada-payments-{}", ulid::Ulid::generate()));
     std::fs::create_dir_all(&dir).unwrap();
-    let options = SqliteConnectOptions::new()
-        .filename(dir.join("platform.db"))
-        .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(3)
-        .connect_with(options)
-        .await
-        .unwrap();
-    {
-        let mut conn = pool.acquire().await.unwrap();
-        let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
-        migrator
-            .add_migrations(timada_orders::migrations())
-            .unwrap();
-        migrator
-            .run(&mut *conn, &evento::migrator::Plan::apply_all())
-            .await
-            .unwrap();
-    }
     // The store in memory (a file would fsync every commit of the thirty-odd
-    // tests running at once), the read models in the test's own pool.
+    // tests running at once), the read models in it.
     let files = cluster::Files {
         path: PathBuf::from(":memory:"),
-        read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
     };
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
     db::migrate_store_read_models(&store).await.unwrap();
@@ -294,7 +268,6 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
         stripe,
         secret_key: secret_key.to_owned(),
         db: store_db,
-        pool,
         dir,
     }
 }
@@ -1071,7 +1044,7 @@ async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
     let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
-    let sweep = LapsedCheckouts::new(h.pool.clone(), h.store(&acme), h.payments.clone());
+    let sweep = LapsedCheckouts::new(h.db.clone(), h.store(&acme), h.payments.clone());
     let open = async || {
         let (cart_id, _) = h.cart(&acme).await;
         let PaymentAnswer::Requested(payment) = h.ask(&acme, &cart_id, Some(2500)).await else {
@@ -1099,22 +1072,22 @@ async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
         .push(dave.payment_id.clone());
     // The carts the sweep looks at come from the read model, a shop at a
     // time and a page at a time.
-    timada_orders::read_model_subscription::<cluster::Executor>(h.pool.clone())
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
         .run_once(&h.platform.0)
         .await
         .unwrap();
     assert_eq!(
-        timada_orders::paying_tenants_before(&h.pool, i64::MAX)
+        timada_orders::paying_tenants_before(&h.db, i64::MAX)
             .await
             .unwrap(),
         vec![acme.id.clone()]
     );
-    let first = timada_orders::paying_carts_before(&h.pool, &acme.id, i64::MAX, None, 3)
+    let first = timada_orders::paying_carts_before(&h.db, &acme.id, i64::MAX, None, 3)
         .await
         .unwrap();
     assert_eq!(first.len(), 3);
     let rest = timada_orders::paying_carts_before(
-        &h.pool,
+        &h.db,
         &acme.id,
         i64::MAX,
         Some(&CartCursor::from(&first[2])),

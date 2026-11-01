@@ -1,5 +1,7 @@
 mod common;
 
+use timada_core::db::Db;
+
 use std::sync::Arc;
 
 use common::*;
@@ -9,11 +11,11 @@ use timada_newsletter::{
 };
 
 async fn catch_up(
-    executor: &evento::Sqlite,
-    pool: &sqlx::SqlitePool,
+    executor: &evento::Turso,
+    pool: &Db,
     keys: &Arc<MemoryKeys>,
 ) -> anyhow::Result<()> {
-    read_model_subscription::<evento::Sqlite>(pool.clone(), ring(keys))
+    read_model_subscription::<evento::Turso>(pool.clone(), ring(keys))
         .run_once(executor)
         .await
 }

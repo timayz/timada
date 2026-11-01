@@ -1,25 +1,17 @@
-use sqlx_migrator::{Migration, vec_box};
+//! Schema of the read models: one migration, applied by the composition root
+//! in the store's database next to evento's own.
 
-/// The app name under which these migrations are recorded (the macro needs
-/// the literal, so it is repeated there).
+use evento::turso::migrate::{Migration, Migrations};
+
+/// The app name under which these migrations are recorded.
 pub const MIGRATION_APP: &str = "invoicing";
 
-pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Invoicing0001]
-}
-
-/// The documents a shop issued, with the VAT regime and country each one was
-/// taxed under and the company it was issued by, and one VAT line per rate on
-/// each document for the ledgers.
-pub struct Invoicing0001;
-sqlx_migrator::sqlite_migration!(
-    Invoicing0001,
-    "invoicing",
-    "0001_documents",
-    vec_box![],
-    vec_box![
-        (
-            "CREATE TABLE invoicing_documents (
+/// The read models of this context, one table each (see the columns).
+pub const MIGRATIONS: Migrations<'static> = Migrations::new(
+    MIGRATION_APP,
+    &[Migration::up(
+        "0001_documents",
+        "CREATE TABLE invoicing_documents (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
                 kind TEXT NOT NULL,
@@ -38,19 +30,10 @@ sqlx_migrator::sqlite_migration!(
                 eu_threshold_passed INTEGER NOT NULL,
                 company_id TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, id)
-            )",
-            "DROP TABLE invoicing_documents"
-        ),
-        (
-            "CREATE INDEX invoicing_documents_issued ON invoicing_documents (tenant_id, issued_at)",
-            "DROP INDEX invoicing_documents_issued"
-        ),
-        (
-            "CREATE INDEX invoicing_documents_order ON invoicing_documents (tenant_id, order_id)",
-            "DROP INDEX invoicing_documents_order"
-        ),
-        (
-            "CREATE TABLE invoicing_vat_lines (
+            );
+        CREATE INDEX invoicing_documents_issued ON invoicing_documents (tenant_id, issued_at);
+        CREATE INDEX invoicing_documents_order ON invoicing_documents (tenant_id, order_id);
+        CREATE TABLE invoicing_vat_lines (
                 tenant_id TEXT NOT NULL,
                 document_id TEXT NOT NULL,
                 kind TEXT NOT NULL,
@@ -63,16 +46,12 @@ sqlx_migrator::sqlite_migration!(
                 issued_at INTEGER NOT NULL,
                 company_id TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, document_id, rate_bps)
-            )",
-            "DROP TABLE invoicing_vat_lines"
-        ),
-        (
-            "CREATE INDEX invoicing_vat_lines_issued ON invoicing_vat_lines (tenant_id, regime, issued_at)",
-            "DROP INDEX invoicing_vat_lines_issued"
-        ),
-        (
-            "CREATE INDEX invoicing_vat_lines_company ON invoicing_vat_lines (company_id, regime, issued_at)",
-            "DROP INDEX invoicing_vat_lines_company"
-        ),
-    ]
+            );
+        CREATE INDEX invoicing_vat_lines_issued ON invoicing_vat_lines (tenant_id, regime, issued_at);
+        CREATE INDEX invoicing_vat_lines_company ON invoicing_vat_lines (company_id, regime, issued_at);",
+    )],
 );
+
+/// The tables the migration creates: what a node empties before copying its
+/// store from a peer, so the subscriptions fill them again.
+pub const TABLES: &[&str] = &["invoicing_documents", "invoicing_vat_lines"];

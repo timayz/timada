@@ -103,7 +103,6 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
 
     let files = Files {
         path: config.database.path.clone(),
-        read_models_url: config.database.read_models.clone(),
     };
     let store = db::open_store(&config.database.path).await?;
     let (cluster, platform) = Cluster::open(
@@ -114,12 +113,6 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     )
     .await?;
     let store_db = db::Db::from(store);
-    let write_pool = db::create_write_pool(&config.database.read_models).await?;
-    let read_pool = db::create_read_pool(
-        &config.database.read_models,
-        config.database.max_connections,
-    )
-    .await?;
     let peers = crate::peers::Peers::from_cluster(config.cluster.as_ref())?.map(Arc::new);
     let media = Arc::new(Media::new(&config.media, peers));
 
@@ -281,8 +274,6 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     };
 
     cluster.shutdown().await;
-    read_pool.close().await;
-    write_pool.close().await;
 
     let mut settings = Vec::new();
     if let Some(key) = key {

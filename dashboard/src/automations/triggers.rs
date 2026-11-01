@@ -7,12 +7,12 @@
 //! events ([`timada_automations::listener_subscription`]): the order of the
 //! store decides which events a publication sees.
 
+use crate::db::Db;
 use evento::{
     Evento, Executor,
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
 use timada_automations::{
     AUTOMATION_ACTOR, StartRun, catalog, listener_subscription, listeners_for, record_checked_out,
     record_checkout, record_detected,
@@ -29,10 +29,10 @@ const TRIGGER_WINDOW_SECS: u64 = 60 * 60;
 #[derive(Clone)]
 struct TenantStore(Evento);
 
-/// Follows every tenant's trigger events. `read_models` is the read-model
+/// Follows every tenant's trigger events. `db` is the read-model
 /// database, which must be allowed to write (the listeners live there).
-pub fn subscription<E: Executor>(read_models: SqlitePool, store: Evento) -> SubscriptionBuilder<E> {
-    listener_subscription(SUBSCRIPTION, read_models)
+pub fn subscription<E: Executor>(db: Db, store: Evento) -> SubscriptionBuilder<E> {
+    listener_subscription(SUBSCRIPTION, db)
         .data(TenantStore(store))
         .handler(on_order_placed())
         .handler(on_order_fulfilled())
@@ -63,8 +63,8 @@ async fn start<E: Executor>(
     if crate::auth::now().saturating_sub(at) > TRIGGER_WINDOW_SECS {
         return Ok(());
     }
-    let pool: SqlitePool = context.extract();
-    let listeners = listeners_for(&pool, tenant, trigger).await?;
+    let db: Db = context.extract();
+    let listeners = listeners_for(&db, tenant, trigger).await?;
     if listeners.is_empty() {
         return Ok(());
     }
@@ -245,9 +245,9 @@ async fn on_checkout_requested<E: Executor>(
     context: &Context<'_, E>,
     event: Event<timada_orders::aggregator::CheckoutRequested>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     record_checkout(
-        &pool,
+        &db,
         &event.tenant,
         &event.aggregate_id,
         &event.data.request_id,
@@ -261,8 +261,8 @@ async fn on_cart_checked_out<E: Executor>(
     context: &Context<'_, E>,
     event: Event<timada_orders::aggregator::CheckedOut>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
-    record_checked_out(&pool, &event.tenant, &event.aggregate_id).await
+    let db: Db = context.extract();
+    record_checked_out(&db, &event.tenant, &event.aggregate_id).await
 }
 
 #[evento::subscription]
@@ -270,9 +270,9 @@ async fn on_checkout_abandoned<E: Executor>(
     context: &Context<'_, E>,
     event: Event<timada_automations::aggregator::abandoned::Detected>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     record_detected(
-        &pool,
+        &db,
         &event.tenant,
         &event.data.cart_id,
         &event.data.request_id,

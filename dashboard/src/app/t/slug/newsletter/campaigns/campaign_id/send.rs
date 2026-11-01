@@ -27,7 +27,7 @@ use super::{CampaignId, campaign_url, require_campaign};
 use crate::app::t::slug::newsletter::campaigns::audience_label;
 use crate::app::t::slug::{Slug, TenantNav, require_tenant};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::shop_mail::ShopMail;
 use crate::ui::{Shell, document, notice, page_header, section_card};
 
@@ -44,7 +44,7 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
         return Err(see_other(back).into());
     }
     let audience = count_audience(
-        app_context::<ReadPool>(cx),
+        app_context::<Db>(cx),
         &access.tenant.id,
         campaign.language.as_deref(),
     )

@@ -13,7 +13,7 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 use crate::aggregator::scenario::{Archived, Paused, Published, Resumed};
 use crate::definition::Definition;
@@ -40,15 +40,12 @@ impl Listener {
 }
 
 /// The base of the subscription that starts runs: it keeps the listeners
-/// from the scenarios' events, into `pool` (the read-model database, which
+/// from the scenarios' events, into `db` (the read-model database, which
 /// must be allowed to write). The host adds `.data(…)` and a handler per
 /// trigger event, then `.any_routing_key()` and its retry policy.
-pub fn listener_subscription<E: Executor>(
-    key: &'static str,
-    pool: SqlitePool,
-) -> SubscriptionBuilder<E> {
+pub fn listener_subscription<E: Executor>(key: &'static str, db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(key)
-        .data(pool)
+        .data(db)
         .handler(on_scenario_published())
         .handler(on_scenario_paused())
         .handler(on_scenario_resumed())
@@ -60,7 +57,7 @@ async fn on_scenario_published<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Published>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     // Published only once it reads and has a trigger: anything else starts
     // nothing.
     let Some(trigger) = Definition::from_json(&event.data.definition)
@@ -69,39 +66,36 @@ async fn on_scenario_published<E: Executor>(
     else {
         return Ok(());
     };
-    sqlx::query(
+    db.execute(
         "INSERT INTO automations_listeners (tenant_id, scenario_id, trigger, version, state, since)
          VALUES (?1, ?2, ?3, ?4, 'active', ?5)
          ON CONFLICT (tenant_id, scenario_id) DO UPDATE SET
             trigger = excluded.trigger, version = excluded.version,
             state = excluded.state, since = excluded.since",
+        (
+            event.tenant.as_str(),
+            event.aggregate_id.as_str(),
+            trigger.kind.as_str(),
+            i64::from(event.data.version),
+            event.timestamp as i64,
+        ),
     )
-    .bind(&event.tenant)
-    .bind(&event.aggregate_id)
-    .bind(&trigger.kind)
-    .bind(i64::from(event.data.version))
-    .bind(event.timestamp as i64)
-    .execute(&pool)
     .await?;
     Ok(())
 }
 
 async fn set_state(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     scenario_id: &str,
     state: ListenerState,
     since: u64,
 ) -> anyhow::Result<()> {
-    sqlx::query(
+    db.execute(
         "UPDATE automations_listeners SET state = ?3, since = ?4
          WHERE tenant_id = ?1 AND scenario_id = ?2",
+        (tenant_id, scenario_id, state.as_str(), since as i64),
     )
-    .bind(tenant_id)
-    .bind(scenario_id)
-    .bind(state.as_str())
-    .bind(since as i64)
-    .execute(pool)
     .await?;
     Ok(())
 }
@@ -111,9 +105,9 @@ async fn on_scenario_paused<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Paused>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     set_state(
-        &pool,
+        &db,
         &event.tenant,
         &event.aggregate_id,
         ListenerState::Paused,
@@ -127,9 +121,9 @@ async fn on_scenario_resumed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Resumed>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     set_state(
-        &pool,
+        &db,
         &event.tenant,
         &event.aggregate_id,
         ListenerState::Active,
@@ -143,9 +137,9 @@ async fn on_scenario_archived<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Archived>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     set_state(
-        &pool,
+        &db,
         &event.tenant,
         &event.aggregate_id,
         ListenerState::Archived,
@@ -156,33 +150,29 @@ async fn on_scenario_archived<E: Executor>(
 
 /// The scenarios of a tenant whose trigger is `trigger` and that run.
 pub async fn listeners_for(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     trigger: &str,
 ) -> anyhow::Result<Vec<Listener>> {
-    Ok(sqlx::query_as(
+    db.fetch_all(
         "SELECT * FROM automations_listeners
          WHERE tenant_id = ?1 AND trigger = ?2 AND state = 'active'
          ORDER BY scenario_id",
+        (tenant_id, trigger),
     )
-    .bind(tenant_id)
-    .bind(trigger)
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// Where a scenario stands for its runs; `None` until the subscription
 /// saw it published.
 pub async fn listener_of(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     scenario_id: &str,
 ) -> anyhow::Result<Option<Listener>> {
-    Ok(sqlx::query_as(
+    db.fetch_optional(
         "SELECT * FROM automations_listeners WHERE tenant_id = ?1 AND scenario_id = ?2",
+        (tenant_id, scenario_id),
     )
-    .bind(tenant_id)
-    .bind(scenario_id)
-    .fetch_optional(pool)
-    .await?)
+    .await
 }

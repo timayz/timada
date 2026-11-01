@@ -1,5 +1,7 @@
 mod common;
 
+use timada_core::db::Db;
+
 use common::*;
 use timada_automations::{
     Command, ListenerState, RunFilter, RunStatus, StartRun, Transition, due_runs, listener_of,
@@ -7,8 +9,8 @@ use timada_automations::{
     runs_of_scenario,
 };
 
-async fn follow(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    listener_subscription::<evento::Sqlite>("test/listeners", pool.clone())
+async fn follow(executor: &evento::Turso, pool: &Db) {
+    listener_subscription::<evento::Turso>("test/listeners", pool.clone())
         .run_once(executor)
         .await
         .unwrap();
@@ -89,7 +91,7 @@ async fn runs_are_listed_and_owed_a_look_until_they_end() {
     let (executor, pool) = executor_with_pool().await;
     let automations = Command::new(executor.clone(), TENANT);
     let catch_up = || async {
-        read_model_subscription::<evento::Sqlite>(pool.clone())
+        read_model_subscription::<evento::Turso>(pool.clone())
             .run_once(&executor)
             .await
             .unwrap();

@@ -35,7 +35,7 @@ use crate::components::input::input;
 use crate::components::table::{
     table, table_body, table_cell, table_footer, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, document, fact, facts, format_time, notice, page_header, section_card,
     status_badge,
@@ -162,7 +162,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             &order.lines,
             &crate::aliexpress::forward::order_links(
                 &store,
-                app_context::<ReadPool>(cx),
+                app_context::<Db>(cx),
                 &access.tenant.id,
                 &order,
             )

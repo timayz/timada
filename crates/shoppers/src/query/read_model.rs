@@ -18,7 +18,7 @@ use evento::{
 };
 use std::sync::Arc;
 
-use sqlx::SqlitePool;
+use timada_core::db::Db;
 
 use crate::command::{Shopper, shopper_projection};
 use timada_core::keys::KeyRing as ShopperKeyRing;
@@ -30,16 +30,16 @@ pub const READ_MODEL_SUBSCRIPTION: &str = "timada-shoppers/read-models";
 #[derive(Clone)]
 struct Ring(Arc<dyn ShopperKeyRing>);
 
-/// Builds the subscription over every tenant and routing key. `pool` is the
+/// Builds the subscription over every tenant and routing key. `db` is the
 /// read-model database and must be allowed to write; `keys` holds each
 /// tenant's shopper keys. Start it with `.start(&store)` and keep the handle
 /// for shutdown.
 pub fn read_model_subscription<E: Executor>(
-    pool: SqlitePool,
+    db: Db,
     keys: Arc<dyn ShopperKeyRing>,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
-        .data(pool)
+        .data(db)
         .data(Ring(keys))
         .handler(on_shopper_event())
         .any_routing_key()
@@ -51,7 +51,7 @@ async fn on_shopper_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<crate::aggregator::Shopper>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let keys: Ring = context.extract();
     let Some(state) = shopper_projection()
         .load(&event.aggregate_id)
@@ -62,7 +62,7 @@ async fn on_shopper_event<E: Executor>(
         return Ok(());
     };
     if state.forgotten {
-        return delete_shopper(&pool, &event.tenant, &state.id).await;
+        return delete_shopper(&db, &event.tenant, &state.id).await;
     }
     // Not forgotten, so the key must exist: until it can be read, retry.
     let keys = keys.0.for_tenant(&event.tenant);
@@ -70,32 +70,28 @@ async fn on_shopper_event<E: Executor>(
         .open_with(&*keys)
         .await?
         .ok_or_else(|| anyhow::anyhow!("the key of shopper {} is missing", state.id))?;
-    upsert_shopper(&pool, &event.tenant, &shopper, event.timestamp).await
+    upsert_shopper(&db, &event.tenant, &shopper, event.timestamp).await
 }
 
 /// Drops the row of a shopper who deleted their account.
-pub async fn delete_shopper(
-    pool: &SqlitePool,
-    tenant_id: &str,
-    shopper_id: &str,
-) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM shoppers_shoppers WHERE tenant_id = ?1 AND id = ?2")
-        .bind(tenant_id)
-        .bind(shopper_id)
-        .execute(pool)
-        .await?;
+pub async fn delete_shopper(db: &Db, tenant_id: &str, shopper_id: &str) -> anyhow::Result<()> {
+    db.execute(
+        "DELETE FROM shoppers_shoppers WHERE tenant_id = ?1 AND id = ?2",
+        (tenant_id, shopper_id),
+    )
+    .await?;
     Ok(())
 }
 
 /// Writes the row of a shopper as the write model sees it; `updated_at` is
 /// unix seconds.
 pub async fn upsert_shopper(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     shopper: &Shopper,
     updated_at: u64,
 ) -> anyhow::Result<()> {
-    sqlx::query(
+    db.execute(
         "INSERT INTO shoppers_shoppers (tenant_id, id, email, registered_at, address_count,
             updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -104,14 +100,15 @@ pub async fn upsert_shopper(
             registered_at = excluded.registered_at,
             address_count = excluded.address_count,
             updated_at = MAX(updated_at, excluded.updated_at)",
+        (
+            tenant_id,
+            shopper.id.as_str(),
+            shopper.email.as_str(),
+            shopper.registered_at as i64,
+            shopper.addresses.len() as i64,
+            updated_at as i64,
+        ),
     )
-    .bind(tenant_id)
-    .bind(&shopper.id)
-    .bind(&shopper.email)
-    .bind(shopper.registered_at as i64)
-    .bind(shopper.addresses.len() as i64)
-    .bind(updated_at as i64)
-    .execute(pool)
     .await?;
     Ok(())
 }
