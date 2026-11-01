@@ -7,9 +7,12 @@
 //! ```
 //!
 //! and read the `probe` lines. `CATALOG_PROBE_PRODUCTS` sets how many
-//! products are replayed (300 by default, about 3 300 events: a product is
-//! created, described, priced, given three pictures, an option, two variants,
-//! a category and published, as the Chatounette catalogue's are). Three
+//! products are replayed (300 by default, 3 610 events: a product is created,
+//! described, priced, given three pictures, an option, two variants, a
+//! category and published, as the Chatounette catalogue's are, and its slug
+//! is claimed in a stream of its own, twelve events; the five categories
+//! claim a slug each too). The per-event figures divide by the events the
+//! store holds after seeding, which is what the subscription replays. Three
 //! catch-ups run over the same synthetic history, each on a fresh in-memory
 //! store with the crate's migrations:
 //!
@@ -38,14 +41,13 @@ use timada_catalog::{
     count_products, product_projection, read_model_subscription, upsert_product,
 };
 
-/// A product's history, as a merchant building a catalogue writes it: how
-/// many events it wrote, and the products' ids.
-async fn seed(cmd: &Command<evento::Turso>, products: usize) -> (usize, Vec<String>) {
+/// A product's history, as a merchant building a catalogue writes it: the
+/// products' ids.
+async fn seed(cmd: &Command<evento::Turso>, products: usize) -> Vec<String> {
     let mut categories = Vec::new();
     for name in ["Bedding", "Toys", "Harnesses", "Bowls", "Scratchers"] {
         categories.push(create_category(cmd, name).await.id);
     }
-    let mut events = categories.len();
     let mut ids = Vec::with_capacity(products);
     for n in 0..products {
         let product = create_product(cmd, &format!("Product {n}")).await;
@@ -103,9 +105,18 @@ async fn seed(cmd: &Command<evento::Turso>, products: usize) -> (usize, Vec<Stri
             .await
             .unwrap();
         cmd.publish_product(ALICE, &product.id).await.unwrap();
-        events += 10;
     }
-    (events, ids)
+    ids
+}
+
+/// How many events the store holds: every stream's, the slug claims
+/// included, since the subscription replays them all.
+async fn stored_events(pool: &Db) -> usize {
+    let count: i64 = pool
+        .fetch_scalar("SELECT COUNT(*) FROM event", ())
+        .await
+        .unwrap();
+    usize::try_from(count).unwrap()
 }
 
 #[evento::subscription_all]
@@ -135,8 +146,9 @@ where
     let (executor, pool) = executor_with_pool().await;
     let cmd = Command::new(executor.clone(), TENANT);
     let seeding = Instant::now();
-    let (events, _) = seed(&cmd, products).await;
+    seed(&cmd, products).await;
     let seeding = seeding.elapsed();
+    let events = stored_events(&pool).await;
     prepare(&pool).await;
 
     let started = Instant::now();
@@ -218,7 +230,7 @@ async fn catch_up_cost_per_event() {
 
     let (executor, pool) = executor_with_pool().await;
     let cmd = Command::new(executor.clone(), TENANT);
-    let (_, ids) = seed(&cmd, products).await;
+    let ids = seed(&cmd, products).await;
     let mut states = Vec::with_capacity(ids.len());
     for id in &ids {
         states.push(cmd.load_product(id).await.unwrap().unwrap());
