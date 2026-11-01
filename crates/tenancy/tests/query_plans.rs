@@ -127,6 +127,10 @@ async fn seed_tenants(conn: &Connection, alice: &str) {
     execute(conn, "COMMIT", ()).await.unwrap();
 }
 
+/// Every variant runs sub-millisecond, so the mean is taken over enough
+/// rounds to sit above machine noise.
+const ROUNDS: u32 = 200;
+
 const JOIN_TENANTS_OF_USER: &str = "SELECT t.id AS tenant_id, t.slug, t.name, t.suspended, m.role
          FROM tenancy_members m JOIN tenancy_tenants t ON t.id = m.tenant_id
          WHERE m.user_id = ?1
@@ -160,7 +164,7 @@ async fn tenants_of_user_plan() {
         &plan,
         "SEARCH t USING INDEX sqlite_autoindex_tenancy_tenants_1 (id=?)",
     );
-    let joined: Vec<(String, String, String, bool, String)> = timed("one join", 20, || {
+    let joined: Vec<(String, String, String, bool, String)> = timed("one join", ROUNDS, || {
         fetch_all(&conn, JOIN_TENANTS_OF_USER, (alice,))
     })
     .await
@@ -174,7 +178,7 @@ async fn tenants_of_user_plan() {
         (alice,),
     )
     .await;
-    let two_scans = timed("two scans joined here", 20, || async {
+    let two_scans = timed("two scans joined here", ROUNDS, || async {
         let memberships: Vec<(String, String)> = fetch_all(
             &conn,
             "SELECT tenant_id, role FROM tenancy_members WHERE user_id = ?1",
@@ -208,7 +212,7 @@ async fn tenants_of_user_plan() {
     )
     .await;
 
-    let page = timed("the page's query", 20, || tenants_of_user(&db, alice))
+    let page = timed("the page's query", ROUNDS, || tenants_of_user(&db, alice))
         .await
         .unwrap();
     assert_eq!(page.len(), ALICE_TENANTS);
@@ -300,7 +304,7 @@ async fn companies_of_user_plan() {
         &plan,
         "SEARCH c USING INDEX sqlite_autoindex_tenancy_companies_1 (id=?)",
     );
-    let joined: Vec<(String, String, String, i64)> = timed("one join", 20, || {
+    let joined: Vec<(String, String, String, i64)> = timed("one join", ROUNDS, || {
         fetch_all(&conn, JOIN_COMPANIES_OF_USER, (alice,))
     })
     .await
@@ -314,14 +318,14 @@ async fn companies_of_user_plan() {
         (alice,),
     )
     .await;
-    let owners_first: Vec<(String, String, String, i64)> = timed("owners first", 20, || {
+    let owners_first: Vec<(String, String, String, i64)> = timed("owners first", ROUNDS, || {
         fetch_all(&conn, JOIN_OWNERS_FIRST, (alice,))
     })
     .await
     .unwrap();
     assert_eq!(owners_first, joined);
 
-    let two_scans = timed("two scans joined here", 20, || async {
+    let two_scans = timed("two scans joined here", ROUNDS, || async {
         let owned: Vec<(String,)> = fetch_all(
             &conn,
             "SELECT company_id FROM tenancy_company_owners WHERE user_id = ?1",
@@ -345,7 +349,7 @@ async fn companies_of_user_plan() {
     .await;
     assert_eq!(two_scans, ALICE_COMPANIES);
 
-    let page = timed("the page's query", 20, || companies_of_user(&db, alice))
+    let page = timed("the page's query", ROUNDS, || companies_of_user(&db, alice))
         .await
         .unwrap();
     let names: Vec<_> = joined.iter().map(|row| row.2.as_str()).collect();

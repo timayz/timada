@@ -215,17 +215,15 @@ async fn edition_progress_plan() {
         "edition_progress: {SUBSCRIBERS} subscribers, {} mailed",
         SUBSCRIBERS / 2
     );
-    let plan = report_plan(
+    report_plan(
         &conn,
         "LEFT JOIN subscribers -> deliveries",
         LEFT_JOIN,
         params(),
     )
     .await;
-    assert_step(
-        &plan,
-        "SEARCH d USING INDEX newsletter_deliveries_campaign (tenant_id=?) LEFT-JOIN",
-    );
+    // Reported only: this is the plan the planner picks today (the wrong
+    // index), and it changes once tursodatabase/turso#8664 is fixed.
     let joined: Vec<ZoneProgress> = timed("LEFT JOIN", 1, || fetch_all(&conn, LEFT_JOIN, params()))
         .await
         .unwrap();
