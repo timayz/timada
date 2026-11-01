@@ -1,7 +1,7 @@
 //! What a storefront page reads: the published products of the local copy.
 
-use sqlx::{FromRow, SqlitePool};
 use timada_catalog::{TreeNode, TreeOf, tree_of};
+use timada_core::db::{Db, FromRow, Json, Row};
 
 use crate::money::MoneyFormat;
 
@@ -128,7 +128,7 @@ impl PriceRange {
 }
 
 /// A product as the storefront shows it.
-#[derive(Debug, Clone, FromRow, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Product {
     pub id: String,
     pub slug: String,
@@ -139,16 +139,12 @@ pub struct Product {
     /// Unix seconds of the last change.
     pub updated_at: i64,
     /// Its pictures, in the order the merchant put them.
-    #[sqlx(json, rename = "images_json")]
     pub images: Vec<Image>,
     /// The ways it varies; empty when it does not.
-    #[sqlx(json, rename = "options_json")]
     pub options: Vec<ProductOption>,
     /// The combinations it sells, each with its own price.
-    #[sqlx(json, rename = "variants_json")]
     pub variants: Vec<Variant>,
     /// The facts in its table.
-    #[sqlx(json, rename = "attributes_json")]
     pub attributes: Vec<Attribute>,
     pub min_amount_cents: Option<i64>,
     pub max_amount_cents: Option<i64>,
@@ -159,10 +155,33 @@ pub struct Product {
     /// What is on the shelf of each thing the shop counts: a variant's id,
     /// or `""` for a product without variants. A thing missing here sells
     /// without limit.
-    #[sqlx(json, rename = "stock_json")]
     pub stock: std::collections::BTreeMap<String, u32>,
     /// Whether anything of it can still be bought.
     pub in_stock: bool,
+}
+
+impl FromRow for Product {
+    fn from_row(row: &Row<'_>) -> anyhow::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            slug: row.get("slug")?,
+            name: row.get("name")?,
+            description: row.get("description")?,
+            amount_cents: row.get("amount_cents")?,
+            currency: row.get("currency")?,
+            updated_at: row.get("updated_at")?,
+            images: row.get::<Json<_>>("images_json")?.0,
+            options: row.get::<Json<_>>("options_json")?.0,
+            variants: row.get::<Json<_>>("variants_json")?.0,
+            attributes: row.get::<Json<_>>("attributes_json")?.0,
+            min_amount_cents: row.get("min_amount_cents")?,
+            max_amount_cents: row.get("max_amount_cents")?,
+            review_count: row.get("review_count")?,
+            rating_x100: row.get("rating_x100")?,
+            stock: row.get::<Json<_>>("stock_json")?.0,
+            in_stock: row.get("in_stock")?,
+        })
+    }
 }
 
 impl Product {
@@ -430,24 +449,19 @@ impl ProductPage {
     }
 }
 
+use timada_core::db::fts_query as phrase;
 use timada_core::like_contains as contains;
 
-/// The full-text phrase matching `q` anywhere in a word, when `q` is long
-/// enough for the index (it is cut in runs of three characters); `None`
-/// otherwise, and the search falls back to [`contains`].
-fn phrase(q: &str) -> Option<String> {
-    (q.chars().count() >= 3).then(|| format!("\"{}\"", q.replace('"', "\"\"")))
-}
-
 /// Where a page of products comes from, `?1` being what was searched for.
-/// With a phrase the full-text index leads, so a search costs what it
-/// matches; `CROSS JOIN` keeps the planner from walking every product in
-/// sort order instead. Without one, `?1` is a `LIKE` pattern or `NULL`.
+/// With a phrase ([`phrase`]: `q` long enough for the index, as one folded
+/// phrase) the full-text index over `slug_search` and `name_search` narrows
+/// the products first, so a search costs what it matches. Without one, `?1`
+/// is a `LIKE` pattern or `NULL`.
 macro_rules! products_from {
     (phrase) => {
-        "FROM storefront_products_fts f
-         CROSS JOIN storefront_products p ON p.rowid = f.rowid
-         WHERE storefront_products_fts MATCH ?1 "
+        "FROM storefront_products p
+         WHERE p.id IN (SELECT id FROM storefront_products
+                        WHERE fts_match(slug_search, name_search, ?1)) "
     };
     (pattern) => {
         "FROM storefront_products p
@@ -481,9 +495,8 @@ macro_rules! products_where {
     };
 }
 
-/// One page of the list, ordered by `$order`. The SQL has to be a literal
-/// (sqlx refuses a built string), so each order is its own statement over the
-/// same filter.
+/// One page of the list, ordered by `$order`: each order is its own statement
+/// over the same filter, so every statement stays a literal.
 macro_rules! products_page {
     ($from:ident, $order:literal) => {
         concat!(
@@ -601,10 +614,7 @@ const CATEGORY_TOP_RATED: &str = category_page!(
 );
 
 /// The published products a query matches, in the order it asks for.
-pub async fn published_products(
-    pool: &SqlitePool,
-    query: &ProductQuery,
-) -> sqlx::Result<ProductPage> {
+pub async fn published_products(db: &Db, query: &ProductQuery) -> anyhow::Result<ProductPage> {
     let per_page = i64::from(query.per_page.clamp(1, MAX_PER_PAGE));
     let page = query.page.max(1);
     // A search long enough for the index reads it; a shorter one is a
@@ -631,23 +641,21 @@ pub async fn published_products(
         && query.max_cents.is_none()
         && query.options.is_empty()
     {
-        let total: i64 =
-            sqlx::query_scalar("SELECT subtree_count FROM storefront_categories WHERE id = ?1")
-                .bind(category)
-                .fetch_optional(pool)
-                .await?
-                .unwrap_or(0);
+        let total: Option<(i64,)> = db
+            .fetch_optional(
+                "SELECT subtree_count FROM storefront_categories WHERE id = ?1",
+                (category,),
+            )
+            .await?;
+        let total = total.map_or(0, |(count,)| count);
         let statement = match query.sort {
             ProductSort::Newest => CATEGORY_NEWEST,
             ProductSort::PriceAsc => CATEGORY_PRICE_ASC,
             ProductSort::PriceDesc => CATEGORY_PRICE_DESC,
             ProductSort::TopRated => CATEGORY_TOP_RATED,
         };
-        let items = sqlx::query_as(statement)
-            .bind(category)
-            .bind(per_page)
-            .bind(offset)
-            .fetch_all(pool)
+        let items = db
+            .fetch_all(statement, (category, per_page, offset))
             .await?;
         return Ok(ProductPage {
             items,
@@ -656,30 +664,21 @@ pub async fn published_products(
             total,
         });
     }
-    let total: i64 = sqlx::query_scalar(count)
-        .bind(&search)
-        .bind(&categories)
-        .bind(&exclude)
-        .bind(query.category.as_deref())
-        .bind(per_page)
-        .bind(offset)
-        .bind(query.min_cents)
-        .bind(query.max_cents)
-        .bind(&options)
-        .fetch_one(pool)
-        .await?;
-    let items = sqlx::query_as(pages[query.sort.index()])
-        .bind(&search)
-        .bind(&categories)
-        .bind(&exclude)
-        .bind(query.category.as_deref())
-        .bind(per_page)
-        .bind(offset)
-        .bind(query.min_cents)
-        .bind(query.max_cents)
-        .bind(&options)
-        .fetch_all(pool)
-        .await?;
+    let params = || {
+        (
+            search.as_deref(),
+            categories.as_str(),
+            exclude.as_str(),
+            query.category.as_deref(),
+            per_page,
+            offset,
+            query.min_cents,
+            query.max_cents,
+            options.as_str(),
+        )
+    };
+    let total: i64 = db.fetch_scalar(count, params()).await?;
+    let items = db.fetch_all(pages[query.sort.index()], params()).await?;
     Ok(ProductPage {
         items,
         page,
@@ -694,10 +693,10 @@ pub async fn published_products(
 /// "Colour: Rose" still offers the other colours; its band and its other
 /// options hold.
 pub async fn published_option_values(
-    pool: &SqlitePool,
+    db: &Db,
     query: &ProductQuery,
     option: &str,
-) -> sqlx::Result<Vec<FacetValue>> {
+) -> anyhow::Result<Vec<FacetValue>> {
     let name_key = facet_key(option);
     let phrase = query.q.as_deref().and_then(phrase);
     let statement = if phrase.is_some() {
@@ -714,20 +713,25 @@ pub async fn published_option_values(
         .filter(|(name, _)| *name != name_key)
         .cloned()
         .collect();
-    let rows: Vec<(String, String, i64)> = sqlx::query_as(statement)
-        .bind(&search)
-        .bind(&categories)
-        .bind(&exclude)
-        .bind(query.category.as_deref())
-        // `?5` and `?6` are the page's limit and offset, which a facet has
-        // no use for; every number up to the last one still needs a value.
-        .bind(0i64)
-        .bind(0i64)
-        .bind(query.min_cents)
-        .bind(query.max_cents)
-        .bind(options_json(&others))
-        .bind(&name_key)
-        .fetch_all(pool)
+    let rows: Vec<(String, String, i64)> = db
+        .fetch_all(
+            statement,
+            (
+                search.as_deref(),
+                categories.as_str(),
+                exclude.as_str(),
+                query.category.as_deref(),
+                // `?5` and `?6` are the page's limit and offset, which a facet
+                // has no use for; every number up to the last one still needs
+                // a value.
+                0i64,
+                0i64,
+                query.min_cents,
+                query.max_cents,
+                options_json(&others),
+                name_key.as_str(),
+            ),
+        )
         .await?;
     Ok(rows
         .into_iter()
@@ -739,57 +743,49 @@ pub async fn published_option_values(
 /// sharing a category with any of them, newest first, none of them already
 /// in it. With no category to go by, the newest products.
 pub async fn published_cart_recommendations(
-    pool: &SqlitePool,
+    db: &Db,
     product_ids: &[String],
     limit: u32,
-) -> sqlx::Result<Vec<Product>> {
+) -> anyhow::Result<Vec<Product>> {
     let ids = serde_json::to_string(product_ids).unwrap_or_else(|_| "[]".to_owned());
-    let categories: Vec<String> = sqlx::query_scalar(
-        "SELECT DISTINCT category_id FROM storefront_product_categories
-         WHERE product_id IN (SELECT value FROM json_each(?1))",
-    )
-    .bind(ids)
-    .fetch_all(pool)
-    .await?;
+    let categories: Vec<(String,)> = db
+        .fetch_all(
+            "SELECT DISTINCT category_id FROM storefront_product_categories
+             WHERE product_id IN (SELECT value FROM json_each(?1))",
+            (ids,),
+        )
+        .await?;
     let query = ProductQuery::default()
         .per_page(limit)
-        .in_categories(categories)
+        .in_categories(categories.into_iter().map(|(id,)| id))
         .exclude_all(product_ids.iter().cloned());
-    Ok(published_products(pool, &query).await?.items)
+    Ok(published_products(db, &query).await?.items)
 }
 
 /// One published product, by slug.
-pub async fn published_product_by_slug(
-    pool: &SqlitePool,
-    slug: &str,
-) -> sqlx::Result<Option<Product>> {
-    sqlx::query_as(
+pub async fn published_product_by_slug(db: &Db, slug: &str) -> anyhow::Result<Option<Product>> {
+    db.fetch_optional(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
             min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock
          FROM storefront_products WHERE slug = ?1 AND status = 'published'",
+        (slug,),
     )
-    .bind(slug)
-    .fetch_optional(pool)
     .await
 }
 
 /// The published products among `ids`, in no particular order: what a cart
 /// page shows its lines with (a product missing here is off sale).
-pub async fn published_products_by_ids(
-    pool: &SqlitePool,
-    ids: &[&str],
-) -> sqlx::Result<Vec<Product>> {
+pub async fn published_products_by_ids(db: &Db, ids: &[&str]) -> anyhow::Result<Vec<Product>> {
     let ids = serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_owned());
-    sqlx::query_as(
+    db.fetch_all(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
             min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock
          FROM storefront_products
          WHERE id IN (SELECT value FROM json_each(?1)) AND status = 'published'",
+        (ids,),
     )
-    .bind(ids)
-    .fetch_all(pool)
     .await
 }
 
@@ -931,11 +927,18 @@ pub fn search_categories<'a>(
 
 /// A category row with the count its page lists, as the subscription stored
 /// it.
-#[derive(FromRow)]
 struct CountedCategory {
-    #[sqlx(flatten)]
     category: Category,
     subtree_count: i64,
+}
+
+impl FromRow for CountedCategory {
+    fn from_row(row: &Row<'_>) -> anyhow::Result<Self> {
+        Ok(Self {
+            category: Category::from_row(row)?,
+            subtree_count: row.get("subtree_count")?,
+        })
+    }
 }
 
 impl TreeNode for CountedCategory {
@@ -950,14 +953,15 @@ impl TreeNode for CountedCategory {
 
 /// The live categories of the store as trees, each level in its own order,
 /// with how many published products each one's page lists.
-pub async fn published_categories(pool: &SqlitePool) -> sqlx::Result<Vec<CategoryNode>> {
-    let categories: Vec<CountedCategory> = sqlx::query_as(
-        "SELECT id, slug, name, description, parent_id, position, in_menu, subtree_count
-         FROM storefront_categories WHERE archived = 0
-         ORDER BY position, name, id",
-    )
-    .fetch_all(pool)
-    .await?;
+pub async fn published_categories(db: &Db) -> anyhow::Result<Vec<CategoryNode>> {
+    let categories: Vec<CountedCategory> = db
+        .fetch_all(
+            "SELECT id, slug, name, description, parent_id, position, in_menu, subtree_count
+             FROM storefront_categories WHERE archived = 0
+             ORDER BY position, name, id",
+            (),
+        )
+        .await?;
     Ok(tree_of(categories).into_iter().map(node_of).collect())
 }
 
@@ -971,28 +975,25 @@ fn node_of(node: TreeOf<CountedCategory>) -> CategoryNode {
 }
 
 /// One live category, by slug.
-pub async fn published_category_by_slug(
-    pool: &SqlitePool,
-    slug: &str,
-) -> sqlx::Result<Option<Category>> {
-    sqlx::query_as(
+pub async fn published_category_by_slug(db: &Db, slug: &str) -> anyhow::Result<Option<Category>> {
+    db.fetch_optional(
         "SELECT id, slug, name, description, parent_id, position, in_menu
          FROM storefront_categories WHERE slug = ?1 AND archived = 0",
+        (slug,),
     )
-    .bind(slug)
-    .fetch_optional(pool)
     .await
 }
 
 /// The text a live category's page shows below its products, empty when
 /// it has none. Apart from [`Category`], so the trees every page loads do
 /// not carry it.
-pub async fn published_category_body(pool: &SqlitePool, category_id: &str) -> sqlx::Result<String> {
-    let body: Option<(String,)> =
-        sqlx::query_as("SELECT body FROM storefront_categories WHERE id = ?1 AND archived = 0")
-            .bind(category_id)
-            .fetch_optional(pool)
-            .await?;
+pub async fn published_category_body(db: &Db, category_id: &str) -> anyhow::Result<String> {
+    let body: Option<(String,)> = db
+        .fetch_optional(
+            "SELECT body FROM storefront_categories WHERE id = ?1 AND archived = 0",
+            (category_id,),
+        )
+        .await?;
     Ok(body.map(|(body,)| body).unwrap_or_default())
 }
 
@@ -1008,34 +1009,33 @@ pub fn category_ancestors(nodes: &[CategoryNode], category: &Category) -> Vec<Ca
 
 /// The live categories a product is filed under, in tree order.
 pub async fn published_product_categories(
-    pool: &SqlitePool,
+    db: &Db,
     product_id: &str,
-) -> sqlx::Result<Vec<Category>> {
-    sqlx::query_as(
+) -> anyhow::Result<Vec<Category>> {
+    db.fetch_all(
         "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position, c.in_menu
          FROM storefront_categories c
          JOIN storefront_product_categories pc ON pc.category_id = c.id
          WHERE pc.product_id = ?1 AND c.archived = 0
          ORDER BY c.position, c.name, c.id",
+        (product_id,),
     )
-    .bind(product_id)
-    .fetch_all(pool)
     .await
 }
 
 /// The published products sharing a category with `product`, newest first,
 /// without `product` itself.
 pub async fn published_related_products(
-    pool: &SqlitePool,
+    db: &Db,
     product: &Product,
     limit: u32,
-) -> sqlx::Result<Vec<Product>> {
-    let categories: Vec<(String,)> = sqlx::query_as(
-        "SELECT category_id FROM storefront_product_categories WHERE product_id = ?1",
-    )
-    .bind(&product.id)
-    .fetch_all(pool)
-    .await?;
+) -> anyhow::Result<Vec<Product>> {
+    let categories: Vec<(String,)> = db
+        .fetch_all(
+            "SELECT category_id FROM storefront_product_categories WHERE product_id = ?1",
+            (product.id.as_str(),),
+        )
+        .await?;
     if categories.is_empty() {
         return Ok(Vec::new());
     }
@@ -1043,7 +1043,7 @@ pub async fn published_related_products(
         .per_page(limit)
         .in_categories(categories.into_iter().map(|(id,)| id))
         .exclude(product.id.clone());
-    Ok(published_products(pool, &query).await?.items)
+    Ok(published_products(db, &query).await?.items)
 }
 
 #[cfg(test)]
@@ -1126,26 +1126,21 @@ mod tests {
 /// The filters over a small catalog in an in-memory database.
 #[cfg(test)]
 mod sql {
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-
     use super::*;
     use crate::migrations::migrate;
 
-    /// One connection, or each one of the pool would be its own empty
-    /// database.
-    async fn pool() -> SqlitePool {
-        let options = SqliteConnectOptions::new()
-            .filename(":memory:")
-            .create_if_missing(true);
-        SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap()
+    async fn db() -> Db {
+        let db = Db::from(
+            timada_core::db::Turso::in_memory_concurrent()
+                .await
+                .unwrap(),
+        );
+        migrate(&db).await.unwrap();
+        db
     }
 
     async fn insert_product(
-        pool: &SqlitePool,
+        db: &Db,
         id: &str,
         status: &str,
         range: Option<(i64, i64)>,
@@ -1161,86 +1156,76 @@ mod sql {
             }])
             .unwrap()
         };
-        sqlx::query(
+        // What the subscription writes: the row, with what a search finds
+        // it by.
+        db.execute(
             "INSERT INTO storefront_products (id, slug, name, description, amount_cents,
                 currency, status, updated_at, images_json, options_json, variants_json,
-                attributes_json, min_amount_cents, max_amount_cents)
-             VALUES (?1, ?1, ?1, '', ?2, 'EUR', ?3, 1, '[]', ?4, '[]', '[]', ?5, ?6)",
+                attributes_json, min_amount_cents, max_amount_cents, slug_search, name_search)
+             VALUES (?1, ?1, ?1, '', ?2, 'EUR', ?3, 1, '[]', ?4, '[]', '[]', ?5, ?6, ?7, ?7)",
+            (
+                id,
+                range.map(|(min, _)| min),
+                status,
+                options.as_str(),
+                range.map(|(min, _)| min),
+                range.map(|(_, max)| max),
+                timada_core::db::search_key(id),
+            ),
         )
-        .bind(id)
-        .bind(range.map(|(min, _)| min))
-        .bind(status)
-        .bind(&options)
-        .bind(range.map(|(min, _)| min))
-        .bind(range.map(|(_, max)| max))
-        .execute(pool)
-        .await
-        .unwrap();
-        // What the subscription writes beside the row.
-        sqlx::query(
-            "INSERT INTO storefront_products_fts (rowid, slug, name)
-             SELECT rowid, slug, name FROM storefront_products WHERE id = ?1",
-        )
-        .bind(id)
-        .execute(pool)
         .await
         .unwrap();
         for colour in colours {
-            sqlx::query(crate::read_model::INSERT_OPTION)
-                .bind(id)
-                .bind("couleur")
-                .bind(facet_key(colour))
-                .bind("Couleur")
-                .bind(colour)
-                .execute(pool)
-                .await
-                .unwrap();
+            db.execute(
+                crate::read_model::INSERT_OPTION,
+                (id, "couleur", facet_key(colour), "Couleur", *colour),
+            )
+            .await
+            .unwrap();
         }
     }
 
     /// A collar from 9.90 to 59.90 in rose or blue, a grey basket at 34.90,
     /// an unpriced service, and a draft nobody sees; the first two in a
     /// category whose stored count is 2.
-    async fn catalog() -> SqlitePool {
-        let pool = pool().await;
-        migrate(&pool).await.unwrap();
+    async fn catalog() -> Db {
+        let db = db().await;
         insert_product(
-            &pool,
+            &db,
             "collar",
             "published",
             Some((990, 5990)),
             &["Rose", "Bleu"],
         )
         .await;
-        insert_product(&pool, "basket", "published", Some((3490, 3490)), &["Gris"]).await;
-        insert_product(&pool, "service", "published", None, &[]).await;
-        insert_product(&pool, "draft", "draft", Some((1000, 1000)), &["Rose"]).await;
-        sqlx::query(
+        insert_product(&db, "basket", "published", Some((3490, 3490)), &["Gris"]).await;
+        insert_product(&db, "service", "published", None, &[]).await;
+        insert_product(&db, "draft", "draft", Some((1000, 1000)), &["Rose"]).await;
+        db.execute(
             "INSERT INTO storefront_categories (id, slug, name, description, body, position,
                 archived, in_menu, updated_at, product_count, subtree_count)
              VALUES ('cat', 'cat', 'Cat', '', '', 0, 0, 1, 1, 2, 2)",
+            (),
         )
-        .execute(&pool)
         .await
         .unwrap();
         for product in ["collar", "basket"] {
-            sqlx::query(
+            db.execute(
                 "INSERT INTO storefront_category_products (category_id, product_id,
                     updated_at, min_amount_cents, max_amount_cents, review_count, rating_x100)
                  SELECT 'cat', id, updated_at, min_amount_cents, max_amount_cents, review_count,
                     rating_x100
                  FROM storefront_products WHERE id = ?1",
+                (product,),
             )
-            .bind(product)
-            .execute(&pool)
             .await
             .unwrap();
         }
-        pool
+        db
     }
 
-    async fn ids(pool: &SqlitePool, query: ProductQuery) -> (Vec<String>, i64) {
-        let page = published_products(pool, &query).await.unwrap();
+    async fn ids(db: &Db, query: ProductQuery) -> (Vec<String>, i64) {
+        let page = published_products(db, &query).await.unwrap();
         (page.items.into_iter().map(|p| p.id).collect(), page.total)
     }
 
@@ -1250,55 +1235,53 @@ mod sql {
 
     #[tokio::test]
     async fn a_band_keeps_what_overlaps_it_and_drops_the_unpriced() {
-        let pool = catalog().await;
+        let db = catalog().await;
         let all = ProductQuery::default().sort(ProductSort::PriceAsc);
         assert_eq!(
-            ids(&pool, all.clone()).await,
+            ids(&db, all.clone()).await,
             (owned(&["collar", "basket", "service"]), 3)
         );
         // The collar reaches into both bands; the basket sits in one.
         assert_eq!(
-            ids(&pool, all.clone().priced_between(Some(0), Some(5000))).await,
+            ids(&db, all.clone().priced_between(Some(0), Some(5000))).await,
             (owned(&["collar", "basket"]), 2)
         );
         assert_eq!(
-            ids(&pool, all.clone().priced_between(Some(5000), Some(7000))).await,
+            ids(&db, all.clone().priced_between(Some(5000), Some(7000))).await,
             (owned(&["collar"]), 1)
         );
         assert_eq!(
-            ids(&pool, all.clone().priced_between(Some(7000), Some(10000)))
+            ids(&db, all.clone().priced_between(Some(7000), Some(10000)))
                 .await
                 .1,
             0
         );
         // Either bound alone.
         assert_eq!(
-            ids(&pool, all.clone().priced_between(Some(2000), None)).await,
+            ids(&db, all.clone().priced_between(Some(2000), None)).await,
             (owned(&["collar", "basket"]), 2)
         );
         assert_eq!(
-            ids(&pool, all.priced_between(None, Some(1000))).await,
+            ids(&db, all.priced_between(None, Some(1000))).await,
             (owned(&["collar"]), 1)
         );
     }
 
     #[tokio::test]
     async fn an_option_keeps_the_products_taking_its_value() {
-        let pool = catalog().await;
+        let db = catalog().await;
         let all = ProductQuery::default().sort(ProductSort::PriceAsc);
         assert_eq!(
-            ids(&pool, all.clone().with_option("Couleur", "rose")).await,
+            ids(&db, all.clone().with_option("Couleur", "rose")).await,
             (owned(&["collar"]), 1)
         );
         // Folded both sides: the link's key and the merchant's spelling.
         assert_eq!(
-            ids(&pool, all.clone().with_option("couleur", "Gris")).await,
+            ids(&db, all.clone().with_option("couleur", "Gris")).await,
             (owned(&["basket"]), 1)
         );
         assert_eq!(
-            ids(&pool, all.clone().with_option("Couleur", "vert"))
-                .await
-                .1,
+            ids(&db, all.clone().with_option("Couleur", "vert")).await.1,
             0
         );
         // Two pairs must both hold.
@@ -1306,45 +1289,45 @@ mod sql {
             .clone()
             .with_option("Couleur", "Rose")
             .with_option("Couleur", "Bleu");
-        assert_eq!(ids(&pool, both).await, (owned(&["collar"]), 1));
+        assert_eq!(ids(&db, both).await, (owned(&["collar"]), 1));
         let apart = all
             .clone()
             .with_option("Couleur", "Rose")
             .with_option("Couleur", "Gris");
-        assert_eq!(ids(&pool, apart).await.1, 0);
+        assert_eq!(ids(&db, apart).await.1, 0);
         // With a band.
         let dear = all
             .with_option("Couleur", "Rose")
             .priced_between(Some(7000), None);
-        assert_eq!(ids(&pool, dear).await.1, 0);
+        assert_eq!(ids(&db, dear).await.1, 0);
     }
 
     #[tokio::test]
     async fn a_filtered_category_counts_what_it_lists() {
-        let pool = catalog().await;
+        let db = catalog().await;
         let category = ProductQuery::default()
             .in_category("cat")
             .sort(ProductSort::PriceAsc);
         // Unfiltered: the stored count and order.
         assert_eq!(
-            ids(&pool, category.clone()).await,
+            ids(&db, category.clone()).await,
             (owned(&["collar", "basket"]), 2)
         );
         assert_eq!(
-            ids(&pool, category.clone().with_option("Couleur", "Gris")).await,
+            ids(&db, category.clone().with_option("Couleur", "Gris")).await,
             (owned(&["basket"]), 1)
         );
         assert_eq!(
-            ids(&pool, category.priced_between(Some(5000), Some(7000))).await,
+            ids(&db, category.priced_between(Some(5000), Some(7000))).await,
             (owned(&["collar"]), 1)
         );
     }
 
     #[tokio::test]
     async fn the_facet_counts_the_listing_and_sets_its_own_filter_aside() {
-        let pool = catalog().await;
-        async fn values(pool: &SqlitePool, query: &ProductQuery) -> Vec<(String, String, i64)> {
-            published_option_values(pool, query, "Couleur")
+        let db = catalog().await;
+        async fn values(db: &Db, query: &ProductQuery) -> Vec<(String, String, i64)> {
+            published_option_values(db, query, "Couleur")
                 .await
                 .unwrap()
                 .into_iter()
@@ -1353,7 +1336,7 @@ mod sql {
         }
         let all = ProductQuery::default();
         assert_eq!(
-            values(&pool, &all).await,
+            values(&db, &all).await,
             vec![
                 ("bleu".into(), "Bleu".into(), 1),
                 ("gris".into(), "Gris".into(), 1),
@@ -1362,13 +1345,13 @@ mod sql {
         );
         // The active colour does not hide the others; the band does narrow.
         assert_eq!(
-            values(&pool, &all.clone().with_option("Couleur", "rose"))
+            values(&db, &all.clone().with_option("Couleur", "rose"))
                 .await
                 .len(),
             3
         );
         assert_eq!(
-            values(&pool, &all.clone().priced_between(Some(5000), Some(7000))).await,
+            values(&db, &all.clone().priced_between(Some(5000), Some(7000))).await,
             vec![
                 ("bleu".into(), "Bleu".into(), 1),
                 ("rose".into(), "Rose".into(), 1)
@@ -1379,13 +1362,13 @@ mod sql {
             .clone()
             .in_category("cat")
             .with_option("Couleur", "gris");
-        assert_eq!(values(&pool, &category).await.len(), 3);
+        assert_eq!(values(&db, &category).await.len(), 3);
         assert_eq!(
-            values(&pool, &all.clone().search("bask")).await,
+            values(&db, &all.clone().search("bask")).await,
             vec![("gris".into(), "Gris".into(), 1)]
         );
         assert!(
-            published_option_values(&pool, &all, "Taille")
+            published_option_values(&db, &all, "Taille")
                 .await
                 .unwrap()
                 .is_empty()

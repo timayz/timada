@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use evento::subscription::Subscription;
-use evento::{Evento, Executor as _, RemoteClient, Rw, Sidecar};
-use sqlx::SqlitePool;
+use evento::{Evento, Executor as _, RemoteClient, Sidecar};
+use timada_core::db::Db;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -72,7 +72,7 @@ impl Store {
     /// Connects to the store (failing at once when it is unreachable or
     /// refuses the key), prepares the local database (evento's tables and
     /// the library's own) and starts following the catalog into it. `db` is
-    /// [`StoreDb::open`]'s, or a single pool (a test's in-memory database).
+    /// [`StoreDb::open`]'s, or a store a test built in memory.
     pub async fn connect(config: StoreConfig, db: impl Into<StoreDb>) -> anyhow::Result<Store> {
         let db = db.into();
         let mut builder =
@@ -85,14 +85,11 @@ impl Store {
             .connect()
             .await
             .with_context(|| format!("cannot connect to the store at {}", config.addr))?;
-        // Events on the store, cursors and snapshots here, read through the
-        // read pool and written through the writer. The client carries the
-        // store's routing key, which prefixes the cursor key.
-        let local: Rw<evento::Sqlite, evento::Sqlite> =
-            (db.read().clone().into(), db.write().clone().into()).into();
-        let executor = Evento::new(Sidecar::from((client, local)));
+        // Events on the store, cursors and snapshots here. The client carries
+        // the store's routing key, which prefixes the cursor key.
+        let executor = Evento::new(Sidecar::from((client, db.store().clone())));
 
-        crate::migrate(db.write()).await?;
+        crate::migrate(db.db()).await?;
         let api = match &config.api_url {
             Some(url) => Some(crate::reviews::Api::new(
                 url,
@@ -102,7 +99,7 @@ impl Store {
             None => None,
         };
 
-        let subscription = catalog_subscription(db.write().clone())
+        let subscription = catalog_subscription(db.db().clone())
             .start(&executor)
             .await
             .context("cannot start following the catalog")?;
@@ -133,8 +130,8 @@ impl Store {
 
     /// The local database, for reading: the catalog copy, cursors and
     /// snapshots. Only the library writes to it.
-    pub fn pool(&self) -> &SqlitePool {
-        self.inner.db.read()
+    pub fn db(&self) -> &Db {
+        self.inner.db.db()
     }
 
     /// The URL prefix of the library's endpoints.
@@ -177,17 +174,18 @@ impl Store {
             .await
             .map(|answer| answer.is_ok())
             .unwrap_or(false);
-        let products: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM storefront_products WHERE status = 'published'",
-        )
-        .fetch_one(self.inner.db.read())
-        .await
-        .unwrap_or(0);
-        let last_event_at: Option<i64> =
-            sqlx::query_scalar("SELECT max(updated_at) FROM storefront_products")
-                .fetch_one(self.inner.db.read())
-                .await
-                .unwrap_or(None);
+        let db = self.inner.db.db();
+        let products: i64 = db
+            .fetch_scalar(
+                "SELECT count(*) FROM storefront_products WHERE status = 'published'",
+                (),
+            )
+            .await
+            .unwrap_or(0);
+        let last_event_at: Option<i64> = db
+            .fetch_scalar("SELECT max(updated_at) FROM storefront_products", ())
+            .await
+            .unwrap_or(None);
         StoreStatus {
             connected,
             subscription: self.inner.subscription.lock().unwrap().clone(),
@@ -247,7 +245,7 @@ async fn supervise(inner: Arc<Inner>, mut handle: Subscription, mut stop: watch:
                 _ = tokio::time::sleep(delay) => {}
             }
             delay = (delay * 2).min(MAX_RESTART_DELAY);
-            match catalog_subscription(inner.db.write().clone())
+            match catalog_subscription(inner.db.db().clone())
                 .start(&inner.executor)
                 .await
             {

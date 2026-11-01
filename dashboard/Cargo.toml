@@ -11,7 +11,6 @@ tokio.workspace = true
 topcoat = { workspace = true, features = ["ui", "icon-iconify"] }
 imagesize.workspace = true
 bytes.workspace = true
-sqlx.workspace = true
 evento.workspace = true
 timada-core = { path = "../crates/core" }
 jiff.workspace = true

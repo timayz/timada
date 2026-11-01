@@ -3,9 +3,9 @@
 //!
 //! [`Store::connect`] opens the connection to the store API with the tenant's
 //! key, keeps a local copy of the published catalog current in the app's own
-//! SQLite database ([`StoreDb::open`]: a read pool for the pages, one writer
-//! for the copy), and [`RouterBuilderStoreExt::store`] puts it in the app
-//! context. Pages then read the catalog with [`products`] and
+//! database ([`StoreDb::open`]: one Turso file, SQLite's format in a
+//! pure-Rust engine, opened for several writers at once), and
+//! [`RouterBuilderStoreExt::store`] puts it in the app context. Pages then read the catalog with [`products`] and
 //! [`require_product`] inside their own markup; the one component shipped,
 //! [`price`], renders a formatted price and nothing else: every class and
 //! attribute comes from the merchant. Every amount a person reads (a cart's
