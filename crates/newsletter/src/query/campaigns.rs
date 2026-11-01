@@ -1,6 +1,14 @@
 //! Queries over `newsletter_campaigns`, `newsletter_editions` and
 //! `newsletter_deliveries`: the campaigns page of a tenant, and what the
 //! sending still owes.
+//!
+//! Every lookup in `newsletter_deliveries` names its index (`INDEXED BY`):
+//! Turso's planner costs each column of the composite primary key as unique
+//! on its own and so takes whichever index pins `tenant_id`, then walks
+//! every delivery of the tenant once per outer row
+//! (tursodatabase/turso#8664). The primary key's index is the one SQLite
+//! names for a table's `PRIMARY KEY` constraint. Issue #336 has the plans
+//! and timings; `tests/query_plans.rs` runs them again.
 
 use timada_core::db::{Db, FromRow};
 
@@ -37,14 +45,14 @@ macro_rules! select_campaigns {
     ($tail:literal) => {
         concat!(
             "SELECT c.*,
-                (SELECT COUNT(*) FROM newsletter_deliveries d
+                (SELECT COUNT(*) FROM newsletter_deliveries d INDEXED BY newsletter_deliveries_campaign
                  WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id
                    AND d.failed = 0 AND d.skipped = 0)
                  AS delivered,
-                (SELECT COUNT(*) FROM newsletter_deliveries d
+                (SELECT COUNT(*) FROM newsletter_deliveries d INDEXED BY newsletter_deliveries_campaign
                  WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id AND d.failed = 1)
                  AS failed,
-                (SELECT COUNT(*) FROM newsletter_deliveries d
+                (SELECT COUNT(*) FROM newsletter_deliveries d INDEXED BY newsletter_deliveries_campaign
                  WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id AND d.skipped = 1)
                  AS skipped
              FROM newsletter_campaigns c ",
@@ -124,6 +132,7 @@ pub async fn undelivered_subscribers(
            AND (?3 IS NULL OR s.language = ?3)
            AND NOT EXISTS (
                SELECT 1 FROM newsletter_deliveries d
+                 INDEXED BY sqlite_autoindex_newsletter_deliveries_1
                WHERE d.tenant_id = s.tenant_id AND d.edition_id = ?2
                  AND d.subscriber_id = s.id)
          ORDER BY s.id
@@ -201,13 +210,16 @@ pub async fn editions_of_campaign(
     db.fetch_all(
         "SELECT e.*,
             (SELECT COUNT(*) FROM newsletter_deliveries d
+                INDEXED BY sqlite_autoindex_newsletter_deliveries_1
              WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id
                AND d.failed = 0 AND d.skipped = 0)
              AS delivered,
             (SELECT COUNT(*) FROM newsletter_deliveries d
+                INDEXED BY sqlite_autoindex_newsletter_deliveries_1
              WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.failed = 1)
              AS failed,
             (SELECT COUNT(*) FROM newsletter_deliveries d
+                INDEXED BY sqlite_autoindex_newsletter_deliveries_1
              WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.skipped = 1)
              AS skipped
          FROM newsletter_editions e
@@ -247,7 +259,7 @@ pub async fn edition_progress(
                 CASE WHEN d.subscriber_id IS NULL AND s.status = 'confirmed'
                      AND (?3 IS NULL OR s.language = ?3) THEN 1 ELSE 0 END AS waiting
             FROM newsletter_subscribers s
-            LEFT JOIN newsletter_deliveries d
+            LEFT JOIN newsletter_deliveries d INDEXED BY sqlite_autoindex_newsletter_deliveries_1
               ON d.tenant_id = s.tenant_id AND d.edition_id = ?2 AND d.subscriber_id = s.id
             WHERE s.tenant_id = ?1)
          GROUP BY zone
@@ -277,6 +289,7 @@ pub async fn undelivered_in_zone(
            AND COALESCE(s.time_zone, ?4) = ?5
            AND NOT EXISTS (
                SELECT 1 FROM newsletter_deliveries d
+                 INDEXED BY sqlite_autoindex_newsletter_deliveries_1
                WHERE d.tenant_id = s.tenant_id AND d.edition_id = ?2
                  AND d.subscriber_id = s.id)
          ORDER BY s.id
