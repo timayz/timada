@@ -15,6 +15,7 @@ ulid.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+tracing-subscriber.workspace = true
 
 # `#[evento::aggregate]` expands to `bitcode::` paths, so the crate must name the
 # dependency even though no source file mentions it.

@@ -7318,6 +7318,7 @@ dependencies = [
  "timada-core",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "ulid",
 ]
 
