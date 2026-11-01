@@ -3,14 +3,14 @@
 `timada-storefront` is what a merchant's own [topcoat](https://crates.io/crates/topcoat)
 app depends on to sell from its timada store. It connects to the dashboard's store API
 with the tenant's API key, keeps a local copy of the published catalog in the app's own
-SQLite database, and hands pages the data; the markup is the merchant's.
+database (one Turso file), and hands pages the data; the markup is the merchant's.
 
 ## Connecting
 
 ```rust
 use timada_storefront::{RouterBuilderStoreExt, Store, StoreConfig, StoreDb, StoreTls};
 
-let db = StoreDb::open("storefront.db", 8).await?;                 // the app's database
+let db = StoreDb::open("storefront.db").await?;                    // the app's database
 let config = StoreConfig::new("store.example.com:4321", token)
     .tls(StoreTls::from_ca_pem(Path::new("store-ca.pem"), "store.example.com")?)
     .prefix("/store");                                              // the default
@@ -48,21 +48,20 @@ store.shutdown().await;
   reviews and their photos) and signs its shoppers in, over HTTPS with the same key.
   Without it the store shows the catalog and sells nothing, shows reviews but takes
   none (`Store::takes_reviews`), and nobody signs in (`Store::signs_shoppers_in`).
-- The **local database** is opened as the dashboard opens its own: `StoreDb::open`
-  gives the pages a pool of read-only connections (the second argument: how many pages
-  read at once, since each connection runs on a thread of its own) and every write
-  (the catalog copy, the cursor, the snapshots) one connection, so writes queue
-  instead of contending for SQLite's lock while holding a connection a page waits
-  for. The copy is rebuilt from the store when lost, so the writer commits with
-  `synchronous = NORMAL`. A single `SqlitePool` converts too, for a test's in-memory
+- The **local database** is opened as the dashboard opens its own: one Turso file
+  (SQLite's format in a pure-Rust, in-process engine) opened for several writers at
+  once, so the catalog copy, the cursor and the snapshots are written in transactions
+  that run alongside the pages' reads and are run again should two writers change the
+  same rows; nothing queues behind a lock. The copy is rebuilt from the store when
+  lost. A `Turso` or a `timada_core::db::Db` converts too, for a test's in-memory
   database.
 - `Store::connect` fails at once when the store is unreachable or refuses the key. It
-  applies evento's tables and `storefront_products` to the local database (`timada_storefront::
-  migrations()` exists for hosts running their own migrator), then follows the catalog.
+  applies the library's tables to the local database (`timada_storefront::MIGRATIONS` and
+  `migrate` exist for hosts preparing it themselves), then follows the catalog.
 
 ## What lives where
 
-Events stay on the store. The app's SQLite file holds the subscription cursor (key
+Events stay on the store. The app's database file holds the subscription cursor (key
 `storefront/catalog`, prefixed by the store's region), the projection snapshots, the
 `storefront_products` rows (the gallery among them), the category tree
 (`storefront_categories` and `storefront_product_categories`) and the published reviews
@@ -556,8 +555,8 @@ open https://chatounette.localhost/
 
 All three values are on the tenant's API keys page; to sell, tick `store:checkout` on
 the key. It listens on 3457 (`PORT`) and keeps its copy of the catalog in
-`chatounette.db` (`STORE_DB`). `STORE_ADDR`, `STORE_DB_READ_CONNECTIONS` (the read
-pool, 8 by default), `HOST`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of
+`chatounette.db` (`STORE_DB`; a `-wal` and a `-log` file live next to it). `STORE_ADDR`,
+`HOST`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of
 `STORE_ADDR` by default) are the other knobs, `TRUSTED_PROXIES` (comma-separated
 addresses or CIDR networks) names the reverse proxies whose `X-Forwarded-For` gives
 the shopper's address, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the

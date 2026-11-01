@@ -7,7 +7,7 @@ connects with a key and sells from that catalog in its own markup.
 
 Everything is Rust. The web layer is [topcoat](https://crates.io/crates/topcoat)
 (server-rendered pages, `view!` components, cookie sessions); state is event-sourced
-with [evento](https://github.com/timayz/evento) over SQLite, replicated by its Accord
+with [evento](https://github.com/timayz/evento) over Turso, replicated by its Accord
 consensus executor; read models are SQL tables fed by subscriptions. One binary,
 `timada-dashboard`, hosts all of it.
 
@@ -630,7 +630,7 @@ that rendering in a sandboxed frame; the list is the `pages` read model.
 
 `timada-storefront` runs inside the merchant's app. Its executor is a `Sidecar`:
 events go through the remote client to the store API, while the subscription cursor,
-the projection snapshots and the product rows live in the app's own SQLite file. One
+the projection snapshots and the product rows live in the app's own Turso file. One
 file per replica, so replicas never fence each other out of the subscription and
 nothing accumulates on the tenant's store. Carts and orders never come through that
 executor: the library asks the dashboard's `/store/carts/*` and `/store/orders/*`

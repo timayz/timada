@@ -264,7 +264,7 @@ dir = "data/shopper-keys"
 # write_backlog = 100000
 
 [monitoring]
-log_level = "info,sqlx=warn"
+log_level = "info"
 log_json = false
 log_target = true
 log_line_number = true

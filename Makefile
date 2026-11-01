@@ -42,8 +42,8 @@ seed.chatounette:
 		--pages examples/chatounette/pages --env-file data/seed.chatounette.env
 
 # Keeps the platform as `make seed.chatounette` left it in DEV_SNAPSHOT (the
-# server stopped): the store, the read models, the pictures and the shopper
-# keys, with the Chatounette clone's database (best once its catalogue is in)
+# server stopped): the database, the pictures and the shopper keys, with the
+# Chatounette clone's database (best once its catalogue is in)
 # and the settings the seed printed. Restore brings it all back in seconds,
 # replacing what is there: stop the server and Chatounette first. Then
 # `make chatounette` with the settings restore prints.

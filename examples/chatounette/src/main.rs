@@ -12,9 +12,7 @@
 //!   in front of several (a load balancer, a geo-routed name), looked up again
 //!   on every reconnect
 //! - `STORE_TOKEN` — the API key's token, from the tenant's API keys page
-//! - `STORE_DB` — the local SQLite file (`chatounette.db`)
-//! - `STORE_DB_READ_CONNECTIONS` — how many pages read the local file at once
-//!   (8)
+//! - `STORE_DB` — the local database file (`chatounette.db`)
 //! - `STORE_TLS_CA` — TLS to the store (optional), checked against
 //!   `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by default)
 //! - `STORE_MEDIA_URL` — where the product pictures are loaded from, as the
@@ -83,17 +81,11 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let read_connections: u32 = env_or(
-        "STORE_DB_READ_CONNECTIONS",
-        &timada_storefront::DEFAULT_READ_CONNECTIONS.to_string(),
-    )
-    .parse()
-    .context("STORE_DB_READ_CONNECTIONS is not a number")?;
-    let db = StoreDb::open(env_or("STORE_DB", "chatounette.db"), read_connections)
+    let db = StoreDb::open(env_or("STORE_DB", "chatounette.db"))
         .await
         .context("cannot open the local database")?;
     if std::env::args().nth(1).as_deref() == Some("migrate") {
-        timada_storefront::migrate(db.write()).await?;
+        timada_storefront::migrate(db.db()).await?;
         tracing::info!("local database ready");
         return Ok(());
     }
