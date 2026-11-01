@@ -43,7 +43,7 @@ use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
 use crate::components::card::CARD;
 use crate::config::Config;
-use crate::db::{ReadPool, WritePool};
+use crate::db::{Db, ReadPool, WritePool};
 use crate::key_vault::{self, KeyVault};
 use crate::mail::Mailer;
 use crate::media::{MEDIA_ROUTE, Media, MediaCache, PEER_ROUTE};
@@ -65,6 +65,8 @@ pub struct WebhookSealing(pub Option<crate::seal::WebhookKeys>);
 /// Everything the pages reach through the app context.
 pub struct Services {
     pub executor: Executor,
+    /// The read models in the store's database.
+    pub db: Db,
     pub read_pool: ReadPool,
     pub write_pool: WritePool,
     pub providers: Providers,
@@ -95,6 +97,7 @@ pub struct Services {
 pub fn router(services: Services) -> Router {
     let Services {
         executor,
+        db,
         read_pool,
         write_pool,
         providers,
@@ -150,6 +153,7 @@ pub fn router(services: Services) -> Router {
         // Encrypts the in-flight sign-in cookies (`private_cookies`).
         .app_context(Key::derive_from(config.auth.secret_key.as_bytes()))
         .app_context(executor)
+        .app_context(db)
         .app_context(read_pool)
         .app_context(write_pool)
         .app_context(providers)
@@ -194,7 +198,9 @@ struct HomeQuery {
 pub async fn home(cx: &Cx) -> Result<impl View> {
     let user = crate::auth::require_user(cx).await?;
     let query = query_params::<HomeQuery>(cx)?;
-    let mine = tenants_of_user(app_context::<ReadPool>(cx), &user.id).await?;
+    let mine = tenants_of_user(app_context::<Db>(cx), &user.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let tenants_line = match mine.len() {
         0 => "You do not belong to any tenant yet.".to_owned(),
         1 => "You belong to one tenant.".to_owned(),

@@ -67,6 +67,8 @@ struct Harness {
     platform: Command<cluster::Executor>,
     /// The store's file, read directly for what the node recorded in it.
     store: db::Store,
+    /// The read models in the store's database.
+    db: db::Db,
     pool: SqlitePool,
     dir: PathBuf,
     connections: Arc<StoreConnections>,
@@ -109,9 +111,6 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         let mut conn = pool.acquire().await.unwrap();
         let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
         migrator
-            .add_migrations(timada_tenancy::migrations())
-            .unwrap();
-        migrator
             .add_migrations(timada_catalog::migrations())
             .unwrap();
         migrator
@@ -129,6 +128,8 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
     };
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    db::migrate_store_read_models(&store).await.unwrap();
+    let store_db = db::Db::from(store.clone());
     let (cluster, platform) = Cluster::open(None, None, &files, store.clone())
         .await
         .unwrap();
@@ -160,6 +161,7 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         cluster,
         platform: Command(platform),
         store,
+        db: store_db,
         pool,
         dir,
         connections,
@@ -178,7 +180,7 @@ impl Harness {
             })
             .await
             .unwrap();
-        read_model_subscription::<cluster::Executor>(self.pool.clone())
+        read_model_subscription::<cluster::Executor>(self.db.clone())
             .run_once(&self.platform.0)
             .await
             .unwrap();

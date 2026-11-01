@@ -15,4 +15,9 @@ jiff.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 deunicode.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 ulid.workspace = true
+
+[dev-dependencies]

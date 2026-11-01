@@ -16,7 +16,7 @@ use crate::app::t::slug::{require_tenant, role_label};
 use crate::app::tenants::{error_code, tenancy};
 use crate::auth::{now, require_user};
 use crate::config::Config;
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::mail::send_invitation;
 
 #[derive(Deserialize)]
@@ -36,12 +36,13 @@ pub async fn invite(cx: &Cx, Form(form): Form<InviteForm>) -> Result<SeeOther> {
     let slug = access.tenant.slug.as_str();
     let limits = &app_context::<Config>(cx).invitations;
     let sent_recently = invitations_sent_since(
-        app_context::<ReadPool>(cx),
+        app_context::<Db>(cx),
         &access.tenant.id,
         &access.user_id,
         now().saturating_sub(limits.window_secs),
     )
-    .await?;
+    .await
+    .map_err(topcoat::Error::from_anyhow)?;
     if !limits.allows(&sent_recently) {
         tracing::info!(
             tenant = %access.tenant.id,

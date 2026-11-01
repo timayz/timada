@@ -7363,7 +7363,10 @@ dependencies = [
  "hmac 0.12.1",
  "jiff",
  "rand 0.9.5",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
+ "tokio",
  "ulid",
 ]
 
@@ -7451,8 +7454,6 @@ dependencies = [
  "argon2",
  "bitcode",
  "evento",
- "sqlx",
- "sqlx_migrator",
  "thiserror 2.0.21",
  "timada-core",
  "tokio",
@@ -7659,8 +7660,6 @@ dependencies = [
  "minijinja",
  "rand 0.9.5",
  "serde",
- "sqlx",
- "sqlx_migrator",
  "thiserror 2.0.21",
  "timada-core",
  "tokio",

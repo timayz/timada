@@ -19,7 +19,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{Shell, document, empty_state, format_time, page_header, section_card};
 
 const PAGE_SIZE: i64 = 50;
@@ -46,12 +46,13 @@ pub async fn history(cx: &Cx) -> Result<impl View> {
     let tenant = access.tenant;
     // One more than shown tells whether an older page exists.
     let mut rows = member_audit_of_tenant(
-        app_context::<ReadPool>(cx),
+        app_context::<Db>(cx),
         &tenant.id,
         query.before,
         PAGE_SIZE + 1,
     )
-    .await?;
+    .await
+    .map_err(topcoat::Error::from_anyhow)?;
     let older = (rows.len() as i64 > PAGE_SIZE).then(|| {
         rows.truncate(PAGE_SIZE as usize);
         href!(history, Slug(tenant.slug.clone()))

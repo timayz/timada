@@ -1,6 +1,7 @@
 //! Queries over `tenancy_companies`, for the companies pages.
 
-use sqlx::{FromRow, SqlitePool};
+use anyhow::Result;
+use timada_core::db::{Db, FromRow};
 
 /// One row of `tenancy_companies`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -23,40 +24,32 @@ pub struct CompanyTenantRow {
 }
 
 /// The companies a user owns, by name.
-pub async fn companies_of_user(pool: &SqlitePool, user_id: &str) -> sqlx::Result<Vec<CompanyRow>> {
-    sqlx::query_as(
-        "SELECT c.* FROM tenancy_companies c
+pub async fn companies_of_user(db: &Db, user_id: &str) -> Result<Vec<CompanyRow>> {
+    db.fetch_all(
+        "SELECT c.id, c.siren, c.legal_name, c.created_at FROM tenancy_companies c
          JOIN tenancy_company_owners o ON o.company_id = c.id
          WHERE o.user_id = ?1 ORDER BY c.legal_name COLLATE NOCASE",
+        (user_id,),
     )
-    .bind(user_id)
-    .fetch_all(pool)
     .await
 }
 
 /// The tenants selling as a company, by name.
-pub async fn tenants_of_company(
-    pool: &SqlitePool,
-    company_id: &str,
-) -> sqlx::Result<Vec<CompanyTenantRow>> {
-    sqlx::query_as(
+pub async fn tenants_of_company(db: &Db, company_id: &str) -> Result<Vec<CompanyTenantRow>> {
+    db.fetch_all(
         "SELECT id, slug, name, COALESCE(series_code, '') AS series_code FROM tenancy_tenants
          WHERE company_id = ?1 ORDER BY name COLLATE NOCASE",
+        (company_id,),
     )
-    .bind(company_id)
-    .fetch_all(pool)
     .await
 }
 
 /// Every company, newest first, for the platform administrators.
-pub async fn all_companies(
-    pool: &SqlitePool,
-    offset: i64,
-    limit: i64,
-) -> sqlx::Result<Vec<CompanyRow>> {
-    sqlx::query_as("SELECT * FROM tenancy_companies ORDER BY created_at DESC LIMIT ?1 OFFSET ?2")
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await
+pub async fn all_companies(db: &Db, offset: i64, limit: i64) -> Result<Vec<CompanyRow>> {
+    db.fetch_all(
+        "SELECT id, siren, legal_name, created_at FROM tenancy_companies
+         ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
+        (limit, offset),
+    )
+    .await
 }

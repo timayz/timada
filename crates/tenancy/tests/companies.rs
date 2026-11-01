@@ -186,7 +186,7 @@ async fn tenants_link_with_a_series_code_of_their_own() {
         .await
         .unwrap();
 
-    timada_tenancy::read_model_subscription::<evento::Sqlite>(pool.clone())
+    timada_tenancy::read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(&cmd.0)
         .await
         .unwrap();

@@ -1,34 +1,22 @@
 #![allow(dead_code)]
 
-use evento::migrator::Migrate;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
+use timada_core::db::Db;
 use timada_tenancy::{Command, CreateTenant, TenantState};
 
-/// A fresh in-memory event store with the read-model schema applied.
-pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
-    let options = SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
+/// A fresh in-memory event store with the read-model schema applied, and
+/// the read-model database in it.
+pub async fn executor_with_pool() -> (evento::Turso, Db) {
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let mut conn = store.connect().unwrap();
+    timada_tenancy::MIGRATIONS
+        .to_latest(&mut conn)
         .await
+        .map_err(|(_, err)| err)
         .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .add_migrations(timada_tenancy::migrations())
-        .unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
-    (pool.clone().into(), pool)
+    (store.clone(), Db::from(store))
 }
 
-pub async fn command() -> Command<evento::Sqlite> {
+pub async fn command() -> Command<evento::Turso> {
     Command(executor_with_pool().await.0)
 }
 
@@ -39,7 +27,7 @@ pub fn create(name: &str, owner: &str) -> CreateTenant {
     }
 }
 
-pub async fn create_tenant(cmd: &Command<evento::Sqlite>, name: &str, owner: &str) -> TenantState {
+pub async fn create_tenant(cmd: &Command<evento::Turso>, name: &str, owner: &str) -> TenantState {
     cmd.create_tenant(create(name, owner)).await.unwrap()
 }
 
@@ -48,7 +36,7 @@ pub fn new_id() -> String {
 }
 
 /// The gateway and the read-model database behind it.
-pub async fn command_with_pool() -> (Command<evento::Sqlite>, sqlx::SqlitePool) {
+pub async fn command_with_pool() -> (Command<evento::Turso>, Db) {
     let (executor, pool) = executor_with_pool().await;
     (Command(executor), pool)
 }

@@ -1,7 +1,8 @@
 //! Queries over the read models, for the administration pages and the
 //! sessions list of the account page.
 
-use sqlx::{FromRow, SqlitePool};
+use anyhow::Result;
+use timada_core::db::{Db, FromRow, params_from_iter, placeholders};
 
 /// One row of `identity_users`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -43,23 +44,17 @@ impl SessionRow {
     }
 }
 
+use timada_core::db::fts_query as phrase;
 use timada_core::like_contains as contains;
 
-/// The full-text phrase matching `q` anywhere in a word, when `q` is long
-/// enough for the index (it is cut in runs of three characters); `None`
-/// otherwise, and the search falls back to [`contains`].
-fn phrase(q: &str) -> Option<String> {
-    (q.chars().count() >= 3).then(|| format!("\"{}\"", q.replace('"', "\"\"")))
-}
-
 /// Where the users come from, `?1` being what was searched for. With a phrase
-/// the full-text index leads (`CROSS JOIN` keeps the planner from walking
-/// every user in order instead); without one `?1` is a `LIKE` pattern or
-/// `NULL`.
+/// the full-text index narrows the rows first; without one `?1` is a `LIKE`
+/// pattern or `NULL`.
 macro_rules! users_from {
     (phrase) => {
-        "FROM identity_users_fts f CROSS JOIN identity_users u ON u.rowid = f.rowid
-         WHERE identity_users_fts MATCH ?1 "
+        "FROM identity_users u
+         WHERE u.id IN (SELECT id FROM identity_users
+                        WHERE fts_match(account_search, label_search, ?1)) "
     };
     (pattern) => {
         "FROM identity_users u
@@ -89,32 +84,22 @@ fn search_of(q: Option<&str>) -> (Option<String>, bool) {
 
 /// Users whose account or name contains `q` (everyone when `None`),
 /// deleted ones last, then by name.
-pub async fn list_users(
-    pool: &SqlitePool,
-    q: Option<&str>,
-    offset: i64,
-    limit: i64,
-) -> sqlx::Result<Vec<UserRow>> {
+pub async fn list_users(db: &Db, q: Option<&str>, offset: i64, limit: i64) -> Result<Vec<UserRow>> {
     let (search, indexed) = search_of(q);
     let statement = if indexed {
         users_page!(phrase)
     } else {
         users_page!(pattern)
     };
-    sqlx::query_as(statement)
-        .bind(search)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await
+    db.fetch_all(statement, (search, limit, offset)).await
 }
 
 /// How many users [`list_users`] would list: with no search, the total the
 /// subscription keeps; with one, the matches counted.
-pub async fn count_users(pool: &SqlitePool, q: Option<&str>) -> sqlx::Result<i64> {
+pub async fn count_users(db: &Db, q: Option<&str>) -> Result<i64> {
     if q.is_none() {
-        return sqlx::query_scalar("SELECT users FROM identity_totals WHERE id = 1")
-            .fetch_one(pool)
+        return db
+            .fetch_scalar("SELECT users FROM identity_totals WHERE id = 1", ())
             .await;
     }
     let (search, indexed) = search_of(q);
@@ -123,59 +108,46 @@ pub async fn count_users(pool: &SqlitePool, q: Option<&str>) -> sqlx::Result<i64
     } else {
         concat!("SELECT COUNT(*) ", users_from!(pattern))
     };
-    sqlx::query_scalar(statement)
-        .bind(search)
-        .fetch_one(pool)
-        .await
+    db.fetch_scalar(statement, (search,)).await
 }
 
 /// The rows of the given users, in no particular order; unknown ids are
 /// skipped. For pages that show other contexts' user ids by name.
-pub async fn users_by_ids(pool: &SqlitePool, ids: &[String]) -> sqlx::Result<Vec<UserRow>> {
+pub async fn users_by_ids(db: &Db, ids: &[String]) -> Result<Vec<UserRow>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut query = sqlx::QueryBuilder::new(
+    let statement = format!(
         "SELECT id, account, label, is_admin, deleted, registered_at, last_sign_in_at,
             sign_in_count, oauth2_count, passkey_count, email, has_password
-         FROM identity_users WHERE id IN (",
+         FROM identity_users WHERE id IN ({})",
+        placeholders(ids.len())
     );
-    let mut separated = query.separated(", ");
-    for id in ids {
-        separated.push_bind(id);
-    }
-    separated.push_unseparated(")");
-    query.build_query_as().fetch_all(pool).await
+    db.fetch_all(&statement, params_from_iter(ids.iter().cloned()))
+        .await
 }
 
 /// Every known session of a user, newest first.
-pub async fn user_sessions(pool: &SqlitePool, user_id: &str) -> sqlx::Result<Vec<SessionRow>> {
-    sqlx::query_as(
+pub async fn user_sessions(db: &Db, user_id: &str) -> Result<Vec<SessionRow>> {
+    db.fetch_all(
         "SELECT id, user_id, started_at, expires_at, ended, user_agent, ip
          FROM identity_sessions WHERE user_id = ?1
          ORDER BY started_at DESC, id",
+        (user_id,),
     )
-    .bind(user_id)
-    .fetch_all(pool)
     .await
 }
 
 /// The sessions of a user that still authenticate at `now` (unix seconds),
 /// newest first.
-pub async fn active_sessions(
-    pool: &SqlitePool,
-    user_id: &str,
-    now: i64,
-) -> sqlx::Result<Vec<SessionRow>> {
-    sqlx::query_as(
+pub async fn active_sessions(db: &Db, user_id: &str, now: i64) -> Result<Vec<SessionRow>> {
+    db.fetch_all(
         "SELECT id, user_id, started_at, expires_at, ended, user_agent, ip
          FROM identity_sessions
          WHERE user_id = ?1 AND ended = 0 AND expires_at > ?2
          ORDER BY started_at DESC, id",
+        (user_id, now),
     )
-    .bind(user_id)
-    .bind(now)
-    .fetch_all(pool)
     .await
 }
 

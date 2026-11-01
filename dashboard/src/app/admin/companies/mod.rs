@@ -17,7 +17,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{Shell, document, empty_row, format_time, notice, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -34,7 +34,9 @@ pub fn admin_companies_url(cx: &Cx, error: Option<&str>, message: Option<&str>) 
 pub async fn index(cx: &Cx) -> Result<impl View> {
     require_admin(cx).await?;
     let query = query_params::<CompaniesQuery>(cx)?;
-    let rows = all_companies(app_context::<ReadPool>(cx), 0, 200).await?;
+    let rows = all_companies(app_context::<Db>(cx), 0, 200)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     Ok(view! {
         document(
             title: "Companies · Administration",

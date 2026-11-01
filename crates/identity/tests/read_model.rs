@@ -1,13 +1,15 @@
 mod common;
 
+use timada_core::db::Db;
+
 use common::*;
 use timada_identity::{
     Command, OAuth2Mode, active_sessions, count_users, list_users, read_model_subscription,
     user_sessions,
 };
 
-async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    read_model_subscription::<evento::Sqlite>(pool.clone())
+async fn catch_up(executor: &evento::Turso, pool: &Db) {
+    read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
@@ -84,7 +86,7 @@ async fn users_and_sessions_are_listed_and_stay_idempotent() {
     );
 
     // Replaying the whole stream changes nothing.
-    read_model_subscription::<evento::Sqlite>(pool.clone())
+    read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(&executor)
         .await
         .unwrap();

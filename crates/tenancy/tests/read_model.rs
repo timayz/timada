@@ -1,5 +1,7 @@
 mod common;
 
+use timada_core::db::Db;
+
 use common::*;
 use timada_tenancy::{
     AcceptInvitation, Command, InviteMember, SentCounts, count_open_invitations_of_tenant,
@@ -7,8 +9,8 @@ use timada_tenancy::{
     open_invitations_of_tenant, read_model_subscription, tenants_of_user,
 };
 
-async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    read_model_subscription::<evento::Sqlite>(pool.clone())
+async fn catch_up(executor: &evento::Turso, pool: &Db) {
+    read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
@@ -66,7 +68,7 @@ async fn tenants_and_members_are_listed_and_stay_idempotent() {
     assert!(tenants_of_user(&pool, "nobody").await.unwrap().is_empty());
 
     // Delivering everything again changes nothing.
-    read_model_subscription::<evento::Sqlite>(pool.clone())
+    read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(&executor)
         .await
         .unwrap();
@@ -177,7 +179,7 @@ async fn invitations_sent_are_counted_by_tenant_and_by_account() {
     let beta = create_tenant(&cmd, "Beta", &alice).await;
     let zeta = create_tenant(&cmd, "Zeta", &bob).await;
     async fn invite(
-        cmd: &Command<evento::Sqlite>,
+        cmd: &Command<evento::Turso>,
         by: &str,
         tenant_id: &str,
         email: &str,

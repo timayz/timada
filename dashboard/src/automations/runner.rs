@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
+
+use crate::db::Db;
 use timada_automations::{
     AUTOMATION_ACTOR, ListenerState, RUN_HISTORY_SECS, RunState, Step, Transition,
     catalog::{self, CodeValue, DISCOUNT, EMAIL, NOTIFY, Subject, WEBHOOK},
@@ -87,6 +89,8 @@ pub struct Runner<E = Executor> {
     read_pool: SqlitePool,
     /// The read-model database, writable: ended runs leave the list.
     write_pool: SqlitePool,
+    /// The read models in the store's database: the members to tell.
+    db: Db,
     /// The store, every tenant's.
     store: E,
     mail: Arc<AppContext>,
@@ -116,6 +120,7 @@ impl<E: Store> Runner<E> {
     pub fn new(
         read_pool: SqlitePool,
         write_pool: SqlitePool,
+        db: Db,
         store: E,
         mail: Arc<AppContext>,
         base_url: String,
@@ -137,6 +142,7 @@ impl<E: Store> Runner<E> {
         Ok(Arc::new(Self {
             read_pool,
             write_pool,
+            db,
             store,
             mail,
             base_url,
@@ -420,7 +426,7 @@ impl<E: Store> Runner<E> {
             .filter(|user_id| tenant.can(user_id, permission))
             .cloned()
             .collect();
-        let recipients = mailboxes(timada_identity::users_by_ids(&self.read_pool, &ids).await?);
+        let recipients = mailboxes(timada_identity::users_by_ids(&self.db, &ids).await?);
         if recipients.is_empty() {
             return Ok(Acted::Skipped("No member to tell.".into()));
         }
@@ -933,7 +939,10 @@ mod tests {
 
     /// One in-memory database holding the store and the read models, the
     /// store wrapped as the cluster's is.
-    async fn store() -> (Evento, SqlitePool) {
+    async fn store() -> (Evento, SqlitePool, Db) {
+        let turso = evento::Turso::in_memory_concurrent().await.unwrap();
+        crate::db::migrate_store_read_models(&turso).await.unwrap();
+        let db = Db::from(turso.clone());
         let options = SqliteConnectOptions::new()
             .filename(":memory:")
             .create_if_missing(true);
@@ -943,10 +952,7 @@ mod tests {
             .await
             .unwrap();
         let mut conn = pool.acquire().await.unwrap();
-        let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-        migrator
-            .add_migrations(timada_identity::migrations())
-            .unwrap();
+        let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
         migrator
             .add_migrations(timada_orders::migrations())
             .unwrap();
@@ -961,8 +967,7 @@ mod tests {
             .await
             .unwrap();
         drop(conn);
-        let sqlite: evento::Sqlite = pool.clone().into();
-        (Evento::new(sqlite), pool)
+        (Evento::new(turso), pool, db)
     }
 
     /// The trigger subscription, caught up: the listeners, then the runs
@@ -1009,10 +1014,16 @@ mod tests {
             .unwrap();
     }
 
-    fn runner(store: &Evento, pool: &SqlitePool, keys: &Arc<MemoryKeys>) -> Arc<Runner<Evento>> {
+    fn runner(
+        store: &Evento,
+        pool: &SqlitePool,
+        db: &Db,
+        keys: &Arc<MemoryKeys>,
+    ) -> Arc<Runner<Evento>> {
         Runner::new(
             pool.clone(),
             pool.clone(),
+            db.clone(),
             store.clone(),
             Arc::new(AppContext::new()),
             "https://dashboard.example".into(),
@@ -1104,7 +1115,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_event_starts_one_run_that_goes_through_its_steps() {
-        let (store, pool) = store().await;
+        let (store, pool, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         publish(&store, &welcome()).await;
         follow(&store, &pool).await;
@@ -1117,7 +1128,7 @@ mod tests {
         assert_eq!(due.len(), 1);
 
         let run_id = &due[0].1;
-        runner(&store, &pool, &keys)
+        runner(&store, &pool, &db, &keys)
             .advance(&shop(), run_id, crate::auth::now())
             .await
             .unwrap();
@@ -1138,7 +1149,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_event_before_the_publication_starts_nothing() {
-        let (store, pool) = store().await;
+        let (store, pool, _db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         subscribe(&store, &keys, "ada@example.com").await;
         publish(&store, &welcome()).await;
@@ -1148,7 +1159,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_paused_scenario_holds_its_runs_until_resumed() {
-        let (store, pool) = store().await;
+        let (store, pool, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         let id = publish(&store, &welcome()).await;
         follow(&store, &pool).await;
@@ -1159,7 +1170,7 @@ mod tests {
         follow(&store, &pool).await;
 
         let run = the_run(&store, &pool).await.unwrap();
-        let runner = runner(&store, &pool, &keys);
+        let runner = runner(&store, &pool, &db, &keys);
         runner
             .advance(&shop(), &run.id, crate::auth::now())
             .await
@@ -1180,7 +1191,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_wait_holds_the_run_until_its_time() {
-        let (store, pool) = store().await;
+        let (store, pool, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         let mut definition = Definition::default();
         definition.set_trigger(SUBSCRIBER_CONFIRMED).unwrap();
@@ -1200,7 +1211,7 @@ mod tests {
         follow(&store, &pool).await;
 
         let run = the_run(&store, &pool).await.unwrap();
-        let runner = runner(&store, &pool, &keys);
+        let runner = runner(&store, &pool, &db, &keys);
         let automations = Command::new(store.clone(), TENANT);
         let now = crate::auth::now();
         runner.advance(&shop(), &run.id, now).await.unwrap();
@@ -1289,7 +1300,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_checkout_left_unpaid_starts_a_run_once_its_delay_is_over() {
-        let (store, pool) = store().await;
+        let (store, pool, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         let mut definition = Definition::default();
         definition
@@ -1306,7 +1317,7 @@ mod tests {
         let cart = checkout_left(&store).await;
         follow(&store, &pool).await;
 
-        let runner = runner(&store, &pool, &keys);
+        let runner = runner(&store, &pool, &db, &keys);
         let now = crate::auth::now();
         // Within the hour: not left yet.
         runner.sweep(now).await.unwrap();

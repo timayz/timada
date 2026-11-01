@@ -110,9 +110,10 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         config.cluster.as_ref(),
         config.server.region.as_deref(),
         &files,
-        store,
+        store.clone(),
     )
     .await?;
+    let store_db = db::Db::from(store);
     let write_pool = db::create_write_pool(&config.database.read_models).await?;
     let read_pool = db::create_read_pool(
         &config.database.read_models,
@@ -189,7 +190,7 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         }
     };
     // So the back office lists it right away.
-    timada_tenancy::read_model_subscription::<Executor>(write_pool.clone())
+    timada_tenancy::read_model_subscription::<Executor>(store_db.clone())
         .run_once(&platform)
         .await?;
 

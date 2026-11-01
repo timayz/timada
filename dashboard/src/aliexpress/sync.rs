@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
+
+use crate::db::Db;
 use timada_aliexpress::{ForwardRow, LinkRow, forwards_due, links_due};
 use tokio::task::JoinHandle;
 
@@ -29,15 +31,23 @@ const PACE: Duration = Duration::from_millis(200);
 
 pub struct AliexpressSync {
     read_pool: SqlitePool,
+    /// The read models in the store's database (the companies' access).
+    db: Db,
     /// The store, every tenant's.
     store: Executor,
     aliexpress: Arc<Aliexpress>,
 }
 
 impl AliexpressSync {
-    pub fn new(read_pool: SqlitePool, store: Executor, aliexpress: Arc<Aliexpress>) -> Arc<Self> {
+    pub fn new(
+        read_pool: SqlitePool,
+        db: Db,
+        store: Executor,
+        aliexpress: Arc<Aliexpress>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             read_pool,
+            db,
             store,
             aliexpress,
         })
@@ -135,13 +145,9 @@ impl AliexpressSync {
     /// may lag), and one node per token renews it.
     async fn renew_due(&self, now: u64) -> anyhow::Result<()> {
         let before = now.saturating_add(timada_aliexpress::REFRESH_MARGIN_SECS) as i64;
-        let due = timada_tenancy::aliexpress_accounts_due(
-            &self.read_pool,
-            before,
-            now as i64,
-            SWEEP_LIMIT,
-        )
-        .await?;
+        let due =
+            timada_tenancy::aliexpress_accounts_due(&self.db, before, now as i64, SWEEP_LIMIT)
+                .await?;
         for company_id in &due {
             if let Err(err) = self.renew_company(company_id, now).await {
                 tracing::error!(company = %company_id, error = %err, "AliExpress access not renewed");
