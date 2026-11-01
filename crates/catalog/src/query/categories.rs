@@ -274,15 +274,27 @@ pub async fn refresh_category_counts(conn: &Connection, tenant_id: &str) -> Resu
         (tenant_id,),
     )
     .await?;
-    let memberships: Vec<(String, String)> = fetch_all(
+    // Two scans joined here rather than one SQL join: Turso answers that
+    // join by walking every product of the tenant once per link, which
+    // made a recount of a 1 300-product shop take seconds.
+    let archived: std::collections::HashSet<String> = fetch_all::<(String,)>(
         conn,
-        "SELECT pc.category_id, pc.product_id
-         FROM catalog_product_categories pc
-         JOIN catalog_products p ON p.tenant_id = pc.tenant_id AND p.id = pc.product_id
-         WHERE pc.tenant_id = ?1 AND p.status <> 'archived'",
+        "SELECT id FROM catalog_products WHERE tenant_id = ?1 AND status = 'archived'",
         (tenant_id,),
     )
-    .await?;
+    .await?
+    .into_iter()
+    .map(|(id,)| id)
+    .collect();
+    let memberships: Vec<(String, String)> = fetch_all::<(String, String)>(
+        conn,
+        "SELECT category_id, product_id FROM catalog_product_categories WHERE tenant_id = ?1",
+        (tenant_id,),
+    )
+    .await?
+    .into_iter()
+    .filter(|(_, product_id)| !archived.contains(product_id))
+    .collect();
     for (id, counts) in category_counts(links, &memberships) {
         execute(
             conn,
