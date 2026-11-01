@@ -266,14 +266,31 @@ pub fn category_counts(
 }
 
 /// Works out and stores the counts of every category of a tenant, inside the
-/// transaction that changed what they count.
+/// transaction that changed what they count. Only a category whose counts
+/// moved is written: a product's write runs this, and a statement costs
+/// about as much whether it changes a row or not.
 pub async fn refresh_category_counts(conn: &Connection, tenant_id: &str) -> Result<()> {
-    let links: Vec<CategoryLink> = fetch_all(
+    let rows: Vec<(String, Option<String>, bool, i64, i64)> = fetch_all(
         conn,
-        "SELECT id, parent_id, archived FROM catalog_categories WHERE tenant_id = ?1",
+        "SELECT id, parent_id, archived, product_count, subtree_count
+         FROM catalog_categories WHERE tenant_id = ?1",
         (tenant_id,),
     )
     .await?;
+    let stored: std::collections::HashMap<&str, (i64, i64)> = rows
+        .iter()
+        .map(|(id, _, _, product_count, subtree_count)| {
+            (id.as_str(), (*product_count, *subtree_count))
+        })
+        .collect();
+    let links: Vec<CategoryLink> = rows
+        .iter()
+        .map(|(id, parent_id, archived, _, _)| CategoryLink {
+            id: id.clone(),
+            parent_id: parent_id.clone(),
+            archived: *archived,
+        })
+        .collect();
     // Two scans joined here rather than one SQL join: Turso answers that
     // join by walking every product of the tenant once per link, which
     // made a recount of a 1 300-product shop take seconds.
@@ -296,11 +313,13 @@ pub async fn refresh_category_counts(conn: &Connection, tenant_id: &str) -> Resu
     .filter(|(_, product_id)| !archived.contains(product_id))
     .collect();
     for (id, counts) in category_counts(links, &memberships) {
+        if stored.get(id.as_str()) == Some(&(counts.product_count, counts.subtree_count)) {
+            continue;
+        }
         execute(
             conn,
             "UPDATE catalog_categories SET product_count = ?3, subtree_count = ?4
-             WHERE tenant_id = ?1 AND id = ?2
-               AND (product_count <> ?3 OR subtree_count <> ?4)",
+             WHERE tenant_id = ?1 AND id = ?2",
             (
                 tenant_id,
                 id.as_str(),
