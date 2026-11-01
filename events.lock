@@ -83,11 +83,15 @@ event timada-catalog/ProductSlug::Claimed { product_id: String }
 event timada-catalog/ProductSlug::Released unit
 event timada-catalog/StockItem::Consumed { cart_id: String, order_id: String, quantity: u32, consumed_by: String }
 event timada-catalog/StockItem::OnHandSet { on_hand: u32, set_by: String }
+event timada-catalog/StockItem::Opened { product_id: String, variant_id: Option<String>, tracked: bool, on_hand: u32, holds: Vec<CarriedHold>, recent: Vec<CarriedTake>, opened_by: String }
 event timada-catalog/StockItem::Released { cart_id: String, released_by: String }
 event timada-catalog/StockItem::Reserved { cart_id: String, quantity: u32, expires_at: u64, reserved_by: String }
 event timada-catalog/StockItem::Restored { order_id: String, quantity: u32, restored_by: String }
 event timada-catalog/StockItem::Tracked { product_id: String, variant_id: Option<String>, on_hand: u32, tracked_by: String }
 event timada-catalog/StockItem::Untracked { untracked_by: String }
+event timada-catalog/StockPointer::Rolled { generation: u32, rolled_by: String }
+event timada-catalog/StockTake::Restored { restored_by: String }
+event timada-catalog/StockTake::Taken { cart_id: String, lines: Vec<TakenLine>, taken_by: String }
 event timada-discounts/Discount::Archived { archived_by: String }
 event timada-discounts/Discount::Created { code: String, percent_bps: Option<u32>, amount_cents: Option<u64>, currency: Option<String>, starts_at: Option<u64>, ends_at: Option<u64>, max_uses: Option<u32>, once_per_email: bool, created_by: String }
 event timada-discounts/Discount::Deactivated { deactivated_by: String }
@@ -98,8 +102,10 @@ event timada-discounts/DiscountBuyer::Reserved { cart_id: String, expires_at: u6
 event timada-discounts/DiscountCode::Claimed { discount_id: String }
 event timada-discounts/DiscountCode::Released unit
 event timada-discounts/DiscountUsage::Consumed { cart_id: String, order_id: String, consumed_by: String }
+event timada-discounts/DiscountUsage::Opened { reserved: Vec<CarriedReservation>, consumed_count: u32, recent: Vec<CarriedUse>, opened_by: String }
 event timada-discounts/DiscountUsage::Released { cart_id: String, released_by: String }
 event timada-discounts/DiscountUsage::Reserved { cart_id: String, expires_at: u64, reserved_by: String }
+event timada-discounts/DiscountUsagePointer::Rolled { generation: u32, rolled_by: String }
 event timada-discounts/Offers::OfferArchived { offer_id: String, archived_by: String }
 event timada-discounts/Offers::OfferCreated { offer_id: String, product_id: String, variant_id: Option<String>, price_cents: u64, currency: String, title: Option<String>, requires_product_id: Option<String>, min_subtotal_cents: Option<u64>, starts_at: Option<u64>, ends_at: Option<u64>, created_by: String }
 event timada-discounts/Offers::OfferDeactivated { offer_id: String, deactivated_by: String }
@@ -292,7 +298,12 @@ event timada-tenancy/TenantSlug::Released unit
 type timada_aliexpress::aggregator::NewSku { sku_id: String, selections: Vec<(String, String)>, cost_cents: u64, available: u32, image: Option<String> }
 type timada_aliexpress::aggregator::SkuLink { sku_id: String, variant_id: Option<String>, cost_cents: u64, available: u32 }
 type timada_aliexpress::aggregator::forward::ForwardItem { ae_product_id: String, sku_id: String, quantity: u32, service_name: String }
+type timada_catalog::value_object::CarriedHold { cart_id: String, quantity: u32, expires_at: u64 }
+type timada_catalog::value_object::CarriedTake { order_id: String, cart_id: Option<String>, restored: bool }
 type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
+type timada_catalog::value_object::TakenLine { product_id: String, variant_id: Option<String>, quantity: u32 }
+type timada_discounts::value_object::CarriedReservation { cart_id: String, expires_at: u64 }
+type timada_discounts::value_object::CarriedUse { cart_id: String, order_id: String }
 type timada_identity::value_object::ChallengePurpose enum { Register, SignIn, ResetPassword }
 type timada_identity::value_object::SignInMethod enum { OAuth2, Passkey }
 type timada_invoicing::rates::ExchangeRate { currency: String, per_euro: String, date: String, source: String }

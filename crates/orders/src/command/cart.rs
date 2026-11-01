@@ -1,5 +1,5 @@
 use evento::{Executor, ProjectionAggregate};
-use timada_catalog::{ProductState, product_projection, stock_item_id, stock_projection};
+use timada_catalog::{ProductState, product_projection};
 use timada_discounts::{
     DISCOUNT_UNKNOWN, DiscountState, discount_code_id, discount_code_projection,
     discount_projection, normalize_code,
@@ -280,11 +280,9 @@ impl<E: Executor> super::Command<E> {
         variant_id: Option<&str>,
         quantity: u32,
     ) -> Result<(), OrderError> {
-        let Some(stock) = stock_projection()
-            .load(stock_item_id(product_id, variant_id))
-            .tenant(&self.tenant)
-            .execute(&self.executor)
-            .await?
+        let Some(stock) =
+            timada_catalog::load_stock(&self.executor, &self.tenant, product_id, variant_id)
+                .await?
         else {
             return Ok(());
         };

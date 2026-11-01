@@ -195,8 +195,8 @@ async fn an_order_takes_its_share_once_and_gives_it_back_once() {
     let stock = cmd.load_stock(&product.id, None).await.unwrap().unwrap();
     assert!(stock.holds.is_empty());
 
-    cmd.restore_stock(ALICE, "order-1", &lines).await.unwrap();
-    cmd.restore_stock(ALICE, "order-1", &lines).await.unwrap();
+    cmd.restore_stock(ALICE, "order-1").await.unwrap();
+    cmd.restore_stock(ALICE, "order-1").await.unwrap();
     let stock = cmd.load_stock(&product.id, None).await.unwrap().unwrap();
     assert_eq!(stock.on_hand, 5);
 }

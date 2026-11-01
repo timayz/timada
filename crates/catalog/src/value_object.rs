@@ -87,10 +87,64 @@ pub fn product_sku_id(sku: &str) -> String {
     evento::hash_ids(vec!["product-sku", &sku_key(sku)])
 }
 
-/// The stock stream of a product without variants (`variant_id` `None`) or
-/// of one of its variants.
-pub fn stock_item_id(product_id: &str, variant_id: Option<&str>) -> String {
-    evento::hash_ids(vec!["stock", product_id, variant_id.unwrap_or("")])
+/// The stock stream of generation `generation` of a product without
+/// variants (`variant_id` `None`) or of one of its variants.
+pub fn stock_item_id(product_id: &str, variant_id: Option<&str>, generation: u32) -> String {
+    let generation = generation.to_string();
+    evento::hash_ids(vec![
+        "stock",
+        product_id,
+        variant_id.unwrap_or(""),
+        generation.as_str(),
+    ])
+}
+
+/// The stream naming the current stock generation of a thing.
+pub fn stock_pointer_id(product_id: &str, variant_id: Option<&str>) -> String {
+    evento::hash_ids(vec!["stock-pointer", product_id, variant_id.unwrap_or("")])
+}
+
+/// The stream of what one order took off the shelves.
+pub fn stock_take_id(order_id: &str) -> String {
+    evento::hash_ids(vec!["stock-take", order_id])
+}
+
+/// How many events a stock generation holds before the next one is opened:
+/// well inside a stream's 65 535 versions, and short enough that loading a
+/// thing's stock stays cheap.
+pub const STOCK_CHUNK: u16 = 1000;
+
+/// How many of the last orders a stock generation remembers, so an order
+/// delivered again is told apart from a new one before its own stream says
+/// so.
+pub const RECENT_ORDERS: usize = 256;
+
+/// A hold carried into a new stock generation: what the checkout of
+/// `cart_id` holds until `expires_at` (unix seconds, excluded).
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct CarriedHold {
+    pub cart_id: String,
+    pub quantity: u32,
+    pub expires_at: u64,
+}
+
+/// An order a stock generation remembers: the one made from `cart_id`
+/// (unknown when only its restoration is remembered), and whether what it
+/// took is back on the shelf.
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct CarriedTake {
+    pub order_id: String,
+    pub cart_id: Option<String>,
+    pub restored: bool,
+}
+
+/// Some of a counted thing an order took: a product without variants
+/// (`variant_id` `None`) or one variant.
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct TakenLine {
+    pub product_id: String,
+    pub variant_id: Option<String>,
+    pub quantity: u32,
 }
 
 /// The most a shop counts of one thing.

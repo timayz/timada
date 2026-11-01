@@ -3,31 +3,34 @@
 //! Every write model folds *all* events of its aggregate (`strict()`), so the
 //! version it observes, and `write()` sends as `original_version`, never goes
 //! stale. None of them is snapshotted: a discount is a handful of events, a
-//! usage stream at most a few per use of a capped code, the offers stream a
-//! few per offer.
+//! usage generation at most [`USAGE_CHUNK`](crate::USAGE_CHUNK) events, the
+//! offers stream a few per offer.
 
 mod code_index;
 mod discount;
 mod offer;
 mod usage;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::ops::Deref;
 
 pub use discount::*;
 pub use offer::*;
+pub use usage::load_usage;
 
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::buyer::{
     Consumed as BuyerConsumed, Released as BuyerReleased, Reserved as BuyerReserved,
 };
-use crate::aggregator::usage::{Consumed, Released as UsageReleased, Reserved};
+use crate::aggregator::usage::{
+    Consumed, DiscountUsagePointer, Opened, Released as UsageReleased, Reserved, Rolled,
+};
 use crate::aggregator::{Archived, Claimed, Created, Deactivated, Reactivated, Released};
 use crate::error::DiscountError;
 use crate::value_object::{
-    DiscountValue, MIN_CHARGE_CENTS, discount_buyer_id, discount_code_id, discount_usage_id,
+    DiscountValue, MIN_CHARGE_CENTS, RECENT_USES, discount_buyer_id, discount_code_id,
 };
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -279,23 +282,38 @@ pub struct Reservation {
     pub expires_at: u64,
 }
 
-/// The uses of a capped code: the ones held by checkouts and the ones spent
-/// by orders, by cart id.
+/// A use an order spent, as the generation remembers it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecentUse {
+    pub cart_id: String,
+    pub order_id: String,
+}
+
+/// How many spent uses a generation remembers: [`RECENT_USES`], or two in
+/// the unit tests so forgetting one is cheap to reach.
+const fn recent_uses() -> usize {
+    if cfg!(test) { 2 } else { RECENT_USES }
+}
+
+/// The uses of a capped code, as its current generation says them: the ones
+/// held by checkouts, by cart id, and how many orders spent one.
 #[evento::projection(id = id, name = "timada-discounts/UsageState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct UsageState {
     pub id: String,
     pub reserved: BTreeMap<String, Reservation>,
-    /// Cart id → order id.
-    pub consumed: BTreeMap<String, String>,
+    /// How many orders spent a use, over every generation.
+    pub consumed_count: u32,
+    /// The last [`RECENT_USES`] orders that spent one, oldest first.
+    pub recent: VecDeque<RecentUse>,
 }
 
 impl UsageState {
     /// The uses that count against the cap at `now`: the spent ones and the
     /// reservations that have not lapsed.
     pub fn taken_at(&self, now: u64) -> usize {
-        self.consumed.len()
+        self.consumed_count as usize
             + self
                 .reserved
                 .values()
@@ -309,14 +327,102 @@ impl UsageState {
             .get(cart_id)
             .is_some_and(|held| now < held.expires_at)
     }
+
+    /// The order that spent the use of `cart_id`, as far as the generation
+    /// remembers.
+    pub fn consumed_by_cart(&self, cart_id: &str) -> Option<&str> {
+        self.recent
+            .iter()
+            .find(|spent| spent.cart_id == cart_id)
+            .map(|spent| spent.order_id.as_str())
+    }
+
+    /// The reservations not lapsed at `now`.
+    pub(crate) fn live_reservations(
+        &self,
+        now: u64,
+    ) -> Vec<crate::value_object::CarriedReservation> {
+        self.reserved
+            .iter()
+            .filter(|(_, held)| now < held.expires_at)
+            .map(|(cart_id, held)| crate::value_object::CarriedReservation {
+                cart_id: cart_id.clone(),
+                expires_at: held.expires_at,
+            })
+            .collect()
+    }
+
+    /// Remembers `spent`, forgetting the oldest beyond the recent ones.
+    fn remember(&mut self, spent: RecentUse) {
+        self.recent.retain(|known| known.cart_id != spent.cart_id);
+        self.recent.push_back(spent);
+        while self.recent.len() > recent_uses() {
+            self.recent.pop_front();
+        }
+    }
 }
 
 pub fn usage_projection<E: Executor>() -> Projection<E, UsageState> {
     Projection::new::<crate::aggregator::usage::DiscountUsage>()
+        .handler(on_usage_opened())
         .handler(on_usage_reserved())
         .handler(on_usage_released())
         .handler(on_usage_consumed())
         .strict()
+}
+
+#[evento::handler]
+async fn on_usage_opened(event: Event<Opened>, usage: &mut UsageState) -> anyhow::Result<()> {
+    usage.id = event.aggregate_id.to_owned();
+    usage.reserved = event
+        .data
+        .reserved
+        .iter()
+        .map(|held| {
+            (
+                held.cart_id.clone(),
+                Reservation {
+                    expires_at: held.expires_at,
+                },
+            )
+        })
+        .collect();
+    usage.consumed_count = event.data.consumed_count;
+    usage.recent = event
+        .data
+        .recent
+        .iter()
+        .map(|spent| RecentUse {
+            cart_id: spent.cart_id.clone(),
+            order_id: spent.order_id.clone(),
+        })
+        .collect();
+    Ok(())
+}
+
+/// Which generation of a code's uses is current.
+#[evento::projection(id = id, name = "timada-discounts/UsagePointerState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct UsagePointerState {
+    pub id: String,
+    pub generation: u32,
+}
+
+pub fn usage_pointer_projection<E: Executor>() -> Projection<E, UsagePointerState> {
+    Projection::new::<DiscountUsagePointer>()
+        .handler(on_usage_rolled())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_usage_rolled(
+    event: Event<Rolled>,
+    pointer: &mut UsagePointerState,
+) -> anyhow::Result<()> {
+    pointer.id = event.aggregate_id.to_owned();
+    pointer.generation = pointer.generation.max(event.data.generation);
+    Ok(())
 }
 
 #[evento::handler]
@@ -344,10 +450,11 @@ async fn on_usage_released(
 async fn on_usage_consumed(event: Event<Consumed>, usage: &mut UsageState) -> anyhow::Result<()> {
     usage.id = event.aggregate_id.to_owned();
     usage.reserved.remove(&event.data.cart_id);
-    usage.consumed.insert(
-        event.data.cart_id.to_owned(),
-        event.data.order_id.to_owned(),
-    );
+    usage.consumed_count = usage.consumed_count.saturating_add(1);
+    usage.remember(RecentUse {
+        cart_id: event.data.cart_id.to_owned(),
+        order_id: event.data.order_id.to_owned(),
+    });
     Ok(())
 }
 
@@ -464,11 +571,7 @@ impl<E: Executor> Command<E> {
 
     /// The uses of a capped discount (`None` before the first one).
     pub async fn load_usage(&self, discount_id: &str) -> anyhow::Result<Option<UsageState>> {
-        usage_projection()
-            .load(discount_usage_id(discount_id))
-            .tenant(&self.tenant)
-            .execute(&self.executor)
-            .await
+        load_usage(&self.executor, &self.tenant, discount_id).await
     }
 
     /// One shopper's use of a discount good once per e-mail.
