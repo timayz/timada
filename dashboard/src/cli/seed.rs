@@ -42,6 +42,11 @@ pub struct SeedArgs {
     /// Leave the pictures out
     #[arg(long)]
     pub skip_images: bool,
+    /// Return as soon as the catalogue is in, without bringing the back
+    /// office's catalogue and pages lists up to date: `serve` does that on
+    /// start, so a storefront can be started right away
+    #[arg(long)]
+    pub no_catch_up: bool,
     /// Pictures copied or fetched at once
     #[arg(long, default_value_t = 8)]
     pub concurrency: usize,
@@ -237,10 +242,13 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         args.storefront_url.as_deref(),
     )
     .await?;
-    // So the catalogue pages show the products without waiting for `serve`.
-    timada_catalog::read_model_subscription::<Executor>(store_db.clone())
-        .run_once(&platform)
-        .await?;
+    // So the catalogue pages show the products without waiting for `serve`,
+    // unless the operator would rather not wait for this.
+    if !args.no_catch_up {
+        timada_catalog::read_model_subscription::<Executor>(store_db.clone())
+            .run_once(&platform)
+            .await?;
+    }
 
     if args.test_payments {
         test_payments(&config, &tenancy, &executor, &tenant.id, &owner.id).await?;
@@ -250,9 +258,11 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         let pages = timada_pages::Command::new(executor.clone(), &tenant.id);
         let (created, skipped) = seed_pages(&pages, &owner.id, dir).await?;
         tracing::info!(created, skipped, "pages loaded");
-        timada_pages::read_model_subscription::<Executor>(store_db.clone())
-            .run_once(&platform)
-            .await?;
+        if !args.no_catch_up {
+            timada_pages::read_model_subscription::<Executor>(store_db.clone())
+                .run_once(&platform)
+                .await?;
+        }
     }
 
     let key = if args.no_key {
