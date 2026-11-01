@@ -793,11 +793,12 @@ pub async fn published_products_by_ids(db: &Db, ids: &[&str]) -> anyhow::Result<
          WHERE id IN ({}) AND status = 'published'",
         timada_core::db::placeholders(ids.len())
     );
-    db.fetch_all(
-        &statement,
-        timada_core::db::params_from_iter(ids.iter().map(|id| (*id).to_owned())),
-    )
-    .await
+    // Owned before the await: a parameter iterator borrowing `&[&str]`
+    // carries two lifetimes into the future, and the pages that call this
+    // through `cart` then fail to prove the future `Send` for every one of
+    // them ("implementation of `Send` is not general enough").
+    let params: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+    db.fetch_all(&statement, params).await
 }
 
 // =============================================================================
