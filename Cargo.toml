@@ -117,17 +117,17 @@ debug = false
 inherits = "dev"
 debug = true
 
-# evento's concurrent-write support (timayz/evento PR #467) until it is released
-# as alpha.38: every evento crate from the same branch, or the lock resolves a
-# mix of the two.
+# evento's concurrent-write support (timayz/evento #467, merged into `alpha`)
+# until it is released as alpha.38: every evento crate from the same branch,
+# or the lock resolves a mix of the two.
 [patch.crates-io]
-evento = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
-evento-accord = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
-evento-core = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
-evento-fjall = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
-evento-lock = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
-evento-macro = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
-evento-remote = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
-evento-sql = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
-evento-sql-migrator = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
-evento-turso = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-accord = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-core = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-fjall = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-lock = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-macro = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-remote = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-sql = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-sql-migrator = { git = "https://github.com/timayz/evento", branch = "alpha" }
+evento-turso = { git = "https://github.com/timayz/evento", branch = "alpha" }

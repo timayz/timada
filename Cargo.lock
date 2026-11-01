@@ -2153,7 +2153,7 @@ dependencies = [
 [[package]]
 name = "evento"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "evento-accord",
  "evento-core",
@@ -2169,7 +2169,7 @@ dependencies = [
 [[package]]
 name = "evento-accord"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2188,7 +2188,7 @@ dependencies = [
 [[package]]
 name = "evento-core"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2208,7 +2208,7 @@ dependencies = [
 [[package]]
 name = "evento-fjall"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2225,7 +2225,7 @@ dependencies = [
 [[package]]
 name = "evento-lock"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "anyhow",
  "quote",
@@ -2236,7 +2236,7 @@ dependencies = [
 [[package]]
 name = "evento-macro"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "convert_case 0.12.0",
  "quote",
@@ -2246,7 +2246,7 @@ dependencies = [
 [[package]]
 name = "evento-remote"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2265,7 +2265,7 @@ dependencies = [
 [[package]]
 name = "evento-sql"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2282,7 +2282,7 @@ dependencies = [
 [[package]]
 name = "evento-sql-migrator"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "async-trait",
  "evento-sql",
@@ -2294,7 +2294,7 @@ dependencies = [
 [[package]]
 name = "evento-turso"
 version = "2.0.0-alpha.37"
-source = "git+https://github.com/timayz/evento?branch=feat%2Fturso-concurrent-writes#e30016bcb7cd1d190a9ab089c33bd45a09caeec7"
+source = "git+https://github.com/timayz/evento?branch=alpha#f76ca48bf0cf2b497fb0586269c95afce6cf5533"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4403,7 +4403,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http",
