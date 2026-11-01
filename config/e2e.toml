@@ -97,4 +97,4 @@ allow_private_hosts = true
 key = "e2e-only-secrets-key-never-used-outside-the-test-suite"
 
 [monitoring]
-log_level = "info,timada_dashboard=debug"
+log_level = "info,timada_dashboard=debug,tantivy=warn,turso_core::mvcc=warn"

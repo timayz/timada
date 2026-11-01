@@ -75,9 +75,12 @@ fn trusted_proxies(value: &str) -> anyhow::Result<Vec<IpNet>> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // RUST_LOG overrides; the default keeps the search index and the store
+    // engine to warnings, as both report routine work at `info`.
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,tantivy=warn,turso_core::mvcc=warn".into()),
         )
         .init();
 

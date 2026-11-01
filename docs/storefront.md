@@ -564,7 +564,8 @@ the key. It listens on 3457 (`PORT`) and keeps its copy of the catalog in
 addresses or CIDR networks) names the reverse proxies whose `X-Forwarded-For` gives
 the shopper's address, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the
 shopper cookies; unset, a random key is made at startup and the cookies do not survive
-a restart.
+a restart. `RUST_LOG` sets what is logged; by default `info`, with the search index and
+the store engine kept to warnings.
 
 The browser suite boots it with a key minted in the dashboard on a small catalogue
 made there: `tests/e2e/chatounette.spec.ts` walks the home, a category, a product, the

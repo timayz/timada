@@ -264,7 +264,10 @@ dir = "data/shopper-keys"
 # write_backlog = 100000
 
 [monitoring]
-log_level = "info"
+# What gets logged: a level, then overrides per component. The default keeps
+# the search index and the store engine to warnings, as both report routine
+# work (index commits, checkpoints) at `info`.
+log_level = "info,tantivy=warn,turso_core::mvcc=warn"
 log_json = false
 log_target = true
 log_line_number = true

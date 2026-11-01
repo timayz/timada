@@ -3,6 +3,7 @@
 *.db
 *.db-wal
 *.db-shm
+*.db-log
 .claude/settings.local.json
 .pwmcp-profiles
 /test-results
