@@ -11,7 +11,7 @@
 trusted_proxies = ["172.16.0.0/12"]
 
 [database]
-store = "sqlite:data/e2e-store.db"
+path = "data/e2e-timada.db"
 read_models = "sqlite:data/e2e-read-models.db"
 
 [media]

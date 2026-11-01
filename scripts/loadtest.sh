@@ -221,7 +221,9 @@ if [ -n "$traefik" ] && [ "$traefik" != 0 ]; then
   watch+=(--watch "traefik=$traefik")
 fi
 for i in 0 1 2; do
-  watch+=(--watch-file "data/load/node$i/store.db" --watch-file "data/load/node$i/store.db-wal")
+  for suffix in "" -wal -log; do
+    watch+=(--watch-file "data/load/node$i/timada.db$suffix")
+  done
 done
 
 "$bin/timada-loadtest" "$@" --target "$target" --dashboard "$dashboard" \

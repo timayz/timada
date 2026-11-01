@@ -15,7 +15,7 @@ use clap::Args;
 use timada_catalog_import::{Images, ImportOptions, NoImages, Snapshot};
 use timada_tenancy::{CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ};
 
-use crate::cluster::{Cluster, Executor, Files, StorePools};
+use crate::cluster::{Cluster, Executor, Files};
 use crate::config::Config;
 use crate::db;
 use crate::media::Media;
@@ -102,28 +102,18 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     super::migrate(config.clone()).await?;
 
     let files = Files {
-        store_url: config.database.store.clone(),
+        path: config.database.path.clone(),
         read_models_url: config.database.read_models.clone(),
     };
-    let store_write =
-        db::create_write_pool(&config.database.store, db::Durability::Durable).await?;
-    let store_cursors =
-        db::create_write_pool(&config.database.store, db::Durability::Relaxed).await?;
-    let store_read =
-        db::create_read_pool(&config.database.store, config.database.max_connections).await?;
+    let store = db::open_store(&config.database.path).await?;
     let (cluster, platform) = Cluster::open(
         config.cluster.as_ref(),
         config.server.region.as_deref(),
         &files,
-        StorePools {
-            read: store_read.clone(),
-            write: store_write.clone(),
-            cursors: store_cursors.clone(),
-        },
+        store,
     )
     .await?;
-    let write_pool =
-        db::create_write_pool(&config.database.read_models, db::Durability::Durable).await?;
+    let write_pool = db::create_write_pool(&config.database.read_models).await?;
     let read_pool = db::create_read_pool(
         &config.database.read_models,
         config.database.max_connections,
@@ -292,9 +282,6 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     cluster.shutdown().await;
     read_pool.close().await;
     write_pool.close().await;
-    store_read.close().await;
-    store_cursors.close().await;
-    store_write.close().await;
 
     let mut settings = Vec::new();
     if let Some(key) = key {

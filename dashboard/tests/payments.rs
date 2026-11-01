@@ -19,8 +19,6 @@ mod invoicing;
 mod payments;
 #[path = "../src/seal.rs"]
 mod seal;
-#[path = "../src/store_writer.rs"]
-mod store_writer;
 #[path = "../src/vies.rs"]
 mod vies;
 
@@ -245,7 +243,7 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
         .unwrap();
     {
         let mut conn = pool.acquire().await.unwrap();
-        let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
+        let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
         migrator
             .add_migrations(timada_tenancy::migrations())
             .unwrap();
@@ -257,17 +255,14 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
             .await
             .unwrap();
     }
-    // One file for the store and the read models: the test's own pool is both.
+    // The store in memory (a file would fsync every commit of the thirty-odd
+    // tests running at once), the read models in the test's own pool.
     let files = cluster::Files {
-        store_url: format!("sqlite:{}", dir.join("platform.db").display()),
+        path: PathBuf::from(":memory:"),
         read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
     };
-    let pools = cluster::StorePools {
-        read: pool.clone(),
-        write: pool.clone(),
-        cursors: pool.clone(),
-    };
-    let (cluster, platform) = Cluster::open(None, None, &files, pools).await.unwrap();
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let (cluster, platform) = Cluster::open(None, None, &files, store).await.unwrap();
     let payments = Arc::new(Payments::new(
         Some(seal::Sealer::new("payments", SEAL_KEY)),
         stripe.clone(),

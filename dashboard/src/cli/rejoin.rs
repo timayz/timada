@@ -17,7 +17,7 @@ pub async fn rejoin(config: Config) -> Result<()> {
         "a single node has no peer to copy the store from: nothing to rejoin"
     );
     let files = Files {
-        store_url: config.database.store.clone(),
+        path: config.database.path.clone(),
         read_models_url: config.database.read_models.clone(),
     };
     let marker = mark_for_rejoin(&files)?;

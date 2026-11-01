@@ -670,8 +670,9 @@ mod tests {
         }
     }
 
-    /// One in-memory database holding both the store and the read model.
-    async fn store() -> (evento::Sqlite, SqlitePool) {
+    /// An in-memory store, and an in-memory read-model database.
+    async fn store() -> (evento::Turso, SqlitePool) {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
         let options = SqliteConnectOptions::new()
             .filename(":memory:")
             .create_if_missing(true);
@@ -681,7 +682,7 @@ mod tests {
             .await
             .unwrap();
         let mut conn = pool.acquire().await.unwrap();
-        let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
+        let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
         migrator
             .add_migrations(timada_newsletter::migrations())
             .unwrap();
@@ -693,15 +694,15 @@ mod tests {
             .await
             .unwrap();
         drop(conn);
-        (pool.clone().into(), pool)
+        (store, pool)
     }
 
-    async fn catch_up(store: &evento::Sqlite, pool: &SqlitePool, keys: Arc<MemoryKeys>) {
-        timada_catalog::read_model_subscription::<evento::Sqlite>(pool.clone())
+    async fn catch_up(store: &evento::Turso, pool: &SqlitePool, keys: Arc<MemoryKeys>) {
+        timada_catalog::read_model_subscription::<evento::Turso>(pool.clone())
             .run_once(store)
             .await
             .unwrap();
-        timada_newsletter::read_model_subscription::<evento::Sqlite>(
+        timada_newsletter::read_model_subscription::<evento::Turso>(
             pool.clone(),
             Arc::new(MemoryRing(keys)),
         )
@@ -710,12 +711,12 @@ mod tests {
         .unwrap();
     }
 
-    async fn subscribe(store: &evento::Sqlite, keys: &MemoryKeys, email: &str) {
+    async fn subscribe(store: &evento::Turso, keys: &MemoryKeys, email: &str) {
         subscribe_in(store, keys, email, None).await;
     }
 
     async fn subscribe_in(
-        store: &evento::Sqlite,
+        store: &evento::Turso,
         keys: &MemoryKeys,
         email: &str,
         time_zone: Option<&str>,
@@ -1013,7 +1014,7 @@ mod tests {
     }
 
     async fn scheduled_campaign(
-        store: &evento::Sqlite,
+        store: &evento::Turso,
         schedule: timada_newsletter::schedule::Schedule,
     ) -> String {
         let newsletter = timada_newsletter::Command::new(store.clone(), TENANT);

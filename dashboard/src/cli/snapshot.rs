@@ -4,9 +4,11 @@
 //! brought back to that state in seconds, or a load test that starts every
 //! run from the same files.
 //!
-//! The databases are saved with `VACUUM INTO`: one whole file each, holding
-//! what their write-ahead log held. A restore replaces the files (and drops
-//! their logs and a pending rejoin mark), and the directories.
+//! The store is saved as its files (the database, its write-ahead log and
+//! its commit log: a consistent set while nothing writes). The read-model
+//! database still of its own is saved with `VACUUM INTO`: one whole file
+//! holding what its write-ahead log held. A restore replaces the files (and
+//! drops their logs and a pending rejoin mark), and the directories.
 //!
 //! A cluster node's store holds its consensus journal: brought back alone to
 //! an older state, it is an older copy of itself among peers that went on,
@@ -23,6 +25,7 @@ use sqlx::ConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 
 use crate::config::Config;
+use crate::db::{store_files, with_suffix};
 
 #[derive(Args, Debug)]
 pub struct SnapshotArgs {
@@ -67,7 +70,7 @@ struct Paths {
 impl Paths {
     fn of(config: &Config) -> Result<Self> {
         Ok(Self {
-            store: database_file(&config.database.store)?,
+            store: config.database.path.clone(),
             read_models: database_file(&config.database.read_models)?,
             media: config.media.dir.clone(),
             data_keys: config.data_keys.dir.clone(),
@@ -128,7 +131,7 @@ async fn save(paths: &Paths, dir: &Path, replace: bool, also: &[PathBuf]) -> Res
     std::fs::create_dir_all(partial.join(ALSO))
         .with_context(|| format!("cannot create {}", partial.display()))?;
 
-    vacuum_into(&paths.store, &partial.join(STORE)).await?;
+    copy_store(&paths.store, &partial.join(STORE))?;
     vacuum_into(&paths.read_models, &partial.join(READ_MODELS)).await?;
     copy_dir(&paths.media, &partial.join(MEDIA))?;
     copy_dir(&paths.data_keys, &partial.join(DATA_KEYS))?;
@@ -167,7 +170,7 @@ async fn restore(paths: &Paths, dir: &Path, also: &[PathBuf]) -> Result<()> {
         );
     }
 
-    put_database(&dir.join(STORE), &paths.store)?;
+    put_store(&dir.join(STORE), &paths.store)?;
     let _ = std::fs::remove_file(joining_marker(&paths.store));
     put_database(&dir.join(READ_MODELS), &paths.read_models)?;
     replace_dir(&dir.join(MEDIA), &paths.media)?;
@@ -183,6 +186,37 @@ fn database_file(url: &str) -> Result<PathBuf> {
     Ok(SqliteConnectOptions::from_str(url)?
         .get_filename()
         .to_path_buf())
+}
+
+/// Copies the store's files (`db::store_files`) to `to` and the same
+/// suffixes: with the server stopped nothing writes them, so the set is
+/// consistent, and what the logs hold goes along.
+fn copy_store(from: &Path, to: &Path) -> Result<()> {
+    ensure!(from.is_file(), "{} does not exist", from.display());
+    for (source, target) in store_files(from).iter().zip(store_files(to).iter()) {
+        if source.is_file() {
+            std::fs::copy(source, target)
+                .with_context(|| format!("cannot copy {}", source.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Puts the store's files kept at `from` in place of those at `to`: a log
+/// kept with the file comes back with it, one the file at `to` had goes.
+fn put_store(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _ = std::fs::remove_file(with_suffix(to, "-shm"));
+    for (source, target) in store_files(from).iter().zip(store_files(to).iter()) {
+        let _ = std::fs::remove_file(target);
+        if source.is_file() {
+            std::fs::copy(source, target)
+                .with_context(|| format!("cannot write {}", target.display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// A whole copy of the database at `from`, its write-ahead log included.
@@ -262,12 +296,6 @@ fn file_name(file: &Path) -> Result<&std::ffi::OsStr> {
         .with_context(|| format!("{} names no file", file.display()))
 }
 
-fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
-}
-
 /// The rejoin mark next to the store (`cluster::joining_marker`).
 fn joining_marker(store: &Path) -> PathBuf {
     with_suffix(store, ".joining")
@@ -305,6 +333,37 @@ mod tests {
         sqlx::Connection::close(connection).await.unwrap();
     }
 
+    /// A row in the store's file, written through the store itself: the
+    /// commit lands in the store's log, which the snapshot must carry.
+    async fn store_database(path: &Path, value: i64) {
+        let store = crate::db::open_store(path).await.unwrap();
+        // Schema changes need a plain statement, outside the concurrent
+        // transactions the rows are written in.
+        store
+            .connect()
+            .unwrap()
+            .execute("CREATE TABLE IF NOT EXISTS t (v INTEGER)", ())
+            .await
+            .unwrap();
+        store
+            .transaction(&value, |tx, value| {
+                Box::pin(async move {
+                    tx.execute("DELETE FROM t", ()).await?;
+                    tx.execute("INSERT INTO t VALUES (?1)", (*value,)).await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn store_value(path: &Path) -> i64 {
+        let store = crate::db::open_store(path).await.unwrap();
+        let conn = store.connect().unwrap();
+        let mut rows = conn.query("SELECT v FROM t", ()).await.unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
     async fn value(path: &Path) -> i64 {
         let mut connection = SqliteConnectOptions::new()
             .filename(path)
@@ -329,7 +388,7 @@ mod tests {
         };
         std::fs::create_dir_all(root.join("data/media/t1")).unwrap();
         std::fs::create_dir_all(&paths.data_keys).unwrap();
-        database(&paths.store, 1).await;
+        store_database(&paths.store, 1).await;
         database(&paths.read_models, 10).await;
         std::fs::write(root.join("data/media/t1/a.jpg"), b"picture").unwrap();
         std::fs::write(paths.data_keys.join("k1"), b"key").unwrap();
@@ -347,7 +406,7 @@ mod tests {
         );
 
         // The platform moves on: more rows, a new picture, a lost key.
-        database(&paths.store, 2).await;
+        store_database(&paths.store, 2).await;
         database(&paths.read_models, 20).await;
         database(&storefront, 200).await;
         std::fs::write(root.join("data/media/t1/b.jpg"), b"new").unwrap();
@@ -356,7 +415,7 @@ mod tests {
         std::fs::write(joining_marker(&paths.store), b"").unwrap();
 
         restore(&paths, &kept, &also).await.unwrap();
-        assert_eq!(value(&paths.store).await, 1);
+        assert_eq!(store_value(&paths.store).await, 1);
         assert_eq!(value(&paths.read_models).await, 10);
         assert_eq!(value(&storefront).await, 100);
         assert!(root.join("data/media/t1/a.jpg").is_file());
