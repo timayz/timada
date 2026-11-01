@@ -499,8 +499,8 @@ timada-dashboard --config config/dev.local.toml seed \
 tenant is created under their ownership when no tenant has the slug (`--slug` to name
 it). The categories and products go in through the catalog's commands, their pictures
 are copied from the snapshot into the node's media directory (a picture the snapshot
-lacks is fetched from the shop; `--skip-images` leaves them all out, `--limit N` makes
-a quick run), the shop gets a delivery method (France, Belgium,
+lacks is fetched from the shop; `--skip-images` leaves them all out, `--limit N` loads
+only the first N products), the shop gets a delivery method (France, Belgium,
 Switzerland, free from 65 €) and the promo code `MONSTER10` (10 %) so a storefront can
 sell at once, and a key holding `store:read` and `store:checkout` is minted. The command
 ends with the storefront's settings on stdout:
@@ -526,8 +526,11 @@ Nous livrons en France, en Belgique et en Suisse…
 the Chatounette's six pages, which `make seed.chatounette` passes.
 
 A second run skips what is already there (by slug), so a run that stopped halfway can
-be started again. The read models of the back office catch up when the server next
-starts. `make seed.chatounette` wraps the command for the dev config; `seeds/README.md`
+be started again. The command ends by bringing the back office's catalogue and pages
+lists up to date, which takes a while for a large catalogue; `--no-catch-up` skips that
+and leaves it to the server, which catches up when it next starts.
+`make seed.chatounette` wraps the command for the dev config with `--no-catch-up`, and
+`LIMIT=200 make seed.chatounette` loads only the first 200 products; `seeds/README.md`
 says where each snapshot comes from and how to take it.
 
 ## The example
