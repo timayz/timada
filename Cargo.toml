@@ -118,16 +118,16 @@ inherits = "dev"
 debug = true
 
 # evento's concurrent-write support (timayz/evento PR #467) until it is released
-# as alpha.38: every evento crate from the same checkout, or the lock resolves
-# a mix of the two.
+# as alpha.38: every evento crate from the same branch, or the lock resolves a
+# mix of the two.
 [patch.crates-io]
-evento = { path = "../evento-turso-mvcc/evento" }
-evento-accord = { path = "../evento-turso-mvcc/evento-accord" }
-evento-core = { path = "../evento-turso-mvcc/evento-core" }
-evento-fjall = { path = "../evento-turso-mvcc/evento-fjall" }
-evento-lock = { path = "../evento-turso-mvcc/evento-lock" }
-evento-macro = { path = "../evento-turso-mvcc/evento-macro" }
-evento-remote = { path = "../evento-turso-mvcc/evento-remote" }
-evento-sql = { path = "../evento-turso-mvcc/evento-sql" }
-evento-sql-migrator = { path = "../evento-turso-mvcc/evento-sql-migrator" }
-evento-turso = { path = "../evento-turso-mvcc/evento-turso" }
+evento = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento-accord = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento-core = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento-fjall = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento-lock = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento-macro = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento-remote = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento-sql = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento-sql-migrator = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
+evento-turso = { git = "https://github.com/timayz/evento", branch = "feat/turso-concurrent-writes" }
