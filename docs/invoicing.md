@@ -98,13 +98,32 @@ invoice decides it when it is issued, seconds after the payment.
     That count is an append at the version the ledger was read at, so two tenants
     selling at once never both count against a stale total. A retry finds its
     sale counted and gets the same decision back.
-  - Only sales in euros count: nothing here converts a currency. A VAT-registered
-    company without the One-Stop Shop therefore sells to consumers in other EU
-    countries in euros only; a request to pay for such a sale in another currency
-    is refused (`oss_required_for_currency`) rather than taxed at destination
-    without the registration that lets the company remit it. With the One-Stop
-    Shop ticked, the sale goes ahead, taxed at destination, and is not counted
-    (daily exchange rates for the count are a follow-up).
+  - The count is in euros. A sale priced in another currency counts for what it
+    is worth at the **European Central Bank's euro reference rate** of the day it
+    is invoiced (the latest the Bank published on or before that day: before the
+    day's publication, on a weekend or a holiday, the working day before's; a
+    rate more than seven days old does not stand). The invoice records the rate
+    it was counted at (currency, rate, day, source), and a retry after a crash
+    records the rate the ledger counted it at, not a later day's.
+  - A VAT-registered company without the One-Stop Shop therefore sells to
+    consumers in other EU countries in euros or in a currency the Bank publishes
+    a rate for (dollars, pounds, francs). A request to pay for such a sale
+    in a currency the Bank does not publish is refused (`oss_required_for_currency`)
+    rather than taxed at destination without the registration that lets the
+    company remit it; one made while the rates cannot be read is refused as
+    `payments_unavailable`, to be asked again. With the One-Stop Shop ticked, the
+    sale goes ahead in any currency, taxed at destination, and is counted when a
+    rate exists.
+  - The `[invoicing] euro_rates_url` setting points elsewhere (tests use a
+    fixture). The dashboard reads the Bank's ninety-day file once, then the
+    day's file when a day it has not seen is asked for, at most once an hour.
+- **VAT in euros.** A document in another currency than the euro also states its
+  VAT in euros (CGI art. 289; directive 2006/112/CE art. 230), converted at the
+  rate recorded on it: *TVA en euros : 4,00 € (1 € = 1,25 USD, taux de référence
+  de la Banque centrale européenne du 14/10/2026)*. A credit note converts at its
+  invoice's rate, the tax having been chargeable that day. A document issued while
+  the rates could not be read (a sale whose tax does not hang on them) states no
+  VAT in euros.
 - **One-Stop Shop.** The merchant ticks "One-Stop Shop" on the invoicing page to
   apply destination VAT from the first euro.
   - The company's page shows the year's total.

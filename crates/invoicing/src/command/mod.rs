@@ -24,10 +24,14 @@ use std::ops::Deref;
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
 use crate::aggregator::{
-    CreditNoteIssued, InvoiceDiscounted, InvoiceIssued, InvoiceShippingCharged, Recorded, Reserved,
+    CreditNoteIssued, EuroRateRecorded, InvoiceDiscounted, InvoiceIssued, InvoiceShippingCharged,
+    Recorded, Reserved,
 };
 use crate::error::InvoicingError;
-use crate::tax::{Destination, DistanceSales, Regime, TaxProfile, decide, is_distance_sale};
+use crate::rates::{EURO, ExchangeRate};
+use crate::tax::{
+    Destination, DistanceSales, Regime, TaxProfile, decide, is_distance_sale, needs_euro_rate,
+};
 use crate::value_object::{
     Address, BOOK_CHUNK, CREDIT_NOTE_PREFIX, INVOICE_PREFIX, InvoiceLine, Seller, TEMPLATE_VERSION,
     VatSubtotal, book_id, credit_note_id, document_label, invoice_id, prorate, series_code,
@@ -178,6 +182,11 @@ pub struct IssuedDocument {
     /// Invoice: the year's EU distance sales, this one included.
     pub eu_distance_sales_cents: u64,
     pub eu_threshold_passed: bool,
+    /// For a document in another currency than the euro: the euro rate of
+    /// the day it was issued (a credit note's is its invoice's), and its VAT
+    /// at that rate, in euro cents.
+    pub euro_rate: Option<ExchangeRate>,
+    pub total_vat_eur_cents: Option<u64>,
 }
 
 // =============================================================================
@@ -201,6 +210,7 @@ pub fn book_projection<E: Executor>() -> Projection<E, BookState> {
         .handler(on_credit_note_issued())
         .handler(on_invoice_discounted())
         .handler(on_invoice_shipping_charged())
+        .handler(on_euro_rate_recorded())
         .strict()
 }
 
@@ -275,6 +285,20 @@ async fn on_invoice_shipping_charged(
             name: event.data.name.to_owned(),
             amount_cents: event.data.amount_cents,
         });
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_euro_rate_recorded(
+    event: Event<EuroRateRecorded>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    // Written right after the `InvoiceIssued` or `CreditNoteIssued` it
+    // belongs to.
+    if let Some(document) = book.documents.get_mut(&event.data.document_id) {
+        document.euro_rate = Some(event.data.rate.to_owned());
+        document.total_vat_eur_cents = Some(event.data.total_vat_eur_cents);
     }
     Ok(())
 }
@@ -416,6 +440,13 @@ pub struct NewInvoice {
     /// VIES's reference for the check.
     pub buyer_vat_number: Option<String>,
     pub vies_reference: Option<String>,
+    /// The euro rate of `currency` on the day of issue, when it is not the
+    /// euro: what the sale counts for against the yearly threshold of EU
+    /// distance sales, and the VAT in euros the document also states. A
+    /// distance sale from a seller without the One-Stop Shop cannot be
+    /// issued without it ([`needs_euro_rate`]); any other sale is issued
+    /// without, and then states no VAT in euros.
+    pub euro_rate: Option<ExchangeRate>,
 }
 
 /// Money given back against an order's invoice.
@@ -476,6 +507,20 @@ impl<E: Executor> Command<E> {
         if total != invoice.total_cents {
             return Err(InvoicingError::TotalMismatch);
         }
+        let destination = Destination {
+            country: invoice.delivery.country.clone(),
+            postal_code: invoice.delivery.postal_code.clone(),
+            vat_number: invoice.buyer_vat_number.clone(),
+        };
+        // The rate of the invoice's own currency, parsed, or nothing.
+        let euro_rate = invoice.euro_rate.clone().filter(|rate| {
+            !invoice.currency.eq_ignore_ascii_case(EURO) && rate.converts(&invoice.currency)
+        });
+        if euro_rate.is_none() && needs_euro_rate(invoice.tax, &destination, &invoice.currency) {
+            return Err(InvoicingError::EuroRateMissing {
+                currency: invoice.currency.clone(),
+            });
+        }
         // What each line was really sold for: the discount spread over the
         // lines in proportion, to the cent. Shipping is an accessory of the
         // goods it carries: it is spread over them the same way and taxed
@@ -504,11 +549,6 @@ impl<E: Executor> Command<E> {
 
         // The VAT, fixed before the number: for a distance sale, counted
         // in the company's ledger (a retry gets the same decision back).
-        let destination = Destination {
-            country: invoice.delivery.country.clone(),
-            postal_code: invoice.delivery.postal_code.clone(),
-            vat_number: invoice.buyer_vat_number.clone(),
-        };
         let sold: Vec<(&str, u64)> = invoice
             .lines
             .iter()
@@ -516,7 +556,14 @@ impl<E: Executor> Command<E> {
             .map(|(line, net)| (line.tax_category.as_str(), *net))
             .collect();
         let decide_with = |before: DistanceSales| {
-            decide(invoice.tax, &destination, &sold, &invoice.currency, before)
+            decide(
+                invoice.tax,
+                &destination,
+                &sold,
+                &invoice.currency,
+                euro_rate.as_ref(),
+                before,
+            )
         };
         let decision = if is_distance_sale(invoice.tax, &destination) {
             ledger
@@ -553,6 +600,12 @@ impl<E: Executor> Command<E> {
         );
         let total_vat_cents: u64 = vat.iter().map(|subtotal| subtotal.vat_cents).sum();
         let reverse_charge = decision.regime == Regime::ReverseCharge;
+        // The rate the sale was counted at (a retry's is the ledger's), or
+        // the day's for a sale that is not counted.
+        let euro_rate = decision.euro_rate.clone().or(euro_rate);
+        let in_euros = euro_rate
+            .as_ref()
+            .and_then(|rate| Some((rate.clone(), rate.to_euro_cents(total_vat_cents)?)));
         self.issue_reserved(&document_id, |book, series, number| {
             let mut write = evento::append(book);
             write.event(&InvoiceIssued {
@@ -598,6 +651,13 @@ impl<E: Executor> Command<E> {
                     amount_cents: shipping.amount_cents,
                 });
             }
+            if let Some((rate, total_vat_eur_cents)) = &in_euros {
+                write.event(&EuroRateRecorded {
+                    document_id: document_id.clone(),
+                    rate: rate.clone(),
+                    total_vat_eur_cents: *total_vat_eur_cents,
+                });
+            }
             write
         })
         .await
@@ -620,6 +680,12 @@ impl<E: Executor> Command<E> {
         }
         let vat = prorate(&invoice.vat, credit.amount_cents);
         let total_vat_cents: u64 = vat.iter().map(|subtotal| subtotal.vat_cents).sum();
+        // The VAT given back, in euros at the invoice's rate: the tax was
+        // chargeable on the invoice's day.
+        let in_euros = invoice
+            .euro_rate
+            .as_ref()
+            .and_then(|rate| Some((rate.clone(), rate.to_euro_cents(total_vat_cents)?)));
         let document_id = credit_note_id(&credit.refund_id);
         let index = self
             .reserve(
@@ -632,33 +698,40 @@ impl<E: Executor> Command<E> {
             return self.document_in(book, &document_id).await;
         }
         self.issue_reserved(&document_id, |book, series, number| {
-            evento::append(book)
-                .event(&CreditNoteIssued {
+            let mut write = evento::append(book);
+            write.event(&CreditNoteIssued {
+                document_id: document_id.clone(),
+                series: series.to_owned(),
+                number,
+                issued_at: now,
+                invoice_document_id: invoice.document_id.clone(),
+                invoice_label: invoice.label.clone(),
+                order_id: invoice.order_id.clone(),
+                order_reference: invoice.order_reference.clone(),
+                refund_id: credit.refund_id.clone(),
+                seller: invoice.seller.clone(),
+                buyer: invoice.buyer.clone(),
+                buyer_email: invoice.buyer_email.clone(),
+                currency: invoice.currency.clone(),
+                vat: vat.clone(),
+                total_excl_vat_cents: credit.amount_cents - total_vat_cents,
+                total_vat_cents,
+                total_cents: credit.amount_cents,
+                template: TEMPLATE_VERSION,
+                issued_by: credit.issued_by.clone(),
+                company_id: invoice.company_id.clone(),
+                regime: invoice.regime.as_str().to_owned(),
+                tax_country: invoice.tax_country.clone(),
+                buyer_vat_number: invoice.buyer_vat_number.clone(),
+            });
+            if let Some((rate, total_vat_eur_cents)) = &in_euros {
+                write.event(&EuroRateRecorded {
                     document_id: document_id.clone(),
-                    series: series.to_owned(),
-                    number,
-                    issued_at: now,
-                    invoice_document_id: invoice.document_id.clone(),
-                    invoice_label: invoice.label.clone(),
-                    order_id: invoice.order_id.clone(),
-                    order_reference: invoice.order_reference.clone(),
-                    refund_id: credit.refund_id.clone(),
-                    seller: invoice.seller.clone(),
-                    buyer: invoice.buyer.clone(),
-                    buyer_email: invoice.buyer_email.clone(),
-                    currency: invoice.currency.clone(),
-                    vat: vat.clone(),
-                    total_excl_vat_cents: credit.amount_cents - total_vat_cents,
-                    total_vat_cents,
-                    total_cents: credit.amount_cents,
-                    template: TEMPLATE_VERSION,
-                    issued_by: credit.issued_by.clone(),
-                    company_id: invoice.company_id.clone(),
-                    regime: invoice.regime.as_str().to_owned(),
-                    tax_country: invoice.tax_country.clone(),
-                    buyer_vat_number: invoice.buyer_vat_number.clone(),
-                })
-                .to_owned()
+                    rate: rate.clone(),
+                    total_vat_eur_cents: *total_vat_eur_cents,
+                });
+            }
+            write
         })
         .await
     }

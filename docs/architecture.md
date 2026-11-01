@@ -673,7 +673,8 @@ lifetime, sign-in limits, OIDC providers), `mail` (the platform's server), `secr
 (the one key the shops' secrets are sealed under; omit it and no shop can connect
 payments, mail servers or shopper accounts), `media` (the pictures' directory and
 public address), `data_keys` (the personal-data key vault), `payments` (Stripe's
-address, for the stand-in), `invoicing` (the VAT-number check), `reviews`
+address, for the stand-in), `invoicing` (the VAT-number check, the euro reference
+rates), `reviews`
 (the review-request timer), `newsletter` (the send sweep), `automations` (the run
 timer, the abandoned-checkout delay), `store` (the limits on what a storefront hands
 in), `invitations` (their limits), `aliexpress` (the platform's app), `store_api`

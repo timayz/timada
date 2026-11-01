@@ -570,6 +570,11 @@ pub struct InvoicingConfig {
     /// European Commission's own when unset. Tests point it at a stand-in.
     #[serde(default)]
     pub vies_url: Option<String>,
+    /// Where the European Central Bank's daily euro reference rates are
+    /// read, for sales priced in another currency; the Bank's own address
+    /// when unset. Tests point it at a stand-in.
+    #[serde(default)]
+    pub euro_rates_url: Option<String>,
 }
 
 /// Card payments: each tenant connects its own Stripe account; this node

@@ -295,8 +295,10 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   open payment back by its request id for the page after the redirect.
 - Each `CartLineView` carries its `tax_category`. `CartView::vat_estimate(country)`
   gives the VAT the total includes when shipped there (`VatEstimate::label()` reads
-  `VAT FR 20%`), or `None` outside the EU. It is an estimate for display: the invoice
-  decides, from the merchant's VAT standing, the postal code and a buyer's VAT number.
+  `VAT FR 20%`), or `None` outside the EU. It is an estimate for display, of a sale
+  under the EU distance-sales threshold whatever its currency: the invoice decides,
+  from the merchant's VAT standing, the year's sales abroad (one in another currency
+  counted at the day's euro rate), the postal code and a buyer's VAT number.
 - The order (`order_of_cart`, `order`) arrives once the provider confirmed the payment
   to the dashboard, usually a second after the browser comes back. Its `reference`
   (`K7Q4-MZP2`) is what a shopper quotes.

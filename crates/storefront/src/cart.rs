@@ -341,7 +341,11 @@ impl CartView {
                 ..Default::default()
             },
             &lines,
-            currency,
+            // Under the threshold whatever the currency: a sale in another
+            // currency counts at the euro rate of the day, which the invoice
+            // has and a storefront does not.
+            timada_invoicing::rates::EURO,
+            None,
             tax::DistanceSales::default(),
         );
         let sums: Vec<(u32, u64)> = decision

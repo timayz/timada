@@ -108,5 +108,6 @@
 
 #v(1em)
 #if d.vat_mention != "" [#strong(d.vat_mention) \ ]
+#if d.at("vat_in_euros", default: "") != "" [#d.vat_in_euros \ ]
 #d.settlement
 

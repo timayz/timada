@@ -61,8 +61,10 @@ not know yet, and the credit note follows.
   (permission `tenant:manage`), link it to a company the member owns, or register
   one. See `docs/invoicing.md`. Until then, every request to pay is refused with
   `invoicing_not_configured`; a sale to a consumer in another EU country in a
-  currency other than the euro is refused with `oss_required_for_currency` unless
-  the company ticked the One-Stop Shop.
+  currency the European Central Bank publishes no euro rate for is refused with
+  `oss_required_for_currency` unless the company ticked the One-Stop Shop (one in
+  dollars, pounds or another published currency is counted against the EU
+  threshold at the Bank's rate of the day, see `docs/invoicing.md`).
 
 - **Merchant.** On `/t/<slug>/payments` (permission `payments:manage`):
   1. Paste the publishable key and the secret key from Stripe (Developers › API keys).
