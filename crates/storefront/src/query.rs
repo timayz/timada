@@ -777,16 +777,28 @@ pub async fn published_product_by_slug(db: &Db, slug: &str) -> anyhow::Result<Op
 /// The published products among `ids`, in no particular order: what a cart
 /// page shows its lines with (a product missing here is off sale).
 pub async fn published_products_by_ids(db: &Db, ids: &[&str]) -> anyhow::Result<Vec<Product>> {
-    let ids = serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_owned());
-    db.fetch_all(
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // One placeholder per id rather than a `json_each` list: given the list
+    // Turso walks every published product through the status index
+    // (`SEARCH p USING INDEX storefront_products_price (status=?)`), so a
+    // cart cost the whole catalogue; given the ids it reads them one by one
+    // through the primary key (see the `probe` tests).
+    let statement = format!(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
             min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock
          FROM storefront_products
-         WHERE id IN (SELECT value FROM json_each(?1)) AND status = 'published'",
-        (ids,),
-    )
-    .await
+         WHERE id IN ({}) AND status = 'published'",
+        timada_core::db::placeholders(ids.len())
+    );
+    // Owned before the await: a parameter iterator borrowing `&[&str]`
+    // carries two lifetimes into the future, and the pages that call this
+    // through `cart` then fail to prove the future `Send` for every one of
+    // them ("implementation of `Send` is not general enough").
+    let params: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+    db.fetch_all(&statement, params).await
 }
 
 // =============================================================================
@@ -1234,6 +1246,23 @@ mod sql {
     }
 
     #[tokio::test]
+    async fn products_by_ids_keeps_the_published_ones_among_them() {
+        let db = catalog().await;
+        let found = published_products_by_ids(&db, &["basket", "draft", "missing", "collar"])
+            .await
+            .unwrap();
+        let mut ids: Vec<&str> = found.iter().map(|p| p.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["basket", "collar"]);
+        assert!(
+            published_products_by_ids(&db, &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn a_band_keeps_what_overlaps_it_and_drops_the_unpriced() {
         let db = catalog().await;
         let all = ProductQuery::default().sort(ProductSort::PriceAsc);
@@ -1373,5 +1402,366 @@ mod sql {
                 .unwrap()
                 .is_empty()
         );
+    }
+}
+
+/// The plans and timings of the per-request joins under Turso's planner
+/// (#336): a few thousand products in a temporary database opened the way
+/// an app opens its own, each statement explained and timed. Run by hand:
+/// `cargo test -p timada-storefront probe -- --ignored --nocapture`.
+#[cfg(test)]
+mod probe {
+    use std::time::{Duration, Instant};
+
+    use timada_core::db::{Turso, execute};
+
+    use super::*;
+    use crate::migrations::migrate;
+
+    const PRODUCTS: i64 = 3_000;
+    const CATEGORIES: i64 = 60;
+    const RUNS: u32 = 50;
+
+    /// Three thousand products, four in five published, each filed under two
+    /// of sixty categories; the category rows a page reads filled for the
+    /// published ones, as the subscription would.
+    async fn catalog() -> Db {
+        let db = Db::from(Turso::temporary_concurrent().await.unwrap());
+        migrate(&db).await.unwrap();
+        db.write(&(), |tx, ()| {
+            Box::pin(async move {
+                for i in 0..PRODUCTS {
+                    let id = format!("p{i:05}");
+                    let status = if i % 5 == 0 { "draft" } else { "published" };
+                    let min = 100 + (i * 37) % 9_000;
+                    execute(
+                        tx,
+                        "INSERT INTO storefront_products (id, slug, name, description,
+                            amount_cents, currency, status, updated_at, images_json,
+                            options_json, variants_json, attributes_json, min_amount_cents,
+                            max_amount_cents, review_count, rating_x100, slug_search,
+                            name_search)
+                         VALUES (?1, ?1, ?1, '', ?2, 'EUR', ?3, ?4, '[]', '[]', '[]', '[]',
+                            ?2, ?5, ?6, ?7, ?1, ?1)",
+                        (
+                            id.as_str(),
+                            min,
+                            status,
+                            i,
+                            min + (i % 7) * 100,
+                            i % 11,
+                            (i % 5) * 100,
+                        ),
+                    )
+                    .await?;
+                    for category in [i % CATEGORIES, (i / 50) % CATEGORIES] {
+                        let category = format!("c{category:03}");
+                        execute(
+                            tx,
+                            "INSERT OR IGNORE INTO storefront_product_categories
+                                (product_id, category_id) VALUES (?1, ?2)",
+                            (id.as_str(), category.as_str()),
+                        )
+                        .await?;
+                        if status == "published" {
+                            execute(
+                                tx,
+                                "INSERT OR IGNORE INTO storefront_category_products
+                                    (category_id, product_id, updated_at, min_amount_cents,
+                                     max_amount_cents, review_count, rating_x100)
+                                 SELECT ?2, id, updated_at, min_amount_cents, max_amount_cents,
+                                    review_count, rating_x100
+                                 FROM storefront_products WHERE id = ?1",
+                                (id.as_str(), category.as_str()),
+                            )
+                            .await?;
+                        }
+                    }
+                }
+                for c in 0..CATEGORIES {
+                    let id = format!("c{c:03}");
+                    execute(
+                        tx,
+                        "INSERT INTO storefront_categories (id, slug, name, description, body,
+                            parent_id, position, archived, in_menu, updated_at)
+                         VALUES (?1, ?1, ?1, '', '', NULL, ?2, ?3, 1, 1)",
+                        (id.as_str(), c, i64::from(c % 10 == 9)),
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        db
+    }
+
+    /// What `EXPLAIN QUERY PLAN` says of `sql`, one line per step.
+    async fn plan(db: &Db, sql: &str, params: impl timada_core::db::IntoParams) -> String {
+        let rows: Vec<(i64, i64, i64, String)> = db
+            .fetch_all(&format!("EXPLAIN QUERY PLAN {sql}"), params)
+            .await
+            .unwrap();
+        rows.into_iter()
+            .map(|(_, _, _, detail)| format!("\n    {detail}"))
+            .collect()
+    }
+
+    /// How long `run` takes on average over [`RUNS`], after one warm-up, and
+    /// how many rows it read.
+    async fn timed<F, Fut>(mut run: F) -> (Duration, usize)
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = usize>,
+    {
+        run().await;
+        let started = Instant::now();
+        let mut rows = 0;
+        for _ in 0..RUNS {
+            rows = run().await;
+        }
+        (started.elapsed() / RUNS, rows)
+    }
+
+    fn report(name: &str, plan: &str, took: Duration, rows: usize) {
+        tracing::info!(target: "probe", %name, rows, ?took, plan = %plan);
+    }
+
+    const PRODUCT_COLUMNS: &str = "p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
+        p.updated_at, p.images_json, p.options_json, p.variants_json, p.attributes_json,
+        p.min_amount_cents, p.max_amount_cents, p.review_count, p.rating_x100, p.stock_json,
+        p.in_stock";
+
+    #[tokio::test]
+    #[ignore = "measures Turso's plans; run by hand with --ignored --nocapture"]
+    async fn category_page() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("probe=info")
+            .with_test_writer()
+            .try_init();
+        let db = catalog().await;
+        let category = "c007";
+        let (limit, offset) = (24i64, 24i64);
+
+        // As shipped: the join, the page cut on the category rows.
+        let sql = CATEGORY_NEWEST;
+        let plan_join = plan(&db, sql, (category, limit, offset)).await;
+        let (took, rows) = timed(|| async {
+            let items: Vec<Product> = db.fetch_all(sql, (category, limit, offset)).await.unwrap();
+            items.len()
+        })
+        .await;
+        report("category page: join", &plan_join, took, rows);
+
+        // The ids of the page first, then the products among them, put back
+        // in the page's order here.
+        let ids_sql = "SELECT product_id FROM storefront_category_products
+             WHERE category_id = ?1
+             ORDER BY updated_at DESC, product_id DESC LIMIT ?2 OFFSET ?3";
+        let by_ids_sql = format!(
+            "SELECT {PRODUCT_COLUMNS} FROM storefront_products p
+             WHERE p.id IN (SELECT value FROM json_each(?1))"
+        );
+        let plan_two = format!(
+            "{}\n  then{}",
+            plan(&db, ids_sql, (category, limit, offset)).await,
+            plan(&db, &by_ids_sql, ("[\"p00001\"]",)).await
+        );
+        let (took, rows) = timed(|| async {
+            let ids: Vec<(String,)> = db
+                .fetch_all(ids_sql, (category, limit, offset))
+                .await
+                .unwrap();
+            let ids: Vec<&str> = ids.iter().map(|(id,)| id.as_str()).collect();
+            let json = serde_json::to_string(&ids).unwrap();
+            let mut items: Vec<Product> = db.fetch_all(&by_ids_sql, (json,)).await.unwrap();
+            items.sort_by_key(|p| ids.iter().position(|id| *id == p.id));
+            items.len()
+        })
+        .await;
+        report("category page: two statements", &plan_two, took, rows);
+
+        // The join written the other way round, should the planner follow
+        // the text.
+        let sql = format!(
+            "SELECT {PRODUCT_COLUMNS}
+             FROM storefront_products p
+             JOIN storefront_category_products cp ON cp.product_id = p.id
+             WHERE cp.category_id = ?1
+             ORDER BY cp.updated_at DESC, cp.product_id DESC LIMIT ?2 OFFSET ?3"
+        );
+        let plan_reversed = plan(&db, &sql, (category, limit, offset)).await;
+        let (took, rows) = timed(|| async {
+            let items: Vec<Product> = db.fetch_all(&sql, (category, limit, offset)).await.unwrap();
+            items.len()
+        })
+        .await;
+        report(
+            "category page: join, products first",
+            &plan_reversed,
+            took,
+            rows,
+        );
+
+        // A `CROSS JOIN` tells SQLite's planner to keep the order written.
+        let sql = format!(
+            "SELECT {PRODUCT_COLUMNS}
+             FROM storefront_category_products cp
+             CROSS JOIN storefront_products p ON p.id = cp.product_id
+             WHERE cp.category_id = ?1
+             ORDER BY cp.updated_at DESC, cp.product_id DESC LIMIT ?2 OFFSET ?3"
+        );
+        let plan_cross = plan(&db, &sql, (category, limit, offset)).await;
+        let (took, rows) = timed(|| async {
+            let items: Vec<Product> = db.fetch_all(&sql, (category, limit, offset)).await.unwrap();
+            items.len()
+        })
+        .await;
+        report("category page: cross join", &plan_cross, took, rows);
+    }
+
+    #[tokio::test]
+    #[ignore = "measures Turso's plans; run by hand with --ignored --nocapture"]
+    async fn product_categories() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("probe=info")
+            .with_test_writer()
+            .try_init();
+        let db = catalog().await;
+        let product = "p01234";
+
+        // As shipped: the join.
+        let sql = "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position, c.in_menu
+             FROM storefront_categories c
+             JOIN storefront_product_categories pc ON pc.category_id = c.id
+             WHERE pc.product_id = ?1 AND c.archived = 0
+             ORDER BY c.position, c.name, c.id";
+        let plan_join = plan(&db, sql, (product,)).await;
+        let (took, rows) = timed(|| async {
+            let items: Vec<Category> = db.fetch_all(sql, (product,)).await.unwrap();
+            items.len()
+        })
+        .await;
+        report("product categories: join", &plan_join, took, rows);
+
+        // The links as a subquery the categories are looked up in.
+        let sql = "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position, c.in_menu
+             FROM storefront_categories c
+             WHERE c.archived = 0
+               AND c.id IN (SELECT category_id FROM storefront_product_categories
+                            WHERE product_id = ?1)
+             ORDER BY c.position, c.name, c.id";
+        let plan_in = plan(&db, sql, (product,)).await;
+        let (took, rows) = timed(|| async {
+            let items: Vec<Category> = db.fetch_all(sql, (product,)).await.unwrap();
+            items.len()
+        })
+        .await;
+        report("product categories: IN subquery", &plan_in, took, rows);
+
+        // An `EXISTS` over the links, one per category.
+        let sql = "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position, c.in_menu
+             FROM storefront_categories c
+             WHERE c.archived = 0
+               AND EXISTS (SELECT 1 FROM storefront_product_categories pc
+                           WHERE pc.product_id = ?1 AND pc.category_id = c.id)
+             ORDER BY c.position, c.name, c.id";
+        let plan_exists = plan(&db, sql, (product,)).await;
+        let (took, rows) = timed(|| async {
+            let items: Vec<Category> = db.fetch_all(sql, (product,)).await.unwrap();
+            items.len()
+        })
+        .await;
+        report("product categories: EXISTS", &plan_exists, took, rows);
+
+        // Two statements joined here.
+        let links_sql =
+            "SELECT category_id FROM storefront_product_categories WHERE product_id = ?1";
+        let categories_sql = "SELECT id, slug, name, description, parent_id, position, in_menu
+             FROM storefront_categories
+             WHERE archived = 0 AND id IN (SELECT value FROM json_each(?1))
+             ORDER BY position, name, id";
+        let plan_two = format!(
+            "{}\n  then{}",
+            plan(&db, links_sql, (product,)).await,
+            plan(&db, categories_sql, ("[\"c001\"]",)).await
+        );
+        let (took, rows) = timed(|| async {
+            let links: Vec<(String,)> = db.fetch_all(links_sql, (product,)).await.unwrap();
+            let ids: Vec<&str> = links.iter().map(|(id,)| id.as_str()).collect();
+            let json = serde_json::to_string(&ids).unwrap();
+            let items: Vec<Category> = db.fetch_all(categories_sql, (json,)).await.unwrap();
+            items.len()
+        })
+        .await;
+        report("product categories: two statements", &plan_two, took, rows);
+    }
+
+    /// Not one of the two joins, but the shape the two-statement rewrite
+    /// would lean on, and what [`published_products_by_ids`] runs for a
+    /// cart: `id IN (SELECT value FROM json_each(?1))`.
+    #[tokio::test]
+    #[ignore = "measures Turso's plans; run by hand with --ignored --nocapture"]
+    async fn products_by_ids() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("probe=info")
+            .with_test_writer()
+            .try_init();
+        let db = catalog().await;
+        let ids: Vec<String> = (1..=6).map(|i| format!("p{:05}", i * 401)).collect();
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let json = serde_json::to_string(&ids).unwrap();
+
+        // As shipped.
+        let sql = format!(
+            "SELECT {PRODUCT_COLUMNS} FROM storefront_products p
+             WHERE p.id IN (SELECT value FROM json_each(?1)) AND p.status = 'published'"
+        );
+        let plan_json = plan(&db, &sql, (json.as_str(),)).await;
+        let (took, rows) = timed(|| async {
+            let items: Vec<Product> = db.fetch_all(&sql, (json.as_str(),)).await.unwrap();
+            items.len()
+        })
+        .await;
+        report("products by ids: IN json_each", &plan_json, took, rows);
+
+        // One placeholder per id.
+        let sql = format!(
+            "SELECT {PRODUCT_COLUMNS} FROM storefront_products p
+             WHERE p.id IN ({}) AND p.status = 'published'",
+            timada_core::db::placeholders(ids.len())
+        );
+        let params = || {
+            timada_core::db::params_from_iter(
+                ids.iter()
+                    .map(|id| timada_core::db::Value::Text((*id).to_owned())),
+            )
+        };
+        let plan_list = plan(&db, &sql, params()).await;
+        let (took, rows) = timed(|| async {
+            let items: Vec<Product> = db.fetch_all(&sql, params()).await.unwrap();
+            items.len()
+        })
+        .await;
+        report("products by ids: placeholders", &plan_list, took, rows);
+
+        // The ids read from the JSON first, then one lookup each.
+        let one_sql = format!(
+            "SELECT {PRODUCT_COLUMNS} FROM storefront_products p
+             WHERE p.id = ?1 AND p.status = 'published'"
+        );
+        let plan_each = plan(&db, &one_sql, ("p00401",)).await;
+        let (took, rows) = timed(|| async {
+            let mut items: Vec<Product> = Vec::new();
+            for id in &ids {
+                if let Some(p) = db.fetch_optional(&one_sql, (*id,)).await.unwrap() {
+                    items.push(p);
+                }
+            }
+            items.len()
+        })
+        .await;
+        report("products by ids: one lookup each", &plan_each, took, rows);
     }
 }
