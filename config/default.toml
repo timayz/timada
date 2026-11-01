@@ -118,10 +118,15 @@ dir = "data/shopper-keys"
 # cancel_check_secs = 60
 
 # Invoices. A business buyer's EU VAT number is checked with VIES, the
-# European Commission's service, before an invoice goes without VAT.
+# European Commission's service, before an invoice goes without VAT. A sale
+# priced in another currency than the euro is counted against the EU
+# distance-sales threshold, and states its VAT in euros, at the European
+# Central Bank's daily reference rate.
 # [invoicing]
 # # Where VIES is reached; the Commission's own address when unset.
 # vies_url = "https://ec.europa.eu/taxation_customs/vies/rest-api"
+# # Where the Bank's reference rates are read; the Bank's own address when unset.
+# euro_rates_url = "https://www.ecb.europa.eu/stats/eurofxref"
 
 # Reviews. Some days after an order is fulfilled (each shop picks how many
 # on its Reviews page), its buyer gets a mail asking for a review.

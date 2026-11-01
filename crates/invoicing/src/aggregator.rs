@@ -1,6 +1,7 @@
 //! The persisted shapes. Every variant is frozen once merged (`events.lock`):
 //! a change of shape is a new variant, never a changed field.
 
+use crate::rates::ExchangeRate;
 use crate::value_object::{Address, InvoiceLine, Seller, VatSubtotal};
 
 /// One chunk of a numbering series (`F2026`, `A2026`): its stream holds the
@@ -70,6 +71,17 @@ pub enum Book {
         document_id: String,
         name: String,
         amount_cents: u64,
+    },
+    /// The euro rate of a document priced in another currency, written with
+    /// its `InvoiceIssued` or `CreditNoteIssued`: the rate of the day of
+    /// issue (for a credit note, of the invoice it corrects), which the
+    /// sale was counted at against the threshold of EU distance sales, and
+    /// the document's VAT at that rate, in euro cents, which the document
+    /// also states (CGI art. 289; directive 2006/112/CE art. 230).
+    EuroRateRecorded {
+        document_id: String,
+        rate: ExchangeRate,
+        total_vat_eur_cents: u64,
     },
     /// A credit note: money given back against an invoice.
     CreditNoteIssued {
@@ -143,5 +155,12 @@ pub enum DistanceLedger {
         /// The year's total excluding VAT, this sale included.
         sales_cents: u64,
         passed: bool,
+    },
+    /// The euro rate a sale in another currency was counted at, written
+    /// with its `Counted`, so a retry records the same rate on the invoice.
+    Converted {
+        document_id: String,
+        tenant_id: String,
+        rate: ExchangeRate,
     },
 }

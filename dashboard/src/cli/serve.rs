@@ -111,6 +111,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         Arc::new(crate::vies::ViesClient::new(
             config.invoicing.vies_url.clone(),
         )),
+        Arc::new(crate::ecb::EcbClient::new(
+            config.invoicing.euro_rates_url.clone(),
+        )),
         background_mail.clone(),
         url.clone(),
     ) {
@@ -249,6 +252,7 @@ fn subscriptions(
     payments: Arc<crate::payments::Payments>,
     aliexpress: Arc<crate::aliexpress::Aliexpress>,
     vies: Arc<dyn crate::vies::Vies>,
+    euro_rates: Arc<dyn crate::ecb::EuroRates>,
     background_mail: Arc<topcoat::context::AppContext>,
     base_url: String,
 ) -> Vec<(&'static str, SubscriptionBuilder<Executor>)> {
@@ -344,7 +348,7 @@ fn subscriptions(
         ),
         (
             "payments",
-            crate::payments::subscription(payments.clone(), store.clone()),
+            crate::payments::subscription(payments.clone(), euro_rates.clone(), store.clone()),
         ),
         (
             "discount usage",
@@ -388,7 +392,7 @@ fn subscriptions(
         ),
         (
             "invoices",
-            crate::invoicing::subscription(store.clone(), vies, store),
+            crate::invoicing::subscription(store.clone(), vies, euro_rates, store),
         ),
     ]
 }
