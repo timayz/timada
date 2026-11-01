@@ -17,6 +17,8 @@ mod cluster;
 mod config;
 #[path = "../src/db.rs"]
 mod db;
+#[path = "../src/peers.rs"]
+mod peers;
 #[path = "../src/rate_limit.rs"]
 mod rate_limit;
 #[path = "../src/read_only_store.rs"]
@@ -1857,7 +1859,7 @@ async fn respond(mut socket: TcpStream, status: StatusCode, body: &Value) {
 
 /// The dashboard's `POST /store/shoppers/code`, as far as the limits go.
 async fn code_endpoint(platform: cluster::Executor, limits: config::StoreConfig) -> String {
-    let limiter = Arc::new(rate_limit::RateLimiter::new());
+    let limiter = Arc::new(rate_limit::RateLimiter::new(None));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
@@ -1881,7 +1883,8 @@ async fn code_endpoint(platform: cluster::Executor, limits: config::StoreConfig)
                     &access.tenant.id,
                     header(&head, "x-shopper-ip").as_deref(),
                     Some(peer.ip()),
-                );
+                )
+                .await;
                 let (status, body) = if allowed {
                     (StatusCode::ACCEPTED, json!({}))
                 } else {

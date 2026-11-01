@@ -243,8 +243,12 @@ by construction.
    is counted before the password is looked at, per browser address and per account
    (`[auth] login_attempts_per_ip`, `login_attempts_per_email`, `login_window_secs`;
    `too_many_logins` past them), so a password cannot be guessed by trying. Like every
-   limit here (`rate_limit.rs`), it is counted in each node's memory: behind a balancer
-   over N nodes a client may get up to N times the limit.
+   limit here (`rate_limit.rs`), it holds across the cluster: each node keeps the passes
+   it let through and, before letting one more through, asks the other nodes for theirs
+   (`POST /cluster/limits` on their `cluster.web_peers` address, under `cluster.secret`,
+   the keys hashed). A node that does not answer within two seconds counts for nothing,
+   and two nodes deciding at the same moment may each let the last pass through, so the
+   limit holds to within a moment's requests.
 8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
    `/auth/*` (sign in, the account page, passkeys, e-mail, password, sessions),
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
@@ -258,8 +262,9 @@ by construction.
    accounts*), `/store/contact` (a storefront handing in a message from its contact
    form, see *Support messages*), `/store/newsletter/*` (sign-ups and their links, see
    *Newsletter*), `/store/automations/opt-out` (a customer declining a shop's
-   automated mails), `/cluster/media/*` and `/cluster/keys/*` (the nodes copying
-   pictures and keys to one another, under `cluster.secret`), `/invitations/{token}`,
+   automated mails), `/cluster/media/*`, `/cluster/keys/*` and `/cluster/limits` (the
+   nodes copying pictures and keys to one another and asking what the others let
+   through the limits, under `cluster.secret`), `/invitations/{token}`,
    `/admin/*` (users, tenants, companies, this node's cluster view). `ui/` holds the
    shared furniture: the chrome, the page helpers, the theme, the icons.
 

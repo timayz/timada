@@ -3,4 +3,5 @@
 //! shared secret.
 
 pub mod keys;
+pub mod limits;
 pub mod media;

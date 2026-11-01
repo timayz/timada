@@ -41,7 +41,8 @@ pub async fn login(cx: &Cx, Form(form): Form<LoginForm>) -> Result<SeeOther> {
         &app_context::<Config>(cx).auth,
         &form.email,
         client_ip(cx),
-    );
+    )
+    .await;
     if !allowed {
         tracing::info!("password sign-in refused: too many attempts");
         return Ok(see_other(login_url(cx, Some(TOO_MANY_LOGINS))));

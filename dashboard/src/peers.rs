@@ -1,9 +1,11 @@
 //! The other nodes of the cluster, as the files every node keeps reach them:
 //! the product pictures ([`crate::media`]) and the shopper keys
-//! ([`crate::shopper_keys`]). A file is copied to a majority of the cluster
+//! ([`crate::key_vault`]). A file is copied to a majority of the cluster
 //! before the event naming it is recorded, the same majority a commit needs,
-//! so it survives whatever the events survive.
+//! so it survives whatever the events survive. The rate limits ask the same
+//! nodes what they let through ([`crate::rate_limit`]).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use openidconnect::reqwest;
@@ -170,16 +172,26 @@ pub(crate) mod test_support {
 
     /// A peer answering every request with `status` and `body`.
     pub async fn peer(status: u16, body: &'static [u8]) -> String {
+        answering(move |_, _| (status, body.to_vec())).await
+    }
+
+    /// A peer answering every request with what `answer` makes of its head
+    /// (the request line and headers, as sent) and body.
+    pub async fn answering(
+        answer: impl Fn(&str, &[u8]) -> (u16, Vec<u8>) + Send + Sync + 'static,
+    ) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let answer = Arc::new(answer);
         tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
+                let answer = answer.clone();
                 tokio::spawn(async move {
                     // Read the head, then as much body as it announces.
                     let mut request = Vec::new();
                     let mut chunk = [0u8; 4096];
-                    let length = loop {
+                    let (head_end, length) = loop {
                         let read = stream.read(&mut chunk).await.unwrap_or(0);
                         if read == 0 {
                             return;
@@ -192,7 +204,7 @@ pub(crate) mod test_support {
                                 .find_map(|line| line.strip_prefix("content-length:"))
                                 .and_then(|value| value.trim().parse::<usize>().ok())
                                 .unwrap_or(0);
-                            break end + 4 + length;
+                            break (end, end + 4 + length);
                         }
                     };
                     while request.len() < length {
@@ -202,12 +214,15 @@ pub(crate) mod test_support {
                         }
                         request.extend_from_slice(&chunk[..read]);
                     }
+                    let head = String::from_utf8_lossy(&request[..head_end]).into_owned();
+                    let (status, body) =
+                        answer(&head, &request[(head_end + 4).min(request.len())..]);
                     let head = format!(
                         "HTTP/1.1 {status} X\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                         body.len()
                     );
                     let _ = stream.write_all(head.as_bytes()).await;
-                    let _ = stream.write_all(body).await;
+                    let _ = stream.write_all(&body).await;
                 });
             }
         });

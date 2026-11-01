@@ -663,8 +663,9 @@ pub struct ClusterConfig {
     #[serde(default)]
     pub listen: Option<SocketAddr>,
     /// Every node's web address as the other nodes reach it, in `peers`
-    /// order, e.g. `http://10.0.0.2:3000`. Product pictures are copied
-    /// between nodes through it. Required with more than one node.
+    /// order, e.g. `http://10.0.0.2:3000`. Product pictures and shopper
+    /// keys are copied between nodes through it, and the rate limits ask
+    /// the other nodes through it. Required with more than one node.
     #[serde(default)]
     pub web_peers: Vec<String>,
     /// Shared by every node: a node only accepts a picture copied from a
