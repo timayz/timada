@@ -25,8 +25,14 @@ pub type Store = Turso;
 /// and applies the pending migrations of its schema (the events', the
 /// consensus journal's, then the read models'). The file is opened for
 /// several writers at once; one opened before that way stays so.
+///
+/// The system's temporary directory must exist and be writable first
+/// ([`check_temp_dir`]): the database spills the larger statements through
+/// it, and the first one that does would otherwise fail long after the open,
+/// with an error that looks like a store problem (#338).
 pub async fn open_store(path: &Path) -> Result<Store> {
     prepare_dir(path)?;
+    check_temp_dir(&std::env::temp_dir())?;
     let store = Turso::open_concurrent(path)
         .await
         .with_context(|| format!("cannot open {}", path.display()))?;
@@ -76,6 +82,56 @@ pub fn with_suffix(path: &Path, suffix: &str) -> std::path::PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
     std::path::PathBuf::from(name)
+}
+
+/// Checks that `dir`, the system's temporary directory (`TMPDIR`, or `/tmp`
+/// without it), exists and can be written to, by creating and removing a
+/// file in it: the database spills its larger statements (sorts, upserts,
+/// long `IN` lists) through files there and has no fallback. A shell whose
+/// `TMPDIR` names a directory that is gone is the usual way to fail this.
+pub fn check_temp_dir(dir: &Path) -> Result<()> {
+    match std::fs::metadata(dir) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => anyhow::bail!(
+            "the temporary directory {} is not a directory; \
+             set TMPDIR to an existing, writable directory",
+            dir.display()
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
+            "the temporary directory {} does not exist; \
+             set TMPDIR to an existing, writable directory",
+            dir.display()
+        ),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "cannot read the temporary directory {}; \
+                     set TMPDIR to an existing, writable directory",
+                    dir.display()
+                )
+            });
+        }
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or(0);
+    let probe = dir.join(format!(".timada-{}-{nanos}", std::process::id()));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .with_context(|| {
+            format!(
+                "cannot write to the temporary directory {}; \
+                 set TMPDIR to a writable directory",
+                dir.display()
+            )
+        })?;
+    if let Err(err) = std::fs::remove_file(&probe) {
+        tracing::warn!(probe = %probe.display(), %err, "cannot remove the temporary-directory probe");
+    }
+    Ok(())
 }
 
 /// Creates the directory `path` lives in.
@@ -222,4 +278,54 @@ pub async fn empty_store(store: &Store) -> Result<()> {
             })
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh directory under the test's own temporary directory, which
+    /// exists; the test removes it when it needs one that is gone.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("timada-db-tests-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn temp_dir_check_passes_on_a_writable_directory() {
+        let dir = scratch("writable");
+        check_temp_dir(&dir).unwrap();
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "the probe file is removed"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn temp_dir_check_names_a_missing_directory_and_tmpdir() {
+        // What a stale `TMPDIR` (a dev shell whose directory was cleaned
+        // up) hands `std::env::temp_dir()`: a path that is gone.
+        let dir = scratch("missing");
+        std::fs::remove_dir_all(&dir).unwrap();
+        let err = check_temp_dir(&dir).unwrap_err().to_string();
+        assert!(err.contains(&dir.display().to_string()), "{err}");
+        assert!(err.contains("does not exist"), "{err}");
+        assert!(err.contains("TMPDIR"), "{err}");
+    }
+
+    #[test]
+    fn temp_dir_check_refuses_a_file() {
+        let dir = scratch("file");
+        let file = dir.join("not-a-directory");
+        std::fs::write(&file, b"").unwrap();
+        let err = check_temp_dir(&file).unwrap_err().to_string();
+        assert!(err.contains("is not a directory"), "{err}");
+        assert!(err.contains("TMPDIR"), "{err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
