@@ -3,9 +3,6 @@ mod common;
 use std::ops::Deref;
 
 use common::{MemoryKeys, TENANT, codes};
-use evento::migrator::Migrate;
-use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use timada_orders::ShippingAddress;
 use timada_shoppers::CodeVerifier;
 use timada_shoppers::{
@@ -18,13 +15,13 @@ const EMAIL: &str = "Ada@Example.com";
 
 /// The commands over one in-memory store, with the keys they keep.
 struct Shoppers {
-    command: Command<evento::Sqlite>,
+    command: Command<evento::Turso>,
     keys: MemoryKeys,
-    pool: SqlitePool,
+    store: evento::Turso,
 }
 
 impl Deref for Shoppers {
-    type Target = Command<evento::Sqlite>;
+    type Target = Command<evento::Turso>;
 
     fn deref(&self) -> &Self::Target {
         &self.command
@@ -38,10 +35,13 @@ impl Shoppers {
 
     /// Every event's payload, as stored.
     async fn raw_events(&self) -> Vec<Vec<u8>> {
-        sqlx::query_scalar("SELECT data FROM event")
-            .fetch_all(&self.pool)
-            .await
-            .unwrap()
+        let conn = self.store.connect().unwrap();
+        let mut rows = conn.query("SELECT data FROM event", ()).await.unwrap();
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            out.push(row.get::<Vec<u8>>(0).unwrap());
+        }
+        out
     }
 }
 
@@ -50,25 +50,11 @@ async fn shoppers() -> Shoppers {
 }
 
 async fn shoppers_with(keys: MemoryKeys) -> Shoppers {
-    let options = SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
     Shoppers {
-        command: Command::new(pool.clone().into(), TENANT),
+        command: Command::new(store.clone(), TENANT),
         keys,
-        pool,
+        store,
     }
 }
 

@@ -13,7 +13,7 @@ use topcoat::{
 };
 
 use super::{Answer, SIGNED_OUT, answer, opened, refused, signed_in, status};
-use crate::db::ReadPool;
+use crate::db::Db;
 
 /// The most orders a history lists.
 const HISTORY_LEN: i64 = 50;
@@ -32,13 +32,13 @@ pub async fn orders(cx: &Cx) -> Result<Answer> {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
     let rows = orders_of_email(
-        app_context::<ReadPool>(cx),
+        app_context::<Db>(cx),
         &access.tenant.id,
         &shopper.email,
         HISTORY_LEN,
     )
     .await
-    .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
+    .map_err(topcoat::Error::from_anyhow)?;
     let orders: Vec<_> = rows
         .iter()
         .map(|row| {

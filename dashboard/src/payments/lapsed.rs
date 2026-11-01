@@ -25,8 +25,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use crate::db::Db;
 use anyhow::Context as _;
-use sqlx::SqlitePool;
 use timada_discounts::RESERVATION_SECS;
 use timada_orders::{CartCursor, OrderError, paying_carts_before, paying_tenants_before};
 use tokio::task::JoinHandle;
@@ -52,7 +52,8 @@ fn now() -> u64 {
 
 /// The sweep, with what it needs outside any request.
 pub struct LapsedCheckouts {
-    read_pool: SqlitePool,
+    /// The read models: the carts with a payment open.
+    db: Db,
     /// The store, every tenant's.
     store: Executor,
     payments: Arc<Payments>,
@@ -71,9 +72,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl LapsedCheckouts {
-    pub fn new(read_pool: SqlitePool, store: Executor, payments: Arc<Payments>) -> Arc<Self> {
+    pub fn new(db: Db, store: Executor, payments: Arc<Payments>) -> Arc<Self> {
         Arc::new(Self {
-            read_pool,
+            db,
             store,
             payments,
             cursors: Mutex::default(),
@@ -103,7 +104,7 @@ impl LapsedCheckouts {
             return Ok(0);
         }
         let before = now.saturating_sub(RESERVATION_SECS) as i64;
-        let tenants = paying_tenants_before(&self.read_pool, before).await?;
+        let tenants = paying_tenants_before(&self.db, before).await?;
         let mut cancelled = 0;
         for tenant_id in &tenants {
             match self.sweep_tenant(tenant_id, before, now).await {
@@ -136,7 +137,7 @@ impl LapsedCheckouts {
         };
         let after = lock(&self.cursors).get(tenant_id).cloned();
         let carts = paying_carts_before(
-            &self.read_pool,
+            &self.db,
             tenant_id,
             before,
             after.as_ref(),

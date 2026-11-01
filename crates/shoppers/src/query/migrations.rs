@@ -1,22 +1,17 @@
-use sqlx_migrator::{Migration, vec_box};
+//! Schema of the read models: one migration, applied by the composition root
+//! in the store's database next to evento's own.
 
-/// The app name under which these migrations are recorded (the macro needs
-/// the literal, so it is repeated there).
+use evento::turso::migrate::{Migration, Migrations};
+
+/// The app name under which these migrations are recorded.
 pub const MIGRATION_APP: &str = "shoppers";
 
-pub fn migrations() -> Vec<Box<dyn Migration<sqlx::Sqlite>>> {
-    vec_box![Shoppers0001]
-}
-
-pub struct Shoppers0001;
-sqlx_migrator::sqlite_migration!(
-    Shoppers0001,
-    "shoppers",
-    "0001_shoppers",
-    vec_box![],
-    vec_box![
-        (
-            "CREATE TABLE shoppers_shoppers (
+/// The read models of this context, one table each (see the columns).
+pub const MIGRATIONS: Migrations<'static> = Migrations::new(
+    MIGRATION_APP,
+    &[Migration::up(
+        "0001_shoppers",
+        "CREATE TABLE shoppers_shoppers (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
                 email TEXT NOT NULL,
@@ -24,13 +19,12 @@ sqlx_migrator::sqlite_migration!(
                 address_count INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
-            )",
-            "DROP TABLE shoppers_shoppers"
-        ),
-        (
-            "CREATE INDEX shoppers_shoppers_registered ON shoppers_shoppers
-                (tenant_id, registered_at DESC)",
-            "DROP INDEX shoppers_shoppers_registered"
-        ),
-    ]
+            );
+        CREATE INDEX shoppers_shoppers_registered ON shoppers_shoppers
+                (tenant_id, registered_at DESC);",
+    )],
 );
+
+/// The tables the migration creates: what a node empties before copying its
+/// store from a peer, so the subscriptions fill them again.
+pub const TABLES: &[&str] = &["shoppers_shoppers"];

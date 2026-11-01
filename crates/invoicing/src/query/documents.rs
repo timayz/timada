@@ -1,6 +1,6 @@
 //! Queries over `invoicing_documents`, for the invoicing pages of a tenant.
 
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 use crate::value_object::format_amount_fr;
 
@@ -45,43 +45,39 @@ impl DocumentRow {
 /// The documents of a tenant, in the order of their series and numbers,
 /// newest first.
 pub async fn documents_of_tenant(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     offset: i64,
     limit: i64,
-) -> sqlx::Result<Vec<DocumentRow>> {
-    sqlx::query_as(
+) -> anyhow::Result<Vec<DocumentRow>> {
+    db.fetch_all(
         "SELECT * FROM invoicing_documents WHERE tenant_id = ?1
          ORDER BY issued_at DESC, series DESC, number DESC LIMIT ?2 OFFSET ?3",
+        (tenant_id, limit, offset),
     )
-    .bind(tenant_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
     .await
 }
 
-pub async fn count_documents(pool: &SqlitePool, tenant_id: &str) -> sqlx::Result<i64> {
-    sqlx::query_scalar("SELECT COUNT(*) FROM invoicing_documents WHERE tenant_id = ?1")
-        .bind(tenant_id)
-        .fetch_one(pool)
-        .await
+pub async fn count_documents(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
+    db.fetch_scalar(
+        "SELECT COUNT(*) FROM invoicing_documents WHERE tenant_id = ?1",
+        (tenant_id,),
+    )
+    .await
 }
 
 /// The invoice and the credit notes of an order, in the order they were
 /// issued.
 pub async fn documents_of_order(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     order_id: &str,
-) -> sqlx::Result<Vec<DocumentRow>> {
-    sqlx::query_as(
+) -> anyhow::Result<Vec<DocumentRow>> {
+    db.fetch_all(
         "SELECT * FROM invoicing_documents WHERE tenant_id = ?1 AND order_id = ?2
          ORDER BY issued_at, kind DESC, number",
+        (tenant_id, order_id),
     )
-    .bind(tenant_id)
-    .bind(order_id)
-    .fetch_all(pool)
     .await
 }
 
@@ -100,12 +96,12 @@ pub struct OssRow {
 /// tenant of it together: the VAT of other EU countries charged to their
 /// consumers, by country and rate.
 pub async fn oss_return(
-    pool: &SqlitePool,
+    db: &Db,
     company_id: &str,
     from: i64,
     to: i64,
-) -> sqlx::Result<Vec<OssRow>> {
-    sqlx::query_as(
+) -> anyhow::Result<Vec<OssRow>> {
+    db.fetch_all(
         "SELECT country, rate_bps, currency,
             SUM(CASE kind WHEN 'credit_note' THEN -base_cents ELSE base_cents END) AS base_cents,
             SUM(CASE kind WHEN 'credit_note' THEN -vat_cents ELSE vat_cents END) AS vat_cents
@@ -113,10 +109,7 @@ pub async fn oss_return(
          WHERE company_id = ?1 AND regime = 'oss' AND issued_at >= ?2 AND issued_at < ?3
          GROUP BY country, rate_bps, currency
          ORDER BY country, rate_bps DESC",
+        (company_id, from, to),
     )
-    .bind(company_id)
-    .bind(from)
-    .bind(to)
-    .fetch_all(pool)
     .await
 }

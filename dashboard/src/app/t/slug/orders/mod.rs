@@ -22,7 +22,7 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
     section_card, status_badge,
@@ -80,9 +80,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_number = query.page.unwrap_or(1).max(1);
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let filter = OrderFilter::default().status(status).search(q);
-    let total = count_orders(pool, &tenant.id, &filter).await?;
+    let total = count_orders(pool, &tenant.id, &filter)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let rows = orders_of_tenant(
         pool,
         &tenant.id,
@@ -90,7 +92,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         (page_number - 1) * PAGE_SIZE,
         PAGE_SIZE,
     )
-    .await?;
+    .await
+    .map_err(topcoat::Error::from_anyhow)?;
     let pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
     let slug = tenant.slug.clone();
     let page_link = {

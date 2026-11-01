@@ -34,7 +34,7 @@ use crate::components::checkbox::checkbox;
 use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{Shell, document, page_header, section_card};
 
 /// The shop's day now.
@@ -191,7 +191,7 @@ pub async fn schedule(cx: &Cx) -> Result<impl View> {
         return Err(see_other(campaign_url(cx, &slug, &campaign.id, None, None)).into());
     }
     let audience = count_audience(
-        app_context::<ReadPool>(cx),
+        app_context::<Db>(cx),
         &access.tenant.id,
         campaign.language.as_deref(),
     )

@@ -19,15 +19,9 @@ trusted_proxies = []
 [database]
 # The database file: every tenant's events, the snapshots, the subscription
 # cursors and the consensus journal (what the cluster replicates), and the
-# read-model tables that have moved into it. Created on first start; a
-# `-wal` and a `-log` file live next to it and belong with it.
+# read-model tables the pages read. Created on first start; a `-wal` and a
+# `-log` file live next to it and belong with it.
 path = "data/timada.db"
-# The read models not yet in that file, as a DSN: tables the pages read,
-# derived from the store by the subscriptions; a lost file is rebuilt.
-read_models = "sqlite:data/read-models.db"
-# Read pool size for `serve`, for the read-model file; its driver runs one OS
-# thread per open connection.
-max_connections = 3
 
 [auth]
 # Protects sign-in attempts that are still in progress (the state carried in

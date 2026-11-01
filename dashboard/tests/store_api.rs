@@ -28,8 +28,6 @@ use std::time::Duration;
 use evento::Executor as _;
 use evento::cursor::{Args, Value};
 use evento::remote::{Client, ServerHandle};
-use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use timada_tenancy::aggregator::Renamed;
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, SCOPE_STORE_WRITE,
@@ -50,7 +48,6 @@ struct Harness {
     platform: Command<cluster::Executor>,
     /// The read models in the store's database.
     db: db::Db,
-    pool: SqlitePool,
     dir: PathBuf,
     connections: Arc<StoreConnections>,
     addr: SocketAddr,
@@ -86,20 +83,10 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         .try_init();
     let dir = std::env::temp_dir().join(format!("timada-store-api-{}", ulid::Ulid::generate()));
     std::fs::create_dir_all(&dir).unwrap();
-    let options = SqliteConnectOptions::new()
-        .filename(dir.join("platform.db"))
-        .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(3)
-        .connect_with(options)
-        .await
-        .unwrap();
     // The store in memory (a file would fsync every commit of the thirty-odd
-    // tests running at once), the read models in the test's own pool.
+    // tests running at once), the read models in it.
     let files = cluster::Files {
         path: PathBuf::from(":memory:"),
-        read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
     };
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
     db::migrate_store_read_models(&store).await.unwrap();
@@ -133,7 +120,6 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         cluster,
         platform: Command(platform),
         db: store_db,
-        pool,
         dir,
         connections,
         addr,

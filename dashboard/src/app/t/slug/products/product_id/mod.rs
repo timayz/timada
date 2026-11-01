@@ -52,7 +52,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::components::textarea::textarea;
-use crate::db::{Db, ReadPool};
+use crate::db::Db;
 use crate::media::Media;
 use crate::ui::{
     LINK, Shell, document, empty_row, fact, facts, format_time, notice, page_header, section_card,
@@ -300,7 +300,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .get(&product.created_by)
         .cloned()
         .unwrap_or_else(|| product.created_by.clone());
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     // Which categories it is in comes from the product's own stream, like
     // the rest of this page, so a change shows at once; each one is then
     // read from its own stream too (a product is in a handful at most).
@@ -330,7 +330,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let link = match timada_aliexpress::link_of_product(pool, &access.tenant.id, &product.id)
         .await
-        .map_err(|err| topcoat::Error::from_anyhow(err.into()))?
+        .map_err(topcoat::Error::from_anyhow)?
     {
         Some(row) => {
             timada_aliexpress::Command::new(access.executor()?.clone(), access.tenant_id())

@@ -1,13 +1,15 @@
 mod common;
 
+use timada_core::db::Db;
+
 use common::*;
 use timada_automations::{
     Command, ScenarioFilter, ScenarioStatus, count_scenarios, read_model_subscription,
     scenarios_of_tenant,
 };
 
-async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    read_model_subscription::<evento::Sqlite>(pool.clone())
+async fn catch_up(executor: &evento::Turso, pool: &Db) {
+    read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
