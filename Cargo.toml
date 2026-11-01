@@ -21,7 +21,9 @@ topcoat-view = "=0.11.0"
 topcoat-view-macro = "=0.11.0"
 sqlx = { version = "0.9", default-features = false, features = ["migrate", "runtime-tokio", "sqlite"] }
 sqlx_migrator = { version = "0.20", features = ["sqlite"] }
-evento = { version = "=2.0.0-alpha.37", features = ["sqlite", "remote", "accord"] }
+# `sqlite` stays while the read models move crate by crate to the store's file
+# (dropped by the last PR of the series); `turso` + `turso-fts` are the store.
+evento = { version = "=2.0.0-alpha.37", features = ["sqlite", "turso", "turso-fts", "remote", "accord"] }
 bitcode = "0.6"
 argon2 = { version = "0.5", features = ["std"] }
 ulid = "3.0"
@@ -115,5 +117,17 @@ debug = false
 inherits = "dev"
 debug = true
 
-
-
+# evento's concurrent-write support (timayz/evento PR #467) until it is released
+# as alpha.38: every evento crate from the same checkout, or the lock resolves
+# a mix of the two.
+[patch.crates-io]
+evento = { path = "../evento-turso-mvcc/evento" }
+evento-accord = { path = "../evento-turso-mvcc/evento-accord" }
+evento-core = { path = "../evento-turso-mvcc/evento-core" }
+evento-fjall = { path = "../evento-turso-mvcc/evento-fjall" }
+evento-lock = { path = "../evento-turso-mvcc/evento-lock" }
+evento-macro = { path = "../evento-turso-mvcc/evento-macro" }
+evento-remote = { path = "../evento-turso-mvcc/evento-remote" }
+evento-sql = { path = "../evento-turso-mvcc/evento-sql" }
+evento-sql-migrator = { path = "../evento-turso-mvcc/evento-sql-migrator" }
+evento-turso = { path = "../evento-turso-mvcc/evento-turso" }

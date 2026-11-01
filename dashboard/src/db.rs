@@ -1,12 +1,19 @@
-//! SQLite pools and the schema migrators.
+//! The database file, and the read-model pools of the tables not yet in it.
 //!
-//! Two files: the store (every tenant's events, the snapshots, the
-//! subscription cursors and the Accord consensus journal) and the read models
-//! (the tables the pages read). Each gets two pools for `serve`, as in
-//! imkitchen: a read-only pool sized for concurrent reads and a
-//! single-connection write pool, so every write is serialized up front
-//! instead of failing with SQLITE_BUSY mid-transaction. The write side runs
-//! WAL with `synchronous = FULL`: an acked write must survive power loss.
+//! The store is one file (`database.path`): every tenant's events, the
+//! snapshots, the subscription cursors and the consensus journal, opened for
+//! several writers at once ([`open_store`]): the node applies events on the
+//! store's own connection, the consensus journal writes on its own, and the
+//! read models that have moved into the file are written by their
+//! subscriptions through [`evento::Turso::transaction`]. Every write is a
+//! transaction that runs alongside the others and is run again should two of
+//! them change the same rows.
+//!
+//! The read models still in their own file (`database.read_models`) keep
+//! the two pools of before, as in imkitchen: a read-only pool sized for
+//! concurrent reads and a single-connection write pool, so every write is
+//! serialized up front instead of failing with SQLITE_BUSY mid-transaction.
+//! The write side runs WAL with `synchronous = FULL`.
 
 use std::ops::Deref;
 use std::path::Path;
@@ -14,10 +21,16 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use evento::Turso;
+use evento::turso::TursoJournal;
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
 use sqlx_migrator::{Info, Migrator};
+
+/// The store: the one database file, as the node and the read models in it
+/// write it.
+pub type Store = Turso;
 
 /// The read models' read-only pool, as registered in topcoat's app context:
 /// `let db: &ReadPool = app_context(cx);` then use it as a `SqlitePool`.
@@ -46,6 +59,71 @@ const SERVE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// leftover `-wal` from an unclean shutdown can take well over 5s on slow
 /// storage.
 pub const MAINTENANCE_BUSY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Opens the store at `path`, creating the file and its directory if needed,
+/// and applies the pending migrations of its schema (the events', then the
+/// consensus journal's). The file is opened for several writers at once;
+/// one opened before that way stays so.
+pub async fn open_store(path: &Path) -> Result<Store> {
+    prepare_dir(path)?;
+    let store = Turso::open_concurrent(path)
+        .await
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    // The journal's tables, so a `migrate` leaves nothing for `serve` to
+    // create; the node builds its journal over the same database later.
+    TursoJournal::new(store.database().clone())
+        .await
+        .with_context(|| format!("cannot migrate the consensus journal in {}", path.display()))?;
+    tracing::info!(path = %path.display(), "store ready");
+    Ok(store)
+}
+
+/// The files that make up the store at `path`: the file itself, its
+/// write-ahead log and its commit log. They belong together: copied, moved
+/// or deleted as one.
+pub fn store_files(path: &Path) -> [std::path::PathBuf; 3] {
+    [
+        path.to_path_buf(),
+        with_suffix(path, "-wal"),
+        with_suffix(path, "-log"),
+    ]
+}
+
+/// Deletes the store at `path`, with its logs and the lock file its
+/// connections may have left; nothing when there is none.
+pub fn remove_store(path: &Path) -> Result<()> {
+    for file in store_files(path)
+        .iter()
+        .chain([with_suffix(path, "-shm")].iter())
+    {
+        match std::fs::remove_file(file) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| format!("cannot remove {}", file.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `path` with `suffix` appended to its file name.
+pub fn with_suffix(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    std::path::PathBuf::from(name)
+}
+
+/// Creates the directory `path` lives in.
+pub fn prepare_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    Ok(())
+}
 
 /// Per-connection options shared by every pool. sqlx re-applies these pragmas
 /// every time it opens a connection, including replacements after the idle
@@ -80,30 +158,15 @@ pub async fn create_read_pool(database_url: &str, max_connections: u32) -> Resul
     Ok(pool)
 }
 
-/// What a write pool promises once a commit returns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Durability {
-    /// On disk (`synchronous = FULL`): the events, the consensus journal
-    /// and the read models.
-    Durable,
-    /// In the operating system's hands (`synchronous = NORMAL`): a power
-    /// cut may lose the last commits, never corrupt the file. For the
-    /// subscription cursors and the snapshots, which are redone or rebuilt.
-    Relaxed,
-}
-
 /// Read-write pool for `serve`: one connection, so writes never contend
 /// with each other and queue in order instead of backing off on SQLite's
-/// lock. On the store, the Accord journal shares it with the events.
-pub async fn create_write_pool(database_url: &str, durability: Durability) -> Result<SqlitePool> {
+/// lock. `synchronous = FULL`: an acked write must survive power loss.
+pub async fn create_write_pool(database_url: &str) -> Result<SqlitePool> {
     prepare_database_dir(database_url)?;
     let options = base_options(database_url, SERVE_BUSY_TIMEOUT)?
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(match durability {
-            Durability::Durable => SqliteSynchronous::Full,
-            Durability::Relaxed => SqliteSynchronous::Normal,
-        });
+        .synchronous(SqliteSynchronous::Full);
 
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -111,7 +174,7 @@ pub async fn create_write_pool(database_url: &str, durability: Durability) -> Re
         .await
         .with_context(|| format!("cannot open {database_url}"))?;
 
-    tracing::info!(?durability, "write pool ready (1 connection)");
+    tracing::info!("write pool ready (1 connection)");
     Ok(pool)
 }
 
@@ -142,19 +205,7 @@ pub async fn create_pool(
 /// does not, so `migrate` calls this before it.
 pub fn prepare_database_dir(database_url: &str) -> Result<()> {
     let options = SqliteConnectOptions::from_str(database_url)?;
-    let filename: &Path = options.get_filename();
-    if let Some(parent) = filename.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("cannot create {}", parent.display()))?;
-    }
-    Ok(())
-}
-
-/// The store's schema: events, snapshots, subscribers and the Accord journal.
-pub fn store_migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
-    evento::sql_migrator::new::<sqlx::Sqlite>()
+    prepare_dir(options.get_filename())
 }
 
 /// The bounded contexts' read models.
@@ -222,20 +273,21 @@ pub async fn recreate_read_models(url: &str) -> Result<()> {
 /// keeps the consensus journal (the `accord_*` tables): what a node does
 /// before copying a peer's store (see `evento-accord`'s operations guide,
 /// "Opening a node by joining").
-pub async fn empty_store(write_pool: &SqlitePool) -> Result<()> {
-    let mut tx = write_pool.begin().await?;
-    sqlx::query("DELETE FROM event")
-        .execute(&mut *tx)
+pub async fn empty_store(store: &Store) -> Result<()> {
+    store
+        .transaction(&(), |tx, ()| {
+            Box::pin(async move {
+                tx.execute("DELETE FROM event", ())
+                    .await
+                    .context("cannot empty the events")?;
+                tx.execute("DELETE FROM snapshot", ())
+                    .await
+                    .context("cannot empty the snapshots")?;
+                tx.execute("DELETE FROM subscriber", ())
+                    .await
+                    .context("cannot empty the subscription cursors")?;
+                Ok(())
+            })
+        })
         .await
-        .context("cannot empty the events")?;
-    sqlx::query("DELETE FROM snapshot")
-        .execute(&mut *tx)
-        .await
-        .context("cannot empty the snapshots")?;
-    sqlx::query("DELETE FROM subscriber")
-        .execute(&mut *tx)
-        .await
-        .context("cannot empty the subscription cursors")?;
-    tx.commit().await?;
-    Ok(())
 }

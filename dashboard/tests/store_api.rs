@@ -19,8 +19,6 @@ mod db;
 mod read_only_store;
 #[path = "../src/store_api.rs"]
 mod store_api;
-#[path = "../src/store_writer.rs"]
-mod store_writer;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -99,7 +97,7 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         .unwrap();
     {
         let mut conn = pool.acquire().await.unwrap();
-        let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
+        let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
         migrator
             .add_migrations(timada_tenancy::migrations())
             .unwrap();
@@ -108,17 +106,14 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
             .await
             .unwrap();
     }
-    // One file for the store and the read models: the test's own pool is both.
+    // The store in memory (a file would fsync every commit of the thirty-odd
+    // tests running at once), the read models in the test's own pool.
     let files = cluster::Files {
-        store_url: format!("sqlite:{}", dir.join("platform.db").display()),
+        path: PathBuf::from(":memory:"),
         read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
     };
-    let pools = cluster::StorePools {
-        read: pool.clone(),
-        write: pool.clone(),
-        cursors: pool.clone(),
-    };
-    let (cluster, platform) = Cluster::open(None, None, &files, pools).await.unwrap();
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let (cluster, platform) = Cluster::open(None, None, &files, store).await.unwrap();
     let connections = StoreConnections::new();
     let (tls_cert, tls_key) = match tls {
         Some((cert, key)) => (Some(cert), Some(key)),

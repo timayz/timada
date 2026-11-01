@@ -25,8 +25,6 @@ mod read_only_store;
 mod store_api;
 #[path = "../src/store_carts.rs"]
 mod store_carts;
-#[path = "../src/store_writer.rs"]
-mod store_writer;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -67,6 +65,8 @@ const NOW: u64 = 1_800_000_000;
 struct Harness {
     cluster: Arc<Cluster>,
     platform: Command<cluster::Executor>,
+    /// The store's file, read directly for what the node recorded in it.
+    store: db::Store,
     pool: SqlitePool,
     dir: PathBuf,
     connections: Arc<StoreConnections>,
@@ -107,7 +107,7 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         .unwrap();
     {
         let mut conn = pool.acquire().await.unwrap();
-        let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
+        let mut migrator = sqlx_migrator::Migrator::<sqlx::Sqlite>::default();
         migrator
             .add_migrations(timada_tenancy::migrations())
             .unwrap();
@@ -122,17 +122,16 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
             .await
             .unwrap();
     }
-    // One file for the store and the read models: the test's own pool is both.
+    // The store in memory (a file would fsync every commit of the thirty-odd
+    // tests running at once), the read models in the test's own pool.
     let files = cluster::Files {
-        store_url: format!("sqlite:{}", dir.join("platform.db").display()),
+        path: PathBuf::from(":memory:"),
         read_models_url: format!("sqlite:{}", dir.join("platform.db").display()),
     };
-    let pools = cluster::StorePools {
-        read: pool.clone(),
-        write: pool.clone(),
-        cursors: pool.clone(),
-    };
-    let (cluster, platform) = Cluster::open(None, None, &files, pools).await.unwrap();
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let (cluster, platform) = Cluster::open(None, None, &files, store.clone())
+        .await
+        .unwrap();
     let connections = StoreConnections::new();
     let (tls_cert, tls_key) = match tls {
         Some((cert, key)) => (Some(cert), Some(key)),
@@ -160,6 +159,7 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
     Harness {
         cluster,
         platform: Command(platform),
+        store,
         pool,
         dir,
         connections,
@@ -237,10 +237,16 @@ impl Harness {
 
     /// The subscription cursors recorded in the store.
     async fn store_cursors(&self) -> Vec<String> {
-        sqlx::query_scalar("SELECT key FROM subscriber ORDER BY key")
-            .fetch_all(&self.pool)
+        let conn = self.store.connect().unwrap();
+        let mut rows = conn
+            .query("SELECT key FROM subscriber ORDER BY key", ())
             .await
-            .unwrap()
+            .unwrap();
+        let mut keys = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            keys.push(row.get::<String>(0).unwrap());
+        }
+        keys
     }
 
     /// How many storefronts of the tenant are connected.

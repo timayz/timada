@@ -15,8 +15,6 @@ mod cluster;
 mod config;
 #[path = "../src/db.rs"]
 mod db;
-#[path = "../src/store_writer.rs"]
-mod store_writer;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -28,7 +26,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use timada_catalog::{CreateProduct, ProductState};
 use timada_tenancy::{Command, CreateTenant, read_model_subscription};
 
-use cluster::{Cluster, Executor, Files, StorePools};
+use cluster::{Cluster, Executor, Files};
 use config::ClusterConfig;
 
 struct Node {
@@ -61,7 +59,7 @@ impl Default for Tuning {
 
 impl Node {
     fn store_path(root: &Path, id: u64) -> PathBuf {
-        root.join(format!("node{id}")).join("store.db")
+        root.join(format!("node{id}")).join("timada.db")
     }
 
     /// Opens node `id` over its own files; a fresh node migrates them first.
@@ -70,22 +68,11 @@ impl Node {
         std::fs::create_dir_all(&dir).unwrap();
         let path = Self::store_path(root, id);
         let files = Files {
-            store_url: format!("sqlite:{}", path.display()),
+            path: path.clone(),
             read_models_url: format!("sqlite:{}", dir.join("read-models.db").display()),
         };
-        db::migrate(&files.store_url, db::store_migrator().unwrap())
-            .await
-            .unwrap();
+        let store = db::open_store(&path).await.unwrap();
         db::migrate(&files.read_models_url, db::read_model_migrator().unwrap())
-            .await
-            .unwrap();
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .busy_timeout(Duration::from_secs(5));
-        let pool = SqlitePoolOptions::new()
-            .max_connections(3)
-            .connect_with(options)
             .await
             .unwrap();
         let read_models = SqlitePoolOptions::new()
@@ -109,11 +96,7 @@ impl Node {
             }),
             None,
             &files,
-            StorePools {
-                read: pool.clone(),
-                write: pool.clone(),
-                cursors: pool.clone(),
-            },
+            store,
         )
         .await
         .unwrap();
@@ -153,12 +136,16 @@ async fn free_addrs() -> Vec<SocketAddr> {
     listeners.iter().map(|l| l.local_addr().unwrap()).collect()
 }
 
-async fn read_only(path: &Path) -> SqlitePool {
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(SqliteConnectOptions::new().filename(path).read_only(true))
+/// One number out of a node's store file: Turso keeps one database per path
+/// in a process, so this reads what the node (running or stopped) has.
+async fn count_in(path: &Path, sql: &str, params: impl evento::turso::turso::IntoParams) -> i64 {
+    let db = evento::turso::turso::Builder::new_local(path.to_str().unwrap())
+        .build()
         .await
-        .unwrap()
+        .unwrap();
+    let conn = db.connect().unwrap();
+    let mut rows = conn.query(sql, params).await.unwrap();
+    rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
 }
 
 /// Events of `tenant` (every tenant with `None`) in a node's store file.
@@ -166,31 +153,22 @@ async fn events_in(path: &Path, tenant: Option<&str>) -> i64 {
     if !path.exists() {
         return 0;
     }
-    let pool = read_only(path).await;
-    let count = match tenant {
-        Some(tenant) => sqlx::query_scalar("SELECT COUNT(*) FROM event WHERE tenant = ?1")
-            .bind(tenant)
-            .fetch_one(&pool)
+    match tenant {
+        Some(tenant) => {
+            count_in(
+                path,
+                "SELECT COUNT(*) FROM event WHERE tenant = ?1",
+                (tenant,),
+            )
             .await
-            .unwrap(),
-        None => sqlx::query_scalar("SELECT COUNT(*) FROM event")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-    };
-    pool.close().await;
-    count
+        }
+        None => count_in(path, "SELECT COUNT(*) FROM event", ()).await,
+    }
 }
 
 /// Consensus commands the journal still holds (not compacted).
 async fn commands_in(path: &Path) -> i64 {
-    let pool = read_only(path).await;
-    let count = sqlx::query_scalar("SELECT COUNT(*) FROM accord_commands")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
-    count
+    count_in(path, "SELECT COUNT(*) FROM accord_commands", ()).await
 }
 
 async fn await_events(path: &Path, tenant: Option<&str>, expected: i64, what: &str) {
@@ -472,25 +450,14 @@ async fn concurrent_writers_never_see_stale_versions() {
         .try_init();
     let root = temp_root("stress");
     let files = Files {
-        store_url: format!("sqlite:{}", root.join("store.db").display()),
+        path: root.join("timada.db"),
         read_models_url: format!("sqlite:{}", root.join("read-models.db").display()),
     };
-    db::migrate(&files.store_url, db::store_migrator().unwrap())
-        .await
-        .unwrap();
+    let store = db::open_store(&files.path).await.unwrap();
     db::migrate(&files.read_models_url, db::read_model_migrator().unwrap())
         .await
         .unwrap();
-    let pools = StorePools {
-        read: db::create_read_pool(&files.store_url, 3).await.unwrap(),
-        write: db::create_write_pool(&files.store_url, db::Durability::Durable)
-            .await
-            .unwrap(),
-        cursors: db::create_write_pool(&files.store_url, db::Durability::Relaxed)
-            .await
-            .unwrap(),
-    };
-    let (cluster, store) = Cluster::open(None, None, &files, pools).await.unwrap();
+    let (cluster, store) = Cluster::open(None, None, &files, store).await.unwrap();
     let mut tasks = tokio::task::JoinSet::new();
     for t in 0..64 {
         let store = store.clone();
